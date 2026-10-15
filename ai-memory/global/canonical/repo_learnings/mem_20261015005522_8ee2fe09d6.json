@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "When changing files under `.github/workflows/`, check whether the repository expects a corresponding changelog entry; several merged workflow changes included one alongside the workflow edit. Entries use descriptive names and often include the issue number.",
+  "fingerprint": "3923a31a2e301f4b17af41632e8e283ec0e03db982eca29207b746404c9feb34",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38662398023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38662398023",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7370",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7380",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7382",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7387",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7390",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7379",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7384",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7385",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7388",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7391"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261015005522_8ee2fe09d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "GitHub Actions workflow changes are commonly accompanied by a changelog fragment in `changelog.d/`.",
+  "timestamps": {
+    "created_at": "2026-10-15T00:55:22Z",
+    "promoted_at": "2026-10-15T00:57:05Z",
+    "superseded_at": null
+  }
+}

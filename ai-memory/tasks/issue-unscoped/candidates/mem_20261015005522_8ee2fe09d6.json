@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "GitHub Actions workflow changes are commonly accompanied by a changelog fragment in `changelog.d/`.",
   "timestamps": {
     "created_at": "2026-10-15T00:55:22Z",
-    "promoted_at": null,
+    "promoted_at": "2026-10-15T00:57:05Z",
     "superseded_at": null
   }
 }
