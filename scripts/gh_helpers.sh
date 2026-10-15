@@ -172,11 +172,18 @@ _gh_actions_escape()
 #     (gh prints this when --remove-label targets a label that is
 #     not on the issue; retrying just burns API budget.)
 #   * HTTP 404 Not Found             (resource doesn't exist)
+#   * HTTP 400 Bad Request           (malformed request)
+#   * HTTP 401 / "Bad credentials" / "Requires authentication"
+#                                    (invalid or missing token)
 #   * HTTP 422 Unprocessable Entity  (validation / already-exists)
 #   * "Resource not accessible by integration"      (GITHUB_TOKEN scope)
 #   * "Resource not accessible by personal access token" (PAT scope)
 #   * "Commenting is disabled on issues with more than 2500 comments"
 #     (GitHub's per-issue comment cap; it stays until comments are deleted)
+#
+# Generic HTTP 403 is deliberately NOT matched: gh_retry and
+# gh_retry_to_file check permanent failures before rate limits, and
+# secondary rate limits / content-creation throttles also answer 403.
 #
 # Returns 0 (true) if the text indicates such a failure.
 # Conservative on purpose — only matches conditions that retrying
@@ -184,7 +191,7 @@ _gh_actions_escape()
 # ---------------------------------------------------------------
 _is_gh_permanent_failure()
 {
-	printf '%s' "$1" | grep -qiE "['\"][^'\"]+['\"] not found|gh: Not Found|HTTP 404|404 Not Found|status code 404|HTTP 422|Resource not accessible by (integration|personal access token)|Commenting is disabled on issues with more than [0-9]+ comments"
+	printf '%s' "$1" | grep -qiE "['\"][^'\"]+['\"] not found|gh: Not Found|HTTP 404|404 Not Found|status code 404|HTTP 400|HTTP 401|HTTP 422|Bad credentials|Requires authentication|Resource not accessible by (integration|personal access token)|Commenting is disabled on issues with more than [0-9]+ comments"
 }
 
 # ---------------------------------------------------------------

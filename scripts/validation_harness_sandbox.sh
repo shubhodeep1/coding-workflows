@@ -162,7 +162,7 @@ sandbox_env_is_denied()
 		VALIDATION_TEST_USERNAME|VALIDATION_TEST_PASSWORD|VALIDATION_TEST_API_KEY|TEST_USERNAME|TEST_PASSWORD|TEST_API_KEY)
 			return 1
 			;;
-		*TOKEN*|*SECRET*|*_PAT|*PAT_*|*API_KEY*|*PRIVATE_KEY*|*CREDENTIAL*|GIT_CONFIG_*|GIT_ASKPASS|SSH_*|ACTIONS_*|RUNNER_*|GITHUB_*|OPENROUTER_*|TG_*|CLAUDE_*|ANTHROPIC_*|OPENAI_*|VALIDATION_HARNESS_SANDBOX_*)
+		*TOKEN*|*SECRET*|*_PAT|*PAT_*|*API_KEY*|*PRIVATE_KEY*|*CREDENTIAL*|GIT_CONFIG_*|GIT_ASKPASS|SSH_*|ACTIONS_*|RUNNER_*|GITHUB_*|OPENROUTER_*|TG_*|CLAUDE_*|ANTHROPIC_*|OPENAI_*|VALIDATION_HARNESS_SANDBOX_*|VALIDATION_HARNESS_SELFCHECK_*)
 			return 0
 			;;
 	esac
@@ -274,7 +274,11 @@ pidns_state_base()
 # socket and is skipped, so it cannot fail the launch. A socket renamed in
 # that window is skipped at its old name too, so after the mask root lists
 # the sockets again and exits 125 when any one other than docker.sock is
-# left unmasked (a bind-mounted /dev/null is no longer a socket).
+# left unmasked (a bind-mounted /dev/null is no longer a socket). That
+# recheck tests each entry with `! -type l -xtype s`, which stats it: plain
+# `-type s` trusts the directory entry's type, which a bind mount does not
+# change, so it still lists every masked socket and every launch exited 125
+# (#7355).
 as_sandbox_in_pidns()
 {
 	local pidfile="$1" started="$2" uid runtime_dir
@@ -283,7 +287,7 @@ as_sandbox_in_pidns()
 	[[ "${uid}" =~ ^[0-9]+$ ]] || return 125
 	runtime_dir="$(sandbox_runtime_dir)"
 	sudo -n sh -c 'if [ "$1" != "-" ]; then printf "%s\n" "$$" > "$1" || exit 125; fi; shift; exec unshare --pid --fork --mount-proc --propagation private --kill-child -- "$@"' pidns "${pidfile}" \
-		sh -c 'for s in "$2" "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; done; if [ -d "$2" ]; then find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock" -exec sh -c "$3" mask {} + || exit 125; if [ -n "$(find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock" -print -quit)" ]; then exit 125; fi; fi; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 3; exec "$@"' started "${started}" "${runtime_dir}" \
+		sh -c 'for s in "$2" "$2/bus" "$2/systemd/private"; do if [ -L "$s" ]; then exit 125; fi; done; if [ -d "$2" ]; then find "$2" -xdev -ignore_readdir_race -type s ! -path "$2/docker.sock" -exec sh -c "$3" mask {} + || exit 125; if [ -n "$(find "$2" -xdev -ignore_readdir_race ! -type l -xtype s ! -path "$2/docker.sock" -print -quit)" ]; then exit 125; fi; fi; if [ "$1" != "-" ]; then : > "$1" || exit 125; fi; shift 3; exec "$@"' started "${started}" "${runtime_dir}" \
 		'for s do [ -e "$s" ] || continue; mount --bind /dev/null "$s" || { if [ -e "$s" ]; then exit 1; fi; }; done' \
 		sudo -n -u "${VALIDATION_HARNESS_SANDBOX_USER}" -- env -i "${SANDBOX_ENV_ARGS[@]}" "$@"
 }
@@ -782,34 +786,64 @@ case "$(cat /proc/1/comm 2>/dev/null || true)" in
 esac
 # The user manager runs in the host PID namespace; every socket under the
 # runtime dir except docker.sock (wherever it was moved) must be masked.
+# `-xtype` stats the entry; `-type` would trust the directory entry, which
+# still says "socket" under the bind mount that masks it (#7355).
 rt="/run/user/$(id -u)"
-if [ -d "${rt}" ] && [ -n "$(find "${rt}" -xdev -type s ! -path "${rt}/docker.sock" -print -quit 2>/dev/null)" ]; then
+if [ -d "${rt}" ] && [ -n "$(find "${rt}" -xdev ! -type l -xtype s ! -path "${rt}/docker.sock" -print -quit 2>/dev/null)" ]; then
 	fail user_manager_reachable
 fi
 printf 'ok\n'
 PIDNS_PROBE
+
+# Reason for a selfcheck probe whose output is empty or malformed (the launch
+# itself failed). With VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP
+# set to `true` (any letter case) it names the pass and the launcher's exit
+# code: probe_failed_<plain|pidns>_rc_<n>. Unset or any other value keeps the
+# plain probe_failed. The placeholder gates only this reason text; it comes
+# from the unblock judge's round 1 on #7355, and the operator step is to export
+# it into the validate job's environment (validate.yml forwards no such
+# variable). Probe stderr is never read. Always returns 0.
+selfcheck_probe_failed_reason()
+{
+	local pass="$1" rc="$2" flag="${VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP:-}"
+	if [ "${flag,,}" != "true" ]; then
+		printf 'probe_failed\n'
+		return 0
+	fi
+	case "${pass}" in
+		plain|pidns) ;;
+		*) pass="unknown" ;;
+	esac
+	[[ "${rc}" =~ ^[0-9]{1,3}$ ]] || rc="unknown"
+	printf 'probe_failed_%s_rc_%s\n' "${pass}" "${rc}"
+	return 0
+}
 
 cmd_selfcheck()
 {
 	validate_config selfcheck
 	require_sudo selfcheck
 	id -u "${VALIDATION_HARNESS_SANDBOX_USER}" >/dev/null 2>&1 || sandbox_fail selfcheck sandbox_user_missing
-	local caller_pid="${1:-${PPID}}" home verdict host_ns
+	local caller_pid="${1:-${PPID}}" home verdict host_ns probe_out probe_rc
 	home="$(sandbox_home)"
 	build_sandbox_env "${home}" "${home}/work" "$(sandbox_docker_host)"
-	verdict="$(as_sandbox bash -c "${SELFCHECK_PROBE}" selfcheck "${caller_pid}" \
-		"${HOME:-}" "${RUNNER_TEMP:-}" "${RUNTIME_DIR:-}" "${GITHUB_WORKSPACE:-}" 2>/dev/null | tail -n 1 || true)"
+	probe_rc=0
+	probe_out="$(as_sandbox bash -c "${SELFCHECK_PROBE}" selfcheck "${caller_pid}" \
+		"${HOME:-}" "${RUNNER_TEMP:-}" "${RUNTIME_DIR:-}" "${GITHUB_WORKSPACE:-}" 2>/dev/null)" || probe_rc=$?
+	verdict="$(printf '%s\n' "${probe_out}" | tail -n 1)"
 	if [ "${verdict}" != "ok" ]; then
-		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="probe_failed"
+		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="$(selfcheck_probe_failed_reason plain "${probe_rc}")"
 		sandbox_fail selfcheck "${verdict}"
 	fi
 	# Second pass inside a PID namespace created the same way as the harness's.
 	pidns_supported selfcheck
 	host_ns="$(readlink "/proc/$$/ns/pid" 2>/dev/null || true)"
 	[ -n "${host_ns}" ] || sandbox_fail selfcheck pid_namespace_unverifiable
-	verdict="$(as_sandbox_in_pidns - - bash -c "${SELFCHECK_PIDNS_PROBE}" pidns-selfcheck "${caller_pid}" "${host_ns}" 2>/dev/null | tail -n 1 || true)"
+	probe_rc=0
+	probe_out="$(as_sandbox_in_pidns - - bash -c "${SELFCHECK_PIDNS_PROBE}" pidns-selfcheck "${caller_pid}" "${host_ns}" 2>/dev/null)" || probe_rc=$?
+	verdict="$(printf '%s\n' "${probe_out}" | tail -n 1)"
 	if [ "${verdict}" != "ok" ]; then
-		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="probe_failed"
+		[[ "${verdict}" =~ ^[a-z_]+$ ]] || verdict="$(selfcheck_probe_failed_reason pidns "${probe_rc}")"
 		sandbox_fail selfcheck "${verdict}"
 	fi
 	# The harness reaches Docker; a daemon in the host PID namespace would let

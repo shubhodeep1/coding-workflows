@@ -1940,7 +1940,7 @@ jobs:
       # has no checkout, no LLM, and no working tree, so the ~30 s spent
       # here would be pure waste there.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@v1.3.1
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
         with:
           tool-cache: true
           android: true
@@ -4615,7 +4615,7 @@ jobs:
             echo "::warning::check_external_branch_advance.sh missing from support scripts; fail-open (skipping pre-push gate)."
           fi
 
-          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
           echo "Pushing pending commits to ${TARGET_BRANCH}..."
 
           # Retry non-fast-forward rejections with fetch+merge.  A concurrent
@@ -5252,6 +5252,13 @@ jobs:
                 # review_rb_judge.sh requested a branch update; its
                 # synchronize run re-validates the PR without a person.
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but the base moved under its files; branch update requested\nThe synchronize run re-validates automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              stale_head)
+                # A push landed during the judge call; the push re-runs review.
+                MSG="$(printf 'PR review blocked — PR head moved during the judge call; judge took no action\nThe new push re-runs review automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              head_unverified)
+                MSG="$(printf 'PR review blocked — judge could not read the live PR head; fix refused\nStall recovery will retry automatically')"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
               sync_merge_failed)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but gh pr merge failed\nNeeds retry or manual merge investigation')" ;;

@@ -312,3 +312,11 @@ def test_publish_workflow_is_scoped_and_least_privilege() -> None:
 	assert checkout["with"]["persist-credentials"] is False
 	for step in job["steps"]:
 		assert "${{" not in step.get("run", ""), step.get("name")
+
+
+def test_review_sandbox_dockerfile_installs_gawk() -> None:
+	text = (ROOT / "scripts/review_sandbox/Dockerfile").read_text()
+	(apt_line,) = [line for line in text.splitlines() if "apt-get install" in line]
+	tokens = apt_line.split()
+	for package in ("gawk", "python3", "ca-certificates"):
+		assert package in tokens, apt_line
