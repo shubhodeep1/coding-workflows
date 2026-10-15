@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When planning changes to GitHub Actions workflows or CI job behavior, check whether the change needs a corresponding `changelog.d/` entry. This pattern recurs across workflow rebalances and workflow behavior changes.",
+  "fingerprint": "439e36a8a587aef25a3c0b6c162c081a04a7fb5066752a89dc214c1d0b0eac3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38672772993",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38672772993",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7370",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7380",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7387",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7390",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7406",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7379",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7384",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7388",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7391",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7408"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261015025555_f6d923045c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow and CI changes in this repository are commonly accompanied by a changelog fragment under `changelog.d/`.",
+  "timestamps": {
+    "created_at": "2026-10-15T02:55:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
