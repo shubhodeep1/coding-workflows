@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue deliver in this repository?\nChoices:\nA) No code change. Treat it as a monitoring alert. The prune change ships to tele-funtoken-msg-scoring through the normal `stable` release and its `auto/update-workflows-*` sync. The daily consumer check closes this issue by itself once #3928 and #4038 drop below 2000 comments. If the plan step must still produce an edit, limit it to a changelog/agents.d note recording the outcome. (RECOMMENDED)\nB) Add detection to `scripts/consumer_health_check.sh` / `.py`. When a `tracking_issue_comments` problem is found, the issue would also say whether the consumer's installed wrapper pin includes the prune change, and whether an updater PR is waiting to merge. Today it only says \"check that the sync ran\".\nC) Add remediation. When the check finds this problem, it would trigger the consumer's `ai-update-workflows.yml` sync (or re-run a stuck updater PR) so the prune change arrives without a person.\n**Note:** B and C can be combined (`B+C`). Neither is needed if A is chosen.\nQ2: Pruning removes only the poller's old state comments, so an issue whose comments are mostly something else, perhaps #4038 (2040), can stay at or above the 2000-comment threshold after pruning. In that case what should happen?\nChoices:\nA) Nothing more. This issue stays open as the signal for a person, and the 2000 threshold (`CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT`) stays as it is. (RECOMMENDED)\nB) Widen pruning to other repeated pipeline comments on tracking issues (beyond the existing `TRACKING_COMMENT_REPEAT` count-in-place), so the count can fall below the threshold.\nC) Change the health check to count only comments that pruning cannot remove, so it closes once the state comments are gone.\n**Note:** if Q1 is A, choosing Q2:B or Q2:C turns this into a code change. Pick Q1:B or C instead, or expect a second round of questions.",
+  "fingerprint": "4e2664cc417d3bf4784d6298e3c3ed97fc99b6a8abe4aea0d4294d32a1a8ea4b",
+  "lineage": {
+    "issue_number": 7427,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38694372402",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38694372402",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261015065152_d906792822",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7427,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38694372402"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7427 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-15T06:51:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
