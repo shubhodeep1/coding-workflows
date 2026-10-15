@@ -1716,3 +1716,10 @@ def test_selfcheck_probe_launches_keep_stderr_discarded() -> None:
 	selfcheck = _function_body("cmd_selfcheck")
 	assert '"${GITHUB_WORKSPACE:-}" 2>/dev/null)" || probe_rc=$?' in selfcheck
 	assert '"${caller_pid}" "${host_ns}" 2>/dev/null)" || probe_rc=$?' in selfcheck
+
+
+def test_selfcheck_placeholder_flag_is_not_passed_to_the_sandbox() -> None:
+	script = f'source "{HELPER}"; sandbox_env_is_allowed "$1" && ! sandbox_env_is_denied "$1"'
+	for name, passed in (("VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP", False), ("VALIDATION_TEST_USERNAME", True)):
+		out = subprocess.run(["bash", "-c", script, "x", name], capture_output=True, text=True, env={"PATH": os.environ["PATH"]}, timeout=30)
+		assert (out.returncode == 0) is passed, (name, out)
