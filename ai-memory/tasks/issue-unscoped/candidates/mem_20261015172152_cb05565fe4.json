@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:859,906-910 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `_HEAL_ITALIC_RE.fullmatch(token)` skip in `run_heal_plan_scope_gate` also drops legitimate bare root-level globs such as `*foo*`, so they are never checked against the verified heal scope.\n  WHY: A plan with such a glob gets `heal_scope_verified` and an automatic `/approved`; only the implement-time scope check catches it later. Severity disagreement: the reviewers' labels were NIT, BLOCKER, MAJOR, MAJOR and MAJOR, and the highest (BLOCKER) is mapped to critical. The qwen reviewer called the finding speculative and reported none.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:906-910 (`_HEAL_ITALIC_RE` defined at line 859) | severity=NIT | confidence=3\n  PROBLEM: An unbackticked bullet like `- *foo*` is skipped as italic prose and a root-level glob of the same shape is skipped too, so the pattern is never checked against the verified heal scope.\n  WHY: The gate can return `heal_scope_verified` and auto-approve early. Impact is limited because plans normally backtick paths and the implement-time commit scope check still enforces scope.\n- HARDENING_SUGGESTIONS: scripts/files_touched_scope_guard.py line 909. Narrow the italic exception so it never skips a token containing `.`, `?` or `[`, and hold when a bare token has glob characters and the Files section holds other unbackticked globs. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:909-910 | severity=BLOCKER | confidence=5\n  PROBLEM: The italic-prose skip (`_HEAL_ITALIC_RE.fullmatch(token)`) also skips valid root-level glob patterns such as `*foo*` or `*bar*`.\n  WHY: A plan listing such a glob is not validated against the scope, so out-of-scope paths can be auto-approved.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/files_touched_scope_guard.py:908-910 | severity=MAJOR | confidence=5\n  PROBLEM: The italic-prose exception matches any single-token alphanumeric root-level glob (`*foo*`, `*test*`, `*spec*`, `*api*`), so it is dropped before the scope check. `test_gate_holds_bare_root_level_glob` covers only `*.py`, and `test_gate_reads_bold_backticked_bullets_once` uses tokens with prose context, so neither test covers this.\n  WHY: The gate returns `approve` / `heal_scope_verified` and plan.yml posts `/approved`. The implement-time `check_automation_paths` then refuses the out-of-scope changes and the issue stalls.\n- .github/workflows/plan.yml:2643 | severity=NIT | confidence=4\n  PROBLEM: This is a positive confirmation, not a defect. The added `python3 -I -B` on the `workflow_failure_heal.py heal-scope verify` call is consistent with `agents.md` and with the neighbouring gate call, and it adds no new implicit-execution surface.\n  WHY: The script uses only the standard library and `-I` closes the local-directory import path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/files_touched_scope_guard.py:908-910 | severity=MAJOR | confidence=5\n  PROBLEM: The italic-prose exception also skips valid bare glob patterns such as `*foo*`.\n  WHY: `extract_plan_file_paths` also drops the glob, so the gate can approve a plan without checking that pattern against the verified heal scope, and posts `/approved` for a plan that should be held.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:859,908-910 | severity=MAJOR | confidence=3\n  PROBLEM: `_HEAL_ITALIC_RE` is too broad. It matches root-level globs such as `*foo*`, `*test*` and `*data-*`, and the `continue` at line 910 drops them before the `denied` filter at 919-920. `test_gate_holds_bare_root_level_glob` (tests/test_heal_plan_grant_body_edit_fix.py:176-179) holds `*.py`, so this is inconsistent with that pinned contract.\n  WHY: A heal plan listing a bare `*word*` root glob alongside in-scope paths gets `approve` / `heal_scope_verified` on a file set never checked against the verified heal scope. The implement-time scope guard bounds the impact.\n- HARDENING_SUGGESTIONS: scripts/files_touched_scope_guard.py lines 908-910. Skip as prose only when the token does not end in a glob metacharacter, or drop the `_HEAL_ITALIC_RE` clause so bare `*word*` tokens are scope-checked. Estimated lines changed: \u22643. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2c69e440f8d5eb1fa248c88cd25820a819fee6c762dc3e569e2aed5b9b7c225b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7447,
+    "run_id": "38770060131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38770060131",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261015172152_cb05565fe4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7447,
+    "run_id": "38770060131"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-15T17:21:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
