@@ -70,6 +70,8 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 			"'ai:retro'",
 			"!contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step')",
 			"!contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage')",
+			# Consumer health notices are operator reports, not work items.
+			"!contains(toJson(github.event.issue.labels.*.name), 'ai:consumer-health')",
 			"github.event.issue.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.issue.author_association)",
 			"github.event.issue.user.type == 'Bot'",
