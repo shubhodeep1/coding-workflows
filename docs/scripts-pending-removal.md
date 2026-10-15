@@ -341,7 +341,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/consumer_health_check.sh` + `scripts/consumer_health_check.py` (daily step in `.github/workflows/orchestrate_poll.yml`)
 
-- **Introduced in:** #9999 (2026-10-15)
+- **Introduced in:** #7415 (2026-10-15)
 - **Type:** long-running
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**
