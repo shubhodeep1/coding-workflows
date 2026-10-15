@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: Option A needs step timings that this pipeline cannot read. The data-provision guard rules out an option that asks me to supply data I don't have, so A is out. B is the conservative choice the repository's own history supports.\n- **Why `tests-heal-plan-and-validation` has room now.** That job took 15m12s on `main` (run 38584572151, issue #7387), and nearly all of it was the step \"Workflow failure heal contract and driver tests\". Per `changelog.d/7387-ci-heal-job-workflow-heal-step-move.md`, that step now runs its largest module in four parallel shards, so this is likely the job with the most room.\n- **Why the release job is over budget.** It measured 535-604s before two additions: the \"Regression tests wired by the CI wiring guard (part 1)\" step (#7382, `changelog.d/7382-ci-static-checks-rebalance.md`) and three steps from #7383. It now takes 933s. The part 1 step runs 34 test modules, many of them driven by subprocesses, so it is the largest single addition.\n- **What to move.** Move only \"Regression tests wired by the CI wiring guard (part 1)\", with its name and body unchanged. It already ran in `static-checks` on a depth-1 checkout with the same pip set, so it needs nothing that only the release job has. No test pins which job it runs in.\n- **What stays.** \"Release CI gate tests (stubbed gh; both release workflows)\" stays where it is. It is one unit-test file plus a short stubbed-`gh` shell scenario, so it is not shown to be heavy. Moving it would only use up the receiving job's room.\n\nQ2: Use A as the target estimate. Both jobs should be estimated at about 12 minutes or less. That leaves margin below the 15-minute warning at `CI_BUDGET_JOB_WARN_RATIO` 0.75, so this does not just trade one budget-watch issue for another. C needs per-job timings we don't have, and B leaves too little margin. If the estimate turns out wrong, `budget-watch` on the next push to `main` reopens the deduplicated issue with a real measurement.\n\nEXECUTION PLAN (required for any non-letter decision):\n(Both decisions are letter choices. The concrete steps that bind B are below.)\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml\n      - job `tests-release-and-log-analysis`: the part 1 step and its preceding comment, around lines 1416-1461\n      - job `tests-heal-plan-and-validation`, around lines 844-1039\n      - the `static-checks` header comment, around lines 35-37\n    - changelog.d/7382-ci-static-checks-rebalance.md, changelog.d/7383-ci-heal-job-rebalance.md and changelog.d/7387-ci-heal-job-workflow-heal-step-move.md, for the history\n  steps:\n    1. Cut the whole \"Regression tests wired by the CI wiring guard (part 1)\" step out of `tests-release-and-log-analysis`.\n       - Do not change its `name:` or `run:` body, including the order of the test file list.\n    2. Paste it into `tests-heal-plan-and-validation` as that job's last step, after \"Validation shell-quoting and credential-scrub tests\".\n    3. Above the moved step, add a comment in the style of the earlier moves:\n       - It moved from `tests-release-and-log-analysis`, which took 15m33s of its 20 minutes on `main` (run 38663329196, budget-watch issue #7406).\n       - Step timings were not readable when this was planned. This step was chosen as the largest addition since that job measured 535-604s.\n       - The step name and body are unchanged.\n    4. Edit the old comment above the step in the release job:\n       - Drop or rewrite the stale wording about the part 1 step living there.\n       - Keep the merge-train comment's incident context; only correct the facts that are now out of date.\n    5. Update the `static-checks` header comment so it says the part 1 step now runs in `tests-heal-plan-and-validation`.\n    6. Leave these unchanged:\n       - every `timeout-minutes` value, every job name and the `needs` list of the aggregate `lint` job;\n       - the checkout `fetch-depth` of both jobs: the heal job's depth-1 checkout is enough, since the step ran on depth 1 in `static-checks`.\n    7. Add `changelog.d/7406-ci-release-job-rebalance.md`:\n       - category \"changed\", in the same shape as the #7382/#7383 fragments;\n       - the operator note \"nothing to change; no new variable\".\n    8. Run the guards: `tests/test_ci_job_split_contract.py` (no step in two jobs, aggregate needs and budgets unchanged) and `tests/test_ci_wires_every_test_file.py` (every test file is still named in a workflow).\n  replaces_acceptance_criterion: \"Move its slowest steps (see the run's step timings)\" becomes \"move the step that a count of test modules and subprocesses shows to be the largest addition since the last measured baseline\".\n  equivalence_argument: The growth from about 570s to 933s in this job came from #7382 and #7383. The part 1 step is the biggest of those additions by module and subprocess count. Moving it unchanged into the job whose dominant step was just parallelised serves the same goal: get the source job away from its timeout without raising `timeout-minutes` or adding job names.\n  reversibility: This moves one block of YAML. If the next `budget-watch` run on `main` flags `tests-heal-plan-and-validation`, the step can go back or on to another job in one edit.\n\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml, job `budget-watch` and `scripts/ci_budget_watch.py` (`CI_BUDGET_JOB_WARN_RATIO`, default 0.75)\n  steps:\n    1. Treat about 12 minutes per job as the planning target, estimated from module and subprocess counts. Do not run CI to measure it.\n    2. Say in the PR body and the changelog fragment that this is an estimate. The real check is the next `budget-watch` run on `main`.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: n/a\n  reversibility: Self-correcting. `budget-watch` reopens a deduplicated issue if a job reaches 15 minutes.",
+  "fingerprint": "d3b455af1bba6cccc0481ebcdbc93d27235478626246c057c5660b0a9cc2f941",
+  "lineage": {
+    "issue_number": 7406,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38665816382",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38665816382",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7406"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261015014024_cf2066c2e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7406,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38665816382"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7406",
+  "timestamps": {
+    "created_at": "2026-10-15T01:40:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
