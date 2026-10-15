@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Changes to workflow-related scripts and review automation were repeatedly merged with targeted tests covering the changed behavior. When modifying these components, look for an existing focused test module or add one, including contract tests when workflow inputs or security boundaries are involved.",
+  "fingerprint": "3ea9b934ea15989ffb51163f159af749980318401ab11c67ad872b32b782bf40",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38662398023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38662398023",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7370",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7380",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7382",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7387",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7390",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7379",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7384",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7385",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7388",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7391"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261015005847_7aedf33b5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Automation behavior changes are commonly protected by focused regression tests.",
+  "timestamps": {
+    "created_at": "2026-10-15T00:58:47Z",
+    "promoted_at": "2026-10-15T01:00:32Z",
+    "superseded_at": null
+  }
+}
