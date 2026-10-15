@@ -181,7 +181,7 @@ def test_non_regular_and_oversize_readmes_are_rejected(tmp_path, kind):
 	elif kind == "directory":
 		path.mkdir()
 	else:
-		path.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+		path.write_bytes(b"x" * (8 * 1024 * 1024 + 1))
 	result = run_readme(tmp_path)
 	assert result.returncode == 3
 	assert result.stdout == b""

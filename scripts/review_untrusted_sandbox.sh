@@ -97,7 +97,10 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		exit 1
 	fi
 	printf '%s\n' "${workspace}" > "${root}/workspace"
-	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
+	# A tracked file over the per-file limit is left out of the review snapshot
+	# rather than failing the review; the editor cannot recreate it (transfer
+	# refuses a result that conflicts with a host path).
+	REVIEW_SNAPSHOT_SKIP_OVERSIZED=1 PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
 	# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh);
