@@ -8694,7 +8694,12 @@ def test_review_snapshot_skips_oversized_files_only_when_the_review_sandbox_asks
 	assert not (source / "big.py").exists() and (source / "mid.html").read_bytes() == files["mid.html"]
 
 	transfer = [sys.executable, script, "transfer", str(host), str(source), str(manifest)]
-	# The editor cannot recreate a file it never saw.
+	# The editor cannot recreate a file it never saw. An oversized recreation is
+	# refused by the result read itself (reason=unsafe_file).
+	(source / "big.py").write_bytes(b"r" * (limit + 1))
+	result = subprocess.run(transfer, capture_output=True, text=True, env=base_env)
+	assert result.returncode == 1 and result.stderr.strip().endswith("reason=unsafe_file")
+	assert (host / "big.py").read_bytes() == files["big.py"]
 	(source / "big.py").write_bytes(b"replaced")
 	result = subprocess.run(transfer, capture_output=True, text=True, env=base_env)
 	assert result.returncode == 1 and result.stderr.strip().endswith("reason=result_conflicts_host")
