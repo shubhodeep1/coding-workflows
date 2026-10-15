@@ -1,6 +1,0 @@
-<!-- changelog: fixed -->
-- **Consumer health notices are no longer picked up as work items.** The clarify workflow now skips issues labelled `ai:consumer-health`, the same way it skips `ai:operator-step` and `ai:provider-outage` issues.
-
-The daily consumer health check files an `ai:consumer-health` issue for the operator when a consumer repository has a problem: AI workflows switched off, a silent poller, or a tracking issue near the comment cap. On its first run on 2026-10-15 it filed #7426 and #7427 for `tele-funtoken-msg-scoring`. The issue pipeline then treated both as tasks. It auto-answered and planned them, closed #7426 as "already implemented", and merged #7428 (an `agents.d` note) for #7427. Because the check only re-files a notice when no open one exists, closed notices would have come back every day with a new Telegram warning and another pipeline run. The `opened` guard in `.github/workflows/clarify.yml`, `.github/workflows/internal-clarify.yml` and the consumer wrapper `workflow-templates/ai-clarify.yml` now skips the label. The notice stays open until the check sees the problem cleared and closes it.
-
-What this means for operators: each consumer problem produces one open notice and one Telegram warning, and no pipeline runs on it. To act on a notice, fix the consumer, or comment `/reclarify` on it if you want the pipeline to plan a change.
