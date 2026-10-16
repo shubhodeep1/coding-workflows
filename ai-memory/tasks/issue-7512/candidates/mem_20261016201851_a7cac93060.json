@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The root-cause fix lives in `scripts/resolve_integration_ref.sh`, which this heal issue's scope marker does not allow. How should the fix ship?\nChoices:\nA. Re-file the fix as a new issue, opened by an OWNER/MEMBER/COLLABORATOR or by the unblock judge's re-issue, whose `files_touched:` lists exactly these paths:\n   - `scripts/resolve_integration_ref.sh`\n   - `tests/test_resolve_integration_ref_ci_triage.py`\n   - the two new fixtures under `tests/fixtures/integration_ref_resolver_ci_triage/`\n   - one `changelog.d/` fragment\n   The new issue gets the narrow skip from the diagnosis (managed label, no triage label, a matching `Tracking issue:` line), plus both regression fixtures. Close this issue as superseded. After the fix merges, post `/reclarify` on #7511. Optional step 4 (`scripts/orchestrate_poll_process.sh`) is left out. (RECOMMENDED)\nB. Work around it inside the allowed scope: in `clarify.yml` / `internal-clarify.yml`, turn CI-triage routing off for `ai:orchestrator-managed` issues. **Note:** this switches a fail-closed guard off in clarify only. It goes against this issue's own fix constraints (\"do not disable, skip, or weaken the failing check\"), and plan, implement, clarify-respond and validate would still refuse #7511.\nC. Make no code change. Close this issue as not planned, and have an operator remove the copied `<!-- check-failure-triage:\u2026 -->` header lines from #7511's body and post `/reclarify`. Any later managed child with a copied triage body would hit the same failure.",
+  "fingerprint": "24da274ccf6f58a85f77420e58b1be0ae40c38f3416467c09dbcad41ffdfbc77",
+  "lineage": {
+    "issue_number": 7512,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38960548948",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38960548948",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261016201851_a7cac93060",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7512,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38960548948"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7512 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-16T20:18:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
