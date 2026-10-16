@@ -205,6 +205,15 @@ if not has_label and not has_marker:
 if not has_label and re.search(r"<!--\s*check-failure-triage:(?!pr=)", body) is None:
 	print("skip")
 	sys.exit(0)
+# An ai:orchestrator-managed child whose body copies a triage header
+# (#7511 / #7512) but has no ai:check-triage label is not a triage issue
+# to route: it resolves through its tracking issue, like any managed child.
+# Keep the pattern identical to extract_tracking_issue(). Without a
+# tracking line it is still refused as label_missing (fail closed).
+tracking_line = re.compile(r"^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$", re.MULTILINE)
+if not has_label and "ai:orchestrator-managed" in names and tracking_line.search(body):
+	print("skip")
+	sys.exit(0)
 pr_markers = re.findall(r"check-failure-triage:pr=([^\s>]*)", body)
 pr = pr_markers[0] if len(pr_markers) == 1 and re.fullmatch(r"[1-9][0-9]{0,9}", pr_markers[0]) else "none"
 
