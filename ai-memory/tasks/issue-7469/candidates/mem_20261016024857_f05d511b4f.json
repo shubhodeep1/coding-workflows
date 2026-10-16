@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7469,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7469\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7471\",\"pr_number\":7471,\"branch\":\"ai/issue-7469\",\"run_id\":\"38840704512\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38840704512\",\"changed_files\":[\"changelog.d/wfopt-2026-09-20-branch-review-base-fail-closed.md\",\"scripts/review_collect_pr_metadata.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "17a75720e1d5d3367f9a7a0a8672c3ba6159634e84e45fafa71fb9d644d22ca6",
+  "lineage": {
+    "issue_number": 7469,
+    "parent_ids": [],
+    "pr_number": 7471,
+    "run_id": "38840704512",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38840704512",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7471"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261016024857_f05d511b4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7469,
+    "level": "run",
+    "pr_number": 7471,
+    "run_id": "38840704512"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7469: https://github.com/shubhodeep1/coding-workflows/pull/7471",
+  "timestamps": {
+    "created_at": "2026-10-16T02:48:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
