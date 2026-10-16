@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -876,6 +877,7 @@ def _run_poller(
 	enable_security_pass: str = "false",
 	security_audit_payload: dict | None = None,
 	security_audit_exit_code: int = 0,
+	security_audit_stderr: str = "",
 	capture_telegram_calls: bool = False,
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
@@ -1234,6 +1236,7 @@ esac
 				"  'tracking_body': json.loads(Path(os.environ['GH_MOCK_STORE']).read_text(encoding='utf-8'))['issues']['192']['body'],\n"
 				"}), encoding='utf-8')\n"
 				"PY\n"
+				f"printf '%s' {shlex.quote(security_audit_stderr)} >&2\n"
 				f"if [ {int(security_audit_exit_code)} -ne 0 ]; then exit {int(security_audit_exit_code)}; fi\n"
 				"python3 - \"${SECURITY_AUDIT_FINDINGS_OUT}\" <<'PY'\n"
 				"import json, sys\n"
@@ -4011,6 +4014,65 @@ def test_security_pass_audit_worktree_failure_fails_closed() -> None:
 	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in combined_log
 	assert result["latest_state"]["security_pass_status"] == "failed"
 	assert result["latest_state"]["status"] != "complete"
+
+
+def test_security_pass_audit_failure_logs_stderr_tail_and_reports_audit_error() -> None:
+	"""A failed findings-JSON audit used to fail closed with no cause anywhere:
+	its stderr went to a file the job log never showed (tele-funtoken-msg-scoring
+	#3928). The tail now reaches the job log with `##[` escaped, and the last
+	structured `security-audit: phase=... error=...` line reaches the project."""
+	audit_stderr = (
+		"warming up\n"
+		"##[error]injected workflow command\n"
+		"security-audit: phase=prompt-render cwd=/w path=/s/prompts/mode-security-audit.txt "
+		"error=prompt\\ renderer\\ exited\\ nonzero\n"
+	)
+	result = _run_poller(
+		state=_security_pass_audit_tree_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_exit_code=3,
+		security_audit_stderr=audit_stderr,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_AUDIT_STDERR tracking_issue=192 rc=3 lines=3" in combined_log
+	assert "| warming up" in combined_log
+	assert "| ##\\[error]injected workflow command" in combined_log
+	assert "\n##[error]injected workflow command" not in combined_log
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in combined_log
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	failure_comments = [body for body in comment_bodies if "Project security pass unavailable" in body]
+	assert failure_comments, comment_bodies
+	assert "exited with status 3" in failure_comments[-1]
+	assert "last audit error: `phase prompt-render, error prompt\\ renderer\\ exited\\ nonzero`" in failure_comments[-1]
+	assert "injected workflow command" not in failure_comments[-1]
+
+
+def test_security_pass_audit_failure_without_structured_error_points_to_job_log() -> None:
+	result = _run_poller(
+		state=_security_pass_audit_tree_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_exit_code=1,
+		security_audit_stderr="bash: line 9: unbound variable\n",
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_AUDIT_STDERR tracking_issue=192 rc=1 lines=1" in combined_log
+	assert "| bash: line 9: unbound variable" in combined_log
+	comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	failure_comments = [body for body in comment_bodies if "Project security pass unavailable" in body]
+	assert failure_comments, comment_bodies
+	assert "job log under SECURITY_PASS_AUDIT_STDERR" in failure_comments[-1]
+	assert "unbound variable" not in failure_comments[-1]
 
 
 def test_security_pass_audit_worktree_wiring_contract() -> None:

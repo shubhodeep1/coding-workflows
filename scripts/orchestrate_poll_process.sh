@@ -6410,6 +6410,38 @@ reconcile_tracking_body_after_security_pass_transition() {
   return 0
 }
 
+# The findings-JSON audit runs under codex_heartbeat.sh with its stderr in a
+# file, so a failed pass used to leave no cause in the job log
+# (tele-funtoken-msg-scoring #3928 failed every tick 0.2s after the prompt was
+# built). Logs `SECURITY_PASS_AUDIT_STDERR` and the stderr tail, line-capped,
+# printable-only and with `##[` escaped so no line can act as a workflow
+# command. The raw tail goes to the job log only, where Actions masks
+# registered secrets. Prints, on stdout, the last structured
+# `security-audit: phase=... error=...` line's phase and error (security_audit.sh
+# already redacts those) for the project comment, or nothing.
+security_pass_report_audit_stderr() {
+  local audit_stderr_path="$1"
+  local audit_exit_rc="$2"
+  local audit_stderr_lines=0 audit_failure_line="" audit_failure_phase="" audit_failure_error=""
+  if [ -s "${audit_stderr_path}" ]; then
+    audit_stderr_lines="$(wc -l < "${audit_stderr_path}" | tr -d '[:space:]')"
+  fi
+  echo "SECURITY_PASS_AUDIT_STDERR tracking_issue=${TRACKING_NUM} rc=${audit_exit_rc} lines=${audit_stderr_lines:-0}" >&2
+  if [ ! -s "${audit_stderr_path}" ]; then
+    return 0
+  fi
+  echo "::group::Security audit stderr (last 40 lines)" >&2
+  tail -n 40 "${audit_stderr_path}" | cut -c1-400 | LC_ALL=C tr -cd '[:print:]\n' | sed -e 's/##\[/##\\[/g' -e 's/^/| /' >&2 || true
+  echo "::endgroup::" >&2
+  audit_failure_line="$(LC_ALL=C grep -E '^security-audit: phase=' "${audit_stderr_path}" 2>/dev/null | tail -n 1 || true)"
+  if [ -z "${audit_failure_line}" ]; then
+    return 0
+  fi
+  audit_failure_phase="$(printf '%s\n' "${audit_failure_line}" | sed -nE 's/^security-audit: phase=([^ ]*).*/\1/p')"
+  audit_failure_error="$(printf '%s\n' "${audit_failure_line}" | sed -nE 's/.* error=(.*)$/\1/p' | sed -E 's/ provider=[^ ]*$//')"
+  printf 'phase %s, error %s' "${audit_failure_phase:-unknown}" "${audit_failure_error:-unknown}" | LC_ALL=C tr -cd '[:print:]' | tr -d '`' | cut -c1-300
+}
+
 security_pass_fail_closed() {
   local failure_reason="$1"
   local failure_detail="$2"
@@ -8685,7 +8717,13 @@ run_security_pass_inline() {
     return 1
   fi
   if [ "${security_pass_audit_rc}" -ne 0 ]; then
-    security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
+    local security_pass_audit_failure_summary=""
+    security_pass_audit_failure_summary="$(security_pass_report_audit_stderr "${audit_error_file}" "${security_pass_audit_rc}")" || security_pass_audit_failure_summary=""
+    if [ -n "${security_pass_audit_failure_summary}" ]; then
+      security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited with status ${security_pass_audit_rc} without a usable result (last audit error: \`${security_pass_audit_failure_summary}\`)" "${prior_security_status}"
+    else
+      security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited with status ${security_pass_audit_rc} without a usable result; its stderr tail is in this run's job log under SECURITY_PASS_AUDIT_STDERR" "${prior_security_status}"
+    fi
     return 1
   fi
 
