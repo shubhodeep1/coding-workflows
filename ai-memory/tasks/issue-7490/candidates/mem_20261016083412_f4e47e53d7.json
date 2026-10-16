@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply workflow-optimization-2026-09-20-2 recommendations (verified subset)\",\"issues\":[{\"id\":\"continuation-peer-check\",\"title\":\"Review autofix: skip the peer check on continuation dispatches only when AUTOFIX_SKIP_SELF_TRIGGERED=true\",\"priority\":1},{\"id\":\"editor-stall-fallback\",\"title\":\"Review editor: switch to MODEL_EDITOR_FALLBACK after a stall-guard kill on the OpenCode path\",\"priority\":2},{\"id\":\"ledger-circuit-breaker\",\"title\":\"ledger_emit_substate.sh: per-job circuit breaker after the first record-run-event timeout or auth failure\",\"priority\":2},{\"id\":\"collector-pre-runner-failure\",\"title\":\"Workflow log collector: classify a job that failed before any step ran as pre_runner_failure\",\"priority\":3},{\"id\":\"wfopt-2026-09-20-2-closeout\",\"title\":\"Close out analysis/workflow-optimization-2026-09-20-2.md: delete the doc and record per-recommendation verdicts\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"continuation-peer-check\",\"to\":\"wfopt-2026-09-20-2-closeout\"},{\"from\":\"editor-stall-fallback\",\"to\":\"wfopt-2026-09-20-2-closeout\"},{\"from\":\"ledger-circuit-breaker\",\"to\":\"wfopt-2026-09-20-2-closeout\"},{\"from\":\"collector-pre-runner-failure\",\"to\":\"wfopt-2026-09-20-2-closeout\"}]}",
+  "fingerprint": "00a2619e5e13ffc8ab032f9ba23f476d72c8eafa36c87b98f499b020ed3c4b15",
+  "lineage": {
+    "issue_number": 7490,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38873220645",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38873220645",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261016083412_f4e47e53d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7490,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38873220645"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply workflow-optimization-2026-09-20-2 recommendations (verified subset)' into 5 issues (tracking #7490)",
+  "timestamps": {
+    "created_at": "2026-10-16T08:34:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
