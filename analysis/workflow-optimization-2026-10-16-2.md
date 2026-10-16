@@ -292,3 +292,323 @@ Stages in end-to-end order, with the evidence per stage:
 - The 6-minute CI gap is attributed to truncation of many short steps, not to one hung step.
 
 **Missing context:** without the mounted logs, the specific causes of the part-2 test failures and the checkout failure can't be determined.
+## Deep Audit — Workflows & Scripts (2026-10-16)
+
+> **Scope and method.** I read these in full or in the cited ranges: `CLAUDE.md`, `.github/ai/label_contract.v1.json`, `internal-review.yml`, `review_autofix_sweep.yml`, `cancel_on_pr_close.yml`, `internal-cancel-on-pr-close.yml`, `sync_ai_labels.yml`, `orchestrate_poll.yml:180-229`, `implement.yml:4933-5170`, `workflow-log-analysis.yml:1057-2125`, `review_autofix.yml:2770-2910, 3305-3360, 4085-4130, 4835-5139, 5430-5474`, `scripts/gh_helpers.sh:1-1430, 1880-1990`, `scripts/label_helpers.sh`, `scripts/tg_helpers.sh:15-305`, `scripts/review_merge_train.sh:1150-1440`, `scripts/orchestrate_poll_process.sh:21790-21900, 22030-22120, 22195-22284`, `scripts/workflow_failure_heal_intake.sh:432-471`, `scripts/nag_reminder.sh` and `tests/test_workflow_file_size_limit.py`. The other files were covered by targeted greps only. I measured no character or byte counts with tooling; every size below is an estimate and says so.
+>
+> **Already covered in this report, not repeated here:** the duplicate review runs and `internal-review.yml:50` concurrency keys (Speed 1), the `REVIEW_CHECKOUT_FAIL` exits at `review_autofix.yml:2809-2866` (Reliability 2), and the `CODEX_TOKENS_RE` parser at `scripts/cost_audit.py:62` (Reliability 3).
+
+### Section 1: Bug & Correctness Sweep
+
+**BUG-001**: `scripts/label_helpers.sh:220-254` · Severity: **High** · Category: `bug`
+- **Description:** `set_issue_phase_label_resilient` reads the label set, computes a new one, then replaces it with `PUT …/labels`. Two things can go wrong:
+  - **Empty read becomes "no labels" (can wipe labels).** The read at 221-222 is `gh_retry gh api --paginate … | jq -cs 'add // []'`. When `gh_retry` fails it writes nothing to stdout (gh_helpers.sh:1043-1054). `jq -cs 'add // []'` on empty input prints `[]` and exits 0. Unless the caller has `pipefail` set, the `if !` at 221 never fires and line 234 keeps `[]`. The PUT at 249-251 then replaces **every** label with just the target label, dropping non-phase labels such as `ai:orchestrator-managed` and `ai:orchestrator-tracking`. That is the label-loss class that stalls the orchestrator (see §21's incident). [NEEDS VERIFICATION: whether any caller sources this helper without `pipefail`.]
+  - **Lost update even when the read succeeds.** Any label added or removed by another job between the GET (221) and the PUT (250) is overwritten.
+- **Recommended fix:**
+  - Read into a file with `gh_retry_to_file` (gh_helpers.sh:1149), so the exit status belongs to the API call and not to `jq`.
+  - Treat an empty or `[]` result as a failed read and take the existing POST-add fallback (224-230).
+  - Replace the full-set `PUT` with POST-add of the target plus one DELETE per phase label actually present. These are the same endpoints the merge train already uses (`review_merge_train.sh:949`, `:986`).
+
+  ```bash
+  _cur_file="$(mktemp)"
+  if ! gh_retry_to_file "${_cur_file}" gh api --paginate "repos/${repo}/issues/${issue_number}/labels" --jq '.[].name' || [ ! -s "${_cur_file}" ]
+  then
+  	# existing POST-add fallback (lines 224-230)
+  	:
+  fi
+  ```
+
+**BUG-002**: `scripts/gh_helpers.sh:1271-1335` · Severity: **Medium** · Category: `bug`
+- **Description:** `gh_api_json_to_file` never calls `_is_gh_permanent_failure`, while `gh_retry` (1099) and `gh_retry_to_file` (1184) both do. So 404, 422 and 401 responses are retried 5 times, with sleeps of 1+2+4+8 = 15 s. Several callers probe endpoints where a 404 is an expected answer:
+  - `workflow_failure_heal_intake.sh:459` reads `pulls/${ISSUE_NUMBER}`.
+  - `workflow_failure_heal_intake.sh:466` reads `compare/${HEAD_SHA}...${BIND_PR_HEAD}` after a force-push, where the old SHA may be gone.
+  - `workflow_failure_heal_report.sh:235` reads `pulls/${ISSUE_NUMBER}` on an issue number.
+
+  Each of these spends 5 calls and about 15 s instead of 1 call.
+- **Recommended fix:** in the `else` branch at 1302-1323, add the same permanent-failure block as `gh_retry_to_file:1184-1192`: log a warning, truncate `outfile`, `return 1`.
+
+**BUG-003**: `scripts/gh_helpers.sh:1350-1403` · Severity: **Medium** · Category: `bug`
+- **Description:** `curl_gh_api` retries every non-2xx response, including permanent ones (404, 401, 422), up to `GH_RETRY_MAX_ATTEMPTS`. It also lacks the single-attempt rule for non-idempotent POSTs that `gh_retry` (1067-1069) and `gh_api_retry` (931-933) have. A POST through it that hits a 5xx or timeout after GitHub already accepted the write gets replayed, which can post duplicate comments. [NEEDS VERIFICATION: which of the `curl_gh_api` callers in `check_failure_triage.sh`, `workflow_failure_heal_intake.sh` and `workflow_failure_heal_report.sh` send POSTs; the `tg_helpers.sh:169,176` callers are GETs.] The header at 1340-1341 also says it "sleeps 30 s", but the code sleeps until the parsed reset (1384-1388).
+- **Recommended fix:**
+  - Return immediately on `4xx` other than 403/429.
+  - Parse `-X POST` / `--data*` from the arguments and cap attempts at 1 unless the caller passes `--idempotent`, mirroring `_gh_cmd_is_unsafe_post`.
+  - Correct the header comment.
+
+**BUG-004**: `.github/workflows/review_autofix_sweep.yml:213, 228-239, 590-609` · Severity: **Medium** · Category: `bug`
+- **Description:** The step runs under `set -euo pipefail` (213), but the open-PR listing at 228-237 is a raw `gh api --paginate`, even though `gh_api_retry` is already sourced at 216-220. One transient error fails "Enumerate open PRs…". Two later steps have no status-check function, so they default to `success()` and are skipped for that tick:
+  - "Re-run cancelled CI failed jobs once" (590-598), which also loses the snapshot it reads, written at 239.
+  - "Re-dispatch stale security holds" (600-601).
+
+  The backfill step (564) already uses `!cancelled()` for exactly this reason.
+- **Recommended fix:**
+  - Use `GH_TOKEN="${READ_TOKEN}" gh_api_retry --paginate -X GET …` at 228.
+  - Add `${{ !cancelled() && … }}` to the `if:` of steps 590 and 600.
+  - Have `ci_cancelled_rerun.py` fail open when the snapshot file is missing. [NEEDS VERIFICATION: current behaviour of `ci_cancelled_rerun.py` on a missing file.]
+
+**BUG-005**: `.github/workflows/implement.yml:5151-5168` · Severity: **Medium** · Category: `bug`
+- **Description:** In "Handle no-op implementation" (`set -euo pipefail` at 4942), the fall-through comment POST `gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" -f body="${noop_body}"` has no `|| true`. It is also a non-idempotent create, so `gh_retry` makes one attempt (gh_helpers.sh:1067). If that POST fails, the step exits before 5157-5168 apply `ai:implementation-failed`, which is the label the orchestrator re-issue path keys on. The three earlier guards in the same step all tolerate a comment failure (4989, 5032, 5123). The POST also prints the full comment JSON to the log, because it has no `>/dev/null`.
+- **Recommended fix:** apply the label first (5157-5168), then post the comment with `>/dev/null 2>&1 || echo "::warning::no-op comment post failed for #${ISSUE_NUMBER}"`.
+
+**BUG-006**: `.github/workflows/cancel_on_pr_close.yml:128-147, 266-284` · Severity: **Medium** · Category: `bug`
+- **Description:** Close-time cleanup lists and cancels only `event=pull_request` runs (133, 143, 275). Review runs dispatched by the sweep, the poller and the merge train are `workflow_dispatch` runs from the default branch, named `Internal: AI Review & Autofix [pr:N]` (`internal-review.yml:8`). They never match, so they keep running after the PR closes. The only stop is the closed-PR watchdog (`gh_review_pr_state`, called at `review_run_reviewers.sh:4247` and `review_apply_fixes.sh:2121`), which covers the reviewer and editor phases only. [NEEDS VERIFICATION: how much runner time a closed PR's dispatched run spends before the watchdog fires.]
+- **Recommended fix:** add one paged `gh_api_retry` listing of `actions/workflows/internal-review.yml/runs?event=workflow_dispatch&status=…` per status. Match `display_title` against `[pr:<PR_NUMBER>]` with default-branch provenance, reusing the `dispatch_pr` jq definition from `review_autofix_sweep.yml:376-385`. Cancel the matches with the existing loop at 304-320.
+
+**BUG-007**: `scripts/tg_helpers.sh:124-127, 148-150` · Severity: **Medium** · Category: `bug`
+- **Description:** `tg_send_msg` and `tg_delete_msg` call `curl -s -X POST https://api.telegram.org/…` with no `--max-time` or `--connect-timeout`. The rate-limit alert in `gh_helpers.sh:421, 465, 509, 526` uses `--max-time 10`. A stalled Telegram connection therefore blocks the calling step, for example the five Telegram steps in `review_autofix.yml` (4100, 4845, 4995, 5136, 5440), until the job timeout. That turns a best-effort notification into a hang.
+- **Recommended fix:** add `--connect-timeout 5 --max-time 10` to every Telegram `curl` in `tg_helpers.sh`, matching `_gh_ratelimit_tg_alert`.
+
+**BUG-008**: `scripts/tg_helpers.sh:22-29, 203-211` · Severity: Low · Category: `bug`
+- **Description:** `tg_helpers.sh` sources `scripts/gh_helpers.sh` relative to the current directory. By contrast, `gh_helpers.sh:120` and `label_helpers.sh:13` resolve their own `BASH_SOURCE` directory. If the caller's working directory has no `scripts/`, and `gh_helpers.sh` has not been sourced already, `curl_gh_api` falls back to plain `curl` (28). Plain `curl` exits 0 on HTTP errors, so `_tg_newest_comments_json` fails to parse and returns 1. `tg_store_msg_id` then POSTs a **new** tracking comment on every message (206-210). That is the comment-spam failure the file itself documents at 157-159.
+  - `review_autofix.yml` (4101-4102) avoids this only by sourcing `gh_helpers.sh` straight after, which redefines the fallback.
+- **Recommended fix:** source `"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gh_helpers.sh"`, using the same pattern as `label_helpers.sh:13`.
+
+**BUG-009**: `scripts/tg_helpers.sh:214-229, 282-298` · Severity: Low · Category: `bug`
+- **Description:** `tg_store_msg_id` and `tg_store_phase_msg_id` read the tracking comment, edit its ID list with `sed`, and PATCH it back. Two concurrent jobs on the same issue or PR, such as a review run and a poller tick, lose one job's message IDs. Those Telegram messages are then never cleaned up.
+- **Recommended fix:** the race can't be removed without a lock. Narrow it: re-read right before the PATCH and merge the ID sets. Or keep one marker comment per run (`tg_cleanup:<run_id>:…`) and have the cleanup read all of them.
+
+**SEC-001**: `scripts/tg_helpers.sh:124, 207, 226, 233, 275, 295, 301`; `scripts/gh_helpers.sh:417` · Severity: Low · Category: `security`
+- **Description:** These calls put `Authorization: token ${GH_TOKEN}` and the Telegram bot token (`…/bot${TG_BOT_SECRET}/…`) on the `curl` command line. Command lines can be read through `/proc/<pid>/cmdline` by any process running as the same user on the runner (inference). Masking hides them from the Actions log, but not from other processes. GitHub API calls made through `gh` take the token from the environment instead.
+- **Recommended fix:** send GitHub calls in `tg_helpers.sh` through `gh_retry gh api`, so the token stays out of argv. For Telegram, pass the URL through a `0600` temp file (`curl --config <file>`) and delete it afterwards.
+- **No injection finding:** untrusted PR and issue text reaches shell only through `env:`, for example `lint-pr-body-auto-close.yml:60-61`, `issue_pr_status.yml:204-205`, `orchestrate_clarify_respond.yml:75,122,612` and `review_autofix.yml:593-594`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+**API-001**: `scripts/orchestrate_poll_process.sh:21805-21853` (callers at 10523, 12688, 16927, 17355, 20627, 21695, 21723, 25075, 25158, 25420, 26259, 26318, 29160, 29594) · Severity: **Medium** · Category: `api-redundancy`
+- **Description:** `_has_active_autofix_run` runs `gh_retry gh run list --workflow <wf> --branch <head>` once for each of `ai-review.yml`, `internal-review.yml` and `review_autofix.yml` (21811-21819). When those find nothing it then calls `_pr_named_review_dispatch_runs`, which reads up to 10 pages for each of two wrappers (22085-22103). It is reached through `_dispatch_review_for_conflicts` (22233) from per-PR loops: the ready-to-merge loop (25075), the in-progress loop (25158) and the review-blocked loop (26259, 26318). The sweep already proved the cheaper shape: one snapshot per tick, then local lookups (`review_autofix_sweep.yml:292-439`).
+  - `ai-review.yml` does not exist in this repo. If `gh`'s "workflow not found" error text doesn't match `_is_gh_permanent_failure` (gh_helpers.sh:194), each lookup costs 5 attempts and about 15 s of backoff. [NEEDS VERIFICATION: the exact `gh run list --workflow <missing>` error text.]
+- **Current calls:** 3–5+ per PR evaluated, so 3N–5N per tick.
+- **Proposed:** about 6 paged calls per tick (3 statuses × 2 wrappers) plus 0 per PR.
+- **Pattern to extend:** copy `snapshot_active_review_runs` (sweep 300-435) into a poller helper and cache its result in a cycle-local file next to `_CONFLICT_DISPATCH_TRACKER` (22223). Keep today's fail-closed rule: an incomplete snapshot means skip the dispatch.
+
+**API-002**: `.github/workflows/internal-cancel-on-pr-close.yml:6-7,16`; `cancel_on_pr_close.yml:331-367`; `orchestrate_poll.yml:195-222`; `internal-orchestrate-poll.yml:5` · Severity: **Medium** · Category: `api-redundancy`
+- **Description:** Two workflows run the global merge-train release scan (`review_merge_train.sh release`, which calls `_mt_release` at 1333) every 5 minutes in this repo:
+  - the poller backstop, on every tick (`orchestrate_poll.yml:195-222`);
+  - `cancel_on_pr_close.yml`'s scheduled path, which `internal-cancel-on-pr-close.yml` also fires on `*/5 * * * *`.
+
+  Each scan costs:
+  - an open-PR listing;
+  - when any PR is queued, the in-flight listing, which reads 5 statuses twice: at least 10 calls (`review_merge_train.sh:1166`);
+  - per queued PR: a paged file list (222), a marker-comment read (804) and blocker evaluation.
+
+  The step's own comment says the scheduled release exists because "core-profile repos have no poll backstop" (cancel_on_pr_close.yml:334). Full-profile repos like this one pay twice.
+- **Current calls:** 2 scans per 5 min, so about 2 × (2 + 10 + 3Q), where Q is the number of queued PRs.
+- **Proposed:** 1 scan per 5 min. Halves merge-train API use.
+- **Fix:** gate the scheduled release in `cancel_on_pr_close.yml` with `if: github.event_name != 'schedule' || vars.WORKFLOW_PROFILE == 'core'`. The `pull_request: closed` path stays unchanged.
+
+**API-003**: `scripts/tg_helpers.sh:166-237, 245-251` · Severity: Low · Category: `api-redundancy`
+- **Description:** Each `tg_send_tracked` call costs 3 GitHub calls: the issue GET for the comment count (169), the last comments page GET (176), then a PATCH or POST (225/232). `review_autofix.yml` makes several tracked sends per run (4118, 4861, 4940, 5051, 5102, 5124).
+- **Current calls:** 3 per tracked message. **Proposed:** 1 per message after the first in a job.
+- **Pattern to extend:** the `RUNNER_TEMP` + `flock` per-job cache in `gh_review_pr_state` (gh_helpers.sh:83-118). Cache the tracking comment's ID and body, and fall back to the 3-call path on a cache miss.
+
+**API-004**: `scripts/label_helpers.sh:159-193, 218` · Severity: Low · Category: `api-redundancy`
+- **Description:** `ensure_label_exists` sends `gh label create` (a POST) on every call. When the label already exists, GitHub answers 422 and the helper ignores it. `set_issue_phase_label_resilient` calls it on every phase transition (218).
+- **Current calls:** 1 POST per call. **Proposed:** 0 after the first successful create or "already exists" in a job.
+- **Fix:** record each confirmed label in a job-local file `${RUNNER_TEMP}/ai_labels_ensured_${GITHUB_RUN_ID}` and check it before the POST. This fails open: a missing file means the POST is sent as today.
+
+**API-005**: `.github/workflows/review_autofix.yml:4976, 5059, 5110, 5132` · Severity: Low · Category: `api-redundancy`
+- **Description:** The "Editor changes lost" and "Editor no-op suspicious" branches POST a **new** PR comment on every occurrence. A PR stuck in a no-op loop collects one comment per run. The same file already has a marker upsert (3335-3358), as does `review_merge_train.sh` (`_mt_upsert_comment`, 870-886).
+- **Current calls:** 1 new comment per occurrence. **Proposed:** a marker upsert (1 PATCH), reusing the `PR_ISSUE_COMMENTS_FILE` already fetched (3326) so no extra read is needed. [NEEDS VERIFICATION: the poller's no-op recovery sweep greps for the `⚠️ **Editor no-op suspicious**` literal; check it doesn't depend on comment count or recency before switching to upsert.]
+
+**API-006**: `scripts/orchestrate_poll_process.sh:22249-22259`; `scripts/review_merge_train.sh:1323-1329` · Severity: Low · Category: `api-redundancy`
+- **Description:** Both dispatchers try `ai-review.yml` first. It doesn't exist in this repo, so every dispatch costs one failed `gh workflow run` before `internal-review.yml` succeeds.
+- **Current calls:** 2 per dispatch here. **Proposed:** 1.
+- **Fix:** resolve the wrapper once per process and memoize the first one that succeeds. Alternatively, order `internal-review.yml` first when `GITHUB_REPOSITORY` is `shubhodeep1/coding-workflows`.
+
+**BATCH-001**: `.github/workflows/implement.yml:5084-5097` · Severity: Low · Category: `api-batching`
+- **Description:** The ancestor-chain no-op walk makes 2 REST calls per hop: the issue body (5085) and the paged comments (5089). With the default `IMPL_NOOP_ANCESTRY_THRESHOLD=2`, that is 4 calls, and each paged comment read can be several pages.
+- **Proposed:** 1 GraphQL call per hop: `repository{issue(number:$n){body comments(last:100){nodes{body}}}}`. That gives 2 calls total, still fail-open (break on any error). The hops are sequential, so they can't be aliased into one query.
+- **Pattern to extend:** the aliased-query construction in `cancel_on_pr_close.yml:174-188`.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001**: five "active review run" snapshot implementations · Severity: **Medium** · Category: `duplication`
+- **Description:** The same "is a review run active for PR N or branch B" question is answered five ways:
+  - `review_autofix_sweep.yml:300-439` (`snapshot_active_review_runs`): statuses `queued in_progress pending`.
+  - `orchestrate_poll_process.sh:21805-21853` (`_has_active_autofix_run`): `in_progress queued pending`.
+  - `orchestrate_poll_process.sh:22043+` (`_pr_named_review_dispatch_runs`).
+  - `gh_helpers.sh:1921+` (`_autofix_pr_named_review_runs`), nearly the same code as the poller's: same two wrappers, 10-page cap and 404-means-empty rule.
+  - `review_merge_train.sh:1151+` (`_mt_inflight_review_branches`): statuses `requested pending queued waiting in_progress`, read twice.
+  - `cancel_on_pr_close.yml:116-150` (`_cpr_fetch_active_runs`): `queued in_progress`.
+
+  The status sets already differ (see CONSIST-005).
+- **Recommended fix:** add one helper to `scripts/gh_helpers.sh`:
+  - **Signature:** `review_active_runs_snapshot <repo> <out_file> [wrappers…]`.
+  - **Output:** `{ "pr:<N>": count, "<branch>": count }`, with default-branch provenance as in sweep 372-385.
+  - **Statuses:** `requested waiting pending queued in_progress`.
+  - **On an incomplete listing:** rc 1.
+
+  Callers to update: the sweep (437-439), `_has_active_autofix_run`, `_mt_inflight_review_branches` and `_autofix_pr_named_review_runs`'s callers. Document its batching contract per §15.
+
+**DUP-002**: default-branch memo, four copies · Severity: Low · Category: `duplication`
+- **Description:** Four places resolve and cache the default branch:
+  - `gh_helpers.sh:1898-1919` (`_autofix_review_default_branch_prime`).
+  - `orchestrate_poll_process.sh:21874-21900` (`_review_run_default_branch`).
+  - `review_merge_train.sh:1142` (`_mt_resolve_default_branch`).
+  - `review_autofix_sweep.yml:285-290`, inline.
+
+  All four apply the same `^[A-Za-z0-9._/-]+$` and `!= "null"` checks.
+- **Recommended fix:** one `gh_repo_default_branch <repo>` in `gh_helpers.sh`, memoized in a file under `${RUNNER_TEMP}`. Callers wrap it, keeping their existing names (§10).
+
+**DUP-003**: `scripts/gh_helpers.sh:1060-1335` · Severity: **Medium** · Category: `duplication`
+- **Description:** `gh_retry`, `gh_retry_to_file` and `gh_api_json_to_file` are three copies of one retry loop: temp-file setup, rate-limit branch, backoff and final error. They have already drifted: the third copy lacks the permanent-failure check (BUG-002).
+- **Recommended fix:** an internal `_gh_retry_core <mode:stdout|file|json> <outfile|-> <cmd…>`. Keep the three public names as thin wrappers so no caller changes (§10).
+
+**DUP-004**: inline label creation, 44 sites in 14 files · Severity: **Medium** · Category: `duplication`
+- **Description:** A grep finds 44 `gh label create` calls across 14 files, 43 of them outside the catalog helper in `label_helpers.sh`. Examples: `implement.yml` (8), `implement_handle_guard_block.sh` (10), `review_autofix.yml` (4), `review_rb_judge.sh` (4). Two scripts reimplement part of the catalog as `case` blocks: `review_autofix_step_mark_ready_to_merge.sh:18-27` and `review_rb_judge.sh:927-936`. The comment at `review_rb_judge.sh:916-917` justifies skipping `gh_retry` because of 422s, but `gh_retry` now treats HTTP 422 as permanent (gh_helpers.sh:194); see DEBT-001.
+- **Recommended fix:** route every site through `ensure_label_exists <label> <repo>` (label_helpers.sh:159). Its catalog mirrors `label_contract.v1.json`, which also fixes CONSIST-001.
+
+**DUP-005**: `.github/workflows/workflow-log-analysis.yml:246-385, 822-996, 1659-1856, 2264-2453; 1098-1191, 1886-1962` · Severity: **Medium** · Category: `duplication`
+- **Description:** The four AI jobs repeat the same roughly 150-line setup: resolve engine, install Claude, Claude credential, Python, cache/install/persist/restore Codex, Codex config, uv, Semble install and index. The three AI passes also repeat the `AI_PHASE_FAILURE_V1` emitter (`emit_log_analysis_phase_failure` and `emit_deep_audit_failure`) and the attempt/backoff loop (1338-1396 vs 2031-2084).
+- **Recommended fix:**
+  - Add a composite action `.github/actions/setup-codex-cached`, extending `install-codex`, that owns the cache/persist/restore steps.
+  - Add `scripts/wla_emit_phase_failure.sh <failed_step> <failure_mode> <attempts> <summary>`.
+  - Add `scripts/wla_run_ai_pass.sh <role> <prompt_file> <out_file> <phase>`.
+  - Update the four jobs. Moving these bodies out also removes the EXPR-001/EXPR-002 risk.
+
+**DUP-006**: `.github/workflows/review_autofix.yml:4103-4117, 4849-4860, 4908-4909, 4999-5000, 5152-5157, 5445-5461` · Severity: Low · Category: `duplication`
+- **Description:** Six steps build the same Telegram message by hand: `PR_URL` / `RUN_URL` / `ISSUE_NUM` / `MSG+="Issue: …"`.
+- **Recommended fix:** add `scripts/review_autofix_step_tg_compose.sh` providing `review_tg_compose <headline>`, built from `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY` and `GITHUB_RUN_ID`. Follow the `review_autofix_step_<slug>.sh` registration pattern described in agents.md ("Workflow file size limit").
+
+**DUP-007**: `.github/workflows/cancel_on_pr_close.yml:337-346` vs `orchestrate_poll.yml:203-211` · Severity: Low · Category: `duplication`
+- **Description:** The same 7 `MERGE_TRAIN_*` env defaults are copied in both workflows, so a default changed in one will drift from the other.
+- **Recommended fix:** move the defaults into `review_merge_train.sh`'s env parsing and pass only the `vars.*` values from the workflows. [NEEDS VERIFICATION: which defaults the script already applies.]
+
+### Section 4: Expression Size Limit Risk Assessment
+
+> **What CI already guards:** `tests/test_workflow_file_size_limit.py:62-98` fails any `jobs.*.steps[].run` that contains `${{` and is at least 18,000 characters long. So no workflow step can currently be in the High band (≥18,000), assuming CI is green.
+>
+> **What's estimated:** the sizes below are inferences from line counts and visible line lengths, after YAML strips the block indentation. None were measured with tooling. Each fix is the same: replace `${{ github.* }}` inside the body with the runner's default env vars (`GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, `GITHUB_WORKFLOW`, `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`). With no `${{` left, the body is no longer one expression and isn't subject to the 21,000-character limit.
+
+**EXPR-001**: `.github/workflows/workflow-log-analysis.yml:1068-1399` ("Run workflow log analysis") · Severity: **Medium** · Category: `expression-limit`
+- **Description:** A 331-line run body with `${{ github.run_id }}`, `${{ github.run_attempt }}`, `${{ github.workflow }}`, `${{ github.server_url }}` and `${{ github.repository }}` at 1111-1113, 1126, 1132-1134 and 1171-1173. Several lines are over 200 characters (1253, 1258, 1310-1311, 1332).
+  - **Estimated size:** 15,000–17,900 characters (inference; CI passes, so under 18,000).
+  - **Headroom:** about 3,100–6,000 characters to 21,000.
+- **Recommended fix:** substitute the 12 `${{ github.* }}` uses with the env vars above. That is behaviour-neutral, because they are the same values. Then extract the body as in DUP-005.
+
+**EXPR-002**: `.github/workflows/workflow-log-analysis.yml:1867-2119` (deep audit) and `:2453-2717` (API redundancy pass) · Severity: Low · Category: `expression-limit`
+- **Description:**
+  - Deep audit: about 252 lines, `${{ }}` at 1897-1899, 1911, 1917-1919, 1950-1952. Estimated 12,000–14,000 characters.
+  - API redundancy: about 264 lines, `${{ }}` at 2495-2497 and 2548-2550. Estimated 12,000–14,500 characters.
+  - **Headroom:** about 6,500–9,000 characters each.
+  - Both carry the inline `required_headings` validator and attempt loop, which tend to grow.
+- **Recommended fix:** the same env-var substitution as EXPR-001.
+
+**EXPR-003**: `.github/workflows/implement.yml:4941-5168` ("Handle no-op implementation") · Severity: **Medium** · Category: `expression-limit`
+- **Description:** About 227 lines. Long prose comment and issue-body literals (4969-4975, 5008-5022, 5102-5109, 5131-5149) sit alongside `${{ }}` at 4946, 4948, 5151, 5159, 5161, 5165 and 5167. Every new guard adds another prose block.
+  - **Estimated size:** 13,000–15,500 characters (inference).
+  - **Headroom:** about 5,500–8,000 characters. [NEEDS VERIFICATION: exact length.]
+- **Recommended fix:** use `${REPO}`, which is already assigned at 4948, or `${GITHUB_REPOSITORY}`, and build `RUN_URL` from the env vars. Move the four comment bodies to files under `prompts/`, rendered with `scripts/render_prompt.sh`, or move the whole body to `scripts/implement_handle_noop.sh`.
+
+**EXPR-004**: `.github/workflows/review_autofix.yml:4995-5133` ("Telegram editor-noop-suspicious warning") · Severity: Low · Category: `expression-limit`
+- **Description:** About 138 lines with `${{ }}` at 4999-5000, 5059, 5110 and 5132.
+  - **Estimated size:** 8,000–9,500 characters.
+  - **Headroom:** about 11,500 characters.
+  - It grows every time a new no-op branch is added (three so far).
+- **Recommended fix:** the env-var substitution, plus DUP-006.
+
+**EXPR-005**: `tests/test_workflow_file_size_limit.py:66-98` · Severity: Low · Category: `expression-limit`
+- **Description:** The guard has two blind spots:
+  - It only walks `jobs.*.steps`. Composite actions under `.github/actions/*/action.yml` (for example `setup-runtime` at 146 lines and `run-soft-error-analyzer` at 166 lines) are never checked.
+  - It has no early-warning tier, so EXPR-001 and EXPR-003 only surface once they cross 18,000.
+
+  No `actions/github-script` `script:` inputs exist today (a grep found 0).
+- **Recommended fix:**
+  - Also iterate `runs.steps[].run` in `.github/actions/**/action.yml`.
+  - Print, without failing, every `${{ }}` body of 15,000 characters or more, so growth shows up in CI logs.
+
+**Workflow file size.** No workflow is anywhere near 800 KB. The binding limit is GitHub's 512,000 bytes (§24), and CI fails at 480,000 bytes (`tests/test_workflow_file_size_limit.py:26-27,44-59`). By line count the largest are `test-and-mark-stable.yml` (7,551 lines), `implement.yml` (6,494) and `review_autofix.yml` (5,690). Byte headroom under 480,000 was not measured. [NEEDS VERIFICATION: `wc -c` on these three.] The "1 MB / 800 KB" figures in this audit's own prompt are stale; see CONSIST-007.
+
+### Section 5: Cross-Cutting Concerns
+
+**Technical-debt markers.** A grep for `TODO`, `FIXME` and `HACK` across `.github/workflows/*.yml`, `scripts/*.sh` and `scripts/*.py` found 0 matches. No marker findings.
+
+**DEAD-001**: `scripts/gh_helpers.sh:336-341` · Severity: Low · Category: `dead-code`
+- **Description:** `gh_rate_limit_breaker_tripped` has no callers in workflows or scripts. Its own comment (313-318) says the only consumer, the `orchestrate_poll.yml` self-retrigger, was removed.
+- **Recommended fix:** don't remove it (§10; consumer repos may call it). Mark it deprecated in the header and point to `gh_rate_limit_breaker_active` (894).
+
+**DEAD-002**: `.github/workflows/review_autofix_sweep.yml:219` · Severity: Low · Category: `dead-code`
+- **Description:** `source "${GH_API_RETRY_HELPERS:-/dev/null}"` always sources `/dev/null` here. `GH_API_RETRY_HELPERS` is only written by "Bootstrap GitHub API retry helper" steps in other workflows (`validate.yml:142`, `implement.yml:159`, `review_autofix.yml:357`, `security-audit.yml:103`, `orchestrate_clarify_respond.yml:113`). [NEEDS VERIFICATION: `tests/test_workflow_gh_retry_fallback_contract.py:406` may require this literal line.]
+- **Recommended fix:** keep the line if the contract test needs it, and add a comment saying the sweep sources `scripts/gh_helpers.sh` directly (216-217).
+
+**DEAD-003**: `scripts/gh_helpers.sh:91, 108` · Severity: Low · Category: `dead-code`
+- **Description:** `gh_review_pr_state` accepts a `merged` value from `pulls/{n}` `.state`, but the REST pulls API only returns `open` or `closed`, so that branch can't be reached (inference based on the REST schema).
+- **Recommended fix:** leave the behaviour as is and add a comment. A merged PR reports as `closed`, which callers already handle.
+
+**DEBT-001**: `scripts/review_rb_judge.sh:916-936` · Severity: Low · Category: `tech-debt`
+- **Description:** The comment says `gh label create` is deliberately not wrapped in `gh_retry` because of 422 "already exists". `gh_retry` now treats HTTP 422 as permanent and makes one attempt (gh_helpers.sh:194, 1099-1106), so the comment is out of date and transient 5xx failures go unretried.
+- **Recommended fix:** call `ensure_label_exists` (DUP-004) and delete the stale comment.
+
+**CONSIST-001**: label colour and description drift from the contract · Severity: Low · Category: `consistency`
+- **Description:** These create-if-missing calls use different metadata from the contract:
+
+  | Label | Call site | Hard-coded value | Contract value |
+  |---|---|---|---|
+  | `ai:closed` | `implement.yml:4976-4977`, `5110-5111` | colour `6b7280`, "Issue closed by automation (superseded, duplicated, or already complete)" | `label_contract.v1.json:156-158`: colour `6a737d`, "Linked PR closed without merge" |
+  | `ai:needs-human` | `implement.yml:5023-5024` | colour `b60205` | `100-102`: colour `e11d48` |
+  | `ai:log-analysis-failed` | `workflow-log-analysis.yml:1182-1185`, `1960` | "Workflow log analysis failed" | `84-86`: "Workflow log analysis failed before producing an analysis report" |
+
+  Whichever path creates the label first decides its metadata until `sync_ai_labels.yml` runs.
+- **Recommended fix:** use `ensure_label_exists` (DUP-004).
+
+**CONSIST-002**: `.github/workflows/workflow-log-analysis.yml:319, 901, 1738, 2343` · Severity: Low · Category: `consistency`
+- **Description:** These steps use `shubhodeep1/coding-workflows/.github/actions/install-codex@stable`, while the same jobs use local `./.github/actions/install-claude` (1707) and `./.github/actions/claude-pool-token` (1715). The workflow is not reusable (schedule and dispatch only, per the comment at 1676-1677). `security-audit.yml:273` and `workflow-failure-heal-intake.yml:228,409` already use `./.github/actions/install-codex`. As a result, changes to `install-codex` on `main` aren't exercised by this repo's own log-analysis runs until they reach `@stable`.
+  - The reusable workflows (`implement.yml:254`, `plan.yml:103`, …) correctly keep `@stable`.
+- **Recommended fix:** switch these four to `uses: ./.github/actions/install-codex`.
+
+**CONSIST-003**: `.github/workflows/review_autofix_sweep.yml:274, 288, 485-491, 552` · Severity: Low · Category: `consistency`
+- **Description:** The `AUTOFIX_SWEEP_END` line on the `default_branch_unavailable` path (288) is missing the `skipped_merge_queued=` and `snapshot_incomplete=` fields that 274 and 552 emit. The `claude_capacity_wait` skip (485-491) increments no counter, so the counters don't add up to `candidates`.
+- **Recommended fix:** add a `skipped_capacity_wait` counter (a new key, so additive) and emit the same field set on all three END lines.
+
+**CONSIST-004**: `.github/workflows/review_autofix_sweep.yml:577-609` · Severity: Low · Category: `consistency`
+- **Description:** "Record GH_PAT budget at sweep end" (577) runs before "Re-dispatch stale security holds" (600-609), which uses `secrets.GH_PAT` (603). The step's `GH_PAT_BUDGET … used_in_job=` value therefore under-counts. This matters for the poller and sweep attribution gap in this report's "GH API Call Audit" section.
+- **Recommended fix:** move the end-budget step to be the last step, keeping `if: always()`.
+
+**CONSIST-005**: active-run status sets differ (see DUP-001) · Severity: Low · Category: `consistency`
+- **Description:** The sweep (`review_autofix_sweep.yml:337`) and the poller (`orchestrate_poll_process.sh:21818`) don't treat `requested` or `waiting` runs as active, but the merge train does (`review_merge_train.sh:1166`). A review run sitting in `waiting` or `requested` is invisible to the sweep, which can then dispatch a duplicate. Inference: `waiting` normally only appears with environment protection rules.
+- **Recommended fix:** use one status list (`requested waiting pending queued in_progress`) in the shared helper from DUP-001.
+
+**CONSIST-006**: raw `gh` where neighbouring code uses the retry helpers · Severity: Low · Category: `consistency`
+- **Description:** These calls use bare `gh`:
+  - `review_autofix_sweep.yml:228` and `285` (raw `gh api`) and `543` (raw `gh workflow run`, with stderr discarded so the failure reason is lost).
+  - `workflow-log-analysis.yml:1162`, `1182`, `1187`, `1944`, `1960-1961`.
+  - `implement.yml:1949`, `2175`, `2194-2195`, `2217`.
+
+  The same files already use `gh_retry` or `gh_api_retry` for the same endpoints, for example `implement.yml:1773` and `2403`.
+- **Recommended fix:** wrap reads in `gh_api_retry` or `gh_retry`, and creates in `gh_retry` (which makes a single attempt for creates). Capture stderr into the `::warning::` line instead of discarding it.
+
+**CONSIST-007**: `prompts/mode-workflow-audit.txt:83-84, 100` · Severity: Low · Category: `consistency`
+- **Description:** The audit prompt says the workflow limit is "1 MB (1,048,576 characters)" and asks for flags above 800 KB. §24 and `tests/test_workflow_file_size_limit.py:26-27` put GitHub's limit at 512,000 bytes, with CI failing at 480,000. Its line references `review_autofix.yml:2370` and `:2576` also no longer point at the split steps; 2396-2408 is now the workspace-cache step.
+- **Recommended fix:** change the prompt text to 512,000 / 480,000 bytes and refer to the incidents by PR or issue number instead of line.
+
+**SHELL-001**: `scripts/orchestrate_poll_process.sh:21811, 22249` · Severity: Low · Category: `shellcheck`
+- **Description:** `wf_candidate` is the loop variable in both `_has_active_autofix_run` and `_dispatch_review_for_conflicts`, and neither declares it `local`. It leaks into the global scope of a script of roughly 30,000 lines.
+- **Recommended fix:** add `local wf_candidate` in both functions.
+
+**SHELL-002**: `.github/workflows/implement.yml:5005`; `review_autofix_sweep.yml:458` · Severity: Low · Category: `shellcheck`
+- **Description:** `printf '%s' "${var}" | grep -q…` runs under `set -o pipefail` (4942, 213). If `grep -q` exits on its first match before `printf` has finished writing (input bigger than the pipe buffer), `printf` gets SIGPIPE and the pipeline returns 141. In `implement.yml:5005` that would make the `.codex-workflow-src` hard-fail guard report a false negative. Inference: it is unlikely with today's input sizes.
+- **Recommended fix:** use `grep -qE '…' <<< "${remaining_changes}"`, or a bash `[[ … =~ … ]]` test.
+
+**SHELL-003**: `.github/workflows/review_autofix.yml:5077-5078` · Severity: Low · Category: `shellcheck`
+- **Description:** `ls -1 … | wc -l` and `ls -1 … | sort -V | tail -n 1` parse `ls` output (SC2012).
+- **Recommended fix:** `shopt -s nullglob; editor_errs=("${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err)`, then use `${#editor_errs[@]}` and `printf '%s\n' "${editor_errs[@]}" | sort -V | tail -n 1`.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 14 | BUG-002, BUG-003, BUG-004, BUG-005, BUG-006, BUG-007, API-001, API-002, DUP-001, DUP-003, DUP-004, DUP-005, EXPR-001, EXPR-003 |
+| Low | 27 | BUG-008, BUG-009, SEC-001, API-003, API-004, API-005, API-006, BATCH-001, DUP-002, DUP-006, DUP-007, EXPR-002, EXPR-004, EXPR-005, DEAD-001, DEAD-002, DEAD-003, DEBT-001, CONSIST-001, CONSIST-002, CONSIST-003, CONSIST-004, CONSIST-005, CONSIST-006, CONSIST-007, SHELL-001, SHELL-002, SHELL-003 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | `scripts/label_helpers.sh` | Small |
+| API call optimization | `scripts/orchestrate_poll_process.sh`, `scripts/review_merge_train.sh`, `.github/workflows/cancel_on_pr_close.yml`, `scripts/tg_helpers.sh`, `scripts/label_helpers.sh`, `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml` | Medium |
+| Code modularization | `scripts/gh_helpers.sh`, `.github/workflows/review_autofix_sweep.yml`, `scripts/orchestrate_poll_process.sh`, `scripts/review_merge_train.sh`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/workflow-log-analysis.yml`, `.github/actions/install-codex/action.yml` (or a new composite action), `.github/workflows/review_autofix.yml`, plus the 14 files with inline `gh label create` | Large |
+| Expression size reduction | `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`, `tests/test_workflow_file_size_limit.py` | Small |
+| Medium/Low fixes | `scripts/gh_helpers.sh`, `scripts/tg_helpers.sh`, `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/implement.yml`, `.github/workflows/workflow-log-analysis.yml`, `scripts/review_rb_judge.sh`, `scripts/orchestrate_poll_process.sh`, `prompts/mode-workflow-audit.txt` | Medium |
