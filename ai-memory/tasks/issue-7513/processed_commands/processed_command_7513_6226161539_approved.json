@@ -5,13 +5,26 @@
   "entry_id": "processed_command_7513_6226161539_approved",
   "issue_number": 7513,
   "metadata": {
+    "branch": "ai/issue-7513",
+    "changed_files": [
+      "changelog.d/7513-resolver-managed-child-copied-triage-header.md",
+      "scripts/resolve_integration_ref.sh",
+      "tests/fixtures/integration_ref_resolver_ci_triage/managed_child_copied_header_without_label_skips.json",
+      "tests/fixtures/integration_ref_resolver_ci_triage/managed_child_without_tracking_line_label_missing.json",
+      "tests/test_resolve_integration_ref_ci_triage.py"
+    ],
+    "issue_number": 7513,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7513",
+    "pr_number": 7514,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7514",
+    "run_attempt": "1",
+    "run_id": "38978076450",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38978076450"
   },
   "run_attempt": 1,
   "run_id": "38978076450",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-16T22:53:00Z",
+  "status": "completed",
+  "timestamp": "2026-10-16T23:14:08Z",
   "workflow": "implement"
 }
