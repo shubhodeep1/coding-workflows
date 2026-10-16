@@ -324,9 +324,11 @@ def test_required_workflows_fail_closed_when_resolver_staging_fails() -> None:
 
 def test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit() -> None:
 	"""A merged/closed triage PR (reason=pr_not_open) keeps the default
-	branch in clarify only, so the #7095 resolution gate can run; every other
-	phase still refuses. With routing on, a rate-limited resolver (exit 75)
-	never falls back to the default branch."""
+	branch in clarify, so the #7095 resolution gate can run, and in plan,
+	whose superseded-PR step (#7216, #7477) closes the issue, plans on the
+	PR's base or skips planning; every other phase still refuses. With
+	routing on, a rate-limited resolver (exit 75) never falls back to the
+	default branch."""
 	pr_not_open = {
 		"FAKE_RESOLVER_RC": "3",
 		"FAKE_RESOLVER_STDERR": "::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=pr_not_open",
@@ -338,10 +340,13 @@ def test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit() 
 	rate_limited = {"FAKE_RESOLVER_RC": "75"}
 	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS):
 		rc, out, gh_output = _run_refctx(workflow_name, "ok", "true", pr_not_open)
-		if workflow_name == "clarify.yml":
+		if workflow_name in ("clarify.yml", "plan.yml"):
 			assert rc == 0 and "ref=\n" in gh_output, f"{workflow_name} pr_not_open\n{out}"
 			assert "::notice::CI_TRIAGE_PR_BRANCH_ROUTING" in out, out
 			assert "::error::CI_TRIAGE_PR_BRANCH_ROUTING" not in out, out
+			if workflow_name == "plan.yml":
+				assert "pr_not_open=true\n" in gh_output, gh_output
+				assert "resolver_status=failed\n" in gh_output, gh_output
 		else:
 			assert rc != 0 and "ref=" not in gh_output, f"{workflow_name} pr_not_open\n{out}"
 		rc, out, gh_output = _run_refctx(workflow_name, "ok", "true", other_refusal)
@@ -355,6 +360,31 @@ def test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit() 
 			assert rc == 0 and "ref=\n" in gh_output, f"{workflow_name} rate_limited routing off\n{out}"
 
 
+def test_plan_pr_not_open_refusal_keeps_other_reasons_fatal() -> None:
+	"""Issue #7477: plan's refctx step exited 1 on reason=pr_not_open
+	(multi-user-ai-agent#264, run 38862023746). It now succeeds with an
+	empty ref and pr_not_open=true; any other exit-3 reason, including one
+	that only starts with pr_not_open, still fails closed."""
+	def refusal(reason: str) -> dict[str, str]:
+		return {
+			"FAKE_RESOLVER_RC": "3",
+			"FAKE_RESOLVER_STDERR": f"::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason={reason}",
+		}
+
+	rc, out, gh_output = _run_refctx("plan.yml", "ok", "true", refusal("pr_not_open"))
+	assert rc == 0, out
+	assert "ref=\n" in gh_output and "pr_not_open=true\n" in gh_output, gh_output
+	assert "::notice::CI_TRIAGE_PR_BRANCH_ROUTING" in out, out
+	assert "::error::" not in out, out
+	for reason in ("pr_not_open_extra", "branch_missing", "pr_cross_repository"):
+		rc, out, gh_output = _run_refctx("plan.yml", "ok", "true", refusal(reason))
+		assert rc != 0, f"{reason}\n{out}"
+		assert "ref=" not in gh_output and "pr_not_open" not in gh_output, f"{reason}: {gh_output!r}"
+		assert "::error::CI_TRIAGE_PR_BRANCH_ROUTING" in out, out
+	rc, out, gh_output = _run_refctx("plan.yml", "ok", "true", {"FAKE_RESOLVER_RC": "0"})
+	assert rc == 0 and "pr_not_open" not in gh_output, gh_output
+
+
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
@@ -362,6 +392,7 @@ def main() -> int:
 	test_required_workflows_fail_closed_on_ci_triage_routing_refusal()
 	test_required_workflows_fail_closed_when_resolver_staging_fails()
 	test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit()
+	test_plan_pr_not_open_refusal_keeps_other_reasons_fatal()
 	return 0
 
 
