@@ -226,8 +226,11 @@ def test_guard_step_wiring_contract() -> None:
 def test_refctx_emits_resolver_status_on_every_exit_path() -> None:
 	body = _run_body("Resolve integration ref")
 	assert body.count('echo "resolver_status=unavailable" >> "$GITHUB_OUTPUT"') == 3
-	for status in ("resolved", "routed", "none", "failed"):
-		assert body.count(f'echo "resolver_status={status}" >> "$GITHUB_OUTPUT"') == 1
+	# "failed" is written twice: the generic fallback and the tolerated
+	# reason=pr_not_open refusal (#7477), which also writes pr_not_open=true.
+	for status, expected in (("resolved", 1), ("routed", 1), ("none", 1), ("failed", 2)):
+		assert body.count(f'echo "resolver_status={status}" >> "$GITHUB_OUTPUT"') == expected, status
+	assert body.count('echo "pr_not_open=true" >> "$GITHUB_OUTPUT"') == 1
 	# "routed" only when the resolver's own routing line names this issue and
 	# exactly the branch it printed.
 	assert 'bash "${resolver_script}" 2>"${resolver_err_file}"' in body
