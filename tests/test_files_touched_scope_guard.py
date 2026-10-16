@@ -1254,7 +1254,7 @@ def test_build_pipeline_plan_grant_body_appends_a_canonical_block() -> None:
 	assert guard.extract_files_touched(body) == ["a/b.py", "tests/**", "changelog.d/*", "agents.d/*"]
 
 
-def _run_grant_cli(plan: str, meta: dict, flag: str = "true") -> tuple[int, dict, str | None]:
+def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str = "true") -> tuple[int, dict, str | None]:
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		(tdp / "plan.md").write_text(plan, encoding="utf-8")
@@ -1262,7 +1262,7 @@ def _run_grant_cli(plan: str, meta: dict, flag: str = "true") -> tuple[int, dict
 		out = tdp / "grant_body.md"
 		proc = subprocess.run([sys.executable, str(GUARD_SCRIPT), "--plan-auto-approval-gate",
 			"--plan-file", str(tdp / "plan.md"), "--flag-enabled", flag, "--pipeline-login", "pipeline[bot]",
-			"--allow-workflow-edits", "true", "--issue-number", "42", "--issue-meta-file", str(tdp / "meta.json"),
+			"--allow-workflow-edits", allow_edits, "--issue-number", "42", "--issue-meta-file", str(tdp / "meta.json"),
 			"--pipeline-grant-body-out", str(out)], capture_output=True, text=True, check=False)
 		body = out.read_text(encoding="utf-8") if out.exists() and out.stat().st_size else None
 		return proc.returncode, json.loads(proc.stdout), body
@@ -1297,10 +1297,22 @@ def test_plan_gate_pipeline_plan_grant_holds_when_the_plan_cannot_be_granted() -
 	plan = "## Files likely to change\n- `scripts/v1.0`\n- `scripts/a.sh`\n"
 	code, record, body = _run_grant_cli(plan, _pipeline_meta())
 	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["denied_paths"] == ["scripts/v1.0"] and body is None
-	# More files than the cap: no proposal, the open-grant hold stands.
+	# More files than the cap: no proposal; the hold names the size so the
+	# plan stage can hand the plan to the orchestrator (Q151).
 	many = "## Files likely to change\n" + "".join(f"- `scripts/f{i}.sh`\n" for i in range(51))
 	code, record, body = _run_grant_cli(many, _pipeline_meta())
-	assert record["reason"] == "open_grant_not_exact" and body is None
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and body is None
+	assert record["reason"] == guard.PIPELINE_PLAN_TOO_LARGE_REASON == "plan_too_large_for_grant"
+	assert record["plan_path_count"] == 51 and record["decision"] == "hold"
+	# With workflow edits switched off the plan keeps that hold reason, so it
+	# is never handed to a project whose child issues would be refused.
+	code, record, body = _run_grant_cli(many, _pipeline_meta(), allow_edits="false")
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and body is None
+	assert record["reason"] == "workflow_edits_disabled" and "plan_path_count" not in record
+	# Exactly at the cap the grant is still written; a repeated path counts once.
+	at_cap = "## Files likely to change\n" + "".join(f"- `scripts/f{i}.sh`\n" for i in range(50)) + "- `scripts/f0.sh`\n"
+	code, record, body = _run_grant_cli(at_cap, _pipeline_meta())
+	assert record["reason"] == "pipeline_plan_grant" and "plan_path_count" not in record and body
 
 
 # --- Flush-left files_touched lists (#7296, Q111) ---------------------------

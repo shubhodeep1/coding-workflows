@@ -2326,6 +2326,19 @@ def test_capacity_wait_label_outranks_the_stage_label():
 	assert "ai:claude-capacity-wait" not in orchestrate_lib.TERMINAL_PHASES
 
 
+def test_split_to_project_label_is_a_dedicated_phase():
+	# Q152: a plan-split source issue carries only ai:split-to-project while
+	# its orchestrator project runs. It must not read as no_labels, which
+	# would post /reclarify after 60 minutes.
+	assert orchestrate_lib.determine_phase(["ai:split-to-project"]) == "ai:split-to-project"
+	assert orchestrate_lib.determine_phase(["ai:split-to-project", "ai:closed"]) == "ai:closed"
+	assert "ai:split-to-project" in orchestrate_lib.DEDICATED_HANDLER_PHASES
+	assert "ai:split-to-project" not in orchestrate_lib.TERMINAL_PHASES
+	text = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	skip = next(line for line in text.splitlines() if '[ "${phase}" = "ai:needs-human" ] || ' in line and "ai:validation-fixing" in line)
+	assert '[ "${phase}" = "ai:split-to-project" ]' in skip
+
+
 def test_detect_stalls_skips_capacity_wait_phase():
 	state = _make_state()
 	issue = state["waves"][0]["issues"][0]

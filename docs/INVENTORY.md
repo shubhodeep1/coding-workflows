@@ -175,6 +175,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/plan_superseded_merged_pr.py` — Plan-phase check that closes a CI-repair issue (or a re-issue of one) whose pull request already merged with the failing check passing on its final head (issue #7216; log prefix `PLAN_SUPERSEDED_MERGED_PR`).
+- `scripts/plan_split_dispatch.sh` — Plan-phase hand-off that starts an orchestrator project (Claude engine) for a pipeline-authored plan listing more than 50 files, instead of holding it for `/approved` (Q151; log prefix `PLAN_SPLIT`).
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-full.patch` — Fixture asset for phase-b-risk-tier-full.patch.

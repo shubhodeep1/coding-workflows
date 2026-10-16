@@ -16,6 +16,11 @@ on:
         required: false
         type: string
         default: ""
+      tracking_comment:
+        description: Optional comment posted on the tracking issue after creation (the plan stage's split marker).
+        required: false
+        type: string
+        default: ""
 permissions:
   contents: write
   issues: write
@@ -28,4 +33,5 @@ jobs:
     with:
       project_description: ${{ inputs.project_description }}
       engine: ${{ inputs.engine }}
+      tracking_comment: ${{ inputs.tracking_comment }}
     secrets: inherit

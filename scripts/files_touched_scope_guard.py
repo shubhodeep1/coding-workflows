@@ -668,6 +668,11 @@ PIPELINE_PLAN_GRANT_COMPANIONS = ("tests/**", "changelog.d/*", "agents.d/*")
 PIPELINE_PLAN_GRANT_MAX_PATHS = 50
 PIPELINE_PLAN_GRANT_MARKER = "<!-- ai:pipeline-plan-grant:v1 -->"
 PIPELINE_PLAN_GRANT_REASON = "pipeline_plan_grant"
+# A plan whose Files section lists more than PIPELINE_PLAN_GRANT_MAX_PATHS
+# files gets no grant. The plan stage hands it to the orchestrator as a
+# project instead (scripts/plan_split_dispatch.sh, Q151); the record carries
+# the count as ``plan_path_count``.
+PIPELINE_PLAN_TOO_LARGE_REASON = "plan_too_large_for_grant"
 _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
@@ -789,6 +794,7 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 	"""
 	protected: list[str] = []
 	grant_proposed = False
+	plan_path_count = 0
 	try:
 		with open(plan_file, encoding="utf-8") as handle:
 			plan_text = handle.read()
@@ -822,7 +828,19 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				and isinstance(grant, dict) and grant.get("open") is True
 				and grant.get("reason") == PIPELINE_AUTHOR_OPEN_REASON):
 			plan_paths = extract_plan_file_paths(plan_text)
-			if plan_paths and len(plan_paths) <= PIPELINE_PLAN_GRANT_MAX_PATHS:
+			if len(plan_paths) > PIPELINE_PLAN_GRANT_MAX_PATHS:
+				# The open grant hid the workflow-edits switch from the check
+				# above; a plan the implement guard would refuse anyway (for
+				# example workflow_edits_disabled) keeps that reason, so it is
+				# never handed to a project whose children would be blocked.
+				status, open_denied, open_reason = check_automation_paths(protected, grant, allow_workflow_edits,
+					issue_number)
+				if status != STATUS_IN_SCOPE:
+					decision, reason, denied = PLAN_DECISION_HOLD, open_reason, open_denied or protected
+				else:
+					decision, reason = PLAN_DECISION_HOLD, PIPELINE_PLAN_TOO_LARGE_REASON
+					plan_path_count = len(plan_paths)
+			elif plan_paths:
 				proposed_body = build_pipeline_plan_grant_body(metadata.get("body") or "", plan_paths)
 				proposed_grant = build_automation_grant(dict(metadata, body=proposed_body), pipeline_login,
 					fetch_origin if repo else None)
@@ -840,10 +858,13 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
 		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
 		grant_proposed = False
+		plan_path_count = 0
 	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
 		"log_paths": plan_gate_log_paths(denied or protected)}
 	if grant_proposed:
 		record["pipeline_grant_body"] = True
+	if plan_path_count:
+		record["plan_path_count"] = plan_path_count
 	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
 
 
