@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-log-analysis.yml:1183-1186,1962,2561 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: Routing `gh label create \"ai:log-analysis-failed\"` through `_wla_label_retry`/`gh_retry` retries the expected already-exists failure up to 5 times, because its message is not matched by `_is_gh_permanent_failure` and `gh label create` is not an unsafe POST.\n  WHY: Each failure handler wastes about 4 extra API calls and 15 s of backoff (minimax estimates about 45 s and 15 POSTs per pass) before `|| true`. Severity disagreement: sonnet and minimax said MAJOR, luna said NIT; highest used. glm-5_3-flash disputes this and says `HTTP 422` is matched as permanent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `changelog.d/wfopt-2026-09-20-log-analysis-label-retry.md` following CLAUDE.md \u00a720.\"\n  expected_change_site: changelog.d/wfopt-2026-09-20-log-analysis-label-retry.md\n  confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The fragment has a headline and lead paragraph but no audience-closing \"What this means for <audience>\" paragraph required by \u00a720.D. Disputed by anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, who say the final paragraph serves that role. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/workflow-log-analysis.yml:~1183, ~1962, ~2561 | severity=MAJOR | confidence=3\n  PROBLEM: The issue's premise is wrong. An existing label does not answer with a permanent HTTP 422 that `gh_retry` skips. `gh label create` prints \"label with name ... already exists\", which `_is_gh_permanent_failure` (gh_helpers.sh:192-195) does not match.\n  WHY: Each failure handler makes 5 failed create calls with 15 s of backoff, noisy warnings and an error annotation. The following `--add-label` is delayed but not lost. Hardening score 2. The reviewer says the wording comes from recollection of gh's source, not from the repo.\n- TASK COMPLETENESS: all three handlers are covered, the `AI_PHASE_FAILURE_V1` post is untouched, and the contract test is added and registered. The changelog audience-closing NIT was considered and not reported.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/workflow-log-analysis.yml:1183, 1962, 2561 | severity=MAJOR | confidence=4\n  PROBLEM: Routing `gh label create` through `gh_retry` does not make \"already exists\" a single attempt. The message matches no marker in `scripts/gh_helpers.sh:194`, and `_gh_cmd_is_unsafe_post` (`gh_helpers.sh:804-816`) does not list `label create`, so `max_attempts` stays at 5.\n  WHY: This is contradicted by `tests/test_implement_post_codex_recovery.py:287-289` and by `analysis/workflow-optimization-2026-10-15.md:268-279` (BUG-001). Each failed pass wastes about 15 POSTs and about 45 s.\n- TASK_GAP:\n  Requirement: \"Add `changelog.d/wfopt-2026-09-20-log-analysis-label-retry.md` following CLAUDE.md \u00a720.\"\n  Expected change site: `changelog.d/wfopt-2026-09-20-log-analysis-label-retry.md`\n  Evidence of absence: No \"What this means for operators\" audience-closing paragraph (\u00a720.D).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- HARDENING: either document the limitation inline, or add the \"already exists\" pattern to `_is_gh_permanent_failure` at `scripts/gh_helpers.sh:194`. Score 3.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/workflow-log-analysis.yml:1183-1186, 1962, 2561 (also scripts/gh_helpers.sh:192-195, 800-815, 1064-1068) | severity=NIT | confidence=4\n  PROBLEM: An existing label's `gh label create` error is not recognised as permanent, and `gh label create` is not an unsafe POST, so the wrapper retries up to 5 times.\n  WHY: Each failure handler makes 5 unnecessary API calls and waits through 1, 2, 4 and 8 s backoffs before `|| true`.\n- TASK_GAP:\n  Requirement: \"Add `changelog.d/wfopt-2026-09-20-log-analysis-label-retry.md` following CLAUDE.md \u00a720.\"\n  Expected change site: `changelog.d/wfopt-2026-09-20-log-analysis-label-retry.md`\n  Evidence of absence: No audience-closing paragraph stating the operational takeaway (\u00a720.D). Lines 1-4 contain no such closing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING: none. Score 1.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nReviewer notes: The reviewer rejected the \"retried 5 times\" finding. `_is_gh_permanent_failure` (scripts/gh_helpers.sh:192-195) matches `HTTP 422`, so the already-exists path costs one call. `GH_RETRY_IDEMPOTENT=true _wla_label_retry` is valid, and the raw fallback is preserved. The task is complete and the changelog closing paragraph is sufficient.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3001d2415b9ec97d929ab6f3cc2ca5437ea3015244c0d4aa3280fa7259509412",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7472,
+    "run_id": "38842334141",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38842334141",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016032713_558fd3bb22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7472,
+    "run_id": "38842334141"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T03:27:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
