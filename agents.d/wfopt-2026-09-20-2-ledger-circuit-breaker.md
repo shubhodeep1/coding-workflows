@@ -10,7 +10,9 @@
   `emit_failed` detail matching (case-insensitive) `authentication failed`,
   `could not read username`, `bad credentials`, `http 401`, `http 403`,
   `returned error: 403` or `permission to .* denied`, creates the sentinel
-  with noclobber; only the caller that created it prints
+  with noclobber (an auth match whose detail also names `rate limit` or
+  `abuse` is a transient 403 and leaves the circuit closed); only the caller
+  that created it prints
   `::warning::ledger_emit_substate circuit opened (reason=timeout|auth); later substates in this job are skipped`.
   While the sentinel exists and the switch is on, the helper exits 0 before
   building metadata or calling `record-run-event`, with no output; those

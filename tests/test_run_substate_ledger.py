@@ -790,6 +790,21 @@ def test_circuit_breaker_ignores_unrelated_failures() -> None:
 		assert _circuit_call_count(tmp_path) == 2
 
 
+def test_circuit_breaker_ignores_rate_limited_403() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		rate_env = {
+			"CIRCUIT_TEST_STDERR": "gh: You have exceeded a secondary rate limit (HTTP 403)",
+			"CIRCUIT_TEST_RC": "1",
+		}
+		for substate in ("PreparingWorkspace", "Succeeded"):
+			rc, _stdout, stderr = _run_circuit_helper(tmp_path, substate, extra_env=rate_env)
+			assert rc == 0, stderr
+			assert "circuit opened" not in stderr, stderr
+		assert not _circuit_sentinel(tmp_path).exists()
+		assert _circuit_call_count(tmp_path) == 2
+
+
 def test_circuit_breaker_switch_off_keeps_calling_the_store() -> None:
 	for switch_value in ("false", "FALSE"):
 		with tempfile.TemporaryDirectory() as tmp_dir:

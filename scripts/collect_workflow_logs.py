@@ -1012,7 +1012,7 @@ def _fetch_run_log_archive(
 # while queued or before a runner picked it up (only skipped/null steps).
 PRE_RUNNER_FAILURE_STEP_NAME = "pre_runner_failure"
 _PRE_RUNNER_STEP_CONCLUSIONS = frozenset(
-    {"success", "failure", "cancelled", "neutral", "timed_out", "action_required"}
+    {"success", "failure", "cancelled", "neutral", "timed_out", "action_required", "startup_failure"}
 )
 
 

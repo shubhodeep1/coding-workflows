@@ -634,7 +634,10 @@ case "${emit_result}" in
 					ledger_circuit_reason="timeout"
 					;;
 				*)
-					if grep -Eiq 'authentication failed|could not read username|bad credentials|http 401|http 403|returned error: 403|permission to .* denied' <<<"${emit_result#emit_failed:}"; then
+					# A 403 that is a (secondary) rate limit or abuse response is
+					# transient, not an authentication failure; leave it closed.
+					if grep -Eiq 'authentication failed|could not read username|bad credentials|http 401|http 403|returned error: 403|permission to .* denied' <<<"${emit_result#emit_failed:}" \
+						&& ! grep -Eiq 'rate limit|abuse' <<<"${emit_result#emit_failed:}"; then
 						ledger_circuit_reason="auth"
 					fi
 					;;

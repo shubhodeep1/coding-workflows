@@ -206,6 +206,11 @@ def test_extract_failure_point_labels_jobs_that_never_ran_a_step():
 	)
 	assert setup_only == {"job_name": "build", "step_name": None}
 
+	startup = collector.extract_failure_point(
+		[{"name": "build", "conclusion": "failure", "steps": [{"name": "a", "conclusion": "startup_failure"}]}]
+	)
+	assert startup == {"job_name": "build", "step_name": None}
+
 	precedence = collector.extract_failure_point(
 		[
 			{"name": "queued", "conclusion": "failure", "steps": []},
