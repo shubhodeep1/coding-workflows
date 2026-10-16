@@ -1157,10 +1157,10 @@ jobs:
       # crash on `require`, no pool is written and clarify is refused with
       # reason=no_credential. Pin the action's module type in the support
       # checkout before the action runs. The body is kept byte-identical to the
-      # plan.yml step (tests/test_plan_codex_step_extraction.py). The real fix
-      # is a committed .github/actions/claude-pool-token/package.json, owned by
-      # a separately scoped issue; once it ships this step logs reason=present
-      # and can be removed.
+      # plan.yml step (tests/test_plan_codex_step_extraction.py). Since #7432
+      # the action ships package.json, so this step normally logs
+      # reason=present; it stays as a fallback for a staged support checkout
+      # whose action copy lacks the file.
       - name: Pin claude-pool-token action module type
         if: steps.ai_engine.outputs.engine == 'claude'
         continue-on-error: true
