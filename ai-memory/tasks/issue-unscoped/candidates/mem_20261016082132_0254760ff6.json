@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_superseded_merged_pr_workflow.py:464-471 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: test_pr_not_open_invalid_base_ref_skips (base_ref=\"bad..ref\") is rejected by the classifier's `_valid_branch` check in scripts/plan_superseded_merged_pr.py before the shell sees it, so it does not exercise the new `invalid_base_ref` branch at plan.yml lines 1089-1092.\n  WHY: The test asserts only `reason=pr_not_open_unresolved`, so it passes either way and the shell defense-in-depth branch is not covered. Reviewers labelled this NIT; qwen's hardening risk score was 1. Confidence 3 from anthropic, qwen gave none for this item.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The issue's \"Suggested fix\" item 5 and \"Affected files\" list call for a comment edit at `.github/workflows/clarify.yml:185-188` (plan also tolerates `pr_not_open`) and an `agents.d/<issue>-plan-pr-not-open.md` fragment.\n  expected_change_site: `.github/workflows/clarify.yml` (comment only) and `agents.d/7477-plan-pr-not-open.md`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  EVIDENCE: Neither file appears in the PR diff or the last-run diff, and the heal scope (`plan.yml`, `tests/**`, `changelog.d/*.md`) does not cover them. Both reviewers note AD-1 in the PR description deliberately defers them and the behaviour is documented in `changelog.d/7477-plan-pr-not-open.md`. Both rated it NIT, a documented deferral.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_plan_superseded_merged_pr_workflow.py:test_pr_not_open_invalid_base_ref_skips (against plan.yml lines 1089-1092) | severity=NIT | confidence=3\n  PROBLEM: scripts/plan_superseded_merged_pr.py classify() rejects a base ref failing `_valid_branch` (line 380) before the shell sees it, so the test passes through the classifier's rejection path, not the new `invalid_base_ref` branch.\n  WHY: The test asserts only `reason=pr_not_open_unresolved`, so it passes either way; the shell branch is harmless defense in depth but not exercised.\n- TASK_GAP:\n  Requirement: The issue's \"Suggested fix\" item 5 and \"Affected files\" list call for a comment edit at `.github/workflows/clarify.yml:185-188` and an `agents.d/<issue>-plan-pr-not-open.md` fragment.\n  Expected change site: `.github/workflows/clarify.yml` (comment only) and `agents.d/7477-plan-pr-not-open.md`.\n  Evidence of absence: Neither file appears in the PR diff or the last-run diff. The heal scope marker does not cover them. AD-1 deliberately keeps the fix inside that scope. Documented in `changelog.d/7477-plan-pr-not-open.md`; a documented deferral.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- HARDENING: tests/test_plan_superseded_merged_pr_workflow.py, test_pr_not_open_invalid_base_ref_skips: add a one-line comment, or assert the actual `detail=` value (1-2 lines). HARDENING_RISK_SCORE: 1\n- Verdict: no BLOCKER or MAJOR findings. CI reported no failed check-runs on head a27cb874, but three jobs were still in progress.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP:\n  Requirement: The issue's \"Suggested fix\" item 5 calls for a comment edit at `.github/workflows/clarify.yml:185-188` and an `agents.d/<issue>-plan-pr-not-open.md` fragment.\n  Expected change site: `.github/workflows/clarify.yml` (comment only) and `agents.d/7477-plan-pr-not-open.md`\n  Evidence of absence: Neither file is touched in the PR DIFF or LAST RUN DIFF. AD-1 explicitly defers both changes to stay inside the heal scope. The changelog fragment already documents the new behavior. Documented deferral, not a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING: tests/test_plan_superseded_merged_pr_workflow.py:464-471, test_pr_not_open_invalid_base_ref_skips: the test passes `base_ref=\"bad..ref\"` expecting to exercise the `invalid_base_ref` shell branch at plan.yml:1089-1092, but classify() rejects `..` via `_valid_branch` and returns `pr_read_failed` first. Fix: assert `detail=pr_read_failed` or add a comment (1-2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a90298985397ad5a7be579d80b552b61b17d747f0278e80b2faf2f3ac1a2aa52",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7487,
+    "run_id": "38870943310",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38870943310",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016082132_0254760ff6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7487,
+    "run_id": "38870943310"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T08:21:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
