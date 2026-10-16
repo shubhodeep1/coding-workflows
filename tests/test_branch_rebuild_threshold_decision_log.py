@@ -84,8 +84,15 @@ def test_bait_injection_drops_blob_content() -> None:
 
 
 def test_agents_fragment_registers_log_prefix() -> None:
-    text = FRAGMENT.read_text(encoding="utf-8")
-    marker = '<!-- agents: section="Stable log prefixes (contractual)" -->'
+    # The pending fragment is folded into agents.md (and deleted) by
+    # scripts/assemble_agents.py at release time; after that, check the
+    # folded section instead.
+    if FRAGMENT.exists():
+        text = FRAGMENT.read_text(encoding="utf-8")
+        marker = '<!-- agents: section="Stable log prefixes (contractual)" -->'
+    else:
+        text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+        marker = "\n## Stable log prefixes (contractual)\n"
     assert marker in text
     tail = text.split(marker, 1)[1]
     assert f"- `{LOG_KEY}`" in tail
