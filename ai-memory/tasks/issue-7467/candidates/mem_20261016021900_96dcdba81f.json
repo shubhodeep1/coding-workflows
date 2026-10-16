@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply workflow-optimization-2026-09-20 recommendations (verified subset)\",\"issues\":[{\"id\":\"log-analysis-label-retry\",\"title\":\"workflow-log-analysis: retry the ai:log-analysis-failed label writes through gh_retry (CONSIST-001)\",\"priority\":2},{\"id\":\"branch-review-base-ref-fail-closed\",\"title\":\"review_collect_pr_metadata: fail closed instead of assuming `main` in the no-PR branch-review path (BUG-002 remainder)\",\"priority\":3},{\"id\":\"wfopt-2026-09-20-report-and-delete\",\"title\":\"Record workflow-optimization-2026-09-20 verdicts and delete the source doc\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"log-analysis-label-retry\",\"to\":\"wfopt-2026-09-20-report-and-delete\"},{\"from\":\"branch-review-base-ref-fail-closed\",\"to\":\"wfopt-2026-09-20-report-and-delete\"}]}",
+  "fingerprint": "3245b38cf4bc25e260e106c44466429b8b2a76ed7045928244905594962435f6",
+  "lineage": {
+    "issue_number": 7467,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38838891374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38838891374",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261016021900_96dcdba81f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7467,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38838891374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply workflow-optimization-2026-09-20 recommendations (verified subset)' into 3 issues (tracking #7467)",
+  "timestamps": {
+    "created_at": "2026-10-16T02:19:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
