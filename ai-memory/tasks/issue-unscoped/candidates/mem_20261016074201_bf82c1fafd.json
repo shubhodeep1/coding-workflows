@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/7476-clarify-claude-pool-token-esm.md:2 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fragment says the other Claude callers \"still fail\" until a separately scoped issue commits `.github/actions/claude-pool-token/package.json`, but that file already exists (from #7432), so the fragment contradicts changelog.d/7434-plan-claude-pool-token-esm.md.\n  WHY: The release notes will mislead operators into thinking the callers are still broken. No runtime failure. All three reviewers rated it NIT, shown here as low.\n- .github/workflows/clarify.yml:1153-1163 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The comment block above the clarify pin step (\"owned by a separately scoped issue\") still says `package.json` is pending, although the action already ships it. The equivalent plan.yml comment was already corrected.\n  WHY: The stale comment gives operators wrong guidance. The step itself is correct and logs `reason=present`. Both reviewers rated it NIT, shown here as low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/7476-clarify-claude-pool-token-esm.md (and the comment block in .github/workflows/clarify.yml, lines 1153-1163) | severity=NIT | confidence=5\n  PROBLEM: `.github/actions/claude-pool-token/package.json` already exists (from #7432). The #7434 fragment and the `agents.d` entry say the action ships its own `package.json`. The #7476 text and the clarify.yml comment at line 1162 (\"owned by a separately scoped issue\") say the other Claude callers still fail.\n  WHY: Nothing breaks at runtime. The release notes and the workflow comment send operators after an already-fixed problem.\n- TASK COMPLETENESS / INTENT GAPS: Nothing missing. The clarify.yml pin step, the tests and the changelog fragment are all in the diff. The `package.json` deliverable is deferred by AD-1 and is not a gap. | severity=NIT | confidence=1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/7476-clarify-claude-pool-token-esm.md:2 | severity=NIT | confidence=5\n  PROBLEM: The release fragments make contradictory claims. Line 2 says the other Claude callers \"still fail\" until `.github/actions/claude-pool-token/package.json` is committed. That file exists at line 1 of `.github/actions/claude-pool-token/package.json`, and changelog.d/7434-plan-claude-pool-token-esm.md:2 says the package fixes every Claude role.\n  WHY: The assembled release notes tell consumers that callers remain broken until a package commit that is already present.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/7476-clarify-claude-pool-token-esm.md:2 | severity=NIT | confidence=5\n  PROBLEM: The fragment says the other Claude roles \"still fail the same way in those consumers until a separately scoped issue commits `.github/actions/claude-pool-token/package.json`\". That file already exists (from #7432, commit `020a7e8`) and contains `{\"type\": \"commonjs\"}`. The sibling fragment changelog.d/7434-plan-claude-pool-token-esm.md says the action ships `package.json`.\n  WHY: There is no runtime failure, but the release note will mislead operators. The comment above the step in `.github/workflows/clarify.yml` (lines 1160-1163) repeats the stale claim. The plan.yml comment (lines 1488-1494) was already corrected.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ab13b2c7c95191c0867a6de5672975285bfaa152754e6fcc86c08ed66ce11204",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7481,
+    "run_id": "38865791896",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38865791896",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016074201_bf82c1fafd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7481,
+    "run_id": "38865791896"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T07:42:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
