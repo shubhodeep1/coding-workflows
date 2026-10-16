@@ -187,7 +187,20 @@ if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; the
 	HEAD_SHA_OVERRIDE="${HEAD_SHA_OVERRIDE_INPUT:-}"
 	BASE_REF_OVERRIDE="${BASE_REF_OVERRIDE_INPUT:-}"
 	if [ -z "${BASE_REF_OVERRIDE}" ]; then
-		BASE_REF_OVERRIDE="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
+		# Fail closed: a silent fall back to `main` diffed the review against
+		# the wrong base on a transient API failure or a non-`main` default.
+		branch_review_repo_json="${TMP_RUNTIME_DIR}/branch_review_repo.json"
+		branch_review_default_branch=""
+		if gh_retry "${branch_review_repo_json}" api "repos/${REPOSITORY}"; then
+			branch_review_default_branch="$(jq -r '.default_branch // empty' "${branch_review_repo_json}" 2>/dev/null || true)"
+		fi
+		if [ -z "${branch_review_default_branch}" ] \
+			|| ! [[ "${branch_review_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+			|| ! git check-ref-format --branch "${branch_review_default_branch}" >/dev/null 2>&1; then
+			echo "::error::No-PR claude-branch-review path: could not resolve the repository default branch; pass base_ref_override or retry."
+			exit 1
+		fi
+		BASE_REF_OVERRIDE="${branch_review_default_branch}"
 	fi
 	if [ -z "${HEAD_REF_OVERRIDE}" ] || [ -z "${HEAD_SHA_OVERRIDE}" ]; then
 		echo "::error::No-PR claude-branch-review path: head_ref_override and head_sha_override must be supplied by the caller."
