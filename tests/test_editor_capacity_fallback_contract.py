@@ -16,6 +16,9 @@ the fallback:
 """
 
 import json
+import os
+import re
+import subprocess
 from pathlib import Path
 
 
@@ -116,6 +119,139 @@ def test_review_apply_fixes_switches_model_on_final_attempt() -> None:
 	# The loop sets the fallback on the final attempt.
 	assert 'EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"' in text
 	assert 'local editor_attempt_model="${EDITOR_ATTEMPT_MODEL:-${MODEL_EDITOR}}"' in text
+
+
+FINAL_ATTEMPT_IF = (
+	'if [ "${attempt}" -eq "${editor_max_attempts}" ] '
+	'&& [ -n "${MODEL_EDITOR_FALLBACK:-}" ] '
+	'&& [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then'
+)
+FINAL_ATTEMPT_ECHO = (
+	'echo "Final editor attempt: switching model to fallback '
+	'${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited)."'
+)
+STALL_ELIF = (
+	'elif [ "${editor_stall_fallback_active}" -eq 1 ] '
+	'|| editor_stall_fallback_applies "${editor_prev_attempt_stall_killed}"; then'
+)
+
+
+def _function_body(text: str, name: str) -> str:
+	match = re.search(
+		rf"^{re.escape(name)}\(\)\n\{{\n.*?^\}}\n",
+		text,
+		re.MULTILINE | re.DOTALL,
+	)
+	assert match, f"{name} not defined in {REVIEW_APPLY_FIXES}"
+	return match.group(0)
+
+
+def test_review_apply_fixes_final_attempt_condition_unchanged() -> None:
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	assert FINAL_ATTEMPT_IF in text
+	assert FINAL_ATTEMPT_ECHO in text
+	# The stall switch is an elif after the unchanged final-attempt arm.
+	if_pos = text.index(FINAL_ATTEMPT_IF)
+	elif_pos = text.index(STALL_ELIF)
+	assert if_pos < text.index(FINAL_ATTEMPT_ECHO) < elif_pos
+
+
+def test_review_apply_fixes_stall_fallback_condition_text() -> None:
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	assert STALL_ELIF in text
+	assert (
+		'if editor_stall_fallback_switch_enabled '
+		'"${EDITOR_STALL_FALLBACK_ENABLED-}"; then '
+		'editor_stall_fallback_switch_on=1; fi'
+	) in text
+	assert 'editor_prev_attempt_stall_killed=0\n  case "${stall_state}" in' in text
+	killed_arm = re.search(r"    killed\)\n(.*?)\n      ;;", text, re.DOTALL)
+	assert killed_arm, "killed) arm not found"
+	assert "editor_prev_attempt_stall_killed=1" in killed_arm.group(1)
+	assert (
+		'echo "Editor attempt ${attempt}: previous attempt was stall-killed; '
+		'switching model to fallback ${MODEL_EDITOR_FALLBACK}."'
+	) in text
+	assert "editor_stall_fallback_active=1" in text
+	# No required-variable guard: the switch defaults on inside the helper.
+	assert "${EDITOR_STALL_FALLBACK_ENABLED:?" not in text
+
+
+def test_review_apply_fixes_stall_fallback_requires_engine_and_switch() -> None:
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	body = _function_body(text, "editor_stall_fallback_applies")
+	assert '"${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" != "claude"' in body
+	assert "editor_stall_fallback_switch_on" in body
+	assert '"${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR:-}"' in body
+
+
+def _run_shell(script: str, env: dict) -> subprocess.CompletedProcess:
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	defs = (
+		_function_body(text, "editor_stall_fallback_switch_enabled")
+		+ _function_body(text, "editor_stall_fallback_applies")
+	)
+	base_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+	base_env.update(env)
+	return subprocess.run(
+		["bash", "-c", defs + script],
+		env=base_env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+
+
+def test_review_apply_fixes_stall_fallback_switch_behaviour() -> None:
+	unset = _run_shell(
+		'editor_stall_fallback_switch_enabled "${EDITOR_STALL_FALLBACK_ENABLED-}"',
+		{},
+	)
+	assert unset.returncode == 0 and unset.stdout == ""
+	for value, expected_rc in (
+		("", 0),
+		("true", 0),
+		("TRUE", 0),
+		("false", 1),
+		("FALSE", 1),
+	):
+		result = _run_shell(
+			'editor_stall_fallback_switch_enabled "${EDITOR_STALL_FALLBACK_ENABLED-}"',
+			{"EDITOR_STALL_FALLBACK_ENABLED": value},
+		)
+		assert result.returncode == expected_rc, (value, result)
+		assert "::warning::" not in result.stdout, value
+	bad = _run_shell(
+		'editor_stall_fallback_switch_enabled "${EDITOR_STALL_FALLBACK_ENABLED-}"',
+		{"EDITOR_STALL_FALLBACK_ENABLED": "maybe::set-output x"},
+	)
+	assert bad.returncode == 1
+	assert bad.stdout.count("::warning::") == 1
+	# The printed value is reduced to a safe character set.
+	assert "::set-output" not in bad.stdout
+
+
+def test_review_apply_fixes_stall_fallback_predicate_behaviour() -> None:
+	base = {
+		"MODEL_EDITOR": "openai/gpt-6-sol",
+		"MODEL_EDITOR_FALLBACK": "openai/gpt-5.6-sol",
+		"editor_stall_fallback_switch_on": "1",
+	}
+
+	def applies(prev: str, **overrides: str) -> bool:
+		env = dict(base)
+		env.update(overrides)
+		env = {k: v for k, v in env.items() if v is not None}
+		result = _run_shell(f'editor_stall_fallback_applies "{prev}"', env)
+		return result.returncode == 0
+
+	assert applies("1")
+	assert applies("1", AI_ENGINE_RESOLVED_REVIEW_EDITOR="codex")
+	assert not applies("1", AI_ENGINE_RESOLVED_REVIEW_EDITOR="claude")
+	assert not applies("1", MODEL_EDITOR_FALLBACK="")
+	assert not applies("1", MODEL_EDITOR_FALLBACK="openai/gpt-6-sol")
+	assert not applies("0")
+	assert not applies("1", editor_stall_fallback_switch_on="0")
 
 
 def main() -> int:
