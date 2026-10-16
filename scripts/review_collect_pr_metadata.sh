@@ -195,7 +195,7 @@ if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; the
 			branch_review_default_branch="$(jq -r '.default_branch // empty' "${branch_review_repo_json}" 2>/dev/null || true)"
 		fi
 		if [ -z "${branch_review_default_branch}" ] \
-			|| ! [[ "${branch_review_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+			|| ! [[ "${branch_review_default_branch}" =~ ^[A-Za-z0-9._/-][A-Za-z0-9._/+-]*$ ]] \
 			|| ! git check-ref-format --branch "${branch_review_default_branch}" >/dev/null 2>&1; then
 			echo "::error::No-PR claude-branch-review path: could not resolve the repository default branch; pass base_ref_override or retry."
 			exit 1
