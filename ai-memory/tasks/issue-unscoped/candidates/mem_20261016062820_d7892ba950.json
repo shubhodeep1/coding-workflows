@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_collect_pr_metadata.sh:197-200 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The allowlist regex `^[A-Za-z0-9._/-]+$` at line 198 rejects valid Git branch names containing `+`, such as `release+candidate`, before the `git check-ref-format --branch` check runs.\n  WHY: A repository whose default branch contains `+` makes the no-PR branch-review path exit with \"could not resolve the repository default branch\". Severity disagreement: google_gemini-3_1-flash-lite said MAJOR, and the other four reviewers said NIT. The highest is used.\n- scripts/review_collect_pr_metadata.sh:194,231,235,240,247 | severity=critical | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: qwen_qwen3_7-plus says `gh_retry \"${file}\" api \"repos/...\"` passes an output file as the first argument, but `gh_retry` runs `\"$@\"` as a command, so the file path would be executed.\n  WHY: qwen_qwen3_7-plus says all five call sites would fail at runtime. anthropic_claude-sonnet-5_5 disagrees: it says the local `gh_retry` wrapper at line 69 calls `gh_retry_to_file \"${outfile}\" gh \"$@\"` and matches the existing calls at lines 138, 231 and 235.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_collect_pr_metadata.sh:198 | severity=NIT | confidence=4\n  PROBLEM: The allowlist `^[A-Za-z0-9._/-]+$` is stricter than the `git check-ref-format --branch` check that follows. It rejects valid branch names containing `+`, `@` or `#`.\n  WHY: A default branch such as `release+candidate` makes the helper exit 1 with the \"could not resolve the repository default branch\" error. This only affects the `force_claude_branch_review` path with no `base_ref_override`.\n- No other findings. The reviewer checked the `gh_retry` usage, `TMP_RUNTIME_DIR`, `_wla_label_create`, `GH_RETRY_IDEMPOTENT`, the `AI_PHASE_FAILURE_V1` comment post, and the analysis doc and report counts, and found no issues.\n- HARDENING_RISK_SCORE: 1\n- TASK COMPLETENESS / INTENT GAPS: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_collect_pr_metadata.sh:198 | severity=MAJOR | confidence=4\n  PROBLEM: The regex `^[A-Za-z0-9._/-]+$` rejects branch names containing `+`, which is valid in Git.\n  WHY: Valid branches containing `+` are rejected, which blocks review metadata collection even though they would pass the later `git check-ref-format` check.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_collect_pr_metadata.sh:197-200 | severity=NIT | confidence=4\n  PROBLEM: The regex `^[A-Za-z0-9._/-]+$` excludes `+`, which is valid in git branch names. The check is redundant with the later `git check-ref-format --branch`.\n  WHY: A default branch such as `release+something` makes the no-PR claude-branch review path terminate without synthesizing review metadata, even though the API result was valid.\n- HARDENING_SUGGESTIONS: drop the regex test and rely on `git check-ref-format --branch` alone (-1 line). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_collect_pr_metadata.sh:198 | severity=NIT | confidence=4\n  PROBLEM: The branch-name allowlist rejects `+`, which is valid in a Git branch name.\n  WHY: A default branch named `release+candidate` makes the helper exit before it reaches `git check-ref-format --branch`, so the no-PR branch review fails.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_collect_pr_metadata.sh:194,231,235,240,247 | severity=BLOCKER | confidence=5\n  PROBLEM: The script uses `gh_retry \"${file}\" api \"repos/...\"`, but `gh_retry` does not support an output file as its first argument. The reviewer says the correct function for file output is `gh_retry_to_file <outfile> gh api <endpoint>`.\n  WHY: `gh_retry` runs `\"$@\"`, so it would try to execute the file path as a command and fail. The reviewer says this happens in 5 places.\n- scripts/review_collect_pr_metadata.sh:198 | severity=NIT | confidence=4\n  PROBLEM: The regex `^[A-Za-z0-9._/-]+$` rejects valid Git branch names containing `+`, though `git check-ref-format --branch` could validate them.\n  WHY: In no-PR branch-review mode, a default branch such as `release+candidate` fails the regex and exits before review metadata is synthesized.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3ef3bba76be585ccf638f53510ef262e5cc85dafda72aad5ef394d51fcf43198",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7470,
+    "run_id": "38858977021",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38858977021",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016062820_d7892ba950",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7470,
+    "run_id": "38858977021"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T06:28:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
