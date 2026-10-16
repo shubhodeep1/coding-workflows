@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add an agents.d/ fragment, not a direct agents.md edit, plus a changelog fragment, describing the plan behaviour.\"\n  expected_change_site: agents.d/7477-plan-pr-not-open.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: The PR diff includes changelog.d/7477-plan-pr-not-open.md but no agents.d fragment describing the new plan behavior. Severity disagreement: google_gemini-3_1-flash-lite=MAJOR, qwen_qwen3_7-plus=NIT; the highest is MAJOR. qwen notes that AD-1 deferred this because of heal scope constraints, but the issue did not mark it as a follow-up. anthropic_claude-sonnet-5_5 treated the same item as deferred by AD-1 and not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Add an agents.d/ fragment, not a direct agents.md edit, plus a changelog fragment, describing the plan behaviour.\"\n  Expected change site: agents.d/7477-plan-pr-not-open.md\n  Evidence of absence: The PR diff includes changelog.d/7477-plan-pr-not-open.md, but is missing the agents.d/ fragment that describes the new plan behavior, as requested in the issue's \"Suggested fix\".\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Add an agents.d/ fragment, not a direct agents.md edit, plus a changelog fragment, describing the plan behaviour.\"\n  Expected change site: agents.d/7477-plan-pr-not-open.md\n  Evidence of absence: The issue's \"Suggested fix\" item 5 explicitly asks for an agents.d fragment describing the new plan behavior. The PR diff includes changelog.d/7477-plan-pr-not-open.md but no agents.d fragment. The \"Affected files\" section also lists agents.d/<issue>-plan-pr-not-open.md. Auto-decision AD-1 in the PR description deferred this due to heal scope constraints (the isolated heal editor cannot write outside plan.yml, tests/**, changelog.d/*.md), but the issue did not explicitly mark this as a follow-up or later PR. The behavior change is documented in the changelog fragment, but the agents.d fragment was requested as part of the fix.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "41a52099817ef6a408bfda4747523215a9996269e1aa8cee5cd07fa4a1b8736d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7487,
+    "run_id": "38873366294",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38873366294",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016100911_7fa7856950",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7487,
+    "run_id": "38873366294"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T10:09:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
