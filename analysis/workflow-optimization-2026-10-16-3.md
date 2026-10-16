@@ -618,3 +618,158 @@ The CI guard `tests/test_workflow_file_size_limit.py:66-98` fails any step `run:
 | Code modularization | `scripts/label_helpers.sh`, `scripts/gh_helpers.sh`, `scripts/validate_process.sh`, `scripts/orchestrate_poll_process.sh`, `.github/workflows/{implement,review_autofix,orchestrate_poll,plan,workflow-log-analysis,clarify}.yml`, new `scripts/implement_handle_noop.sh` | Medium |
 | Expression size reduction | `.github/workflows/implement.yml`, `.github/workflows/plan.yml`, `.github/workflows/review_autofix.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `.github/workflows/orchestrate_poll.yml`, `.github/workflows/implement.yml`, `.github/workflows/plan.yml`, `scripts/orchestrate_poll_process.sh`, `scripts/gh_helpers.sh`, `.github/workflows/review_autofix_sweep.yml` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-16)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE`: the change stays inside one step or function and has no intervening mutation, no change to error or retry behaviour, no pagination or concurrency boundary, and no change to log keys. The implement stage may apply it without further review. `NEEDS_VERIFICATION`: the change looks correct, but at least one precondition cannot be proven by reading the code. The listed verification steps must pass before anyone implements it. `RISKY_SKIP`: the call sits in a retry, stall-recovery, security-gate, pagination or race-defence path, or merging it would change failure semantics. It is listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001 — Post-merge validate dispatch reads labels once per issue on the PR-body fallback path**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:** `.github/workflows/review_autofix.yml:863` (fallback sets `labels: null`), `:868-902` (loop), `:872` (per-issue call). The batched path at `:816-822` already returns labels.
+- **Current / proposed calls:** N `gh issue view` calls, where N is the number of issue refs pulled from the PR title/body, only when `closingIssuesReferences` was empty. Proposed: 1 aliased GraphQL call, keeping the per-issue call as a fallback when that call fails.
+- **Endpoints:** GraphQL `issue(number:){labels}` (through `gh issue view --json labels`), once per issue.
+- **Evidence:**
+  ```bash
+  issue_nodes_json="$(printf '%s\n' "${issue_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0)) | map({number: tonumber, labels: null})')"
+  ...
+  if issue_labels="$(gh_retry gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+  ```
+- **Proposed fix:** before the loop at `:868`, when any node has `labels == null`, run one `gh_retry gh api graphql` with aliases `i<N>: issue(number: N) { labels(first: 100) { nodes { name } } }` under `repository(owner:, name:)`. Use the alias style of `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh`). Fill in `labels` on the nodes. Any alias that is still `null` keeps the existing `:872` call.
+- **Safety rationale:** error semantics change. Today a failed read skips only that issue (`continue` at `:880`); a batched call would skip every issue unless the per-issue fallback stays. The loop also mutates state between iterations (`gh workflow run` at `:891`, label removal at `:899`), on other issues only.
+- **Downstream signal:** before implementing, count the `Found linked issues via PR body/title fallback:` lines (`:861`) in recent `post-merge-validate-dispatch` logs and confirm N > 1 actually happens. If N is almost always 1, drop this finding; it saves nothing. If you implement it, add a test that a failed GraphQL call still falls through to the per-issue `gh issue view`.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001 — The no-op ancestry walk re-reads the current issue body, which is already in `ISSUE_META_FILE`**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - `.github/workflows/implement.yml:5084-5085` (first hop of the loop, with `current="${ISSUE_NUMBER}"` at `:5083`);
+  - `:275` (`ISSUE_META_FILE` exported to the job env);
+  - `:2396-2407` ("Recheck security dependency before edits" writes the full issue payload to `ISSUE_META_FILE`, or sets `SKIP_IMPLEMENT=true` on failure);
+  - `:1761-1770` (`issue_meta_matches_issue` validator).
+- **Current / proposed calls:** 2 × hops (up to 2 × `IMPL_NOOP_ANCESTRY_THRESHOLD`). Proposed: one fewer, because hop 1 needs no body read when the cached file is valid.
+- **Endpoints:** REST `GET repos/{repo}/issues/{n}` (`.body`).
+- **Evidence:** every write to `ISSUE_META_FILE` in `implement.yml` (`:183, 718, 737, 746, 1773, 1993, 2403`) comes before the "Handle no-op implementation" step (`:4933`). That step only runs when `SKIP_IMPLEMENT != 'true'`, so by then the `:2403` fetch has succeeded. Both steps are in the single `implement` job (`:92-6420`) and use the same `GH_PAT`.
+  ```bash
+  parent_body="$(gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+  ```
+- **Proposed fix:** on the first hop only, when `current == ISSUE_NUMBER` and `jq -e --arg n "${ISSUE_NUMBER}" '(.number|tostring)==$n and has("body")' "${ISSUE_META_FILE}"` succeeds, read `parent_body` from the file. Otherwise keep the live call unchanged. Later hops stay live.
+- **Safety rationale:** the two reads are in different steps with a Codex run in between, and nobody has proven that no step edits the issue body in that window. The rule against intervening mutations is therefore not shown to hold.
+- **Downstream signal:**
+  1. Grep `implement.yml` (`:2407-4933`) and the scripts it stages for any `PATCH .../issues/${ISSUE_NUMBER}` or `gh issue edit --body`. If one exists, drop this finding.
+  2. Confirm that the `Re-issued from #N` lineage line is written only when the issue is created.
+  3. Because of EXPR-001, the change must not add any `${{ }}` to this step body, and should land with or after EXPR-001.
+
+**REUSE-002 — The codex-agent "Check PR state" payload and the "Collect PR metadata" payload are separate full fetches of the same PR**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - `.github/workflows/review_autofix.yml:2177-2201` (`pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo 'null')"`, which uses only `.labels`, `.state` and `.merged*`);
+  - `:2603-2610`, which runs `scripts/review_collect_pr_metadata.sh:231` (`gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"`).
+- **Current / proposed calls:** 2 full `GET pulls/{n}` per review run. Proposed: 1 when the two steps run within the freshness window, otherwise 2 (unchanged).
+- **Endpoints:** REST `GET repos/{repo}/pulls/{n}`.
+- **Evidence:** the job already uses a freshness-bounded reuse pattern in `scripts/review_run_reviewers.sh:457-461`: `PR_PAYLOAD_FILE` is reused only when it is 120 seconds old or less, otherwise the script makes a live call at `:464`. The `:2188` payload is a strict superset of what `:231` needs (`review_collect_pr_metadata.sh:250-256` reads title, body, base.ref, head.ref and head.repo.full_name).
+- **Proposed fix:** have `:2188` also write `pr_meta` to a new `${RUNTIME_DIR}` file (check that the name is unique). In `review_collect_pr_metadata.sh`, before `:231`, copy that file into `PR_PAYLOAD_FILE` only when all of these hold: it is 120 seconds old or less (same `stat -c %Y` rule as `review_run_reviewers.sh:458-459`), it is an object with `.number == PR_NUMBER`, and it has a non-empty `.head.sha`. Otherwise make the existing call.
+- **Safety rationale:** the error semantics differ. `:2188` fails open to `null` and assumes the PR is open, while `:231` is the authoritative payload whose `head.sha` drives the review. The OpenCode, Claude and static-context steps between them probably take longer than 120 seconds, so the reuse may never trigger.
+- **Downstream signal:** measure the gap between the end of "Check PR state (defense-in-depth)" and the start of "Collect PR metadata" across recent codex-agent runs. Implement only if p50 is 120 seconds or less. Then confirm that no consumer of `PR_PAYLOAD_FILE` needs a head SHA fresher than the copy guarded by `review_run_reviewers.sh:457-461`.
+
+**REUSE-003 — Capacity resume lists the provider-outage trackers again after `find_tracking` cached them**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - `.github/workflows/orchestrate_poll.yml:244-246` (one page, `per_page=100`, cached to `${RUNTIME_DIR}/provider_outage_trackers.json`; already reused without an API call by `pool_window` at `:1036-1038`);
+  - `scripts/provider_outage.py:1096` (`find_trackers(gh, "capacity")`) → `:480` → `list_issues` at `:355-361` (`--paginate --slurp`), run from "Resume Claude capacity waits" at `orchestrate_poll.yml:1069-1093`.
+- **Current / proposed calls:** 1 paginated listing per tick in the hourly window with `capacity_wait=true`. A naive reuse would make 0.
+- **Endpoints:** REST `GET repos/{repo}/issues?labels=ai:provider-outage&state=open`.
+- **Evidence:** the two reads differ in pagination (single page vs `--paginate`) and in trust model. The workflow checks `author_association ∈ OWNER/MEMBER/COLLABORATOR` (`:247`); Python checks `author == gh.login()` (`provider_outage.py:486-491`). `capacity_resume` also PATCHes the tracker body it just read (`render_wait_probe(tracker["body"], ...)` → `gh.patch_body`, `:1118-1119`).
+- **Proposed fix:** none. Keep the live listing.
+- **Safety rationale:** pagination differs, so this hits a RISKY_SKIP trigger. A stale body feeding the `:1119` PATCH would also reopen a lost-update race against the review sweep's tracker writes.
+- **Downstream signal:** do not auto-implement. Changing this needs a manual design review of the tracker read-modify-write contract in `provider_outage.py` (docstring `:46-62`). The saving is at most 1 call per hour.
+
+**REUSE-004 — The review-blocked judge re-reads PR state in the final-`fix` merge branch after its post-LLM guard read**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - `scripts/review_rb_judge.sh:1888` (`_guard_pr_meta`, full payload, read after the LLM call per the comment at `:1878-1884`);
+  - `:2207-2222` (`fix)` with `IS_FINAL=true` re-reads `.state` before the bound merge).
+  - Same family, for reference: `:1071` (early guard), `:2109` and `:2635` (mergeable poll loops).
+- **Current / proposed calls:** 2. A naive reuse would make 1.
+- **Endpoints:** REST `GET repos/{repo}/pulls/{n}`.
+- **Evidence:** the comment at `:1878-1884` explicitly defends against auto-merge finishing while the judge runs. `RB_JUDGED_HEAD_SHA` / `RB_LIVE_HEAD_SHA` bind the merge to the head that was evaluated. The security-severity and action dispatch (`:1964-2072`) run between the two reads.
+- **Proposed fix:** none.
+- **Safety rationale:** this is a stall-recovery judge path whose re-reads exist to defend against an upstream merge race (TOCTOU), which is a RISKY_SKIP trigger.
+- **Downstream signal:** do not auto-implement. Any change needs a manual review of the head-binding and merged-state guards (`:1888-1901`, `:2211-2216`).
+
+**REUSE-005 — implement.yml reads the full issue twice for the security-dependency gate**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:** `.github/workflows/implement.yml:1985-1993` ("Validate approval phase label": `DEPENDENCY_META` fetch) and `:2396-2407` ("Recheck security dependency before edits"). Both overwrite `ISSUE_META_FILE`. The label reads at `:2031-2037` already reuse the file.
+- **Current / proposed calls:** 2. A naive reuse would make 1.
+- **Endpoints:** REST `GET repos/{repo}/issues/{n}`.
+- **Evidence:** the comment at `:1985-1986` says "Recheck just before advancing the phase. /approved must not bypass a still-open security prerequisite or a failed API read." Each read fails closed (`SKIP_IMPLEMENT=true`).
+- **Proposed fix:** none.
+- **Safety rationale:** these are permission and security-gate rechecks that must stay fresh at two separate decision points, which is a RISKY_SKIP trigger.
+- **Downstream signal:** do not auto-implement. It is listed so later passes do not propose it again.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001 — The forward-merge failure alert fetches the run's jobs for a DEBUG message that the default threshold drops**
+- **Safety tag:** `SAFE_TO_MERGE`
+- **Files / lines:** `.github/workflows/forward-merge-stable-to-main.yml:459-515` (lookup at `:493-504`, send at `:515`; `ALERT_MSG_LEVEL` defaults to `'WARNING'` at `:464`); filter in `scripts/tg_helpers.sh:83-91, 113-115, 120-122`.
+- **Current / proposed calls:** 1 per failed run. Proposed: 0 when the alert cannot be delivered (always the case under the default `WARNING` threshold), still 1 when `ALERT_MSG_LEVEL=DEBUG` and Telegram is configured.
+- **Endpoints:** REST `GET repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs` (raw `curl`).
+- **Evidence:** `failing_step` is used only to build `msg`, which goes only to `tg_send_msg "${msg}" "DEBUG"`. `tg_send_msg` returns before sending when `_tg_should_send DEBUG` fails (DEBUG=0 < WARNING=1) or when `TG_BOT_SECRET` or the chat ID is empty:
+  ```bash
+  if ! _tg_should_send "${level}"; then
+  	return 0
+  fi
+  ...
+  if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${chat_id}" ]; then
+  	return 0
+  fi
+  ```
+  No test pins this lookup (grep of `tests/` for `failing_step` / `attempts/` finds only unrelated fixtures).
+- **Proposed fix:** guard the existing `if [ -n "${GH_TOKEN:-}" ]` block at `:494` with a deliverability check that uses the same predicate. Leave the `tg_send_msg` call unchanged, since it still filters on its own. Check that the new local name is unique in the step:
+  ```bash
+  fm_alert_deliverable=true
+  if declare -F _tg_should_send >/dev/null 2>&1 && ! _tg_should_send DEBUG; then fm_alert_deliverable=false; fi
+  if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then fm_alert_deliverable=false; fi
+  if [ "${fm_alert_deliverable}" = "true" ] && [ -n "${GH_TOKEN:-}" ]; then
+  	# existing jobs lookup, unchanged
+  fi
+  ```
+- **Safety rationale:** the call and its only consumer are in the same step. The call is a fail-open single attempt with no retry loop, pagination, auth probe or emitted log key. The guard repeats exactly the predicate `tg_send_msg` applies, and it falls back to making the call when `_tg_should_send` is missing (an older CWD copy of `tg_helpers.sh`). Delivered alerts are unchanged.
+- **Downstream signal:** in `forward-merge-stable-to-main.yml` "Telegram alert — hard failure", skip the jobs-API lookup unless `_tg_should_send DEBUG` passes and both `TG_BOT_SECRET` and `TG_ADMIN_CHAT_ID`/`TG_CHAT_ID` are set. Compatible with SEC-002 (switching the `curl` to `gh api`).
+
+**DEAD-API-002 — The poll job-failure alert fetches the run's jobs even when the ERROR alert cannot be delivered**
+- **Safety tag:** `SAFE_TO_MERGE`
+- **Files / lines:** `.github/workflows/orchestrate_poll.yml:1835-1885` (lookup at `:1866-1877`, send at `:1885` as `"ERROR"`; `ALERT_MSG_LEVEL` comes from `env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING'` at `:1840`); filter in `scripts/tg_helpers.sh:83-91, 113-122`.
+- **Current / proposed calls:** 1 per failed poll run. Proposed: 0 when Telegram is not configured (consumer repos without `TG_BOT_SECRET` or a chat ID) or when the threshold is `CRITICAL`/`SILENT` (the release-gate SILENT mode documented at `tg_helpers.sh:47-55`); otherwise 1, as today.
+- **Endpoints:** REST `GET repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs` (raw `curl`).
+- **Evidence:** the pattern is the same as DEAD-API-001. `failing_step` feeds only `msg`, and `msg` feeds only `tg_send_msg "${msg}" "ERROR"`, which returns early under the same two conditions.
+- **Proposed fix:** the same guard as DEAD-API-001 with level `ERROR` (`_tg_should_send ERROR`), around the `if [ -n "${GH_TOKEN:-}" ]` block at `:1867`. Use a step-local variable name that does not collide with existing names. Do not change the step's `if: failure()`, env or send call.
+- **Safety rationale:** this is a failure-notification step in `orchestrate_poll.yml`, not code in `orchestrate_poll_process.sh` or a race-defence path. The call is a single fail-open read consumed only within its own step, and no log output or log key changes.
+- **Downstream signal:** in `orchestrate_poll.yml` "Notify Telegram on job failure", skip the jobs-API lookup unless `_tg_should_send ERROR` passes and both `TG_BOT_SECRET` and `TG_ADMIN_CHAT_ID`/`TG_CHAT_ID` are set. Keep the call when `_tg_should_send` is undefined.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: RISKY_SKIP — lives in `orchestrate_poll_process.sh` (`:5059-5199`). Added detail: `_fetch_pr_json` (`:2215-2219`) has no cycle-local cache across its 36 call sites, so any sweep prefetch must be a cache read layered under it, not a replacement.
+- BATCH-002: RISKY_SKIP — these are poll-script loops on the merge path. Added detail: the review-blocked branch deliberately re-fetches the PR (`:25692, 26257, 26326, 26376, 26646, 26717`) as race defence, and a wave prefetch must not feed those reads. The last-cross-reference semantics (`:4455-4470`) must be kept.
+- BATCH-003: RISKY_SKIP — this degraded fallback (`gh_helpers.sh:1640-1657`) feeds stall recovery through `_issue_cross_ref_pr_number_last` (`orchestrate_poll_process.sh:20481, 21657`). Batching would turn the per-URL `ok:false` isolation (`:1653-1654`) into all-or-nothing.
+- BATCH-004: NEEDS_VERIFICATION — per-heal-issue failure isolation (`workflow_failure_heal_pr_reconcile.sh:243-246`, `continue`) and the `per_page=10` head filter would become a base-filtered listing that needs pagination. Confirm stacked heal issues (N > 1) actually occur.
+- BATCH-005: RISKY_SKIP — the proposal replaces `--paginate` comments (`implement.yml:5089-5090`) with `comments(last:100)` in the #1292 duplicate-sub-issue circuit breaker. REUSE-001 covers the safe part (hop 1).
+- API-001: NEEDS_VERIFICATION — `tests/test_review_autofix_sweep_stale_queued.py:341-362` pins the read (#6629: "one default-branch read per tick… no fallback"; `count("--jq .default_branch") == 1`). The test and its contract docstring have to change along with the code.
+- API-002: NEEDS_VERIFICATION — the two error semantics differ. The outage listing fails open (`orchestrate_poll.yml:250-252`); the tracking listing aborts under `set -e` (`:257-262`). The REST-shaped `provider_outage_trackers.json` is consumed at `:1036-1038` and pinned by `tests/test_claude_capacity_wait_call_sites.py:556`. GraphQL `issues` drops `.pull_request` and renames `author_association`.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 2 | DEAD-API-001, DEAD-API-002 |
+| NEEDS_VERIFICATION | 3 | MERGE-001, REUSE-001, REUSE-002 |
+| RISKY_SKIP | 3 | REUSE-003, REUSE-004, REUSE-005 |
+
+These counts cover only the findings raised in this section. The Deep Audit Section 2 items are tagged under Cross-References above: 4 RISKY_SKIP (BATCH-001, BATCH-002, BATCH-003, BATCH-005) and 3 NEEDS_VERIFICATION (BATCH-004, API-001, API-002).
+
+### Implement-Stage Handoff
+- DEAD-API-001 — the call is dead on every failed forward-merge run under the default `ALERT_MSG_LEVEL=WARNING`.
+- DEAD-API-002 — the call is dead on failed poll runs in repos without Telegram, or under a CRITICAL/SILENT threshold.
+
+Both save at most one call per failed run, so the gain is small; their value is that they are provably safe.
