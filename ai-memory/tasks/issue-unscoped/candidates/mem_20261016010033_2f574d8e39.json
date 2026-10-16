@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "Treat consumer workflows marked `disabled_manually` as an intentional pause, not a repository-registration or health-check defect.",
   "timestamps": {
     "created_at": "2026-10-16T01:00:33Z",
-    "promoted_at": null,
+    "promoted_at": "2026-10-16T01:02:24Z",
     "superseded_at": null
   }
 }
