@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:206 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `LEDGER_EMIT_TIMEOUT_SECONDS` row says a timeout leaves the dedupe key unconsumed so a later substate can retry. The default-on job-scoped circuit breaker now skips later substates after a timeout, and the row does not mention `LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED`.\n  WHY: Operators who follow the documented retry behavior will not know that later ledger events are silently dropped, or that `LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED=false` restores per-call retries. Reviewers rated this NIT, so low is the only severity reported.\n- scripts/ledger_emit_substate.sh:630-653 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The circuit breaker treats every 403 as an authentication failure (reason=auth) and opens the circuit, even when the 403 is a transient secondary rate limit or abuse response.\n  WHY: A transient 403 makes the job skip all later substate emissions, so the ledger state is incomplete for a job that might have recovered. The reviewer rated this MAJOR; MAJOR is mapped to high here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:206 | severity=NIT | confidence=4\n  PROBLEM: The `LEDGER_EMIT_TIMEOUT_SECONDS` row says a timeout leaves the dedupe key unconsumed so a later substate can retry. `scripts/ledger_emit_substate.sh` now opens a job-scoped circuit breaker on a timeout (`emit_failed:timeout:*`, line 633), and later substates exit early (lines 546-548). The row does not mention `LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED`.\n  WHY: With the default setting, later substates in the job are dropped silently and the ledger loses those events. Only the changelog fragment and the agents.d fragment document the breaker.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ledger_emit_substate.sh:630-653 | severity=MAJOR | confidence=4\n  PROBLEM: The circuit breaker treats 403 errors as authentication failures (reason=auth) and opens the circuit, even when the 403 is a transient secondary rate limit or abuse response.\n  WHY: A rate-limited 403 from the memory store is transient. Opening the circuit skips later valid substate emissions for the rest of the job, leaving the ledger state incomplete.\n- README.md:206 | severity=NIT | confidence=4\n  PROBLEM: The documentation still says a timeout leaves the dedupe key unconsumed so a later substate can retry. That is now incorrect, because the circuit breaker skips later emissions for the rest of the job.\n  WHY: Operators will be misled about the durability of substate emissions when the memory store is unreachable or failing transiently.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:206 | severity=NIT | confidence=4\n  PROBLEM: The `LEDGER_EMIT_TIMEOUT_SECONDS` row documents a later-substate retry that the helper no longer implements. `scripts/ledger_emit_substate.sh` lines 539-550 exit 0 at line 549 once the `circuit_open` sentinel exists, before the dedupe key is built at line 551.\n  WHY: Under the default `LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED=true`, the rest of the job's `run_substate` events are silently missing from the ledger. The row does not say that `LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED=false` restores per-call retry.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:206 | severity=NIT | confidence=5\n  PROBLEM: The `LEDGER_EMIT_TIMEOUT_SECONDS` row says a timeout leaves the dedupe key unconsumed so a later substate can retry. The new default-on circuit breaker skips later substates in the job after a timeout, and the row omits `LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED`.\n  WHY: Operators will not know that later ledger events are silently dropped after a timeout, or how to disable the breaker.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "eb4d223fc3525dea7723020c2a8d0245b249b77f966bb74335f1f657b4adf0e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7499,
+    "run_id": "38914441617",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38914441617",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016143743_4609600cc6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7499,
+    "run_id": "38914441617"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T14:37:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
