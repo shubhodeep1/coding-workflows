@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -158,6 +161,10 @@ def test_semble_wiring_is_consistent_across_four_codex_jobs() -> None:
 def test_failure_label_writes_route_through_gh_retry_with_fallback() -> None:
 	wf = _workflow_text()
 	helper_def = '_wla_label_retry() { if type gh_retry >/dev/null 2>&1; then gh_retry "$@"; else "$@"; fi; }'
+	create_def = (
+		'_wla_label_create() { local _wla_err; _wla_err=$(gh label create "$@" 2>&1 >/dev/null) && return 0; '
+		'case "${_wla_err}" in *"already exists"*) return 0 ;; esac; _wla_label_retry gh label create "$@"; }'
+	)
 	for step_name in (
 		"Run workflow log analysis",
 		"Run deep audit pass",
@@ -165,7 +172,8 @@ def test_failure_label_writes_route_through_gh_retry_with_fallback() -> None:
 	):
 		body = wf.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name: ", 1)[0]
 		assert body.count(helper_def) == 1, step_name
-		assert '_wla_label_retry gh label create "ai:log-analysis-failed"' in body, step_name
+		assert body.count(create_def) == 1, step_name
+		assert '_wla_label_create "ai:log-analysis-failed"' in body, step_name
 		assert 'GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit "${TRACKING_ISSUE_NUM}"' in body, step_name
 		for line in body.splitlines():
 			stripped = line.lstrip()
@@ -178,6 +186,44 @@ def test_failure_label_writes_route_through_gh_retry_with_fallback() -> None:
 		assert "AI_PHASE_FAILURE_V1" in body, step_name
 
 
+def _run_label_create_helper(tmp: str, gh_stderr: str) -> tuple[int, int]:
+	wf = _workflow_text()
+	defs = [
+		line.strip()
+		for line in wf.splitlines()
+		if line.strip().startswith(("_wla_label_retry() {", "_wla_label_create() {"))
+	][:2]
+	assert len(defs) == 2
+	calls = os.path.join(tmp, "calls")
+	open(calls, "w", encoding="utf-8").close()
+	script = "\n".join(
+		[
+			"gh() { echo call >> \"$CALLS\"; printf '%s\\n' \"$GH_STDERR\" >&2; return 1; }",
+			"gh_retry() { local i; for i in 1 2 3 4 5; do \"$@\" && return 0; done; return 1; }",
+			*defs,
+			'_wla_label_create "ai:log-analysis-failed" --repo o/r',
+		]
+	)
+	env = dict(os.environ, CALLS=calls, GH_STDERR=gh_stderr)
+	proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+	with open(calls, encoding="utf-8") as fh:
+		count = len(fh.read().splitlines())
+	return proc.returncode, count
+
+
+def test_label_create_helper_does_not_retry_an_existing_label() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, calls = _run_label_create_helper(
+			tmp, 'label with name "ai:log-analysis-failed" already exists; use `--force` to update'
+		)
+	assert rc == 0
+	assert calls == 1
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, calls = _run_label_create_helper(tmp, "HTTP 502: Bad Gateway")
+	assert rc != 0
+	assert calls == 6
+
+
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
@@ -187,6 +233,7 @@ def main() -> int:
 	test_scenario_trace_renderer_is_flag_gated_and_local_only()
 	test_semble_wiring_is_consistent_across_four_codex_jobs()
 	test_failure_label_writes_route_through_gh_retry_with_fallback()
+	test_label_create_helper_does_not_retry_an_existing_label()
 	return 0
 
 
