@@ -1485,15 +1485,15 @@ jobs:
             guard_block true target_branch_unverified
           fi
 
-      # Heal #7434 (source shubhodeep1/digital_pa#145): the claude-pool-token
-      # action ships CommonJS main.js / post.js with no package.json of its
-      # own, so in a consumer whose root package.json sets "type": "module"
-      # Node loads them as ES modules, they crash on `require`, no pool is
-      # written and the planner is refused with reason=no_credential. Pin the
-      # action's module type in the support checkout before the action runs.
-      # The real fix is a committed .github/actions/claude-pool-token/package.json;
-      # once it ships this step logs reason=present and can be removed. It runs
-      # before the write-guard snapshot so the file is part of the baseline.
+      # Heal #7434 (source shubhodeep1/digital_pa#145): without its own
+      # package.json, the claude-pool-token action's CommonJS main.js / post.js
+      # load as ES modules in a consumer whose root package.json sets
+      # "type": "module", crash on `require`, write no pool, and the planner is
+      # refused with reason=no_credential. Since #7432 the action ships
+      # package.json, so this step normally logs reason=present; it stays as a
+      # fallback for a staged support checkout whose action copy lacks the file.
+      # It runs before the write-guard snapshot, so its write is never
+      # attributed to the planner.
       - name: Pin claude-pool-token action module type
         if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'
         continue-on-error: true

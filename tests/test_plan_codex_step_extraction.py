@@ -660,9 +660,8 @@ def test_pool_token_action_crashes_under_esm_parent_without_pin() -> None:
 	if shutil.which("node") is None or not main_file.endswith(".js"):
 		print("skip: node missing or the action no longer ships .js entry points")
 		return
-	if (POOL_TOKEN_ACTION_DIR / "package.json").exists():
-		print("skip: the action ships its own package.json")
-		return
+	# _stage_action copies only action.yml and the entry points, so the
+	# staged copy never has the action's own package.json.
 	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
 		root = Path(tmp)
 		action_dir = _stage_action(root, with_pin=False)
