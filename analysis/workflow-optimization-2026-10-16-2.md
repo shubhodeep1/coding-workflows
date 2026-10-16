@@ -612,3 +612,132 @@ Stages in end-to-end order, with the evidence per stage:
 | Code modularization | `scripts/gh_helpers.sh`, `.github/workflows/review_autofix_sweep.yml`, `scripts/orchestrate_poll_process.sh`, `scripts/review_merge_train.sh`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/workflow-log-analysis.yml`, `.github/actions/install-codex/action.yml` (or a new composite action), `.github/workflows/review_autofix.yml`, plus the 14 files with inline `gh label create` | Large |
 | Expression size reduction | `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `scripts/gh_helpers.sh`, `scripts/tg_helpers.sh`, `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/implement.yml`, `.github/workflows/workflow-log-analysis.yml`, `scripts/review_rb_judge.sh`, `scripts/orchestrate_poll_process.sh`, `prompts/mode-workflow-audit.txt` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-16)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: the implement stage may make the change without further review. Both calls hit the same endpoint (or a strict subset of its fields) with identical filters, pagination and auth. They sit in the same function or step with no mutation in between. Error handling and retry behaviour stay the same, and no cycle-local cache contract or concurrency boundary is affected.
+- **`NEEDS_VERIFICATION`**: the change looks correct, but static reading can't prove every one of those conditions. The listed checks must pass before anyone implements it.
+- **`RISKY_SKIP`**: shown for visibility only. At least one hard trigger applies: retry or stall-recovery path, identity or permission probe, pagination, a rate-limit-sensitive path, `orchestrate_poll_process.sh`, race defence, or a change to a log key other code greps for. It must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** · `RISKY_SKIP`
+- **Files:** `.github/workflows/review_autofix.yml:1576-1582` (comments read) and `.github/workflows/review_autofix.yml:1598-1602` (PR read). Both are in the fingerprint-cap step.
+- **Current calls:** 1 + P (P = extra comment pages beyond the first) + 1. **Proposed:** 1 + P GraphQL pages, using `pullRequest{state headRefOid title body comments(first:100){nodes{author{login} body}}}`.
+- **Endpoints:** `GET /repos/{r}/issues/{n}/comments` (`--paginate`) and `GET /repos/{r}/pulls/{n}`.
+- **Evidence:** the two reads run back to back in the same step and target the same PR. The step says the gate snapshot was re-read on purpose, after the per-PR lock:
+  ```
+  # The gate snapshot can predate another queued cap job. The
+  # per-PR concurrency lock above serializes writers; re-read comments
+  # after acquiring it so only the first job applies side effects.
+  # The PR read below cannot provide comments or their author (§15).
+  ```
+  The PR read feeds `pr_state`, `current_head` and `pr_text` (1603-1620). The heal reporter also receives it as `PR_PAYLOAD_FILE` (1720), which expects the full REST pulls shape.
+- **Proposed fix:** none for auto-implementation. A GraphQL merge would mean extending this step with one aliased query, following the pattern of `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh`.
+- **Safety rationale:** four triggers apply:
+  - The comments read paginates.
+  - Both reads are an explicit race defence: the `head_moved` and `pr_closed` checks at 1605-1614 run after the lock.
+  - GraphQL `author.login` drops the `[bot]` suffix that REST `user.login` has. That would break the case-insensitive author match at 1593 and 1655.
+  - `PR_PAYLOAD_FILE` consumers expect the REST pulls schema.
+- **Downstream signal:** do not auto-implement. Manual review would have to prove three things: that `FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN` compares equal under GraphQL login formatting, that `workflow_failure_heal_autofix_report.sh` tolerates a non-REST PR payload, and that the post-lock re-read ordering is kept.
+
+**MERGE-002** · `RISKY_SKIP`
+- **Files:** `scripts/plan_split_dispatch.sh:98-99` (identity) and `scripts/plan_split_dispatch.sh:127-128` (default branch).
+- **Current calls:** 2 on the full path (plus 1-2 workflow-state reads at 118-125, which GraphQL can't serve). **Proposed:** 1 GraphQL read, `{ viewer{login} repository(owner,name){defaultBranchRef{name}} }`.
+- **Endpoints:** `GET /user` and `GET /repos/{r}`.
+- **Evidence:** both calls are in one script with no write between them. Each only feeds a skip guard:
+  ```
+  pipeline_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
+  [ -n "${pipeline_login}" ] || skip identity_unavailable
+  ...
+  default_branch="$(gh_retry gh api "repos/${REPO}" --jq '.default_branch // ""' 2>/dev/null || true)"
+  [ -n "${default_branch}" ] || skip default_branch_unavailable
+  ```
+- **Proposed fix:** none for auto-implementation. If approved, replace both reads with one `gh_retry gh api graphql` read placed at line 98, and keep both skip lines.
+- **Safety rationale:** two triggers apply:
+  - `GET /user` is the identity anchor for the pipeline-authored split-marker dedupe at 106-111.
+  - Merging moves the default-branch read ahead of the `already_split` and wrapper skips. One failure would then report `identity_unavailable` where today it reports `default_branch_unavailable`, which changes observable skip-reason output.
+- **Downstream signal:** do not auto-implement. Manual review must confirm that nothing greps the plan-split skip reasons, and that a GraphQL `viewer` login matches the REST `.user.login` used in the comment filter at 103 and 108.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** · `NEEDS_VERIFICATION`
+- **Files:** `.github/workflows/review_autofix_sweep.yml:228-237` (open-PR listing) and `.github/workflows/review_autofix_sweep.yml:285-290` (default-branch read). Both are in the same step under `set -euo pipefail` (213).
+- **Current calls:** 1 per tick that reaches line 285. **Proposed:** 0. The sweep runs every 30 minutes (`cron: '*/30 * * * *'`, line 80), so this saves up to 48 calls per day per repo running the sweep.
+- **Endpoints:** `GET /repos/{r}/pulls?state=open` (already fetched) and `GET /repos/{r}` (removed).
+- **Evidence:** line 285 is reached only when `total > 0` (273-276), so the PR listing returned at least one PR. Every PR object's `base.repo` is this repository. The listing's jq projection (230-237) currently throws away `base`, which forces the second read:
+  ```
+  sweep_default_branch="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}" --jq .default_branch 2>/dev/null || true)"
+  ```
+  Both calls use the same `READ_TOKEN`. The only thing between them is a local file write (239).
+- **Proposed fix:**
+  - In the jq at 230, keep `(add // [])` as `$all`.
+  - Emit `($all[0].base.repo.default_branch // "")` into a second variable, before the `.draft == false` filter, since drafts carry `base.repo` too.
+  - Assign it to `sweep_default_branch` instead of making the read at 285.
+  - Keep the regex and `null` validation and the `AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable` fallback at 286-290 unchanged, so a missing field still skips the tick.
+- **Safety rationale:** the two calls hit different endpoints, so the strict-subset condition for `SAFE_TO_MERGE` fails. The paginated listing's query parameters are not changed (only its local jq projection is), so the pagination trigger does not apply.
+- **Downstream signal:** before implementing:
+  1. Confirm from GitHub's REST schema or one recorded response that list-pulls `base.repo` includes `default_branch`.
+  2. Run `grep -rn 'repos/${REPOSITORY}" --jq .default_branch' tests/` to make sure no contract test pins the literal at 285.
+  3. Keep the provenance contract in the comment at 278-284 (one value per tick, no fallback) and update the comment.
+  4. Coordinate with Deep Audit DUP-002 so this inline copy is not also folded into a shared memo.
+
+**REUSE-002** · `RISKY_SKIP`
+- **Files:** `.github/workflows/implement.yml:1806` (step "Fetch issue metadata", 1751; `GH_TOKEN: ${{ secrets.GH_PAT }}` at 1754) and `.github/workflows/implement.yml:2138` (step "Unblock judge bulk-delete override", 2121; `GH_TOKEN: ${{ secrets.GH_PAT }}` at 2132). Both steps are in the `implement` job (92).
+- **Current calls:** 2 when a `override=bulk_delete -->` marker is present (2135); 1 otherwise. **Proposed:** 1.
+- **Endpoint:** `GET /user`.
+- **Evidence:** the first read is unconditional, and its value is used only locally (1814). The second step reads it again from the same token:
+  ```
+  pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"     # 1806
+  pipeline_login="$(gh api user --jq '.login' 2>/dev/null || true)"   # 2138
+  ```
+  The comment at 1803-1805 covers the ordering in one direction only ("it cannot supply this grant's pipeline identity before the editor"). It does not cover reusing the earlier value later.
+- **Proposed fix (if approved):** have step 1751 write the login as a step output with an `id:`, not `GITHUB_ENV`. Step 2121 would read `steps.<id>.outputs.pipeline_login` and fall back to `gh api user` when it's empty.
+- **Safety rationale:** the value is the trust anchor that decides which `ai:unblock:v1` markers can lift the bulk-delete threshold (2143-2148), so this is an identity flow. Passing it through job state crosses the trust boundary of steps 1855-2075.
+- **Downstream signal:** do not auto-implement. A human must confirm three things: no step between 1751 and 2121 can write the carrier (rule out `GITHUB_ENV`); step 1751 always runs whenever step 2121 runs (compare `if:` conditions); and the saving (1 call, only when a marker exists) justifies touching a destructive-guard override path.
+
+**REUSE-003** · `RISKY_SKIP`
+- **Files:** `scripts/review_single_issue_security_pass.sh:369-373` (gate mode, called from `.github/workflows/review_autofix.yml:4148` with `GH_TOKEN: ${{ secrets.GH_PAT || github.token }}` at 4135) versus the existing gate job output `fingerprint_cap_marker_author_login`. That output is declared at `review_autofix.yml:328` and written at `scripts/review_autofix_step_evaluate_gate.sh:1371`.
+- **Current calls:** 1 `GET /user` per security-pass gate invocation. **Proposed:** 0 when the gate output is non-empty, else 1.
+- **Endpoint:** `GET /user`.
+- **Evidence:** the script says:
+  ```
+  # The gate job also probes /user, but its identity is not exported to this job.
+  SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+  ```
+  That comment is out of date: the gate's login **is** exported, and two consumers already reuse it, `FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN` (1469) and `AUTOFIX_STREAK_AUTHOR_LOGIN` (5627). However, the gate fills it lazily. `gate_fetch_marker_comments` (`review_autofix_step_evaluate_gate.sh:326-340`) runs only when the partial or cap scans need it, so the output can be empty. The report-mode read at line 615 has no gate output in scope and is not part of this finding.
+- **Proposed fix (if approved):** pass `SECURITY_PASS_AUTHOR_LOGIN_PRIMARY: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}` to the step at 4134-4146. In the script, use it when non-empty, then the `/user` read, then `SECURITY_PASS_AUTHOR_LOGIN_FALLBACK`.
+- **Safety rationale:** this is an identity probe that crosses a job boundary. The gate job's token must be proven identical to `secrets.GH_PAT || github.token`, or markers will be checked against the wrong author.
+- **Downstream signal:** do not auto-implement. A human must check the gate job's `GH_TOKEN` expression against 4135, confirm the security-pass job has `needs: gate`, and confirm that `review_rb_judge_security_pass.sh:210` (the judge step at 4308) gets the same treatment or is deliberately left alone.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001** · `RISKY_SKIP`
+- **Files:** `scripts/workflow_failure_heal_report.sh:209-211` (second read) and `scripts/workflow_failure_heal_report.sh:166-173` (first read).
+- **Current calls:** 0 extra on success. On failure, a second full `gh_retry` series. **Proposed:** 0 extra in both cases.
+- **Endpoint:** `GET /user`.
+- **Evidence:** line 210 runs only when `LABEL = ai:needs-human` (208) and `HEAL_REPORTER_LOGIN` is empty (209). For that label, line 172 has always run first (166), so 210 can only be reached after 172's retries came back empty. It never fetches anything new on a success path. The comment at 206-207 ("The /user read happens only when the marker text is present") predates the shared read at 172.
+- **Proposed fix:** none for auto-implementation. At most, correct the comment at 206-207 so it says 210 only re-reads after the line-172 read failed.
+- **Safety rationale:** this is an identity read that only runs on retry. Removing it changes failure behaviour: a transient failure that a second retry series could recover from would instead reach `exit 1` at 213-214 (`non_retryable_marker_author_unavailable`).
+- **Downstream signal:** do not auto-implement. Removing it needs a human decision that one `gh_retry` series is enough for this fail-closed path, and a check of heal-report logs for any recovery through line 210.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — the fix sits in `orchestrate_poll_process.sh`, replaces fail-closed race defence, and touches paginated `_pr_named_review_dispatch_runs`. Net-new detail: a glob confirms `ai-review.yml` is absent and only `internal-review.yml` exists, so the first lookup per PR in `_has_active_autofix_run` is always a miss in this repo.
+- API-002: NEEDS_VERIFICATION — `vars.WORKFLOW_PROFILE == 'core'` is an established pattern (`orchestrate_poll.yml:34`, `review_autofix_sweep.yml:173`), but `cancel_on_pr_close.yml` doesn't reference it yet. Before gating, confirm no full-profile consumer runs without the poller backstop.
+- API-003: NEEDS_VERIFICATION — the 2-read path at `tg_helpers.sh:160-163` is a deliberate fix for the 447-comment incident. A job-local cache must be updated after its own PATCH or POST (225, 232) and must never fall back to reading the oldest page. It also interacts with BUG-009.
+- API-004: NEEDS_VERIFICATION — confirm that the job-local "ensured" file can't mask a label deleted mid-job by `sync_ai_labels.yml`.
+- API-005: NEEDS_VERIFICATION — this changes PR-comment output that the poller's no-op recovery greps. Cadence and recency semantics must be proven unaffected first.
+- API-006: NEEDS_VERIFICATION — `gh workflow run` is a POST, so memoizing must not skip the fallback after a transient failure. Net-new: the same first-candidate miss, in reverse order, exists at `plan_split_dispatch.sh:118-125`, where consumers pay a 404 on `internal-orchestrate.yml` first.
+- BATCH-001: RISKY_SKIP — the per-hop comments read is paginated, and `comments(last:100)` changes page-boundary semantics for issues with more than 100 comments.
+
+### Summary Counts
+These counts cover this pass's findings plus the Deep Audit IDs cross-referenced above.
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 6 | REUSE-001, API-002, API-003, API-004, API-005, API-006 |
+| RISKY_SKIP | 7 | MERGE-001, MERGE-002, REUSE-002, REUSE-003, DEAD-API-001, API-001, BATCH-001 |
+
+### Implement-Stage Handoff
+- No `SAFE_TO_MERGE` findings in this pass. The best candidate is REUSE-001 (about 48 calls per day per repo running the sweep). It moves to `SAFE_TO_MERGE` once its four verification steps pass.
