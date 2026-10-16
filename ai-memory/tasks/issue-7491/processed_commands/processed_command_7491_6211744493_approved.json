@@ -5,13 +5,26 @@
   "entry_id": "processed_command_7491_6211744493_approved",
   "issue_number": 7491,
   "metadata": {
+    "branch": "ai/issue-7491",
+    "changed_files": [
+      "agents.d/wfopt-2026-09-20-2-continuation-peer-check.md",
+      "changelog.d/wfopt-2026-09-20-2-continuation-peer-check.md",
+      "probably_unnecessary_but_read_if_stuck.md",
+      "scripts/review_autofix_step_post_commit_retrigger.sh",
+      "tests/test_retrigger_default_branch_dispatch.py"
+    ],
+    "issue_number": 7491,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7491",
+    "pr_number": 7496,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7496",
+    "run_attempt": "1",
+    "run_id": "38876148899",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38876148899"
   },
   "run_attempt": 1,
   "run_id": "38876148899",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-16T08:51:15Z",
+  "status": "completed",
+  "timestamp": "2026-10-16T09:13:01Z",
   "workflow": "implement"
 }
