@@ -1008,6 +1008,26 @@ def _fetch_run_log_archive(
         return payload
 
 
+# A failed job none of whose steps reached one of these conclusions failed
+# while queued or before a runner picked it up (only skipped/null steps).
+PRE_RUNNER_FAILURE_STEP_NAME = "pre_runner_failure"
+_PRE_RUNNER_STEP_CONCLUSIONS = frozenset(
+    {"success", "failure", "cancelled", "neutral", "timed_out", "action_required"}
+)
+
+
+def _job_never_ran_a_step(job: dict[str, Any]) -> bool:
+    steps = job.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return True
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("conclusion") or "").lower() in _PRE_RUNNER_STEP_CONCLUSIONS:
+            return False
+    return True
+
+
 def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
     for job in jobs:
         for step in job.get("steps") or []:
@@ -1021,7 +1041,7 @@ def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
         if (job.get("conclusion") or "").lower() == "failure":
             return {
                 "job_name": job.get("name"),
-                "step_name": None,
+                "step_name": PRE_RUNNER_FAILURE_STEP_NAME if _job_never_ran_a_step(job) else None,
             }
 
     return {
