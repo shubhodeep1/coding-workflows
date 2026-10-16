@@ -532,6 +532,8 @@ POOL_TOKEN_ACTION_DIR = REPO_ROOT / ".github" / "actions" / "claude-pool-token"
 PIN_STEP_NAME = "Pin claude-pool-token action module type"
 PIN_STEP_IF = "env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'"
 STAGED_ACTION_REL = Path(".codex-workflow-src") / ".github" / "actions" / "claude-pool-token"
+CLARIFY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
+CLARIFY_PIN_STEP_IF = "steps.ai_engine.outputs.engine == 'claude'"
 
 
 def _step_run_body(step: str) -> str:
@@ -570,9 +572,9 @@ def _clean_env(**extra: str) -> dict[str, str]:
 	return environment
 
 
-def _run_pin(root: Path) -> subprocess.CompletedProcess[str]:
+def _run_pin(root: Path, body: str | None = None) -> subprocess.CompletedProcess[str]:
 	return subprocess.run(
-		["bash", "-c", _pin_step_body()],
+		["bash", "-c", _pin_step_body() if body is None else body],
 		cwd=root, env=_clean_env(), capture_output=True, text=True, check=False,
 	)
 
@@ -735,6 +737,80 @@ def test_pool_token_action_pin_does_not_change_write_guard_paths() -> None:
 		after = _paths("after.tsv")
 		assert before == after
 		assert ".codex-workflow-src/" in after
+
+
+def _clarify_pin_step_body() -> str:
+	return _step_run_body(_workflow_step(CLARIFY_WORKFLOW.read_text(encoding="utf-8"), PIN_STEP_NAME))
+
+
+def test_clarify_pool_token_action_pin_step_wiring() -> None:
+	# Heal #7476: clarify runs the same pin as plan (#7434) before the action.
+	workflow_text = CLARIFY_WORKFLOW.read_text(encoding="utf-8")
+	step = _workflow_step(workflow_text, PIN_STEP_NAME)
+	assert f"        if: {CLARIFY_PIN_STEP_IF}\n" in step
+	assert "        continue-on-error: true\n" in step
+	assert "${{" not in _clarify_pin_step_body()
+	order = [
+		workflow_text.index("      - name: Resolve AI engine\n"),
+		workflow_text.index("      - name: Install Claude Code CLI\n"),
+		workflow_text.index(f"      - name: {PIN_STEP_NAME}\n"),
+		workflow_text.index("      - name: Resolve Claude credential\n"),
+	]
+	assert order == sorted(order)
+	assert workflow_text.count(f"      - name: {PIN_STEP_NAME}\n") == 1
+	credential = _workflow_step(workflow_text, "Resolve Claude credential")
+	assert "uses: ./.codex-workflow-src/.github/actions/claude-pool-token\n" in credential
+	assert "        continue-on-error: true\n" in credential
+	assert f"        if: {CLARIFY_PIN_STEP_IF}\n" in credential
+
+
+def test_clarify_pool_token_action_pin_body_matches_plan() -> None:
+	assert _clarify_pin_step_body() == _pin_step_body()
+
+
+def test_clarify_pool_token_action_loads_under_esm_parent_after_pin() -> None:
+	if shutil.which("node") is None:
+		print("skip: node is not on PATH")
+		return
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=False)
+		pin = _run_pin(root, _clarify_pin_step_body())
+		assert pin.returncode == 0, pin.stderr
+		assert (
+			"CLAUDE_POOL_MODULE_PIN outcome=written" in pin.stdout
+			or "CLAUDE_POOL_MODULE_PIN outcome=skip reason=present" in pin.stdout
+		), pin.stdout
+		output = root / "github_output"
+		output.write_text("", encoding="utf-8")
+		main_file, post_file = _pool_token_action_files()
+		for script in (main_file, post_file):
+			result = _run_node(action_dir, script, root, output)
+			assert result.returncode == 0, (script, result.stderr)
+			assert "require is not defined" not in result.stderr, (script, result.stderr)
+		assert "available=false" in output.read_text(encoding="utf-8")
+
+
+def test_clarify_pool_token_action_pin_keeps_existing_package_json() -> None:
+	body = _clarify_pin_step_body()
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=False)
+		pkg = action_dir / "package.json"
+		pkg.write_text('{"type":"commonjs","name":"upstream"}\n', encoding="utf-8")
+		result = _run_pin(root, body)
+		assert result.returncode == 0, result.stderr
+		assert "CLAUDE_POOL_MODULE_PIN outcome=skip reason=present" in result.stdout
+		assert pkg.read_text(encoding="utf-8") == '{"type":"commonjs","name":"upstream"}\n'
+
+		target = root / "other-dir"
+		target.mkdir()
+		shutil.rmtree(action_dir)
+		action_dir.symlink_to(target, target_is_directory=True)
+		result = _run_pin(root, body)
+		assert result.returncode == 0, result.stderr
+		assert "reason=action_dir_unavailable" in result.stdout
+		assert not (target / "package.json").exists()
 
 
 def main() -> int:

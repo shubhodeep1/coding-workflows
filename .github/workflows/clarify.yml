@@ -1150,6 +1150,35 @@ jobs:
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
+      # Heal #7476 (source shubhodeep1/multi-user-ai-agent#266), same cause as
+      # #7434 in plan.yml: the claude-pool-token action ships CommonJS main.js /
+      # post.js with no package.json of its own, so in a consumer whose root
+      # package.json sets "type": "module" Node loads them as ES modules, they
+      # crash on `require`, no pool is written and clarify is refused with
+      # reason=no_credential. Pin the action's module type in the support
+      # checkout before the action runs. The body is kept byte-identical to the
+      # plan.yml step (tests/test_plan_codex_step_extraction.py). Since #7432
+      # the action ships package.json, so this step normally logs
+      # reason=present; it stays as a fallback for a staged support checkout
+      # whose action copy lacks the file.
+      - name: Pin claude-pool-token action module type
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          action_dir=".codex-workflow-src/.github/actions/claude-pool-token"
+          pkg="${action_dir}/package.json"
+          if [ -L .codex-workflow-src ] || [ -L .codex-workflow-src/.github ] || [ -L .codex-workflow-src/.github/actions ] || [ -L "${action_dir}" ] || [ ! -d "${action_dir}" ]; then
+            echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=skip reason=action_dir_unavailable"
+            exit 0
+          fi
+          if [ -e "${pkg}" ] || [ -L "${pkg}" ]; then
+            echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=skip reason=present"
+            exit 0
+          fi
+          ( set -C; printf '{"type":"commonjs"}\n' > "${pkg}" ) || { echo "::warning::CLAUDE_POOL_MODULE_PIN outcome=failed reason=write_failed"; exit 0; }
+          echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=written"
+
       - name: Resolve Claude credential
         if: steps.ai_engine.outputs.engine == 'claude'
         continue-on-error: true
