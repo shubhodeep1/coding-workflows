@@ -475,7 +475,9 @@ def test_pr_not_open_invalid_base_ref_skips(tmp_path):
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "SKIP_PLAN=true" in github_env
 	assert "PLAN_REROUTED_REF" not in github_env
-	assert "reason=pr_not_open_unresolved" in proc.stdout
+	# classify() rejects "bad..ref" itself (_valid_branch) as pr_read_failed,
+	# so the shell's invalid_base_ref branch stays defence in depth here.
+	assert "reason=pr_not_open_unresolved detail=pr_read_failed" in proc.stdout
 
 
 def test_superseded_still_closes_on_pr_not_open_path(tmp_path):
