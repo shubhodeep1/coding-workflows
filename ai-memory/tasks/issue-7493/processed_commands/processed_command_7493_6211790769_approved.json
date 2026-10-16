@@ -5,13 +5,25 @@
   "entry_id": "processed_command_7493_6211790769_approved",
   "issue_number": 7493,
   "metadata": {
+    "branch": "ai/issue-7493",
+    "changed_files": [
+      "agents.d/wfopt-2026-09-20-2-ledger-circuit-breaker.md",
+      "changelog.d/wfopt-2026-09-20-2-ledger-circuit-breaker.md",
+      "scripts/ledger_emit_substate.sh",
+      "tests/test_run_substate_ledger.py"
+    ],
+    "issue_number": 7493,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7493",
+    "pr_number": 7498,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7498",
+    "run_attempt": "1",
+    "run_id": "38876429077",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/38876429077"
   },
   "run_attempt": 1,
   "run_id": "38876429077",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-16T08:53:45Z",
+  "status": "completed",
+  "timestamp": "2026-10-16T09:17:39Z",
   "workflow": "implement"
 }
