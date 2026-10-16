@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/7434-claude-pool-module-pin.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The CLAUDE_POOL_MODULE_PIN registry bullet names only `plan.yml` as the emitter, but `clarify.yml` now emits the prefix too. `changelog.d/7434-plan-claude-pool-token-esm.md` still says \"Only the plan job is covered\", which disagrees with `changelog.d/7476-clarify-claude-pool-token-esm.md`.\n  WHY: Nothing fails at runtime, but the log-prefix registry is incomplete and the two changelog entries contradict each other. Both reviewers rated this NIT, which is mapped to low. The fix is outside the frozen heal scope.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The linked issue's Suggested fix item 1 asks for `.github/actions/claude-pool-token/package.json` containing exactly `{\"type\":\"commonjs\"}`. Item 3 asks for a regression test such as `tests/test_claude_pool_token_module_type.py`.\n  expected_change_site: `.github/actions/claude-pool-token/package.json` (new), plus a module-type regression test\n  confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The PR changes only `clarify.yml`, `tests/test_plan_codex_step_extraction.py` and `changelog.d/7476-clarify-claude-pool-token-esm.md`, and adds no `package.json` under `.github/actions/claude-pool-token/`. The reviewer treated this as a deliberate deferral (PR description AD-1, frozen heal scope) and rated it a NIT. No follow-up issue number is cited.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/7434-claude-pool-module-pin.md:2 (with changelog.d/7434-plan-claude-pool-token-esm.md:2) | severity=NIT | confidence=3\n  PROBLEM: The PR adds a second emitter of the prefix in `clarify.yml` line 1164. The registry fragment and the 7434 changelog describe plan only, while `changelog.d/7476-clarify-claude-pool-token-esm.md` says plan and clarify are covered.\n  WHY: Nothing fails at runtime. The registry text is incomplete and the two changelog entries disagree. `agents.d/` is outside the frozen heal scope.\n- TASK_GAP:\n  Requirement: The linked issue's Suggested fix item 1 asks for `.github/actions/claude-pool-token/package.json` containing exactly `{\"type\":\"commonjs\"}`. Item 3 asks for a regression test such as `tests/test_claude_pool_token_module_type.py`.\n  Expected change site: `.github/actions/claude-pool-token/package.json` (new), plus a module-type regression test\n  Evidence of absence: The PR changes only `clarify.yml`, `tests/test_plan_codex_step_extraction.py` and `changelog.d/7476-clarify-claude-pool-token-esm.md`, and adds no `package.json`. This is a deliberate deferral under AD-1 and the frozen heal scope. No follow-up issue is cited.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.d/7434-claude-pool-module-pin.md:2 | severity=NIT | confidence=4\n  PROBLEM: The CLAUDE_POOL_MODULE_PIN registry entry names only `plan.yml` as the emitter. `clarify.yml` also emits the prefix (lines 1172, 1176, 1179, 1180).\n  WHY: Nothing fails at runtime, but the released agents.md would carry an incomplete registry entry. The statement \"Only the plan job is covered\" in `changelog.d/7434-plan-claude-pool-token-esm.md` would contradict `changelog.d/7476-clarify-claude-pool-token-esm.md`. The update must land outside this PR's frozen heal scope.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1cbd92a2c26f1a025cb286c269c15c38873b2e22ac483661350cdde479c308bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7481,
+    "run_id": "38863698454",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38863698454",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016071041_d9383e2142",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7481,
+    "run_id": "38863698454"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T07:10:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
