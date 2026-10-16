@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add an agents.d/ fragment describing the plan behaviour, and edit the comment at clarify.yml lines 185-188.\n  expected_change_site: agents.d/7477-plan-pr-not-open.md and a comment in .github/workflows/clarify.yml\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: Neither agents.d/7477-plan-pr-not-open.md nor .github/workflows/clarify.yml is in the PR changed files. The reviewer rated this NIT and not a defect, because AD-1 in the PR description deferred it to stay inside the heal scope (plan.yml, tests/**, changelog.d/*.md). The changelog fragment already covers the behaviour. qwen_qwen3_7-plus also discussed this gap in prose and judged it not a real gap, but listed no task-gap entry.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (NIT) | confidence=2\n  Requirement: Add an agents.d/ fragment describing the plan behaviour, and edit the comment at clarify.yml lines 185-188.\n  Expected change site: agents.d/7477-plan-pr-not-open.md and a comment in .github/workflows/clarify.yml.\n  Evidence of absence: Neither file is in the PR changed files. AD-1 in the PR description chose to stay inside the heal scope. Issue-text deferrals of this kind are not gaps, and the changelog fragment already covers the behaviour.\n- All other lenses (SECURITY, CORRECTNESS, CONCURRENCY, ERROR PATHS, PERFORMANCE, INDEX/DB, NAMING, IMPLICIT-EXECUTION): NONE.\n- Verification note: the last run's only change is to test_pr_not_open_invalid_base_ref_skips. It now asserts reason=pr_not_open_unresolved detail=pr_read_failed. The reviewer checked this against scripts/plan_superseded_merged_pr.py line 380 and it matches. The reviewer could not run the test because the sandbox lacks gh identity. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9096a51a05b9ad2cf1c392420cf9b2ed494f3682973091bad1a2003459c84fa5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7487,
+    "run_id": "38873394626",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38873394626",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016085713_bf53d1205b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7487,
+    "run_id": "38873394626"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-16T08:57:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
