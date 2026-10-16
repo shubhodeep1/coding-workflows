@@ -270,6 +270,20 @@ Once a day the orchestrator poller in coding-workflows runs `scripts/consumer_he
 
 What this means for operators: a paused or stuck consumer shows up as an issue in this repository within a day, without anyone checking each repository. Workflows paused on purpose, like tele-funtoken-msg-scoring's, get an issue that stays open until they are switched back on or the repository is removed from the consumer list. Set `CONSUMER_HEALTH_CHECK_ENABLED=false` to turn the check off.
 
+- **A plan too large for one pipeline grant now becomes an orchestrator project instead of waiting for approval.** When a pipeline-authored issue's plan lists more than 50 files, the plan stage starts an orchestrator project for it on the Claude engine.
+
+Until now such a plan sat in `ai:awaiting-approval` with a "plan auto-approval withheld" warning, because the plan stage writes an exact `files_touched` grant for at most 50 files. The new step (`scripts/plan_split_dispatch.sh`, called from the "Auto-approve clear plan" step of `plan.yml`) dispatches `internal-orchestrate.yml` or `ai-orchestrate.yml` with `engine=claude` and the full plan. The orchestrator splits it into issues of at most 50 files in waves on one integration branch, with the phase that switches a behaviour on placed last. The original issue moves to the new `ai:split-to-project` label and links its tracking issue. The poller closes it when the project completes. Project child issues are never split again. A plan the step cannot hand off is held exactly as before: switched-off or missing wrapper, consumer wrapper not yet synced, plan over 60,000 characters, or a dispatch GitHub rejects. A dispatch that fails without a clear rejection keeps the issue split and sends a WARNING, because it may already have started a project.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Files one pipeline grant covers | 50 |
+| Largest plan handed off (`project_description`) | 60,000 characters |
+| New variable | `PLAN_SPLIT_TO_PROJECT_ENABLED` (default `true`) |
+| New label | `ai:split-to-project` |
+| New wrapper input (`workflow-templates/ai-orchestrate.yml`) | `tracking_comment` |
+
+What this means for operators: large pipeline issues keep moving without a manual `/approved`, and each one shows up as a Claude orchestrator project you can follow from the original issue. A consumer repository splits plans after its next `@stable` sync brings the `tracking_comment` input, and only while its `ai-orchestrate.yml` workflow is enabled. Set `PLAN_SPLIT_TO_PROJECT_ENABLED=false` to keep holding such plans.
+
 ### For contributors
 
 The job that runs #6576's old test code (`rerun-old`) runs on its own runner with no secrets and only `contents: read`. The `rerun` job re-validates that job's artifact and confirms each named test on a separate, clean runner, so old code cannot tamper with the `main` reruns; only `locate` and `report` see `GH_PAT`, and they run only on the default branch. Log text is neutralised before it reaches a comment or issue, so a test's output cannot forge `<!-- ai: -->` markers or workflow commands. `tests/test_pr6576_shard_followup.py` runs in the workflow's own `self-test` job on pull requests that touch these files.
@@ -2712,6 +2726,23 @@ What this means for operators: each consumer problem produces one open notice an
 Previously, a push during the judge call could let the `fix` path post the head-gate success status and apply `ai:ready-to-merge` for a head the judge never saw, or let a reissue keep unjudged code as its baseline. Now `scripts/review_rb_judge.sh` compares the live PR head with the head named in the judge prompt, and skips every action before any comment, label, status or close when the head moved (`judge_skip_reason=stale_head`, log line `RB_JUDGE_STALE_HEAD pr= judged_head= live_head= action=`). When the live head cannot be read, `fix` and `close_and_reissue` are refused (`judge_skip_reason=head_unverified`), and so is a merge that open security findings convert to `fix`. Other merge actions are unchanged, because `--match-head-commit` already binds them.
 
 What this means for operators: a review-blocked PR that receives a push while the judge is running is left for a later review or judge run, and its linked issue no longer reaches `ai:ready-to-merge` from a verdict on an older head.
+
+- **The Claude pool action works in repositories whose `package.json` sets `"type": "module"`.** `.github/actions/claude-pool-token` now ships its own `package.json` with `"type": "commonjs"`, so Node loads `main.js` and `post.js` as CommonJS instead of taking the consumer's ES-module setting. Before, both files failed with `require is not defined`, the job got no Claude credential (`no_credential`) and the role ended with exit 76 (digital_pa#134, hylifegroup.com#96).
+
+- **Planning no longer loses its Claude credential in consumers whose root `package.json` sets `"type": "module"` (#7434).** In such a repository Node loaded the `claude-pool-token` action's CommonJS `main.js` and `post.js` as ES modules, so they crashed on `require`, no account pool was written, and every plan run ended with `AI_ENGINE_FALLBACK_REFUSED role=PLAN reason=no_credential` (`shubhodeep1/digital_pa#145`). `plan.yml` now has a "Pin claude-pool-token action module type" step, run before the write-guard snapshot, that writes `{"type":"commonjs"}` as `package.json` into the action directory of the support checkout. It never overwrites an existing `package.json` or follows a symlink, and logs `CLAUDE_POOL_MODULE_PIN outcome=written|skip|failed reason=present|action_dir_unavailable|write_failed`. The action itself now ships `package.json` (#7432), which fixes every Claude role, so the step normally logs `reason=present` and only writes for a staged action copy that lacks the file. The refusal of `no_credential` is unchanged. After this reaches a stable release and the consumer syncs, a stuck issue plans again on `/answer` or the stall poller's next retry.
+
+- **A slow clone no longer cancels a release after stable has moved.** The `resolve-version` job in `mark-stable.yml` and `test-and-mark-stable.yml` now has 10 minutes instead of 2.
+
+`resolve-version` checks out the full history (`fetch-depth: 0`) to read the tag list. On 2026-10-15 that clone took 87 seconds at 02:21 and more than 2 minutes at 10:04. The 10:04 run (test-and-mark-stable run 38717659089) was cancelled mid-clone after `promote-main-to-stable` had already fast-forwarded `stable`. That left `stable` with no release tag and no consumer update dispatch. The limit now matches the 10 minutes the promote job already gives its own full clone. A contract test keeps every full-clone job in both release workflows at 10 minutes or more.
+
+| The numbers that matter | Value |
+| --- | --- |
+| `resolve-version` timeout | 2 → 10 minutes |
+| Last good clone time | 87 s (run 38670511643) |
+
+What this means for operators: a promotion that moves `stable` also publishes its release, so consumers receive the new pin without a manual re-run.
+
+- **Workflow-heal issues whose plan touches an automation path no longer stall at implementation.** The plan step's automatic approval wrote a pipeline `files_touched` grant into the issue body, and the implement heal preflight then refused the issue because its body had been edited (#7434). Plan approval now leaves heal issue bodies unchanged: it checks the issue's verified heal scope and approves only when every path the plan lists is inside it, otherwise it holds for a maintainer `/approved`. A heal plan that lists no automation path also needs that verified scope now. The implement preflight accepts an edited heal issue when every edit was made by the pipeline account and the scope marker never changed, and logs `HEAL_SCOPE_PIPELINE_EDIT_ACCEPTED`; any other edit, or a failed edit-history read, is still refused. Set `HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED=false` to restore the earlier behaviour.
 
 ### For contributors
 
