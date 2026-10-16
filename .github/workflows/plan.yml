@@ -1509,7 +1509,7 @@ jobs:
             echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=skip reason=present"
             exit 0
           fi
-          ( set -C; printf '{"type":"commonjs"}\n' > "${pkg}" )
+          ( set -C; printf '{"type":"commonjs"}\n' > "${pkg}" ) || { echo "::warning::CLAUDE_POOL_MODULE_PIN outcome=failed reason=write_failed"; exit 0; }
           echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=written"
 
       - name: Capture pre-Codex plan write-guard snapshot
