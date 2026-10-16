@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (119)
+## Processed source docs (120)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -124,6 +124,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-08-29.md`
 - `analysis/workflow-optimization-2026-09-16.md`
 - `analysis/workflow-optimization-2026-09-18.md`
+- `analysis/workflow-optimization-2026-09-20.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1169,3 +1170,33 @@ Processed: 2026-10-14
 - DUP-001, DUP-002, DUP-003 — rejected: refactors with no behaviour change; DUP-003 is partly superseded by the `stage_workflow_support.sh` / `SUPPORT_REF` work.
 - CONSIST-001 (failure-alert lookup bypasses canonical helpers) — rejected: the failure-alert path deliberately depends only on `tg_helpers.sh`, so it still alerts when support staging failed.
 - Executive summary, per-repo breakdown and metrics appendix tables — INVALID/non-material: evidence, not recommendations.
+
+### `analysis/workflow-optimization-2026-09-20.md`
+Processed: 2026-10-16
+- Speed 1 / Cost 1 / per-repo action 1 (`AUTOFIX_SKIP_SELF_TRIGGERED=true`) — rejected: a repository-variable change that needs an operator, not code; the `false` default is deliberate, because the `review_autofix.yml` "Enable auto-merge on PR" comment makes the synchronize run after an autofix commit the loop's verification pass (consistent with the 2026-09-18 Speed 1 verdict).
+- Speed 2 / Cost 2 / Reliability 2 / per-repo action 2 (circuit breaker on by default, half-open probe, `REVIEWER_HEALTH_V1`) — rejected: a default flip affects every consumer; `mistralai/mistral-small-2603` is no longer on the panel; the `REVIEWER_HEALTH` prefix and `vars.REVIEWER_CIRCUIT_BREAKER_ENABLED` already exist (2026-09-18 Cost 2 precedent).
+- Speed 3 (recheck the head after consolidation and before editor retries) — already-implemented in part: the "Pre-editor stale-base gate" (`id: pre_editor_stale_base_gate`) runs after consolidation, immediately before the editor; per-retry rechecks inside the editor are rejected as unmeasured.
+- Speed 4 / AI-memory batching / per-repo action 3 (batch poll memory writes) — rejected: refactors memory push semantics for an unmeasured saving (2026-09-16 and 2026-09-18 Speed 3 precedent).
+- Speed 5 (move structural CI contracts forward) — already-implemented: since #4707 CI runs as parallel jobs (`static-checks`, four test jobs and the `orchestrate-poll` matrix); the first split run took 9.0 minutes.
+- Cost 3 (dynamic 70% context cap with Semble overflow) — rejected: too broad, with a medium quality risk; `CONTEXT_BUDGET_WARN` exists (2026-09-16 Cost 4 precedent).
+- Cost 4 (shadow-log tier decisions before enabling tiering) — already-implemented / obsolete: the lite/standard/full tier resolver is on by default (`REVIEW_TIER_RESOLVER_ENABLED=true`) and `REVIEWER_RISK_TIER` logs exist.
+- Cost 5 (Semble byte telemetry) and Cost 6 (Serena) — rejected: telemetry-only or no action asked.
+- Reliability 1 (`JOB_LOG_COVERAGE_V1`) — rejected: the root cause in the source is unproven, and detection needs an extra per-run jobs-API read (§14).
+- Reliability 3 (`CI_TEST_FAILURE_V1`) — rejected: telemetry with no consumer; the cited contracts already hard-fail.
+- Reliability 4 (memory fail-open detail) — rejected: under-specified (2026-09-16 Reliability 4 precedent).
+- AI memory retrieval budget shadow mode — rejected: experimental, with no measured gain.
+- GH API audit: sweep per-status query — rejected: it changes the paginated active-run snapshot behind the pending-aware sweep guards. `AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE` — already-implemented. `GH_API_CALL_SUMMARY_V1` — rejected: `GH_API_RETRY` and `GH_PAT_BUDGET` cover part of it.
+- Prompt cache 1 (`cache_hit_rate`) — already-implemented: `compute_cache_hit_rate` in `scripts/cost_audit.py`. Prompt cache 2–4 — rejected: under-specified.
+- `ORCHESTRATOR_ISSUE_TIMING_V1`, sweep-skip log enrichment and Copilot outbound summaries — rejected: observability with no consumer.
+- BUG-001 (integration-ref failures select the default branch) — already-implemented: `scripts/resolve_integration_ref.sh` uses `gh_api_retry` and exits 75/2, and callers fail with `INTEGRATION_REF_RESOLVE outcome=rate_limited|api_unavailable`.
+- BUG-002 (branch-review base ref falls back to `main`) — the `internal-review.yml` part is obsolete (PR #6438 removed the push route); the `|| echo 'main'` remainder in `scripts/review_collect_pr_metadata.sh` is applied: branch-review-base-ref-fail-closed (`changelog.d/wfopt-2026-09-20-branch-review-base-fail-closed.md`).
+- API-001 — already-implemented: clarify reads comments once, paginated.
+- API-002, BATCH-001, BATCH-002, BATCH-003, MERGE-002, MERGE-003, REUSE-001 — rejected: tagged RISKY_SKIP in the source.
+- MERGE-001 — rejected: tagged NEEDS_VERIFICATION in the source.
+- DUP-001 through DUP-004 — rejected: refactors with no behaviour change that would add staged support modules (2026-09-16 precedent).
+- EXPR-001 — already-implemented: the staging step binds its values through `env:` and has no interpolation in `run:` (2026-09-18 verdict).
+- CONSIST-001 — applied in part: log-analysis-label-retry (`changelog.d/wfopt-2026-09-20-log-analysis-label-retry.md`); the label writes now go through `gh_retry`. The marker-keyed comment upsert is rejected: the comment is per run and single-attempt, so there is no duplicate risk to justify it.
+- DEAD-001 — rejected: poller hot path, and naming immutability (earlier `read_standalone_state_json` precedent).
+- DEAD-002 — rejected: low value; removing identifiers conflicts with naming immutability.
+- SHELL-001 (SC2043 single-element loops in `scripts/stage_workflow_support.sh`) — rejected: a style-only edit to a staged support script (§9).
+- Reliability 5, executive summary, pipeline-flow table, per-repo breakdown and metrics appendix — INVALID/non-material: evidence, not recommendations.
