@@ -1180,6 +1180,21 @@ jobs:
               || echo "::warning::Could not close partially bound tracking issue #${TRACKING_ISSUE_NUMBER}; close it by hand so the dispatcher can retry."
             exit 1
           fi
+          # Q152: a project started by a plan split (scripts/plan_split_dispatch.sh)
+          # links itself on the source issue, which stays open until the
+          # poller closes it at completion. Only an open issue carrying
+          # ai:split-to-project is commented on; a failure only warns.
+          _split_source="$(printf '%s' "${TRACKING_COMMENT_INPUT:-}" | sed -n 's/^<!-- ai:plan-split-source:v1 issue=\([1-9][0-9]*\) -->$/\1/p' | head -1)"
+          if [ -n "${_split_source}" ]; then
+            if gh_retry gh api "repos/${{ github.repository }}/issues/${_split_source}" \
+                --jq '.state == "open" and ([.labels[].name] | index("ai:split-to-project") != null)' 2>/dev/null | grep -qx true \
+              && gh_retry gh api "repos/${{ github.repository }}/issues/${_split_source}/comments" \
+                -f body="Tracking issue: #${TRACKING_ISSUE_NUMBER} (${TRACKING_ISSUE_URL}). This issue is closed when that project completes." >/dev/null 2>&1; then
+              echo "PLAN_SPLIT_LINKED source_issue=${_split_source} tracking_issue=${TRACKING_ISSUE_NUMBER}"
+            else
+              echo "::warning::Could not link tracking issue #${TRACKING_ISSUE_NUMBER} on plan-split source issue #${_split_source}."
+            fi
+          fi
           {
             echo "tracking_issue_number=${TRACKING_ISSUE_NUMBER}"
             echo "tracking_issue_url=${TRACKING_ISSUE_URL}"
@@ -1573,6 +1588,47 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${TRACKING_ISSUE_NUMBER:-0}" "${MSG}" "${LEVEL}"
+      # Q151: a project started by a plan split that failed before its
+      # tracking issue existed never started, so the source issue is released:
+      # a release marker plus label removal let a /reclarify split it again.
+      # A failure after the tracking issue exists releases nothing.
+      - name: Release plan-split source issue
+        if: failure() && steps.tracking_issue.outputs.tracking_issue_number == '' && contains(inputs.tracking_comment, '<!-- ai:plan-split-source:v1 issue=')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_COMMENT_INPUT: ${{ inputs.tracking_comment }}
+        run: |
+          set -uo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          source_issue="$(printf '%s' "${TRACKING_COMMENT_INPUT}" | sed -n 's/^<!-- ai:plan-split-source:v1 issue=\([1-9][0-9]*\) -->$/\1/p' | head -1)"
+          [ -n "${source_issue}" ] || exit 0
+          if ! gh_retry gh api "repos/${{ github.repository }}/issues/${source_issue}" \
+              --jq '.state == "open" and ([.labels[].name] | index("ai:split-to-project") != null)' 2>/dev/null | grep -qx true; then
+            exit 0
+          fi
+          run_url="${GITHUB_SERVER_URL:-https://github.com}/${{ github.repository }}/actions/runs/${GITHUB_RUN_ID:-}"
+          # Marker first (up to 3 attempts; a duplicate is harmless), then the
+          # label: a label removed without a release marker would leave the
+          # split marker blocking every /reclarify, so a failed marker keeps it.
+          release_posted=false
+          for attempt in 1 2 3; do
+            if gh_retry gh api "repos/${{ github.repository }}/issues/${source_issue}/comments" \
+                -f body="<!-- ai:plan-split-released:v1 issue=${source_issue} -->"$'\n'"The orchestrator run that was to implement this plan failed before it created a tracking issue (${run_url}), so no project is running for it. Comment \`/reclarify\` to plan it again; the plan stage may then hand it to a new project." >/dev/null 2>&1; then
+              release_posted=true
+              break
+            fi
+            [ "${attempt}" -lt 3 ] && sleep 2
+          done
+          if [ "${release_posted}" != true ]; then
+            echo "::warning::Could not post the release marker on plan-split source issue #${source_issue}; delete its plan-split comment, remove ai:split-to-project and comment /reclarify."
+          elif gh_retry gh issue edit "${source_issue}" --repo "${{ github.repository }}" --remove-label "ai:split-to-project" >/dev/null 2>&1; then
+            echo "PLAN_SPLIT_RELEASED source_issue=${source_issue}"
+          else
+            echo "::warning::Posted the release marker on plan-split source issue #${source_issue} but could not remove ai:split-to-project; remove the label by hand, then comment /reclarify."
+          fi
+
       # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
       # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
       # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only

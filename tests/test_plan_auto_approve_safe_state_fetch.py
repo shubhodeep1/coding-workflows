@@ -16,6 +16,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
+HEAL_SCRIPT = REPO_ROOT / "scripts" / "workflow_failure_heal.py"
 ORDINARY_PLAN = "Implementation Plan\n\n### 1. Files likely to change\n- `src/app.py`\n- `README.md`\n"
 SECURITY_FINDING_PLAN = "Implementation Plan\n\n### 1. Files likely to change\n- `scripts/security_audit.sh`\n"
 GRANTED_PLAN = (
@@ -49,14 +50,14 @@ def test_auto_approve_step_uses_safe_issue_state_fetch() -> None:
 	assert 'if gh api "$@" > "${_tmpf}"; then' in block
 	assert '_tmpf="$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null)" || return 1' not in block
 	assert 'if gh api "$@" > "${_tmpf}" 2>/dev/null; then' not in block
-	assert 'CURRENT_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null)"' in block
+	assert 'CURRENT_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" 2>/dev/null)"' in block
 	assert 'CURRENT_STATE="$(printf \'%s\' "${CURRENT_ISSUE_JSON}" | jq -er' in block
 	assert '.user.type == "User"' in block
 	assert '.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")' in block
 	assert '.user.type == "Bot" and .user.login == "github-actions[bot]"' in block
 	assert '|| echo "open"' not in block
 	assert (
-		'CURRENT_STATE="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" '
+		'CURRENT_STATE="$(gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" '
 		'--jq \'.state // "open"\' 2>/dev/null || echo "open")"'
 	) not in block
 
@@ -67,7 +68,7 @@ def test_auto_approve_step_preserves_outputs_and_comment_payload() -> None:
 	assert 'echo "auto_approved=false" >> "$GITHUB_OUTPUT"' in block
 	assert 'if [ "${CURRENT_STATE}" = "closed" ]; then' in block
 	assert 'echo "auto_approved=true" >> "$GITHUB_OUTPUT"' in block
-	assert 'gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \\' in block
+	assert 'gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" \\' in block
 	assert "-f body=$'/approved [auto-approved-by-plan]\\n\\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'" in block
 	assert 'echo "AUTO_IMPLEMENT_ON_CLEAR_PLAN disabled; skipping auto-approval comment."' in block
 
@@ -75,21 +76,30 @@ def test_auto_approve_step_preserves_outputs_and_comment_payload() -> None:
 def _auto_approve_script() -> str:
 	workflow = yaml.safe_load(_workflow_text())
 	step = next(step for step in workflow["jobs"]["plan"]["steps"] if step.get("name") == "Auto-approve clear plan")
-	return step["run"].replace("${{ github.repository }}", "owner/repo")
+	# The repository reaches the body through the step's PLAN_STEP_REPO env
+	# (no expression in the run: body); _run_auto_approve sets it.
+	assert "${{" not in step["run"]
+	return step["run"]
 
 
 def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: bool = False,
 	gate_flag: str | None = None, login: str = "pipeline-bot", comments: list | None = None,
-	posts_out: list | None = None, patches_out: list | None = None, patch_fails: bool = False) -> tuple[bool, str, str]:
+	posts_out: list | None = None, patches_out: list | None = None, patch_fails: bool = False,
+	graphql: dict | None = None, graphql_fails: bool = False, heal_fix_flag: str | None = None,
+	graphql_calls_out: list | None = None, split_stub_rc: int | None = None,
+	split_env_out: dict | None = None) -> tuple[bool, str, str]:
 	"""Run the shipped step against a fake gh; returns (posted, stdout, output file).
 
 	Every other API write (the hold comment) is appended to ``posts_out``;
 	issue-body PATCH calls (the Q108 pipeline plan grant) to ``patches_out``.
+	With ``split_stub_rc``, a stub scripts/plan_split_dispatch.sh exits with
+	that code and its environment lands in ``split_env_out``.
 	"""
 	with tempfile.TemporaryDirectory() as workdir:
 		tmp_path = Path(workdir)
 		(tmp_path / "scripts").mkdir()
 		shutil.copy(GUARD_SCRIPT, tmp_path / "scripts" / "files_touched_scope_guard.py")
+		shutil.copy(HEAL_SCRIPT, tmp_path / "scripts" / "workflow_failure_heal.py")
 		(tmp_path / "scripts" / "gh_helpers.sh").write_text(
 			'gh_retry() { "$@"; }\n'
 			'_safe_gh_jq() { gh api "$@"; }\n'
@@ -99,6 +109,10 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			'    printf "%s" "${ISSUE_RESPONSE}"\n'
 			'  elif [ "$2" = "user" ]; then\n'
 			'    printf "%s\\n" "${PIPELINE_LOGIN}"\n'
+			'  elif [ "$2" = "graphql" ]; then\n'
+			'    [ "${GRAPHQL_FAIL}" = "false" ] || return 1\n'
+			'    printf "%s\\n" "$*" >> "${GRAPHQL_LOG}"\n'
+			'    printf "%s" "${GRAPHQL_RESPONSE}"\n'
 			'  elif [ "$2" = "-X" ] && [ "$3" = "PATCH" ]; then\n'
 			'    [ "${PATCH_FAIL}" = "false" ] || return 1\n'
 			'    printf "%s\\n<<END>>\\n" "$*" >> "${PATCH_LOG}"\n'
@@ -111,23 +125,37 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			'sleep() { :; }\n',
 			encoding="utf-8",
 		)
+		split_env_file = tmp_path / "split_env.json"
+		if split_stub_rc is not None:
+			(tmp_path / "scripts" / "plan_split_dispatch.sh").write_text(
+				"python3 -c 'import json, os, sys; json.dump({k: os.environ.get(k, \"\") for k in "
+				"(\"REPO\", \"ISSUE_NUMBER\", \"PLAN_PATH_COUNT\", \"PLAN_SPLIT_TO_PROJECT_ENABLED\")} "
+				"| {\"plan\": open(os.environ[\"PLAN_FILE\"]).read(), \"issue\": json.load(open(os.environ[\"ISSUE_JSON_FILE\"]))}, "
+				f"open(sys.argv[1], \"w\"))' {split_env_file}\nexit {split_stub_rc}\n",
+				encoding="utf-8",
+			)
 		plan_file = tmp_path / "codex_output.txt"
 		plan_file.write_text(plan_text, encoding="utf-8")
 		output_path = tmp_path / "output"
 		post_log = tmp_path / "posts"
 		patch_log = tmp_path / "patches"
+		graphql_log = tmp_path / "graphql"
 		env = os.environ.copy()
 		for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
-			"ALLOW_WORKFLOW_EDITS", "PLAN_FILE", "GITHUB_STEP_SUMMARY"):
+			"ALLOW_WORKFLOW_EDITS", "PLAN_FILE", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED"):
 			env.pop(name, None)
 		env.update({
 			"GITHUB_OUTPUT": str(output_path),
+			"PLAN_STEP_REPO": "owner/repo",
 			"ISSUE_NUMBER": "123",
 			"ISSUE_RESPONSE": issue if isinstance(issue, str) else json.dumps(issue),
 			"FETCH_FAIL": str(fetch_fails).lower(),
 			"POST_LOG": str(post_log),
 			"PATCH_LOG": str(patch_log),
 			"PATCH_FAIL": str(patch_fails).lower(),
+			"GRAPHQL_LOG": str(graphql_log),
+			"GRAPHQL_FAIL": str(graphql_fails).lower(),
+			"GRAPHQL_RESPONSE": json.dumps(graphql or {}),
 			"COMMENTS_RESPONSE": json.dumps(comments or []),
 			"PIPELINE_LOGIN": login,
 			"AUTO_IMPLEMENT_ON_CLEAR_PLAN": "true",
@@ -136,6 +164,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		})
 		if gate_flag is not None:
 			env["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] = gate_flag
+		if heal_fix_flag is not None:
+			env["HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED"] = heal_fix_flag
 		result = subprocess.run(["bash", "-c", _auto_approve_script()], cwd=tmp_path, env=env, text=True,
 			capture_output=True, check=True)
 		posts = [entry for entry in (post_log.read_text(encoding="utf-8") if post_log.exists() else "").split("\n<<END>>\n")
@@ -155,6 +185,10 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			posts_out.extend(others)
 		if patches_out is not None:
 			patches_out.extend(patches)
+		if graphql_calls_out is not None and graphql_log.exists():
+			graphql_calls_out.extend(graphql_log.read_text(encoding="utf-8").splitlines())
+		if split_env_out is not None and split_env_file.exists():
+			split_env_out.update(json.loads(split_env_file.read_text(encoding="utf-8")))
 		return posted, result.stdout, output_path.read_text(encoding="utf-8")
 
 
@@ -267,7 +301,7 @@ def test_ordinary_plan_unchanged_and_missing_plan_holds() -> None:
 def test_plan_gate_wiring_defaults_on() -> None:
 	text = _workflow_text()
 	assert "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}" in text
-	assert "clarify_isolated_run.sh files_touched_scope_guard.py; do" in text
+	assert "clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do" in text
 	block = _step_block(text, "Auto-approve clear plan")
 	assert "--plan-auto-approval-gate" in block
 	assert 'plan_gate_reason="plan_gate_helper_unavailable"' in block
@@ -324,6 +358,131 @@ def test_old_gate_helpers_are_gone() -> None:
 	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	assert "_automation_path_plan_auto_approval_gate" not in poller
 	assert "automation-path-plan-extractor" not in poller
+
+_LARGE_PLAN = "Implementation Plan\n\n### 1. Files likely to change\n" + "".join(f"- `scripts/f{i}.sh`\n" for i in range(51))
+
+
+def test_too_large_plan_is_handed_to_the_split_script() -> None:
+	# Q151: a plan over the 50-file grant starts an orchestrator project
+	# instead of waiting for /approved; nothing is approved or held.
+	seen: dict = {}
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=_LARGE_PLAN, split_stub_rc=0,
+		split_env_out=seen, posts_out=posts)
+	assert not posted and posts == []
+	assert "plan_split=true" in output and "auto_approve_hold_reason" not in output
+	assert "reason=plan_too_large_for_grant outcome=split issue=123" in stdout
+	assert seen["REPO"] == "owner/repo" and seen["ISSUE_NUMBER"] == "123" and seen["PLAN_PATH_COUNT"] == "51"
+	assert seen["plan"] == _LARGE_PLAN and seen["issue"]["number"] == 123
+
+
+def test_too_large_plan_holds_when_the_split_does_not_start() -> None:
+	# The script exits 3 whenever it cannot start the project (wrapper off,
+	# old wrapper, dispatch error, ...): the plan is held exactly as before.
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=_LARGE_PLAN, split_stub_rc=3, posts_out=posts)
+	assert not posted and "plan_split=true" not in output
+	assert "auto_approve_hold_reason=plan_too_large_for_grant" in output
+	assert "reason=plan_too_large_for_grant outcome=defer" in stdout
+	assert len(posts) == 1 and "reason=plan_too_large_for_grant source=plan" in posts[0]
+	# Without the script (a support checkout that predates it) it holds too.
+	posted, _, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=_LARGE_PLAN)
+	assert not posted and "auto_approve_hold_reason=plan_too_large_for_grant" in output
+
+
+def test_other_holds_never_reach_the_split_script() -> None:
+	seen: dict = {}
+	posted, _, output = _run_auto_approve(_PIPELINE_ISSUE, plan_text=SECURITY_FINDING_PLAN, gate_flag="false",
+		split_stub_rc=0, split_env_out=seen)
+	assert not posted and seen == {} and "plan_split=true" not in output
+
+
+def test_split_plan_sends_no_awaiting_approval_alert() -> None:
+	text = _workflow_text()
+	block = _step_block(text, "Telegram plan notification")
+	assert "steps.auto_approve.outputs.plan_split != 'true'" in block
+	assert "PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}" in _step_block(text, "Auto-approve clear plan")
+
+
+# --- #7444: workflow-heal issues are never body-patched by the plan gate ---
+
+HEAL_MARKER = ("<!-- ai:workflow-heal-scope:v1 paths=scripts/security_audit.sh,.github/workflows/security-audit.yml,"
+	"tests/**,changelog.d/*.md runs=owner/repo:500 -->")
+HEAL_BODY = "Heal this failure.\n" + HEAL_MARKER + "\n"
+HEAL_PLAN = ("Implementation Plan\n\n### 1. Files likely to change\n"
+	"- `scripts/security_audit.sh`\n- `.github/workflows/security-audit.yml`\n- `tests/test_security_audit.py`\n")
+_HEAL_ISSUE = {"state": "open", "number": 123, "user": {"type": "User", "login": "pipeline-bot"},
+	"author_association": "OWNER", "body": HEAL_BODY, "labels": [{"name": "ai:workflow-heal"}]}
+
+
+def _heal_graphql(*, edited: bool = False) -> dict:
+	return {"data": {"repository": {"issue": {"body": HEAL_BODY, "lastEditedAt": "2026-10-15T00:00:00Z" if edited else None,
+		"author": {"login": "pipeline-bot"}, "labels": {"nodes": [{"name": "ai:workflow-heal"}]}}}}}
+
+
+def test_heal_issue_in_scope_plan_is_approved_without_a_body_write() -> None:
+	patches: list[str] = []
+	calls: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=HEAL_PLAN, gate_flag="true",
+		graphql=_heal_graphql(), patches_out=patches, graphql_calls_out=calls)
+	assert posted, stdout
+	assert "auto_approved=true" in output
+	assert patches == []
+	assert "PIPELINE_PLAN_GRANT issue=123 source=plan outcome=skipped reason=heal_issue" in stdout
+	assert "outcome=written" not in stdout
+	assert len(calls) == 1 and "lastEditedAt" in calls[0]
+
+
+def test_heal_issue_out_of_scope_plan_holds_without_a_body_write() -> None:
+	plan = HEAL_PLAN + "- `scripts/other.sh`\n"
+	patches: list[str] = []
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=plan, gate_flag="true",
+		graphql=_heal_graphql(), patches_out=patches, posts_out=posts)
+	assert not posted, stdout
+	assert patches == []
+	assert "auto_approve_hold_reason=heal_scope_plan_out_of_scope" in output
+	assert "outcome=defer issue=123 paths=scripts/other.sh" in stdout
+	assert len(posts) == 1 and "verified workflow-heal scope" in posts[0]
+
+
+def test_edited_heal_issue_holds_as_unverified() -> None:
+	patches: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=HEAL_PLAN, gate_flag="true",
+		graphql=_heal_graphql(edited=True), patches_out=patches)
+	assert not posted, stdout
+	assert patches == []
+	assert "auto_approve_hold_reason=heal_scope_unverified" in output
+
+
+def test_heal_issue_read_failure_holds_as_check_unavailable() -> None:
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=HEAL_PLAN, gate_flag="true",
+		graphql_fails=True, posts_out=posts)
+	assert not posted, stdout
+	assert "auto_approve_hold_reason=heal_scope_check_unavailable" in output
+	assert len(posts) == 1 and "could not run" in posts[0]
+
+
+def test_heal_fix_flag_off_keeps_the_q108_write() -> None:
+	issue = dict(_HEAL_ISSUE, body="Heal this failure. No files_touched block.")
+	patches: list[str] = []
+	calls: list[str] = []
+	posted, stdout, _ = _run_auto_approve(issue, plan_text=SECURITY_FINDING_PLAN, gate_flag="true",
+		heal_fix_flag="false", patches_out=patches, graphql_calls_out=calls)
+	assert posted, stdout
+	assert "PIPELINE_PLAN_GRANT issue=123 source=plan outcome=written" in stdout
+	assert len(patches) == 1
+	assert calls == []
+
+
+def test_heal_fix_flag_wiring() -> None:
+	block = _step_block(_workflow_text(), "Auto-approve clear plan")
+	assert "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}" in block
+	assert "--heal-scope-file" in block
+	implement = (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	preflight = _step_block(implement, "Heal route preflight")
+	assert "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}" in preflight
 
 
 def main() -> int:

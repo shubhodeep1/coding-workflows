@@ -14,12 +14,13 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 ORCHESTRATE_YML = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 STABLE_YML = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 LOG_KEY = "BRANCH_REBUILD_THRESHOLD_DECISION"
 

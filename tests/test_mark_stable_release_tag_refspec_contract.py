@@ -1274,6 +1274,23 @@ def test_ci_lint_job_keeps_its_check_run_name() -> None:
 	)
 
 
+def test_full_clone_release_jobs_have_room_for_the_checkout() -> None:
+	# A 2-minute resolve-version timeout cancelled a release mid-clone after
+	# stable had already moved (test-and-mark-stable run 38717659089).
+	import yaml
+
+	for name in ("mark-stable.yml", "test-and-mark-stable.yml"):
+		jobs = yaml.safe_load((REPO_ROOT / ".github/workflows" / name).read_text(encoding="utf-8"))["jobs"]
+		for job_name, job in jobs.items():
+			full_clone = any(
+				isinstance(step, dict) and str(step.get("uses", "")).startswith("actions/checkout")
+				and str((step.get("with") or {}).get("fetch-depth")) == "0"
+				for step in job.get("steps") or []
+			)
+			if full_clone:
+				assert job.get("timeout-minutes", 360) >= 10, f"{name} jobs.{job_name}: a full clone needs timeout-minutes >= 10"
+
+
 def main() -> None:
 	# Failures surface via uncaught AssertionError → Python's default non-zero
 	# exit; on full success we just print and return None.

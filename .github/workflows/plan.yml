@@ -374,7 +374,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1588,6 +1588,7 @@ jobs:
           PLAN_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
           WORKFLOW_HEAL_EVIDENCE_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_BYTES || '' }}
           WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
+          HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}
         run: |
           if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then
             echo '::error::Heal route classification failed' >&2
@@ -2506,9 +2507,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}
+          # Read as ${PLAN_STEP_REPO} so the run: body carries no expression
+          # (tests/test_workflow_file_size_limit.py expression guard).
+          PLAN_STEP_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -2536,7 +2542,7 @@ jobs:
           # Re-check state and the original author's provenance in the same
           # live response. A closed issue (including smoke cleanup), an
           # untrusted author, or an inconclusive read cannot auto-approve.
-          if ! CURRENT_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null)"; then
+          if ! CURRENT_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" 2>/dev/null)"; then
             echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=issue_lookup_failed outcome=defer issue=${ISSUE_NUMBER}"
             exit 0
           fi
@@ -2569,7 +2575,7 @@ jobs:
             path_count="$(printf '%s' "${paths_json}" | jq 'length' 2>/dev/null)" || path_count=0
             paths_b64="$(printf '%s' "${paths_json}" | base64 | tr -d '\n')"
             echo "automation_path_hold=true" >> "$GITHUB_OUTPUT"
-            if comments_json="$(gh_retry gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null | jq -s -c 'add // []' 2>/dev/null)"; then
+            if comments_json="$(gh_retry gh api --paginate "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null | jq -s -c 'add // []' 2>/dev/null)"; then
               duplicate="$(printf '%s' "${comments_json}" | jq -r --arg issue "${ISSUE_NUMBER}" --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg paths "${paths_b64}" '
                 def trusted: ((.user.login // "" | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")));
                 def event_key: [(.created_at // ""), ((.id // .databaseId // 0) | tonumber? // 0)];
@@ -2588,14 +2594,16 @@ jobs:
             fi
             if ! hold_body="$(jq -rn --argjson paths "${paths_json}" --arg issue "${ISSUE_NUMBER}" \
               --arg reason "${AUTOMATION_PATH_GATE_REASON}" --arg detail "${AUTOMATION_PATH_GATE_DETAIL}" \
-              --arg source "plan" --arg b64 "${paths_b64}" '
+              --arg source "plan" --arg b64 "${paths_b64}" --arg heal "${plan_gate_heal:-false}" '
                 ($paths | map(gsub("[^A-Za-z0-9._/*?\\[\\]-]"; ""))) as $safe
                 | ([range(0; $paths | length) | ($paths[.] | length) - ($safe[.] | length)] | add // 0) as $dropped
                 | [
                     (if $reason == "automation_path_plan_auto_approval_disabled"
                       then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
-                      elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "pipeline_plan_grant_write_failed"))
+                      elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "pipeline_plan_grant_write_failed", "heal_scope_check_unavailable"))
                       then "**Automatic approval withheld: the automation-path grant check could not run.**"
+                      elif ($reason | IN("heal_scope_unverified", "heal_scope_plan_out_of_scope", "heal_scope_plan_paths_missing"))
+                      then "**Automatic approval withheld: the plan is not inside the verified workflow-heal scope.**"
                       else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
                     "",
                     "Reason: `\($detail | gsub("[^a-z0-9_]"; ""))`",
@@ -2605,7 +2613,9 @@ jobs:
                     (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
                     (if any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
                     "",
-                    "To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way.",
+                    (if ($heal == "true" or ($reason | startswith("heal_scope_")))
+                      then "To proceed, a maintainer reviews the plan and replies `/approved`. Do not edit the issue body: the scope of a workflow-heal issue comes from its scope marker, not `files_touched`, and an edit by anyone but the pipeline makes implementation refuse the issue."
+                      else "To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way." end),
                     "",
                     "<!-- ai:automation-path-plan-hold:v1 issue=\($issue) reason=\($reason) source=\($source) paths=\($b64) -->"
                   ] | join("\n")
@@ -2613,7 +2623,7 @@ jobs:
               echo "::warning::Could not render the automation-path hold comment for issue #${ISSUE_NUMBER}."
               return 0
             fi
-            if ! gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+            if ! gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
               echo "::warning::Could not post the automation-path hold comment for issue #${ISSUE_NUMBER}."
             fi
             if [ -f scripts/tg_helpers.sh ]; then
@@ -2621,7 +2631,7 @@ jobs:
               source scripts/tg_helpers.sh >/dev/null 2>&1 || true
             fi
             if type tg_send_msg >/dev/null 2>&1; then
-              tg_send_msg "Plan auto-approval withheld for issue #${ISSUE_NUMBER}: ${AUTOMATION_PATH_GATE_REASON} (${path_count} path(s))."$'\n'"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${{ github.repository }}/issues/${ISSUE_NUMBER}" "WARNING" >/dev/null 2>&1 || true
+              tg_send_msg "Plan auto-approval withheld for issue #${ISSUE_NUMBER}: ${AUTOMATION_PATH_GATE_REASON} (${path_count} path(s))."$'\n'"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" "WARNING" >/dev/null 2>&1 || true
             fi
             return 0
           }
@@ -2645,7 +2655,35 @@ jobs:
               case "$(printf '%s' "${ALLOW_WORKFLOW_EDITS:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" in
                 1|true|yes|on) plan_gate_allow_edits="true" ;;
               esac
-              if [ -f "${plan_gate_guard}" ]; then
+              # #7444: never PATCH an ai:workflow-heal body (the preflight refuses an edited
+              # one); approve only inside its verified heal scope. Every error holds.
+              plan_gate_heal="false"
+              case "$(printf '%s' "${HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+                ''|true) printf '%s' "${CURRENT_ISSUE_JSON}" | jq -e 'any(.labels[]?.name; . == "ai:workflow-heal") | not' >/dev/null 2>&1 || plan_gate_heal="true" ;;
+                false) ;;
+                *) echo "::warning::HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED has invalid value; treating as off" ;;
+              esac
+              if [ "${plan_gate_heal}" = "true" ]; then
+                plan_gate_result='{"reason":"heal_scope_check_unavailable"}'
+                plan_gate_heal_repo="${GITHUB_REPOSITORY:-}"
+                plan_gate_heal_scope="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_heal_scope.XXXXXX")"
+                # §14: REST has no lastEditedAt; one GraphQL read (the preflight's query).
+                if plan_gate_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" && [ -n "${plan_gate_login}" ] \
+                  && plan_gate_heal_verified="$(gh_retry gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}' -f owner="${plan_gate_heal_repo%%/*}" -f repo="${plan_gate_heal_repo#*/}" -F number="${ISSUE_NUMBER}" 2>/dev/null \
+                    | jq -c --arg login "${plan_gate_login}" '.data.repository.issue as $i | {body: $i.body, last_edited_at: $i.lastEditedAt, author_login: $i.author.login, labels: [$i.labels.nodes[].name], pipeline_login: $login}' \
+                    | PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/workflow_failure_heal.py heal-scope verify --input-json /dev/stdin 2>/dev/null)"; then
+                  plan_gate_result='{"reason":"heal_scope_unverified"}'
+                  if printf '%s' "${plan_gate_heal_verified}" | jq -e '.status == "verified"' >/dev/null 2>&1 \
+                    && printf '%s' "${plan_gate_heal_verified}" | jq -r '.paths[]' > "${plan_gate_heal_scope}" 2>/dev/null; then
+                    plan_gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${plan_gate_guard}" --plan-auto-approval-gate --plan-file "${plan_gate_file}" --flag-enabled "${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}" --heal-scope-file "${plan_gate_heal_scope}" --allow-workflow-edits "${plan_gate_allow_edits}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || true)"
+                  fi
+                fi
+                rm -f "${plan_gate_heal_scope}"
+                echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=skipped reason=heal_issue"
+                plan_gate_decision="$(printf '%s' "${plan_gate_result}" | jq -r '.decision // "hold"' 2>/dev/null || echo hold)"
+                plan_gate_reason="$(printf '%s' "${plan_gate_result}" | jq -r '.reason // "plan_gate_error"' 2>/dev/null || echo plan_gate_error)"
+                plan_gate_paths="$(printf '%s' "${plan_gate_result}" | jq -r '.log_paths // "none"' 2>/dev/null || echo none)"
+              elif [ -f "${plan_gate_guard}" ]; then
                 plan_gate_meta_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_issue.XXXXXX")"
                 plan_gate_grant_body_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_gate_grant_body.XXXXXX")"
                 printf '%s' "${CURRENT_ISSUE_JSON}" > "${plan_gate_meta_file}"
@@ -2681,7 +2719,7 @@ jobs:
                 # write holds.
                 if [ "${plan_gate_decision}" = "approve" ] && printf '%s' "${plan_gate_result}" | jq -e '.pipeline_grant_body == true' >/dev/null 2>&1; then
                   if [ -s "${plan_gate_grant_body_file}" ] \
-                    && gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" -f body="$(cat "${plan_gate_grant_body_file}")" >/dev/null 2>&1; then
+                    && gh_retry gh api -X PATCH "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" -f body="$(cat "${plan_gate_grant_body_file}")" >/dev/null 2>&1; then
                     echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=written"
                   else
                     echo "PIPELINE_PLAN_GRANT issue=${ISSUE_NUMBER} source=plan outcome=failed reason=issue_body_write_failed"
@@ -2699,6 +2737,29 @@ jobs:
               # cannot inject workflow commands or forge gate log lines.
               plan_gate_reason="$(printf '%s' "${plan_gate_reason}" | tr -cd 'a-z_' | cut -c1-80)"
               plan_gate_paths="$(printf '%s' "${plan_gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
+              # Q151: a plan over the 50-file grant is handed to the
+              # orchestrator as a Claude project instead of being held. The
+              # script holds (exit 3) whenever it cannot start the project.
+              if [ "${plan_gate_decision}" != "approve" ] && [ "${plan_gate_reason}" = "plan_too_large_for_grant" ] && [ -f scripts/plan_split_dispatch.sh ]; then
+                plan_split_issue_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/plan_split_issue.XXXXXX")"
+                printf '%s' "${CURRENT_ISSUE_JSON}" > "${plan_split_issue_file}"
+                plan_split_rc=0
+                REPO="${PLAN_STEP_REPO}" ISSUE_NUMBER="${ISSUE_NUMBER}" ISSUE_JSON_FILE="${plan_split_issue_file}" \
+                  PLAN_FILE="${plan_gate_file}" RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${PLAN_STEP_REPO}/actions/runs/${GITHUB_RUN_ID:-}" \
+                  PLAN_PATH_COUNT="$(printf '%s' "${plan_gate_result}" | jq -r '.plan_path_count // 0' 2>/dev/null || echo 0)" \
+                  bash scripts/plan_split_dispatch.sh || plan_split_rc=$?
+                rm -f "${plan_split_issue_file}"
+                if [ "${plan_split_rc}" -eq 0 ]; then
+                  echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=plan_too_large_for_grant outcome=split issue=${ISSUE_NUMBER}"
+                  echo "plan_split=true" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "### Plan handed to the orchestrator"
+                    echo ""
+                    echo "The plan lists more files than one pipeline grant covers (50), so it was started as an orchestrator project on the Claude engine. The issue stays open until the project completes."
+                  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+                  exit 0
+                fi
+              fi
               if [ "${plan_gate_decision}" != "approve" ]; then
                 echo "AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=${plan_gate_reason:-plan_gate_error} outcome=defer issue=${ISSUE_NUMBER} paths=${plan_gate_paths:-none}"
                 echo "auto_approve_hold_reason=${plan_gate_reason:-plan_gate_error}" >> "$GITHUB_OUTPUT"
@@ -2728,7 +2789,7 @@ jobs:
               # the auto-approval comment triggers the implement workflow. Without
               # this, the implement workflow may see stale comment state.
               sleep 3
-              gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+              gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" \
                 -f body=$'/approved [auto-approved-by-plan]\n\nAuto approval was posted because AUTO_IMPLEMENT_ON_CLEAR_PLAN is enabled.'
               echo "auto_approved=true" >> "$GITHUB_OUTPUT"
               ;;
@@ -2739,7 +2800,7 @@ jobs:
           esac
 
       - name: Telegram plan notification
-        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && steps.auto_approve.outputs.auto_approved != 'true'
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked != 'true' && steps.parse_plan.outputs.needs_clarification != 'true' && steps.auto_approve.outputs.auto_approved != 'true' && steps.auto_approve.outputs.plan_split != 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
