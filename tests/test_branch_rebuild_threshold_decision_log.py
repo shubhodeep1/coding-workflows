@@ -87,13 +87,13 @@ def test_bait_injection_drops_blob_content() -> None:
 
 
 def test_agents_fragment_registers_log_prefix() -> None:
-    # Read agents.md with pending agents.d/ fragments folded in, so the check
-    # holds both before and after the release fold deletes the fragment.
+    # The registry entry may still sit in a pending agents.d/ fragment or be
+    # folded into agents.md already; agents_text() covers both states.
     text = _agents_text_with_fragments()
     heading = "## Stable log prefixes (contractual)"
     assert heading in text
-    section = text.split(heading, 1)[1]
-    if "\n## " in section:
-        section = section.split("\n## ", 1)[0]
+    # Stop at the next "## " heading so a match in a later section cannot
+    # satisfy the registry check.
+    section = text.split(heading, 1)[1].split("\n## ", 1)[0]
     assert f"- `{LOG_KEY}`" in section
     assert f"LOG_PREFIX.name={LOG_KEY}" in section
