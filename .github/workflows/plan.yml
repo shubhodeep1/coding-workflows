@@ -1485,6 +1485,33 @@ jobs:
             guard_block true target_branch_unverified
           fi
 
+      # Heal #7434 (source shubhodeep1/digital_pa#145): the claude-pool-token
+      # action ships CommonJS main.js / post.js with no package.json of its
+      # own, so in a consumer whose root package.json sets "type": "module"
+      # Node loads them as ES modules, they crash on `require`, no pool is
+      # written and the planner is refused with reason=no_credential. Pin the
+      # action's module type in the support checkout before the action runs.
+      # The real fix is a committed .github/actions/claude-pool-token/package.json;
+      # once it ships this step logs reason=present and can be removed. It runs
+      # before the write-guard snapshot so the file is part of the baseline.
+      - name: Pin claude-pool-token action module type
+        if: env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          action_dir=".codex-workflow-src/.github/actions/claude-pool-token"
+          pkg="${action_dir}/package.json"
+          if [ -L .codex-workflow-src ] || [ -L .codex-workflow-src/.github ] || [ -L .codex-workflow-src/.github/actions ] || [ -L "${action_dir}" ] || [ ! -d "${action_dir}" ]; then
+            echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=skip reason=action_dir_unavailable"
+            exit 0
+          fi
+          if [ -e "${pkg}" ] || [ -L "${pkg}" ]; then
+            echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=skip reason=present"
+            exit 0
+          fi
+          ( set -C; printf '{"type":"commonjs"}\n' > "${pkg}" )
+          echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=written"
+
       - name: Capture pre-Codex plan write-guard snapshot
         if: env.SKIP_PLAN != 'true'
         run: |

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -524,6 +526,216 @@ def test_codex_engine_runs_the_unchanged_codex_call() -> None:
 		'exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" '
 		'2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?'
 	) in runner
+
+
+POOL_TOKEN_ACTION_DIR = REPO_ROOT / ".github" / "actions" / "claude-pool-token"
+PIN_STEP_NAME = "Pin claude-pool-token action module type"
+PIN_STEP_IF = "env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'"
+STAGED_ACTION_REL = Path(".codex-workflow-src") / ".github" / "actions" / "claude-pool-token"
+
+
+def _step_run_body(step: str) -> str:
+	body = step.split("        run: |\n", 1)[1]
+	return "".join(
+		line[10:] if line.startswith("          ") else line.lstrip(" ")
+		for line in body.splitlines(keepends=True)
+	)
+
+
+def _pin_step_body() -> str:
+	return _step_run_body(_workflow_step(PLAN_WORKFLOW.read_text(encoding="utf-8"), PIN_STEP_NAME))
+
+
+def _pool_token_action_files() -> tuple[str, str]:
+	text = (POOL_TOKEN_ACTION_DIR / "action.yml").read_text(encoding="utf-8")
+	try:
+		import yaml  # type: ignore[import-untyped]
+
+		runs = yaml.safe_load(text)["runs"]
+		return str(runs["main"]), str(runs["post"])
+	except ImportError:
+		main_match = re.search(r"^\s+main:\s*(\S+)\s*$", text, re.MULTILINE)
+		post_match = re.search(r"^\s+post:\s*(\S+)\s*$", text, re.MULTILINE)
+		assert main_match and post_match
+		return main_match.group(1), post_match.group(1)
+
+
+def _clean_env(**extra: str) -> dict[str, str]:
+	environment = {
+		key: value
+		for key, value in os.environ.items()
+		if not key.startswith("GIT_") and key not in ("BASH_ENV", "ENV", "NODE_OPTIONS")
+	}
+	environment.update(extra)
+	return environment
+
+
+def _run_pin(root: Path) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["bash", "-c", _pin_step_body()],
+		cwd=root, env=_clean_env(), capture_output=True, text=True, check=False,
+	)
+
+
+def _stage_action(root: Path, with_pin: bool) -> Path:
+	action_dir = root / STAGED_ACTION_REL
+	action_dir.mkdir(parents=True)
+	main_file, post_file = _pool_token_action_files()
+	for name in ("action.yml", main_file, post_file):
+		shutil.copyfile(POOL_TOKEN_ACTION_DIR / name, action_dir / name)
+	scripts_dir = root / ".codex-workflow-src" / "scripts"
+	scripts_dir.mkdir(parents=True)
+	_write_executable(scripts_dir / "claude_pool_token.sh", "#!/usr/bin/env bash\nexit 1\n")
+	(root / "package.json").write_text('{"type":"module"}\n', encoding="utf-8")
+	if with_pin:
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "CLAUDE_POOL_MODULE_PIN outcome=written" in result.stdout
+	return action_dir
+
+
+def _run_node(action_dir: Path, script: str, root: Path, output: Path) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["node", script],
+		cwd=action_dir,
+		env=_clean_env(
+			GITHUB_OUTPUT=str(output),
+			GITHUB_WORKSPACE=str(root),
+			RUNNER_TEMP=str(root / "runner-temp"),
+			INPUT_CONFIG_PATH="",
+			INPUT_PROBE="false",
+		),
+		capture_output=True, text=True, check=False, timeout=60,
+	)
+
+
+def test_pool_token_action_pin_step_wiring() -> None:
+	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	step = _workflow_step(workflow_text, PIN_STEP_NAME)
+	assert f"        if: {PIN_STEP_IF}\n" in step
+	assert "        continue-on-error: true\n" in step
+	body = _pin_step_body()
+	assert "${{" not in body
+	assert "set -C" in body
+	assert '".codex-workflow-src/.github/actions/claude-pool-token"' in body
+	order = [
+		workflow_text.index("      - name: Check-triage target-branch guard\n"),
+		workflow_text.index(f"      - name: {PIN_STEP_NAME}\n"),
+		workflow_text.index("      - name: Capture pre-Codex plan write-guard snapshot\n"),
+		workflow_text.index("      - name: Resolve Claude credential\n"),
+	]
+	assert order == sorted(order)
+	credential = _workflow_step(workflow_text, "Resolve Claude credential")
+	assert "uses: ./.codex-workflow-src/.github/actions/claude-pool-token\n" in credential
+	assert "        continue-on-error: true\n" in credential
+	assert "steps.ai_engine.outputs.engine == 'claude'" in credential
+
+
+def test_pool_token_action_loads_under_esm_parent_after_pin() -> None:
+	if shutil.which("node") is None:
+		print("skip: node is not on PATH")
+		return
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=True)
+		output = root / "github_output"
+		output.write_text("", encoding="utf-8")
+		main_file, post_file = _pool_token_action_files()
+		for script in (main_file, post_file):
+			result = _run_node(action_dir, script, root, output)
+			assert result.returncode == 0, (script, result.stderr)
+			assert "ReferenceError" not in result.stderr, (script, result.stderr)
+			assert "require is not defined" not in result.stderr, (script, result.stderr)
+		written = output.read_text(encoding="utf-8")
+		assert "available=false" in written
+		assert "reason=script_failed" in written
+		assert (action_dir / "package.json").read_text(encoding="utf-8") == '{"type":"commonjs"}\n'
+
+
+def test_pool_token_action_crashes_under_esm_parent_without_pin() -> None:
+	# Reproduces the reported failure (digital_pa#145 at 7feb4ef553b2): with
+	# the consumer's "type": "module" package.json and no pin, main.js never
+	# reaches its own available=false fallback.
+	main_file, _post_file = _pool_token_action_files()
+	if shutil.which("node") is None or not main_file.endswith(".js"):
+		print("skip: node missing or the action no longer ships .js entry points")
+		return
+	if (POOL_TOKEN_ACTION_DIR / "package.json").exists():
+		print("skip: the action ships its own package.json")
+		return
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=False)
+		output = root / "github_output"
+		output.write_text("", encoding="utf-8")
+		result = _run_node(action_dir, main_file, root, output)
+		assert result.returncode != 0
+		assert "require is not defined" in result.stderr
+		assert "available=" not in output.read_text(encoding="utf-8")
+
+
+def test_pool_token_action_pin_step_keeps_existing_package_json() -> None:
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=False)
+		pkg = action_dir / "package.json"
+		pkg.write_text('{"type":"commonjs","name":"upstream"}\n', encoding="utf-8")
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "CLAUDE_POOL_MODULE_PIN outcome=skip reason=present" in result.stdout
+		assert pkg.read_text(encoding="utf-8") == '{"type":"commonjs","name":"upstream"}\n'
+
+		pkg.unlink()
+		dangling = root / "elsewhere.json"
+		pkg.symlink_to(dangling)
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "reason=present" in result.stdout
+		assert pkg.is_symlink() and not dangling.exists()
+
+		target = root / "other-dir"
+		target.mkdir()
+		shutil.rmtree(action_dir)
+		action_dir.symlink_to(target, target_is_directory=True)
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "reason=action_dir_unavailable" in result.stdout
+		assert not (target / "package.json").exists()
+
+		action_dir.unlink()
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "reason=action_dir_unavailable" in result.stdout
+
+
+def test_pool_token_action_pin_does_not_change_write_guard_paths() -> None:
+	if shutil.which("git") is None:
+		print("skip: git is not on PATH")
+		return
+	snapshot_body = _step_run_body(
+		_workflow_step(PLAN_WORKFLOW.read_text(encoding="utf-8"), "Capture pre-Codex plan write-guard snapshot")
+	)
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp) / "ws"
+		root.mkdir()
+		_stage_action(root, with_pin=False)
+		for repo in (root, root / ".codex-workflow-src"):
+			subprocess.run(["git", "init", "-q", str(repo)], env=_clean_env(), check=True)
+
+		def _paths(name: str) -> list[str]:
+			out = Path(tmp) / name
+			subprocess.run(
+				["bash", "-c", snapshot_body], cwd=root, check=True, capture_output=True,
+				env=_clean_env(PRE_PLAN_WRITE_GUARD_PATHS_FILE=str(out)),
+			)
+			return [line.split("\t", 1)[0] for line in out.read_text(encoding="utf-8").splitlines()]
+
+		before = _paths("before.tsv")
+		pin = _run_pin(root)
+		assert pin.returncode == 0, pin.stderr
+		after = _paths("after.tsv")
+		assert before == after
+		assert ".codex-workflow-src/" in after
 
 
 def main() -> int:
