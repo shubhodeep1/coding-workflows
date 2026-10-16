@@ -224,6 +224,10 @@ jobs:
           chmod +x "${resolver_script}"
           # Exit 3 means CI-triage PR-branch routing was required but could
           # not be verified; never fall back to the default branch then.
+          # One exception (#7477): reason=pr_not_open (the triage PR merged
+          # or closed) is tolerated as in clarify, with pr_not_open=true, and
+          # the "Close superseded CI-repair issue (merged PR)" step settles
+          # it: close the issue, plan on the PR's base, or skip planning.
           resolver_rc=0
           # Resolver stderr is captured (then replayed) so a branch that came
           # from CI-triage PR-head routing, not from an explicit body line,
@@ -236,8 +240,16 @@ jobs:
             CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
+          resolver_pr_not_open=false
+          if [ "${resolver_rc}" -eq 3 ] && grep -Eq 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" 2>/dev/null; then
+            resolver_pr_not_open=true
+          fi
           if [ -s "${resolver_err_file}" ]; then
-            cat "${resolver_err_file}" >&2
+            if [ "${resolver_pr_not_open}" = "true" ]; then
+              sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            else
+              cat "${resolver_err_file}" >&2
+            fi
           fi
           if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
@@ -261,6 +273,11 @@ jobs:
             else
               echo "resolver_status=none" >> "$GITHUB_OUTPUT"
             fi
+          elif [ "${resolver_pr_not_open}" = "true" ]; then
+            echo "::notice::CI-triage PR for issue #${issue_number} is no longer open; planning continues only if the superseded-PR check resolves it."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "resolver_status=failed" >> "$GITHUB_OUTPUT"
+            echo "pr_not_open=true" >> "$GITHUB_OUTPUT"
           elif [ "${resolver_rc}" -eq 3 ]; then
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
@@ -873,6 +890,8 @@ jobs:
           REPO_SLUG: ${{ github.repository }}
           PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED: ${{ vars.PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED || 'true' }}
           PLAN_SUPERSEDE_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
+          PLAN_PR_NOT_OPEN: ${{ steps.refctx.outputs.pr_not_open }}
+          PLAN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
@@ -885,8 +904,28 @@ jobs:
           # (#7185). Every unverifiable state plans as usual (fail open).
           set -uo pipefail
           log() { echo "PLAN_SUPERSEDED_MERGED_PR issue=${ISSUE_NUMBER} $*"; }
+          # Issue #7477: when "Resolve integration ref" tolerated a CI-triage
+          # PR that is no longer open (pr_not_open=true), the checkout is the
+          # default branch. Any outcome this step cannot resolve (close the
+          # issue, or plan on the PR's base) skips planning instead.
+          pr_not_open=false
+          if [ "${PLAN_PR_NOT_OPEN:-}" = "true" ]; then
+            pr_not_open=true
+          fi
+          pr_not_open_unresolved() {
+            local detail="${1:-unknown}"
+            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            log "outcome=skip reason=pr_not_open_unresolved detail=${detail}"
+            echo "::warning::Planning skipped for #${ISSUE_NUMBER}: CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail})."
+            source scripts/tg_helpers.sh 2>/dev/null || true
+            if type tg_send_tracked >/dev/null 2>&1; then
+              tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: its CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail})."$'\n'"Issue: ${ISSUE_URL:-}" "WARNING" || true
+            fi
+            exit 0
+          }
           case "$(printf '%s' "${PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" in
             false|0|no|off)
+              [ "${pr_not_open}" = "true" ] && pr_not_open_unresolved disabled
               log "outcome=skip reason=disabled"
               exit 0
               ;;
@@ -901,6 +940,7 @@ jobs:
           ok = "ai:check-triage" in labels or re.search(r"Re-issued (by the unblock judge )?from\s*#|^-\s*Replaces:\s*#", body, re.M)
           sys.exit(0 if ok else 1)
           ' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+            [ "${pr_not_open}" = "true" ] && pr_not_open_unresolved not_candidate
             log "outcome=plan reason=not_candidate"
             exit 0
           fi
@@ -914,6 +954,7 @@ jobs:
             fi
           done
           if [ -z "${helper}" ]; then
+            [ "${pr_not_open}" = "true" ] && pr_not_open_unresolved helper_missing
             echo "::warning::Superseded-issue check helper is unavailable; planning as usual."
             log "outcome=plan reason=helper_missing"
             exit 0
@@ -927,6 +968,7 @@ jobs:
           result_file="${RUNTIME_DIR}/plan_superseded.json"
           if ! python3 -I -B "${helper}" classify --issue-meta-file "${ISSUE_META_FILE}" \
             --repo "${REPO_SLUG}" --pipeline-login "${login}" --out "${result_file}"; then
+            [ "${pr_not_open}" = "true" ] && pr_not_open_unresolved classifier_failed
             log "outcome=plan reason=classifier_failed"
             exit 0
           fi
@@ -935,6 +977,7 @@ jobs:
             python3 -I -B -c 'import json, sys; value = json.load(open(sys.argv[1], encoding="utf-8")).get(sys.argv[2]); sys.stdout.write("" if value is None else str(value))' "${result_file}" "$1"
           }
           if ! outcome="$(field outcome 2>/dev/null)" || [ -z "${outcome}" ]; then
+            [ "${pr_not_open}" = "true" ] && pr_not_open_unresolved classifier_failed
             log "outcome=plan reason=classifier_failed"
             exit 0
           fi
@@ -970,6 +1013,7 @@ jobs:
                 field comment_body > "${comment_file}"
                 if ! grep -qF -- "${marker}" "${comment_file}" || \
                   ! gh_retry gh api "repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}/comments" -f body="$(cat "${comment_file}")" >/dev/null; then
+                  [ "${pr_not_open}" = "true" ] && pr_not_open_unresolved comment_failed
                   echo "::warning::Could not post the superseded-issue comment; planning as usual."
                   log "source=${source_issue} pr=${pr_number} outcome=plan reason=comment_failed"
                   exit 0
@@ -1011,7 +1055,12 @@ jobs:
               field facts > "${facts_file}"
               echo "PLAN_MERGED_PR_FACTS_FILE=${facts_file}" >> "$GITHUB_ENV"
               branch_ok() { [[ "$1" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] && [[ "$1" != *..* ]]; }
-              if [ -n "${head_ref}" ] && [ "${PLAN_SUPERSEDE_RESOLVED_REF}" = "${head_ref}" ] && branch_ok "${base_ref}"; then
+              # Reroute when the checkout is the merged PR's former head, or
+              # (#7477) when the PR is no longer open, the checkout is the
+              # default branch and the PR's base is another branch.
+              if { { [ -n "${head_ref}" ] && [ "${PLAN_SUPERSEDE_RESOLVED_REF}" = "${head_ref}" ]; } || \
+                { [ "${pr_not_open}" = "true" ] && [ "${base_ref}" != "${PLAN_DEFAULT_BRANCH:-}" ]; }; } && \
+                branch_ok "${base_ref}"; then
                 # "Stage workflow support files" installed support copies over
                 # tracked scripts/ and prompts/ files, so a plain checkout
                 # refuses when they differ between head and base. Save them,
@@ -1025,7 +1074,7 @@ jobs:
                   git checkout --quiet -f -B "${base_ref}" FETCH_HEAD && \
                   tar -xf "${staged_tar}"; then
                   echo "PLAN_REROUTED_REF=${base_ref}" >> "$GITHUB_ENV"
-                  log "source=${source_issue} pr=${pr_number} outcome=rerouted from=${head_ref} to=${base_ref}"
+                  log "source=${source_issue} pr=${pr_number} outcome=rerouted from=${head_ref:-default} to=${base_ref}"
                 else
                   # Never plan on the merged PR's former head (#7185): skip
                   # this run and let stall recovery retry it.
@@ -1037,11 +1086,16 @@ jobs:
                     tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: could not check out ${base_ref} after PR #${pr_number} merged."$'\n'"Issue: ${ISSUE_URL:-}" "WARNING" || true
                   fi
                 fi
+              elif [ "${pr_not_open}" = "true" ] && [ "${base_ref}" != "${PLAN_DEFAULT_BRANCH:-}" ]; then
+                # The base failed the branch-name check: never fall through
+                # to planning on the default branch.
+                pr_not_open_unresolved invalid_base_ref
               else
                 log "source=${source_issue} pr=${pr_number} check=${check_label} outcome=plan reason=merged_check_not_passed"
               fi
               ;;
             *)
+              [ "${pr_not_open}" = "true" ] && pr_not_open_unresolved "${reason:-unknown}"
               log "outcome=plan reason=${reason:-unknown}"
               ;;
           esac
