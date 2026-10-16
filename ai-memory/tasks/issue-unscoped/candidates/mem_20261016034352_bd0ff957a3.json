@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:1510-1512 | severity=critical | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The pin step uses `continue-on-error: true` without verifying the result of the `printf` command.\n  WHY: If `printf` fails for reasons other than `noclobber` (read-only filesystem, full disk, permissions), the job proceeds as if the pin succeeded, so the action later crashes with a `ReferenceError` and the issue is refused with `reason=no_credential`. The reviewer labeled this SEVERITY: BLOCKER, which is mapped to critical here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add a regression test that copies the action into a temp directory whose parent package.json has \"type\": \"module\", runs node main.js and node post.js, and asserts neither exits with a ReferenceError. The issue also suggested hardening by wrapping the body of main() in main.js in a try/catch, and this was not implemented.\n  expected_change_site: .github/actions/claude-pool-token/main.js and post.js (try/catch hardening); tests/test_plan_codex_step_extraction.py (regression test)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The regression tests `test_pool_token_action_loads_under_esm_parent_after_pin` and `test_pool_token_action_crashes_under_esm_parent_without_pin` were added. The try/catch hardening in main.js and post.js was not implemented, so `available=false` is not guaranteed to be written on a crash.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:1510-1512 | severity=BLOCKER | confidence=4\n  PROBLEM: The pin step uses `continue-on-error: true` without verifying the result of the `printf` command.\n  WHY: If `printf` fails for reasons other than `noclobber` (read-only filesystem, full disk, permissions), the job proceeds as if the pin succeeded, so the action later crashes with a `ReferenceError` and the issue is refused with `reason=no_credential`.\n- TASK_GAP:\n  Requirement: Add a regression test that copies the action into a temp directory whose parent package.json has \"type\": \"module\", runs node main.js and node post.js, and asserts neither exits with a ReferenceError. The suggested try/catch hardening in the issue was not implemented.\n  Expected change site: tests/test_plan_codex_step_extraction.py\n  Evidence of absence: The tests `test_pool_token_action_loads_under_esm_parent_after_pin` and `test_pool_token_action_crashes_under_esm_parent_without_pin` were added and cover the regression. The hardening (\"wrap the body of main() in main.js in a try/catch\") was not implemented.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING_SUGGESTIONS: .github/actions/claude-pool-token/main.js and post.js, top-level logic. The script uses `require`, which is not defined in ESM scope. Suggested fix: wrap the main execution logic in a `try/catch` so `available=false` is always written on a crash. Estimated lines changed: 5-10. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "065d3102afba99e1e353e624d2724aa1a4c99c741a66a242bce35a5f4cef6a3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7463,
+    "run_id": "38842735388",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38842735388",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016034352_bd0ff957a3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7463,
+    "run_id": "38842735388"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-16T03:43:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
