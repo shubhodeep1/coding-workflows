@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7477,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7477\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7487\",\"pr_number\":7487,\"branch\":\"ai/issue-7477\",\"run_id\":\"38864552018\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/38864552018\",\"changed_files\":[\".github/workflows/plan.yml\",\"changelog.d/7477-plan-pr-not-open.md\",\"tests/test_plan_superseded_merged_pr_workflow.py\",\"tests/test_workflow_checkout_integration_ref_audit.py\"]}",
+  "fingerprint": "f4a95cb9810c518bfc5d3e56595ae6e2e81aee78094ec52d61e10f9288731b6c",
+  "lineage": {
+    "issue_number": 7477,
+    "parent_ids": [],
+    "pr_number": 7487,
+    "run_id": "38864552018",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38864552018",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7487"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261016072451_5180786405",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7477,
+    "level": "run",
+    "pr_number": 7487,
+    "run_id": "38864552018"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7477: https://github.com/shubhodeep1/coding-workflows/pull/7487",
+  "timestamps": {
+    "created_at": "2026-10-16T07:24:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
