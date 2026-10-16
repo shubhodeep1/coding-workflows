@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The root-cause fix (a committed `package.json` for the action) is outside this issue's frozen edit scope. Which fix should this issue deliver?\nChoices:\nA. Stay inside the scope. Add a \"Pin claude-pool-token action module type\" step to `.github/workflows/clarify.yml` right before \"Resolve Claude credential\", mirroring the #7434 step in `plan.yml`: same `CLAUDE_POOL_MODULE_PIN` log prefix, no-overwrite and no-symlink write, fail-open. Add a regression test under `tests/` and a `changelog.d/` fragment. The committed `package.json`, which also covers implement, review, the poller, validate and the other callers, is left to a separately scoped issue. (RECOMMENDED)\nB. Do only the root-cause fix: commit `.github/actions/claude-pool-token/package.json` (`{\"type\":\"commonjs\"}`) plus a test and a changelog fragment. This needs a trusted operator to widen the scope with an exact `files_touched` grant for that path first. Without the grant, implement will stop as `ai:scope-blocked`.\nC. Do both A and B in one PR, with the same scope-grant requirement as B.",
+  "fingerprint": "82529401bcc70390fe7bc2f8dc54eeab79ba1d319c79a5d058c9659b62dc35ac",
+  "lineage": {
+    "issue_number": 7476,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38859668333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38859668333",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261016061623_ae9837099a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7476,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38859668333"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7476 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-16T06:16:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
