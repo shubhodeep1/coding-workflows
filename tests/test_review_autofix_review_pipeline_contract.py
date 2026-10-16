@@ -3656,6 +3656,93 @@ def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> No
 	assert not any("repos/owner/repo/pulls/" in " ".join(call) for call in result["mock_state"]["calls"])
 
 
+_NO_PR_BASE_REF_ERROR = (
+	"::error::No-PR claude-branch-review path: could not resolve the repository "
+	"default branch; pass base_ref_override or retry."
+)
+
+
+def test_review_collect_pr_metadata_no_pr_base_ref_fails_closed() -> None:
+	text = METADATA_HELPER.read_text(encoding="utf-8")
+	assert "|| echo 'main'" not in text
+	assert "gh api \"repos/${REPOSITORY}\" --jq '.default_branch'" not in text
+
+	start_marker = 'if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; then'
+	end_marker = "AUTOFIX_NO_PR_METADATA_SYNTHESIZED"
+	start = text.index(start_marker)
+	end = text.index(end_marker, start)
+	block = text[start:end]
+
+	assert 'BASE_REF_OVERRIDE="${BASE_REF_OVERRIDE_INPUT:-}"' in block
+	assert 'gh_retry "${branch_review_repo_json}" api "repos/${REPOSITORY}"' in block
+	assert ".default_branch // empty" in block
+	assert _NO_PR_BASE_REF_ERROR in block
+	error_idx = block.index(_NO_PR_BASE_REF_ERROR)
+	assert "exit 1" in block[error_idx:]
+
+
+@pytest.mark.parametrize(
+	"api_responses",
+	[
+		{},
+		{"repos/owner/repo": {"default_branch": ""}},
+	],
+	ids=["repo_read_fails", "empty_default_branch"],
+)
+def test_review_collect_pr_metadata_no_pr_base_ref_unresolvable_exits_nonzero(
+	api_responses: dict[str, object],
+) -> None:
+	with tempfile.TemporaryDirectory(prefix="review-collect-pr-metadata-base-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		runtime_dir = tmp / "runtime"
+		bin_dir.mkdir()
+		runtime_dir.mkdir()
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_review_collect_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(json.dumps({"api_responses": api_responses}), encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GITHUB_REPOSITORY_OWNER": "owner",
+			"GH_TOKEN": "test-token",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"PR_NUMBER": "",
+			"CLAUDE_BRANCH_REVIEW_MODE": "true",
+			"HEAD_REF_OVERRIDE_INPUT": "claude/test-no-pr",
+			"HEAD_SHA_OVERRIDE_INPUT": "deadbeef",
+			"BASE_REF_OVERRIDE_INPUT": "",
+			"PR_PAYLOAD_FILE": str(runtime_dir / "pr_payload.json"),
+			"PR_META_FILE": str(runtime_dir / "pr_meta.json"),
+			"PR_ISSUE_COMMENTS_FILE": str(runtime_dir / "pr_issue_comments.json"),
+			"PR_REVIEWS_FILE": str(runtime_dir / "pr_reviews.json"),
+			"PR_REVIEW_COMMENTS_FILE": str(runtime_dir / "pr_review_comments.json"),
+			"LINKED_ISSUE_CONTEXT_FILE": str(runtime_dir / "linked_issue_context.txt"),
+			"PR_ALL_COMMENTS_CONTEXT_FILE": str(runtime_dir / "pr_all_comments_context.txt"),
+			"PR_DIFF_FILE": str(runtime_dir / "pr_diff.patch"),
+			"GITHUB_ENV": str(runtime_dir / "github_env.txt"),
+		})
+
+		result = subprocess.run(
+			["bash", str(METADATA_HELPER)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=False,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		assert result.returncode != 0
+		assert _NO_PR_BASE_REF_ERROR in result.stdout
+		assert "AUTOFIX_NO_PR_METADATA_SYNTHESIZED" not in result.stdout
+		assert not (runtime_dir / "pr_payload.json").exists()
+
+
 def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default() -> None:
 	result = _run_review_collect_pr_metadata_harness(
 		pr_number="42",
