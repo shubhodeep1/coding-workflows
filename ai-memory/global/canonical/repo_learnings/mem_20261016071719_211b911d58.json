@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "When a consumer repository's workflows are deliberately disabled, preserve its registration and leave the clarify and plan paths unchanged unless the requested scope explicitly calls for a change. The existing scheduled consumer-health check can close the notice when the external condition is resolved.",
+  "fingerprint": "81238020dbff72108b1c4d66b9448d4147bb0934b142322e0e8c117926ecb3ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38865454281",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38865454281",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7434",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7444",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7468",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7469",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7474",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7447",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7463",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7471",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7472",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7475"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261016071719_211b911d58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Consumer-health notices do not by themselves justify changing this repository's consumer registration or health-check workflows.",
+  "timestamps": {
+    "created_at": "2026-10-16T07:17:19Z",
+    "promoted_at": "2026-10-16T07:18:30Z",
+    "superseded_at": null
+  }
+}
