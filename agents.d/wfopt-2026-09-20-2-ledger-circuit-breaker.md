@@ -17,4 +17,7 @@
   events are dropped. Other `emit_failed` results keep the per-call warning
   and leave the circuit closed. Output tokens, `LEDGER_SUBSTATES_ENABLED`
   and the timeout parsing are unchanged, and the helper still exits 0 on
-  every telemetry failure.
+  every telemetry failure. The switch is read only from the helper's
+  environment: `implement.yml`, `review_autofix.yml` and `validate.yml` do
+  not pass it from `vars.*` (unlike `LEDGER_EMIT_TIMEOUT_SECONDS`), so a
+  repository variable alone does not turn the breaker off.
