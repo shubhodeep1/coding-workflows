@@ -119,13 +119,14 @@ def _triage_body() -> str:
 	])
 
 
-def _fixtures(run_conclusion: str) -> dict:
+def _fixtures(run_conclusion: str, merged: bool = True, base_ref: str = "main") -> dict:
 	triage = {"number": 6977, "body": _triage_body(), "user": {"login": "owner-human"},
 		"author_association": "OWNER", "labels": [{"name": "ai:check-triage"}]}
 	return {
 		f"repos/{REPO}/issues/6977": triage,
-		f"repos/{REPO}/pulls/6976": {"merged_at": "2026-10-10T00:00:00Z", "state": "closed",
-			"head": {"sha": HEAD_SHA, "ref": HEAD_BRANCH, "repo": {"full_name": REPO}}, "base": {"ref": "main"}},
+		f"repos/{REPO}/pulls/6976": {"merged_at": "2026-10-10T00:00:00Z" if merged else None, "state": "closed",
+			"merged": merged,
+			"head": {"sha": HEAD_SHA, "ref": HEAD_BRANCH, "repo": {"full_name": REPO}}, "base": {"ref": base_ref}},
 		f"repos/{REPO}/actions/runs/123": {"workflow_id": 77, "repository": {"full_name": REPO}},
 		f"repos/{REPO}/actions/workflows/77/runs?head_sha={HEAD_SHA}&per_page=1":
 			{"workflow_runs": [{"status": "completed", "conclusion": run_conclusion}]},
@@ -133,7 +134,8 @@ def _fixtures(run_conclusion: str) -> dict:
 
 
 def _run_step(tmp_path: Path, *, run_conclusion="success", comments=None, env_extra=None, stage_helper=True,
-	issue_body="Re-issued by the unblock judge from #6977.\n\nSpecification: fix CI.\n\nWhy: red.", cwd=None):
+	issue_body="Re-issued by the unblock judge from #6977.\n\nSpecification: fix CI.\n\nWhy: red.", cwd=None,
+	merged=True, base_ref="main"):
 	work = cwd or (tmp_path / "work")
 	work.mkdir(exist_ok=True)
 	if stage_helper:
@@ -153,7 +155,7 @@ def _run_step(tmp_path: Path, *, run_conclusion="success", comments=None, env_ex
 		"user": {"login": PIPELINE}, "author_association": "NONE", "labels": []}))
 	(runtime / "issue_comments.json").write_text(json.dumps(comments or []))
 	fixtures = tmp_path / "fixtures.json"
-	fixtures.write_text(json.dumps(_fixtures(run_conclusion)))
+	fixtures.write_text(json.dumps(_fixtures(run_conclusion, merged=merged, base_ref=base_ref)))
 	github_env = tmp_path / "github_env"
 	github_env.write_text("")
 	log = tmp_path / "gh.log"
@@ -359,3 +361,127 @@ def test_reroute_keeps_ignored_staged_helpers_the_base_tracks(tmp_path):
 	assert "PLAN_REROUTED_REF=main" in github_env, proc.stdout + proc.stderr
 	assert (work / "README.md").read_text() == "base\n"
 	assert (work / "scripts" / "helper.sh").read_text() == "staged helper\n"
+
+
+# Issue #7477: "Resolve integration ref" now tolerates reason=pr_not_open and
+# exports pr_not_open=true; the checkout is then the default branch. The step
+# must close the issue, plan on the PR's base, or skip planning.
+PR_NOT_OPEN_ENV = {"PLAN_PR_NOT_OPEN": "true"}
+
+
+def _origin_with_branches(tmp_path, default_branch, base_branch=None):
+	"""A bare origin holding `default_branch` (and `base_branch` when given),
+	plus a work clone checked out on the default branch."""
+	origin = tmp_path / "origin.git"
+	seed = tmp_path / "seed"
+	work = tmp_path / "work"
+	_git("init", "-q", "--bare", str(origin), cwd=tmp_path)
+	_git("init", "-q", "-b", default_branch, str(seed), cwd=tmp_path)
+	(seed / "README.md").write_text("default\n")
+	_git("add", "README.md", cwd=seed)
+	_git("commit", "-q", "-m", "default", cwd=seed)
+	_git("push", "-q", str(origin), default_branch, cwd=seed)
+	if base_branch and base_branch != default_branch:
+		_git("checkout", "-q", "-b", base_branch, cwd=seed)
+		(seed / "README.md").write_text("base\n")
+		_git("commit", "-q", "-am", "base", cwd=seed)
+		_git("push", "-q", str(origin), base_branch, cwd=seed)
+	_git("clone", "-q", "-b", default_branch, str(origin), str(work), cwd=tmp_path)
+	return work
+
+
+def test_pr_not_open_reroutes_to_non_default_base(tmp_path):
+	work = _origin_with_branches(tmp_path, "trunk", "main")
+	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "trunk", "PLAN_SUPERSEDE_RESOLVED_REF": "trunk"})
+	output = proc.stdout + proc.stderr
+	assert proc.returncode == 0, output
+	assert "PLAN_REROUTED_REF=main" in github_env, output
+	assert "SKIP_PLAN" not in github_env
+	assert (work / "README.md").read_text() == "base\n"
+	assert f"outcome=rerouted from={HEAD_BRANCH} to=main" in proc.stdout
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+def test_pr_not_open_plans_on_default_base(tmp_path):
+	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure",
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "PLAN_SUPERSEDE_RESOLVED_REF": "main"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN" not in github_env
+	assert "PLAN_REROUTED_REF" not in github_env
+	assert "outcome=plan reason=merged_check_not_passed" in proc.stdout
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+def test_pr_not_open_closed_unmerged_skips_planning(tmp_path):
+	proc, calls, github_env = _run_step(tmp_path, merged=False,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main"})
+	output = proc.stdout + proc.stderr
+	assert proc.returncode == 0, output
+	assert "SKIP_PLAN=true" in github_env
+	assert "outcome=skip reason=pr_not_open_unresolved detail=pr_closed_unmerged" in proc.stdout
+	assert output.count("::warning::") == 1, output
+	assert not any(call[:2] in (["issue", "close"], ["issue", "edit"]) for call in calls)
+
+
+def test_closed_unmerged_without_pr_not_open_still_plans(tmp_path):
+	proc, _, github_env = _run_step(tmp_path, merged=False)
+	assert proc.returncode == 0
+	assert "SKIP_PLAN" not in github_env
+	assert "outcome=plan reason=pr_closed_unmerged" in proc.stdout
+
+
+@pytest.mark.parametrize("variant,detail", [
+	("helper_missing", "helper_missing"),
+	("comment_failed", "comment_failed"),
+	("disabled", "disabled"),
+	("not_candidate", "not_candidate"),
+])
+def test_pr_not_open_unverifiable_skips_planning(tmp_path, variant, detail):
+	env_extra = {**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main"}
+	kwargs = {}
+	if variant == "helper_missing":
+		kwargs["stage_helper"] = False
+	elif variant == "comment_failed":
+		env_extra["FAKE_COMMENT_FAIL"] = "1"
+	elif variant == "disabled":
+		env_extra["PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED"] = "False"
+	elif variant == "not_candidate":
+		kwargs["issue_body"] = "Plain issue body."
+	proc, calls, github_env = _run_step(tmp_path, env_extra=env_extra, **kwargs)
+	output = proc.stdout + proc.stderr
+	assert proc.returncode == 0, output
+	assert "SKIP_PLAN=true" in github_env
+	assert f"outcome=skip reason=pr_not_open_unresolved detail={detail}" in proc.stdout
+	assert output.count("::warning::") == 1, output
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+def test_pr_not_open_failed_reroute_skips(tmp_path):
+	# The base branch "main" is absent on origin, so the fetch fails.
+	work = _origin_with_branches(tmp_path, "trunk")
+	proc, calls, github_env = _run_step(tmp_path, run_conclusion="failure", cwd=work,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "trunk", "PLAN_SUPERSEDE_RESOLVED_REF": "trunk"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "PLAN_REROUTED_REF" not in github_env
+	assert "outcome=skip reason=reroute_failed" in proc.stdout
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+
+
+def test_pr_not_open_invalid_base_ref_skips(tmp_path):
+	proc, _, github_env = _run_step(tmp_path, run_conclusion="failure", base_ref="bad..ref",
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "PLAN_REROUTED_REF" not in github_env
+	assert "reason=pr_not_open_unresolved" in proc.stdout
+
+
+def test_superseded_still_closes_on_pr_not_open_path(tmp_path):
+	proc, calls, github_env = _run_step(tmp_path, env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "outcome=superseded" in proc.stdout
+	assert "pr_not_open_unresolved" not in proc.stdout
+	assert any(call[:2] == ["issue", "close"] for call in calls)
