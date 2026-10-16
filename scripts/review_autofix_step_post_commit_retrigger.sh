@@ -95,23 +95,42 @@ fi
 sleep "${peer_wait}"
 
 # Continuation dispatches are the designated successor run for a
-# productive [ai-autofix] push. The only same-branch peer the
-# dedup can find is the gate-skipped pull_request.synchronize run
-# produced by our own push (AUTOFIX_GATE_SKIP
-# reason=self_triggered_autofix), whose `run` job is gated out
-# because its `needs.gate.outputs.should_run == 'true'` condition
-# is not met, so it never advances retrigger_guard or invokes
-# rb_judge. Handing the iteration to that peer stalls the cycle
-# until the orchestrator stall cron recovers — and the cron does
-# not scan non-orchestrator PRs at all (probably_unnecessary_but_read_if_stuck.md §20.4). Bypass
-# the peer check in the continuation case; legacy non-continuation
-# dispatches keep their existing dedup semantics.
-if [ "${is_continuation_dispatch}" = "true" ]; then
+# productive [ai-autofix] push only when AUTOFIX_SKIP_SELF_TRIGGERED
+# is `true`. Only then does the gate skip the pull_request.synchronize
+# run produced by our own push (AUTOFIX_GATE_SKIP
+# reason=self_triggered_autofix): its `run` job is gated out because
+# its `needs.gate.outputs.should_run == 'true'` condition is not met,
+# so it never advances retrigger_guard or invokes rb_judge. Handing
+# the iteration to that peer would stall the cycle until the
+# orchestrator stall cron recovers — and the cron does not scan
+# non-orchestrator PRs at all (probably_unnecessary_but_read_if_stuck.md
+# §20.4) — so in that case the peer check is bypassed. The comparison
+# mirrors scripts/review_autofix_step_evaluate_gate.sh exactly.
+#
+# Under the default (AUTOFIX_SKIP_SELF_TRIGGERED unset or `false`) the
+# synchronize run is a real review run in the same pr-autofix-<PR>
+# concurrency group (cancel-in-progress: false). Dispatching anyway
+# queued a redundant second run that waited 31-159 minutes (five such
+# pairs in analysis/workflow-optimization-2026-09-20-2.md, for example
+# cancelled run 35466085922 next to successful run 35466097830). So the
+# continuation runs the peer check and skips with
+# `reason=sync_event_inflight ... continuation=true` when a peer is
+# found. The check fails open: no peer seen, a failed probe, or a
+# missing helper still dispatches, so a missing synchronize event
+# still gets a successor run. Legacy non-continuation dispatches keep
+# their existing dedup semantics and log lines.
+if [ "${is_continuation_dispatch}" = "true" ] \
+  && [ "${AUTOFIX_SKIP_SELF_TRIGGERED:-false}" = "true" ]; then
   echo "AUTOFIX_PEER_CHECK_BYPASSED pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} reason=continuation_dispatch source=post_commit_retrigger"
 elif type autofix_retrigger_has_inflight_peer >/dev/null 2>&1 \
   && autofix_retrigger_has_inflight_peer "${PR_NUMBER}" "${TARGET_BRANCH}" "${CURRENT_RUN_ID}"; then
-  echo "AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
-  emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=sync_event_inflight" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger"
+  if [ "${is_continuation_dispatch}" = "true" ]; then
+    echo "AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger continuation=true"
+    emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=sync_event_inflight" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger" "continuation=true"
+  else
+    echo "AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight pr=${PR_NUMBER} current_run=${CURRENT_RUN_ID} source=post_commit_retrigger"
+    emit_event "AUTOFIX_DISPATCH_SKIPPED" "reason=sync_event_inflight" "pr=${PR_NUMBER}" "current_run=${CURRENT_RUN_ID}" "source=post_commit_retrigger"
+  fi
   exit 0
 fi
 
