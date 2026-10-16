@@ -679,3 +679,153 @@ TODO/FIXME/HACK/XXX markers: a search of `.github/workflows/*.yml`, `scripts/*.s
 | Code modularization | `.github/actions/gh-pat-budget/action.yml` (new), `.github/actions/checkout-workflow-support/action.yml` (new), `.github/workflows/review_autofix.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/clarify.yml`, `.github/workflows/implement.yml`, `scripts/comprehensive_test_and_release_gh_api.sh`, `scripts/review_rb_judge.sh`, `scripts/review_autofix_step_*` helpers, `scripts/label_helpers.sh` callers | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`, optional new `scripts/implement_handle_noop.sh` | Small |
 | Medium/Low fixes | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, `.github/workflows/clarify.yml`, `.github/workflows/orchestrate_poll.yml` (and 9 other workflows for BUG-005), `scripts/gh_helpers.sh`, `scripts/review_commit_changes.sh`, `scripts/review_conflict_resolve.sh`, `scripts/review_rb_judge.sh`, `.github/workflows/pr6576-shard-followup.yml` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-16)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the merge or removal was proven safe from static reading alone. The calls hit the same endpoint (or a strict subset of its fields) with the same pagination, filters and auth. They sit in one function or step with no mutation between them. Error handling and retry behaviour stay the same, no concurrency boundary is crossed, and no cache contract changes. The implement stage may act on these without further review. `NEEDS_VERIFICATION` means the change looks correct, but at least one of those conditions cannot be proven from source. The listed verification steps must pass before anyone implements it. `RISKY_SKIP` means the call is in a retry or backoff loop, an auth or permission probe, a paginated read, a rate-limit-sensitive path, `orchestrate_poll_process.sh`, a stall-recovery or race-defence path, or would change log keys other code greps for. It is listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** — `NEEDS_VERIFICATION`
+- **Files:**
+  - `.github/workflows/review_autofix.yml:868-902`: the per-issue label read at 872, inside the `while IFS=$'\t' read -r issue_number has_validate_label labels_known` loop.
+  - `.github/workflows/review_autofix.yml:816-822`: the existing GraphQL `closingIssuesReferences` read.
+  - `.github/workflows/review_autofix.yml:863`: the fallback that builds nodes with `labels: null`.
+- **Current call count:** N REST/GraphQL `gh issue view` calls, where N is the number of issues found by the PR body/title fallback. This path runs only when `closingIssuesReferences` returned nothing or failed.
+- **Proposed call count:** 1 aliased GraphQL call, falling back to N per-issue calls if the batch fails.
+- **Endpoints:** `gh issue view <n> --json labels` (GraphQL `issue.labels`), N times. Proposed: one `repository { i<N>: issue(number:N) { number labels(first:100) { nodes { name } } } ... }`.
+- **Evidence:** the fallback creates nodes with unknown labels, and the loop then reads each issue's labels on its own:
+  ```bash
+  issue_nodes_json="$(printf '%s\n' "${issue_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0)) | map({number: tonumber, labels: null})')"
+  ...
+  if [ "${labels_known}" != "true" ]; then
+    if issue_labels="$(gh_retry gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+  ```
+  All issue numbers are known at line 863, before the loop starts.
+- **Proposed fix:** right after line 863, run one aliased GraphQL query over every `labels == null` node. Follow the alias pattern of `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`. Rewrite `issue_nodes_json` with the labels it returns, so `labels_known=true` and line 872 is skipped. Leave the per-issue `gh issue view` at 872 unchanged as the fallback, for when the batch fails or returns no node for an issue.
+- **Safety rationale:** this is not proven `SAFE_TO_MERGE`, for two reasons.
+  - The error semantics change: today one failed read skips only that issue (`continue` at 880). A failed batch would affect every issue unless the per-issue fallback is kept.
+  - The loop mutates in between: `gh issue edit --remove-label` at 899 runs after each issue is dispatched. It touches only that issue, but a prefetch moves the label read for later issues to before that mutation.
+- **Downstream signal:** before implementing:
+  1. Confirm `gh issue view --json labels` returns at most 100 labels, so `labels(first:100)` is an exact equivalent.
+  2. Confirm no test asserts the per-issue call count or order on this path. Grep `tests/` for `post-merge-validate` and `orchestrator-validate-required` fixtures.
+  3. Confirm the extra bytes stay under the `review_autofix.yml` size guard (`tests/test_workflow_file_size_limit.py`, 480,000 bytes, §24). If they do not, move the body to `scripts/review_autofix_step_<slug>.sh`.
+
+**MERGE-002** — `RISKY_SKIP`
+- **Files:** `scripts/review_enable_auto_merge.sh:100` (`reviewed_head_is_current_for_labels`), `scripts/review_enable_auto_merge.sh:155` (paginated labels), `scripts/review_enable_auto_merge.sh:221` (full PR metadata).
+- **Current call count:**
+  - e2e-labelled path: 2 calls (labels at 155, then `pulls/{n}` at 100 through 158).
+  - Normal path: 2 calls (labels at 155, then `pulls/{n}` at 221).
+- **Proposed call count:** 1 in theory. Fetch `pulls/{n}` once before 155 and read `.labels[].name`, `.head.sha` and `.head.ref` from it. **Not recommended.**
+- **Endpoints:** `GET repos/{repo}/issues/{n}/labels?per_page=100` (`--paginate`) and `GET repos/{repo}/pulls/{n}`.
+- **Evidence:** the PR object from 221 already carries `labels` and `head.sha`, so in principle it could answer both 155 and 100. But the label read is paginated on purpose:
+  ```bash
+  # `--paginate ?per_page=100` so a PR carrying many labels ... can
+  # still surface `e2e-smoke-test` on page ≥2.
+  ```
+  The head re-read at 98-99 is also documented as deliberate: "the smallest non-duplicative freshness read" on early-exit paths.
+- **Proposed fix:** none for automation.
+- **Safety rationale:** three `RISKY_SKIP` triggers apply.
+  - **Pagination:** 155 uses `--paginate`, and the PR object's embedded `labels` array has unverified size semantics.
+  - **Permission and merge-authorization flow:** every failure path fails closed and suppresses auto-merge (comments at 129-143 and 204-206).
+  - **Head freshness defence:** the code guards against the head moving between calls.
+- **Downstream signal:** do not auto-implement. Manual review must:
+  1. Prove from GitHub REST docs that `pulls/{n}.labels` is never truncated.
+  2. Show that moving the head read earlier does not widen the window between the head check and `gh pr merge --match-head-commit`.
+  3. Keep the `AUTOFIX_AUTO_MERGE_HEAD_BOUND` log lines unchanged.
+
+**MERGE-003** — `RISKY_SKIP`
+- **Files:** `.github/workflows/test-and-mark-stable.yml:1383-1384` (open-PR read at the top of each tick) and `.github/workflows/test-and-mark-stable.yml:1472-1473` (`PR_RECHECK`).
+- **Current call count:** 2 identical `pulls?state=open&head=…&per_page=1` reads in a tick that reaches the failure branch.
+- **Proposed call count:** no change recommended.
+- **Endpoint:** `GET repos/{TEST_REPO}/pulls?state=open&head={owner}:ai/issue-{N}&per_page=1`.
+- **Evidence:** both calls use the same endpoint and query string. The second one runs after `sleep "$POLL_INTERVAL"` and after `scoped_implement_runs_complete`, and it exists to defend against a race:
+  ```bash
+  # Keep the existing PR recheck and confirm the run list again
+  # after it: a newly indexed active run must not be missed.
+  ```
+- **Proposed fix:** none. CONSIST-001 in the Deep Audit already covers switching 1472 to `gh_api_safe_quiet_print`. That changes only the wrapper, not the call count.
+- **Safety rationale:** this is a race-defence path: the recheck is deliberately separated in time from the first read, so merging it removes the guard it provides.
+- **Downstream signal:** do not merge. Any change needs manual review against the "implement completed but no PR" false-failure history this recheck protects against.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** — `NEEDS_VERIFICATION` (extends API-001)
+- **Files:** `.github/workflows/test-and-mark-stable.yml:857-858` (full issue read) and `.github/workflows/test-and-mark-stable.yml:865-866` (comments list used only for `length`). The value is used only in `CUR_STATE` at 868.
+- **Current call count:** 2 per Phase 1 tick for labels plus comment count.
+- **Proposed call count:** 1 per tick. Phase 1 drops from 3 to 2 calls per tick with this alone, and from 3 to 1 together with DEAD-API-001.
+- **Endpoints:** `GET repos/{TEST_REPO}/issues/{N}`, and `GET repos/{TEST_REPO}/issues/{N}/comments` (default page, 30 items).
+- **Evidence:** line 857 already fetches the whole issue object, which includes the integer `comments` field, but projects only the labels. Line 865 then lists comments only to count them:
+  ```bash
+  COMMENT_COUNT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+    --jq 'length' || echo "0")
+  ```
+  This count also stops at 30, the default page size, which BUG-003 notes. The issue's `.comments` field has no cap. `COMMENT_COUNT` is used only in `CUR_STATE` (868), which is compared with `PREV_STATE` and never logged; the log line at 909 prints only labels.
+- **Net-new vs. API-001:** API-001 merges 865 with 891. This finding removes 865 by reusing the 857 response instead, so it does not depend on the BUG-003 endpoint-parameter question. If BUG-003 is fixed with `--paginate`, a paginated count would be page-dependent, while `.comments` is not.
+- **Proposed fix:** change the jq at 857-858 to emit both values in one response, for example `--jq '[([.labels[].name] | join(",")), (.comments | tostring)] | @tsv'`, split them with `IFS=$'\t' read -r LABELS COMMENT_COUNT`, and delete 865-866. On a failed call `LABELS` must stay empty, as it is today, so the `-z "$LABELS"` checks keep their meaning (see DEAD-001).
+- **Safety rationale:** this cannot be `SAFE_TO_MERGE`.
+  - The fields are not the same data: the issue's `.comments` counter is a different field from `length(comments page 1)`, and the two may differ in eventual consistency.
+  - The polling loop's activity signal changes: comment counts above 30 now reset the inactivity timer, where today they cannot.
+- **Downstream signal:** before implementing:
+  1. In one release run log, confirm that the issue's `.comments` count rises within one tick of a comment POST.
+  2. Confirm EXPR-004's watch-list estimate for Phase 1 (782-911) still holds after the edit.
+  3. Apply it in the same PR as, or after, DEAD-001, so the `-z "$LABELS"` guard is either removed or kept consistently.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001** — `NEEDS_VERIFICATION`
+- **Files:**
+  - `.github/workflows/test-and-mark-stable.yml:890-899`: the `LAST_BOT_COMMENT` read and its only consumer.
+  - Evidence sources: `.github/workflows/clarify.yml:1631-1659` ("Post clarification questions") and `.github/workflows/clarify.yml:1930-1945` ("Comment on issue failure").
+- **Current call count:** 1 per Phase 1 tick (about 60 over a 10-minute clarify at the 10 s interval the Deep Audit cites).
+- **Proposed call count:** 0. Alternatively, keep it and fix it under BUG-003 so it can actually match.
+- **Endpoint:** `GET repos/{TEST_REPO}/issues/{N}/comments?per_page=5&direction=desc`.
+- **Evidence:** the filter accepts only comments by the Actions bot:
+  ```bash
+  --jq '[.[] | select(.user.login == "github-actions[bot]")] | .[0].body // ""'
+  ```
+  Every clarify step that comments on the issue posts with the PAT, so the comment author is the PAT's account, not `github-actions[bot]`:
+  ```yaml
+  - name: Post clarification questions
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+  ...
+  - name: Comment on issue failure
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+  ```
+  The only `github.token` step in `clarify.yml` (1949-1952, "Queue failed reclarify for poller") runs only for `issue_comment` `/reclarify` events, not on the release test's path.
+  The text match also misses: the questions comment says `Clarification required` (1646), which matches neither `clarification.*needed` nor `NEEDS_CLARIFICATION`.
+  The output `status=clarification_needed` (896) has no consumer; a repo-wide grep finds it only at its write site. In practice the call's result can never take the `exit 1` branch, and the phase falls through to the inactivity timeout.
+- **Net-new vs. API-001/BUG-003:** API-001 treats 891 as live and merges it. If 891 is dead, API-001's merge does nothing, and removing it gives the same 3→2 saving directly (3→1 with REUSE-001).
+- **Proposed fix:** choose one of two options in the same PR as BUG-003.
+  - (a) Delete 890-899. This keeps the current effective behaviour: a clarification request ends in the inactivity timeout.
+  - (b) Keep one comments read and match the `<!-- ai:clarification-questions -->` marker (`clarify.yml:1645`) instead of the author login. This makes the check fire, which changes behaviour.
+- **Safety rationale:** static reading cannot prove the author mismatch.
+  - In `TEST_REPO`, `GH_PAT` could in principle be an app-backed token.
+  - Option (a) also removes a failure-detection branch from the release gate.
+- **Downstream signal:**
+  1. From one `test-and-mark-stable.yml` release run, read `issues/{N}/comments` on the smoke issue and confirm no comment has `user.login == "github-actions[bot]"`.
+  2. Decide with the release-gate owner between (a), keeping current behaviour, and (b), making clarification fail fast.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — the two comment reads use different pagination (default 30 vs. `per_page=5`), so the identical-pagination condition fails. DEAD-API-001 suggests 891 is dead and REUSE-001 removes 865 another way, so implement those instead of a straight merge.
+- BATCH-001: NEEDS_VERIFICATION — net-new detail: the REST filter at 1383 scopes by head owner (`head=${TEST_REPO%%/*}:ai/issue-N`), but GraphQL `pullRequests(headRefName:)` matches any fork's branch with that name. The batched query must also select `headRepositoryOwner{login}` and filter on it. The open-PR read also guards the success exit at 1392-1399. EXPR-002 must land first.
+- BATCH-002: RISKY_SKIP — it is in `scripts/orchestrate_poll_process.sh` (`security_pass_unblock_filed_advisory_followups`, 7713-7734), and the header (7704-7710) documents the per-row read as an audited, retried-next-tick contract.
+- BATCH-003: RISKY_SKIP — it is in `orchestrate_poll_process.sh`. The header (37-41) makes the per-issue "live issue read" part of the replay authorization ("The marker is data, not authorization"), and line 57 re-checks state and label live, a TOCTOU defence. Taking those fields from the listing at 46-47 would weaken it.
+- API-002: RISKY_SKIP — the comments read at `implement.yml:5089-5090` uses `--paginate`. Replacing it with GraphQL `comments(last:100)` changes page-boundary semantics for the no-op ancestry counter that guards the #1292 duplicate-reissue failure (5070-5074).
+- API-003: RISKY_SKIP — the POST at `review_freshness_ci_failed.sh:73-80` sits in an explicit retry loop, and switching to `gh_api_retry --idempotent` changes its retry behaviour. The change is reasonable but needs manual review.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | MERGE-001, REUSE-001, DEAD-API-001 |
+| RISKY_SKIP | 2 | MERGE-002, MERGE-003 |
+
+The table counts only findings raised in this section. The tags given to the cross-referenced Deep Audit findings are in the list above.
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
+- Highest-value candidates once verified: DEAD-API-001 together with REUSE-001. Together they take the Phase 1 clarify wait in `test-and-mark-stable.yml` from 3 calls per tick to 1.
