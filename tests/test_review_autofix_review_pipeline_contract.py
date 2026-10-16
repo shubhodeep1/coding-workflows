@@ -3686,8 +3686,9 @@ def test_review_collect_pr_metadata_no_pr_base_ref_fails_closed() -> None:
 	[
 		{},
 		{"repos/owner/repo": {"default_branch": ""}},
+		{"repos/owner/repo": {"default_branch": "+lead"}},
 	],
-	ids=["repo_read_fails", "empty_default_branch"],
+	ids=["repo_read_fails", "empty_default_branch", "leading_plus_rejected"],
 )
 def test_review_collect_pr_metadata_no_pr_base_ref_unresolvable_exits_nonzero(
 	api_responses: dict[str, object],
