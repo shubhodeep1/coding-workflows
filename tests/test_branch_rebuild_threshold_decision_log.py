@@ -91,6 +91,8 @@ def test_agents_fragment_registers_log_prefix() -> None:
     text = _agents_text_with_fragments()
     heading = "## Stable log prefixes (contractual)"
     assert heading in text
-    section = text.split(heading, 1)[1]
+    # Stop at the next "## " heading so a match in a later section cannot
+    # satisfy the registry check.
+    section = text.split(heading, 1)[1].split("\n## ", 1)[0]
     assert f"- `{LOG_KEY}`" in section
     assert f"LOG_PREFIX.name={LOG_KEY}" in section
