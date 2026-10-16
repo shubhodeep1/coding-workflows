@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_collect_pr_metadata.sh:197-199 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The default-branch allowlist regex rejects a valid Git branch name that starts with `+` (e.g. `+lead`), and the `leading_plus_rejected` test at tests/test_review_autofix_review_pipeline_contract.py:3689 codifies that rejection.\n  WHY: In no-PR branch-review mode a repository whose default branch starts with `+` exits before review metadata is synthesized, unless the operator supplies `base_ref_override`. Gemini gave no severity and openai_gpt-6-luna gave NIT, so low is used. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 treat the rejection as deliberate and fail-closed, and qwen_qwen3_7-plus reported nothing.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_collect_pr_metadata.sh:198 | confidence=4\n  PROBLEM: The validation regex `^[A-Za-z0-9._/-][A-Za-z0-9._/+-]*$` rejects valid Git branch names starting with `+`.\n  WHY: Branches such as `+lead` are rejected as unresolvable, which blocks review unless the operator provides `base_ref_override`. Git handles these names correctly in qualified refspecs, so the restriction is not needed for security.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_collect_pr_metadata.sh:197-199 | severity=NIT | confidence=4\n  PROBLEM: The allowlist rejects a default branch named `+lead`, which is a valid Git branch name. The new `leading_plus_rejected` test in `tests/test_review_autofix_review_pipeline_contract.py:3689` codifies that rejection.\n  WHY: In no-PR branch-review mode, a repository whose API reports `+lead` as its default branch exits before review metadata is synthesized. Downstream fetch refspecs prefix the name with `+refs/heads/`, so the leading `+` is not read as the force marker.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a16a1d48ddd0c30c338aec4ce57946607a5bef7bfe37fbc80f772a9deffbe490",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7470,
+    "run_id": "38865853659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38865853659",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261016080721_6b186eadb1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7470,
+    "run_id": "38865853659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-16T08:07:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
