@@ -236,6 +236,25 @@ def test_failed_marker_never_releases_a_concurrent_split() -> None:
 	assert not any(c[-1].startswith("body=<!-- ai:plan-split-released:v1") for c in calls)
 
 
+def test_failed_marker_post_that_landed_is_released_not_deduplicated() -> None:
+	# The marker POST failed client-side but GitHub created the comment: the
+	# re-read finds this run's own marker (it carries this run's RUN_URL).
+	# It is not another run's reservation, so the split is released and the
+	# plan held instead of being left stuck under ai:split-to-project.
+	own = {"id": 500, "login": "pipeline-bot", "body": "<!-- ai:plan-split:v1 issue=123 wrapper=internal-orchestrate.yml -->\n"
+		"(`internal-orchestrate.yml`, https://github.com/owner/repo/actions/runs/9). The project splits it."}
+	code, out, calls = _run(extra_env={"FAKE_COMMENT_FAIL": "true", "PLAN_SPLIT_RETRY_SLEEP_SECS": "0",
+		"FAKE_COMMENTS_AFTER": json.dumps(own)})
+	assert code == 3 and "reason=marker_failed" in out and "deduplicated" not in out, out
+	assert _dispatches(calls) == []
+	assert any(c[-1].startswith("body=<!-- ai:plan-split-released:v1 issue=123 -->") for c in calls)
+	# Another run whose URL merely starts with this one (runs/90) still counts.
+	other = {**own, "body": own["body"].replace("runs/9)", "runs/90)")}
+	code, out, _ = _run(extra_env={"FAKE_COMMENT_FAIL": "true", "PLAN_SPLIT_RETRY_SLEEP_SECS": "0",
+		"FAKE_COMMENTS_AFTER": json.dumps(other)})
+	assert code == 0 and "reason=concurrent_split_marker_failed" in out, out
+
+
 # --- poller: close the source issue when the project completes (Q152) -------
 
 POLLER = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
