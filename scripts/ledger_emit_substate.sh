@@ -20,6 +20,28 @@ ledger_substates_enabled()
 	esac
 }
 
+# Job-scoped circuit breaker switch (LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED).
+# Unlike LEDGER_SUBSTATES_ENABLED, only unset, empty or `true` (any case) mean
+# on and only `false` means off; any other value (including `1`/`yes`/`on`)
+# means off with a warning.  The raw value is never echoed.
+ledger_emit_circuit_breaker_enabled()
+{
+	local circuit_switch
+	circuit_switch="$(printf '%s' "${LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED-}" | tr '[:upper:]' '[:lower:]')"
+	case "${circuit_switch}" in
+		''|true)
+			return 0
+			;;
+		false)
+			return 1
+			;;
+		*)
+			ledger_substate_warn "invalid LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED value; circuit breaker disabled"
+			return 1
+			;;
+	esac
+}
+
 resolve_ai_memory_script()
 {
 	local script_dir repo_root candidate
@@ -514,6 +536,18 @@ seen_scope="$(printf '%s' "${run_id}_${GITHUB_RUN_ATTEMPT:-1}_${GITHUB_JOB:-defa
 seen_file_default="${RUNNER_TEMP:-/tmp}/ledger-substates/${seen_scope}.seen"
 seen_file="${LEDGER_SUBSTATES_SEEN_FILE:-${seen_file_default}}"
 marker_dir="${seen_file}.d"
+# Circuit breaker sentinel: once a record-run-event call in this job times
+# out or fails authentication, later substates in the same job are skipped
+# silently instead of each paying the full emit timeout again.  marker_dir
+# is scoped by run id, run attempt and job (or LEDGER_SUBSTATES_SEEN_FILE).
+ledger_circuit_sentinel="${marker_dir}/circuit_open"
+ledger_circuit_breaker_on="false"
+if ledger_emit_circuit_breaker_enabled; then
+	ledger_circuit_breaker_on="true"
+fi
+if [ "${ledger_circuit_breaker_on}" = "true" ] && [ -e "${ledger_circuit_sentinel}" ]; then
+	exit 0
+fi
 dedupe_key="${workflow}|${phase}|${mode}|${attempt:-0}|${lane:-}|${event_type}|${dedupe_state}"
 
 if [ -z "${status}" ]; then
@@ -593,6 +627,30 @@ case "${emit_result}" in
 		;;
 	emit_failed:*)
 		ledger_substate_warn "record-run-event failed (${emit_result#emit_failed:}); skipping substate emission"
+		if [ "${ledger_circuit_breaker_on}" = "true" ]; then
+			ledger_circuit_reason=""
+			case "${emit_result}" in
+				emit_failed:timeout:*)
+					ledger_circuit_reason="timeout"
+					;;
+				*)
+					# A 403 that is a (secondary) rate limit or abuse response is
+					# transient, not an authentication failure; leave it closed.
+					if grep -Eiq 'authentication failed|could not read username|bad credentials|http 401|http 403|returned error: 403|permission to .* denied' <<<"${emit_result#emit_failed:}" \
+						&& ! grep -Eiq 'rate limit|abuse' <<<"${emit_result#emit_failed:}"; then
+						ledger_circuit_reason="auth"
+					fi
+					;;
+			esac
+			if [ -n "${ledger_circuit_reason}" ]; then
+				mkdir -p "${marker_dir}" 2>/dev/null || true
+				# noclobber gives O_EXCL create-once semantics: only the caller
+				# that creates the sentinel prints the circuit-opened warning.
+				if ( set -C; : > "${ledger_circuit_sentinel}" ) 2>/dev/null; then
+					ledger_substate_warn "circuit opened (reason=${ledger_circuit_reason}); later substates in this job are skipped"
+				fi
+			fi
+		fi
 		exit 0
 		;;
 	*)

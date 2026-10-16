@@ -181,7 +181,61 @@ def test_extract_failure_point_step_precedence_then_job_fallback():
 	assert point == {"job_name": "lint", "step_name": "run lint"}
 
 	point_job = collector.extract_failure_point([{"name": "build", "conclusion": "failure", "steps": []}])
-	assert point_job == {"job_name": "build", "step_name": None}
+	assert point_job == {"job_name": "build", "step_name": "pre_runner_failure"}
+
+
+def test_extract_failure_point_labels_jobs_that_never_ran_a_step():
+	for job in (
+		{"name": "build", "conclusion": "failure"},
+		{"name": "build", "conclusion": "failure", "steps": None},
+		{"name": "build", "conclusion": "failure", "steps": []},
+		{
+			"name": "build",
+			"conclusion": "failure",
+			"steps": [
+				{"name": "a", "conclusion": "skipped"},
+				{"name": "b", "conclusion": None},
+				{"name": "c"},
+			],
+		},
+	):
+		assert collector.extract_failure_point([job]) == {"job_name": "build", "step_name": "pre_runner_failure"}
+
+	setup_only = collector.extract_failure_point(
+		[{"name": "build", "conclusion": "failure", "steps": [{"name": "Set up job", "conclusion": "success"}]}]
+	)
+	assert setup_only == {"job_name": "build", "step_name": None}
+
+	startup = collector.extract_failure_point(
+		[{"name": "build", "conclusion": "failure", "steps": [{"name": "a", "conclusion": "startup_failure"}]}]
+	)
+	assert startup == {"job_name": "build", "step_name": None}
+
+	precedence = collector.extract_failure_point(
+		[
+			{"name": "queued", "conclusion": "failure", "steps": []},
+			{"name": "lint", "conclusion": "failure", "steps": [{"name": "run lint", "conclusion": "failure"}]},
+		]
+	)
+	assert precedence == {"job_name": "lint", "step_name": "run lint"}
+
+
+def test_compute_run_metrics_failed_run_reports_pre_runner_failure():
+	run = {
+		"id": 35452034565,
+		"name": "AI Review",
+		"path": ".github/workflows/review_autofix.yml",
+		"_workflow_family": "review_autofix",
+		"status": "completed",
+		"conclusion": "failure",
+		"event": "push",
+		"run_attempt": 1,
+		"created_at": "2026-04-10T10:00:00Z",
+		"run_started_at": "2026-04-10T10:01:00Z",
+		"updated_at": "2026-04-10T12:09:00Z",
+	}
+	row = collector.compute_run_metrics("owner/repo", run, [{"name": "review / codex-agent", "conclusion": "failure", "steps": []}])
+	assert row["failure_point"] == {"job_name": "review / codex-agent", "step_name": "pre_runner_failure"}
 
 
 def test_compute_run_metrics_cancelled_step_precedence_then_job_fallback():

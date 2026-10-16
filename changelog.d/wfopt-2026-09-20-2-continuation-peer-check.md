@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **A productive autofix push now starts one review run, not two.** After the review editor pushes an `[ai-autofix]` commit, the run that pushed it checks whether the push's own synchronize review run is already queued or running before it dispatches a continuation run.
+
+Before this, the continuation dispatch always skipped that check, on the assumption that the gate skips the synchronize run. The gate does that only when `AUTOFIX_SKIP_SELF_TRIGGERED=true`, and the default is `false`, so most pushes queued two review runs in the same `pr-autofix-<PR>` concurrency group. One of them was redundant and waited 31 to 159 minutes (for example cancelled run 35466085922 next to successful run 35466097830). The continuation now logs `AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight ... continuation=true` and leaves the next iteration to the synchronize run when it sees one. When it sees none, or the check fails, it dispatches as before.
+
+What this means for operators: under the default settings each productive autofix push gets one review run. With `AUTOFIX_SKIP_SELF_TRIGGERED=true` nothing changes: the continuation still bypasses the check and logs `AUTOFIX_PEER_CHECK_BYPASSED reason=continuation_dispatch`.
