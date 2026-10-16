@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.77,
+  "details": "Changes to scripts/ commonly appear alongside focused tests named for the helper or pipeline behavior. When changing shell or Python workflow utilities, inspect those tests first and preserve their expected failure handling and invocation semantics.",
+  "fingerprint": "5ec33810be948f7417505e328f30526853efd9e229a89193abeb29993f2fc1b8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38905606009",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38905606009",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7476",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7477",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7491",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7492",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7493",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7481",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7487",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7496",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7497",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7498"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261016132502_a514c04fc8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Script-level workflow helpers have dedicated tests that define their operational contracts.",
+  "timestamps": {
+    "created_at": "2026-10-16T13:25:02Z",
+    "promoted_at": "2026-10-16T13:27:06Z",
+    "superseded_at": null
+  }
+}
