@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -108,3 +109,42 @@ def test_ci_triage_fixtures_stay_out_of_the_parity_directory() -> None:
 	parity_dir = REPO_ROOT / "tests" / "fixtures" / "integration_ref_resolver"
 	names = {path.name for path in parity_dir.glob("*.json")}
 	assert not names & {path.name for path in FIXTURES}
+
+
+TRACKING_LINE_PATTERN = r'^\s*(?:-\s*)?(?:\*\*Tracking issue:\*\*|Tracking issue:)\s*#(\d+)\s*$'
+
+
+def test_managed_child_copied_header_fixtures_are_present() -> None:
+	# Issue #7513 (#7511 / #7512): an ai:orchestrator-managed child with a
+	# copied triage header, no ai:check-triage label and a tracking line
+	# resolves through its tracking issue; without the tracking line it is
+	# still refused as label_missing.
+	skip_path = FIXTURE_DIR / "managed_child_copied_header_without_label_skips.json"
+	refuse_path = FIXTURE_DIR / "managed_child_without_tracking_line_label_missing.json"
+	skip = json.loads(skip_path.read_text(encoding="utf-8"))
+	refuse = json.loads(refuse_path.read_text(encoding="utf-8"))
+	tracking = re.compile(TRACKING_LINE_PATTERN, re.MULTILINE)
+
+	skip_issue = skip["issues"]["101"]
+	assert skip["expected_exit_code"] == 0
+	assert skip["expected_stdout"]
+	assert "expected_error_reason" not in skip
+	assert {"name": "ai:orchestrator-managed"} in skip_issue["labels"]
+	assert {"name": "ai:check-triage"} not in skip_issue["labels"]
+	assert tracking.search(skip_issue["body"])
+
+	refuse_issue = refuse["issues"]["101"]
+	assert refuse["expected_exit_code"] == 3
+	assert refuse["expected_error_reason"] == "label_missing"
+	assert {"name": "ai:orchestrator-managed"} in refuse_issue["labels"]
+	assert not tracking.search(refuse_issue["body"])
+
+	for path in (skip_path, refuse_path):
+		result = _run_case(path)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "self-test passed" in result.stdout
+
+
+def test_tracking_line_pattern_stays_in_sync_with_extract_tracking_issue() -> None:
+	text = RESOLVER.read_text(encoding="utf-8")
+	assert text.count(TRACKING_LINE_PATTERN) == 2
