@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Changes to .github/workflows are repeatedly accompanied by targeted tests that check workflow contracts, and some also include integration or ref-audit coverage. When modifying workflow orchestration, identify the relevant contract tests and update or add coverage for the behavior and failure paths.",
+  "fingerprint": "ce1931a54255729c870bae08362ffe2a672262655c903efb4c25c5d374e17207",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38905606009",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38905606009",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7476",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7477",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7491",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7492",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7493",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7481",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7487",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7496",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7497",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7498"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261016132112_83b4bc50c3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is guarded by focused contract tests, not just workflow-file edits.",
+  "timestamps": {
+    "created_at": "2026-10-16T13:21:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
