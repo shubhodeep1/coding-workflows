@@ -1075,6 +1075,7 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
+          _wla_label_retry() { if type gh_retry >/dev/null 2>&1; then gh_retry "$@"; else "$@"; fi; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -1179,12 +1180,12 @@ jobs:
               "recommended_resume_action=retrigger_log_analysis" \
               "timestamp=${timestamp}"
 
-            gh label create "ai:log-analysis-failed" \
+            _wla_label_retry gh label create "ai:log-analysis-failed" \
               --repo "${GITHUB_REPOSITORY}" \
               --color "e11d48" \
               --description "Workflow log analysis failed" >/dev/null 2>&1 || true
 
-            gh issue edit "${TRACKING_ISSUE_NUM}" \
+            GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
               --repo "${GITHUB_REPOSITORY}" \
               --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || \
               echo "::warning::Failed to apply ai:log-analysis-failed to #${TRACKING_ISSUE_NUM}."
@@ -1872,6 +1873,7 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
+          _wla_label_retry() { if type gh_retry >/dev/null 2>&1; then gh_retry "$@"; else "$@"; fi; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -1957,8 +1959,8 @@ jobs:
               "attempt_count=${attempt_count}" \
               "recommended_resume_action=retrigger_log_analysis" \
               "timestamp=${timestamp}"
-            gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
-            gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
+            _wla_label_retry gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
+            GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
           }
 
           if [ -z "${REPORT_FILE}" ]; then
@@ -2470,6 +2472,7 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
+          _wla_label_retry() { if type gh_retry >/dev/null 2>&1; then gh_retry "$@"; else "$@"; fi; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -2555,8 +2558,8 @@ jobs:
               "attempt_count=${attempt_count}" \
               "recommended_resume_action=retrigger_log_analysis" \
               "timestamp=${timestamp}"
-            gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
-            gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
+            _wla_label_retry gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
+            GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
           }
 
           if [ -z "${REPORT_FILE}" ]; then

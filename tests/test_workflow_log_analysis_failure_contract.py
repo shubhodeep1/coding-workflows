@@ -155,6 +155,29 @@ def test_semble_wiring_is_consistent_across_four_codex_jobs() -> None:
 	assert wf.count("{{SEMBLE_PREFETCH}}") == 0
 
 
+def test_failure_label_writes_route_through_gh_retry_with_fallback() -> None:
+	wf = _workflow_text()
+	helper_def = '_wla_label_retry() { if type gh_retry >/dev/null 2>&1; then gh_retry "$@"; else "$@"; fi; }'
+	for step_name in (
+		"Run workflow log analysis",
+		"Run deep audit pass",
+		"Run API redundancy pass",
+	):
+		body = wf.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name: ", 1)[0]
+		assert body.count(helper_def) == 1, step_name
+		assert '_wla_label_retry gh label create "ai:log-analysis-failed"' in body, step_name
+		assert 'GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit "${TRACKING_ISSUE_NUM}"' in body, step_name
+		for line in body.splitlines():
+			stripped = line.lstrip()
+			assert not stripped.startswith('gh label create "ai:log-analysis-failed"'), step_name
+			assert not stripped.startswith('gh issue edit "${TRACKING_ISSUE_NUM}"'), step_name
+			if "_wla_label_retry" in stripped:
+				assert "AI_PHASE_FAILURE_V1" not in stripped, step_name
+		# The per-run AI_PHASE_FAILURE_V1 comment post stays a single attempt.
+		assert "_wla_label_retry gh api" not in body, step_name
+		assert "AI_PHASE_FAILURE_V1" in body, step_name
+
+
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
@@ -163,6 +186,7 @@ def main() -> int:
 	test_weekly_retro_path_is_schedule_gated_and_default_on()
 	test_scenario_trace_renderer_is_flag_gated_and_local_only()
 	test_semble_wiring_is_consistent_across_four_codex_jobs()
+	test_failure_label_writes_route_through_gh_retry_with_fallback()
 	return 0
 
 
