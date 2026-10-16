@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **The Claude pool action works in repositories whose `package.json` sets `"type": "module"`.** `.github/actions/claude-pool-token` now ships its own `package.json` with `"type": "commonjs"`, so Node loads `main.js` and `post.js` as CommonJS instead of taking the consumer's ES-module setting. Before, both files failed with `require is not defined`, the job got no Claude credential (`no_credential`) and the role ended with exit 76 (digital_pa#134, hylifegroup.com#96).

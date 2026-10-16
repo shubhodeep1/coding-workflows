@@ -7,7 +7,8 @@ per-token usage table. Checks the pool layout scripts/ai_engine.sh reads,
 the least-used ordering, every available=false reason, masking, and the
 post-step cleanup. Also asserts that no coding-workflows workflow or
 template references the CLAUDE_POOL_TOKEN_* secrets, which live only in
-shubhodeep1/claude-workers.
+shubhodeep1/claude-workers. The action also runs as CommonJS under a
+consumer whose root package.json sets "type": "module".
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import http.server
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import threading
@@ -347,6 +349,47 @@ def test_action_post_refuses_a_dangerous_directory(env: dict, tmp_path: Path) ->
 	)
 	assert "cleanup skipped reason=pool_dir_invalid" in post.stdout
 	assert keep.exists()
+
+
+def test_action_package_json_pins_commonjs() -> None:
+	assert json.loads((ACTION_DIR / "package.json").read_text(encoding="utf-8")) == {"type": "commonjs"}
+
+
+def test_action_runs_as_commonjs_under_a_module_type_consumer(tmp_path: Path) -> None:
+	"""A consumer root package.json with "type": "module" must not turn main.js / post.js into ES modules."""
+	consumer = tmp_path / "consumer"
+	action = consumer / ".codex-workflow-src" / ".github" / "actions" / "claude-pool-token"
+	action.mkdir(parents=True)
+	(consumer / "package.json").write_text(json.dumps({"type": "module"}), encoding="utf-8")
+	for name in ("main.js", "post.js", "package.json"):
+		shutil.copy2(ACTION_DIR / name, action / name)
+	runner_temp = tmp_path / "runner-temp"
+	runner_temp.mkdir()
+	values = {
+		"PATH": os.environ["PATH"],
+		"HOME": str(tmp_path),
+		"RUNNER_TEMP": str(runner_temp),
+		"GITHUB_OUTPUT": str(tmp_path / "out"),
+	}
+	# scripts/claude_pool_token.sh is absent here, so main.js's own fallback must run.
+	main = subprocess.run(["node", str(action / "main.js")], capture_output=True, text=True, env=values, timeout=60, check=False)
+	assert main.returncode == 0, main.stderr
+	assert "require is not defined" not in main.stderr
+	assert "CLAUDE_POOL available=false reason=script_failed" in main.stdout
+	pool = runner_temp / "claude-pool"
+	pool.mkdir()
+	(pool / "order").write_text("A\n", encoding="utf-8")
+	post = subprocess.run(["node", str(action / "post.js")], capture_output=True, text=True, env=values, timeout=60, check=False)
+	assert post.returncode == 0, post.stderr
+	assert "require is not defined" not in post.stderr
+	assert "CLAUDE_POOL cleanup removed=true" in post.stdout
+	assert not pool.exists()
+	# Negative control: without the marker the consumer's "type": "module" applies and the
+	# CommonJS code fails (the ReferenceError text is Node's; match on ReferenceError if it changes).
+	(action / "package.json").unlink()
+	broken = subprocess.run(["node", str(action / "main.js")], capture_output=True, text=True, env=values, timeout=60, check=False)
+	assert broken.returncode != 0
+	assert "require is not defined" in broken.stderr
 
 
 def test_action_metadata() -> None:

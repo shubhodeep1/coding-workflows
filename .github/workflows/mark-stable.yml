@@ -126,7 +126,10 @@ jobs:
   resolve-version:
     needs: [source]
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    # The full-history checkout (fetch-depth: 0, for the tag list) took 87s
+    # on 2026-10-15 02:21 and passed 2 minutes at 10:04, cancelling the
+    # release after stable had already moved (run 38717659089).
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.resolve.outputs.version }}
     steps:

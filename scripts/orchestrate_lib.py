@@ -1456,6 +1456,9 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:closed",
 	"ai:needs-human",
 	"ai:claude-capacity-wait",
+	# Plan split to an orchestrator project (Q151/Q152): the project owns the
+	# work and the poller closes the source issue when it completes.
+	"ai:split-to-project",
 	"ai:blocked",
 	"ai:clarify-failed",
 	"ai:clarify-respond-failed",
@@ -1524,6 +1527,8 @@ DEDICATED_HANDLER_PHASES: set[str] = {
 	"ai:needs-human",
 	# Claude pool capacity wait (issue #7251): the hourly resume pass owns it.
 	"ai:claude-capacity-wait",
+	# Plan split source issue (Q152): close_plan_split_source_if_needed owns it.
+	"ai:split-to-project",
 	"ai:blocked",
 	"ai:implementation-failed",
 	"ai:validating",

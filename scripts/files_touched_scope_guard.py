@@ -49,6 +49,11 @@ Inputs:
                           pipeline_plan_grant; the record then has
                           pipeline_grant_body: true and the caller must write
                           the body at PATH to the issue first.
+  --plan-auto-approval-gate --plan-file PATH --heal-scope-file PATH
+                          --flag-enabled VALUE --issue-number NUMBER
+                          Workflow-heal plans (#7444): approve only when every
+                          path the plan lists is inside the verified heal
+                          scope (one path per line). Never writes a grant.
 
 Output:
   stdout — the out-of-scope staged paths, one per line (empty when none).
@@ -663,6 +668,11 @@ PIPELINE_PLAN_GRANT_COMPANIONS = ("tests/**", "changelog.d/*", "agents.d/*")
 PIPELINE_PLAN_GRANT_MAX_PATHS = 50
 PIPELINE_PLAN_GRANT_MARKER = "<!-- ai:pipeline-plan-grant:v1 -->"
 PIPELINE_PLAN_GRANT_REASON = "pipeline_plan_grant"
+# A plan whose Files section lists more than PIPELINE_PLAN_GRANT_MAX_PATHS
+# files gets no grant. The plan stage hands it to the orchestrator as a
+# project instead (scripts/plan_split_dispatch.sh, Q151); the record carries
+# the count as ``plan_path_count``.
+PIPELINE_PLAN_TOO_LARGE_REASON = "plan_too_large_for_grant"
 _PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
 _PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
@@ -784,6 +794,7 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 	"""
 	protected: list[str] = []
 	grant_proposed = False
+	plan_path_count = 0
 	try:
 		with open(plan_file, encoding="utf-8") as handle:
 			plan_text = handle.read()
@@ -817,7 +828,19 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 				and isinstance(grant, dict) and grant.get("open") is True
 				and grant.get("reason") == PIPELINE_AUTHOR_OPEN_REASON):
 			plan_paths = extract_plan_file_paths(plan_text)
-			if plan_paths and len(plan_paths) <= PIPELINE_PLAN_GRANT_MAX_PATHS:
+			if len(plan_paths) > PIPELINE_PLAN_GRANT_MAX_PATHS:
+				# The open grant hid the workflow-edits switch from the check
+				# above; a plan the implement guard would refuse anyway (for
+				# example workflow_edits_disabled) keeps that reason, so it is
+				# never handed to a project whose children would be blocked.
+				status, open_denied, open_reason = check_automation_paths(protected, grant, allow_workflow_edits,
+					issue_number)
+				if status != STATUS_IN_SCOPE:
+					decision, reason, denied = PLAN_DECISION_HOLD, open_reason, open_denied or protected
+				else:
+					decision, reason = PLAN_DECISION_HOLD, PIPELINE_PLAN_TOO_LARGE_REASON
+					plan_path_count = len(plan_paths)
+			elif plan_paths:
 				proposed_body = build_pipeline_plan_grant_body(metadata.get("body") or "", plan_paths)
 				proposed_grant = build_automation_grant(dict(metadata, body=proposed_body), pipeline_login,
 					fetch_origin if repo else None)
@@ -835,10 +858,95 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
 		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
 		grant_proposed = False
+		plan_path_count = 0
 	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
 		"log_paths": plan_gate_log_paths(denied or protected)}
 	if grant_proposed:
 		record["pipeline_grant_body"] = True
+	if plan_path_count:
+		record["plan_path_count"] = plan_path_count
+	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
+# Workflow-heal plans (unblock fix-up #7444 for #7434). A heal issue's scope is
+# its intake-written ai:workflow-heal-scope:v1 marker, and the implement
+# preflight refuses a body that was edited. So plan.yml never writes a Q108
+# grant into a heal issue: it verifies the live marker (workflow_failure_heal.py
+# heal-scope verify), passes the verified paths here, and this gate approves only
+# when every path the plan lists is inside them. The matcher is the one the heal
+# route's commit check uses (strict: no lockfile allowance). No body is written.
+HEAL_PLAN_APPROVE_REASON = "heal_scope_verified"
+_HEAL_BARE_GLOB_RE = re.compile(r"[A-Za-z0-9_.*?/\[\]-]+")
+
+
+def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: str,
+	issue_number: str, allow_workflow_edits: str = "false") -> tuple[dict, int]:
+	"""Approve a heal plan only inside its verified heal scope; every error holds."""
+	protected: list[str] = []
+	denied: list[str] = []
+	try:
+		with open(plan_file, encoding="utf-8") as handle:
+			plan_text = handle.read()
+		if not plan_text.strip():
+			raise ValueError("empty plan")
+		protected = extract_plan_automation_paths(plan_text)
+		scope = normalize_allowlist(_read_allowlist(heal_scope_file)) if heal_scope_file else []
+		files = extract_plan_file_paths(plan_text)
+		if not scope:
+			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_check_unavailable", protected
+		elif protected and not _flag_enabled(flag_value):
+			decision, reason, denied = PLAN_DECISION_HOLD, "automation_path_plan_auto_approval_disabled", protected
+		elif protected and allow_workflow_edits != "true":
+			# Same switch check_automation_paths applies at implement time.
+			decision, reason, denied = PLAN_DECISION_HOLD, "workflow_edits_disabled", protected
+		elif _plan_files_section(plan_text) is None or (not files and not protected):
+			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_plan_paths_missing", protected
+		else:
+			# extract_plan_file_paths drops directory and glob tokens, so read
+			# them back from the Files section: a heal plan never approves a
+			# path set it cannot name exactly.
+			loose: list[str] = []
+			for line in (_plan_files_section(plan_text) or "").splitlines():
+				raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+				bullet = _PLAN_GRANT_BULLET_RE.match(line)
+				if bullet:
+					raw_tokens.append((bullet.group(1), False))
+				for raw, backticked in raw_tokens:
+					raw = raw.strip()
+					if not backticked:
+						if "`" in raw:
+							# Its backticked spans were read above (``**`a/b.py`**``).
+							continue
+						# A leading bold marker is markdown, not a glob (`**Files`).
+						raw = re.sub(r"^\*\*(?=[^*/])", "", raw)
+					token = normalize_path(_plan_path_token(raw))
+					if not token:
+						continue
+					globlike = token.endswith("/") or any(char in token for char in _GLOB_CHARS)
+					# A bare root-level glob (`- *.py`, `- *foo*`) counts; a word
+					# with prose punctuation (`*Optional:*`) does not. An
+					# italic-shaped word is ambiguous, so it is checked (fail closed).
+					if globlike and not backticked and "/" not in token \
+						and not _HEAL_BARE_GLOB_RE.fullmatch(token):
+						continue
+					# Also keep nested tokens _plan_grant_path rejects (an
+					# extensionless `docs/guide`) so the scope check sees them.
+					if globlike or ("/" in token and "`" not in token and not _plan_grant_path(token)):
+						loose.append(token)
+			candidates: list[str] = []
+			for path in files + protected + loose:
+				if path not in candidates:
+					candidates.append(path)
+			denied = [path for path in candidates if path.endswith("/") or any(char in path for char in _GLOB_CHARS)
+				or not path_in_scope(path, scope, allow_lockfiles=False)]
+			if denied:
+				decision, reason = PLAN_DECISION_HOLD, "heal_scope_plan_out_of_scope"
+			else:
+				decision, reason = PLAN_DECISION_APPROVE, HEAL_PLAN_APPROVE_REASON
+	except (OSError, UnicodeDecodeError, ValueError, TypeError):
+		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
+	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
+		"log_paths": plan_gate_log_paths(denied or protected)}
 	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
 
 
@@ -882,7 +990,14 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--flag-enabled", default="true")
 	parser.add_argument("--pipeline-grant-body-out", default="",
 		help="plan gate: write the proposed pipeline plan grant body here (Q108)")
+	parser.add_argument("--heal-scope-file", default="",
+		help="plan gate: verified workflow-heal scope paths; approve only inside them, never write a grant (#7444)")
 	args = parser.parse_args(argv)
+	if args.plan_auto_approval_gate and args.heal_scope_file:
+		record, code = run_heal_plan_scope_gate(args.plan_file, args.heal_scope_file, args.flag_enabled,
+			args.issue_number, args.allow_workflow_edits)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
 	if args.plan_auto_approval_gate:
 		record, code = run_plan_auto_approval_gate(args.plan_file, args.flag_enabled, args.issue_meta_file,
 			args.pipeline_login, args.allow_workflow_edits, args.issue_number, args.origin_repo,
