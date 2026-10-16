@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (120)
+## Processed source docs (121)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -125,6 +125,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-16.md`
 - `analysis/workflow-optimization-2026-09-18.md`
 - `analysis/workflow-optimization-2026-09-20.md`
+- `analysis/workflow-optimization-2026-09-20-2.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1200,3 +1201,24 @@ Processed: 2026-10-16
 - DEAD-002 — rejected: low value; removing identifiers conflicts with naming immutability.
 - SHELL-001 (SC2043 single-element loops in `scripts/stage_workflow_support.sh`) — rejected: a style-only edit to a staged support script (§9).
 - Reliability 5, executive summary, pipeline-flow table, per-repo breakdown and metrics appendix — INVALID/non-material: evidence, not recommendations.
+
+### `analysis/workflow-optimization-2026-09-20-2.md`
+Processed: 2026-10-16
+- Speed 1 / GH API audit (redundant dispatches) / per-repo action 1 — applied: continuation-peer-check (`changelog.d/wfopt-2026-09-20-2-continuation-peer-check.md`); `scripts/review_autofix_step_post_commit_retrigger.sh` now skips the peer check on continuation dispatches only when `AUTOFIX_SKIP_SELF_TRIGGERED=true`, and under the default the synchronize run is the successor. The 2026-09-20 rejection of flipping the variable itself still stands.
+- Speed 2 / Cost 4 / per-repo action 3 (editor fallback) — applied in part: editor-stall-fallback (`changelog.d/wfopt-2026-09-20-2-editor-stall-fallback.md`), on the OpenCode editor path only; the Claude engine ignores the OpenRouter attempt model, and `openai/gpt-5.6-sol` is no longer the primary editor.
+- Speed 3 / Reliability 1 / per-repo action 2 (memory write circuit breaker) — applied in part: ledger-circuit-breaker (`changelog.d/wfopt-2026-09-20-2-ledger-circuit-breaker.md`). The local JSONL with a final batch flush is rejected: it needs new end-of-job wiring in every caller, and suppressed telemetry is dropped just as timed-out events are today.
+- Speed 4 / GH API probable hotspot (check-run unchanged-snapshot cutoff) — rejected: shortening `CHECK_RUNS_WAIT_TIMEOUT_SECS` waits changes fail-open timing, as the earlier deferrals note, and unchanged-snapshot backoff already exists.
+- Speed 5 (batch memory-maintenance record/promote pushes) — rejected: changes memory push and promote atomicity to save minutes on a monthly job (2026-09-16 and 2026-09-18 Speed 3 precedent).
+- Speed 6 (conditional free-disk-space) — rejected: there is no free-space measurement before cleanup, the sandbox image builds and dependency installs rely on the reclaimed space, and the action is already pinned (2026-09-18 SEC-001).
+- Cost 1 / per-repo action 3 (collector dedup) — already-implemented: `_dedupe_structured_cost_telemetry_full_logs` in `scripts/collect_workflow_logs.py` drops structured telemetry lines from a job-level log when a descendant step log carries the same line, and `_extract_step_name` strips the numeric prefixes. The cited run's logs could not be re-fetched to confirm.
+- Cost 2 / Reliability 4 / Prompt Cache additions (`PROMPT_COMPONENT_TOKENS`, prefix hash, 85% compaction) — rejected: too broad; `CONTEXT_BUDGET_WARN` exists (2026-09-16 Cost 4 precedent).
+- Cost 3 / Reliability 3 (Mistral / reviewer health circuit breaker) — rejected as obsolete: `mistralai/mistral-small-2603` is no longer on the panel, and `vars.REVIEWER_CIRCUIT_BREAKER_ENABLED` exists (2026-09-18 Cost 2 precedent).
+- Cost 5 and Reliability 5 (Semble) — INVALID/non-material: no action was asked.
+- Cost 6 (`SERENA_PROBE ... result=skipped reason=disabled`) — rejected: telemetry with no consumer.
+- Reliability 2 (pre-runner failures) — applied in part: collector-pre-runner-failure (`changelog.d/wfopt-2026-09-20-2-collector-pre-runner-failure.md`), via `pre_runner_failure` in `extract_failure_point`. The job timestamp, runner and queue-duration fields are rejected as telemetry with no consumer.
+- Reliability 6 (`CLEANUP_SUMMARY`) — rejected: cleanup is nonfatal, and the unset `RUNTIME_DIR` warning is expected on a precheck-skipped implement run (2026-09-18 Reliability 4 precedent).
+- AI Memory Health (lessons `skip_reason`, prune retained-reason distribution), GH API required instrumentation and the Orchestrator Health tracking list — rejected: observability with no consumer; `GH_API_RETRY` and `GH_PAT_BUDGET` cover part of it.
+- Pipeline flow, implement "move phase validation before setup" — already-implemented: the "Precheck approval phase label" step in `implement.yml` runs before installation and model steps, which are gated on `SKIP_IMPLEMENT`. The cause of the 772 s skip run is unmeasured.
+- Pipeline flow, "recheck head before editor" — already-implemented: the pre-editor stale-base gate (`id: pre_editor_stale_base_gate`).
+- Pipeline flow, CI step timings and the release-validation row — rejected: no change was asked.
+- Executive summary, per-repo breakdown and metrics appendix — INVALID/non-material: evidence, not recommendations.
