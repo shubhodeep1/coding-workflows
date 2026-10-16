@@ -2086,7 +2086,12 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
   if [ "${attempt}" -eq "${editor_max_attempts}" ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
     EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"
+    # A stall kill just before the final attempt names the stall as the cause.
+    if [ "${editor_stall_fallback_active}" -ne 1 ] && editor_stall_fallback_applies "${editor_prev_attempt_stall_killed}"; then
+      echo "Editor attempt ${attempt}: previous attempt was stall-killed; switching model to fallback ${MODEL_EDITOR_FALLBACK}."
+    else
     echo "Final editor attempt: switching model to fallback ${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited)."
+    fi
   elif [ "${editor_stall_fallback_active}" -eq 1 ] || editor_stall_fallback_applies "${editor_prev_attempt_stall_killed}"; then
     if [ "${editor_stall_fallback_active}" -ne 1 ]; then
       echo "Editor attempt ${attempt}: previous attempt was stall-killed; switching model to fallback ${MODEL_EDITOR_FALLBACK}."
