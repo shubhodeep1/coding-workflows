@@ -698,6 +698,43 @@ autofix_resume_truthy()
 	return 1
 }
 
+# Stall fallback switch (EDITOR_STALL_FALLBACK_ENABLED). Unset, empty or
+# "true" (any letter case) is on; "false" is off; any other value is off with
+# one ::warning::. The value is reduced to [A-Za-z0-9_.-] (32 chars max)
+# before it is printed so it cannot inject a workflow command.
+editor_stall_fallback_switch_enabled()
+{
+	local raw="${1-}"
+	local lowered
+	lowered="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+	case "${lowered}" in
+		''|true)
+			return 0
+			;;
+		false)
+			return 1
+			;;
+	esac
+	local shown
+	shown="$(printf '%s' "${raw}" | tr -cd 'A-Za-z0-9_.-' | cut -c1-32)"
+	echo "::warning::EDITOR_STALL_FALLBACK_ENABLED='${shown}' is not true or false; stall fallback disabled."
+	return 1
+}
+
+# Returns 0 when the next editor attempt should switch to MODEL_EDITOR_FALLBACK
+# because the previous attempt was stall-killed ($1 = 1). Requires the switch,
+# a fallback distinct from the primary, and a non-Claude engine (the Claude
+# sandbox picks its own model and ignores the OpenRouter slug).
+editor_stall_fallback_applies()
+{
+	[ "${1-0}" = "1" ] || return 1
+	[ "${editor_stall_fallback_switch_on:-0}" = "1" ] || return 1
+	[ -n "${MODEL_EDITOR_FALLBACK:-}" ] || return 1
+	[ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR:-}" ] || return 1
+	[ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" != "claude" ] || return 1
+	return 0
+}
+
 autofix_resume_same_head_active()
 {
 	autofix_resume_truthy "${AUTOFIX_RESUME_RESTORED:-false}" || return 1
@@ -2006,6 +2043,12 @@ if nag_reminder_enabled; then
     editor_max_attempts="${editor_nag_attempt_limit}"
   fi
 fi
+# Stall fallback: after a stall-killed attempt, retry on MODEL_EDITOR_FALLBACK
+# (sticky for the remaining attempts) instead of the same primary model.
+editor_stall_fallback_switch_on=0
+if editor_stall_fallback_switch_enabled "${EDITOR_STALL_FALLBACK_ENABLED-}"; then editor_stall_fallback_switch_on=1; fi
+editor_prev_attempt_stall_killed=0
+editor_stall_fallback_active=0
 editor_silent_rounds=0
 while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   # Early exit if PR was closed/merged (detected by reviewer or editor watchdog)
@@ -2043,7 +2086,21 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
   if [ "${attempt}" -eq "${editor_max_attempts}" ] && [ -n "${MODEL_EDITOR_FALLBACK:-}" ] && [ "${MODEL_EDITOR_FALLBACK}" != "${MODEL_EDITOR}" ]; then
     EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"
-    echo "Final editor attempt: switching model to fallback ${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited)."
+    # A stall kill just before the final attempt names the stall as the cause;
+    # an earlier stall switch already logged its line and stays on the fallback.
+    if [ "${editor_stall_fallback_active}" -eq 1 ]; then
+      :
+    elif editor_stall_fallback_applies "${editor_prev_attempt_stall_killed}"; then
+      echo "Editor attempt ${attempt}: previous attempt was stall-killed; switching model to fallback ${MODEL_EDITOR_FALLBACK}."
+    else
+      echo "Final editor attempt: switching model to fallback ${EDITOR_ATTEMPT_MODEL} (primary ${MODEL_EDITOR} capacity-limited)."
+    fi
+  elif [ "${editor_stall_fallback_active}" -eq 1 ] || editor_stall_fallback_applies "${editor_prev_attempt_stall_killed}"; then
+    if [ "${editor_stall_fallback_active}" -ne 1 ]; then
+      echo "Editor attempt ${attempt}: previous attempt was stall-killed; switching model to fallback ${MODEL_EDITOR_FALLBACK}."
+    fi
+    editor_stall_fallback_active=1
+    EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR_FALLBACK}"
   fi
   emit_editor_substate "PreparingWorkspace" "${attempt}"
   # Cap this attempt's wall time to the lesser of EDITOR_MAX_WALL
@@ -2337,6 +2394,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     editor_silent_rounds=$((editor_silent_rounds + 1))
   fi
 
+  editor_prev_attempt_stall_killed=0
   case "${stall_state}" in
     observed)
       echo "Editor attempt ${attempt}: codex_stall_observed marker recorded (observe-only mode)."
@@ -2345,6 +2403,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     killed)
       echo "Editor attempt ${attempt}: codex_stall_killed marker recorded (exit=${cmd_rc})."
       emit_editor_substate "codex_stall_killed" "${attempt}" "${tmp_err}"
+      editor_prev_attempt_stall_killed=1
       ;;
   esac
 
