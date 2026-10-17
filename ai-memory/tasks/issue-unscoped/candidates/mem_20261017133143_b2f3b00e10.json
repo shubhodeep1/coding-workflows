@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "A validation workflow change was paired with a test named `test_workflow_support_ref_follows_pin.py`, indicating that the selected support ref must remain consistent with its declared pin. When changing setup or support-checkout steps, preserve this pin relationship and its test.",
+  "fingerprint": "1fb2e242bdcc112f6055b6f96c5db5dde424eb7ba56f16b298ea6a3382c26d49",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39035746363",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39035746363",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7516",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7526",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7551",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7553",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7523",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7531",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7559"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261017133143_b2f3b00e10",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow support references are treated as pinned configuration and have dedicated regression coverage.",
+  "timestamps": {
+    "created_at": "2026-10-17T13:31:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
