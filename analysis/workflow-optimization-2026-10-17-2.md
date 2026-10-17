@@ -562,3 +562,108 @@ No new per-iteration REST loops were found in the files read this pass. AM-BATCH
 | Code modularization | `scripts/gh_helpers.sh` (`gh_workflow_active_run_count`), `scripts/codex_helpers.sh` (`codex_tokens_used`), new `.github/actions/wla-agent-setup/action.yml`, new `scripts/workflow_log_analysis_helpers.sh`, `scripts/label_helpers.sh`, `scripts/review_rb_judge.sh`, `clarify.yml`, `plan.yml`, `orchestrate.yml`, `orchestrate_clarify_respond.yml`, `implement.yml`, `workflow-log-analysis.yml`, `auto_release_stable.sh`, `apply_analysis_on_main.sh` | Medium |
 | Expression size reduction | `.github/workflows/workflow-log-analysis.yml` (3 step bodies) | Small |
 | Medium/Low fixes | `scripts/cost_audit.py` (+ test fixtures), `.github/workflows/promote-main-to-stable.yml` (+ `agents.d/` prefix fragment), `scripts/auto_release_stable.sh`, `scripts/promote_main_cycle.sh`, `scripts/label_helpers.sh`, `scripts/review_rb_judge.sh`, `.github/workflows/implement.yml`, `scripts/resolve_integration_ref.sh` (+ fixture), `scripts/review_autofix_step_evaluate_gate.sh`, `.github/workflows/test-and-mark-stable.yml`, this report's AI Memory Health section | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-17)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means static reading proves every precondition: same endpoint or a strict field subset, the same pagination, filters and auth, the same function or step, no mutation in between, unchanged error handling, no concurrency boundary crossed, and any cache contract kept. The implement stage may apply these directly. `NEEDS_VERIFICATION` means the change is probably correct but at least one precondition cannot be proven from the source alone. The listed checks must pass before anyone implements it. `RISKY_SKIP` means at least one hard trigger applies: a retry, backoff, wait or stall path; an auth or identity probe; `--paginate` or manual paging; a rate-limit-sensitive path; code that guards against upstream races; or log keys that other code greps for. These findings are listed so they are visible. They must not be auto-implemented, and some exist mainly to stop a future pass from wrongly merging calls that are deliberately separate.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001 — The merge-train release loop lists the same PR's comments twice, once per marker**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/review_merge_train.sh:1393`: `_mt_find_marker_comment_id "${num}" "${MT_MARKER}"`, which calls `_mt_find_marker_comment` at `:800-806` and through it the paginated listing at `:804`.
+  - `scripts/review_merge_train.sh:1413`: `_mt_upsert_comment "${num}" "${MT_RELEASED_MARKER}" …`, called with no 4th argument. At `:875` it calls `_mt_find_marker_comment_id` again, which repeats the paginated listing at `:804`. If a marker is found, the body GET at `:879` follows.
+- **Current call count:** 2 × P listing pages per released PR, where P = ⌈comments/100⌉, plus 0 or 1 comment GET.
+- **Proposed call count:** P listing pages per released PR.
+- **Endpoint(s):** `GET repos/{owner}/{repo}/issues/{pr}/comments?per_page=100` (`--paginate`) and `GET repos/{owner}/{repo}/issues/comments/{id}`.
+- **Evidence:** both lookups filter the same paginated response the same way, by author login and by `startswith(marker)`:
+  ```bash
+  gh_retry gh api --paginate "repos/${MT_REPO}/issues/${pr}/comments?per_page=100" \
+  	--jq ".[] | select((.user.login // \"\" | ascii_downcase) == \"${MT_AUTOMATION_LOGIN}\" and ((.body // \"\") | startswith(\"${marker}\"))) | …"
+  ```
+  The markers do not share a prefix (`:134` `<!-- merge-train:queued -->`, `:135` `<!-- merge-train:released -->`, `:137` `<!-- merge-train:queue-retired -->`), so one listing could return the latest comment for each marker.
+- **Proposed fix (manual review only):** add `_mt_find_marker_comments_multi <pr> <marker>...`, which returns `marker id created_at` lines from a single `:804`-style listing. At `:1393`, capture the `MT_RELEASED_MARKER` id as well, and pass it to `_mt_upsert_comment` as its 4th argument at `:1413`, which `:873-874` already supports.
+- **Safety rationale:** several hard triggers apply.
+  - The call is paginated.
+  - It runs once per PR inside the release loop (`continue` at `:1386`, `:1390`, `:1395`).
+  - Three mutations sit between the two lookups: the PATCH at `:1398`, the label-DELETE claim at `:1406` and the dispatch at `:1410`.
+  - The claim exists to defend against concurrent release runs (`:1403-1405`). Another release run could post a `released` marker in that window, and a snapshot taken at `:1393` would miss it.
+- **Downstream signal:** do not auto-implement. A reviewer must confirm that only the claiming run can write `MT_RELEASED_MARKER` once the DELETE at `:1406` succeeds, which would make a pre-claim snapshot authoritative. They must also confirm that changing the shape of the listing output keeps the `LC_ALL=C sort -k2,2r -k1,1nr` newest-first ordering per marker.
+
+**MERGE-002 — `auto_release_stable.sh` makes three workflow-scoped run listings that cannot safely become one repo-wide listing**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:** `scripts/auto_release_stable.sh:162` (`test-and-mark-stable.yml` runs), `:170` (`promote-main-to-stable.yml` runs) and `:176` (`mark-stable.yml` runs), each with `per_page=30`.
+- **Current call count:** 3 per tick that reaches the guard.
+- **Proposed call count:** in theory 2 (keep `:162`, merge `:170` and `:176` into one `actions/runs` read filtered by `.path`). This pass recommends keeping 3.
+- **Endpoint(s):** `GET repos/{owner}/{repo}/actions/workflows/{file}/runs?per_page=30` (×3). The merge candidate would be `GET repos/{owner}/{repo}/actions/runs?per_page=100`.
+- **Evidence:** the three responses are reduced with the same active-status jq at `:166`, `:173` and `:177` and added together at `:174` and `:178`. The repo-wide endpoint would return all three workflows in one call. However, `runs_json` from `:162` is also read at `:188` and `:191` for `failed_attempts_on_tip`, which needs the gate's own completed history. The report records about 1,000 runs per ~12h window, so a repo-wide page of 100 covers roughly 1.2h. A `waiting` or `queued` promote or mark-stable run older than that would drop out of the window.
+- **Proposed fix:** none for now. If DUP-001's `gh_workflow_active_run_count` helper lands, it must keep one workflow-scoped call per workflow file.
+- **Safety rationale:** this is a race guard. `release_in_flight` at `:179-181` stops a gate dispatch that would cancel an in-flight gate. A smaller window would fail open and allow the cancellation behind BUG-002.
+- **Downstream signal:** do not auto-implement. When DUP-001 is implemented, a reviewer must check that the helper does not fold these three per-workflow reads into one repo-wide read.
+
+**MERGE-003 — The review gate's second `pulls/{n}` read is a deliberate live-head recheck and must not reuse `_pr_gate`**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:** `scripts/review_autofix_step_evaluate_gate.sh:87-88` (`gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}"`, the full projection) and `:1327` (`gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "open" then .head.sha // "" else "" end'`).
+- **Current call count:** 2 on the skip-notice path.
+- **Proposed call count:** 2 (no change).
+- **Endpoint(s):** `GET repos/{owner}/{repo}/pulls/{n}`.
+- **Evidence:** both calls hit the same endpoint, and `:1327` reads only `.state` and `.head.sha`, a strict subset of `_pr_gate`. The code comment at `:1323-1326` explains why they are separate:
+  ```bash
+  # The earlier PR fetch established this head for the gate, not
+  # for the comment POST: a push may have moved it in between.
+  # This read cannot reuse the earlier snapshot; on failure or
+  # a moved head, do not publish stale review-skip evidence.
+  ```
+- **Proposed fix:** none. This entry stops CONSIST-003 (moving the gate's reads to `gh_api_retry`) or a later consolidation pass from replacing `:1327` with `${pr_head_sha_gate}`.
+- **Safety rationale:** a fresh read is the only protection against a head change between the gate decision and the POST at `:1331` (a time-of-check/time-of-use race). Merging the two reads would publish stale skip evidence.
+- **Downstream signal:** do not auto-implement. When CONSIST-003 is applied, `:1327` may be wrapped in `gh_api_retry` for retries, but it must remain a separate live read.
+
+**MERGE-004 — `_resilient_phase_swap`'s second labels GET is a race reconcile, not a duplicate**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:** `scripts/review_rb_judge.sh:959-960` (first `GET …/labels`, paginated) and `:997-998` (second `GET …/labels`, paginated).
+- **Current call count:** 2 GETs on the non-terminal path, plus 1 POST, D DELETEs and 0 or 1 more DELETE (as documented at `:952-953`).
+- **Proposed call count:** 2 GETs (no change).
+- **Endpoint(s):** `GET repos/{owner}/{repo}/issues/{n}/labels` (`--paginate`).
+- **Evidence:** both calls are identical, with the same endpoint and `--jq '[.[].name]' | jq -cs 'add // []'`. The second exists to detect an `ai:merged` or `ai:closed` label that `issue_pr_status.yml` added while the swap was running (`:968-976`, `:1002-1009`, incident `tele-funtoken-msg-scoring#4379`).
+- **Proposed fix:** none. BUG-004 and DUP-004 both rewrite this function. Whoever implements them must keep two separate GETs. BUG-004's capture-then-merge change applies to each GET on its own.
+- **Safety rationale:** the second read guards against a race with another writer, and both reads are paginated.
+- **Downstream signal:** do not auto-implement any consolidation. When DUP-004 is implemented, a reviewer must confirm that the shared helper with `preserve_terminal=true` still performs the post-mutation GET.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001 — `_mt_upsert_comment` re-fetches a marker comment body that the listing it came from already returned**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:** `scripts/review_merge_train.sh:804` (paginated listing in `_mt_find_marker_comment`, already filtered to the marker comment) and `:879` (`gh_retry gh api "repos/${MT_REPO}/issues/comments/${existing_id}" --jq '.body'`).
+- **Callers:** on the gate path, `:958` lists the comments and `:993-999` passes `"${queued_comment_id}"` as the 4th argument. On the release path, `:1413` lists again inside the upsert (see MERGE-001).
+- **Current call count:** 1 body GET per upsert when a marker comment exists.
+- **Proposed call count:** 0 body GETs.
+- **Endpoint(s):** `GET repos/{owner}/{repo}/issues/comments/{id}`.
+- **Evidence:** the `.body` at `:879` belongs to the comment the `:804` listing selected with `(.body // "") | startswith(marker)`, so the listing already had it. `:879` only compares bodies to skip a no-op PATCH (`:880-882`).
+- **Proposed fix (manual review only):** have `_mt_find_marker_comment` also print `(.body | @base64)` as a third field. Bodies span several lines, so they cannot be printed raw in this line-oriented output. Let `_mt_upsert_comment` take a 5th argument with the cached body, and keep `:879` as the fallback when that argument is absent.
+- **Safety rationale:** this changes the projection of a paginated call whose output is sorted line by line (`:805`). The `:879` GET is also a fresh read taken after the gate's possible bypass PATCH at `:967`, which can fail at `:973` after being applied on the server. A cached body could then skip a PATCH that was needed.
+- **Downstream signal:** do not auto-implement. A reviewer must check that `sort -k2,2r -k1,1nr` still selects correctly with a third field. They must also check that no PATCH to the same comment can fall between the listing and the upsert on either path (`:967` on the gate path, `:1398` on the release path, which targets a different marker's comment).
+
+### Dead Calls (DEAD-API-###)
+
+No findings. Every read checked in this pass feeds a branch, a log line or an output:
+- `check-failure-triage-historical.yml`: `:85` feeds the cap, `:97` feeds `head_repo` and `merge_commit_sha`, `:107` feeds `head_sha` and `details_url`, and `:123` feeds `log_available`.
+- `promote_main_cycle.sh`: `self_runs_json` is used at `:343` and again at `:403`.
+- `ai_engine_fallback_report.sh:229`: `login` feeds the marker-author check at `:254`.
+
+### Cross-References to Deep Audit Section
+- API-001: `RISKY_SKIP`. Its interim fix (`sort=created&direction=desc`, stop at the first page with a match) changes how pages are walked on a `--paginate` read (`check-failure-triage-historical.yml:75-78`). Prefer removal under DEAD-001.
+- API-002: `RISKY_SKIP`. It is a paginated read on the capacity-wait path, and the tracker marker is what keeps stall recovery away from the item (`ai_engine_fallback_report.sh:278-280`). New detail: `run_token` is `RUN_ID` (`:216`), which every re-run attempt shares. A `since=` set from the current attempt's start would therefore miss a marker posted by an earlier attempt, and `:258` would post a duplicate wait comment. Any `since=` must use the run's first-attempt creation time, and it must come from data already in the environment, not a new API call.
+- API-003: `RISKY_SKIP`. The idle read at `promote_main_cycle.sh:455-456` sits inside the gate-idle wait loop (`:454-466`). The two reads also use different filters: `:455` has no event filter and `per_page=30`, while `:467` uses `event=workflow_dispatch&per_page=50`. Deriving `before_gate_ids` from 50 runs of all events would shrink the exclusion window that protects the title match at `:484` against earlier same-title runs.
+- DEAD-001 (Section 5; it determines whether API-001 costs anything): `NEEDS_VERIFICATION`. The registry's removal trigger (`docs/scripts-pending-removal.md:227`) requires the triage issue to be *closed*, but the guard stops as soon as the issue *exists* (`:79-81`). Run preflight checks `:229-231` before deleting.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | DEAD-001 (cross-reference) |
+| RISKY_SKIP | 8 | MERGE-001, MERGE-002, MERGE-003, MERGE-004, REUSE-001, API-001 (cross-reference), API-002 (cross-reference), API-003 (cross-reference) |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
