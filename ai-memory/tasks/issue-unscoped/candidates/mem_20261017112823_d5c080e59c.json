@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_labels.py:742-765 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: `_warn_if_retired_label_in_use` still logs `LABEL_SYNC_RETIRED_IN_USE` with `count=0 issues=` when the API returns a non-empty list of malformed entries (e.g. `[{}]`) that lack `number`.\n  WHY: The log prefix says the label is in use while the payload says count=0, which gives operators a contradictory signal. Both reviewers rated it NIT. minimax_minimax-m3 also says it bypasses the documented `LABEL_SYNC_RETIRED_CHECK_FAILED` path. anthropic_claude-sonnet-5_5 judged the same input unreachable from real callers and did not report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ai_labels.py:_warn_if_retired_label_in_use | severity=NIT | confidence=5\n  PROBLEM: The function logs `LABEL_SYNC_RETIRED_IN_USE` with `count=0 issues=` when the API returns a list containing only malformed entries (e.g. `[{}]`) that lack a \"number\" field.\n  WHY: `issue_items` is non-empty but `issue_numbers` is empty, so the warning is still logged. This contradicts the intent to warn only when the label is actually in use, and `count=0` is an ambiguous operator signal.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_labels.py:742-765 | severity=NIT | confidence=4\n  PROBLEM: The docstring says `LABEL_SYNC_RETIRED_IN_USE` is logged only when the count is above zero. The code only short-circuits on an empty list, so a non-empty list of malformed entries (e.g. `[{}]`) gives `issue_numbers = []` and still logs `LABEL_SYNC_RETIRED_IN_USE` with `count=0 issues=`.\n  WHY: The prefix says the label is in use but the payload says count=0. The line is hard to grep reliably, the documented `LABEL_SYNC_RETIRED_CHECK_FAILED` path is skipped, and the all-malformed branch is untested.\n- scripts/ai_labels.py:742-765 | severity=NIT | confidence=4\n  PROBLEM: The error-handling boundary treats a non-empty list of malformed items as a successful in-use signal. The fail-open contract is honoured only for non-list responses, and there is no early `if not issue_numbers: return` after the comprehension.\n  WHY: Operators cannot tell a genuinely in-use label from a malformed GitHub response, and the malformed case never reaches the `LABEL_SYNC_RETIRED_CHECK_FAILED` log.\n- HARDENING_SUGGESTIONS: scripts/ai_labels.py lines 750-754: add `if not issue_numbers: return` right after the `issue_numbers` comprehension to suppress the warning when no valid entries exist (about 2 lines changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cefa37592d58ca8cf6d85c6e57f9a4f40c1776027b8c3c1af3e3c72aef89f4be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7554,
+    "run_id": "39027667182",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39027667182",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017112823_d5c080e59c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7554,
+    "run_id": "39027667182"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T11:28:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
