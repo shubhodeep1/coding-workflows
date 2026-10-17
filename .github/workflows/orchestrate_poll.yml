@@ -740,15 +740,16 @@ jobs:
             mkdir -p "$(dirname -- "${activation_asset}")"
             install -m 0644 "${asset_src}" "${activation_asset}"
           done
-          # Unblock scan (replace-claude-sessions plan Phase 7). Optional: a
-          # missing file only skips the scan, never the poll.
-          for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py; do
+          # Unblock scan (replace-claude-sessions plan Phase 7) and the orphan
+          # fix-up close that rides its tick (orphan_fixup_close.py). Optional:
+          # a missing file only skips that step, never the poll.
+          for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py scripts/orphan_fixup_close.py; do
             asset_src=".codex-workflow-src/${unblock_asset}"
             if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/${unblock_asset}" ]; then
               asset_src=".codex-workflow-src-main/${unblock_asset}"
             fi
             if [ ! -f "${asset_src}" ]; then
-              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the unblock scan is skipped."
+              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the step that needs it is skipped."
               continue
             fi
             install -m 0644 "${asset_src}" "${unblock_asset}"
@@ -1195,6 +1196,11 @@ jobs:
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
+          ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
+          ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
+          ORPHAN_FIXUP_CLOSE_MAX_PER_TICK: ${{ vars.ORPHAN_FIXUP_CLOSE_MAX_PER_TICK || '5' }}
+          ORPHAN_FIXUP_CLOSE_GRACE_MINUTES: ${{ vars.ORPHAN_FIXUP_CLOSE_GRACE_MINUTES || '60' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
@@ -1390,6 +1396,11 @@ jobs:
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
+          ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
+          ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
+          ORPHAN_FIXUP_CLOSE_MAX_PER_TICK: ${{ vars.ORPHAN_FIXUP_CLOSE_MAX_PER_TICK || '5' }}
+          ORPHAN_FIXUP_CLOSE_GRACE_MINUTES: ${{ vars.ORPHAN_FIXUP_CLOSE_GRACE_MINUTES || '60' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
@@ -1496,6 +1507,11 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
+          ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
+          ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
+          ORPHAN_FIXUP_CLOSE_MAX_PER_TICK: ${{ vars.ORPHAN_FIXUP_CLOSE_MAX_PER_TICK || '5' }}
+          ORPHAN_FIXUP_CLOSE_GRACE_MINUTES: ${{ vars.ORPHAN_FIXUP_CLOSE_GRACE_MINUTES || '60' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
