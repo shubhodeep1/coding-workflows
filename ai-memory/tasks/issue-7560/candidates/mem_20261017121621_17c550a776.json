@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the step durations come from to choose which steps leave `tests-release-and-log-analysis`?\nChoices:\nA) The implementer times each step's own test command in its sandbox (for example `time python3 tests/<file>`). It moves the slowest steps, as written, until the job's measured total is under 75% of its 20 minutes (the `budget-watch` warning ratio, about 15 minutes). The measured times go in the PR description. (RECOMMENDED)\nB) An operator posts the per-step durations from run 39030079651 as an `/answer`, and the plan moves steps using those exact numbers.\nC) No timing at all: move a fixed set of the steps that look heaviest (the inline \"Release CI gate tests (stubbed gh; both release workflows)\" block, the three workflow-log coverage gates and \"Validation harness sandbox tests\").\nQ2: Which job may receive the moved steps?\nChoices:\nA) Exactly one of the other three test jobs (`tests-hooks-and-orchestrator`, `tests-heal-plan-and-validation`, `tests-promote-stall-and-review`): the one with the lowest measured total, as long as it also stays under 75% of its 20 minutes after the move. (RECOMMENDED)\nB) Split the moved steps across two or more of those three test jobs, so each one stays under 75%.\nC) A or B, and `static-checks` (15-minute budget) may also receive steps.\n**Note:** the `orchestrate-poll` matrix job is never a target under any choice. A step moved there would run once per matrix group.",
+  "fingerprint": "3d61d1109e01813d3877421e252cc6e9a249d1558fa7e0a16eec5b8f1b9f2c6e",
+  "lineage": {
+    "issue_number": 7560,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39031547953",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39031547953",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261017121621_17c550a776",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7560,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39031547953"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7560 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-17T12:16:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
