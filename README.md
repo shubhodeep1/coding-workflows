@@ -126,6 +126,7 @@ deployment fallback.
 | `THINKING_LEVEL_UNBLOCK_JUDGE` | No | `high` | unblock_judge | Reasoning effort for the unblock judge. |
 | `UNBLOCK_JUDGE_TIMEOUT_SECS` | No | `1500` | unblock_judge (direct script environment only) | Per-model timeout inside the isolated container; the workflow does not forward this repo variable. Must be a positive integer; invalid direct-run values log `UNBLOCK_JUDGE ... outcome=timeout_fallback` and use `1500` so a bad setting does not strand the item. The workflow job has a separate 45-minute timeout. |
 | `JUDGE_OUTPUT_FAILURE_MAX` | No | `3` | orchestrate_poll | Consecutive project-judge runs with no usable output (the model failed, or its output did not parse) before the project fails with `ai:blocked` for the unblock judge. Reset by the next parsed verdict. Must be a positive integer; invalid values fall back to `3`. |
+| `AI_VALIDATE_SCHEDULE_ENABLED` | No | unset (off) | ai-validate wrapper | `true` opts the repository in to the weekly scheduled validation of the default branch (Monday 04:17 UTC, issue #7553): no model phases, and one `ai:scheduled-validation-failed` issue while it is red. Unset or any other value skips the scheduled job. |
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files and automatic wrapper updates. In implement, `true` is necessary but not sufficient for automation paths: the issue must also have a trusted-author exact `files_touched` grant. `false` rejects staged `.github/`, `.claude/`, `scripts/`, `prompts/`, and `workflow-templates/` paths (workflow edits are still discarded by the existing step). Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
 | `UPDATER_VERIFY_RELEASE_MANIFEST` | No | `true` | update_workflows | When `true`, unset or empty (case-insensitive; any other value keeps it off, and a value other than `false` also logs a warning), the consumer updater verifies the attested release manifest before it changes any consumer file. It finds the `vX.Y.Z` release whose tag points at the commit `stable` resolves to, downloads its `release-manifest.v1.json` asset (one release lookup and one asset download with `GH_PAT`), and checks it with `gh attestation verify` against this repo's `mark-stable.yml` / `test-and-mark-stable.yml` run from `refs/heads/stable` (both reject any other dispatch ref), GitHub-hosted runners only. It then hash-checks the verifier's own modules and runs `scripts/verify_release_manifest.py` on every file the updater reads. Any failure stops the run before any file is written and nothing is pushed; the summary shows `ERR_RELEASE_MANIFEST_VERIFY_FAILED` and the log an `UPDATER_MANIFEST_VERIFY outcome=rejected reason=<token>` line. Off: one `UPDATER_MANIFEST_VERIFY outcome=skip reason=disabled` line and no API calls. Releases published before the verifier modules were added to the manifest fail with `reason=verifier_unattested`; v1.32.0 and later pass. |
 | `UPDATER_PR_DELIVERY_ENABLED` | No | `true` | update_workflows | When `true`, unset or empty (case-insensitive; any other value keeps it off, and a value other than `false` also logs a warning), the consumer updater delivers its changes as a pull request instead of pushing to the default branch. It commits to `auto/update-workflows-<release-sha-12>`, pushes with a lease (a branch holding commits the updater did not write, or one that moved during the run, fails the run and nothing is pushed), runs `scripts/lint_pr_body_auto_close.py` on the PR title, body and commit message, and opens one pull request or refreshes the open one (one `gh pr list` call scoped to that head and the default branch). Earlier updater pull requests for older releases, opened by the `GH_PAT` account from this repository, are closed with a comment pointing at the new one. A separate `verify` job then checks the PR head out as data, downloads and attests the release manifest again, and compares every file the PR changes with the attested release (wrappers re-rendered at the release SHA, `.claude/` and `CLAUDE.md` against manifest hashes, retired-file deletions against the attested hashes, audit-gate and changelog output by re-running the attested scripts on the PR's parent; anything else is rejected). It posts the commit status `ai-update-workflows/verify` on the PR head and logs one `UPDATER_PR_VERIFY outcome=passed|rejected reason=<token>` line. Auto-merge (`--squash --match-head-commit` on the verified head) is enabled only by that job, only after the check passed, and only when `UPDATER_VERIFY_RELEASE_MANIFEST` verification reported `verified=true`; otherwise the PR waits for a human and the run logs a warning. Any verify error posts a `failure` status and leaves auto-merge off. The `verify` job posts the status with the caller's `statuses: write`, which the current `ai-update-workflows.yml` template grants; with an older wrapper that lacks it, the job retries once with `GH_PAT` and logs a warning, and fails closed only if that also fails. It needs a stable release that already ships `scripts/verify_release_manifest.py verify-pr-tree`. If a human closed this release's PR without merging, the run pushes nothing. Each run logs one `UPDATER_PR_DELIVERY outcome=opened|refreshed|skipped|failed reason=<token>` line; the Telegram notification and the run summary show the PR URL. All PR calls use `GH_PAT`. Off: the `ai-sync/stable` pull request (#7128), or the direct push to the default branch when the `update_via_pull_request` input is `false`. |
@@ -445,7 +446,7 @@ reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"). 
 automatically triages newly opened issues only when the original author is a GitHub `User` with
 `author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR`, or the exact `github-actions[bot]`
 identity with type `Bot`. Issues labelled `ai:orchestrator-tracking`, `ai:security-audit`,
-`ai:retro`, `ai:operator-step`, `ai:provider-outage`, or `ai:consumer-health` remain excluded. A trusted maintainer can start clarification
+`ai:retro`, `ai:operator-step`, `ai:provider-outage`, `ai:consumer-health`, or `ai:scheduled-validation-failed` remain excluded. A trusted maintainer can start clarification
 on an outside issue with
 `/reclarify` and continue planning with `/answer`, but must explicitly post `/approved` after
 reviewing the plan: an outside author's issue is never auto-approved. The `/reclarify` route accepts
@@ -507,7 +508,7 @@ permissions:
 jobs:
   clarify:
     if: >-
-      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage') && !contains(toJson(github.event.issue.labels.*.name), 'ai:consumer-health')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage') && !contains(toJson(github.event.issue.labels.*.name), 'ai:consumer-health') && !contains(toJson(github.event.issue.labels.*.name), 'ai:scheduled-validation-failed')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && !contains(github.event.comment.body, 'To restart clarification reply:')))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:pr-dependency-released:"')))
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable
@@ -1091,12 +1092,15 @@ on:
         required: false
         type: string
         default: ""
+  schedule:
+    - cron: "17 4 * * 1"
 permissions:
   contents: write
   issues: write
   pull-requests: write
 jobs:
   validate:
+    if: github.event_name != 'schedule' || vars.AI_VALIDATE_SCHEDULE_ENABLED == 'true'
     uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@<40-character-release-sha> # stable
     with:
       tracking_issue: ${{ inputs.tracking_issue || '0' }}
@@ -1106,6 +1110,22 @@ jobs:
       target_ref: ${{ inputs.target_ref || '' }}
     secrets: inherit
 ```
+
+Scheduled validation (issue #7553): the wrapper also runs every Monday at 04:17 UTC,
+but only in a repository that sets the variable `AI_VALIDATE_SCHEDULE_ENABLED` to
+`true`; otherwise the scheduled job is skipped and no runner starts. The cron is
+fixed because `on.schedule` cannot read variables. A scheduled run validates the
+default branch (`tracking_issue` 0, empty `target_ref`) in deterministic mode
+(`VALIDATE_SCHEDULED_MODE=true` in `validate.yml`, `VALIDATE_DETERMINISTIC_ONLY=true`
+in `scripts/validate_process.sh`): it calls no model, so discover, diagnose and
+self-heal are skipped and per-phase alerts are silenced. Without a committed
+`.ai/validate.yml` it reports `raw_status=harness_missing`; failing tests report
+`raw_status=tests_failed`. `scripts/validate_scheduled_sink.sh` reports the result in
+one issue labelled `ai:scheduled-validation-failed` (first body line
+`<!-- ai:scheduled-validation:v1 -->`, written by the `GH_PAT` login): opened with one
+Telegram WARNING, edited in place while the default branch stays red, and closed when
+a later scheduled run passes. Clarify ignores that label, so the issue never enters
+the pipeline. Manual and orchestrator runs are unchanged.
 
 **`.github/workflows/ai-update-workflows.yml`** — Automatically updates workflow wrappers when upstream templates change
 ```yaml
@@ -1451,7 +1471,7 @@ permissions:
 jobs:
   clarify:
     if: >-
-      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage') && !contains(toJson(github.event.issue.labels.*.name), 'ai:consumer-health')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage') && !contains(toJson(github.event.issue.labels.*.name), 'ai:consumer-health') && !contains(toJson(github.event.issue.labels.*.name), 'ai:scheduled-validation-failed')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && !contains(github.event.comment.body, 'To restart clarification reply:')))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:pr-dependency-released:"')))
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable

@@ -229,6 +229,10 @@
       "color": "b60205",
       "description": "Model provider outage tracker (automation); the review sweep resumes and closes it on recovery"
     },
+    "ai:scheduled-validation-failed": {
+      "color": "b60205",
+      "description": "Weekly scheduled validation of the default branch is failing (automation); closes when a later scheduled run passes"
+    },
     "ai:unblock-closed": {
       "color": "5c5c5c",
       "description": "Closed by the unblock judge after every verdict was spent; a closed project is marked abandoned"

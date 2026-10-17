@@ -33,6 +33,14 @@ on:
         required: false
         type: string
         default: ""
+  # Opt-in weekly validation of the default branch (issue #7553): Monday
+  # 04:17 UTC. The cron is fixed because on.schedule cannot read repository
+  # variables; the job below runs on it only when the repository variable
+  # AI_VALIDATE_SCHEDULE_ENABLED is 'true'. A scheduled run uses the input
+  # defaults (tracking_issue 0, empty target_ref), calls no model, and reports
+  # a failure in one ai:scheduled-validation-failed issue.
+  schedule:
+    - cron: "17 4 * * 1"
 permissions:
   contents: write
   issues: write
@@ -41,6 +49,7 @@ permissions:
   id-token: write
 jobs:
   validate:
+    if: github.event_name != 'schedule' || vars.AI_VALIDATE_SCHEDULE_ENABLED == 'true'
     uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@stable
     with:
       tracking_issue: ${{ inputs.tracking_issue || '0' }}

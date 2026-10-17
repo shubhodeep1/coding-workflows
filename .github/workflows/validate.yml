@@ -112,6 +112,12 @@ jobs:
       CLAUDE_CAPACITY_WAIT_ITEM_KIND: ${{ inputs.tracking_issue && inputs.tracking_issue != '0' && 'issue' || 'run' }}
       CLAUDE_CAPACITY_WAIT_ITEM_NUMBER: ${{ inputs.tracking_issue || '' }}
       CLAUDE_CAPACITY_WAIT_STAGE: validate
+      # Opt-in weekly scheduled run of the consumer wrapper (issue #7553). A
+      # called workflow keeps the caller's github context, so the schedule is
+      # read from github.event_name. A tracking issue or an explicit target
+      # turns scheduled mode off. Scheduled mode runs no model phase and
+      # reports through scripts/validate_scheduled_sink.sh.
+      VALIDATE_SCHEDULED_MODE: ${{ github.event_name == 'schedule' && (inputs.tracking_issue == '' || inputs.tracking_issue == '0') && inputs.target_ref == '' && 'true' || 'false' }}
     steps:
       - name: Bootstrap GitHub API retry helper
         continue-on-error: true
@@ -685,6 +691,12 @@ jobs:
           set -euo pipefail
           engine="codex"
           engine_script="${CLAUDE_ENGINE_SUPPORT_DIR:-}/scripts/ai_engine.sh"
+          # Scheduled mode (#7553) calls no model: keep codex so the Claude CLI
+          # install and the pool-token probes below are skipped.
+          if [ "${VALIDATE_SCHEDULED_MODE:-false}" = "true" ]; then
+            echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -n "${CLAUDE_ENGINE_SUPPORT_DIR:-}" ] && [ -f "${engine_script}" ] && [ ! -L "${engine_script}" ]; then
             if [[ "${TRACKING_ISSUE_INPUT}" =~ ^[1-9][0-9]*$ ]]; then
               # API audit (unattended section 14): no earlier step of this job
@@ -1269,13 +1281,17 @@ jobs:
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_VALIDATE: ${{ vars.AI_ENGINE_VALIDATE || '' }}
           AI_ENGINE_VALIDATE_SELF_HEAL: ${{ vars.AI_ENGINE_VALIDATE_SELF_HEAL || '' }}
-          MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
+          # Scheduled mode (#7553): no self-heal, no model phases, and no
+          # per-phase alerts (the sink step sends one WARNING when it opens
+          # the failure issue).
+          MAX_SELF_HEAL_ATTEMPTS: ${{ env.VALIDATE_SCHEDULED_MODE == 'true' && '0' || vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
+          VALIDATE_DETERMINISTIC_ONLY: ${{ env.VALIDATE_SCHEDULED_MODE }}
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
           VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' && steps.renderer_dependencies.outputs.renderer_state == 'prepared' }}
           VALIDATION_RENDERER_DEPENDENCIES_OUTCOME: ${{ steps.renderer_dependencies.outcome }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          ALERT_MSG_LEVEL: ${{ env.VALIDATE_SCHEDULED_MODE == 'true' && 'SILENT' || inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           validate_process_rc=0
@@ -1586,6 +1602,39 @@ jobs:
             --issue-number "${issue_number}" \
             --actor "${{ github.actor }}" \
             --metadata-json "${metadata_json}"
+
+      # Issue #7553: a scheduled run reports its result in one deduplicated
+      # ai:scheduled-validation-failed issue in this repository (opened with one
+      # Telegram WARNING, updated in place, closed when a later run passes).
+      # Runs only the trusted support copy of the helper, never the checkout.
+      # A cancelled run is not evidence of a red branch, so it reports nothing.
+      - name: Report scheduled validation result
+        id: scheduled_sink
+        if: "!cancelled() && env.VALIDATE_SCHEDULED_MODE == 'true' && env.CLAUDE_CAPACITY_WAIT != 'true'"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          SINK_STATUS: ${{ steps.collect_status.outputs.status }}
+          SINK_RAW_STATUS: ${{ steps.collect_status.outputs.raw_status }}
+          SINK_SUMMARY: ${{ steps.collect_status.outputs.summary }}
+          SINK_FAILURE_SUMMARY: ${{ steps.collect_status.outputs.failure_summary }}
+          SINK_RESULT_FILE: ${{ steps.runtime.outputs.runtime_dir }}/validation_result.json
+          SINK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SINK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          # Do not source the workspace-directed shell startup file here.
+          BASH_ENV: ''
+        run: |
+          sink_support_dir="${VALIDATE_HELPER_STAGE_DIR:-}"
+          sink_script="${sink_support_dir}/scripts/validate_scheduled_sink.sh"
+          if [ -z "${sink_support_dir}" ] || [ ! -f "${sink_script}" ] || [ -L "${sink_script}" ]; then
+            echo "::warning::VALIDATE_SCHEDULED_SINK outcome=skip reason=support_missing"
+            exit 0
+          fi
+          SINK_HEAD_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)" \
+            bash "${sink_script}" || true
 
       - name: Force orchestrate poll after validation finalization
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
