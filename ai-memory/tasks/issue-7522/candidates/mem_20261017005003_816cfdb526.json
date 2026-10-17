@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue: update `tests/e2e_smoke_canary_b.txt` (orchestrate smoke run 38986967451)\n\nPlanning ref: `orchestrator/project-7520` at `a0d3499b1feb5904a8112740f359f7ed5a1a57a6`. The integration branch mismatch line reads `false`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue names one fixture file and the exact two lines it must hold. Line 1 already reads `status: ok`. Line 2 reads `decompose-run: 25567947079`, which is a previous run's ID. Only line 2 changes. The file already ends with a single newline. Nothing else is in scope, so going beyond Hold Scope would only break the issue's single-file rule.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. The change only edits a plain-text fixture.\n\n## Data structures affected\nThe fixture's content becomes exactly:\n```\nstatus: ok\ndecompose-run: 38986967451\n```\nIt ends with one trailing newline.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Rewrite the whole file instead of patching line 2\n- Chosen: Write the full two-line content with one trailing newline.\n- Alternatives considered: Replace only line 2 with sed.\n- Why: Writing the whole file guarantees line 1 is exactly `status: ok`, that there are exactly two lines, and that the trailing newline is right, whatever was in the file before.\n\n## Security considerations\nNo trust boundary, endpoint, external input or money surface is touched. The issue text is untrusted, but it only supplies a numeric run ID and a fixed status string, and both go into a non-executable text fixture.\n\n## Risks and edge cases\n- Editing `tests/e2e_smoke_canary.txt` would collide with the sibling issue. The implementer must leave that file alone.\n- Do not add a changelog fragment, docs or tests.\n- Make sure there is no extra blank line at the end and no CRLF line endings.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary_b.txt` should print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` should print `decompose-run: 38986967451`.\n- `wc -l` should report 2.\n- `git diff --stat` should list only `tests/e2e_smoke_canary_b.txt`.\n\n## Pre-execution self-check\nThe plan covers every acceptance criterion and stays inside the one file the issue allows. No answers are missing and no inputs are blocked.\n\nAssumptions: none. Missing context: none.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "0f1212dc8c68e6e0c58d63ed0e07b1f7b938d8d9d89a45d4283d441a7da070ce",
+  "lineage": {
+    "issue_number": 7522,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38987579851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38987579851",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7522"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261017005003_816cfdb526",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7522,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38987579851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7522",
+  "timestamps": {
+    "created_at": "2026-10-17T00:50:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
