@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.91,
+  "details": "The merged workflow changes repeatedly pair edits under `.github/workflows/` with targeted tests that check contracts, checkout/ref behavior, and failure paths. When changing a workflow, inspect the corresponding tests and preserve their explicit behavioral guarantees rather than relying on YAML syntax validation alone.",
+  "fingerprint": "898f942ec3c03fab2f38672f4bfe549481234f6ed0b7d989a835f789bb5dbea9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39035746363",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39035746363",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7516",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7526",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7551",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7553",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7523",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7531",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7559"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261017132011_66444fcb43",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is guarded by focused Python contract tests; update or add those tests alongside workflow YAML changes.",
+  "timestamps": {
+    "created_at": "2026-10-17T13:20:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
