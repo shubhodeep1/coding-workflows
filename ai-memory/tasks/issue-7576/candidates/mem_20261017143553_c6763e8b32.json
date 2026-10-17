@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Without the step timings, how should the planner choose which steps to move out of `tests-promote-stall-and-review` (15m18s of 20 minutes) and which job receives them?\nChoices:\nA) Estimate from the repository: rank the job's steps by the size of the test modules they run (test-function count and file size). Move the heaviest ones, likely including the \"Regression tests wired by the CI wiring guard (part 2)\" catch-all step and the larger review-conflict-resolve and review-autofix contract steps. Target roughly 4-5 minutes. The receiving job is `tests-heal-plan-and-validation`, which has the fewest steps. Steps move unchanged, keeping their names, and no `timeout-minutes` changes. (RECOMMENDED)\nB) The operator supplies the slowest step names, their durations from run 39039638823, and the receiving job in the `/answer`. The planner moves exactly those.\nC) Move the whole review-autofix / review-conflict contract block (from \"Review autofix EDITOR_CHANGES_LOST shim regression tests\" through \"Summariser sandbox-mode pin contract test\") into `tests-heal-plan-and-validation`, unchanged and in the same order.",
+  "fingerprint": "51b2fa8294cc5d88b18d24fa9c43e5bd50284c65401f8cbac5919fe4dfb5adab",
+  "lineage": {
+    "issue_number": 7576,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39040982743",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39040982743",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261017143553_c6763e8b32",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7576,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39040982743"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7576 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-17T14:35:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
