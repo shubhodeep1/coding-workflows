@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When changing workflow behavior or automation scripts, check for an appropriate test under `tests/` and a corresponding `changelog.d/` entry. This pattern recurs across changes to workflow files and scripts; analysis-only changes may not follow it.",
+  "fingerprint": "84d666fb7ae5e7d60201f159dc69a3544a05fecc6e45e06e4f974c7793311520",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38994942278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38994942278",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7476",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7492",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7493",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7500",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7513",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7481",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7497",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7498",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7507",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7514"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261017023049_7bf2e48f58",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Behavioral changes to scripts and GitHub Actions are commonly paired with a focused regression or contract test and a changelog entry.",
+  "timestamps": {
+    "created_at": "2026-10-17T02:30:49Z",
+    "promoted_at": "2026-10-17T02:32:42Z",
+    "superseded_at": null
+  }
+}
