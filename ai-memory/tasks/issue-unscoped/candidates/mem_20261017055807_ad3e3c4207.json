@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_pool_daily_usage.sh:114-124 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The 3,900-character cap (`text=\"${text:0:3900}\"`, line 116) silently truncates the report, but the send is still treated as successful (sent=true) and the daily cache marker is saved, so omitted accounts are not retried that day.\n  WHY: Reviewers rated this MAJOR (mapped to high); sonnet-5_5 dropped the same cap as a confidence-2 NIT because a pool large enough to hit it is unlikely.\n- scripts/claude_pool_daily_usage.sh:116 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, anthropic_claude-sonnet-5_5]\n  PROBLEM: The cap is applied after the \"Probed by\" run-URL suffix is appended, so an oversized report cuts the link first and leaves a partial URL fragment.\n  WHY: minimax_minimax-m3 rated it NIT with confidence 4; anthropic_claude-sonnet-5_5 noted the same ordering and listed it only as a hardening suggestion.\n- scripts/claude_pool_daily_usage.sh:95-102 | severity=low | confidence=3\n  flagged_by: [qwen_qwen3_7-plus, anthropic_claude-sonnet-5_5]\n  PROBLEM: The `::warning::` for a failed `claude_engine.py pool-usage` call omits the cause because the helper's stderr is discarded with `2>/dev/null`.\n  WHY: qwen_qwen3_7-plus rated it NIT with confidence 3; anthropic_claude-sonnet-5_5 raised it only as a hardening suggestion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nHardening suggestions (not findings):\n- scripts/claude_pool_daily_usage.sh, `daily_usage_send` `text=\"${text:0:3900}\"` line: the cap cuts the \"Probed by\" link first. Suggested fix: truncate the account body to about 3800 characters before appending the link.\n- scripts/claude_pool_daily_usage.sh, `daily_usage_send` `2>/dev/null` on the `pool-usage` call: the warning does not name the cause. Suggested fix: capture the helper's stderr and put its first line in the warning.\n\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_pool_daily_usage.sh:116-124 | severity=MAJOR | confidence=4\n  PROBLEM: Message truncation leads to false-positive success reporting and suppression of retries.\n  WHY: The script truncates the report at 3900 characters but then unconditionally sets sent=true (line 121). That creates the daily cache marker, so the day's report is not retried in full.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_pool_daily_usage.sh: `daily_usage_send` block that appends the \"Probed by \u2026\" suffix and applies `text=\"${text:0:3900}\"`, plus the `sent=true` branch | severity=MAJOR | confidence=4\n  PROBLEM: The 3,900-character cap is applied after the trailing \"Probed by\" suffix is appended. An oversized report is cut mid-string, Telegram still returns a message_id, and `sent=true` is written.\n  WHY: The day's cache marker is saved, so dropped accounts and the footer are not retried until the next UTC day. The \"probe results unreadable\" warning does not fire on this path.\n- scripts/claude_pool_daily_usage.sh: same `text=\"${text:0:3900}\"` line, with the suffix appended immediately above | severity=NIT | confidence=4\n  PROBLEM: The cut can fall inside the URL, so the message ends with a partial run-link fragment.\n  WHY: Telegram renders the partial URL as plain text, so the diagnostic link is unreadable. The marker still saves, so it is not retried that day.\n\nHardening suggestion (not a finding): truncate the body before appending the footer, then keep the existing cap as a backstop (~3 lines).\n\nHARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_pool_daily_usage.sh:114-124 (report generation in scripts/claude_engine.py:895-928) | severity=MAJOR | confidence=4\n  PROBLEM: The 3,900-character cap silently truncates the account list. The report builder adds one line per probe, but the send path cuts the finished message without checking that all account lines remain.\n  WHY: Trailing accounts are omitted, but a successful Telegram response still sets `sent=true`. The workflow then saves the daily cache marker, so those accounts are not reported again that day.\n\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/claude_pool_daily_usage.sh:116 (`text=\"${text:0:3900}\"`) | severity=MAJOR | confidence=4\n  PROBLEM: The 3,900-character cap silently removes account entries when the report exceeds that length, but the report is still sent as successful and the daily cache marker is saved.\n  WHY: Accounts cut from the message are not retried that day. This contradicts the PR description that one message lists every pool account. `test_report_lists_every_account_in_one_message` uses only 6 accounts, so the truncation path is untested.\n- scripts/claude_pool_daily_usage.sh: `daily_usage_send`, `claude_engine.py pool-usage` call (lines 95-102) | severity=NIT | confidence=3\n  PROBLEM: The `::warning::` logged when `claude_engine.py pool-usage` fails does not include the cause, because stderr is discarded with `2>/dev/null`.\n  WHY: The warning says \"reason=pool_usage_failed\" with no diagnostic detail, which makes debugging harder when the fallback text is sent.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3eaac2f49161a3816a47f1a3c0bf64a453ddcd48e59a551803cda3ad8576f4cb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7541,
+    "run_id": "39006658742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39006658742",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017055807_ad3e3c4207",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7541,
+    "run_id": "39006658742"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T05:58:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
