@@ -940,5 +940,137 @@ class CiFailedShardLogSummaryTest(unittest.TestCase):
 		self.assertLess(rc_branch, second_append)
 
 
+MERGE_TRAIN_STEP_NAME = "Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)"
+MERGE_TRAIN_MODULE = "tests/test_review_merge_train.py"
+MERGE_TRAIN_SMALL_MODULES = (
+	"tests/test_gh_helpers_parse_reset_header.py",
+	"tests/test_gh_retry_stdout_isolation.py",
+	"tests/test_gh_retry_permanent_auth_failures.py",
+	"tests/test_gh_api_retry.py",
+	"tests/test_gh_api_retry_py.py",
+)
+MERGE_TRAIN_AWK_RE = re.compile(
+	r"""awk -v n="\$\{mt_shard\}" -v total="\$\{mt_shards\}" '(?P<expr>[^']+)'"""
+)
+
+
+def run_merge_train_judge(step_run: str, files: dict[str, dict[str, str]]) -> subprocess.CompletedProcess:
+	"""Run the merge-train step's judgment part against fake shard files.
+
+	`files` maps a shard id (`"0"`..`"2"` or `"rest"`) to the files it left
+	(`txt`, `log`, `rc`). The cut starts after the reap loop and ends at the
+	final exit, so the shipped shell is exercised, pointed at a temp dir.
+	"""
+	start = step_run.index("mt_ids=()")
+	end = step_run.index("\nfi\n", step_run.index("merge-train step shards failed")) + len("\nfi\n")
+	with tempfile.TemporaryDirectory(prefix="test_mt_judge_") as tmp:
+		for shard_id, shard_files in files.items():
+			stem = "merge_train_rest" if shard_id == "rest" else f"merge_train_shard_{shard_id}"
+			for suffix, content in shard_files.items():
+				Path(tmp, f"{stem}.{suffix}").write_text(content, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/merge_train_", f"{tmp}/merge_train_")
+		return subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nmt_shards=3\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+
+class MergeTrainStepContractTest(unittest.TestCase):
+	"""The merge-train step runs its largest module in local shards (#7579).
+
+	Group 1 of `orchestrate-poll` took 15m13s of its 20 minutes with this step
+	running serially. The step stays in place, by name and guard, and splits
+	tests/test_review_merge_train.py across 3 processes beside one process for
+	the small modules. Every test must still run exactly once, and a shard that
+	fails or records no exit code must fail the step.
+	"""
+
+	def setUp(self) -> None:
+		self.step = poll_job_step(MERGE_TRAIN_STEP_NAME)
+		self.run = self.step["run"]
+
+	def green(self) -> dict[str, dict[str, str]]:
+		files = {str(n): {"txt": f"t{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(3)}
+		files["rest"] = {"log": "ok\n", "rc": "0\n"}
+		return files
+
+	def test_step_keeps_its_name_job_and_group_guard(self) -> None:
+		self.assertEqual(self.step["if"], "strategy.job-index == 1")
+		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+		owners = [
+			job_id
+			for job_id, job in jobs.items()
+			for step in job.get("steps", [])
+			if step.get("name") == MERGE_TRAIN_STEP_NAME
+		]
+		self.assertEqual(owners, [POLL_JOB_ID])
+
+	def test_all_six_modules_are_named_literally(self) -> None:
+		for module in (MERGE_TRAIN_MODULE, *MERGE_TRAIN_SMALL_MODULES):
+			with self.subTest(module=module):
+				self.assertIn(module, self.run)
+
+	def test_partition_and_collection_are_derived_in_step(self) -> None:
+		match = MERGE_TRAIN_AWK_RE.search(self.run)
+		self.assertIsNotNone(match)
+		self.assertEqual(match.group("expr").strip(), "NR % total == n")
+		self.assertIn('--collect-only -q -p no:cacheprovider "${mt_module}"', self.run)
+		self.assertIn("mt_shards=3", self.run)
+		self.assertIn("No tests collected from", self.run)
+
+	def test_serial_invocation_is_gone(self) -> None:
+		self.assertNotIn("python3 -m pytest -q -p no:cacheprovider \\\n  tests/test_review_merge_train.py", self.run)
+		self.assertNotIn("tests/test_review_merge_train.py \\", self.run)
+
+	def test_every_process_is_reaped_before_any_is_judged(self) -> None:
+		self.assertLess(self.run.index('wait "${mt_pid}"'), self.run.index("mt_failed=()"))
+
+	def test_partition_covers_every_test_function_once(self) -> None:
+		import ast
+
+		module = ast.parse((REPO_ROOT / MERGE_TRAIN_MODULE).read_text(encoding="utf-8"))
+		names = [
+			node.name
+			for node in ast.walk(module)
+			if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+		]
+		self.assertGreater(len(names), 0)
+		expression = MERGE_TRAIN_AWK_RE.search(self.run).group("expr").strip()
+		collected: list[str] = []
+		for n in range(3):
+			collected.extend(ShardPartitionTest.shard(self, names, 3, n, expression))
+		self.assertCountEqual(collected, names)
+
+	def test_all_green_passes(self) -> None:
+		result = run_merge_train_judge(self.run, self.green())
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("failed", result.stdout)
+
+	def test_failing_shard_fails_the_step_with_prefixed_tail(self) -> None:
+		files = self.green()
+		files["1"] = {"txt": "t1\n", "log": "::error::forged\nFAILED x\n", "rc": "1\n"}
+		result = run_merge_train_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::merge-train step shards failed: 1\n", result.stdout)
+		tail = result.stdout[result.stdout.index("shard 1 failed; last 40 log lines"):]
+		self.assertIn("| ::error::forged", tail)
+		self.assertNotIn("\n::error::forged", tail)
+
+	def test_missing_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files["rest"] = {"log": "partial\n"}
+		result = run_merge_train_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::merge-train step shards failed: rest\n", result.stdout)
+
+	def test_empty_shard_is_skipped(self) -> None:
+		files = self.green()
+		del files["2"]
+		result = run_merge_train_judge(self.run, files)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
 	unittest.main()
