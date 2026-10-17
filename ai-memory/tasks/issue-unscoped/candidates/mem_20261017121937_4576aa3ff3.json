@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description says values of `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS` above 3600 are clamped to 3600.\n  expected_change_site: PR description on GitHub (not editable in the repo); `scripts/validation_refresh_runner.py` `SELF_TEST_TIMEOUT_MAX_SECS`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  EVIDENCE: `scripts/validation_refresh_runner.py:73`, `:74` and `:75` define `SELF_TEST_TIMEOUT_MAX_SECS = 1800` (the reviewers cite different line numbers), `min(configured, SELF_TEST_TIMEOUT_MAX_SECS)` at line 142, README.md:3999, `.github/workflows/validation-refresh.yml` comment, `agents.d/7556-validation-refresh-diagnostics.md:2`, `changelog.d/7556-validation-refresh-diagnostics.md:12` all document the 1800 clamp. Only the PR body still says 3600. This is a stale description and needs a manual PR-body edit. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: The PR description says values of `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS` above 3600 are clamped to 3600.\n  Expected change site: `scripts/validation_refresh_runner.py`, `SELF_TEST_TIMEOUT_MAX_SECS`.\n  Evidence of absence: The code, README, changelog, agents fragment and workflow comment all say 1800. Only the PR body still says 3600. This is a documentation mismatch that needs a manual PR-text edit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: The PR description states \"values above `3600` are clamped to `3600`\" for `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS`.\n  Expected change site: GitHub PR description body; `scripts/validation_refresh_runner.py` `SELF_TEST_TIMEOUT_MAX_SECS` constant and docstring.\n  Evidence of absence: The PR body still says 3600. `scripts/validation_refresh_runner.py:74` is `SELF_TEST_TIMEOUT_MAX_SECS = 1800`, and README.md:3999, the workflow comment, `agents.d/7556-validation-refresh-diagnostics.md:2` and `changelog.d/7556-validation-refresh-diagnostics.md:12` document the 1800 clamp. The code clamp is deliberate. The PR text must be corrected by hand.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\n- Requirement: The PR description says \"values above 3600 are clamped to 3600\" for VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS.\n  Expected change site: PR description on GitHub (not in repository files)\n  Evidence of absence: `scripts/validation_refresh_runner.py:73` defines `SELF_TEST_TIMEOUT_MAX_SECS = 1800`. The README, changelog and workflow comment all document 1800. The PR description still says 3600 and needs a manual update.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: PR description states \"values above 3600 are clamped to 3600\" for `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS`.\n  Expected change site: `scripts/validation_refresh_runner.py` (`SELF_TEST_TIMEOUT_MAX_SECS`), and the PR description itself.\n  Evidence of absence: The code clamps at 1800 (`SELF_TEST_TIMEOUT_MAX_SECS = 1800`, scripts/validation_refresh_runner.py:75; `min(configured, SELF_TEST_TIMEOUT_MAX_SECS)`, line 142). The README, workflow comment, changelog and agents fragments all document 1800. The PR body's 3600 text was never corrected, and it needs a manual edit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bb0eb9caaa16be808f989a7e389f24159e8786ce6b61af118c29787ac752c9ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7556,
+    "run_id": "39030933275",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39030933275",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017121937_4576aa3ff3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7556,
+    "run_id": "39030933275"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T12:19:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
