@@ -211,3 +211,60 @@ def test_shared_actions_are_referenced_by_commit() -> None:
 				continue
 			offenders.append(f"{path.relative_to(ROOT)}: {ref}")
 	assert not offenders, offenders
+
+
+def test_integration_resolver_names_the_pin_on_the_default_routing_path(tmp_path: Path) -> None:
+	# CI-triage routing defaults on; the pinned-run log line still carries the pin.
+	for workflow in RESOLVER_WORKFLOWS:
+		step = _resolver_step(workflow)
+		run_dir = tmp_path / workflow
+		run_dir.mkdir()
+		reusable = f"{SUPPORT_REPO}/.github/workflows/{workflow}"
+		result = _run_resolver(step, f"{reusable}@{PIN}", "true", run_dir)
+		assert result.returncode != 0, (workflow, result.stdout, result.stderr)
+		output = result.stdout + result.stderr
+		assert "ci_triage_routing=on" in output and f"pinned_ref={PIN}" in output, (workflow, output)
+
+
+_SUPPORT_CHECKOUT_REFS = {
+	"${{ env.SCRIPT_REF }}": "SCRIPT_REF",
+	"${{ env.DUPLICATE_NOTICE_SCRIPT_REF }}": "DUPLICATE_NOTICE_SCRIPT_REF",
+}
+
+
+@pytest.mark.parametrize("workflow", WORKFLOWS)
+def test_every_support_checkout_is_verified_before_use(workflow: str) -> None:
+	# The first step after a support checkout that reads .codex-workflow-src must
+	# compare its HEAD with a pinned ref, so no job runs unverified support code.
+	data = yaml.safe_load((ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8"))
+	checked = 0
+	for job_name, job in data["jobs"].items():
+		steps = job.get("steps", [])
+		for index, step in enumerate(steps):
+			with_ = step.get("with") or {}
+			if not str(step.get("uses", "")).startswith("actions/checkout@") or with_.get("repository") != SUPPORT_REPO:
+				continue
+			variable = _SUPPORT_CHECKOUT_REFS.get(str(with_.get("ref", "")))
+			if variable is None or with_.get("path") != ".codex-workflow-src":
+				continue
+			user = next(
+				(later for later in steps[index + 1 :] if not str(later.get("uses", "")).startswith("actions/checkout@") and ".codex-workflow-src" in str(later.get("run", ""))),
+				None,
+			)
+			assert user is not None, (workflow, job_name, step.get("name"))
+			script = str(user["run"])
+			assert '=~ ^[0-9a-f]{40}$ ]]' in script and "git -C .codex-workflow-src rev-parse HEAD" in script and f'"${{{variable}' in script, (workflow, job_name, step.get("name"), user.get("name"))
+			checked += 1
+	assert checked, workflow
+
+
+def test_gh_api_retry_bootstrap_fetches_the_pinned_commit() -> None:
+	# The pre-support gh_api_retry helper follows the pin as well; a pinned run
+	# fetches the commit itself and checks FETCH_HEAD before reading the helper.
+	for workflow in ("implement.yml", "validate.yml", "orchestrate_clarify_respond.yml", "security-audit.yml", "review_autofix.yml"):
+		text = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+		start = text.index("      - name: Bootstrap GitHub API retry helper\n")
+		step = text[start : text.index("\n      - name: ", start + 10)]
+		assert "SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in step, workflow
+		assert 'fetch -q --no-tags --depth 1 --filter=blob:none origin "${ghr_pin}"' in step, workflow
+		assert '[ "$(git -C "${ghr_dir}/src" rev-parse FETCH_HEAD 2>/dev/null)" = "${ghr_pin}" ]' in step, workflow

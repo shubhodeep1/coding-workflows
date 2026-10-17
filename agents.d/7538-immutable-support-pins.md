@@ -17,7 +17,20 @@
   - The integration-ref resolver fetches the pinned commit, checks its `HEAD`,
     and fails closed on any staging failure for a pinned run, logging
     `INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=<token>
-    pinned_ref=<sha>`. Unpinned runs keep the existing CI-triage-routing rule.
+    pinned_ref=<sha>` (with `ci_triage_routing=on` before `pinned_ref=` while
+    routing is on). Unpinned runs keep the existing CI-triage-routing rule.
+  - Every support checkout is checked against the pin before it is used. The
+    orchestrate run-start staging step fails the job on a mismatch or a
+    missing checkout; implement's duplicate-PR notice skips its Telegram
+    helper; the heal-report jobs of `implement.yml`, `clarify.yml` and
+    `plan.yml` skip with `WORKFLOW_HEAL_PHASE_REPORT skip
+    reason=support_ref_mismatch`.
+  - The "Bootstrap GitHub API retry helper" step (identical in
+    `implement.yml`, `validate.yml`, `orchestrate_clarify_respond.yml`,
+    `security-audit.yml` and `review_autofix.yml`) fetches the pinned commit
+    when the job `workflow_ref` names any coding-workflows workflow file at a
+    40-hex SHA, and reads the helper only when `FETCH_HEAD` equals it;
+    otherwise the steps fall back to their plain API calls, never to `stable`.
   - Wrappers on `@stable`, a branch, or any other identity keep `stable`
     support with the `main` fallback; the wrapper itself is mutable there.
   - `install-codex` is referenced by commit

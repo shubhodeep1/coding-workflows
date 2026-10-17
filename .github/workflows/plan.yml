@@ -191,7 +191,9 @@ jobs:
           esac
           resolver_stage_fail_closed() {
             if [ "${resolver_ci_triage_routing_on}" = "true" ]; then
-              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 ci_triage_routing=on; refusing to fall back to the default branch."
+              resolver_pin_log=""
+              if [ "${resolver_ref_pinned}" = "true" ]; then resolver_pin_log=" pinned_ref=${resolver_ref}"; fi
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 ci_triage_routing=on${resolver_pin_log}; refusing to fall back to the default branch."
             elif [ "${resolver_ref_pinned}" = "true" ]; then
               echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 pinned_ref=${resolver_ref}; refusing to run resolver code from another ref."
             else
@@ -3181,6 +3183,12 @@ jobs:
           reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
           if [ ! -f "${reporter}" ]; then
             echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          # A pinned support ref must be exactly the commit the caller pinned
+          # (tele-funtoken-msg-scoring#4566); never run another ref's reporter.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=support_ref_mismatch ref=${SCRIPT_REF}"
             exit 0
           fi
           REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \

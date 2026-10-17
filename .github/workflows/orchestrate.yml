@@ -144,8 +144,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install Codex CLI
-        # Intentionally use the released action ref as the rollout boundary.
-        # Consumers pick this up when test-and-mark-stable retags @stable.
+        # Pinned by commit (tele-funtoken-msg-scoring#4566); bump it in the PR
+        # that changes the action.
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -252,6 +252,14 @@ jobs:
       - name: Stage workflow memory support files for run-start
         run: |
           set -euo pipefail
+
+          # A pinned support ref must be exactly the commit the caller pinned
+          # (tele-funtoken-msg-scoring#4566); fail instead of staging, or
+          # letting the next step source, code from anywhere else.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
           if [ ! -d .codex-workflow-src ]; then
             echo "::warning::Support source checkout unavailable before run-start memory event"
