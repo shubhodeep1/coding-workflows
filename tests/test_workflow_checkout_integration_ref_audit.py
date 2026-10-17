@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -603,6 +604,60 @@ def test_clarify_always_steps_tolerate_missing_setup() -> None:
 				assert "cache_hit=false" in output.read_text(encoding="utf-8")
 
 
+_RELEASE_FAKE_GH = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [ "$1 $2" = "api user" ]; then echo "${FAKE_GH_LOGIN:-pipeline-bot}"; exit 0; fi
+exit 0
+"""
+
+
+def _run_phase_label_step(labels: list[str], comments: list[dict[str, object]], login: str = "pipeline-bot") -> tuple[int, str, list[str]]:
+	body = _step_run_body("clarify.yml", "Set clarification phase label").replace("a" * 40, "issue_comment")
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		(tmp_path / "scripts").mkdir()
+		(tmp_path / "scripts" / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+		(tmp_path / "scripts" / "label_helpers.sh").write_text("ensure_label_exists() { :; }\n", encoding="utf-8")
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		fake_gh = bin_dir / "gh"
+		fake_gh.write_text(_RELEASE_FAKE_GH, encoding="utf-8")
+		fake_gh.chmod(0o755)
+		meta = tmp_path / "meta.json"
+		meta.write_text(json.dumps({"labels": [{"name": n} for n in labels]}), encoding="utf-8")
+		all_comments = tmp_path / "comments.json"
+		all_comments.write_text(json.dumps(comments), encoding="utf-8")
+		log = tmp_path / "gh.log"
+		log.write_text("", encoding="utf-8")
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+			"ISSUE_NUMBER": "5",
+			"ISSUE_META_FILE": str(meta),
+			"ISSUE_ALL_COMMENTS_FILE": str(all_comments),
+			"FAKE_GH_LOG": str(log),
+			"FAKE_GH_LOGIN": login,
+		}
+		res = subprocess.run(["bash", "-c", body], env=env, cwd=tmp, capture_output=True, text=True, timeout=60)
+		return res.returncode, res.stdout + res.stderr, log.read_text(encoding="utf-8").splitlines()
+
+
+def test_clarify_reclarify_releases_label_missing_hold_block() -> None:
+	"""Issue #7516: after the operator repairs the labels and posts /reclarify,
+	the hold's ai:blocked label is removed, but only for the GH_PAT login's
+	hold marker. Plan keeps ai:blocked when ai:clarification is also present."""
+	trusted = [{"user": {"login": "pipeline-bot"}, "body": f"text\n{_LABEL_MISSING_MARKER}\n"}]
+	delete = "api -X DELETE repos/consumer/repo/issues/5/labels/ai:blocked"
+	rc, out, calls = _run_phase_label_step(["ai:clarification", "ai:blocked"], trusted)
+	assert rc == 0, out
+	assert any(delete in c for c in calls), calls
+	assert "INTEGRATION_REF_RESOLVE outcome=released reason=label_missing issue=5" in out, out
+	forged = [{"user": {"login": "someone-else"}, "body": _LABEL_MISSING_MARKER}]
+	for labels, comments in ((["ai:blocked"], forged), (["ai:clarification"], trusted), (["ai:blocked"], [])):
+		rc, out, calls = _run_phase_label_step(labels, comments)
+		assert rc == 0, out
+		assert not any(delete in c for c in calls), (labels, calls)
+
+
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
@@ -617,6 +672,7 @@ def main() -> int:
 	test_label_missing_hold_is_clarify_only_and_exact()
 	test_clarify_steps_after_refctx_honour_label_missing_hold()
 	test_clarify_always_steps_tolerate_missing_setup()
+	test_clarify_reclarify_releases_label_missing_hold_block()
 	return 0
 
 

@@ -14,7 +14,7 @@ If the account login, the comment read, the comment or the label cannot be writt
 
 The "Semantic cache lookup", "Write run summary" and "Telegram failure notification" steps now skip with a warning when the job stopped before the runtime workspace or support scripts were set up, so the real error stays the run's first error.
 
-What this means for operators: to release a held issue, either restore `ai:check-triage` and remove `ai:orchestrator-managed`, or add the canonical tracking line to the issue body, then comment `/reclarify`. For #7511 and #7515, whose pull requests have merged, restoring the labels lets clarify close them through the check-triage resolution gate.
+What this means for operators: to release a held issue, either restore `ai:check-triage` and remove `ai:orchestrator-managed`, or add the canonical tracking line to the issue body, then comment `/reclarify`. Once routing passes, that clarify run removes the hold's `ai:blocked` label (only when the `GH_PAT` account wrote the hold marker), so planning and the unblock scan do not see a stale block. For #7511 and #7515, whose pull requests have merged, restoring the labels lets clarify close them through the check-triage resolution gate.
 
 ### For contributors
 
