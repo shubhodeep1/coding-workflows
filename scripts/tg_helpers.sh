@@ -153,7 +153,7 @@ tg_send_report_msg()
 		return 0
 	fi
 	local resp
-	resp=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+	resp=$(curl -s --max-time 30 -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
 		-d "chat_id=${chat_id}" \
 		-d "disable_web_page_preview=true" \
 		--data-urlencode "text=${msg}" 2>/dev/null) || {
@@ -161,7 +161,13 @@ tg_send_report_msg()
 		return 0
 	}
 	local msg_id
-	msg_id=$(printf '%s' "${resp}" | jq -r '.result.message_id // empty' 2>/dev/null)
+	if ! msg_id=$(printf '%s' "${resp}" | jq -r '.result.message_id // empty' 2>/dev/null); then
+		echo "::warning::Telegram response could not be parsed" >&2
+		msg_id=""
+	elif [ -z "${msg_id}" ]; then
+		# Telegram's own error text (never contains the bot token).
+		echo "::warning::Telegram returned no message id: $(printf '%s' "${resp}" | jq -r '.description // "unknown"' 2>/dev/null | tr -cd '[:print:]' | cut -c1-200)" >&2
+	fi
 	printf '%s' "${msg_id:-}"
 }
 
