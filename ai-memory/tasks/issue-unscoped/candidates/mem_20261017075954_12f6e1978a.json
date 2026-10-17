@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:2167-2192 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `upstream_managed_status` only checks the final path component with `is_symlink()`, so a managed path under a symlinked parent directory still resolves inside the repo and can be reported \"unmodified\", which suppresses the finding.\n  WHY: This defeats the rule that a symlink at a synced path is filed. Severity disagreement: sonnet-5_5 rated it NIT with confidence 2 and the others rated it MAJOR with confidence 4, so the highest is used. qwen_qwen3_7-plus disputed the finding as not a real defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/security_audit.sh:2177-2183 | severity=NIT | confidence=2\n  PROBLEM: `is_symlink()` tests only the final path component, so a managed path under a symlinked parent directory that points inside the repo passes the check and is suppressed as `unmodified`.\n  WHY: The impact is low because the suppressed bytes are identical to the release bytes and the layout is contrived.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/security_audit.sh:2167-2172 | severity=MAJOR | confidence=4\n  PROBLEM: `upstream_managed_status` uses `candidate.resolve()`, which follows symlinks in parent directories.\n  WHY: A symlinked parent pointing at an in-repo file with the expected digest makes the audit report \"unmodified\" for a path that should count as modified.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh:~2168 | severity=MAJOR | confidence=4\n  PROBLEM: The guard `candidate.is_symlink() or not candidate.is_file()` only inspects the leaf. A symlinked ancestor (e.g. `.claude` pointing at `docs/claude-store/`) resolves to release bytes, the digest matches, and the status is \"unmodified\".\n  WHY: A real defect on a synced path can be hidden and the finding is dropped from the follow-up queue. No test covers the parent-directory bypass.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh:2177-2183 | severity=MAJOR | confidence=4\n  PROBLEM: The symlink check covers only the final path component, so a symlinked parent can resolve to an in-repo regular file with a managed digest.\n  WHY: The finding is suppressed even though the synced path is redirected.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/security_audit.sh:2177-2192 | severity=MAJOR | confidence=4\n  PROBLEM: The symlink guard inspects only the leaf. `is_file()` and `resolve()` follow parent symlinks, and `relative_to(repo_root)` accepts any in-repo target.\n  WHY: A symlinked managed parent directory (e.g. `.claude/hooks`) with matching release bytes is suppressed instead of filed as `consumer_modified`. This contradicts the documented invariant that a symlink at a synced path is filed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "601e4f9c312ad8503c678ca54c41c850d80b5ec849ff2266027b636b6234c679",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7546,
+    "run_id": "39013109065",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39013109065",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017075954_12f6e1978a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7546,
+    "run_id": "39013109065"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T07:59:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
