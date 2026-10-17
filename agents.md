@@ -593,10 +593,10 @@ and `<(...)` bodies up to three levels deep (`_MAX_SHELL_WRAPPER_DEPTH`) and
 runs the normal merged-PR check on each Git commit or push found there;
 wrapped text it cannot read safely (a dynamic command word, an unterminated
 body, deeper nesting) asks for confirmation when it could run a Git write.
-`sudo`, `timeout`, `xargs` and pipes into `bash` keep their existing handling,
-and so does the `command` builtin: `command git push ...`, bare or inside
-`bash -c`, is not yet inspected (both copies' `_SHELL_CONTROL_PREFIXES` lack
-it; the fix needs both hook copies, which the pipeline cannot write). The live
+Since #6038 the `time`, `command`, `nice`, `ionice`, `exec`, `nohup`,
+`setsid` and `timeout` prefixes are skipped and the Git command behind them
+is checked; other runners with a Git write in their words (`sudo git push`,
+`xargs git push`) ask, and pipes into `bash` stay unparsed. The live
 hook runs on every Bash call through its `PreToolUse` settings entry; no
 variable or operator step enables it. `CLAUDE_PR_MERGE_GUARD=off` disables
 only the merged-PR check, not the API-write confirmation safeguard. Tests run
@@ -2290,8 +2290,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `eval` arguments and `$(...)` / backtick / `<(...)` bodies are parsed up to
   three levels deep and get the same check; wrapped text that cannot be read
   (an expansion in command position, an unterminated body or heredoc, deeper
-  nesting) asks when it could run a Git write. Prefix wrappers such as `sudo`
-  or `xargs` and `... | bash` are still not inspected.
+  nesting) asks when it could run a Git write. Transparent prefixes (`time`,
+  `command`, `nice`, `timeout`, ...) are skipped and checked; `sudo`, `xargs`
+  and other runners with a Git write in their words ask (#6038); `... | bash`
+  is still not inspected.
 - **No MCP tools inside.** Serena (and any other MCP server) is not configured
   in the container, so isolated prompts carry no Serena hints. Semble results
   are rendered into prompts on the host and are unaffected.
