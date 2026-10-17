@@ -1690,6 +1690,35 @@ def test_security_audit_files_findings_on_a_synced_path_replaced_by_a_symlink() 
 	assert "outcome=filed reason=consumer_modified finding=rules-doc-gap" in proc.stdout
 
 
+def test_security_audit_files_findings_on_a_synced_path_under_a_symlinked_parent_directory() -> None:
+	"""A symlinked ancestor directory routes the synced path elsewhere, so it is filed."""
+	with tempfile.TemporaryDirectory(prefix="security-audit-parent-symlink-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = _consumer_fixture_repo(tmp_path)
+		store = repo_dir / "docs" / "claude-store"
+		store.parent.mkdir(parents=True, exist_ok=True)
+		(repo_dir / ".claude").rename(store)
+		(repo_dir / ".claude").symlink_to(Path("docs") / "claude-store")
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("hook-guard-bypass", file_path=".claude/hooks/gh_api_write_guard.py")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SECURITY_AUDIT_UPSTREAM_SOURCE_DIR": str(REPO_ROOT),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["hook-guard-bypass"]
+	assert "upstream_managed" not in payload
+	assert "outcome=filed reason=consumer_modified finding=hook-guard-bypass" in proc.stdout
+
+
 def test_security_audit_drops_findings_for_files_missing_from_the_checkout_with_a_log_line() -> None:
 	proc, final_state = _run_consumer_findings_json()
 

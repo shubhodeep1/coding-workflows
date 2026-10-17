@@ -2180,6 +2180,10 @@ def upstream_managed_status(file_path: str) -> str:
 			return "modified"
 		resolved = candidate.resolve()
 		resolved.relative_to(repo_root)
+		# repo_root is already resolved, so any symlinked parent directory
+		# makes the resolved path differ from the literal synced path.
+		if resolved != candidate:
+			return "modified"
 		data = resolved.read_bytes()
 	except (OSError, ValueError):
 		return "modified"
