@@ -133,6 +133,49 @@ def test_managed_paths_defaults_to_head_and_rejects_a_missing_commit(tmp_path):
 	assert run_builder("managed-paths").returncode == 2
 
 
+def test_managed_digests_hold_the_bytes_a_sync_writes(tmp_path):
+	import hashlib
+
+	repo, sha = make_upstream_repo(tmp_path)
+	wrapper = "name: AI Review\njobs:\n  review:\n    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable\n"
+	(repo / "workflow-templates" / "ai-review.yml").write_text(wrapper, encoding="utf-8")
+	(repo / "workflow-templates" / "audit-gate" / "assets").mkdir(parents=True)
+	(repo / "workflow-templates" / "audit-gate" / "assets" / "x.js").write_text("audit()\n", encoding="utf-8")
+	retired_hash = "a" * 64
+	(repo / "workflow-templates" / "retired_files.txt").write_text(f"# comment\n.claude/commands/old.md {retired_hash} not-a-hash\n", encoding="utf-8")
+	(repo / "workflow-templates" / ".claude" / "commands" / "link.md").symlink_to("do.md")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "digests")
+	sha = _git(repo, "rev-parse", "HEAD")
+	result = run_builder("managed-digests", "--repo-root", str(repo), "--commit", sha)
+	assert result.returncode == 0, result.stderr
+	digests = json.loads(result.stdout)
+
+	def sha256(text: str) -> list:
+		return [hashlib.sha256(text.encode("utf-8")).hexdigest()]
+
+	rendered = wrapper.replace("@stable", f"@{sha} # stable")
+	assert digests[".github/workflows/ai-review.yml"] == sha256(rendered)
+	assert digests[".claude/commands/do.md"] == sha256("do\n")
+	assert digests["CLAUDE.md"] == sha256("rules\n")
+	assert digests["scripts/security/x.js"] == sha256("audit()\n")
+	assert digests[".claude/commands/old.md"] == [retired_hash]
+	# Symlinks have no digest (the sync never writes one as a regular file).
+	assert ".claude/commands/link.md" not in digests
+	# Consumer-edited paths are never managed.
+	assert not {"CHANGELOG.md", "agents.md", "package.json"} & set(digests)
+
+
+def test_managed_digests_skip_a_wrapper_the_renderer_rejects(tmp_path):
+	repo, sha = make_upstream_repo(tmp_path)
+	result = run_builder("managed-digests", "--repo-root", str(repo), "--commit", sha)
+	assert result.returncode == 0, result.stderr
+	digests = json.loads(result.stdout)
+	# "name: AI Review" has no @stable reference, so the updater could not render it either.
+	assert ".github/workflows/ai-review.yml" not in digests
+	assert ".claude/commands/do.md" in digests
+
+
 def test_build_rejects_bad_arguments(tmp_path):
 	repo, sha = make_upstream_repo(tmp_path)
 	out = str(tmp_path / "m.json")

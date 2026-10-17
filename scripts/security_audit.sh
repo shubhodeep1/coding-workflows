@@ -535,10 +535,13 @@ fi
 SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_FP_EXCLUSIONS:-scripts/security_audit_fp_exclusions.json}"
 
 # Findings on paths coding-workflows owns (the synced wrapper workflows,
-# .claude/ assets, CLAUDE.md, audit-gate files) can never be fixed by a
-# consumer: the next sync overwrites the fix. In a consumer repo the filter
-# keeps them out of the follow-up / fix-cycle queue and reports them in the
-# run log (SECURITY_AUDIT_UPSTREAM_MANAGED) and the tracker comment instead.
+# .claude/ assets, CLAUDE.md, audit-gate files, retired files) can never be
+# fixed by a consumer: the next sync overwrites the fix. In a consumer repo the
+# filter keeps them out of the follow-up / fix-cycle queue and reports them in
+# the run log (SECURITY_AUDIT_UPSTREAM_MANAGED) and the tracker comment
+# instead, but only while the consumer's file is byte-identical to what the
+# release writes there (build_sync_manifest.py managed-digests). A
+# consumer-modified copy is the consumer's own change and is filed as before.
 # `false` restores the old behaviour. The upstream tree is looked up in
 # SECURITY_AUDIT_UPSTREAM_SOURCE_DIR, then <support dir>/.codex-workflow-src
 # (the orchestrate poller's support checkout), then the support dir itself
@@ -655,7 +658,7 @@ OVERSIZED_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-prompt.txt"
 OVERSIZED_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-error.txt"
 LINE_OWNERSHIP_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-summary.json"
 LINE_OWNERSHIP_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-error.txt"
-UPSTREAM_MANAGED_PATHS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/upstream-managed-paths.txt"
+UPSTREAM_MANAGED_DIGESTS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/upstream-managed-digests.json"
 UPSTREAM_MANAGED_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/upstream-managed-error.txt"
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
@@ -1812,15 +1815,15 @@ else
 fi
 
 # security_audit_resolve_upstream_managed_paths — write the upstream-managed
-# path patterns (one glob per line, `*` matches within a segment) to
-# UPSTREAM_MANAGED_PATHS_FILE and log one SECURITY_AUDIT_UPSTREAM_MANAGED
+# path digests (a JSON object: consumer path -> sha256 values a sync writes) to
+# UPSTREAM_MANAGED_DIGESTS_FILE and log one SECURITY_AUDIT_UPSTREAM_MANAGED
 # outcome line. Reads local git objects only: no GitHub API calls (CLAUDE.md
 # §15). Fails open: any problem leaves the file empty, so every finding is
 # filed exactly as before.
 security_audit_resolve_upstream_managed_paths()
 {
 	local skip_reason="" candidate_dir="" source_dir="" pattern_count=0 untrusted_seen="false" candidate_origin=""
-	: > "${UPSTREAM_MANAGED_PATHS_FILE}"
+	: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
 	if ! security_audit_flag_enabled "${SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER}"; then
 		skip_reason="disabled"
 	elif [ -z "${GITHUB_REPOSITORY:-}" ]; then
@@ -1859,13 +1862,13 @@ security_audit_resolve_upstream_managed_paths()
 		elif [ -z "${source_dir}" ]; then
 			skip_reason="upstream_tree_missing"
 		elif ! env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE PYTHONDONTWRITEBYTECODE=1 \
-			python3 -I "${source_dir}/scripts/build_sync_manifest.py" managed-paths \
+			python3 -I "${source_dir}/scripts/build_sync_manifest.py" managed-digests \
 			--repo-root "${source_dir}" --commit HEAD \
-			> "${UPSTREAM_MANAGED_PATHS_FILE}" 2> "${UPSTREAM_MANAGED_ERROR_FILE}"; then
-			: > "${UPSTREAM_MANAGED_PATHS_FILE}"
+			> "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2> "${UPSTREAM_MANAGED_ERROR_FILE}"; then
+			: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
 			skip_reason="manifest_failed"
 		else
-			pattern_count="$(grep -c . "${UPSTREAM_MANAGED_PATHS_FILE}" 2>/dev/null || true)"
+			pattern_count="$(python3 -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); print(len(data) if isinstance(data, dict) else 0)' "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2>/dev/null || true)"
 			[[ "${pattern_count}" =~ ^[0-9]+$ ]] || pattern_count=0
 			[ "${pattern_count}" -gt 0 ] || skip_reason="empty_list"
 		fi
@@ -1891,9 +1894,10 @@ python3 - \
 	"${CHANGED_FILES_FILE}" \
 	"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
 	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" \
-	"${UPSTREAM_MANAGED_PATHS_FILE}" <<'PY'
+	"${UPSTREAM_MANAGED_DIGESTS_FILE}" <<'PY'
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -1911,7 +1915,7 @@ waived_findings_path = Path(sys.argv[9])
 # Still passed (and validated by the caller) to keep the argument order
 # stable; it no longer controls waiver suppression.
 _unused_waiver_line_window = int(sys.argv[10])
-upstream_managed_paths_path = Path(sys.argv[11]) if len(sys.argv) > 11 and sys.argv[11] else None
+upstream_managed_digests_path = Path(sys.argv[11]) if len(sys.argv) > 11 and sys.argv[11] else None
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -1952,19 +1956,24 @@ def log_safe_token(value: object) -> str:
 	return token or "?"
 
 
-def load_upstream_managed_patterns(path: Path | None) -> list["re.Pattern[str]"]:
-	"""Compile the upstream-managed path globs; any problem means no filtering."""
+def load_upstream_managed_digests(path: Path | None) -> dict[str, frozenset[str]]:
+	"""Read the upstream-managed path digests; any problem means no filtering."""
 	if path is None:
-		return []
+		return {}
 	try:
-		entries = path.read_text(encoding="utf-8").split("\n")
-	except (OSError, UnicodeDecodeError):
-		return []
-	return [
-		re.compile("^" + "".join("[^/]*" if char == "*" else re.escape(char) for char in entry) + "$")
-		for entry in entries
-		if entry.strip()
-	]
+		data = json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+		return {}
+	if not isinstance(data, dict):
+		return {}
+	digests: dict[str, frozenset[str]] = {}
+	for managed_path, values in data.items():
+		if not isinstance(managed_path, str) or not isinstance(values, list):
+			continue
+		valid = frozenset(value for value in values if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value))
+		if valid:
+			digests[managed_path] = valid
+	return digests
 
 
 def load_json(path: Path, *, label: str):
@@ -2126,11 +2135,28 @@ def matching_exclusion_rule(finding: dict[str, object], rules: list[dict[str, ob
 	return None
 
 
-upstream_managed_patterns = load_upstream_managed_patterns(upstream_managed_paths_path)
+upstream_managed_digests = load_upstream_managed_digests(upstream_managed_digests_path)
 
 
-def matches_upstream_managed_path(file_path: str) -> bool:
-	return any(pattern.match(file_path) for pattern in upstream_managed_patterns)
+def upstream_managed_status(file_path: str) -> str:
+	"""`unmanaged`, `unmodified` (the release's own bytes) or `modified`.
+
+	Only `unmodified` keeps a finding out of the consumer's queue: a consumer
+	change to a synced file is the consumer's own code until the next sync.
+	"""
+	expected = upstream_managed_digests.get(file_path)
+	if not expected:
+		return "unmanaged"
+	candidate = repo_root / file_path
+	try:
+		if candidate.is_symlink() or not candidate.is_file():
+			return "modified"
+		resolved = candidate.resolve()
+		resolved.relative_to(repo_root)
+		actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+	except (OSError, ValueError):
+		return "modified"
+	return "unmodified" if actual in expected else "modified"
 
 
 raw_findings = load_json(codex_output_path, label="Codex output")
@@ -2228,10 +2254,17 @@ for raw_finding in raw_findings:
 	if waived_id is not None:
 		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
 		continue
-	if matches_upstream_managed_path(str(normalized_finding["file"])):
-		# Owned by coding-workflows: the next sync overwrites any consumer fix
-		# and consumer pipelines may not edit the path, so a fix-up issue could
-		# never be resolved. Report it instead of filing it.
+	managed_status = upstream_managed_status(str(normalized_finding["file"]))
+	if managed_status == "modified":
+		print(
+			f"SECURITY_AUDIT_UPSTREAM_MANAGED outcome=filed reason=consumer_modified finding={log_safe_token(finding_id)}"
+			f" file={log_safe_token(normalized_finding['file'])} line={normalized_finding['line']}"
+		)
+	if managed_status == "unmodified":
+		# The release's own bytes, owned by coding-workflows: the next sync
+		# overwrites any consumer fix and consumer pipelines may not edit the
+		# path, so a fix-up issue could never be resolved. Report it instead of
+		# filing it.
 		upstream_managed_findings.append(
 			{
 				"finding_id": finding_id,
