@@ -173,6 +173,11 @@ jobs:
           # 2100s (35m) leaves >=20m for clone + render/lint/self-test across all
           # repos. See scripts/validation_refresh_runner.py.
           VALIDATION_DISCOVERY_BUDGET_SECS: ${{ vars.VALIDATION_DISCOVERY_BUDGET_SECS || '2100' }}
+          # Wall-clock cap (seconds) for ONE consumer's sandboxed self-test. The
+          # runner default of 300s is too short for large monorepos (bitsafe.io
+          # exited 124). Invalid values fall back to 900; the runner clamps the
+          # value to 3600. See scripts/validation_refresh_runner.py.
+          VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS: ${{ vars.VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS || '900' }}
           VALIDATION_DISCOVERY_MODEL: ${{ vars.VALIDATION_DISCOVERY_MODEL || 'openai/gpt-6-sol' }}
           VALIDATION_DISCOVERY_REASONING_EFFORT: ${{ vars.VALIDATION_DISCOVERY_REASONING_EFFORT || 'high' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}

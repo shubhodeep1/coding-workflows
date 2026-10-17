@@ -62,6 +62,27 @@ DISCOVERY_CODEX_CALL_TIMEOUT_SECS = 300
 CLONE_ATTEMPTS = 3
 CLONE_RETRY_DELAYS_SECS = (5, 15)
 
+# Wall-clock cap (seconds) for the sandboxed consumer self-test of one repo.
+# `CommandExecutor.run` defaults to 300 s, which a large monorepo's
+# `docker compose build` + tests exceeds (bitsafe.io exits 124). Override with
+# VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS; a missing, non-numeric or
+# non-positive value falls back to the default and a larger value is clamped
+# to the maximum so one repo cannot outlast the job's `timeout-minutes`.
+SELF_TEST_TIMEOUT_ENV = "VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS"
+SELF_TEST_TIMEOUT_DEFAULT_SECS = 900
+SELF_TEST_TIMEOUT_MAX_SECS = 3600
+
+# Bounds for the failure text a stage puts into its diagnostic. The text is
+# consumer-controlled and ends up in the Actions log, so it is size-limited
+# and sanitised by `_sanitized_failure_lines`.
+FAILURE_DETAIL_HEAD_LINES = 3
+FAILURE_DETAIL_TAIL_LINES = 20
+FAILURE_DETAIL_LINE_MAX_CHARS = 500
+FAILURE_DETAIL_LOG_TAIL_MAX_CHARS = 1800
+FAILURE_DETAIL_COMPOSE_TAIL_MAX_CHARS = 1200
+FAILURE_DETAIL_MAX_CHARS = 4096
+FAILURE_DETAIL_FILE_READ_BYTES = 65536
+
 # Control-plane credentials the refresh process may hold (the workflow step
 # sets GH_TOKEN from GH_PAT and OPENROUTER_API_KEY). Every pipeline
 # subprocess that works on the untrusted consumer clone (render, lint,
@@ -112,6 +133,11 @@ def _env_str(name: str, default: str) -> str:
 	if value is None or not value.strip():
 		return default
 	return value.strip()
+
+
+def _self_test_timeout_secs() -> int:
+	configured = _env_int(SELF_TEST_TIMEOUT_ENV, SELF_TEST_TIMEOUT_DEFAULT_SECS)
+	return min(configured, SELF_TEST_TIMEOUT_MAX_SECS)
 
 
 @dataclass(frozen=True)
@@ -376,6 +402,17 @@ class ValidationRefreshRunner:
 		# does NOT push or open a PR — consumer repos render assets on demand
 		# during their own validation flow. The drift is recorded for monitoring.
 		result.diagnostics.append("validation_assets_drifted_no_push")
+		if not self._validation_assets_tracked(repo_dir):
+			# `changed` only means "working tree not clean after render". With
+			# nothing tracked under validation/ the rendered files are simply
+			# untracked, so this is not drift against committed assets. The
+			# line above (and `drifted=1`) is kept for log compatibility;
+			# this last diagnostic is the one `detail=` shows.
+			result.diagnostics.append(
+				"validation_assets_not_committed: no files under validation/ are tracked on the "
+				"default branch, so the dirty tree is rendered output that is not committed, "
+				"not drift against committed assets"
+			)
 		result.outcome = "green" if pipeline_green else "red"
 		return result
 
@@ -490,6 +527,7 @@ class ValidationRefreshRunner:
 			str(os.getpid()),
 			str(self.source_root / "scripts" / "validate_driver.sh"),
 		]
+		self_test_timeout_secs = _self_test_timeout_secs()
 		self_test_env_overrides = {
 			**pipeline_env_overrides,
 			# Inside the sandbox copy the driver writes its default
@@ -527,9 +565,21 @@ class ValidationRefreshRunner:
 					timeout=600,
 				)
 				self._harness_sandbox_provisioned = True
-			self.executor.run(self_test_command, cwd=repo_dir, env_overrides=self_test_env_overrides)
+			self.executor.run(
+				self_test_command,
+				cwd=repo_dir,
+				env_overrides=self_test_env_overrides,
+				timeout=self_test_timeout_secs,
+			)
 		except CommandFailure as exc:
-			diagnostics.append(_format_command_failure("self_test", exc))
+			diagnostics.append(
+				_format_command_failure(
+					"self_test",
+					exc,
+					compose_log_path=pipeline_log_dir / "compose.log",
+					timeout_secs=self_test_timeout_secs,
+				)
+			)
 			# A timeout kills only the helper; stop the sandbox user's harness.
 			try:
 				self.executor.run(
@@ -543,6 +593,21 @@ class ValidationRefreshRunner:
 			return False, diagnostics
 
 		return True, diagnostics
+
+	def _validation_assets_tracked(self, repo_dir: Path) -> bool:
+		"""True unless git proves nothing under validation/ is tracked.
+
+		A failed lookup counts as tracked, so the not-committed diagnostic is
+		only emitted on positive evidence.
+		"""
+		proc = self.executor.run(
+			["git", "ls-files", "--", "validation"],
+			cwd=repo_dir,
+			check=False,
+		)
+		if proc.returncode != 0:
+			return True
+		return bool((proc.stdout or "").strip())
 
 	def _repository_has_changes(self, repo_dir: Path) -> bool:
 		proc = self.executor.run(
@@ -577,6 +642,16 @@ class ValidationRefreshRunner:
 			print(f"VALIDATION_DISCOVERY_SKIPPED_DISABLED repository={repository}")
 			return
 
+		# Dedup runs before the budget gate: a repo with a recent successful
+		# discovery is `skipped_dedup` whether or not budget remains, so late repos
+		# no longer report `skipped_budget` for a skip they would have had anyway.
+		# Q5:A dedup — skip when a successful discovery is recorded within window.
+		if _dedup_skip(repository=repository, repo_root=self.source_root, dedup_days=ctx.dedup_days):
+			result.discovery_outcome = "skipped_dedup"
+			result.discovery_diagnostics.append("dedup_window_active")
+			print(f"VALIDATION_DISCOVERY_SKIPPED_DEDUP repository={repository}")
+			return
+
 		# Aggregate wall-clock budget gate (VALIDATION_DISCOVERY_BUDGET_SECS).
 		# Only start this repo's codex discovery while enough budget remains to
 		# cover its worst case (`codex_attempts * DISCOVERY_CODEX_CALL_TIMEOUT_SECS`),
@@ -598,13 +673,6 @@ class ValidationRefreshRunner:
 					f"budget_secs={ctx.discovery_budget_secs}"
 				)
 				return
-
-		# Q5:A dedup — skip when a successful discovery is recorded within window.
-		if _dedup_skip(repository=repository, repo_root=self.source_root, dedup_days=ctx.dedup_days):
-			result.discovery_outcome = "skipped_dedup"
-			result.discovery_diagnostics.append("dedup_window_active")
-			print(f"VALIDATION_DISCOVERY_SKIPPED_DEDUP repository={repository}")
-			return
 
 		consumer_head_sha = self._read_default_branch_head_sha(repo_dir)
 		committed_manifest_text = self._read_committed_manifest_yaml(repo_dir)
@@ -1277,15 +1345,179 @@ def manifest_shell_safety_violations(manifest_path: Path) -> list[str]:
 	return violations
 
 
-def _format_command_failure(stage: str, failure: CommandFailure) -> str:
-	stderr = (failure.stderr or "").strip()
-	stdout = (failure.stdout or "").strip()
-	if stderr:
-		detail = " | ".join(line.strip() for line in stderr.splitlines()[:3] if line.strip())
-	elif stdout:
-		detail = " | ".join(line.strip() for line in stdout.splitlines()[:3] if line.strip())
-	else:
-		detail = "no_output"
+# Terminal escape sequences (OSC, CSI, two-character) and the C0/C1 control
+# characters other than tab and newline. Carriage returns are turned into
+# newlines before this runs.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# The sandbox helper's success lines (`... selfcheck ok`, `... run ok staged`)
+# always lead stderr and would fill the head-line cap. Failure lines
+# (`outcome=fail reason=...`) and the provision probe lines are kept.
+_SANDBOX_OK_LINE_RE = re.compile(r"^VALIDATION_HARNESS_SANDBOX\s+phase=\S+\s+outcome=ok\b")
+
+
+def _credential_values_to_redact() -> list[str]:
+	values = {
+		os.environ.get(name, "").strip() for name in REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES
+	}
+	# Very short values would also redact ordinary words.
+	return sorted((value for value in values if len(value) >= 8), key=len, reverse=True)
+
+
+def _sanitized_failure_lines(text: str | None) -> list[str]:
+	"""Return the non-empty lines of consumer-controlled `text`, made log-safe.
+
+	The text comes from the untrusted consumer clone and is printed into the
+	Actions log, so: terminal escapes and control characters are removed, the
+	value of every refresh credential is redacted, whitespace is collapsed,
+	each line is capped at FAILURE_DETAIL_LINE_MAX_CHARS, and a line that
+	starts with `::` or `##[` (a workflow command such as `::set-env` or
+	`::add-mask::`) is prefixed so the runner no longer parses it.
+	"""
+	if not text:
+		return []
+	cleaned = _ANSI_ESCAPE_RE.sub("", text)
+	cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+	cleaned = _CONTROL_CHARS_RE.sub("", cleaned)
+	for secret in _credential_values_to_redact():
+		cleaned = cleaned.replace(secret, "[redacted]")
+	lines: list[str] = []
+	for raw_line in cleaned.split("\n"):
+		line = " ".join(raw_line.split())
+		if not line:
+			continue
+		if line.startswith("::") or line.startswith("##["):
+			line = "[workflow-command-neutralised] " + line
+		if len(line) > FAILURE_DETAIL_LINE_MAX_CHARS:
+			line = line[: FAILURE_DETAIL_LINE_MAX_CHARS - 3] + "..."
+		lines.append(line)
+	return lines
+
+
+def _tail_lines_text(lines: list[str], *, max_chars: int) -> str:
+	"""Join the last FAILURE_DETAIL_TAIL_LINES of `lines` within `max_chars`.
+
+	The newest lines win when the budget is short.
+	"""
+	picked: list[str] = []
+	used = 0
+	for line in reversed(lines[-FAILURE_DETAIL_TAIL_LINES:]):
+		cost = len(line) + 4
+		if picked and used + cost > max_chars:
+			break
+		picked.append(line)
+		used += cost
+	return " // ".join(reversed(picked))
+
+
+def _read_log_tail(path: Path | None) -> str:
+	"""Read at most FAILURE_DETAIL_FILE_READ_BYTES from the end of a log file.
+
+	Missing, unreadable and symlinked paths give "" (the file was written by
+	the sandbox copy-back, but it is still consumer-influenced).
+	"""
+	if path is None:
+		return ""
+	try:
+		if path.is_symlink() or not path.is_file():
+			return ""
+		with path.open("rb") as handle:
+			size = handle.seek(0, os.SEEK_END)
+			handle.seek(max(0, size - FAILURE_DETAIL_FILE_READ_BYTES))
+			return handle.read().decode("utf-8", errors="replace")
+	except OSError:
+		return ""
+
+
+def _parse_driver_result(stdout: str | None) -> dict[str, Any] | None:
+	"""Return the validation driver's result object from its stdout, if any.
+
+	The driver prints one JSON object (`result`, `phase`, `failures[]` with
+	`test` / `error` / `log_tail`). The last line that parses to an object
+	wins; absent or garbled output gives None.
+	"""
+	if not stdout:
+		return None
+	for raw_line in reversed(stdout.splitlines()):
+		candidate = raw_line.strip()
+		if not candidate.startswith("{") or len(candidate) > 1_000_000:
+			continue
+		try:
+			parsed = json.loads(candidate)
+		except ValueError:
+			continue
+		if isinstance(parsed, dict):
+			return parsed
+	return None
+
+
+def _driver_result_detail_parts(driver: dict[str, Any]) -> list[str]:
+	parts: list[str] = []
+	phase = driver.get("phase")
+	if isinstance(phase, str):
+		phase_lines = _sanitized_failure_lines(phase)
+		if phase_lines:
+			parts.append(f"phase={phase_lines[0]}")
+	failures = driver.get("failures")
+	first = failures[0] if isinstance(failures, list) and failures else None
+	if not isinstance(first, dict):
+		return parts
+	for key in ("test", "error"):
+		value = first.get(key)
+		if isinstance(value, str):
+			value_lines = _sanitized_failure_lines(value)
+			if value_lines:
+				parts.append(f"{key}={' // '.join(value_lines[:FAILURE_DETAIL_HEAD_LINES])}")
+	log_tail = first.get("log_tail")
+	if isinstance(log_tail, str):
+		tail_text = _tail_lines_text(
+			_sanitized_failure_lines(log_tail), max_chars=FAILURE_DETAIL_LOG_TAIL_MAX_CHARS
+		)
+		if tail_text:
+			parts.append(f"log_tail={tail_text}")
+	return parts
+
+
+def _format_command_failure(
+	stage: str,
+	failure: CommandFailure,
+	*,
+	compose_log_path: Path | None = None,
+	timeout_secs: int | None = None,
+) -> str:
+	"""One-line, log-safe description of a failed pipeline stage.
+
+	Head lines come from stderr minus the sandbox helper's success lines,
+	else from stdout. For the `self_test` stage, the driver's result JSON
+	(phase, first failure's test / error / log_tail) and the tail of the
+	copied-back compose log (`compose_log_path`) are appended, because those
+	hold the real cause once the sandbox status lines own stderr.
+	"""
+	head_lines = [
+		line
+		for line in _sanitized_failure_lines(failure.stderr)
+		if not _SANDBOX_OK_LINE_RE.match(line)
+	]
+	driver = _parse_driver_result(failure.stdout) if stage == "self_test" else None
+	if not head_lines and driver is None:
+		head_lines = _sanitized_failure_lines(failure.stdout)
+	parts: list[str] = []
+	if head_lines:
+		parts.append(" | ".join(head_lines[:FAILURE_DETAIL_HEAD_LINES]))
+	if failure.returncode == 124 and timeout_secs is not None:
+		parts.append(f"timeout_secs={timeout_secs}")
+	if stage == "self_test":
+		if driver is not None:
+			parts.extend(_driver_result_detail_parts(driver))
+		compose_text = _tail_lines_text(
+			_sanitized_failure_lines(_read_log_tail(compose_log_path)),
+			max_chars=FAILURE_DETAIL_COMPOSE_TAIL_MAX_CHARS,
+		)
+		if compose_text:
+			parts.append(f"compose_log_tail={compose_text}")
+	detail = " | ".join(parts) if parts else "no_output"
+	if len(detail) > FAILURE_DETAIL_MAX_CHARS:
+		detail = detail[: FAILURE_DETAIL_MAX_CHARS - 3] + "..."
 	return f"{stage}_failed(exit={failure.returncode}): {detail}"
 
 
