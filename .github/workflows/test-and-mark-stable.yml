@@ -7431,6 +7431,40 @@ jobs:
             MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
           else
             MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
+            # A newer release run cancels this run's e2e-smoke-test through the
+            # job's concurrency group (cancel-in-progress: true). That is not a
+            # failure: this run releases nothing and the newer run carries on.
+            # Report SUPERSEDED when the smoke test was cancelled, no other job
+            # failed, and a newer run of this workflow exists. One API call;
+            # on any error the header stays FAILED. This step makes no other
+            # workflow-runs read, so the lookup has no existing call to join.
+            # Known limit: the runs API exposes neither the test_repo input nor
+            # who cancelled the job, so a manual cancel while any newer run
+            # exists is also reported SUPERSEDED (nothing is released either way).
+            RELEASE_SUPERSEDED_BY=""
+            if [ "$E2E" = "cancelled" ]; then
+              release_hard_failure=false
+              for r in "$SCRIPTS" "$ORPHANS" "$ORCHESTRATE_DECOMPOSE" "$VALIDATE_STANDALONE" "$CLARIFY_REJECTS" "$ALT_MODEL" "$VALIDATE" "$RELEASE"; do
+                case "$r" in
+                  success|skipped|cancelled|"") ;;
+                  *) release_hard_failure=true ;;
+                esac
+              done
+              if [ "$release_hard_failure" = "false" ] && [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+                if ! RELEASE_SUPERSEDED_BY="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml/runs?per_page=20" \
+                  --jq "[.workflow_runs[] | select(.id > ${GITHUB_RUN_ID}) | .id] | min // empty" 2>/dev/null)"; then
+                  echo "::warning::Superseded-run lookup failed; keeping the FAILED header"
+                  RELEASE_SUPERSEDED_BY=""
+                fi
+                if ! [[ "${RELEASE_SUPERSEDED_BY}" =~ ^[0-9]+$ ]]; then
+                  RELEASE_SUPERSEDED_BY=""
+                fi
+              fi
+            fi
+            if [ -n "${RELEASE_SUPERSEDED_BY}" ]; then
+              MSG="Release ${{ needs.resolve-version.outputs.version }} SUPERSEDED: newer run ${RELEASE_SUPERSEDED_BY} cancelled this run's e2e-smoke-test; nothing was released by this run"
+              echo "RELEASE_NOTIFY_V1 outcome=superseded run_id=${GITHUB_RUN_ID} superseded_by=${RELEASE_SUPERSEDED_BY}"
+            fi
             STATUS_LINE=""
             for JOB_NAME in e2e-smoke-test validate-scripts workflow-log-analysis-test orphan-workflows-test orchestrate-decompose-test validate-standalone-test clarify-rejects-unsolvable-test e2e-alt-model-test validate release; do
               case "$JOB_NAME" in
