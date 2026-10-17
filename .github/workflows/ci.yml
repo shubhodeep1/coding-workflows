@@ -1098,6 +1098,71 @@ jobs:
             tests/test_workflow_retro_fanout.py \
             tests/test_workflow_support_ref_follows_pin.py
 
+      # Moved from tests-promote-stall-and-review, which took 15m18s of its
+      # 20 minutes on main (run 39039638823, budget-watch issue #7576). Step
+      # timings were not readable when this was planned; these two were chosen
+      # as that job's most expensive steps by test and subprocess counts
+      # (estimated, not measured). Both need only checkout, Python 3.12 and the
+      # shared pip install, which this job already has. Names and bodies
+      # unchanged.
+      - name: Review autofix review-pipeline plumbing contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
+
+      - name: Regression tests wired by the CI wiring guard (part 2)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_sync_reference_files.py \
+            tests/test_ai_memory_workflow_log_analysis_cache.py \
+            tests/test_assemble_changelog.py \
+            tests/test_branch_rebuild_threshold_decision_log.py \
+            tests/test_changelog_fragment_contract.py \
+            tests/test_codex_heartbeat.py \
+            tests/test_codex_isolated_exec_claude_contract.py \
+            tests/test_cost_audit_serena_metrics.py \
+            tests/test_gh_helpers_list_runs_method.py \
+            tests/test_implement_prompt_pinned_sha_contract.py \
+            tests/test_plan_reuse_audit_contract.py \
+            tests/test_plan_template_owned_path_guard.py \
+            tests/test_plan_superseded_merged_pr.py \
+            tests/test_plan_superseded_merged_pr_workflow.py \
+            tests/test_pytest_git_env_isolation.py \
+            tests/test_render_validation_templates.py \
+            tests/test_render_validation_templates_repo_checks.py \
+            tests/test_render_validation_templates_shell_quoting.py \
+            tests/test_retrigger_default_branch_dispatch.py \
+            tests/test_review_autofix_reasoning_schedule.py \
+            tests/test_review_autofix_sweep_merge_queued_skip.py \
+            tests/test_review_commit_changelog_fragment_preserved.py \
+            tests/test_review_conflict_prepare_state_author.py \
+            tests/test_review_floor_rules.py \
+            tests/test_review_host_python_safe_path.py \
+            tests/test_review_issue_ledger.py \
+            tests/test_review_ledger_cache_path_stability.py \
+            tests/test_review_rb_judge_reference_staging.py \
+            tests/test_review_resolve_review_threads.py \
+            tests/test_review_reviewer_attempt_prompt_isolation.py \
+            tests/test_static_context_symlink_guard.py \
+            tests/test_summarize_unselected_runs.py \
+            tests/test_test_and_mark_stable_phase7_unconflict.py \
+            tests/test_validate_lint_bounded_tail_capture.py \
+            tests/test_validate_lint_external_tool_dependencies.py \
+            tests/test_validate_lint_import_audit_safety.py \
+            tests/test_validate_lint_service_tool_scope.py \
+            tests/test_validate_lint_shell_parity.py \
+            tests/test_validate_process_fixup_labels.py \
+            tests/test_verify_integration_fingerprints_baseline.py \
+            tests/test_workflow_untrusted_input_contract.py
+
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -1220,18 +1285,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
-
-      - name: Review autofix review-pipeline plumbing contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
 
       - name: Review autofix step-script contract and workflow file size guard tests
         run: |
@@ -1406,52 +1459,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
-
-      - name: Regression tests wired by the CI wiring guard (part 2)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_ai_memory_sync_reference_files.py \
-            tests/test_ai_memory_workflow_log_analysis_cache.py \
-            tests/test_assemble_changelog.py \
-            tests/test_branch_rebuild_threshold_decision_log.py \
-            tests/test_changelog_fragment_contract.py \
-            tests/test_codex_heartbeat.py \
-            tests/test_codex_isolated_exec_claude_contract.py \
-            tests/test_cost_audit_serena_metrics.py \
-            tests/test_gh_helpers_list_runs_method.py \
-            tests/test_implement_prompt_pinned_sha_contract.py \
-            tests/test_plan_reuse_audit_contract.py \
-            tests/test_plan_template_owned_path_guard.py \
-            tests/test_plan_superseded_merged_pr.py \
-            tests/test_plan_superseded_merged_pr_workflow.py \
-            tests/test_pytest_git_env_isolation.py \
-            tests/test_render_validation_templates.py \
-            tests/test_render_validation_templates_repo_checks.py \
-            tests/test_render_validation_templates_shell_quoting.py \
-            tests/test_retrigger_default_branch_dispatch.py \
-            tests/test_review_autofix_reasoning_schedule.py \
-            tests/test_review_autofix_sweep_merge_queued_skip.py \
-            tests/test_review_commit_changelog_fragment_preserved.py \
-            tests/test_review_conflict_prepare_state_author.py \
-            tests/test_review_floor_rules.py \
-            tests/test_review_host_python_safe_path.py \
-            tests/test_review_issue_ledger.py \
-            tests/test_review_ledger_cache_path_stability.py \
-            tests/test_review_rb_judge_reference_staging.py \
-            tests/test_review_resolve_review_threads.py \
-            tests/test_review_reviewer_attempt_prompt_isolation.py \
-            tests/test_static_context_symlink_guard.py \
-            tests/test_summarize_unselected_runs.py \
-            tests/test_test_and_mark_stable_phase7_unconflict.py \
-            tests/test_validate_lint_bounded_tail_capture.py \
-            tests/test_validate_lint_external_tool_dependencies.py \
-            tests/test_validate_lint_import_audit_safety.py \
-            tests/test_validate_lint_service_tool_scope.py \
-            tests/test_validate_lint_shell_parity.py \
-            tests/test_validate_process_fixup_labels.py \
-            tests/test_verify_integration_fingerprints_baseline.py \
-            tests/test_workflow_untrusted_input_contract.py
 
       # Moved from tests-release-and-log-analysis, which took 20m16s of its
       # 20 minutes on main (run 39030079651, budget-watch issue #7560). It
