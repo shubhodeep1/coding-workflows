@@ -1413,6 +1413,7 @@ jobs:
             tests/test_codex_isolated_exec_claude_contract.py \
             tests/test_cost_audit_serena_metrics.py \
             tests/test_gh_helpers_list_runs_method.py \
+            tests/test_implement_prompt_pinned_sha_contract.py \
             tests/test_plan_reuse_audit_contract.py \
             tests/test_plan_template_owned_path_guard.py \
             tests/test_plan_superseded_merged_pr.py \
@@ -1606,6 +1607,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+
+      - name: Release notification superseded-run tests (stubbed gh and curl)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_release_notify_superseded.py
 
       - name: Release CI gate tests (stubbed gh; both release workflows)
         run: |
