@@ -127,7 +127,9 @@ Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID
 	# Backstop for the 4096-character Telegram limit.
 	text="${text:0:3900}"
 	# Only a message id means the message reached Telegram.
-	message_id="$(tg_send_report_msg "${text}" 2>/dev/null)" || message_id=""
+	# stderr is not redirected, so the helper's "Telegram send failed"
+	# warning reaches the job log.
+	message_id="$(tg_send_report_msg "${text}")" || message_id=""
 	if [ -n "${message_id}" ]; then
 		outcome=sent
 		daily_usage_output "sent=true"
