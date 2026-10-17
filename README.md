@@ -2925,7 +2925,7 @@ can repeat on later ticks that day; a lookup step that itself fails skips
 the tick. `CLAUDE_POOL_DAILY_USAGE_ENABLED=false` turns it off. The steps log
 `CLAUDE_POOL_DAILY_USAGE op=slot in_slot= reason=due|before_hour|disabled|silent|telegram_not_configured`
 and `CLAUDE_POOL_DAILY_USAGE op=send accounts= usable= gated= auth_failed=
-probe_failed= outcome=sent|not_delivered`, and never fail the job.
+probe_failed= outcome=sent|not_delivered truncated=true|false`, and never fail the job.
 
 The token action accepts only the deployed broker URL in Actions jobs and
 only removes pool directories immediately under `$RUNNER_TEMP`; a rejected

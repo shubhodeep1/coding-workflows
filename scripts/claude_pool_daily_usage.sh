@@ -31,7 +31,7 @@
 #
 # Log: CLAUDE_POOL_DAILY_USAGE op=slot in_slot=true|false reason=... date=... hour=...
 #      CLAUDE_POOL_DAILY_USAGE op=send accounts=N usable=N gated=N auth_failed=N probe_failed=N
-#          outcome=sent|not_delivered
+#          outcome=sent|not_delivered truncated=true|false
 # Never fails the job.
 set -uo pipefail
 
@@ -84,7 +84,7 @@ daily_usage_send()
 	fi
 	type tg_send_report_msg >/dev/null 2>&1 || tg_send_report_msg() { :; }
 
-	local probes_json report_args=() report text counts message_id outcome
+	local probes_json report_args=() report text counts message_id outcome err_file err_detail truncated=false
 	probes_json="${CLAUDE_POOL_PROBES:-}"
 	[ -n "${probes_json}" ] || probes_json="[]"
 	if [ -n "${CLAUDE_POOL_DAILY_USAGE_GATE:-}" ]; then
@@ -92,27 +92,39 @@ daily_usage_send()
 	elif [ -n "${CLAUDE_ENGINE_CONFIG:-}" ]; then
 		report_args+=(--config "${CLAUDE_ENGINE_CONFIG}")
 	fi
-	if report="$(printf '%s' "${probes_json}" | PYTHONDONTWRITEBYTECODE=1 python3 "${script_dir}/claude_engine.py" pool-usage "${report_args[@]}" 2>/dev/null)"; then
+	err_file="$(mktemp 2>/dev/null)" || err_file=/dev/null
+	if report="$(printf '%s' "${probes_json}" | PYTHONDONTWRITEBYTECODE=1 python3 "${script_dir}/claude_engine.py" pool-usage "${report_args[@]}" 2>"${err_file}")"; then
 		text="$(printf '%s' "${report}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["text"])')"
 		counts="$(printf '%s' "${report}" | python3 -c '
 import json, sys
 print("accounts=%(accounts)s usable=%(usable)s gated=%(gated)s auth_failed=%(auth_failed)s probe_failed=%(probe_failed)s" % json.load(sys.stdin))
 ')"
 	else
-		echo "::warning::CLAUDE_POOL_DAILY_USAGE op=send reason=pool_usage_failed; sending the fallback text"
+		err_detail="$(tail -n 1 "${err_file}" 2>/dev/null | tr -cd '[:print:]' | cut -c1-200)"
+		echo "::warning::CLAUDE_POOL_DAILY_USAGE op=send reason=pool_usage_failed detail=${err_detail:-none}; sending the fallback text"
 		text="Claude pool daily usage: probe results unreadable."
 		counts="accounts=0 usable=0 gated=0 auth_failed=0 probe_failed=0"
 	fi
 	if [ "${probes_json}" = "[]" ] && [ -n "${CLAUDE_POOL_REASON:-}" ]; then
 		text="${text%.} (pool: ${CLAUDE_POOL_REASON})."
 	fi
+	[ "${err_file}" = /dev/null ] || rm -f "${err_file}"
 	text="📊 ${text}"
+	# Telegram rejects messages over 4096 characters; a rejected send would
+	# be retried on every tick for the rest of the day. Cut the account list
+	# before the run link is added, so the link survives and the message
+	# says it was cut (a retry would cut it the same way).
+	if [ "${#text}" -gt 3700 ]; then
+		printf '::group::CLAUDE_POOL_DAILY_USAGE full report\n%s\n::endgroup::\n' "${text//::/: :}"
+		text="${text:0:3700}
+… (truncated: the report is longer than 3700 characters; see the run log)"
+		truncated=true
+	fi
 	if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
 		text="${text}
 Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 	fi
-	# Telegram rejects messages over 4096 characters; a rejected send would
-	# be retried on every tick for the rest of the day.
+	# Backstop for the 4096-character Telegram limit.
 	text="${text:0:3900}"
 	# Only a message id means the message reached Telegram.
 	message_id="$(tg_send_report_msg "${text}" 2>/dev/null)" || message_id=""
@@ -123,7 +135,7 @@ Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID
 		outcome=not_delivered
 		daily_usage_output "sent=false"
 	fi
-	echo "CLAUDE_POOL_DAILY_USAGE op=send ${counts} outcome=${outcome}"
+	echo "CLAUDE_POOL_DAILY_USAGE op=send ${counts} outcome=${outcome} truncated=${truncated}"
 }
 
 case "${1:-}" in
