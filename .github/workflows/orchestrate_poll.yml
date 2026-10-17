@@ -71,6 +71,11 @@ jobs:
       # resolution or judge evaluation).
       group: ai-orchestrate-poll-${{ github.repository }}
       cancel-in-progress: false
+    outputs:
+      # Daily Claude pool usage report (claude_pool_daily_usage job): due when
+      # this tick is in the slot and the day's cache marker was not found.
+      claude_pool_daily_due: ${{ steps.pool_daily_seen.outcome == 'success' && steps.pool_daily_seen.outputs.cache-hit != 'true' && 'true' || 'false' }}
+      claude_pool_daily_date: ${{ steps.pool_daily_slot.outputs.date }}
 
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
@@ -111,13 +116,25 @@ jobs:
           echo "GH_PAT_BUDGET phase=start workflow=orchestrate_poll job=poll remaining=${remaining} reset=${reset} used_in_job=unknown"
 
       - name: Resolve workflow support ref for gh retry
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_poll\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source for gh retry
@@ -132,7 +149,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback for gh retry
-        if: ${{ steps.checkout_pre_support_source.outcome == 'failure' }}
+        if: ${{ steps.checkout_pre_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -149,9 +166,15 @@ jobs:
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot for gh retry
-        if: ${{ env.SCRIPT_REF != 'main' }}
+        if: ${{ env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -403,9 +426,9 @@ jobs:
 
       - name: Install Codex CLI
         if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
-        # Intentionally use the released action ref as the rollout boundary.
-        # Consumers pick this up when test-and-mark-stable retags @stable.
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        # Pinned by commit (tele-funtoken-msg-scoring#4566); bump it in the PR
+        # that changes the action.
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
@@ -468,13 +491,25 @@ jobs:
 
       - name: Resolve workflow support ref
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_poll\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -489,7 +524,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -507,9 +542,15 @@ jobs:
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
+        if: ${{ env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -704,15 +745,16 @@ jobs:
             mkdir -p "$(dirname -- "${activation_asset}")"
             install -m 0644 "${asset_src}" "${activation_asset}"
           done
-          # Unblock scan (replace-claude-sessions plan Phase 7). Optional: a
-          # missing file only skips the scan, never the poll.
-          for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py; do
+          # Unblock scan (replace-claude-sessions plan Phase 7) and the orphan
+          # fix-up close that rides its tick (orphan_fixup_close.py). Optional:
+          # a missing file only skips that step, never the poll.
+          for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py scripts/orphan_fixup_close.py; do
             asset_src=".codex-workflow-src/${unblock_asset}"
             if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/${unblock_asset}" ]; then
               asset_src=".codex-workflow-src-main/${unblock_asset}"
             fi
             if [ ! -f "${asset_src}" ]; then
-              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the unblock scan is skipped."
+              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the step that needs it is skipped."
               continue
             fi
             install -m 0644 "${asset_src}" "${unblock_asset}"
@@ -1117,6 +1159,33 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: bash .codex-workflow-src/scripts/claude_pool_health_alert.sh
 
+      # Daily Claude pool usage report: decides whether the
+      # claude_pool_daily_usage job below runs on this tick. coding-workflows
+      # only (the pool is shared by every consumer repo), from
+      # CLAUDE_POOL_DAILY_USAGE_HOUR_UTC (default 4 = 12:00 SGT), once per UTC
+      # day: the job saves an actions/cache marker for the day after sending.
+      - name: Check Claude pool daily usage slot
+        id: pool_daily_slot
+        if: github.repository == 'shubhodeep1/coding-workflows'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_DAILY_USAGE_ENABLED: ${{ vars.CLAUDE_POOL_DAILY_USAGE_ENABLED || 'true' }}
+          CLAUDE_POOL_DAILY_USAGE_HOUR_UTC: ${{ vars.CLAUDE_POOL_DAILY_USAGE_HOUR_UTC || '4' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: bash .codex-workflow-src/scripts/claude_pool_daily_usage.sh slot
+
+      - name: Look up today's Claude pool daily usage marker
+        id: pool_daily_seen
+        if: steps.pool_daily_slot.outputs.in_slot == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .claude-pool-daily-usage/sent
+          key: claude-pool-daily-usage-v1-${{ steps.pool_daily_slot.outputs.date }}
+          lookup-only: true
+
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
@@ -1159,6 +1228,11 @@ jobs:
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
+          ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
+          ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
+          ORPHAN_FIXUP_CLOSE_MAX_PER_TICK: ${{ vars.ORPHAN_FIXUP_CLOSE_MAX_PER_TICK || '5' }}
+          ORPHAN_FIXUP_CLOSE_GRACE_MINUTES: ${{ vars.ORPHAN_FIXUP_CLOSE_GRACE_MINUTES || '60' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
@@ -1354,6 +1428,11 @@ jobs:
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
+          ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
+          ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
+          ORPHAN_FIXUP_CLOSE_MAX_PER_TICK: ${{ vars.ORPHAN_FIXUP_CLOSE_MAX_PER_TICK || '5' }}
+          ORPHAN_FIXUP_CLOSE_GRACE_MINUTES: ${{ vars.ORPHAN_FIXUP_CLOSE_GRACE_MINUTES || '60' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
@@ -1460,6 +1539,11 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
+          ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
+          ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
+          ORPHAN_FIXUP_CLOSE_MAX_PER_TICK: ${{ vars.ORPHAN_FIXUP_CLOSE_MAX_PER_TICK || '5' }}
+          ORPHAN_FIXUP_CLOSE_GRACE_MINUTES: ${{ vars.ORPHAN_FIXUP_CLOSE_GRACE_MINUTES || '60' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
@@ -1918,3 +2002,78 @@ jobs:
           else
             echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
           fi
+
+  # Daily Claude pool usage report: one Telegram message with every pool
+  # account's 5-hour and 7-day usage. Runs in shubhodeep1/coding-workflows only,
+  # on the first poll tick at or after CLAUDE_POOL_DAILY_USAGE_HOUR_UTC whose
+  # day has no cache marker yet (the poll job's claude_pool_daily_due output).
+  # Its own job, so probing the pool here never changes the poll job's Claude
+  # credential or capacity-wait state. The broker accepts it because it is a
+  # job of orchestrate_poll.yml.
+  claude_pool_daily_usage:
+    needs: poll
+    if: ${{ !cancelled() && needs.poll.outputs.claude_pool_daily_due == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      # A queued poll run can finish before this job saves the day's marker;
+      # one report job at a time, and each re-checks the marker below.
+      group: claude-pool-daily-usage-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout coding-workflows
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Re-check today's Claude pool daily usage marker
+        id: pool_daily_recheck
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .claude-pool-daily-usage/sent
+          key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
+          lookup-only: true
+
+      - name: Install Claude Code CLI
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Probe the Claude pool
+        id: claude_pool
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Send Claude pool daily usage report
+        id: pool_daily_send
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || 'not_probed' }}
+          CLAUDE_ENGINE_CONFIG: .github/ai/claude_engine.json
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: bash scripts/claude_pool_daily_usage.sh send
+
+      - name: Write today's Claude pool daily usage marker
+        if: steps.pool_daily_send.outputs.sent == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p .claude-pool-daily-usage
+          date -u +%Y-%m-%dT%H:%M:%SZ > .claude-pool-daily-usage/sent
+
+      - name: Save today's Claude pool daily usage marker
+        if: steps.pool_daily_send.outputs.sent == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .claude-pool-daily-usage/sent
+          key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}

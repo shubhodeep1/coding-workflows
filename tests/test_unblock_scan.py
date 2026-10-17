@@ -698,7 +698,7 @@ def test_hand_overs_add_a_scanned_label_or_failed_state() -> None:
 
 def test_poll_workflow_stages_the_scan_and_passes_its_knobs() -> None:
 	text = POLL_WORKFLOW.read_text(encoding="utf-8")
-	assert "for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py; do" in text
+	assert "for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py scripts/orphan_fixup_close.py; do" in text
 	for name, default in (
 		("UNBLOCK_JUDGE_ENABLED", "true"),
 		("UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK", "5"),

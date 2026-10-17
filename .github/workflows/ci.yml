@@ -760,6 +760,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_health_alert.py
 
+      - name: Claude pool daily usage report tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_daily_usage.py
+
       - name: Install Claude CLI action tests
         run: |
           set -euo pipefail
@@ -1025,10 +1030,10 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
 
-      - name: Unblock judge and scan tests (replace-claude-sessions Phase 7)
+      - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py
 
       - name: Tracking issue comment cap tests
         run: |
@@ -1413,6 +1418,7 @@ jobs:
             tests/test_codex_isolated_exec_claude_contract.py \
             tests/test_cost_audit_serena_metrics.py \
             tests/test_gh_helpers_list_runs_method.py \
+            tests/test_implement_prompt_pinned_sha_contract.py \
             tests/test_plan_reuse_audit_contract.py \
             tests/test_plan_template_owned_path_guard.py \
             tests/test_plan_superseded_merged_pr.py \
