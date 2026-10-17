@@ -680,21 +680,21 @@ jobs:
         id: pr_not_open_support_ref
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
-          SUPPORT_REF_REPO: ${{ github.repository }}
-          SUPPORT_REF_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          pin="stable"
-          if [ "${SUPPORT_REF_REPO}" = "shubhodeep1/coding-workflows" ]; then
-            pin="${SUPPORT_REF_SHA}"
+          # Same shape as the other "Resolve workflow support ref" steps
+          # (tests/test_workflow_support_ref_follows_pin.py): one line to GITHUB_ENV.
+          if [ "${{ github.repository }}" = "shubhodeep1/coding-workflows" ]; then
+            echo "PR_NOT_OPEN_SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
           else
+            pin="stable"
             wf_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
             if [[ "${wf_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@[0-9a-f]{40}$ ]]; then
               pin="${wf_ref##*@}"
             fi
             echo "SUPPORT_REF ref=${pin} workflow_ref=${wf_ref:-unknown}"
+            echo "PR_NOT_OPEN_SCRIPT_REF=${pin}" >> "$GITHUB_ENV"
           fi
-          echo "ref=${pin}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout support source for CI-triage PR-not-open hand-off
         if: steps.refctx.outputs.pr_not_open == 'true'
@@ -703,7 +703,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
-          ref: ${{ steps.pr_not_open_support_ref.outputs.ref }}
+          ref: ${{ env.PR_NOT_OPEN_SCRIPT_REF }}
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1

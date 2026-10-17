@@ -515,8 +515,12 @@ def test_implement_handoff_steps_order_and_gating():
 
 
 def test_implement_handoff_uses_only_the_trusted_helper():
-	for name in (HANDOFF_SUPPORT_REF_STEP, HANDOFF_STEP):
-		assert "${{" not in _step_run(name, IMPLEMENT_WORKFLOW)
+	# The support-ref step inlines github.repository / github.sha like its
+	# siblings (test_workflow_support_ref_follows_pin.py); the hand-off body
+	# itself takes every value through env:.
+	assert "${{" not in _step_run(HANDOFF_STEP, IMPLEMENT_WORKFLOW)
+	checkout = "\n".join(_step_block(HANDOFF_CHECKOUT_STEP, IMPLEMENT_WORKFLOW))
+	assert "ref: ${{ env.PR_NOT_OPEN_SCRIPT_REF }}" in checkout
 	body = _step_run(HANDOFF_STEP, IMPLEMENT_WORKFLOW)
 	assert 'python3 -I -B "${helper}" classify' in body
 	assert 'sup="$(pwd)/.codex-workflow-src/scripts"' in body

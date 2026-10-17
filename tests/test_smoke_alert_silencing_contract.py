@@ -66,7 +66,9 @@ EXPECTED_STEP_DECLARATIONS = {
 	# automation-path hold (#6838) sends one WARNING, + "Close superseded
 	# CI-repair issue (merged PR)" (#7216).
 	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 6,
-	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 2,
+	# 3 = two notification steps + "Hand off CI-triage issue whose PR is no
+	# longer open" (#7540), which sends one WARNING or DEBUG alert.
+	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"] * 3,
 	# Issue #6633 adds "Record Claude pool capacity", "Mark outage-caused
 	# review-blocked labels (autofix exhaustion)" and "Record model-provider
 	# outage" (first, fourth and eighth entries). Issue #7370 adds "Defer
