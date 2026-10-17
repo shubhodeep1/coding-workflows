@@ -549,3 +549,134 @@ A CI guard already exists: `tests/test_workflow_file_size_limit.py:66-98` fails 
 | Code modularization | New `.github/actions/resolve-integration-ref`, `.github/actions/resolve-support-ref` and `.github/actions/gh-pat-budget`; `scripts/ai_engine.sh`; `scripts/orchestrate_poll_process.sh`; `clarify.yml`, `plan.yml`, `implement.yml`, `validate.yml`, `orchestrate_clarify_respond.yml` and about 8 other workflows | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/clarify.yml`, new `prompts/mode-clarify-inline.txt`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `clarify.yml`, `plan.yml`, `scripts/comprehensive_test_and_release_gh_api.sh`, `scripts/unblock_judge.sh`, `scripts/gh_helpers.sh`, `.github/workflows/pr6576-shard-followup.yml` (and its script, test and registry entry), the support-checkout fallbacks in 10 workflows | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-17)
+
+### Safety Tag Legend
+- `SAFE_TO_MERGE` means every precondition is met: the same endpoint (or a strict subset of its fields), identical pagination, filters and auth scope, the same function or step with no mutation in between, unchanged error handling, no concurrency boundary crossed, and any cache contract kept. The implement stage may act on it directly.
+- `NEEDS_VERIFICATION` means the change looks correct, but static reading cannot prove all of those preconditions. The named verification steps must pass first.
+- `RISKY_SKIP` means at least one hard trigger applies: pagination, a retry, backoff or polling loop, an auth or identity probe, a rate-limit-sensitive path, `orchestrate_poll_process.sh` or race-defence code, or log keys that other code greps. These findings are listed so they are visible, but they must not be implemented automatically.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001 — The post-merge validate dispatch can make a GraphQL `closingIssuesReferences` read and then a REST `pulls/{n}` title/body read for the same PR**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Calls involved:**
+  - `.github/workflows/review_autofix.yml:816-829` (GraphQL).
+  - `.github/workflows/review_autofix.yml:831-841` (REST fallback).
+  - Both sit in the same step and read `POST_MERGE_LINKED_ISSUES_JSON` / `POST_MERGE_PR_TEXT_JSON`, which come from `needs.gate.outputs` (`review_autofix.yml:722-723`).
+- **Current call count:**
+  - Up to 2 per run, but only when the gate's linked-issues output is `[]` and its PR-text output is empty.
+  - The common case is 1, because the REST read is skipped when `POST_MERGE_PR_TEXT_JSON` has text.
+- **Proposed call count:** 1 in every case.
+- **Endpoints:**
+  - `POST /graphql`: `repository.pullRequest(number).closingIssuesReferences`.
+  - `GET /repos/{owner}/{repo}/pulls/{number}`, of which only `.title` and `.body` are used.
+- **Evidence:** both calls target the same PR, in the same step, with no write in between.
+  ```bash
+  -f query='query(...) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { closingIssuesReferences(first: 50) { nodes { number labels(first: 100) { nodes { name } } } } } } }'
+  ...
+  if pr_data_live="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.title + " " + (.body // "")' 2>/dev/null)"; then
+  ```
+  `pullRequest { title body }` is free to add to the GraphQL selection that is already being sent.
+- **Proposed fix:**
+  - Add `title body` to the `pullRequest` selection at line 820.
+  - Capture `{title, body}` alongside the nodes, for example by changing `--jq` to emit `{nodes: ..., text: (.title + " " + (.body // ""))}`.
+  - At line 834, use that captured text instead of the REST read.
+  - Keep the REST read only for the case where the GraphQL call itself failed (`post_merge_linked_issue_lookup_failed=true`).
+- **Safety rationale:**
+  - Endpoint scope and auth are the same, and both calls are in one step with no mutation between them.
+  - Error handling does change. Today a GraphQL failure still lets the REST read rescue the text fallback, and the two failure flags (`post_merge_linked_issue_lookup_failed` and `post_merge_pr_text_lookup_failed`) feed different warning text at lines 852-855.
+  - That precondition fails unless the REST fallback is kept for the GraphQL-failure path.
+- **Downstream signal (verification steps):**
+  1. Confirm that the GraphQL path skips the REST read only on success, and that the REST read still runs when line 816 fails. This keeps both lines 852-855 warnings reachable.
+  2. Confirm that `normalize_post_merge_issue_nodes_json` (line 807) is fed only the `nodes` array, not the new wrapper object.
+  3. Grep `tests/` for fixtures that assert the exact GraphQL query string, and update any that do.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001 — Each poll cycle fetches the same wave issue's timeline (and the linked PR) up to twice**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - The reconcile loop reads the timeline and PRs for every wave issue: `scripts/orchestrate_poll_process.sh:24724-24767`, with the timeline via `_issue_cross_ref_pr_numbers_unique` at line 24739 and each PR via `_fetch_pr_json` at line 24750.
+  - Later in the same cycle, three loops re-read the timeline and then the PR for subsets of the same `WAVE_STATUS.issues`:
+    - ready-to-merge: `:25009-25018` (`_issue_cross_ref_pr_number_last` at 25012, `_fetch_pr_json` at 25014);
+    - in-progress/done: `:25156-25164` (25158, 25163);
+    - review-blocked: `:25295-25309` (25304).
+  - Timeline helper: `:4420-4436` (paginated REST fallback at 4435). Selectors: `:4438-4453` (unique) and `:4455-4470` (last). `_fetch_pr_json`: `:2215-2219`.
+- **Current call count:** for each wave issue in `ready-to-merge`, `in_progress`, `done` or `review-blocked` status:
+  - 1 extra timeline read of at least 1 page (more on later pages);
+  - 1 extra `pulls/{n}` read.
+  - This is on top of the reconcile loop's reads for the same issue.
+- **Proposed call count:** 0 extra timeline reads per cycle; the PR read is reused only when the selected PR number matches.
+- **Endpoints:**
+  - `GET /repos/{o}/{r}/issues/{n}/timeline` (`--paginate`), or the `gh_issue_timeline_with_cross_refs` GraphQL variant.
+  - `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:**
+  - `_issue_cross_ref_pr_numbers_unique` and `_issue_cross_ref_pr_number_last` both call `_issue_timeline_with_cross_refs_json "${issue_num}"` (lines 4442 and 4459). They differ only in the jq selector (`unique | .[]` versus `last // empty`).
+  - No cycle-local timeline cache exists. `_fetch_pr_json` has no cache either (lines 2215-2219).
+- **Net-new detail that BATCH-001 does not cover:**
+  - **Selection semantics differ on purpose.** `_last` returns the last cross-referencing PR of any kind. The reconcile loop rejects non-implementation PRs (`_pr_json_is_issue_implementation_pr`, prompted by the #3817/#3825 incident described at lines 18385-18393). Reusing the reconcile loop's *selected* PR would silently change which PR the auto-merge, update-branch and review-blocked loops act on. Only the raw timeline JSON can safely be reused, with each caller keeping its own selector.
+  - **The cache cannot live inside the helper.** Line 24739 calls the selector inside `$(...)`, so any variable it sets is lost in that subshell. The ready-to-merge and in-progress loops (`echo ... | while read`, lines 25009 and 25156) are pipeline subshells too. A cache would have to be file-backed under the cycle's runtime directory, or filled in the parent shell before line 24739.
+  - Between the reconcile loop and the later loops, `reconcile_managed_issue_labels` writes labels and `capture_intent_fingerprints_for_merged_subissue` runs (line 24987). A PR opened in that gap is seen today and would be missed by a cached timeline until the next cycle.
+- **Proposed fix (for manual review only):** add a file-backed cycle-local timeline cache that the reconcile loop fills and `_issue_timeline_with_cross_refs_json` reads first, falling back to a live read on a miss (fail open). Pick a name that does not collide with existing identifiers, checked by grep. Document input and output shape, call count and fail-open behaviour per §14. Consider merging it into BATCH-001's GraphQL batch rather than adding a separate cache.
+- **Safety rationale:** several hard triggers apply: the code is in `orchestrate_poll_process.sh`, the timeline read is paginated, and the later loops act on PR state (auto-merge, update-branch) and so defend against upstream races.
+- **Downstream signal:** do not implement automatically. A human must decide whether a timeline up to one cycle stale is acceptable for the auto-merge loop at 25009 and the update-branch loop at 25156, and must confirm that `LINKED_PR_CROSS_REF_REJECTED` and the `Issue #N: no linked PR found in timeline.` log output stay the same.
+
+**REUSE-002 — Heal intake reads `/user` twice for `autofix_failure` reports, although `PROVENANCE_LOGIN` already holds the login**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/workflow_failure_heal_intake.sh:559-562` sets `PROVENANCE_LOGIN` for every non-`workflow_run` kind except a consumer-repo `phase_failure`.
+  - `scripts/workflow_failure_heal_intake.sh:1038-1049`: `HEAL_TRUSTED_AUTHOR` falls back only to `PHASE_COMMENT_AUTHOR`, and then calls `/user` again at line 1044.
+  - `PHASE_COMMENT_AUTHOR` is set only for `phase_failure` (line 874).
+- **Current call count:** 2 `/user` reads per `autofix_failure` intake whose `SOURCE_GEN` is numeric.
+- **Proposed call count:** 1.
+- **Endpoint:** `GET /user`.
+- **Evidence:**
+  - Both calls use the same token: `GH_TOKEN` is only *unset*, for the sandboxed model at lines 1729 and 1737, never swapped.
+  - The recovery path already reuses the login in exactly this order (lines 1204-1206):
+    ```bash
+    # Every candidate below is a /user result for the intake's own token.
+    recovery_login="${PROVENANCE_LOGIN:-}"
+    [ -n "${recovery_login}" ] || recovery_login="${HEAL_TRUSTED_AUTHOR:-}"
+    ```
+  - The §14 comment at lines 1042-1043 ("the only other /user read is for self-repo phase reports") is stale: line 561 also runs for `autofix_failure`.
+- **Proposed fix:** at line 1040, use `HEAL_TRUSTED_AUTHOR="${PHASE_COMMENT_AUTHOR:-${PROVENANCE_LOGIN:-}}"` and keep the `/user` call at line 1044 as the fallback when that is empty. That fallback is still needed for consumer-repo `phase_failure`, where line 560 deliberately leaves `PROVENANCE_LOGIN` empty. Then correct the comment at lines 1042-1043.
+- **Safety rationale:** the token's identity drives trust decisions here: `--trusted-author` feeds `budget` lineage (line 1054) and `--trusted-login` feeds provenance verification (line 580). That makes it an authentication or identity-probe flow, which is a hard `RISKY_SKIP` trigger, even though the endpoint, token and fail-open handling (`|| true`) are the same.
+- **Downstream signal:** do not implement automatically. A reviewer must confirm that, for `autofix_failure`, the provenance login and the heal-lineage trusted author are meant to be the same identity, and must check whether any test asserts two `/user` calls.
+
+### Dead Calls (DEAD-API-###)
+No findings. I checked these call results, and each one is consumed downstream:
+- `unblock_judge.sh:1075`, `:1113`, `:1723` and `:1766`. The `:1766` diff read uses a different media type from `:1113`, so they cannot merge.
+- `workflow_failure_heal_intake.sh:561`, `:564`, `:1012`, `:1024` and `:1098`.
+- `review_autofix.yml:834`, `:1197` and `:1599`. The reads at 1197 and 1599 are deliberate freshness re-reads in separate steps.
+- `implement.yml:5710`, where `headRefName` comes free in the same call as `files`.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: RISKY_SKIP — it sits in `orchestrate_poll_process.sh` and reads a paginated timeline. Net-new detail for the implementer:
+  - GraphQL `PullRequest.state` is uppercase (`OPEN`/`CLOSED`/`MERGED`), but `_jq_field ... 'open|closed|merged'` (lines 24760-24761) needs lowercase.
+  - The synthesised JSON must keep REST paths `.head.ref`, `.merged_at` and `.body`, because `_pr_json_is_issue_implementation_pr` reads the head branch and closing-keyword body (lines 18395-18400).
+  - The `LINKED_PR_CROSS_REF_REJECTED ... head=` log key reads `.head.ref` (line 24756).
+  - See REUSE-001 for the same-cycle re-reads.
+- BATCH-002: NEEDS_VERIFICATION — net-new detail:
+  - The loop at `unblock_judge.sh:404-431` returns on the first matching candidate, so it currently makes 1–3 calls, not always 3.
+  - The REST `head=${owner}:ai/issue-N` filter (line 407) restricts results to same-owner heads. GraphQL `pullRequests(headRefName:)` does not filter by head owner, so the batched query must also select `headRepositoryOwner { login }` and filter on it. Otherwise a fork PR with that branch name could be treated as the fix.
+  - REST picks the latest `merged_at` (`sort_by(.merged_at) | last`). GraphQL `last:1` orders by creation date, so fetch several nodes and sort them client-side.
+  - Candidates must be evaluated in the original candidate order.
+- API-001: RISKY_SKIP — the current reads are `--paginate` (`workflow_failure_heal_intake.sh:1012`, `:1024`; `unblock_judge.sh:371`). The proposed search replacement adds two risks:
+  - The search API has its own, much lower rate limit.
+  - Search indexing lags, so a heal issue filed seconds earlier by a concurrent intake may not appear. That defeats the `action: duplicate` dedup and can open duplicate heal issues. The existing reissue search at `:1098` is safe only because it is fail-open and runs only on the lineage path.
+- API-002: RISKY_SKIP — `test-and-mark-stable.yml:1048-1076` is a polling loop with rate-limit backoff state (`RATE_LIMIT_BACKOFF`, lines 1055-1058). Net-new detail:
+  - The GraphQL `comments.totalCount` differs from today's `jq 'length'` of a single REST page, which is capped at 100 (line 1061). The `CUR_STATE` activity string (line 1081) would change meaning.
+  - Unverified: I believe the per-issue comments list does not support `direction=desc` (line 1060). If so, the current read returns the oldest 100 comments. The REST reference must be checked before either form is relied on.
+
+### Summary Counts
+These counts cover the findings in this pass plus the Deep Audit IDs cross-referenced above.
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-001, BATCH-002 |
+| RISKY_SKIP | 5 | REUSE-001, REUSE-002, BATCH-001, API-001, API-002 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
