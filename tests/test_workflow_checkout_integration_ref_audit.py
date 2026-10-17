@@ -659,10 +659,34 @@ def test_clarify_reclarify_releases_label_missing_hold_block() -> None:
 	forged = [{"id": 42, "user": {"login": "someone-else"}, "body": _LABEL_MISSING_MARKER}]
 	# A hold marker already released never removes a later, unrelated ai:blocked.
 	already_released = [{"id": 43, "user": {"login": "pipeline-bot"}, "body": f"text\n{released}"}]
-	for labels, comments in ((["ai:blocked"], forged), (["ai:clarification"], trusted), (["ai:blocked"], []), (["ai:blocked"], already_released)):
+	for labels, comments in ((["ai:blocked"], forged), (["ai:blocked"], []), (["ai:blocked"], already_released)):
 		rc, out, calls = _run_phase_label_step(labels, comments)
 		assert rc == 0, out
 		assert not any(delete in c or "PATCH" in c for c in calls), (labels, calls)
+	# ai:blocked already removed by hand: the open marker is still retired, so
+	# it cannot release a later, unrelated ai:blocked; nothing is deleted.
+	rc, out, calls = _run_phase_label_step(["ai:clarification"], trusted)
+	assert rc == 0, out
+	assert patch in calls and not any(delete in c for c in calls), calls
+	assert "outcome=released reason=label_missing issue=5 label=absent" in out, out
+
+
+def test_clarify_label_missing_hold_writes_nothing_for_untrusted_comment() -> None:
+	"""The job predicate admits a PR-dependency release comment from any
+	author; the hold must not write with GH_PAT for it before the route
+	step's trust check."""
+	untrusted = {"HOLD_EVENT_NAME": "issue_comment", "HOLD_COMMENT_LOGIN": "outsider", "HOLD_COMMENT_ASSOCIATION": "NONE"}
+	rc, out, gh_output, calls = _run_refctx_gh("clarify.yml", "ok", "true", _label_missing_env(**untrusted))
+	assert rc == 0, out
+	assert "label_missing_hold=true\n" in gh_output, gh_output
+	assert not _posts(calls), calls
+	assert "reason=label_missing_untrusted_comment" in out, out
+	for trusted in (
+		{"HOLD_EVENT_NAME": "issue_comment", "HOLD_COMMENT_LOGIN": "outsider", "HOLD_COMMENT_ASSOCIATION": "MEMBER"},
+		{"HOLD_EVENT_NAME": "issue_comment", "HOLD_COMMENT_LOGIN": "pipeline-bot", "HOLD_COMMENT_ASSOCIATION": "NONE"},
+	):
+		rc, out, gh_output, calls = _run_refctx_gh("clarify.yml", "ok", "true", _label_missing_env(**trusted))
+		assert rc == 0 and len(_posts(calls)) == 2, (trusted, calls)
 
 
 def main() -> int:
@@ -680,6 +704,7 @@ def main() -> int:
 	test_clarify_steps_after_refctx_honour_label_missing_hold()
 	test_clarify_always_steps_tolerate_missing_setup()
 	test_clarify_reclarify_releases_label_missing_hold_block()
+	test_clarify_label_missing_hold_writes_nothing_for_untrusted_comment()
 	return 0
 
 

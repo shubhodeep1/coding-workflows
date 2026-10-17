@@ -7,6 +7,7 @@ Clarify now treats only that refusal for the issue being clarified as a hold:
 
 - it posts one comment that names what is missing and how to fix it, ending in `<!-- ai:integration-ref-label-missing:v1 issue=<n> -->`; a marker counts only when the `GH_PAT` account wrote it, so a rerun posts no second comment;
 - it adds `ai:blocked` after the comment;
+- it writes nothing when the triggering comment is neither from an OWNER/MEMBER/COLLABORATOR nor from the `GH_PAT` account (the PR-dependency release shape the job admits from anyone), and stops the run with `INTEGRATION_REF_RESOLVE outcome=skip reason=label_missing_untrusted_comment`;
 - it writes the step output `label_missing_hold=true`, and every later clarify step skips, so nothing is checked out or run on the default branch;
 - it logs `INTEGRATION_REF_RESOLVE outcome=held reason=label_missing issue=<n> comment=posted|present label=applied` and the run succeeds, so no heal report is filed.
 
@@ -14,7 +15,7 @@ If the account login, the comment read, the comment or the label cannot be writt
 
 The "Semantic cache lookup", "Write run summary" and "Telegram failure notification" steps now skip with a warning when the job stopped before the runtime workspace or support scripts were set up, so the real error stays the run's first error.
 
-What this means for operators: to release a held issue, either restore `ai:check-triage` and remove `ai:orchestrator-managed`, or add the canonical tracking line to the issue body, then comment `/reclarify`. Once routing passes, that clarify run removes the hold's `ai:blocked` label (only when the `GH_PAT` account wrote the hold marker) and rewrites the marker to `<!-- ai:integration-ref-label-missing:v1 issue=<n> released -->`, so a later `ai:blocked` set for another reason is never removed by it, and planning and the unblock scan do not see a stale block. For #7511 and #7515, whose pull requests have merged, restoring the labels lets clarify close them through the check-triage resolution gate.
+What this means for operators: to release a held issue, either restore `ai:check-triage` and remove `ai:orchestrator-managed`, or, only on an issue that keeps `ai:orchestrator-managed`, add the canonical tracking line to the issue body, then comment `/reclarify`. Once routing passes, that clarify run removes the hold's `ai:blocked` label (only when the `GH_PAT` account wrote the hold marker) and rewrites the marker to `<!-- ai:integration-ref-label-missing:v1 issue=<n> released -->`, so a later `ai:blocked` set for another reason is never removed by it (the marker is retired even when `ai:blocked` was already removed by hand), and planning and the unblock scan do not see a stale block. For #7511 and #7515, whose pull requests have merged, restoring the labels lets clarify close them through the check-triage resolution gate.
 
 ### For contributors
 

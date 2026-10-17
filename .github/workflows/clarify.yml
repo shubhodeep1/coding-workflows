@@ -91,6 +91,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          HOLD_EVENT_NAME: ${{ github.event_name }}
+          HOLD_COMMENT_LOGIN: ${{ github.event.comment.user.login }}
+          HOLD_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -228,6 +231,20 @@ jobs:
             if ! [[ "${hold_login}" =~ ^[A-Za-z0-9](-?[A-Za-z0-9])*(\[bot\])?$ ]]; then
               hold_fail identity_unavailable
             fi
+            # The job predicate admits a PR-dependency release comment from any
+            # author; "Decide clarify route" verifies it later. Make no GH_PAT
+            # write for a comment that is neither from a trusted association
+            # nor from the GH_PAT login: stop the run without holding.
+            if [ "${HOLD_EVENT_NAME:-}" = "issue_comment" ] \
+              && ! [[ "${HOLD_COMMENT_ASSOCIATION:-}" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]] \
+              && [ "${HOLD_COMMENT_LOGIN:-}" != "${hold_login}" ]; then
+              {
+                echo "label_missing_hold=true"
+                echo "ref="
+              } >> "$GITHUB_OUTPUT"
+              echo "::warning::INTEGRATION_REF_RESOLVE outcome=skip reason=label_missing_untrusted_comment issue=${issue_number}; no comment or label written."
+              exit 0
+            fi
             hold_comments_file="${resolver_stage_root}/hold_comments.json"
             if ! gh api --paginate --slurp "repos/${hold_repo}/issues/${issue_number}/comments?per_page=100" > "${hold_comments_file}" 2>/dev/null; then
               hold_fail comments_unavailable
@@ -263,7 +280,7 @@ jobs:
               hold_body="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n\n%s' \
                 "**Clarify is on hold: CI-triage routing refused (\`reason=label_missing\`).**" \
                 "This issue carries the check-failure-triage markers but not the \`ai:check-triage\` label. On an \`ai:orchestrator-managed\` issue, the canonical \`- Tracking issue: #N\` line is missing as well. The integration-ref resolver cannot verify a branch, so clarify does not fall back to the default branch." \
-                "To fix it, either restore \`ai:check-triage\` and remove \`ai:orchestrator-managed\`, or add the canonical tracking line to the issue body. Then comment \`/reclarify\` to run clarify again. The issue is labelled \`ai:blocked\` until then." \
+                "To fix it, either restore \`ai:check-triage\` and remove \`ai:orchestrator-managed\`, or, only when the issue keeps \`ai:orchestrator-managed\`, add the canonical tracking line to the issue body. Then comment \`/reclarify\` to run clarify again. The issue is labelled \`ai:blocked\` until then." \
                 "Run: ${hold_run_url}" \
                 "_Posted by the clarify workflow._" \
                 "${hold_marker}")"
@@ -274,7 +291,9 @@ jobs:
             fi
             # The label goes on after the comment, so the ai:blocked label
             # event never precedes the explanation.
-            if ! gh api -X POST "repos/${hold_repo}/issues/${issue_number}/labels" -f 'labels[]=ai:blocked' >/dev/null 2>&1; then
+            # Adding a label is idempotent, so one retry is safe.
+            if ! gh api -X POST "repos/${hold_repo}/issues/${issue_number}/labels" -f 'labels[]=ai:blocked' >/dev/null 2>&1 \
+              && ! { sleep 2; gh api -X POST "repos/${hold_repo}/issues/${issue_number}/labels" -f 'labels[]=ai:blocked' >/dev/null 2>&1; }; then
               hold_fail label_failed
             fi
             {
@@ -993,10 +1012,15 @@ jobs:
           # the unblock scan do not see a stale block. Only an open hold marker
           # by the GH_PAT login counts. The marker is first rewritten to its
           # "released" form, so a later ai:blocked set for another reason is
-          # never removed by this step; any failure leaves the label on.
+          # never removed by this step; any failure leaves the label on. Open
+          # markers are retired even when ai:blocked is already gone (removed
+          # by hand), so a stale marker cannot release a later, unrelated block.
           if [ "${{ github.event_name }}" = "issue_comment" ] \
-            && [ -s "${ISSUE_ALL_COMMENTS_FILE:-}" ] \
-            && jq -e '[(.labels // [])[]?.name] | index("ai:blocked") != null' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+            && [ -s "${ISSUE_ALL_COMMENTS_FILE:-}" ]; then
+            hold_release_has_label=false
+            if jq -e '[(.labels // [])[]?.name] | index("ai:blocked") != null' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+              hold_release_has_label=true
+            fi
             hold_release_login="$(gh api user --jq .login 2>/dev/null || true)"
             hold_release_marker="<!-- ai:integration-ref-label-missing:v1 issue=${ISSUE_NUMBER} -->"
             hold_release_done="<!-- ai:integration-ref-label-missing:v1 issue=${ISSUE_NUMBER} released -->"
@@ -1020,7 +1044,9 @@ jobs:
                   hold_release_ok=false
                 fi
               done
-              if [ "${hold_release_ok}" = "true" ] \
+              if [ "${hold_release_ok}" = "true" ] && [ "${hold_release_has_label}" != "true" ]; then
+                echo "::notice::INTEGRATION_REF_RESOLVE outcome=released reason=label_missing issue=${ISSUE_NUMBER} label=absent"
+              elif [ "${hold_release_ok}" = "true" ] \
                 && GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:blocked" >/dev/null 2>&1; then
                 echo "::notice::INTEGRATION_REF_RESOLVE outcome=released reason=label_missing issue=${ISSUE_NUMBER} label=removed"
               else
