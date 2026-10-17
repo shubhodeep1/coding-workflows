@@ -742,7 +742,10 @@ def _warn_if_retired_label_in_use(*, repo: str, label_name: str, dry_run: bool) 
         for item in issue_items
         if isinstance(item, dict) and isinstance(item.get("number"), int)
     ]
-    count_text = str(len(issue_items))
+    # Count only entries with an issue number, so count= agrees with issues=.
+    # The 100+ cap still follows the raw page size (a full page means more
+    # issues may exist past it).
+    count_text = str(len(issue_numbers))
     if len(issue_items) >= RETIRED_LABEL_IN_USE_PAGE_SIZE:
         count_text = f"{RETIRED_LABEL_IN_USE_PAGE_SIZE}+"
     listed_numbers = issue_numbers[:RETIRED_LABEL_IN_USE_MAX_LISTED_NUMBERS]
