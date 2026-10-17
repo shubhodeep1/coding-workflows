@@ -1284,7 +1284,7 @@ checkout fails, the run skips planning (`SKIP_PLAN=true`, WARNING) rather than
 planning on the former head. Every other
 case, including read failures, plans as usual. Kill switch
 `PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED` (default `true`). Implement's own
-branch resolution is unchanged.
+branch resolution handles a `reason=pr_not_open` refusal separately (#7540).
 
 Issue #7251 dependency wait (unblock fix-up #7257, temporary; registry entry
 in `docs/scripts-pending-removal.md`): #7251 waits for PR #6667 to merge into
