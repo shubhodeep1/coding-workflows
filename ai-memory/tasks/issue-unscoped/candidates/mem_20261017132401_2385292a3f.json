@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Several changes around plan and clarify workflows involve integration-ref audits or `scripts/resolve_integration_ref.sh`, with dedicated tests and fixtures for managed-child and triage cases. When modifying checkout selection or ref resolution, check the shared resolver and cover relevant input combinations with tests.",
+  "fingerprint": "7a91a622f0050372022ad2c38890c9335007d988819090c28fed6be9a5971d96",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39035746363",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39035746363",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7516",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7526",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7540",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7551",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7553",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7523",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7531",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7552",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7559"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261017132401_2385292a3f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Changes to workflow checkout or integration-ref behavior should account for shared resolver logic and edge-case fixtures.",
+  "timestamps": {
+    "created_at": "2026-10-17T13:24:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
