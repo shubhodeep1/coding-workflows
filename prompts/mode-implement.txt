@@ -39,6 +39,15 @@ Test verification:
 - For `npm test`, treat "Missing script" errors as a pass (no tests defined);
   treat any other test failure as a real error.
 
+Pinned-SHA test discipline: never write a test that asserts a specific
+upstream commit SHA in a file the workflow sync manages, such as a wrapper's
+`uses: shubhodeep1/coding-workflows/...@<40-hex>` line or a constant like
+`PINNED_SUPPORT_SHA` holding the SHA you just read. Every `@stable` sync
+rewrites those pins, so the test fails on the next sync PR. Assert the shape
+instead: the ref matches `^[0-9a-f]{40}$` (a full commit, not a branch or
+tag), and where two pins must agree (a checkout `ref:` and a reusable
+workflow `uses:`), read one from the file and compare it to the other.
+
 Verification stage order:
 - Resolve the exact `typecheck -> lint -> tests -> build` commands from the target repo's `AGENTS.md`, `package.json`, and `Makefile` when those surfaces exist; do not invent new repo-level commands in this prompt.
 - Inside the shared verification loop below, always run those four stages in that exact order before any later smoke validation.
