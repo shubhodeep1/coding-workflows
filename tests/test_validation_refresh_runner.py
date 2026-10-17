@@ -1625,6 +1625,9 @@ def test_process_repository_drift_with_tracked_assets_has_no_not_committed_diagn
 			)
 			result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
 			assert result.diagnostics[-1] == "validation_assets_drifted_no_push"
+			# The local index read is bounded to 30 s, not the 300 s default.
+			ls_files_timeouts = [t for c, t in executor.timeouts if tuple(c[:3]) == ("git", "ls-files", "--")]
+			assert ls_files_timeouts == [30]
 			assert not any(line.startswith("validation_assets_not_committed") for line in result.diagnostics)
 			executor.assert_consumed()
 
