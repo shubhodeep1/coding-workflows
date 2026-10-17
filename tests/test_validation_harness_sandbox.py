@@ -1800,3 +1800,191 @@ def test_selfcheck_placeholder_flag_is_not_passed_to_the_sandbox() -> None:
 	for name, passed in (("VALIDATION_HARNESS_SELFCHECK_RUNNER_UNSET_OPERATOR_STEP", False), ("VALIDATION_TEST_USERNAME", True)):
 		out = subprocess.run(["bash", "-c", script, "x", name], capture_output=True, text=True, env={"PATH": os.environ["PATH"]}, timeout=30)
 		assert (out.returncode == 0) is passed, (name, out)
+
+
+# The screened copy (STAGE_PY) is what compose builds with `context: ..` and
+# `COPY . /workspace`. These tests run the embedded program as cmd_run does,
+# over a throwaway git repository, and read the tar it writes to stdout.
+def _stage_program() -> str:
+	out = subprocess.run(
+		["bash", "-c", f'source "{HELPER}"; printf "%s" "${{STAGE_PY}}"'],
+		capture_output=True, text=True, env={"PATH": os.environ["PATH"]}, timeout=30,
+	)
+	assert out.returncode == 0 and "def add(path, arcname):" in out.stdout, out.stderr
+	return out.stdout
+
+
+def _stage_workspace(tmp_path: Path) -> tuple[Path, Path]:
+	# A private copy of the trusted sibling, so `python3 -I` never writes
+	# bytecode into the repository's scripts/ directory.
+	helper_dir = tmp_path / "helper"
+	helper_dir.mkdir()
+	shutil.copy2(REPO_ROOT / "scripts" / "codex_isolated_workspace.py", helper_dir / "codex_isolated_workspace.py")
+	workspace = tmp_path / "workspace"
+	workspace.mkdir()
+	git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+	subprocess.run(["git", "init", "-q", str(workspace)], check=True, env=git_env)
+	return helper_dir, workspace
+
+
+def _git_add(workspace: Path, *names: str) -> None:
+	git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+	subprocess.run(["git", "-C", str(workspace), "add", "-f", "--", *names], check=True, env=git_env)
+
+
+def _write(workspace: Path, name: str, text: str) -> None:
+	path = workspace / name
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(text, encoding="utf-8")
+
+
+def _stage(helper_dir: Path, workspace: Path) -> tuple[dict[str, bytes], str]:
+	result = subprocess.run(
+		["python3", "-I", "-c", _stage_program(), str(helper_dir), str(workspace)],
+		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir)},
+	)
+	assert result.returncode == 0, result.stderr
+	members: dict[str, bytes] = {}
+	with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r|") as archive:
+		for member in archive:
+			assert member.isreg(), member.name
+			handle = archive.extractfile(member)
+			assert handle is not None
+			members[member.name] = handle.read()
+	return members, result.stderr.decode()
+
+
+def test_stage_copy_includes_untracked_files_that_are_not_ignored(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, ".gitignore", "ignored.txt\nbuild/\n")
+	_write(workspace, "tracked.txt", "tracked\n")
+	_git_add(workspace, ".gitignore", "tracked.txt")
+	# The bootstrap seeds this stub untracked (validation_template_bootstrap.py).
+	_write(workspace, "scripts/run_validation_repo_checks.sh", "#!/bin/bash\nexit 0\n")
+	_write(workspace, "ignored.txt", "ignored\n")
+	_write(workspace, "build/out.js", "ignored\n")
+	members, _ = _stage(helper_dir, workspace)
+	assert members["tracked.txt"] == b"tracked\n"
+	assert "scripts/run_validation_repo_checks.sh" in members, "untracked, non-ignored files must be staged"
+	assert "ignored.txt" not in members and "build/out.js" not in members, "ignored files must stay out"
+
+
+def test_stage_copy_admits_env_templates_but_not_real_env_files(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	for name in (".env.example", "app/.env.sample", "app/.env.template", ".env", ".env.local", "app/.env.production", ".env.example.local"):
+		_write(workspace, name, "KEY=value\n")
+	_git_add(workspace, ".env.example", "app/.env.sample", ".env", "app/.env.production")
+	members, stderr = _stage(helper_dir, workspace)
+	for name in (".env.example", "app/.env.sample", "app/.env.template"):
+		assert name in members, name
+		assert f"VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=env_template_admitted path={name}\n" in stderr
+	for name in (".env", ".env.local", "app/.env.production", ".env.example.local"):
+		assert name not in members, name
+	assert "KEY=value" not in stderr, "logs must never carry file content"
+
+
+def test_stage_copy_keeps_other_readonly_exclusions(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	for name in ("certs/server.pem", "deploy.key", ".config/tool.json", "secrets/.env.example", ".npmrc/.env.example", "ok.txt"):
+		_write(workspace, name, "data\n")
+	_git_add(workspace, "certs/server.pem", "deploy.key", ".config/tool.json", "secrets/.env.example", "ok.txt")
+	members, _ = _stage(helper_dir, workspace)
+	assert set(members) == {"ok.txt"}, sorted(members)
+
+
+def test_stage_copy_admits_a_clean_npmrc(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	clean = "legacy-peer-deps=true\n# shared settings\nregistry=https://registry.npmjs.org/\nalways-auth=false\n"
+	_write(workspace, ".npmrc", clean)
+	_write(workspace, "web/.npmrc", "engine-strict=true\n")
+	_git_add(workspace, ".npmrc")
+	members, stderr = _stage(helper_dir, workspace)
+	assert members[".npmrc"] == clean.encode()
+	assert members["web/.npmrc"] == b"engine-strict=true\n"
+	assert "VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=npmrc_admitted path=.npmrc\n" in stderr
+	assert "legacy-peer-deps" not in stderr
+
+
+@pytest.mark.parametrize("content", (
+	"//registry.npmjs.org/:_authToken=abc123\n",
+	"  //npm.pkg.github.com/:_authToken=${NPM_TOKEN}\n",
+	"_authToken=abc123\n",
+	"_auth=dXNlcjpwYXNz\n",
+	"//registry.example.com/:_password=cGFzcw==\n",
+	"//registry.example.com/:username=octo-user\n",
+	"email=me@example.com\n",
+	"certfile=/home/me/cert.pem\n",
+	"keyfile=/home/me/key.pem\n",
+	"cafile=/etc/ca.pem\n",
+	"key=\"-----BEGIN PRIVATE KEY-----\\nabc\"\n",
+	"cert = something\n",
+	"registry=https://user:pass@registry.example.com/\n",
+	"registry=${NPM_REGISTRY}\n",
+	"legacy-peer-deps=true\nPASSWORD=hunter2\n",
+))
+def test_stage_copy_drops_an_npmrc_with_credential_material(tmp_path: Path, content: str) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, ".npmrc", content)
+	_write(workspace, "ok.txt", "ok\n")
+	_git_add(workspace, ".npmrc", "ok.txt")
+	members, stderr = _stage(helper_dir, workspace)
+	assert ".npmrc" not in members
+	assert "ok.txt" in members
+	assert "VALIDATION_HARNESS_SANDBOX phase=stage outcome=skip reason=npmrc_credential path=.npmrc\n" in stderr
+	for line in content.splitlines():
+		value = line.split("=", 1)[-1].strip()
+		if value:
+			assert value not in stderr, "logs must never carry file content"
+
+
+def test_stage_copy_drops_a_symlinked_oversized_or_undecodable_npmrc(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "target.txt", "legacy-peer-deps=true\n")
+	(workspace / ".npmrc").symlink_to("target.txt")
+	_write(workspace, "big/.npmrc", "legacy-peer-deps=true\n" + "#" * (64 * 1024) + "\n")
+	(workspace / "bin").mkdir()
+	(workspace / "bin" / ".npmrc").write_bytes(b"legacy-peer-deps=\xff\xfe\n")
+	_git_add(workspace, ".npmrc", "target.txt", "big/.npmrc", "bin/.npmrc")
+	members, stderr = _stage(helper_dir, workspace)
+	assert ".npmrc" not in members and "big/.npmrc" not in members and "bin/.npmrc" not in members
+	assert "target.txt" in members
+	assert "outcome=skip reason=npmrc_symlink path=.npmrc\n" in stderr
+	assert "outcome=skip reason=npmrc_too_large path=big/.npmrc\n" in stderr
+	assert "outcome=skip reason=npmrc_undecodable path=bin/.npmrc\n" in stderr
+
+
+def test_stage_copy_logs_a_skip_for_a_symlinked_env_template(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "target.txt", "KEY=value\n")
+	(workspace / ".env.example").symlink_to("target.txt")
+	_git_add(workspace, ".env.example", "target.txt")
+	members, stderr = _stage(helper_dir, workspace)
+	assert ".env.example" not in members
+	assert "VALIDATION_HARNESS_SANDBOX phase=stage outcome=skip reason=env_template_not_regular path=.env.example\n" in stderr
+
+
+def test_stage_copy_keeps_ignored_special_files_under_validation_out(tmp_path: Path) -> None:
+	# The validation/ walk adds files git ignores; the staging-only admissions
+	# must not apply to them.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, ".gitignore", "validation/.env.example\nvalidation/.npmrc\n")
+	_git_add(workspace, ".gitignore")
+	_write(workspace, "validation/.env.example", "KEY=value\n")
+	_write(workspace, "validation/.npmrc", "legacy-peer-deps=true\n")
+	_write(workspace, "validation/tests/ok.sh", "#!/bin/bash\n")
+	members, stderr = _stage(helper_dir, workspace)
+	assert "validation/tests/ok.sh" in members
+	assert "validation/.env.example" not in members and "validation/.npmrc" not in members, sorted(members)
+	assert "path=validation/.env.example" not in stderr and "path=validation/.npmrc" not in stderr
+
+
+def test_stage_copy_leaves_the_shared_readonly_screen_unchanged() -> None:
+	# Agent sandboxes use readonly_allowed too; the staging admissions live
+	# only in STAGE_PY.
+	import importlib.util
+	spec = importlib.util.spec_from_file_location("cw_isolated_for_stage_test", REPO_ROOT / "scripts" / "codex_isolated_workspace.py")
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	for name in (".npmrc", "web/.npmrc", ".env.example", ".env.sample", ".env.template"):
+		assert module.readonly_allowed(name) is False, name
