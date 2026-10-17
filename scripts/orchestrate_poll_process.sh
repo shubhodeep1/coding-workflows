@@ -19351,6 +19351,163 @@ The project judge produced no usable output (${why}) ${failures} time(s) in a ro
   fi
 }
 
+# close_orphan_fixup_chains_sweep — closes open unblock fix-up issues whose
+# source issue is already closed (scripts/orphan_fixup_close.py decides; its
+# docstring holds the rules). A fix-up (`<!-- ai:unblock-fixup:v1 item=<n> ...`
+# first body line, scripts/unblock_actions.py `_fixup_body`) only exists to
+# clear the block on item <n>; once <n> is closed nothing waits on it, but the
+# fix-up is blocked itself and the judge files a fix-up of that fix-up, so
+# chains of open fix-ups outlive their closed root (17 deep in one consumer).
+# Each closed fix-up gets one comment ending in
+# `<!-- ai:orphan-fixup-closed:v1 item=<n> parent=<p> root=<r> -->` and is
+# closed as not planned. Runs once per tick from the top of run_unblock_scan,
+# so it covers the full tick and the UNBLOCK_SCAN_SWEEP_ONLY tick.
+# Variables (all optional): ORPHAN_FIXUP_CLOSE_ENABLED (default true; false
+# turns the sweep off), ORPHAN_FIXUP_CLOSE_DRY_RUN (default false; true logs
+# `outcome=would_close` and changes nothing), ORPHAN_FIXUP_CLOSE_MAX_PER_TICK
+# (default 5), ORPHAN_FIXUP_CLOSE_GRACE_MINUTES (default 60: how long the item
+# must have been closed), ORPHAN_FIXUP_CLOSE_MAX_PAGES (default 5 pages of 100
+# open issues).
+# API budget (§15): no existing call of the tick lists open issues with their
+# bodies (the unblock scan's search returns at most 30 blocked items without
+# bodies), so this adds one REST list page per 100 open issues (at most
+# ORPHAN_FIXUP_CLOSE_MAX_PAGES). With no fix-up whose item is closed or
+# unknown that is the whole cost. Otherwise: one aliased GraphQL query for all
+# items not in the list (at most 20), and for each fix-up about to close (at
+# most ORPHAN_FIXUP_CLOSE_MAX_PER_TICK) one _issue_timeline_with_cross_refs_json
+# read (GraphQL-first) and one `gh issue close -c`. The `user` read is the
+# tick's cached unblock_trusted_login. Fails closed: any failed read closes
+# nothing this tick and the next tick retries.
+close_orphan_fixup_chains_sweep() {
+	if ! is_truthy "${ORPHAN_FIXUP_CLOSE_ENABLED:-true}"; then
+		echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=disabled"
+		return 0
+	fi
+	if [ ! -f scripts/orphan_fixup_close.py ]; then
+		echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=support_missing"
+		return 0
+	fi
+	local ofc_max="${ORPHAN_FIXUP_CLOSE_MAX_PER_TICK:-5}" ofc_grace="${ORPHAN_FIXUP_CLOSE_GRACE_MINUTES:-60}" ofc_pages="${ORPHAN_FIXUP_CLOSE_MAX_PAGES:-5}"
+	[[ "${ofc_max}" =~ ^[0-9]+$ ]] || ofc_max=5
+	[[ "${ofc_grace}" =~ ^[0-9]+$ ]] || ofc_grace=60
+	[[ "${ofc_pages}" =~ ^[0-9]+$ ]] && [ "${ofc_pages}" -ge 1 ] || ofc_pages=5
+	if [ "${ofc_max}" -eq 0 ]; then
+		echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=max_zero"
+		return 0
+	fi
+	unblock_trusted_login >/dev/null
+	if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+		echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=login_unavailable"
+		return 0
+	fi
+	local ofc_dir="${RUNNER_TEMP:-/tmp}/orphan-fixup-close"
+	mkdir -p "${ofc_dir}"
+	local ofc_page=1 ofc_resp ofc_raw ofc_items="[]"
+	while [ "${ofc_page}" -le "${ofc_pages}" ]; do
+		if ! ofc_resp="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues?state=open&per_page=100&page=${ofc_page}" \
+			--jq '{raw: length, items: [.[] | select(.pull_request == null) | {number, labels: [.labels[]?.name], author_login: (.user.login // ""), body: ((.body // "") | .[0:400])}]}' 2>/dev/null)"; then
+			echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=list_failed page=${ofc_page}"
+			return 0
+		fi
+		ofc_items="$(jq -c --argjson more "$(printf '%s' "${ofc_resp}" | jq -c '.items' 2>/dev/null || echo 'null')" '. + $more' <<< "${ofc_items}" 2>/dev/null || true)"
+		if [ -z "${ofc_items}" ]; then
+			echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=list_invalid page=${ofc_page}"
+			return 0
+		fi
+		ofc_raw="$(printf '%s' "${ofc_resp}" | jq -r '.raw // 0' 2>/dev/null || echo 0)"
+		[[ "${ofc_raw}" =~ ^[0-9]+$ ]] && [ "${ofc_raw}" -ge 100 ] || break
+		ofc_page=$((ofc_page + 1))
+	done
+	printf '%s' "${ofc_items}" > "${ofc_dir}/issues.json"
+	local ofc_now ofc_sel
+	ofc_now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	if ! ofc_sel="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/orphan_fixup_close.py select --issues-file "${ofc_dir}/issues.json" \
+		--trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${ofc_now}" --max "${ofc_max}" --grace-minutes "${ofc_grace}" 2>/dev/null)"; then
+		echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=select_failed"
+		return 0
+	fi
+	local ofc_need ofc_n ofc_fragment="" ofc_query ofc_gql
+	ofc_need="$(printf '%s' "${ofc_sel}" | jq -r '.need_parents[:20][]?' 2>/dev/null || true)"
+	if [ -n "${ofc_need}" ]; then
+		for ofc_n in ${ofc_need}; do
+			[[ "${ofc_n}" =~ ^[0-9]+$ ]] || continue
+			ofc_fragment+=$'\n'"    p${ofc_n}: issueOrPullRequest(number: ${ofc_n}) {
+      __typename
+      ... on Issue { state stateReason closedAt }
+      ... on PullRequest { state }
+    }"
+		done
+		ofc_query="query {
+  repository(owner: \"${GITHUB_REPOSITORY%%/*}\", name: \"${GITHUB_REPOSITORY##*/}\") {${ofc_fragment}
+  }
+}"
+		if ! ofc_gql="$(gh_retry gh api graphql -f query="${ofc_query}" 2>/dev/null)"; then
+			echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=parent_lookup_failed"
+			return 0
+		fi
+		if ! printf '%s' "${ofc_gql}" | jq -c '
+			(.data.repository // {}) | to_entries
+			| map(select(.value != null) | {key: (.key | ltrimstr("p")), value: {type: .value.__typename, state: (.value.state // null), state_reason: (.value.stateReason // null), closed_at: (.value.closedAt // null)}})
+			| from_entries' > "${ofc_dir}/parents.json" 2>/dev/null; then
+			echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=parent_lookup_invalid"
+			return 0
+		fi
+		if ! ofc_sel="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/orphan_fixup_close.py select --issues-file "${ofc_dir}/issues.json" \
+			--parents-file "${ofc_dir}/parents.json" --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${ofc_now}" --max "${ofc_max}" --grace-minutes "${ofc_grace}" 2>/dev/null)"; then
+			echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=reselect_failed"
+			return 0
+		fi
+	fi
+	local ofc_count ofc_i ofc_row ofc_number ofc_parent ofc_root ofc_depth ofc_root_reason ofc_chain ofc_timeline ofc_check ofc_check_ok ofc_check_reason ofc_comment
+	local ofc_closed=0 ofc_held=0
+	ofc_count="$(printf '%s' "${ofc_sel}" | jq '.close | length' 2>/dev/null || echo 0)"
+	[[ "${ofc_count}" =~ ^[0-9]+$ ]] || ofc_count=0
+	for ((ofc_i = 0; ofc_i < ofc_count; ofc_i++)); do
+		ofc_row="$(printf '%s' "${ofc_sel}" | jq -c ".close[${ofc_i}]" 2>/dev/null || true)"
+		ofc_number="$(printf '%s' "${ofc_row}" | jq -r '.number // empty' 2>/dev/null || true)"
+		ofc_parent="$(printf '%s' "${ofc_row}" | jq -r '.parent // empty' 2>/dev/null || true)"
+		ofc_root="$(printf '%s' "${ofc_row}" | jq -r '.root // empty' 2>/dev/null || true)"
+		ofc_depth="$(printf '%s' "${ofc_row}" | jq -r '.depth // empty' 2>/dev/null || true)"
+		ofc_root_reason="$(printf '%s' "${ofc_row}" | jq -r '.root_reason // "unknown"' 2>/dev/null || echo unknown)"
+		ofc_chain="$(printf '%s' "${ofc_row}" | jq -r '(.chain // []) | map("#" + tostring) | join(" -> ")' 2>/dev/null || true)"
+		[[ "${ofc_number}" =~ ^[0-9]+$ && "${ofc_parent}" =~ ^[0-9]+$ && "${ofc_root}" =~ ^[0-9]+$ ]] || continue
+		# A linked pull request or an earlier close of the fix-up (it was
+		# reopened) is only visible in the timeline; one read per fix-up that
+		# is about to close, never for the rest.
+		if ! ofc_timeline="$(_issue_timeline_with_cross_refs_json "${ofc_number}")"; then
+			echo "ORPHAN_FIXUP_CLOSE item=${ofc_number} parent=${ofc_parent} root=${ofc_root} outcome=skip reason=timeline_fetch_failed"
+			ofc_held=$((ofc_held + 1))
+			continue
+		fi
+		printf '%s' "${ofc_timeline}" > "${ofc_dir}/timeline.json"
+		ofc_check="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/orphan_fixup_close.py timeline-check --timeline-file "${ofc_dir}/timeline.json" 2>/dev/null || echo '{"ok":false,"reason":"check_failed"}')"
+		ofc_check_ok="$(printf '%s' "${ofc_check}" | jq -r '.ok // false' 2>/dev/null || echo false)"
+		ofc_check_reason="$(printf '%s' "${ofc_check}" | jq -r '.reason // "check_failed"' 2>/dev/null || echo check_failed)"
+		if [ "${ofc_check_ok}" != "true" ]; then
+			echo "ORPHAN_FIXUP_CLOSE item=${ofc_number} parent=${ofc_parent} root=${ofc_root} outcome=skip reason=${ofc_check_reason}"
+			ofc_held=$((ofc_held + 1))
+			continue
+		fi
+		if is_truthy "${ORPHAN_FIXUP_CLOSE_DRY_RUN:-false}"; then
+			echo "ORPHAN_FIXUP_CLOSE item=${ofc_number} parent=${ofc_parent} root=${ofc_root} depth=${ofc_depth} chain=\"${ofc_chain}\" outcome=would_close"
+			continue
+		fi
+		ofc_comment="Closing as not planned: this unblock fix-up only existed to unblock #${ofc_parent}, and its chain (${ofc_chain}) ends at #${ofc_root}, which is closed (${ofc_root_reason}). Nothing is waiting on it any more. Reopen it if the change is still wanted; this sweep never closes a reopened issue. Auto-closed by orchestrator poller (close_orphan_fixup_chains_sweep).
+
+<!-- ai:orphan-fixup-closed:v1 item=${ofc_number} parent=${ofc_parent} root=${ofc_root} -->"
+		# One attempt: the close carries a comment, and a retried close would
+		# repeat it. A failed close leaves the fix-up open for the next tick.
+		if GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh issue close "${ofc_number}" --repo "${GITHUB_REPOSITORY}" --reason "not planned" -c "${ofc_comment}" >/dev/null 2>&1; then
+			ofc_closed=$((ofc_closed + 1))
+			echo "ORPHAN_FIXUP_CLOSE item=${ofc_number} parent=${ofc_parent} root=${ofc_root} depth=${ofc_depth} outcome=closed"
+		else
+			echo "::warning::ORPHAN_FIXUP_CLOSE item=${ofc_number} parent=${ofc_parent} root=${ofc_root} outcome=close_failed"
+		fi
+	done
+	echo "ORPHAN_FIXUP_CLOSE selected=${ofc_count} closed=${ofc_closed} held=${ofc_held} skipped=$(printf '%s' "${ofc_sel}" | jq -c '.skipped // {}' 2>/dev/null || echo '{}') outcome=done"
+	return 0
+}
+
 # Once per tick, after the per-project loop: find blocked items and dispatch
 # unblock_judge_dispatch.yml for at most UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK
 # of them (scripts/unblock_scan.py decides).
@@ -19368,6 +19525,10 @@ run_unblock_scan() {
   # Needs-human digest upkeep (plan item 4a) rides the scan's once-per-tick
   # slot in both poller modes, also while the unblock judge is off.
   needs_human_digest_prune || true
+  # Closes open unblock fix-ups whose source issue is closed. Independent of
+  # UNBLOCK_JUDGE_ENABLED (stale fix-ups are cleaned up while the judge is
+  # off) and never ends the scan: a failure inside is logged.
+  close_orphan_fixup_chains_sweep || echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=error rc=$?"
   # Issue #7251 dependency wait: refresh the hold before #7251 can be judged.
   if declare -F _issue_7251_dependency_wait_once >/dev/null 2>&1; then _issue_7251_dependency_wait_once; fi
   if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
