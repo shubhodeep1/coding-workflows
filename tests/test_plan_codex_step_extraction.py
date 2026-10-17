@@ -533,7 +533,9 @@ PIN_STEP_NAME = "Pin claude-pool-token action module type"
 PIN_STEP_IF = "env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'"
 STAGED_ACTION_REL = Path(".codex-workflow-src") / ".github" / "actions" / "claude-pool-token"
 CLARIFY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
-CLARIFY_PIN_STEP_IF = "steps.ai_engine.outputs.engine == 'claude'"
+# Issue #7516: every clarify step after "Resolve integration ref" also skips on
+# the label_missing hold.
+CLARIFY_PIN_STEP_IF = "steps.refctx.outputs.label_missing_hold != 'true' && (steps.ai_engine.outputs.engine == 'claude')"
 
 
 def _step_run_body(step: str) -> str:

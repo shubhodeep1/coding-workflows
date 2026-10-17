@@ -515,6 +515,55 @@ def test_status_workflow_wiring() -> None:
 	assert "activation_verify.sh\" pr" in steps["Verify activation"]["run"]
 
 
+@pytest.mark.parametrize(("head_ref", "label"), [
+	("auto/update-workflows-9e9338339cb3", "auto/update-workflows-"),
+	("ai-sync/stable", "ai-sync/stable"),
+])
+def test_consumer_workflow_sync_pr_is_not_verified(tmp_path: Path, head_ref: str, label: str) -> None:
+	# The updater's own same-repository PRs only refresh upstream-managed wrappers.
+	result, state = _verify(tmp_path, DORMANT, env_extra={"PR_HEAD_REF": head_ref, "PR_HEAD_REPOSITORY": "o/r"})
+	assert result.returncode == 0
+	assert f"ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=workflow_sync_pr sync_branch={label}\n" in result.stdout
+	# Skipped before any GitHub call: no linked-issue read, files read, comment or issue.
+	assert state["calls"] == [] and state["comments"] == [] and state["created"] == []
+
+
+@pytest.mark.parametrize(("head_ref", "head_repository"), [
+	("auto/update-workflows-9e9338339cb3", "attacker/r"),
+	("auto/update-workflows-9e9338339cb3", ""),
+	("ai-sync/stable", "attacker/r"),
+	("ai-sync/stable-2", "o/r"),
+	("auto/update-workflows", "o/r"),
+	("feature/auto/update-workflows-9e9338339cb3", "o/r"),
+	("claude/some-fix", "o/r"),
+	("", "o/r"),
+])
+def test_only_the_updaters_own_branches_skip_verification(tmp_path: Path, head_ref: str, head_repository: str) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs on push.", "gaps": []},
+		env_extra={"PR_HEAD_REF": head_ref, "PR_HEAD_REPOSITORY": head_repository})
+	assert "reason=workflow_sync_pr" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+
+
+def test_sync_pr_skip_does_not_apply_to_project_mode(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "cron", "summary": "Running.", "gaps": []}, mode="project",
+		env_extra={"TRACKING_NUM": "5", "PROJECT_TITLE": "p", "PROJECT_BODY": "b", "FINAL_PR": "", "PROJECT_FILES_JSON": '["a.txt"]',
+			"PR_HEAD_REF": "ai-sync/stable", "PR_HEAD_REPOSITORY": "o/r"})
+	assert "reason=workflow_sync_pr" not in result.stdout
+	assert state["comments"][-1]["endpoint"] == "repos/o/r/issues/5/comments"
+
+
+def test_status_workflow_skips_consumer_workflow_sync_prs() -> None:
+	workflow = yaml.safe_load(STATUS.read_text(encoding="utf-8"))
+	job = workflow["jobs"]["activation-verify"]
+	skip = ("!(github.event.pull_request.head.repo.full_name == github.repository && "
+		"(startsWith(github.event.pull_request.head.ref, 'auto/update-workflows-') || github.event.pull_request.head.ref == 'ai-sync/stable'))")
+	assert skip in job["if"]
+	verify_env = next(step for step in job["steps"] if step["name"] == "Verify activation")["env"]
+	assert verify_env["PR_HEAD_REF"] == "${{ github.event.pull_request.head.ref }}"
+	assert verify_env["PR_HEAD_REPOSITORY"] == "${{ github.event.pull_request.head.repo.full_name || '' }}"
+
+
 def test_poller_runs_it_on_every_completion_path() -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	lines = text.splitlines()
