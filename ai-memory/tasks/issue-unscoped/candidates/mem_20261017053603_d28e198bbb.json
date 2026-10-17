@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"forbid SHA-pinning tests in implement prompt\" \u2014 a \"Pinned-SHA test discipline\" paragraph must reach the implement agent so it stops writing tests that assert a literal upstream SHA\n  expected_change_site: `.github/workflows/implement.yml`, inline heredoc `PROMPT_TEMPLATE_FILE=\"${RUNTIME_DIR}/mode-implement-inline.txt\"`, \"Test verification:\" block (lines 2700-2707)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: implement.yml writes its prompt from the inline heredoc (line 2618) and renders it at line 2792 via render_prompt.sh; mentions of prompts/mode-implement.txt in implement.yml are only comments (lines 2969, 3340); the \"Test verification:\" block (lines 2700-2707) has no pinned-SHA text; implement.yml is not in pr_changed_files.txt; the new paragraph exists only in prompts/mode-implement.txt and prompts/_templates/mode-implement.txt, which the live path does not load; tests/test_implement_prompt_pinned_sha_contract.py reads only those two files so it passes while the real prompt lacks the rule; agents.d/7544-activation-verify-skips-sync-prs.md and changelog.d/7544-skip-activation-verify-for-sync-prs.md claim otherwise. Severity noted as MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=MAJOR, confidence=5)\n  Requirement: \"Implement wrote tests that pin an upstream SHA\" / PR title \"forbid SHA-pinning tests in implement prompt\"; the paragraph must reach the implementer.\n  Expected change site: `.github/workflows/implement.yml`, inline heredoc `PROMPT_TEMPLATE_FILE=\"${RUNTIME_DIR}/mode-implement-inline.txt\"`, \"Test verification:\" block (lines 2700-2707).\n  Evidence of absence: Read implement.yml lines 2618-2619 and 2792. Prompt rendered from inline heredoc via `render_prompt.sh \"${PROMPT_TEMPLATE_FILE}\"`. Mentions of `prompts/mode-implement.txt` are only comments at lines 2969 and 3340. No runtime loader in `scripts/`. No pinned-SHA, `^[0-9a-f]{40}$` or 40-hex text in the block. implement.yml not in `pr_changed_files.txt`. Paragraph only in `prompts/mode-implement.txt` and `prompts/_templates/mode-implement.txt`. `tests/test_implement_prompt_pinned_sha_contract.py` reads only those, so passes while the real prompt lacks the rule. agents.d/7544 and changelog.d/7544 text claims otherwise. Fix: add the ~9-line paragraph to the heredoc and extend the contract test; check `wc -c` stays under 480,000 bytes (\u00a724).\n- Activation-verify half (`.github/workflows/issue_pr_status.yml` `if:` predicate, `PR_HEAD_REF`/`PR_HEAD_REPOSITORY` env, `activation_sync_branch_label` in `scripts/activation_verify.sh`, new tests) judged correct and fail-safe.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (severity=MAJOR, confidence=5)\n  Requirement: \"forbid SHA-pinning tests in implement prompt\" \u2014 a \"Pinned-SHA test discipline\" paragraph must reach the implement agent.\n  Expected change site: `.github/workflows/implement.yml`, inline `PROMPT_TEMPLATE_FILE=\"${RUNTIME_DIR}/mode-implement-inline.txt\"` heredoc (lines 2618-2731), \"Test verification:\" block at lines 2700-2707.\n  Evidence of absence: The block ends at line 2707 with the `npm test` line and \"Restrictions:\" starts at line 2709, with no Pinned-SHA paragraph. implement.yml never loads `prompts/mode-implement.txt` or `prompts/_templates/mode-implement.txt` (only comments at lines 2969 and 3340). The actual prompt is the inline heredoc rendered at line 2792. The new test reads only the two `prompts/` files so it passes anyway. agents.d/7544 and changelog.d/7544 claim otherwise. The agents.md discipline paragraph at lines 2674-2686 in the same heredoc confirms the edit site. Fix: insert the paragraph between lines 2707 and 2709 and extend the test to read `mode-implement-inline.txt` from the workflow YAML; keep implement.yml under 480,000 bytes.\n- Other notes: activation-verify half correct end to end (`.github/workflows/issue_pr_status.yml:914` `if:` predicate, env pass-through at lines 1068-1069, `scripts/activation_verify.sh:231-247` `activation_sync_branch_label` called in the `pr)` arm at line 275). Tests cover positive, negative and project-mode cases. Consumer wrapper `workflow-templates/ai-issue-pr-status.yml` needs no edit.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP (severity=MAJOR, confidence=5)\n  Requirement: \"Forbid SHA-pinning tests in implement prompt,\" so the implementer stops writing tests that assert a literal upstream SHA.\n  Expected change site: `.github/workflows/implement.yml`, the inline implementation prompt template and its assembly.\n  Evidence of absence: The workflow creates `mode-implement-inline.txt` from a heredoc at line 2618 and renders it at line 2792. The new rule is only in `prompts/mode-implement.txt` and `prompts/_templates/mode-implement.txt`, which the workflow does not load into the implementation prompt, so the agent does not receive the rule.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9b7aff6a966908ffdb7b6d6e5eda1dd6d81a7fe5d7b5e6a6f58dae8cfc335c1f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7544,
+    "run_id": "39005498108",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39005498108",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017053603_d28e198bbb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7544,
+    "run_id": "39005498108"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T05:36:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
