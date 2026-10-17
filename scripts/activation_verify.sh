@@ -24,7 +24,8 @@
 #                                 the default branch. Env: REPOSITORY,
 #                                 PR_NUMBER, MERGE_SHA, PR_TITLE, PR_BODY,
 #                                 LINKED_ISSUE (number or empty), PR_COMMITS,
-#                                 TARGET_DIR.
+#                                 TARGET_DIR; optional PR_HEAD_REF and
+#                                 PR_HEAD_REPOSITORY (see the sync-PR skip).
 #   activation_verify.sh project  the poller, when an orchestrator project
 #                                 completes. Env: REPOSITORY, TRACKING_NUM,
 #                                 PROJECT_TITLE, PROJECT_BODY, TARGET_DIR,
@@ -38,6 +39,14 @@
 # The model runs read-only in TARGET_DIR without GH_TOKEN, GITHUB_TOKEN or
 # TG_BOT_SECRET. It needs OPENROUTER_API_KEY for the model call; that value
 # is removed from every model-derived field before any GitHub write.
+#
+# Consumer workflow-sync PRs are not verified: a merged PR from the updater's
+# own same-repository branch (auto/update-workflows-<sha12>, or ai-sync/stable
+# when UPDATER_PR_DELIVERY_ENABLED is false) only refreshes upstream-managed
+# wrappers, so grading it produced activation-gap issues and verdict comments
+# that were noise. The skip needs PR_HEAD_REF and a PR_HEAD_REPOSITORY equal to
+# REPOSITORY; a missing value verifies as before. It runs before any GitHub
+# call, so a skipped PR costs no API request.
 #
 # Model text never starts a comment line ("Summary: ", "Trigger: ", "Fix: "):
 # the poller's /judge_resume, /revalidate and /re-security-pass handlers match
@@ -216,13 +225,34 @@ PY
 	printf '%s\n' "${activation_symlinks_out}"
 }
 
+# Prints the fixed label of the updater branch family when PR_HEAD_REF names
+# one and the PR's head repository is REPOSITORY itself (a fork cannot claim
+# the skip); prints nothing and returns 1 otherwise. Never prints the ref.
+activation_sync_branch_label()
+{
+	local activation_head_ref="${PR_HEAD_REF:-}"
+	[ -n "${activation_head_ref}" ] || return 1
+	[ -n "${PR_HEAD_REPOSITORY:-}" ] && [ "${PR_HEAD_REPOSITORY}" = "${REPOSITORY:-}" ] || return 1
+	case "${activation_head_ref}" in
+		auto/update-workflows-*)
+			printf '%s' "auto/update-workflows-"
+			;;
+		ai-sync/stable)
+			printf '%s' "ai-sync/stable"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
 activation_main()
 {
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file activation_model_rc=0
 	local activation_symlinks_context activation_context_tmp
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_existing_fix activation_fix_lookup_ok
-	local activation_engine_labels=""
+	local activation_engine_labels="" activation_sync_label=""
 	if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
 		activation_log "mode=${mode} outcome=skip reason=disabled"
 		return 0
@@ -240,6 +270,10 @@ activation_main()
 		pr)
 			if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
 				activation_log "mode=pr outcome=skip reason=missing_pr"
+				return 0
+			fi
+			if activation_sync_label="$(activation_sync_branch_label)"; then
+				activation_log "mode=pr item=${PR_NUMBER} outcome=skip reason=workflow_sync_pr sync_branch=${activation_sync_label}"
 				return 0
 			fi
 			key="pr-${PR_NUMBER}"
