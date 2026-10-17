@@ -91,6 +91,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          HOLD_EVENT_NAME: ${{ github.event_name }}
+          HOLD_COMMENT_LOGIN: ${{ github.event.comment.user.login }}
+          HOLD_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -190,9 +193,24 @@ jobs:
           if [ "${resolver_rc}" -eq 3 ] && grep -Eq 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" 2>/dev/null; then
             resolver_pr_not_open=true
           fi
+          # Issue #7516: an issue that carries the check-failure-triage markers
+          # but not ai:check-triage (and, when ai:orchestrator-managed, no
+          # canonical tracking line) is refused as reason=label_missing. That
+          # refusal is deterministic, so failing the job only re-files heal
+          # reports. Clarify holds the issue instead: one explanatory comment
+          # (deduplicated on the GH_PAT login's marker), ai:blocked, and every
+          # later step skips on label_missing_hold=true. Routing is still
+          # refused and nothing runs on the default branch. Only the resolver's
+          # own line for this issue counts; every other exit 3 still fails.
+          resolver_label_missing=false
+          if [ "${resolver_rc}" -eq 3 ] && grep -Eq "^::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=${issue_number} (pr=([0-9]+|none) )?outcome=refused reason=label_missing$" "${resolver_err_file}" 2>/dev/null; then
+            resolver_label_missing=true
+          fi
           if [ -s "${resolver_err_file}" ]; then
             if [ "${resolver_pr_not_open}" = "true" ]; then
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            elif [ "${resolver_label_missing}" = "true" ]; then
+              sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::warning::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
             else
               cat "${resolver_err_file}" >&2
             fi
@@ -202,6 +220,88 @@ jobs:
           elif [ "${resolver_pr_not_open}" = "true" ]; then
             echo "::notice::CI-triage PR for issue #${issue_number} is no longer open; clarifying on the default branch so the resolution gate can run."
             echo "ref=" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_label_missing}" = "true" ]; then
+            hold_repo="${{ github.repository }}"
+            hold_marker="<!-- ai:integration-ref-label-missing:v1 issue=${issue_number} -->"
+            hold_fail() {
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=hold_failed reason=$1 issue=${issue_number}; refusing to fall back to the default branch."
+              exit 1
+            }
+            hold_login="$(gh api user --jq .login 2>/dev/null || true)"
+            if ! [[ "${hold_login}" =~ ^[A-Za-z0-9](-?[A-Za-z0-9])*(\[bot\])?$ ]]; then
+              hold_fail identity_unavailable
+            fi
+            # The job predicate admits a PR-dependency release comment from any
+            # author; "Decide clarify route" verifies it later. Make no GH_PAT
+            # write for a comment that is neither from a trusted association
+            # nor from the GH_PAT login: stop the run without holding.
+            if [ "${HOLD_EVENT_NAME:-}" = "issue_comment" ] \
+              && ! [[ "${HOLD_COMMENT_ASSOCIATION:-}" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]] \
+              && [ "${HOLD_COMMENT_LOGIN:-}" != "${hold_login}" ]; then
+              {
+                echo "label_missing_hold=true"
+                echo "ref="
+              } >> "$GITHUB_OUTPUT"
+              echo "::warning::INTEGRATION_REF_RESOLVE outcome=skip reason=label_missing_untrusted_comment issue=${issue_number}; no comment or label written."
+              exit 0
+            fi
+            hold_comments_file="${resolver_stage_root}/hold_comments.json"
+            if ! gh api --paginate --slurp "repos/${hold_repo}/issues/${issue_number}/comments?per_page=100" > "${hold_comments_file}" 2>/dev/null; then
+              hold_fail comments_unavailable
+            fi
+            # Count the marker only on comments by the GH_PAT login, and only
+            # as the comment's last line.
+            hold_present="$(python3 -I -B -c '
+          import json, sys
+          path, login, marker = sys.argv[1:4]
+          with open(path, encoding="utf-8") as fh:
+              pages = json.load(fh)
+          if not isinstance(pages, list):
+              raise SystemExit(1)
+          count = 0
+          for page in pages:
+              for comment in (page if isinstance(page, list) else [page]):
+                  if not isinstance(comment, dict):
+                      continue
+                  user = comment.get("user") or {}
+                  if not isinstance(user, dict) or user.get("login") != login:
+                      continue
+                  body = comment.get("body") or ""
+                  if isinstance(body, str) and body.rstrip().endswith(marker):
+                      count += 1
+          print(count)
+          ' "${hold_comments_file}" "${hold_login}" "${hold_marker}" 2>/dev/null || true)"
+            if ! [[ "${hold_present}" =~ ^[0-9]+$ ]]; then
+              hold_fail comments_unavailable
+            fi
+            hold_comment_state=present
+            if [ "${hold_present}" -eq 0 ]; then
+              hold_run_url="${GITHUB_SERVER_URL:-https://github.com}/${hold_repo}/actions/runs/${GITHUB_RUN_ID}"
+              hold_body="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n\n%s' \
+                "**Clarify is on hold: CI-triage routing refused (\`reason=label_missing\`).**" \
+                "This issue carries the check-failure-triage markers but not the \`ai:check-triage\` label. On an \`ai:orchestrator-managed\` issue, the canonical \`- Tracking issue: #N\` line is missing as well. The integration-ref resolver cannot verify a branch, so clarify does not fall back to the default branch." \
+                "To fix it, either restore \`ai:check-triage\` and remove \`ai:orchestrator-managed\`, or, only when the issue keeps \`ai:orchestrator-managed\`, add the canonical tracking line to the issue body. Then comment \`/reclarify\` to run clarify again. The issue is labelled \`ai:blocked\` until then." \
+                "Run: ${hold_run_url}" \
+                "_Posted by the clarify workflow._" \
+                "${hold_marker}")"
+              if ! gh api -X POST "repos/${hold_repo}/issues/${issue_number}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+                hold_fail comment_failed
+              fi
+              hold_comment_state=posted
+            fi
+            # The label goes on after the comment, so the ai:blocked label
+            # event never precedes the explanation.
+            # Adding a label is idempotent, so one retry is safe.
+            if ! gh api -X POST "repos/${hold_repo}/issues/${issue_number}/labels" -f 'labels[]=ai:blocked' >/dev/null 2>&1 \
+              && ! { sleep 2; gh api -X POST "repos/${hold_repo}/issues/${issue_number}/labels" -f 'labels[]=ai:blocked' >/dev/null 2>&1; }; then
+              hold_fail label_failed
+            fi
+            {
+              echo "label_missing_hold=true"
+              echo "ref="
+            } >> "$GITHUB_OUTPUT"
+            echo "::warning::INTEGRATION_REF_RESOLVE outcome=held reason=label_missing issue=${issue_number} comment=${hold_comment_state} label=applied"
+            exit 0
           elif [ "${resolver_rc}" -eq 3 ]; then
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
@@ -214,6 +314,7 @@ jobs:
           fi
 
       - name: Checkout repository
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -221,6 +322,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Log checkout ref
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           CLARIFY_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
@@ -234,6 +336,7 @@ jobs:
           fi
 
       - name: Configure git auth for memory helper clones
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -245,11 +348,13 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Install Codex CLI
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
@@ -272,6 +377,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         id: checkout_support_source
         continue-on-error: true
         uses: actions/checkout@v5
@@ -283,7 +389,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.checkout_support_source.outcome == 'failure')
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -293,6 +399,7 @@ jobs:
           fetch-depth: 1
 
       - name: Ensure workflow support source checkout
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
@@ -301,7 +408,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.SCRIPT_REF != 'main')
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -312,6 +419,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -471,6 +579,7 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-issue-${GITHUB_RUN_ID}"
@@ -491,6 +600,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -514,6 +624,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Decide clarify route
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         id: clarify_route
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -826,6 +937,7 @@ jobs:
           echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} automated_release=${IS_AUTOMATED_RELEASE} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX}"
 
       - name: Detect smoke test and tune LLM settings
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           # Match every `[E2E <variant>]` fixture title the release gate
@@ -849,7 +961,7 @@ jobs:
           fi
 
       - name: Fetch issue comments
-        if: steps.clarify_route.outputs.skip_codex != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -886,7 +998,7 @@ jobs:
           fi
 
       - name: Set clarification phase label
-        if: steps.clarify_route.outputs.is_closed != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' || steps.clarify_route.outputs.orchestrator_fast_path == 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.is_closed != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' || steps.clarify_route.outputs.orchestrator_fast_path == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -895,6 +1007,53 @@ jobs:
           source scripts/label_helpers.sh
           # Add clarification label
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
+          # Issue #7516: once routing passes again, a /reclarify after a
+          # label_missing hold drops the hold's ai:blocked label, so plan and
+          # the unblock scan do not see a stale block. Only an open hold marker
+          # by the GH_PAT login counts. The marker is first rewritten to its
+          # "released" form, so a later ai:blocked set for another reason is
+          # never removed by this step; any failure leaves the label on. Open
+          # markers are retired even when ai:blocked is already gone (removed
+          # by hand), so a stale marker cannot release a later, unrelated block.
+          if [ "${{ github.event_name }}" = "issue_comment" ] \
+            && [ -s "${ISSUE_ALL_COMMENTS_FILE:-}" ]; then
+            hold_release_has_label=false
+            if jq -e '[(.labels // [])[]?.name] | index("ai:blocked") != null' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+              hold_release_has_label=true
+            fi
+            hold_release_login="$(gh api user --jq .login 2>/dev/null || true)"
+            hold_release_marker="<!-- ai:integration-ref-label-missing:v1 issue=${ISSUE_NUMBER} -->"
+            hold_release_done="<!-- ai:integration-ref-label-missing:v1 issue=${ISSUE_NUMBER} released -->"
+            hold_release_ids=""
+            if [ -n "${hold_release_login}" ]; then
+              hold_release_ids="$(jq -r --arg login "${hold_release_login}" --arg marker "${hold_release_marker}" \
+                '[.[]? | select((.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker))) | .id | tostring] | join(" ")' \
+                "${ISSUE_ALL_COMMENTS_FILE}" 2>/dev/null || true)"
+            fi
+            if [ -n "${hold_release_ids}" ]; then
+              hold_release_ok=true
+              for hold_release_id in ${hold_release_ids}; do
+                hold_release_body=""
+                if [[ "${hold_release_id}" =~ ^[0-9]+$ ]]; then
+                  hold_release_body="$(jq -r --argjson id "${hold_release_id}" --arg marker "${hold_release_marker}" --arg done "${hold_release_done}" \
+                    'first(.[]? | select(.id == $id)) | (.body | sub("\\s+$"; "")) as $b | $b[0:(($b | length) - ($marker | length))] + $done' \
+                    "${ISSUE_ALL_COMMENTS_FILE}" 2>/dev/null || true)"
+                fi
+                if [ -z "${hold_release_body}" ] \
+                  || ! gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${hold_release_id}" -f body="${hold_release_body}" >/dev/null 2>&1; then
+                  hold_release_ok=false
+                fi
+              done
+              if [ "${hold_release_ok}" = "true" ] && [ "${hold_release_has_label}" != "true" ]; then
+                echo "::notice::INTEGRATION_REF_RESOLVE outcome=released reason=label_missing issue=${ISSUE_NUMBER} label=absent"
+              elif [ "${hold_release_ok}" = "true" ] \
+                && GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:blocked" >/dev/null 2>&1; then
+                echo "::notice::INTEGRATION_REF_RESOLVE outcome=released reason=label_missing issue=${ISSUE_NUMBER} label=removed"
+              else
+                echo "::warning::Could not release the label_missing hold on issue #${ISSUE_NUMBER}; ai:blocked may need removing by hand."
+              fi
+            fi
+          fi
           # Remove stale phase labels only on /reclarify (new issues won't have them)
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -906,7 +1065,7 @@ jobs:
           fi
 
       - name: Orchestrator-managed fast path
-        if: steps.clarify_route.outputs.orchestrator_fast_path == 'true' && steps.clarify_route.outputs.skip_codex == 'true' && steps.clarify_route.outputs.is_closed != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.orchestrator_fast_path == 'true' && steps.clarify_route.outputs.skip_codex == 'true' && steps.clarify_route.outputs.is_closed != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -922,7 +1081,7 @@ jobs:
 
       - name: Record clarification run start
         # A comment the route step did not trust (#7328) writes no AI-memory events.
-        if: steps.clarify_route.outputs.comment_route_trusted != 'false'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.comment_route_trusted != 'false')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -964,7 +1123,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Build context file
-        if: steps.clarify_route.outputs.skip_codex != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true')
         run: |
           set -euo pipefail
           {
@@ -976,14 +1135,14 @@ jobs:
           } > "${ISSUE_CONTEXT_FILE}"
 
       - name: Install Redis Python client
-        if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis')
         continue-on-error: true
         run: |
           set -euo pipefail
           python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
       - name: Restore semantic cache SQLite
-        if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec')
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
@@ -994,7 +1153,7 @@ jobs:
 
       - name: Semantic cache lookup
         id: semantic_cache_lookup
-        if: always() && steps.clarify_route.outputs.skip_codex != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true')
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -1007,6 +1166,13 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          # always() step: the job may have stopped before the runtime
+          # workspace and support scripts were staged (#7516).
+          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -f scripts/semantic_cache.py ]; then
+            echo "::warning::Semantic cache lookup skipped: runtime workspace or support scripts missing (job stopped before setup)"
+            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           LOOKUP_JSON="${RUNTIME_DIR}/semantic_cache_lookup.json"
           if python3 scripts/semantic_cache.py lookup \
             --phase "clarify" \
@@ -1035,7 +1201,7 @@ jobs:
           fi
 
       - name: Create Codex config
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         run: |
           set -euo pipefail
           source scripts/codex_helpers.sh
@@ -1045,7 +1211,7 @@ jobs:
           codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
       - name: Pre-assemble static context (cacheable across runs)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         run: |
           set -euo pipefail
           # See scripts/build_static_context.sh for trimming rationale and
@@ -1056,7 +1222,7 @@ jobs:
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
 
       - name: Retrieve memory context
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1111,7 +1277,7 @@ jobs:
           PY
 
       - name: Set orchestrator /reclarify reasoning effort
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true')
         run: |
           set -euo pipefail
           sed -i -E "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}\"/" ~/.codex/config.toml
@@ -1124,7 +1290,7 @@ jobs:
       # the unchanged codex call below (exit 75, plan D1).
       - name: Resolve AI engine
         id: ai_engine
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         env:
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_CLARIFY: ${{ vars.AI_ENGINE_CLARIFY || '' }}
@@ -1144,7 +1310,7 @@ jobs:
           echo "engine=${engine}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
-        if: steps.ai_engine.outputs.engine == 'claude'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.ai_engine.outputs.engine == 'claude')
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude
         with:
@@ -1162,7 +1328,7 @@ jobs:
       # reason=present; it stays as a fallback for a staged support checkout
       # whose action copy lacks the file.
       - name: Pin claude-pool-token action module type
-        if: steps.ai_engine.outputs.engine == 'claude'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.ai_engine.outputs.engine == 'claude')
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -1180,14 +1346,14 @@ jobs:
           echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=written"
 
       - name: Resolve Claude credential
-        if: steps.ai_engine.outputs.engine == 'claude'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.ai_engine.outputs.engine == 'claude')
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Collect verified heal evidence
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           WORKFLOW_HEAL_EVIDENCE_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_BYTES || '' }}
@@ -1213,7 +1379,7 @@ jobs:
       # image and sends no request to Docker Hub. Always exits 0: if every
       # mirror fails the build behaves exactly as before.
       - name: Pre-seed clarify sandbox base image
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         continue-on-error: true
         env:
           CLARIFY_BASE_IMAGE_MIRRORS: ${{ vars.CLARIFY_BASE_IMAGE_MIRRORS || 'public.ecr.aws/docker/library mirror.gcr.io/library' }}
@@ -1230,7 +1396,7 @@ jobs:
 
       - name: Run Codex
         id: run_codex
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
@@ -1478,7 +1644,7 @@ jobs:
           done
 
       - name: Semantic cache store
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'))
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -1506,18 +1672,24 @@ jobs:
           fi
 
       - name: Save semantic cache SQLite
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'))
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Write run summary
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true'))
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY || '80000' }}
         run: |
           set -euo pipefail
+          # always() step: the job may have stopped before the runtime
+          # workspace was created (#7516).
+          if [ -z "${RUNTIME_DIR:-}" ]; then
+            echo "::warning::Run summary skipped: runtime workspace missing (job stopped before setup)"
+            exit 0
+          fi
           TOKENS=""
           if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
             # Codex CLI prints "tokens used\n<number>" to stderr
@@ -1536,7 +1708,7 @@ jobs:
                 echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold — review prompt efficiency |"
               fi
             fi
-            if [ -f "${CODEX_OUTPUT_FILE}" ]; then
+            if [ -n "${CODEX_OUTPUT_FILE:-}" ] && [ -f "${CODEX_OUTPUT_FILE}" ]; then
               STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)|^\s*BLOCKED:\s*.+$' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
               echo "| Result | ${STATUS} |"
               # Count questions if clarification was needed
@@ -1550,7 +1722,7 @@ jobs:
 
       - name: Parse Codex output
         id: parse_codex
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true'))
         run: |
           set -euo pipefail
           BLOCKED_REASON="$(perl -ne '
@@ -1613,7 +1785,7 @@ jobs:
           fi
 
       - name: Handle blocked clarification output
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.parse_codex.outputs.blocked == 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.parse_codex.outputs.blocked == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1659,7 +1831,7 @@ jobs:
 
       - name: Post clarification questions
         id: post_questions
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CLARIFY_HUMAN_ANSWER_REQUESTED: ${{ steps.clarify_route.outputs.is_forced_reclarify }}
@@ -1712,7 +1884,7 @@ jobs:
         # clarify-respond worker and falls back to these RECOMMENDED picks
         # itself (issue #6262 follow-up).
         id: standalone_auto_decide
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.post_questions.outcome == 'success' && steps.clarify_route.outputs.is_orchestrator_managed != 'true' && steps.clarify_route.outputs.is_forced_reclarify != 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.post_questions.outcome == 'success' && steps.clarify_route.outputs.is_orchestrator_managed != 'true' && steps.clarify_route.outputs.is_forced_reclarify != 'true'))
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1794,7 +1966,7 @@ jobs:
           echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decisions=${AUTO_DECIDE_COUNT} ad_total=$(jq -r '.total' "${AUTO_DECIDE_RENDER_FILE}")"
 
       - name: Record clarification candidate (needs clarification)
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1817,7 +1989,7 @@ jobs:
 
       - name: Post clear-to-proceed comment
         id: post_clear
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1836,7 +2008,7 @@ jobs:
             -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
 
       - name: Record clarification candidate (clear)
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1856,7 +2028,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Telegram clarification notification
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'))
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1899,7 +2071,7 @@ jobs:
           fi
 
       - name: Record clarification run completed
-        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (success() && steps.clarify_route.outputs.comment_route_trusted != 'false')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (success() && steps.clarify_route.outputs.comment_route_trusted != 'false'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -2031,13 +2203,19 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
+          # The job may have failed before support staging (#7516); keep the
+          # real error as the run's first error.
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::Telegram failure notification skipped: scripts/tg_helpers.sh not staged (job stopped before setup)"
+            exit 0
+          fi
           source scripts/tg_helpers.sh
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
-            MSG="AI clarification cancelled/timed out for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+            MSG="AI clarification cancelled/timed out for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
           else
-            MSG="AI clarification failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+            MSG="AI clarification failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
           fi
           MSG+=$'\n'
           MSG+="Issue: ${ISSUE_URL}"
