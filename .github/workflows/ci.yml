@@ -1607,6 +1607,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
 
+      - name: Release notification superseded-run tests (stubbed gh and curl)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_release_notify_superseded.py
+
       - name: Release CI gate tests (stubbed gh; both release workflows)
         run: |
           set -euo pipefail
