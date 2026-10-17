@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **`validate.yml` now loads `setup-runtime` from a fixed commit instead of `@stable`.** Every shared action in the workflows is now referenced by commit, so a later push to `stable` cannot change the code that runs with a consumer's secrets in a validation run. The contract test `tests/test_workflow_support_ref_follows_pin.py` no longer allows any exception. A change to `.github/actions/setup-runtime/action.yml` reaches validate only after the pin in `validate.yml` is bumped in the same PR.

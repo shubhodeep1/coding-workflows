@@ -197,17 +197,15 @@ def test_integration_resolver_follows_the_pin_and_fails_closed(workflow: str, tm
 
 
 def test_shared_actions_are_referenced_by_commit() -> None:
-	# validate.yml's setup-runtime moves to the commit carrying the pinned
-	# install-codex reference in a follow-up; nothing else may use a moving ref.
-	allowed = {("validate.yml", "setup-runtime@stable")}
+	# Every shared action reference must use a 40-hex commit, never a moving ref.
+	validate_text = (ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8")
+	assert re.search(r"uses:\s*shubhodeep1/coding-workflows/\.github/actions/setup-runtime@[0-9a-f]{40}\b", validate_text)
 	paths = sorted((ROOT / ".github" / "workflows").glob("*.yml")) + sorted((ROOT / ".github" / "actions").glob("*/action.yml"))
 	offenders = []
 	for path in paths:
 		for match in re.finditer(r"uses:\s*shubhodeep1/coding-workflows/\.github/actions/([\w.-]+@[\w./-]+)", path.read_text(encoding="utf-8")):
 			ref = match.group(1)
 			if re.fullmatch(r"[\w.-]+@[0-9a-f]{40}", ref):
-				continue
-			if (path.name, ref) in allowed:
 				continue
 			offenders.append(f"{path.relative_to(ROOT)}: {ref}")
 	assert not offenders, offenders
