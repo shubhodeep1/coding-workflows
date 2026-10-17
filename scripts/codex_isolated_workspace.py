@@ -941,6 +941,7 @@ def seed_git_tree_entries(treeish, host, dest, env, *, readonly_limit_only=False
 			if object_type != b"blob":
 				raise Rejected("non-blob in synthetic Git tree")
 			blob_sizes[object_id] = int(object_size)
+	readonly_total = 0
 	for mode, oid, path, name in eligible:
 		if readonly_limit_only:
 			limit = MAX_READONLY_FILE
@@ -950,6 +951,11 @@ def seed_git_tree_entries(treeish, host, dest, env, *, readonly_limit_only=False
 			continue
 		index_entries.append(mode + b" " + oid + b"\t" + path + b"\0")
 		blob_ids.add(oid)
+		if readonly_limit_only:
+			# Same totals as snapshot-readonly; the caller drops the tree.
+			readonly_total += blob_sizes[oid]
+			if len(index_entries) > MAX_READONLY_FILES or readonly_total > MAX_READONLY_TOTAL:
+				raise Rejected("tree exceeds read-only snapshot limits")
 	return index_entries, blob_ids
 
 
@@ -984,8 +990,13 @@ def seed_git(host, dest, base_ref=""):
 		index_entries, blob_ids = seed_git_tree_entries("HEAD", host, dest, env)
 		base_index_entries = []
 		if base_commit:
-			base_index_entries, base_blob_ids = seed_git_tree_entries(base_commit, host, dest, env, readonly_limit_only=True)
-			blob_ids |= base_blob_ids
+			# The base is optional: any failure leaves it out, never HEAD.
+			try:
+				base_index_entries, base_blob_ids = seed_git_tree_entries(base_commit, host, dest, env, readonly_limit_only=True)
+				blob_ids |= base_blob_ids
+			except (OSError, subprocess.CalledProcessError, Rejected, ValueError) as exc:
+				log(f"seed-git base_skipped reason={type(exc).__name__}")
+				base_commit, base_index_entries, base_state = "", [], "unresolved"
 		pack = home / "objects.pack"
 		with open(pack, "wb") as sink:
 			objects = b"\n".join(sorted(blob_ids)) + b"\n" if blob_ids else b""
@@ -1009,12 +1020,16 @@ def seed_git(host, dest, base_ref=""):
 			# The base tree is built in a scratch index outside DEST, so the
 			# agent's index only ever holds HEAD's filtered tree.
 			base_local = dict(local, GIT_INDEX_FILE=str(home / "base.index"))
-			subprocess.run(["git", "update-index", "-z", "--index-info"], env=base_local, input=b"".join(base_index_entries), check=True, capture_output=True)
-			base_tree = subprocess.run(["git", "write-tree"], env=base_local, check=True, capture_output=True, text=True).stdout.strip()
-			base_synthetic = subprocess.run(["git", "commit-tree", base_tree, "-m", "isolated base (default branch)"], env=local, check=True, capture_output=True, text=True).stdout.strip()
-			subprocess.run(["git", "update-ref", "refs/heads/isolated-base", base_synthetic], env=local, check=True, capture_output=True)
-			head_parents = ["-p", base_synthetic]
-			base_state = "present"
+			try:
+				subprocess.run(["git", "update-index", "-z", "--index-info"], env=base_local, input=b"".join(base_index_entries), check=True, capture_output=True)
+				base_tree = subprocess.run(["git", "write-tree"], env=base_local, check=True, capture_output=True, text=True).stdout.strip()
+				base_synthetic = subprocess.run(["git", "commit-tree", base_tree, "-m", "isolated base (default branch)"], env=local, check=True, capture_output=True, text=True).stdout.strip()
+				subprocess.run(["git", "update-ref", "refs/heads/isolated-base", base_synthetic], env=local, check=True, capture_output=True)
+				head_parents = ["-p", base_synthetic]
+				base_state = "present"
+			except (OSError, subprocess.CalledProcessError) as exc:
+				log(f"seed-git base_skipped reason={type(exc).__name__}")
+				base_state = "unresolved"
 		subprocess.run(["git", "update-index", "-z", "--index-info"], env=local, input=b"".join(index_entries), check=True, capture_output=True)
 		filtered_tree = subprocess.run(["git", "write-tree"], env=local, check=True, capture_output=True, text=True).stdout.strip()
 		commit = subprocess.run(["git", "commit-tree", filtered_tree, *head_parents, "-m", "isolated snapshot"], env=local, check=True, capture_output=True, text=True).stdout.strip()

@@ -3124,6 +3124,8 @@ jobs:
               else
                 echo "::warning::CODEX_ISOLATION base_branch=${IMPLEMENT_ISOLATED_BASE_BRANCH} outcome=fetch_failed; the sandbox git has no isolated-base branch."
               fi
+            else
+              echo "::notice::CODEX_ISOLATION base_branch=unset_or_invalid outcome=skipped; the sandbox git has no isolated-base branch."
             fi
             export CODEX_ISOLATED_GIT_BASE_REF
             # Only the sandbox image build is retried (bounded, #7196); every
