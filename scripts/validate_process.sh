@@ -325,6 +325,24 @@ if ! [[ "${MAX_SELF_HEAL_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
 fi
 SELF_HEAL_PATCHES_FILE="${SELF_HEAL_PATCHES_FILE:-${RUNTIME_DIR}/self_heal_patches.jsonl}"
 export SELF_HEAL_ATTEMPT MAX_SELF_HEAL_ATTEMPTS SELF_HEAL_PATCHES_FILE
+# BEGIN deterministic-only gate (#7553): switch
+# VALIDATE_DETERMINISTIC_ONLY (default false here; validate.yml sets it for the
+# opt-in weekly scheduled run) skips every model phase: discover, diagnose and
+# self-heal. Only the committed .ai/validate.yml and the rendered harness run.
+# Unset, empty or "false" is off, "true" (any letter case) is on, any other
+# value is off with a warning.
+VALIDATE_DETERMINISTIC_ONLY_ACTIVE=false
+case "${VALIDATE_DETERMINISTIC_ONLY:-}" in
+	''|[Ff][Aa][Ll][Ss][Ee]) ;;
+	[Tt][Rr][Uu][Ee]) VALIDATE_DETERMINISTIC_ONLY_ACTIVE=true ;;
+	*) echo "::warning::VALIDATE_DETERMINISTIC_ONLY has an unrecognised value; deterministic-only mode stays off." ;;
+esac
+if [ "${VALIDATE_DETERMINISTIC_ONLY_ACTIVE}" = "true" ]; then
+	MAX_SELF_HEAL_ATTEMPTS=0
+	echo "VALIDATE_DETERMINISTIC_ONLY phase=self_heal outcome=skip reason=deterministic_only"
+fi
+export VALIDATE_DETERMINISTIC_ONLY_ACTIVE
+# END deterministic-only gate (#7553): switch
 
 
 # ---------------------------------------------------------------
@@ -3623,6 +3641,15 @@ sys.exit(0)
 PY
 }
 
+# BEGIN deterministic-only gate (#7553): discover
+# A deterministic run never calls a model to discover or generate a manifest.
+if [ "${VALIDATE_DETERMINISTIC_ONLY_ACTIVE:-false}" = "true" ] && { [ -L .ai/validate.yml ] || [ ! -f .ai/validate.yml ]; }; then
+	echo "VALIDATE_DETERMINISTIC_ONLY phase=discover outcome=skip reason=no_committed_manifest"
+	write_result_files "error" "Validation harness missing" ".ai/validate.yml is missing; scheduled runs do not call a model to discover or generate one. Commit .ai/validate.yml, or post /revalidate or dispatch AI Validate by hand for a run that can generate it." "harness_missing"
+	exit 0
+fi
+# END deterministic-only gate (#7553): discover
+
 if [ -f .ai/validate.yml ]; then
   cp .ai/validate.yml "${VALIDATE_HINTS_FILE}"
   HINTS_SOURCE="committed"
@@ -4552,6 +4579,20 @@ if [ "${CANARY_ONLY_FAILURE}" = true ]; then
 	fi
 fi
 
+
+# BEGIN deterministic-only gate (#7553): diagnose
+# A deterministic run reports the failing tests and stops: no diagnose model
+# call, and so no fix-up issue (diagnose creates those even with tracking 0).
+if [ "${VALIDATE_DETERMINISTIC_ONLY_ACTIVE:-false}" = "true" ]; then
+	echo "VALIDATE_DETERMINISTIC_ONLY phase=diagnose outcome=skip reason=deterministic_only"
+	deterministic_failure_summary="${FAILED_TESTS:-0} failing test(s)"
+	if [ -n "${FIRST_FAILURE:-}" ]; then
+		deterministic_failure_summary="${deterministic_failure_summary}: ${FIRST_FAILURE}"
+	fi
+	write_result_files "fail" "Runtime validation failed" "${deterministic_failure_summary}" "tests_failed"
+	exit 0
+fi
+# END deterministic-only gate (#7553): diagnose
 
 # ---------------------------------------------------------------
 # Phase 4: Diagnose failures
