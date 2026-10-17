@@ -5,13 +5,26 @@
   "entry_id": "processed_command_7551_6232147617_approved",
   "issue_number": 7551,
   "metadata": {
+    "branch": "ai/issue-7551",
+    "changed_files": [
+      ".github/workflows/validate.yml",
+      "agents.d/7538-immutable-support-pins.md",
+      "agents.md",
+      "changelog.d/7551-validate-setup-runtime-pin.md",
+      "tests/test_workflow_support_ref_follows_pin.py"
+    ],
+    "issue_number": 7551,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7551",
+    "pr_number": 7552,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7552",
+    "run_attempt": "1",
+    "run_id": "39020237131",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39020237131"
   },
   "run_attempt": 1,
   "run_id": "39020237131",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-17T09:15:14Z",
+  "status": "completed",
+  "timestamp": "2026-10-17T09:27:08Z",
   "workflow": "implement"
 }
