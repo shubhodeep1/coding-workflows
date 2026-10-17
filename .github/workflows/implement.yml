@@ -251,7 +251,7 @@ jobs:
 
       - name: Install dependencies
         if: env.SKIP_IMPLEMENT != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
@@ -452,7 +452,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout support source fallback for duplicate PR notice
-        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && steps.checkout_support_source_duplicate_notice.outcome == 'failure'
+        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && steps.checkout_support_source_duplicate_notice.outcome == 'failure' && env.DUPLICATE_NOTICE_SCRIPT_REF == 'stable'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -463,7 +463,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout support source main snapshot for duplicate PR notice
-        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && env.DUPLICATE_NOTICE_SCRIPT_REF != 'main'
+        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && env.DUPLICATE_NOTICE_SCRIPT_REF == 'stable'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -518,6 +518,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         id: refctx
         env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
           RETARGET_MERGED_BASE_ENABLED: ${{ vars.RETARGET_MERGED_BASE_ENABLED || 'true' }}
@@ -534,6 +535,14 @@ jobs:
 
           resolver_repo="shubhodeep1/coding-workflows"
           resolver_ref="stable"
+          resolver_ref_pinned=false
+          # A consumer wrapper pinned to a commit runs the resolver from that
+          # commit, never from stable or main (issue tele-funtoken#4566).
+          resolver_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [[ "${resolver_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@[0-9a-f]{40}$ ]]; then
+            resolver_ref="${resolver_workflow_ref##*@}"
+            resolver_ref_pinned=true
+          fi
           if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
             resolver_ref="${{ github.sha }}"
           fi
@@ -564,8 +573,13 @@ jobs:
             [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
           esac
           resolver_stage_fail_closed() {
-            [ "${resolver_ci_triage_routing_on}" = "true" ] || return 0
-            echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 ci_triage_routing=on; refusing to fall back to the default branch."
+            if [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 ci_triage_routing=on; refusing to fall back to the default branch."
+            elif [ "${resolver_ref_pinned}" = "true" ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 pinned_ref=${resolver_ref}; refusing to run resolver code from another ref."
+            else
+              return 0
+            fi
             if [ -s "${resolver_clone_log}" ]; then
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
             fi
@@ -575,7 +589,8 @@ jobs:
           if resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
             if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
-               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
+               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}" || \
+               { [ "${resolver_ref_pinned}" = "true" ] && [ "$(git -C "${resolver_stage_primary}" rev-parse HEAD 2>/dev/null || true)" != "${resolver_ref}" ]; }; then
               resolver_stage_fail_closed pin_failed
               echo "::warning::Failed to stage canonical integration resolver ref ${resolver_ref}; using main fallback."
               if [ -s "${resolver_clone_log}" ]; then
@@ -1102,7 +1117,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: env.SKIP_IMPLEMENT != 'true' && steps.checkout_support_source.outcome == 'failure'
+        if: env.SKIP_IMPLEMENT != 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable'
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -1119,9 +1134,15 @@ jobs:
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot
-        if: env.SKIP_IMPLEMENT != 'true' && env.SCRIPT_REF != 'main'
+        if: env.SKIP_IMPLEMENT != 'true' && env.SCRIPT_REF == 'stable'
         continue-on-error: true
         uses: actions/checkout@v5
         with:

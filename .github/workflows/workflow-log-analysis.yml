@@ -316,7 +316,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -898,7 +898,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -1737,7 +1737,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -2344,7 +2344,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
