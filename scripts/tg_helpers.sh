@@ -134,6 +134,38 @@ tg_send_msg()
 }
 
 # ---------------------------------------------------------------
+# tg_send_report_msg — Send a scheduled report the operator asked for
+# (e.g. the daily Claude pool usage message), echo the message_id.
+# Unlike tg_send_msg it adds no level prefix and ignores the
+# ALERT_MSG_LEVEL threshold, except that ALERT_MSG_LEVEL=SILENT still
+# suppresses it. The caller supplies its own label (e.g. "📊 ").
+# Usage: msg_id=$(tg_send_report_msg "📊 Daily report")
+# ---------------------------------------------------------------
+tg_send_report_msg()
+{
+	local msg="$1"
+	if [ "$(printf '%s' "${ALERT_MSG_LEVEL:-}" | tr '[:lower:]' '[:upper:]')" = "SILENT" ]; then
+		return 0
+	fi
+	local chat_id
+	chat_id="$(_tg_chat_id)"
+	if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${chat_id}" ]; then
+		return 0
+	fi
+	local resp
+	resp=$(curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+		-d "chat_id=${chat_id}" \
+		-d "disable_web_page_preview=true" \
+		--data-urlencode "text=${msg}" 2>/dev/null) || {
+		echo "::warning::Telegram send failed" >&2
+		return 0
+	}
+	local msg_id
+	msg_id=$(printf '%s' "${resp}" | jq -r '.result.message_id // empty' 2>/dev/null)
+	printf '%s' "${msg_id:-}"
+}
+
+# ---------------------------------------------------------------
 # tg_delete_msg — Delete a single Telegram message by ID.
 # Usage: tg_delete_msg 12345
 # ---------------------------------------------------------------
