@@ -21,10 +21,12 @@ started, filtered like your checkout (credential-like and oversized files are
 left out). Read what production runs with `git show isolated-base:<path>`,
 `git diff isolated-base -- <path>` or `git ls-tree -r --name-only
 isolated-base`. A file missing there may only have been filtered out.
-`isolated-base` is the default branch's current tip, not the commit your
-branch started from: if the default branch moved on, `git diff isolated-base`
-also shows its newer commits reversed. Those are not your deletions; compare
-against `git merge-base HEAD isolated-base` when you need only your changes.
+`isolated-base` is the default branch's current tip and the direct parent of
+your HEAD commit, not the commit your branch was cut from. If the default
+branch moved on, `git diff isolated-base` also shows its newer commits
+reversed. Those are not your deletions, and the sandbox has no history that
+separates them (`git merge-base HEAD isolated-base` is `isolated-base`
+itself). `git diff HEAD` shows only the edits you made in this run.
 
 Plan-divergence discipline: if the approved plan, issue scope, or
 `files_touched` context materially diverges from the checked-out codebase,

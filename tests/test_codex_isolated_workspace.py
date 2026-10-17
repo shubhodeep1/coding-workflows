@@ -849,3 +849,8 @@ def test_isolated_runner_and_implement_step_pass_the_default_branch_base():
 	assert implement.index("export CODEX_ISOLATED_GIT_BASE_REF") < implement.index('prepare --workdir "$(pwd)" --deps')
 	prompt = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text()
 	assert "git show isolated-base:<path>" in prompt
+	# The inline heredoc is the prompt implement.yml actually sends.
+	inline = implement[implement.index('mode-implement-inline.txt"\n'):]
+	inline = inline[: inline.index("\n          EOF\n")]
+	assert "git show isolated-base:<path>" in inline
+	assert "`git diff HEAD` shows only the edits you made in this run." in inline

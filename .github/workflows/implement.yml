@@ -2674,6 +2674,22 @@ jobs:
           differs), proceed with the codebase truth and note the conflict in
           your output.
 
+          Default-branch reference: your git checkout has no remote and no
+          network, so `origin/...` refs do not exist. When `git branch --list
+          isolated-base` shows that branch, it is the repository's default
+          branch as it was when this run started, filtered like your checkout
+          (credential-like and oversized files are left out). Read what
+          production runs with `git show isolated-base:<path>`, `git diff
+          isolated-base -- <path>` or `git ls-tree -r --name-only
+          isolated-base`. A file missing there may only have been filtered
+          out. `isolated-base` is the default branch's current tip and the
+          direct parent of your HEAD commit, not the commit your branch was
+          cut from. If the default branch moved on, `git diff isolated-base`
+          also shows its newer commits reversed. Those are not your
+          deletions, and the sandbox has no history that separates them
+          (`git merge-base HEAD isolated-base` is `isolated-base` itself).
+          `git diff HEAD` shows only the edits you made in this run.
+
           agents.md discipline: never add text to `agents.md` (or `AGENTS.md`)
           directly, even when the plan says "document in agents.md";
           concurrent PRs collide on the same few sections. Write one fragment
