@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan: update `tests/e2e_smoke_canary_b.txt` (re-issue of #7566)\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue gives the exact final content of one existing two-line canary file and says no other file may change. There is no helper or pattern to build. The complete change is the shortcut here, so nothing is added and nothing is cut.\n\nPlanning ref: HEAD `d1cdb4ceb4d18ca7d4cd00eaf8c70890e94a2cd5` on `orchestrator/project-7564`. The integration branch matches, so there is no mismatch.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. Only the data file changes. Its final bytes must be exactly:\n```\nstatus: ok\ndecompose-run: 39033435276\n```\nThat is two lines, each ending in `\\n`, with no trailing blank line.\n\n## Data structures affected\nOnly the content of the canary file. Line 2's value changes from `25567947079` to `39033435276`.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: write the full two-line content exactly as the issue gives it.\n- Alternatives considered: change only line 2 in place.\n- Why: writing the whole file guarantees the exact bytes and the trailing newline, whatever the current file contains (CRLF line endings or extra lines, for example).\n\n## Security considerations\n- No trust boundary, endpoint, secret or money state is involved.\n- The only abuse case is changes leaking into other files. The `files_touched` allowlist (`tests/e2e_smoke_canary_b.txt`) and the scope guard cover this.\n\n## Risks and edge cases\n- This is the second attempt: #7566 closed without merging. Keep the diff to this one file so the review gate has nothing extra to flag.\n- Do not touch `tests/e2e_smoke_canary.txt`, which is handled by a separate re-issue.\n- Do not add a changelog fragment, because the acceptance criteria say no other file may change.\n\n## Testing considerations\n- `printf 'status: ok\\ndecompose-run: 39033435276\\n' | cmp - tests/e2e_smoke_canary_b.txt` exits 0.\n- `git diff --name-only` lists only `tests/e2e_smoke_canary_b.txt`.\n\n## Pre-execution self-check\n- The file list contains a single path, and that path is in `files_touched`.\n- The final content matches the acceptance criteria byte for byte.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "80c06e94de47a5ef1c67b8f13d4c8a40180037209294eb43d7b9389e42539f91",
+  "lineage": {
+    "issue_number": 7568,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39034567154",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39034567154",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7568"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261017130438_3b7a0b3385",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7568,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39034567154"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7568",
+  "timestamps": {
+    "created_at": "2026-10-17T13:04:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
