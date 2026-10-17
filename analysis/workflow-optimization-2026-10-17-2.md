@@ -308,3 +308,257 @@ No other MCP servers were observed. No `<NAME>_QUERY`, `<NAME>_FALLBACK` or `<NA
 - The `label_missing` reason is inferred from source, not from the run logs.
 - The gate cancellation is attributed from timing plus the `cancel-in-progress: true` concurrency group.
 - The dedup-before-diagnosis ordering comes from reading the source, not from intake logs.
+## Deep Audit — Workflows & Scripts (2026-10-17)
+
+> **Scope and method.** This is the second deep-audit pass today. The first is in `analysis/workflow-optimization-2026-10-17.md`; it is cited below as "AM-report" and its IDs as "AM-BUG-001" and so on. I only cross-reference findings that pass already covered. Files read in depth for this pass: `resolve_integration_ref.sh`, `cost_audit.py` (regex, projection, `parse_log`), `promote-main-to-stable.yml` (`cycle` and `promote` jobs), `promote_main_cycle.sh` (head and steps 6–7), `auto_release_stable.sh`, `auto-release-stable.yml`, the resolver step and the Codex/summary steps of `clarify.yml`, the memory/lineage steps and the no-op guard of `implement.yml`, the lineage step of `issue_pr_status.yml`, `ai_memory.py` (`record-run-event`), `ai_memory_lib.py` (`finalize_task_lineage`), `label_helpers.sh`, `review_rb_judge.sh` (`_resilient_phase_swap`), `gh_retry` in `gh_helpers.sh`, `plan_split_dispatch.sh`, the API reads of `review_autofix_step_evaluate_gate.sh`, the capacity-wait path of `ai_engine_fallback_report.sh`, the guard job of `check-failure-triage-historical.yml`, and the four agent jobs of `workflow-log-analysis.yml`. This run had no shell, so file sizes are line counts and character counts are estimates (marked).
+
+### Section 1: Bug & Correctness Sweep
+
+**Still open from AM-report.** AM-BUG-001 (the mid-body triage marker causes `label_missing`; `resolve_integration_ref.sh:198`, `:205`, `:224-225`) is unchanged. AM-BUG-002 is also unchanged: `clarify.yml:211-214` and `plan.yml:287-290` still fall back to the default branch on resolver rc 2. `implement.yml:639-648` and `validate.yml:254-261` fail closed on that rc. Neither is restated here.
+
+**BUG-001 — Cost telemetry counts echoed script text as Codex usage and drops all Claude and per-phase data**
+- **File:** `scripts/cost_audit.py:62-64`, `:162-198`, `:562-566`, `:690-695`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** This repeats the Executive Summary, Cost 1 and D4 of this report, with exact source locations so it can be tracked as one item.
+  - `CODEX_TOKENS_RE = re.compile(r"tokens\s+used[^0-9\n]*\n?\s*([0-9][0-9,]*)", re.IGNORECASE)` has no line anchor.
+  - The run log echoes every step's script. Each echoed copy of the following lines therefore counts as one "Codex call" whose token count is a number taken from the script text:
+    - `grep -A1 'tokens used' … | tail -1` at `clarify.yml:1524`, `plan.yml:1717`, `orchestrate.yml:1478`, `orchestrate_clarify_respond.yml:1387` and `implement.yml:3773`;
+    - the comment examples and greps at `implement.yml:3650-3667`.
+  - Separately, `build_run_cost_telemetry` copies only `RUN_COST_TELEMETRY_FIELDS` (`:162-198`). That tuple has no `claude_*`, `claude_cost_usd` or `or_phases` key, although `parse_log` computes all of them (`:642-657`, `:719-748`).
+- **Recommended fix:** Apply the anchored regex and the additive field list already written in Cost 1 of this report. Add negative fixtures for the six workflow lines above. `or_phases` is a nested dict, so serialise it to a JSON-safe dict in `build_run_cost_telemetry`. Do not add it to `AGGREGATABLE_COST_FIELDS`.
+
+**BUG-002 — A manual promote can cancel the daily cycle's in-flight smoke gate, because the `promote` job has no active-gate check**
+- **File:** `.github/workflows/promote-main-to-stable.yml:401-444`. Related: `.github/workflows/test-and-mark-stable.yml:518-520`; existing guards at `scripts/promote_main_cycle.sh:446-466` and `scripts/auto_release_stable.sh:162-181`.
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:**
+  - The gate's `e2e-smoke-test` job uses `group: e2e-smoke-test-${{ inputs.test_repo || github.repository }}` with `cancel-in-progress: true`. Any new gate run therefore cancels the one in progress.
+  - Both automated dispatchers wait for the gate to be idle first: the cycle loops on an active-run count until `gate_busy`, and `auto_release_stable.sh` skips with `release_in_flight`.
+  - The `promote` job's `Dispatch test-and-mark-stable on stable` step calls `gh workflow run` straight away. Its `concurrency: promote-main-to-stable` (`:157-159`) serialises it only with `auto-release-stable.yml`. It does not serialise it with the `cycle` job, which has no group.
+  - This is the mechanism behind the cancellation of 38986967451 (Speed 2 / D5; the causal link is inferred from timing).
+  - `stable` has already been fast-forwarded at `:269-275` before the dispatch. So if the step were changed to *skip* rather than warn, the release would pass to `auto-release-stable.yml`. That run does not pass `version_tag` (`auto_release_stable.sh:202-204`), so it would cut a patch release instead of the intended minor bump.
+- **Recommended fix:** Before `gh workflow run`, reuse the `auto_release_stable.sh:162-166` read (one `actions/workflows/test-and-mark-stable.yml/runs?per_page=30` call; better, the DUP-001 helper). If any active run's `display_title` contains `[cycle:`, emit `::warning::PROMOTE_GATE_PREEMPT active_runs=<ids>` (D5; it needs an `agents.d/` prefix fragment under §25). Keep the dispatch as it is by default. A bounded wait can come later behind a new defaulted variable, for example `PROMOTE_GATE_PREEMPT_WAIT_SECS` (default `0`). Check the name for collisions first.
+
+**BUG-003 — Some guarded release reads exit without their documented `*_SKIPPED reason=guard_unavailable` line**
+- **File:** `scripts/auto_release_stable.sh:105`, `:151`, `:162`, `:170`, `:176`; `scripts/promote_main_cycle.sh:467`
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:**
+  - Both scripts promise that "every exit is a logged, stable prefix" (`auto_release_stable.sh:12`, `promote_main_cycle.sh:22`), and both run under `set -euo pipefail` (`:53`, `:84`).
+  - The listed lines are bare `var="$(gh_retry gh api … | jq …)"` assignments. If `gh_retry` exhausts its retries, the assignment fails and `set -e` ends the script with only gh_retry's `::error::gh command failed after N attempts`. The regex checks that follow, such as `:106` and `:457`, never run.
+  - Contrast `auto_release_stable.sh:115-123` and `:130-132`, which map the same failure to `skip_release guard_unavailable`.
+  - Effect (inference): a transient API failure becomes a failed scheduled run. That probably also starts a heal intake, where a clean skip was intended.
+- **Recommended fix:** Append an explicit handler to each read, for example `runs_json="$(gh_retry gh api "…/runs?per_page=30")" || skip_release guard_unavailable "lookup=workflow-runs:${AUTO_RELEASE_STABLE_WORKFLOW_FILE}"`. Do the same at `promote_main_cycle.sh:467` with `skip_cycle guard_unavailable "lookup=workflow-runs-before"`.
+
+**BUG-004 — The phase-label PUT can wipe every non-phase label when the caller lacks `pipefail`**
+- **File:** `scripts/label_helpers.sh:221-222`, `:249-251`; `scripts/review_rb_judge.sh:959-960`, `:997-998`, `:1012-1016`. Behaviour source: `scripts/gh_helpers.sh:1083-1088` and `:1129-1137`.
+- **Severity:** Low (latent)
+- **Category:** `bug`
+- **Description:**
+  - `gh_retry` writes stdout only on success; on failure it prints nothing and returns 1.
+  - Failure detection in `if ! _cur="$(gh_retry gh api --paginate …/labels --jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"` therefore depends entirely on the caller's `pipefail`. Without it, the pipeline's status is `jq`'s 0, and `jq -cs 'add // []'` on empty input yields `[]`.
+  - The function then computes `_new = [target]` and PUTs it (`:249-251`). That replaces every label on the issue, including `ai:orchestrator-managed` and `ai:orchestrator-tracking`.
+  - `label_helpers.sh` is a sourced library that sets no shell options itself (`:1-21`). It is meant for "workflow steps" (`:3`), and GitHub's default `run:` shell is `bash -e {0}`, without pipefail.
+  - Every current caller does set it: `issue_pr_status.yml:210`, `review_autofix.yml:1525`, `review_autofix_step_mark_ready_to_merge.sh:7` and `review_autofix_step_mark_review_blocked_workflow_failure.sh:4`. So there is no live failure today.
+- **Recommended fix:** Make the helper independent of the caller's shell options. Capture the raw output first, then merge the pages:
+  ```bash
+  local _raw=""
+  if ! _raw="$(gh_retry gh api --paginate "repos/${repo}/issues/${issue_number}/labels" --jq '[.[].name]' 2>/dev/null)"
+  then
+  	# existing POST-add fallback, unchanged
+  fi
+  _cur="$(printf '%s' "${_raw}" | jq -cs 'add // []')"
+  ```
+  Apply the same change to both GETs in `_resilient_phase_swap`.
+
+**BUG-005 — Implement's success-no-op path leaves a `phase_started` ledger event with no terminal event `[NEEDS VERIFICATION]`**
+- **File:** `.github/workflows/implement.yml:2228-2242` (start), `:5943-5963` (success), `:6220-6263` (failure or cancel), `:4933-4966` (no-op guard)
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:**
+  - The start event runs whenever `SKIP_IMPLEMENT != 'true'`.
+  - The success event requires `did_commit == 'true' && pr_url != ''`.
+  - The failure event requires `failure() || cancelled()`.
+  - The `Handle no-op implementation` step's Guard 0 treats `codex_success_noop.flag` as a *legitimate success*: it closes the issue with `ai:closed` and opens no PR.
+  - If that run then ends green, the run ledger holds `phase_started` with no `phase_completed` or `phase_failed`. Not verified: whether a later step exits non-zero on this path.
+- **Recommended fix:** Add a `Record implementation run no-op event` step guarded by `steps.commit_changes.outputs.did_commit == 'false' && success()`. It should call `memory_record_run_event --event-type phase_completed --status ok --message "Implementation phase completed without changes"`, which is the same helper as `:5963`.
+
+**BUG-006 — An `Integration branch:` line anywhere in a CI-triage issue body skips triage verification `[NEEDS VERIFICATION]`**
+- **File:** `scripts/resolve_integration_ref.sh:31`, `:409-417` (before the triage routing at `:419-429`)
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:**
+  - `extract_integration_branch` uses a `MULTILINE` pattern that matches any line starting with `Integration branch:`.
+  - `resolve_ref` acts on that line *before* `resolve_ci_triage_branch`. So an `ai:check-triage` issue whose body contains such a line routes to that branch, and none of the label, header, author or live-PR checks at `:226-251` and `:330-367` run.
+  - This is the same unanchored-body-scan family as AM-BUG-001. Not verified: whether `check_failure_triage.sh` ever writes log excerpts that start a line with that text.
+- **Recommended fix:** When routing is on and `child_json` carries `ai:check-triage`, run `resolve_ci_triage_branch` first and ignore the body's `Integration branch:` line. Add a fixture with both a valid triage header and an `Integration branch:` line; it should expect the PR head branch.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+No new per-iteration REST loops were found in the files read this pass. AM-BATCH-001 (wave reconcile), AM-BATCH-002, AM-API-001 and AM-API-002 still apply and are not repeated.
+
+**API-001 — The historical-triage guard lists every `ai:check-triage` issue ever filed, on every push to `main`**
+- **File:** `.github/workflows/check-failure-triage-historical.yml:18-20` (trigger), `:75-78` (list), `:85`, `:97`, `:107`, `:123`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** `gh api --paginate --method GET repos/…/issues -f state=all -f labels=ai:check-triage -F per_page=100` runs on every push. The page count grows with the triage-issue history. Before the dedup hit, a push costs 1 + P calls, rising to P + 4 calls once the issue exists... more precisely: P calls when the issue already exists (the guard stops at `:79-81`), and P + 4 calls otherwise.
+- **Recommended fix:** The single-use purpose is complete once the issue exists, so remove the workflow (DEAD-001). That brings the cost to **0 calls**. As an interim step, add `-f sort=created -f direction=desc` and stop at the first page that contains the marker. That is ≤ P calls, typically 1.
+
+**API-002 — Each capacity-wait report re-reads the capacity tracker's whole comment history**
+- **File:** `scripts/ai_engine_fallback_report.sh:252` (read), `:258` (one appended comment per wait)
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** Each wait adds a comment to the tracker, then the next wait paginates all of them (`--paginate --slurp …/comments?per_page=100`) to look for this run's own `run=${run_token}` marker. **Current:** ⌈C/100⌉ calls per wait, where C grows for as long as the tracker stays open. **Projected:** 1 call. `[NEEDS VERIFICATION]`: how long the tracker stays open in `provider_outage.py`.
+- **Recommended fix:** Only this run can have posted the marker, so add `&since=<run start ISO time>`. `workflow_retro_fanout.sh:349` already uses the same `since=` pattern. Fail open to today's full read if the timestamp is unavailable.
+
+**API-003 — The promote cycle lists the gate's runs twice back to back**
+- **File:** `scripts/promote_main_cycle.sh:455-456` (idle check, `runs?per_page=30`), `:467` (`runs?event=workflow_dispatch&per_page=50`)
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** The final idle-check response comes from the same endpoint a few seconds earlier. **Current:** 2 calls per dispatched cycle. **Projected:** 1. Identification stays correct: `before_gate_ids` only has to exclude earlier runs titled `[cycle:${GITHUB_RUN_ID}]`, for example from a job re-run, and the title filter at `:484` already covers that.
+- **Recommended fix:** Use `per_page=50` in the idle query, keep its last response, and derive `before_gate_ids` from it with `jq -c '[.workflow_runs[]? | select(.event == "workflow_dispatch") | .id]'`. If the DUP-001 helper lands, have it return the raw response as well.
+
+**Retry hygiene:** no new tight loops. `plan_split_dispatch.sh:179-187` wraps a single-attempt POST (`gh_retry` drops unsafe POSTs to 1 attempt, `gh_helpers.sh:1066-1069`) in a 3-try loop with a 2s sleep. That is bounded, and a duplicate release marker is harmless by design (`:170-171`).
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001 — The "active workflow runs" jq filter is copied 6 times, and 3 variants disagree on which statuses count as active**
+- **File:**
+  - Identical copies: `scripts/apply_analysis_on_main.sh:309`, `scripts/auto_release_stable.sh:166`, `:173`, `:177`, `scripts/promote_main_cycle.sh:343`, `:456`.
+  - Divergent variants: `scripts/gh_helpers.sh:2143` (`queued|pending|in_progress`, without `waiting`/`requested`), `scripts/gh_helpers.sh:2167` (all five), `.github/workflows/cancel_on_pr_close.yml:240` and `scripts/worktree_registry.sh:252` (`queued|in_progress` only).
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Every copy is a `gh api …/actions/workflows/<file>/runs` read followed by the same `select(.status == "queued" or …)` count. The divergent copies treat runs waiting on environment approval (`waiting`) as idle. BUG-002's fix would add a seventh copy.
+- **Recommended fix:** Add one helper to `scripts/gh_helpers.sh`. Document its batching contract per §14: 1 call, prints a count, returns 1 on API failure so the caller fails closed.
+  ```bash
+  gh_workflow_active_run_count()
+  {
+  	# <repo> <workflow_file> [exclude_run_id] [per_page]
+  	...
+  }
+  ```
+  Update the six identical callers and the `promote` dispatch step. Keep the divergent variants as they are unless a separate change confirms they should match.
+
+**DUP-002 — Codex `tokens used` parsing is implemented four different ways, and the most common one misreads the single-line format**
+- **File:**
+  - Naive `grep -A1 'tokens used' … | tail -1 | tr -d '[:space:]'`: `clarify.yml:1524`, `plan.yml:1717`, `orchestrate.yml:1478`, `orchestrate_clarify_respond.yml:1387`, `implement.yml:3773`.
+  - Robust two-format parser: `implement.yml:3663-3670`.
+  - Python variants: `scripts/ledger_emit_substate.sh:158-162` and `scripts/cost_audit.py:62-64`.
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:**
+  - For the single-line form `tokens used 12345`, which `implement.yml:3652` documents, the naive parser returns the line *after* the match. Run summaries then show non-numeric text, and the `TOKEN_WARN_THRESHOLD` check is silently skipped through `2>/dev/null`, for example at `clarify.yml:1535`.
+  - The same file, `implement.yml`, uses both parsers.
+- **Recommended fix:** Add `codex_tokens_used <log_file>` to `scripts/codex_helpers.sh`, containing the `implement.yml:3663-3670` logic. It should print digits or nothing. Replace the five naive call sites and the per-attempt loop with it. Keep `ledger_emit_substate.sh`'s Python parser, which reads the codex log file and not the run log, but align it to the same two formats.
+
+**DUP-003 — `workflow-log-analysis.yml` repeats a ~10-step agent toolchain and three in-step helper sets across its jobs**
+- **File:** `.github/workflows/workflow-log-analysis.yml`
+  - Toolchain blocks: `:246-383`, `:822-994`, `:1661-1856`, `:2268-2455` (Resolve AI engine → Install Claude → Cache/Install/Persist/Restore Codex → config → uv → semble install → semble index).
+  - `_wla_label_retry` / `_wla_label_create`: `:1078-1079`, `:1877-1878`, `:2477-2478`.
+  - `wla_engine_ready`: `:490`, `:1336`, `:2031`, `:2630`.
+  - Failure emitters: `emit_log_analysis_phase_failure` `:1100-1193`, `emit_deep_audit_failure` `:1890-1966`, `emit_api_redundancy_failure` from `:2490`.
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:**
+  - 8 of the 10 "Persist/Restore Codex CLI" steps in the whole repo are in this one file; the other 2 are in `plan.yml`.
+  - Every job builds the Semble index eagerly (`:376`, `:980`, `:1842`, `:2441`). That is consistent with Speed 3's "4 bootstraps, all unused", though attributing those to these steps is an inference.
+  - `_wla_label_create` re-implements `ensure_label_exists` (`label_helpers.sh:151-193`).
+- **Recommended fix:**
+  - Create `.github/actions/wla-agent-setup/action.yml` (inputs: `model`, `reasoning`, `semble_mode` defaulting to `lazy`) and replace the four blocks with it.
+  - Create `scripts/workflow_log_analysis_helpers.sh` exposing `wla_engine_ready` and `wla_emit_phase_failure <failed_step_name> <failure_mode> <attempt_count> <summary> <heading>`. Source it from the three pass steps, and use `ensure_label_exists` in place of `_wla_label_create`.
+  - This also removes most of the interpolated text behind EXPR-001.
+
+**DUP-004 — Two resilient phase-label swaps with different phase lists**
+- **File:** `scripts/label_helpers.sh:201-265` (`set_issue_phase_label_resilient`, list at `:149`); `scripts/review_rb_judge.sh:954-1020` (`_resilient_phase_swap`, list at `:957`)
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Both functions do GET labels → compute the phase-free set → PUT or POST. The judge's copy adds terminal-label precedence, and its 10-label list has drifted from the contract (CONSIST-002).
+- **Recommended fix:** Add an optional 4th argument, `preserve_terminal=true`, to `set_issue_phase_label_resilient`, carrying the `:977-1010` logic. Make `_resilient_phase_swap` a thin wrapper around it, and land BUG-004's fix once in the shared helper.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+`tests/test_workflow_file_size_limit.py:32` and `:66-98` already fail CI for any interpolated `run:` body of 18,000 characters or more. Every body below is therefore under 18,000 as long as CI is green. AM-EXPR-001, -002, -003, -004 and -006 still apply.
+
+**EXPR-001 — Three Codex-pass bodies in `workflow-log-analysis.yml` are expression-evaluated only because of a few `github.*` interpolations**
+- **File:** `.github/workflows/workflow-log-analysis.yml:1068-1402` (`Run workflow log analysis`, 335 lines; interpolations at `:1113-1115`, `:1128`, `:1134-1136`, `:1173-1175`), `:1869-2123` (`Run deep audit pass`, 255 lines; `:1901-1903`, `:1915`, `:1921-1923`, `:1954-1956`), `:2469-2722` (`Run API redundancy pass`, 254 lines; `:2501-2503`, `:2515`, `:2521-2523`, `:2554-2556`)
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:**
+  - Every interpolation is `github.run_id`, `github.run_attempt`, `github.workflow`, `github.server_url` or `github.repository`, yet each one makes the entire body a single template expression.
+  - Estimated sizes `[NEEDS VERIFICATION]`:
+    - The first body is about 15,000–17,500 characters, which is in the 71–85% band and leaves roughly 3,500–6,000 characters of headroom.
+    - The other two are about 12,000–14,000 each.
+  - Each pass gains lines whenever a new engine or fallback branch is added, as the `:1329-1375` Claude/capacity-wait block shows.
+- **Recommended fix:** Replace each value with the runner's default environment variable: `${GITHUB_RUN_ID}`, `${GITHUB_RUN_ATTEMPT}`, `${GITHUB_WORKFLOW}`, `${GITHUB_SERVER_URL}` and `${GITHUB_REPOSITORY}`. They are identical in value, including under `workflow_call`. All three bodies then have no `${{ }}` at all and drop out of expression evaluation. The behaviour does not change. DUP-003 then shrinks the bodies further.
+
+**EXPR-002 — Workflow file size: no new measurement**
+- **File:** `.github/workflows/test-and-mark-stable.yml` (7,551 lines), `implement.yml` (6,494), `review_autofix.yml` (5,690), `plan.yml` (3,149), `workflow-log-analysis.yml` (2,833)
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:** Line counts are consistent with AM-EXPR-005's byte estimates (largest about 417 KB). Nothing is near the 800 KB mark in this prompt. The binding limit here is §24's 480,000-byte guard. `[NEEDS VERIFICATION]`: exact byte counts, since no byte counter was available in this run.
+- **Recommended fix:** No new action beyond AM-EXPR-005. Run `wc -c` in the next pass that has a shell.
+
+### Section 5: Cross-Cutting Concerns
+
+**DEAD-001 — `check-failure-triage-historical.yml` is a registered single-use workflow that still runs on every push to `main`**
+- **File:** `.github/workflows/check-failure-triage-historical.yml:1-25`. Registry: `docs/scripts-pending-removal.md:223-231`.
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** The header says it skips itself once the triage issue for run 37922279826 exists. Each push still spends a runner on the guard job plus the paginated listing (API-001). The concurrency group (`:24`) and the env (`:31-33`) hard-code the historical run. It is in the same state as AM-DEAD-001 (`pr6576-shard-followup.yml`).
+- **Recommended fix:** Run the three removal preflight checks in the registry entry. If they pass, delete the workflow, `tests/test_check_failure_triage_historical.py`, its `ci.yml:1904` line, the `tests/test_workflow_checkout_integration_ref_audit.py` entry and the registry entry in one PR (§20.F).
+
+**CONSIST-001 — The AI Memory Health "stale `in_progress` lineage" anomaly is expected behaviour, not a missing event**
+- **File:** `.github/workflows/implement.yml:5784-5804`; `scripts/ai_memory_lib.py:2919-2972`; `.github/workflows/issue_pr_status.yml:701-724`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:**
+  - Implement calls `memory_finalize_task --final-state in_progress` after it opens its PR.
+  - `finalize_task_lineage` *appends* a `runs[]` entry whose `status` is the task state at that moment (`:2962-2971`). It deduplicates only by `(run_id, run_attempt)` (`:2905-2916`), so earlier entries are never updated.
+  - The later `issue_pr_status` finalize adds its own `closed`/`merged` entry.
+  - Implement run 38988118138 showing `in_progress` is therefore correct, and `record-run-event` (`ai_memory.py:355-396`) writes the run ledger, not lineage `runs[]`. The AI Memory Health recommendation to "verify implement emits record-run-event with the final state" targets the wrong mechanism. The real ledger gap is BUG-005.
+- **Recommended fix:** Change the AI Memory Health text to match. Optionally, add a new field named `task_state_at_run` next to `status` in `finalize_task_lineage` so readers do not read it as the run's conclusion. Do not rename `status` (§10).
+
+**CONSIST-002 — `_resilient_phase_swap` uses 10 of the contract's 20 `issue_phase` labels `[NEEDS VERIFICATION]`**
+- **File:** `scripts/review_rb_judge.sh:957` vs `.github/ai/label_contract.v1.json:245-270` and `scripts/label_helpers.sh:149`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:** The judge's list leaves out `ai:validating`, `ai:validated`, `ai:validation-failed`, `ai:validation-fixing`, `ai:validation-recovery`, the three `ai:security-pass*` labels, `ai:needs-human` and `ai:blocked`. A judge swap to `ai:ready-to-merge` therefore leaves those phase labels in place, and the PUT path (`:1012-1016`) keeps them next to `ai:merged`/`ai:closed`. Not verified: whether the judge deliberately leaves validation and security labels alone.
+- **Recommended fix:** If it is deliberate, add a comment citing the contract group and the reason. If not, use `_AI_PHASE_LABELS` from `label_helpers.sh`, which is already sourced by the judge's caller chain (`review_rb_judge.sh` defines label fallbacks at `:930-937`). That arrives naturally with DUP-004.
+
+**CONSIST-003 — The review gate uses raw `gh api` although it defines `gh_api_retry`**
+- **File:** `scripts/review_autofix_step_evaluate_gate.sh:79` (fallback definition) vs raw calls at `:190`, `:279`, `:334`, `:343-347`, `:718`, `:1327`, `:1331`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:** A single transient error means the marker read reports `gate_marker_fetch_state="api_error"` (`:350`), or the PR-files cache is left empty (`:718-720`). Both fail safe, keeping the normal review, so the cost (inference) is a full reviewer panel instead of a deterministic skip, on the most expensive workflow (see Cost 2).
+- **Recommended fix:** Route the GET reads through `gh_api_retry`, which is already available at `:79`. Leave the POST at `:1331` as a single attempt, which is `gh_api_retry`'s default for unsafe POSTs.
+
+**SHELL-001 — The unquoted `[ $IDLE -ge $INACTIVITY_LIMIT ]` from AM-SHELL-001 has four more copies**
+- **File:** `.github/workflows/test-and-mark-stable.yml:902`, `:1494`, `:2466`, `:3806` (plus `:1194`, already reported)
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:** SC2086. All five wait loops carry the same failure mode: an empty value gives an `integer expression expected` error under `set -e`.
+- **Recommended fix:** Quote both operands at all five sites: `[ "$IDLE" -ge "$INACTIVITY_LIMIT" ]`.
+
+**Debt markers:** none. A case-sensitive search for `TODO`, `FIXME`, `HACK` and `XXX` across `scripts/*.sh`, `scripts/*.py` and `.github/workflows/*.yml` returned zero matches, which agrees with the AM-report.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 3 | BUG-001, BUG-002, EXPR-001 |
+| Low | 17 | BUG-003, BUG-004, BUG-005, BUG-006, API-001, API-002, API-003, DUP-001, DUP-002, DUP-003, DUP-004, EXPR-002, DEAD-001, CONSIST-001, CONSIST-002, CONSIST-003, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | none at Critical/High in this pass. AM-BUG-001 (`scripts/resolve_integration_ref.sh` plus 2 fixtures) is still the top open item | Small |
+| API call optimization | `.github/workflows/check-failure-triage-historical.yml` (removal), `scripts/ai_engine_fallback_report.sh`, `scripts/promote_main_cycle.sh` | Small |
+| Code modularization | `scripts/gh_helpers.sh` (`gh_workflow_active_run_count`), `scripts/codex_helpers.sh` (`codex_tokens_used`), new `.github/actions/wla-agent-setup/action.yml`, new `scripts/workflow_log_analysis_helpers.sh`, `scripts/label_helpers.sh`, `scripts/review_rb_judge.sh`, `clarify.yml`, `plan.yml`, `orchestrate.yml`, `orchestrate_clarify_respond.yml`, `implement.yml`, `workflow-log-analysis.yml`, `auto_release_stable.sh`, `apply_analysis_on_main.sh` | Medium |
+| Expression size reduction | `.github/workflows/workflow-log-analysis.yml` (3 step bodies) | Small |
+| Medium/Low fixes | `scripts/cost_audit.py` (+ test fixtures), `.github/workflows/promote-main-to-stable.yml` (+ `agents.d/` prefix fragment), `scripts/auto_release_stable.sh`, `scripts/promote_main_cycle.sh`, `scripts/label_helpers.sh`, `scripts/review_rb_judge.sh`, `.github/workflows/implement.yml`, `scripts/resolve_integration_ref.sh` (+ fixture), `scripts/review_autofix_step_evaluate_gate.sh`, `.github/workflows/test-and-mark-stable.yml`, this report's AI Memory Health section | Medium |
