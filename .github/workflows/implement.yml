@@ -6272,7 +6272,9 @@ jobs:
           set -euo pipefail
           # A failure before support staging (e.g. "Resolve integration ref")
           # has no diagnose helper yet; skip instead of exiting 127 (#7540).
-          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_diagnose_post_codex_failure.sh" ]; then
+          # Never fall back to the checkout's scripts/: with the staged run dir
+          # unset it may be branch-controlled while GH_PAT is in scope.
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_diagnose_post_codex_failure.sh" ]; then
             echo "::warning::Diagnose helper not staged (failure before support staging); skipping fix-up diagnosis."
             exit 0
           fi

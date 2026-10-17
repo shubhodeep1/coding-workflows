@@ -536,7 +536,8 @@ def test_implement_diagnose_step_skips_when_helper_not_staged() -> None:
 	start = wf.index("      - name: Diagnose post-Codex failure and create fix-up issues")
 	end = wf.index("\n      - name:", start + 1)
 	step = wf[start:end]
-	guard = 'if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_diagnose_post_codex_failure.sh" ]; then'
+	guard = ('if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || '
+		'[ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/implement_diagnose_post_codex_failure.sh" ]; then')
 	launch = 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_diagnose_post_codex_failure.sh"'
 	assert guard in step and launch in step
 	assert step.index(guard) < step.index(launch)
