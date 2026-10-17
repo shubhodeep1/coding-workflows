@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_scan.py:266-279 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: `_last_run_times` counts a judge run that ended `failure` or `timed_out` as having judged the item, so the 24-hour `fixup_escalated` window opens after a run that may have crashed early.\n  WHY: The re-grant check for an escalated, scope-blocked fix-up waits up to 24 hours instead of about one hour; the skip is bounded and there is no loop, so the reviewer rated it a NIT.\n- scripts/unblock_scan.py:234-263 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: `_terminal_unchanged` reads only `labeled` events, so it cannot tell who removed `ai:needs-human` or whether the park label was removed at all.\n  WHY: An item a person deliberately un-parked, with no new comment and no new block label, is skipped as `terminal_unchanged` instead of being re-judged; this is the intended #639 trade-off and the reviewer rated it a NIT.\n- scripts/unblock_scan.py:242-263 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The terminal skip in `_terminal_unchanged` (called at lines 381-384) treats the returned comments as complete evidence even when the poller marks the comment history incomplete, because it runs before the `history_incomplete` check at lines 390-392.\n  WHY: An older comment outside the 30-comment window can be edited after the close verdict and `_has_new_evidence` cannot see it, so the re-judge is suppressed; the reviewer rated it a NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_scan.py:266-279 | severity=NIT | confidence=2\n  PROBLEM: `_last_run_times` counts a judge run that ended `failure` or `timed_out` as having judged the item, so the 24-hour `fixup_escalated` window opens after a run that may have crashed early.\n  WHY: The re-grant check for an escalated, scope-blocked fix-up waits up to 24 hours instead of about one hour; the skip is bounded and there is no loop.\n- scripts/unblock_scan.py:234-263 | severity=NIT | confidence=2\n  PROBLEM: `_terminal_unchanged` reads only `labeled` events, so it cannot tell who removed `ai:needs-human` or whether the park label was removed at all.\n  WHY: An item a person deliberately un-parked, with no new comment and no new block label, is skipped as `terminal_unchanged` instead of being re-judged; this is the documented #639 trade-off.\n- HARDENING (tests/test_unblock_scan.py, `test_poller_passes_the_escalated_recheck_to_both_scan_calls`): nothing fails if the poller's runs `--jq` projection loses the `conclusion` field; assert that `{display_title, name, status, conclusion, created_at}` appears in the `run_unblock_scan` body. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- HARDENING (scripts/orchestrate_poll_process.sh, line 19465): the `gh jq` projection depends on the `conclusion` field with no check that it is present in the data returned by the GitHub Actions API; suggested fix is a shell-level check that the jq output matches the expected schema. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_scan.py:242-263 | severity=NIT | confidence=4\n  PROBLEM: The terminal skip in `_terminal_unchanged` (called at lines 381-384, before the `history_incomplete` check at lines 390-392) treats the returned comments as complete evidence even when the poller marks the comment history incomplete.\n  WHY: An older comment outside the 30-comment window can be edited after the close verdict and `_has_new_evidence` cannot see it, so the item is skipped as `terminal_unchanged` and the re-judge is suppressed.\n- HARDENING (tests/test_unblock_scan.py, `test_poller_passes_the_escalated_recheck_to_both_scan_calls`, lines 901-904): the test does not check that the workflow-run projection includes `conclusion`; assert that it includes `{display_title, name, status, conclusion, created_at}`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n- HARDENING (tests/test_unblock_scan.py, `test_poller_passes_the_escalated_recheck_to_both_scan_calls`, line ~905): nothing fails if the poller's runs jq projection loses `conclusion`; add `assert \"{display_title, name, status, conclusion, created_at}\" in body`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d0f0fa0ce50e4a2a8698523530fd30b005619b186eb3dbd4a4676ffbc205a019",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7549,
+    "run_id": "39015553562",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39015553562",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017082305_958210e87d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7549,
+    "run_id": "39015553562"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-17T08:23:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
