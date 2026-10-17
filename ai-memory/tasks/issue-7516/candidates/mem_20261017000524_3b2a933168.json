@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint: read `.github/workflows/clarify.yml` (Resolve integration ref step). Nothing edited.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: Option A is safe and needs no new information. In \"Resolve integration ref\" (`.github/workflows/clarify.yml:205-207`), every resolver exit 3 except `reason=pr_not_open` ends in `exit 1`, so the same deterministic `label_missing` refusal fails the job and starts a new heal report each time. Under A the step still refuses routing and never falls back to the default branch, so the #7513 fail-closed rule stays. It just ends the run as a held skip and hands the issue on through a comment and `ai:blocked`, so it stops repeating the failure. B leaves the heal lineage looping to its cap of 3. C contradicts this issue's own constraint that a deterministic failure needs a code fix and a regression test. Also, #7511 already has the same shape, so a manual relabel alone would not stop it recurring.\nQ2: The `RUNTIME_DIR: unbound variable` and missing `scripts/tg_helpers.sh` errors only appear because the job stopped before setup finished. Making those `always()` steps in `clarify.yml` skip with a `::warning::` is in scope and low risk. It leaves the real error as the run's first error, which matters for the failure headline and fingerprinting.\nQ3: The heal scope marker allows only `.github/workflows/clarify.yml`, `.github/workflows/internal-clarify.yml`, `tests/**` and `changelog.d/*.md`. Any relabeling or copying script under `scripts/` is outside it. The plan should record that script's path and the evidence and file it as a separate follow-up, not stall this PR.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone needed: every decision is a lettered option. Implementation notes for the planner on Q1 and Q2:\n- Q1:\n  - In the `rc -eq 3` branch of step `refctx` (`clarify.yml:205-207`), detect `outcome=refused reason=label_missing$` in `${resolver_err_file}`, the same way `pr_not_open` is detected at lines 189-192.\n  - On a match, downgrade the resolver's `::error::` line to `::warning::`.\n  - Post one comment ending in a dedup marker such as `<!-- ai:integration-ref-label-missing:v1 issue=<n> -->`, using the step's existing `GH_TOKEN` (GH_PAT). Count an earlier marker only when the GH_PAT login wrote it, and do not post again if one exists.\n  - The comment names what is missing (`ai:check-triage`, or a `- Tracking issue (untrusted): #N` line on an `ai:orchestrator-managed` issue) and the operator fix: correct the labels or body, then post `/reclarify`.\n  - Add `ai:blocked`.\n  - Write a step output such as `label_missing_hold=true` plus `ref=`, then `exit 0`. Every later step that would check out code or run the model must skip on that output, so nothing runs on the default branch.\n  - Any other exit 3 keeps `exit 1`.\n  - If the comment or label write fails, keep `exit 1`, so an issue that never reached the unblock path still surfaces as a failure.\n  - Mirror any predicate or output plumbing that `internal-clarify.yml` needs.\n  - Regression test under `tests/`: extract the step body and run it with a stub resolver that prints `::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=7515 pr=7447 outcome=refused reason=label_missing` and exits 3, plus a fake `gh`. Assert exit 0, `label_missing_hold=true`, one comment POST, the `ai:blocked` add, and no POST when a trusted marker already exists. Also assert that other exit-3 reasons still exit 1. The test fails on a0d3499 (exit 1) and passes with the fix; record both runs in the PR.\n  - Add a `changelog.d/<n>-*.md` fragment.\n- Q2: guard the failing `always()` steps with an explicit check that `RUNTIME_DIR` is set and that the support helper files exist. When either is missing, emit `::warning::` and `exit 0`.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nOperator note (not part of the code change): PR #7447 merged into `main` on 2026-10-15. Swapping #7515's labels back (add `ai:check-triage`, remove `ai:orchestrator-managed`) and posting `/reclarify` would make the resolver return `reason=pr_not_open`. Clarify would then stay on the default branch and the #7095 resolution gate could close #7515. #7511 (PR #7463) has the same shape.",
+  "fingerprint": "42550e7cb56e8e245610003ebb5f7732a622364965c839774000c32d32302de7",
+  "lineage": {
+    "issue_number": 7516,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38983917083",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38983917083",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7516"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261017000524_3b2a933168",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7516,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "38983917083"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7516",
+  "timestamps": {
+    "created_at": "2026-10-17T00:05:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
