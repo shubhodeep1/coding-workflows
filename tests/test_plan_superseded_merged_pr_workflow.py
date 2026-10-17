@@ -28,20 +28,27 @@ HEAD_SHA = "c" * 40
 HEAD_BRANCH = "ai/issue-6969"
 
 
-def _step_names() -> list[str]:
-	return [line.strip()[len("- name: "):] for line in PLAN_WORKFLOW.read_text().splitlines()
+IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+HANDOFF_SUPPORT_REF_STEP = "Resolve workflow support ref for CI-triage PR-not-open hand-off"
+HANDOFF_CHECKOUT_STEP = "Checkout support source for CI-triage PR-not-open hand-off"
+HANDOFF_STEP = "Hand off CI-triage issue whose PR is no longer open"
+
+
+def _step_names(workflow: Path = PLAN_WORKFLOW) -> list[str]:
+	return [line.strip()[len("- name: "):] for line in workflow.read_text().splitlines()
 		if line.startswith("      - name: ")]
 
 
-def _step_block(name: str) -> list[str]:
-	lines = PLAN_WORKFLOW.read_text().splitlines()
+def _step_block(name: str, workflow: Path = PLAN_WORKFLOW) -> list[str]:
+	lines = workflow.read_text().splitlines()
 	start = lines.index(f"      - name: {name}")
-	end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("      - name: "))
+	end = next(i for i in range(start + 1, len(lines))
+		if lines[i].startswith("      - name: ") or lines[i].startswith("      # "))
 	return lines[start:end]
 
 
-def _step_run(name: str) -> str:
-	block = _step_block(name)
+def _step_run(name: str, workflow: Path = PLAN_WORKFLOW) -> str:
+	block = _step_block(name, workflow)
 	run_at = block.index("        run: |")
 	return textwrap.dedent("\n".join(block[run_at + 1:])) + "\n"
 
@@ -487,3 +494,150 @@ def test_superseded_still_closes_on_pr_not_open_path(tmp_path):
 	assert "outcome=superseded" in proc.stdout
 	assert "pr_not_open_unresolved" not in proc.stdout
 	assert any(call[:2] == ["issue", "close"] for call in calls)
+
+
+# Issue #7540: implement.yml's "Resolve integration ref" skips on a CI-triage
+# PR that is no longer open; the hand-off step closes the issue as superseded
+# or labels it ai:blocked, from the verified support copy only.
+
+
+def test_implement_handoff_steps_order_and_gating():
+	names = _step_names(IMPLEMENT_WORKFLOW)
+	refctx = names.index("Resolve integration ref")
+	ordered = [names.index(n) for n in (HANDOFF_SUPPORT_REF_STEP, HANDOFF_CHECKOUT_STEP, HANDOFF_STEP)]
+	assert refctx < ordered[0] < ordered[1] < ordered[2] < names.index("Resolve checkout ref")
+	for name in (HANDOFF_SUPPORT_REF_STEP, HANDOFF_CHECKOUT_STEP, HANDOFF_STEP):
+		block = "\n".join(_step_block(name, IMPLEMENT_WORKFLOW))
+		assert "        if: steps.refctx.outputs.pr_not_open == 'true'" in block
+	checkout = "\n".join(_step_block(HANDOFF_CHECKOUT_STEP, IMPLEMENT_WORKFLOW))
+	assert "persist-credentials: false" in checkout and "sparse-checkout: scripts" in checkout
+	assert "path: .codex-workflow-src" in checkout
+
+
+def test_implement_handoff_uses_only_the_trusted_helper():
+	for name in (HANDOFF_SUPPORT_REF_STEP, HANDOFF_STEP):
+		assert "${{" not in _step_run(name, IMPLEMENT_WORKFLOW)
+	body = _step_run(HANDOFF_STEP, IMPLEMENT_WORKFLOW)
+	assert 'python3 -I -B "${helper}" classify' in body
+	assert 'sup="$(pwd)/.codex-workflow-src/scripts"' in body
+	assert "source scripts/" not in body and "bash scripts/" not in body
+	assert "RESTORE_AWAITING_APPROVAL_ON_SKIP" not in body
+	assert "git checkout" not in body
+
+
+def test_implement_workflow_parses_with_handoff_step():
+	yaml = pytest.importorskip("yaml")
+	steps = yaml.safe_load(IMPLEMENT_WORKFLOW.read_text())["jobs"]["implement"]["steps"]
+	step = next(step for step in steps if step.get("name") == HANDOFF_STEP)
+	assert step["id"] == "pr_not_open_handoff"
+
+
+def _run_handoff(tmp_path: Path, *, run_conclusion="success", merged=True, comments_fixture=None,
+	env_extra=None, stage_helper=True):
+	work = tmp_path / "work"
+	work.mkdir(exist_ok=True)
+	if stage_helper:
+		support = work / ".codex-workflow-src" / "scripts"
+		support.mkdir(parents=True, exist_ok=True)
+		for name in ("plan_superseded_merged_pr.py", "files_touched_scope_guard.py"):
+			shutil.copy2(REPO_ROOT / "scripts" / name, support / name)
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	gh = bin_dir / "gh"
+	gh.write_text(FAKE_GH)
+	gh.chmod(0o755)
+	runtime = tmp_path / "runtime"
+	runtime.mkdir(exist_ok=True)
+	meta = runtime / "issue_meta.json"
+	meta.write_text(json.dumps({"number": 7185, "title": "Re-issue of #6977: CI on PR #6976",
+		"body": "Re-issued by the unblock judge from #6977.\n\nSpecification: fix CI.",
+		"user": {"login": PIPELINE}, "author_association": "NONE", "labels": []}))
+	fixtures_data = _fixtures(run_conclusion, merged=merged)
+	if comments_fixture is not None:
+		fixtures_data[f"repos/{REPO}/issues/7185/comments?per_page=100"] = comments_fixture
+	fixtures = tmp_path / "fixtures.json"
+	fixtures.write_text(json.dumps(fixtures_data))
+	log = tmp_path / "gh.log"
+	env = {
+		"PATH": f"{bin_dir}:/usr/local/bin:/usr/bin:/bin",
+		"HOME": str(tmp_path),
+		"GH_LOG": str(log), "GH_FIXTURES": str(fixtures), "FAKE_LOGIN": PIPELINE,
+		"RUNTIME_DIR": str(runtime), "ISSUE_META_FILE": str(meta),
+		"ISSUE_NUMBER": "7185", "REPO_SLUG": REPO, "HANDOFF_PR": "6976", "GITHUB_RUN_ID": "99",
+		"PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED": "true", "PYTHONDONTWRITEBYTECODE": "1",
+	}
+	env.update(env_extra or {})
+	proc = subprocess.run(["bash", "-c", _step_run(HANDOFF_STEP, IMPLEMENT_WORKFLOW)], cwd=str(work), env=env,
+		text=True, capture_output=True, timeout=120)
+	calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+	return proc, calls
+
+
+def _posted_bodies(calls):
+	return [call[call.index("-f") + 1] for call in calls
+		if call[0] == "api" and call[1].endswith("/comments") and "-f" in call]
+
+
+def test_implement_handoff_closes_superseded_issue(tmp_path):
+	proc, calls = _run_handoff(tmp_path)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1
+	assert f"<!-- ai:plan-superseded:v1 pr=6976 head={HEAD_SHA} -->" in bodies[0]
+	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
+	assert "ai:closed" in edit and "ai:awaiting-approval" in edit
+	assert edit[edit.index("--add-label") + 1] == "ai:closed"
+	close = next(call for call in calls if call[:2] == ["issue", "close"])
+	assert close[close.index("--reason") + 1] == "not planned"
+	assert "gate=ci_triage_pr_not_open reason=superseded outcome=closed label=applied close=done comment=posted" in proc.stdout
+
+
+def test_implement_handoff_existing_marker_is_not_posted_again(tmp_path):
+	marker = f"<!-- ai:plan-superseded:v1 pr=6976 head={HEAD_SHA} -->"
+	pages = [[{"user": {"login": PIPELINE}, "body": f"Earlier.\n{marker}"}]]
+	proc, calls = _run_handoff(tmp_path, comments_fixture=pages)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _posted_bodies(calls) == []
+	assert any(call[:2] == ["issue", "close"] for call in calls)
+	assert "comment=present" in proc.stdout
+
+
+def _assert_blocked(proc, calls, detail):
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
+	assert edit[edit.index("--add-label") + 1] == "ai:blocked"
+	assert edit[edit.index("--remove-label") + 1] == "ai:awaiting-approval"
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1
+	assert bodies[0].rstrip().endswith("<!-- ai:implement-pr-not-open:v1 pr=6976 run=99 -->")
+	assert f"reason=blocked_handoff detail={detail} outcome=handed_off" in proc.stdout
+
+
+def test_implement_handoff_closed_unmerged_is_blocked(tmp_path):
+	proc, calls = _run_handoff(tmp_path, merged=False)
+	_assert_blocked(proc, calls, "pr_closed_unmerged")
+
+
+def test_implement_handoff_merged_with_failed_check_is_blocked(tmp_path):
+	proc, calls = _run_handoff(tmp_path, run_conclusion="failure")
+	_assert_blocked(proc, calls, "merged_check_not_passed")
+
+
+def test_implement_handoff_missing_helper_is_blocked(tmp_path):
+	proc, calls = _run_handoff(tmp_path, stage_helper=False)
+	_assert_blocked(proc, calls, "helper_missing")
+	assert not any(call[:2] == ["api", "user"] for call in calls)
+
+
+def test_implement_handoff_switch_off_is_blocked_without_classifier_reads(tmp_path):
+	proc, calls = _run_handoff(tmp_path, env_extra={"PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED": "OFF"})
+	_assert_blocked(proc, calls, "disabled")
+	assert not any(call[0] == "api" and "pulls" in call[1] for call in calls)
+
+
+def test_implement_handoff_edit_failure_still_exits_zero(tmp_path):
+	proc, calls = _run_handoff(tmp_path, merged=False, env_extra={"FAKE_EDIT_FAIL": "1"})
+	assert proc.returncode == 0
+	assert "label=failed" in proc.stdout
+	assert "::warning::" in proc.stdout + proc.stderr
