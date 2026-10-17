@@ -71,6 +71,11 @@ jobs:
       # resolution or judge evaluation).
       group: ai-orchestrate-poll-${{ github.repository }}
       cancel-in-progress: false
+    outputs:
+      # Daily Claude pool usage report (claude_pool_daily_usage job): due when
+      # this tick is in the slot and the day's cache marker was not found.
+      claude_pool_daily_due: ${{ steps.pool_daily_seen.outcome == 'success' && steps.pool_daily_seen.outputs.cache-hit != 'true' && 'true' || 'false' }}
+      claude_pool_daily_date: ${{ steps.pool_daily_slot.outputs.date }}
 
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
@@ -1154,6 +1159,33 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: bash .codex-workflow-src/scripts/claude_pool_health_alert.sh
 
+      # Daily Claude pool usage report: decides whether the
+      # claude_pool_daily_usage job below runs on this tick. coding-workflows
+      # only (the pool is shared by every consumer repo), from
+      # CLAUDE_POOL_DAILY_USAGE_HOUR_UTC (default 4 = 12:00 SGT), once per UTC
+      # day: the job saves an actions/cache marker for the day after sending.
+      - name: Check Claude pool daily usage slot
+        id: pool_daily_slot
+        if: github.repository == 'shubhodeep1/coding-workflows'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_DAILY_USAGE_ENABLED: ${{ vars.CLAUDE_POOL_DAILY_USAGE_ENABLED || 'true' }}
+          CLAUDE_POOL_DAILY_USAGE_HOUR_UTC: ${{ vars.CLAUDE_POOL_DAILY_USAGE_HOUR_UTC || '4' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: bash .codex-workflow-src/scripts/claude_pool_daily_usage.sh slot
+
+      - name: Look up today's Claude pool daily usage marker
+        id: pool_daily_seen
+        if: steps.pool_daily_slot.outputs.in_slot == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .claude-pool-daily-usage/sent
+          key: claude-pool-daily-usage-v1-${{ steps.pool_daily_slot.outputs.date }}
+          lookup-only: true
+
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
@@ -1970,3 +2002,78 @@ jobs:
           else
             echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
           fi
+
+  # Daily Claude pool usage report: one Telegram message with every pool
+  # account's 5-hour and 7-day usage. Runs in shubhodeep1/coding-workflows only,
+  # on the first poll tick at or after CLAUDE_POOL_DAILY_USAGE_HOUR_UTC whose
+  # day has no cache marker yet (the poll job's claude_pool_daily_due output).
+  # Its own job, so probing the pool here never changes the poll job's Claude
+  # credential or capacity-wait state. The broker accepts it because it is a
+  # job of orchestrate_poll.yml.
+  claude_pool_daily_usage:
+    needs: poll
+    if: ${{ !cancelled() && needs.poll.outputs.claude_pool_daily_due == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      # A queued poll run can finish before this job saves the day's marker;
+      # one report job at a time, and each re-checks the marker below.
+      group: claude-pool-daily-usage-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout coding-workflows
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Re-check today's Claude pool daily usage marker
+        id: pool_daily_recheck
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .claude-pool-daily-usage/sent
+          key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
+          lookup-only: true
+
+      - name: Install Claude Code CLI
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Probe the Claude pool
+        id: claude_pool
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Send Claude pool daily usage report
+        id: pool_daily_send
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || 'not_probed' }}
+          CLAUDE_ENGINE_CONFIG: .github/ai/claude_engine.json
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: bash scripts/claude_pool_daily_usage.sh send
+
+      - name: Write today's Claude pool daily usage marker
+        if: steps.pool_daily_send.outputs.sent == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p .claude-pool-daily-usage
+          date -u +%Y-%m-%dT%H:%M:%SZ > .claude-pool-daily-usage/sent
+
+      - name: Save today's Claude pool daily usage marker
+        if: steps.pool_daily_send.outputs.sent == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .claude-pool-daily-usage/sent
+          key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}

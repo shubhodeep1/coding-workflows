@@ -760,6 +760,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_health_alert.py
 
+      - name: Claude pool daily usage report tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_daily_usage.py
+
       - name: Install Claude CLI action tests
         run: |
           set -euo pipefail
