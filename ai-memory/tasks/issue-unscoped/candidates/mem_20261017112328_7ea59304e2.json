@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh:1014 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: When `add()` returns False for an env template (symlink or non-regular file), the file is dropped without any stage_log line.\n  WHY: Operators cannot tell a rejected template from an absent one, unlike `.npmrc` rejections, which log `outcome=skip`; the drop itself is safe. All four reviewers rated it NIT.\n- scripts/validation_harness_sandbox.sh:889-895, 937-940, 993-995 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, google_gemini-3_1-flash-lite]\n  PROBLEM: The `validation/` walk adds files without checking whether Git ignores them, so an ignored `validation/.env.example` can be admitted as a special file. Gemini cites lines 904-912 and says `validation/secrets/.env.example` could be admitted.\n  WHY: This could let an ignored env file into the sandbox. Severity disagreement: gpt-6-luna and gemini rated it MAJOR. The sonnet reviewer rejected the secrets-path variant (minimax's finding), saying `readonly_allowed` runs on every name and `secrets` is in `READONLY_BAD_PARTS`. That rebuttal does not address the ignored-file case.\n- scripts/validation_harness_sandbox.sh:999-1004 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Redundant nested `OSError` handling makes the error path harder to follow.\n  WHY: It does not fail at runtime. Rated NIT.\n- scripts/validation_harness_sandbox.sh:929 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new `phase=stage` log value is not recorded in the `agents.md` fragment alongside the other skip reasons.\n  WHY: It breaks the documented stable-logging contract. Rated NIT. The sonnet reviewer found that the fragment `agents.d/7557-validation-sandbox-staging.md` covers the skip reasons and the `ok` reasons.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/validation_harness_sandbox.sh:1014 | severity=NIT | confidence=3\n  PROBLEM: When `add()` returns False for an admitted env template, nothing is logged.\n  WHY: Nothing breaks and the template is safely not staged. Only the log line is missing.\n- (Rejected minimax finding on the `validation/` walk, `scripts/validation_harness_sandbox.sh:889-896`: dropped because `readonly_allowed` runs on every name. Rejected minimax readability finding on `scripts/validation_harness_sandbox.sh:999-1004`: not reported. All other categories NONE. HARDENING_RISK_SCORE: 1.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_harness_sandbox.sh:1014 | severity=NIT | confidence=4\n  PROBLEM: When `add()` returns False for an env_template, the file is skipped silently with no `stage_log` entry.\n  WHY: Operators cannot tell a policy exclusion from a filesystem skip.\n- scripts/validation_harness_sandbox.sh:904-912 | severity=MAJOR | confidence=3\n  PROBLEM: The directory walk admits files based on `readonly_allowed(name)`, which checks only the parent directory name. `validation/secrets/.env.example` might be admitted.\n  WHY: This could bypass intended security boundaries, depending on the `codex_isolated_workspace` implementation.\n- scripts/validation_harness_sandbox.sh:999-1004 | severity=NIT | confidence=2\n  PROBLEM: Redundant `OSError` handling.\n  WHY: It adds nesting and makes the error path harder to reason about. It does not fail at runtime.\n- scripts/validation_harness_sandbox.sh:929 | severity=NIT | confidence=4\n  PROBLEM: The new `phase=stage` log value is not recorded in the `agents.md` fragment.\n  WHY: It violates the stable-logging documentation contract.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validation_harness_sandbox.sh:889-895, 937-940, 993-995 | severity=MAJOR | confidence=4\n  PROBLEM: The `validation/` walk adds files without checking Git-ignored status, so special-file admission lets an ignored `validation/.env.example` through.\n  WHY: An ignored env file can enter the sandbox, and its contents are not inspected.\n- scripts/validation_harness_sandbox.sh:904-907, 1014-1017 | severity=NIT | confidence=5\n  PROBLEM: A rejected env-template file, such as a symlink, is dropped without a stage log.\n  WHY: The logs cannot distinguish a missing template from a rejected one, despite the contract that each extra file staged or skipped is logged.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/validation_harness_sandbox.sh:1014 | severity=NIT | confidence=4\n  PROBLEM: When `add()` returns False for an env template, the `and` short-circuits and no log is emitted. The test suite has no case for a non-regular env template.\n  WHY: The drop is indistinguishable from a file that was never present, unlike `.npmrc` rejections, which log `outcome=skip`.\n- tests/test_validation_harness_sandbox.py (after `test_stage_copy_drops_a_symlinked_oversized_or_undecodable_npmrc`) | HARDENING_RISK_SCORE=1\n  PROBLEM: No test covers a symlinked or non-regular `.env.example`.\n  WHY: The suggested fix is a test that asserts the file is not staged and logs `outcome=skip`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5c96d5877c766ba48689a51bda5beec4fb284cdb706e9efff2cefac7e1dcc81d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7557,
+    "run_id": "39026997933",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39026997933",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017112328_7ea59304e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7557,
+    "run_id": "39026997933"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T11:23:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
