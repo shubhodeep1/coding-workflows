@@ -1163,7 +1163,7 @@ jobs:
           fi
           # A pinned support ref must be exactly the commit the caller pinned;
           # never run support code from a moving ref in its place.
-          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
             echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
             exit 1
           fi
