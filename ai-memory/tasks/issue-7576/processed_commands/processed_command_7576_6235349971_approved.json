@@ -5,13 +5,23 @@
   "entry_id": "processed_command_7576_6235349971_approved",
   "issue_number": 7576,
   "metadata": {
+    "branch": "ai/issue-7576",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/7576-ci-rebalance-promote-stall-review.md"
+    ],
+    "issue_number": 7576,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7576",
+    "pr_number": 7578,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7578",
+    "run_attempt": "1",
+    "run_id": "39042660402",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39042660402"
   },
   "run_attempt": 1,
   "run_id": "39042660402",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-17T14:56:15Z",
+  "status": "completed",
+  "timestamp": "2026-10-17T15:17:25Z",
   "workflow": "implement"
 }
