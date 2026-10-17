@@ -5,12 +5,12 @@ A consumer cannot resolve those findings: the next `@stable` sync overwrites the
 
 | The numbers that matter | Value |
 | --- | --- |
-| Upstream-managed paths in the current release | 51 (48 wrapper and `.claude/` entries, `CLAUDE.md`, 2 audit-gate files) |
-| New repo variable | `SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER`, default `true` |
+| Upstream-managed paths in the current release | 51 (18 wrapper workflows, 30 `.claude/` paths including 11 retired files, `CLAUDE.md`, 2 audit-gate files) |
+| New switch (script environment, not forwarded from a repository variable) | `SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER`, default `true` |
 | New log prefixes | `SECURITY_AUDIT_UPSTREAM_MANAGED` (`outcome=suppressed`, or `outcome=filed reason=consumer_modified`), `SECURITY_AUDIT_FINDING_DROPPED` |
 | Output additions | `upstream_managed` in `security_audit_findings.v1`, `suppressed_upstream_managed` in the filter summary |
 
-What this means for consumer operators: security-pass fix cycles and `[security-audit]` issues now cover only code the consumer owns. A real defect in a synced file shows up under "Upstream-managed findings (not filed)" in the audit tracker comment and in the `SECURITY_AUDIT_UPSTREAM_MANAGED outcome=suppressed` log lines; it is not reported to coding-workflows automatically. Set `SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER=false` to get the old behaviour.
+What this means for consumer operators: security-pass fix cycles and `[security-audit]` issues now cover only code the consumer owns. A real defect in a synced file shows up under "Upstream-managed findings (not filed)" in the audit tracker comment and in the `SECURITY_AUDIT_UPSTREAM_MANAGED outcome=suppressed` log lines; it is not reported to coding-workflows automatically. Setting `SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER=false` in the audit script's environment gets the old behaviour; the workflows do not forward a repository variable of that name, so a repository variable alone does not turn the filter off.
 
 ### For contributors
 

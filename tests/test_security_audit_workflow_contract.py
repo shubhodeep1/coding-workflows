@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -1813,6 +1814,16 @@ def test_upstream_managed_resolver_explicit_source_dir_is_trusted_without_an_ori
 	assert ".github/workflows/ai-x.yml" in json.loads(patterns)
 
 
+def test_upstream_managed_resolver_reports_an_invalid_explicit_source_dir(tmp_path: Path) -> None:
+	"""A bad override must not silently fall through to a discovered checkout."""
+	checkout = _upstream_checkout_fixture(tmp_path, "https://github.com/shubhodeep1/coding-workflows")
+	not_a_checkout = tmp_path / "not-a-checkout"
+	not_a_checkout.mkdir()
+	stdout, patterns = _run_upstream_managed_resolver(tmp_path, support_dir=checkout, source_dir=str(not_a_checkout))
+	assert stdout == "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=upstream_source_dir_invalid"
+	assert patterns == ""
+
+
 def test_security_audit_issues_mode_reports_upstream_managed_findings_without_filing_them() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-upstream-issues-") as fixture_td:
 		repo_dir = _consumer_fixture_repo(Path(fixture_td))
@@ -3556,6 +3567,12 @@ def main() -> int:
 	for name in sorted(globals()):
 		if name.startswith("test_") and callable(globals()[name]):
 			for kwargs in _parametrize_cases(globals()[name]):
+				# Supply pytest's tmp_path fixture when a test declares it,
+				# since this runner calls tests without pytest.
+				if "tmp_path" in inspect.signature(globals()[name]).parameters and "tmp_path" not in kwargs:
+					with tempfile.TemporaryDirectory(prefix="security-audit-tmp-path-") as tmp_dir:
+						globals()[name](tmp_path=Path(tmp_dir), **kwargs)
+					continue
 				globals()[name](**kwargs)
 	return 0
 

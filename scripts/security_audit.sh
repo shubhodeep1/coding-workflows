@@ -1822,7 +1822,7 @@ fi
 # filed exactly as before.
 security_audit_resolve_upstream_managed_paths()
 {
-	local skip_reason="" candidate_dir="" source_dir="" pattern_count=0 untrusted_seen="false" candidate_origin=""
+	local skip_reason="" candidate_dir="" source_dir="" pattern_count=0 untrusted_seen="false" candidate_origin="" override_invalid="false"
 	: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
 	if ! security_audit_flag_enabled "${SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER}"; then
 		skip_reason="disabled"
@@ -1839,8 +1839,9 @@ security_audit_resolve_upstream_managed_paths()
 			if [ -d "${candidate_dir}/workflow-templates" ] \
 				&& [ -f "${candidate_dir}/scripts/build_sync_manifest.py" ] \
 				&& env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${candidate_dir}" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
-				# The builder runs with the caller's credentials, so only an
-				# explicit SECURITY_AUDIT_UPSTREAM_SOURCE_DIR or a checkout whose
+				# The builder runs as the caller (its environment is reduced to
+				# PATH and HOME below, but the user's files stay readable), so
+				# only an explicit SECURITY_AUDIT_UPSTREAM_SOURCE_DIR or a checkout whose
 				# origin is the upstream repository is executed. A consumer's own
 				# checkout (the poller's working directory) is never trusted.
 				candidate_origin="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${candidate_dir}" remote get-url origin 2>/dev/null || true)"
@@ -1855,13 +1856,20 @@ security_audit_resolve_upstream_managed_paths()
 						;;
 				esac
 				untrusted_seen="true"
+			elif [ "${candidate_dir}" = "${SECURITY_AUDIT_UPSTREAM_SOURCE_DIR}" ]; then
+				# An explicit override that is not an upstream checkout is
+				# reported as such instead of falling through to another tree.
+				override_invalid="true"
+				break
 			fi
 		done
-		if [ -z "${source_dir}" ] && [ "${untrusted_seen}" = "true" ]; then
+		if [ "${override_invalid}" = "true" ]; then
+			skip_reason="upstream_source_dir_invalid"
+		elif [ -z "${source_dir}" ] && [ "${untrusted_seen}" = "true" ]; then
 			skip_reason="upstream_tree_untrusted"
 		elif [ -z "${source_dir}" ]; then
 			skip_reason="upstream_tree_missing"
-		elif ! env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE PYTHONDONTWRITEBYTECODE=1 \
+		elif ! env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
 			python3 -I "${source_dir}/scripts/build_sync_manifest.py" managed-digests \
 			--repo-root "${source_dir}" --commit HEAD \
 			> "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2> "${UPSTREAM_MANAGED_ERROR_FILE}"; then
@@ -3194,6 +3202,8 @@ if findings:
 				f"   - Recommendation: {finding['recommendation']}",
 			]
 		)
+elif summary.get("upstream_managed"):
+	comment_lines.extend(["", "No findings to file after exclusions; upstream-managed findings are listed below."])
 else:
 	comment_lines.extend(["", "No findings met the confidence gate after exclusions."])
 
