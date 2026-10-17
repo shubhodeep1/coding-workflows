@@ -605,14 +605,29 @@ jobs:
           chmod +x "${resolver_script}"
           # Exit 3 means CI-triage PR-branch routing was required but could
           # not be verified; never fall back to the default branch then.
+          # One exception (#7540, as plan.yml #7477): reason=pr_not_open (the
+          # triage PR merged or closed) skips implementation with
+          # pr_not_open=true and no ref; the hand-off step below settles it.
           resolver_rc=0
+          resolver_err_file="${resolver_stage_root}/resolver.err"
           integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
             CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
-            bash "${resolver_script}"
+            bash "${resolver_script}" 2>"${resolver_err_file}"
           })" || resolver_rc=$?
+          resolver_pr_not_open=false
+          if [ "${resolver_rc}" -eq 3 ] && grep -Eq 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" 2>/dev/null; then
+            resolver_pr_not_open=true
+          fi
+          if [ -s "${resolver_err_file}" ]; then
+            if [ "${resolver_pr_not_open}" = "true" ]; then
+              sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            else
+              cat "${resolver_err_file}" >&2
+            fi
+          fi
           if [ "${resolver_rc}" -eq 0 ]; then
             # Port P6 (replace-claude-sessions plan, Phase 8d): an integration
             # branch whose own PR already merged (and whose tip is still that
@@ -627,6 +642,12 @@ jobs:
               fi
             fi
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_pr_not_open}" = "true" ]; then
+            not_open_pr="$(grep -E 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" | sed -n 's/.* pr=\([0-9][0-9]*\) .*/\1/p' | head -n1)"
+            echo "::notice::CI-triage PR for issue #${issue_number} is no longer open; implementation is skipped and the issue is handed off."
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            { echo "pr_not_open=true"; echo "pr_not_open_pr=${not_open_pr}"; } >> "$GITHUB_OUTPUT"
+            exit 0
           elif [ "${resolver_rc}" -eq 3 ]; then
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
@@ -649,6 +670,154 @@ jobs:
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
+
+      # Issue #7540: the CI-triage PR merged or closed after planning. Settle
+      # the issue instead of failing every retry: close it as superseded
+      # (plan.yml #7216 classifier, verified support copy only) or hand it to
+      # ai:blocked for the unblock judge. Never falls back to the default branch.
+      - name: Resolve workflow support ref for CI-triage PR-not-open hand-off
+        if: steps.refctx.outputs.pr_not_open == 'true'
+        id: pr_not_open_support_ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          # Same shape as the other "Resolve workflow support ref" steps
+          # (tests/test_workflow_support_ref_follows_pin.py): one line to GITHUB_ENV.
+          if [ "${{ github.repository }}" = "shubhodeep1/coding-workflows" ]; then
+            echo "PR_NOT_OPEN_SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            pin="stable"
+            wf_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${wf_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@[0-9a-f]{40}$ ]]; then
+              pin="${wf_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${pin} workflow_ref=${wf_ref:-unknown}"
+            echo "PR_NOT_OPEN_SCRIPT_REF=${pin}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout support source for CI-triage PR-not-open hand-off
+        if: steps.refctx.outputs.pr_not_open == 'true'
+        id: checkout_support_source_pr_not_open
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.PR_NOT_OPEN_SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Hand off CI-triage issue whose PR is no longer open
+        if: steps.refctx.outputs.pr_not_open == 'true'
+        id: pr_not_open_handoff
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPO_SLUG: ${{ github.repository }}
+          HANDOFF_PR: ${{ steps.refctx.outputs.pr_not_open_pr }}
+          PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED: ${{ vars.PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED || 'true' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -uo pipefail
+          pr="$(printf '%s' "${HANDOFF_PR:-}" | tr -cd '0-9')"
+          log() { echo "AI_PHASE_GATE_V1 phase=implement gate=ci_triage_pr_not_open $* issue=${ISSUE_NUMBER} pr=${pr:-none}"; }
+          # Only the verified support copy is sourced or run, never scripts/ (#7159).
+          sup="$(pwd)/.codex-workflow-src/scripts"
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          source "${sup}/tg_helpers.sh" 2>/dev/null || true
+          source "${sup}/label_helpers.sh" 2>/dev/null || true
+          notify() { type tg_send_tracked >/dev/null 2>&1 && tg_send_tracked "${ISSUE_NUMBER}" "$1"$'\n'"Issue: ${ISSUE_URL:-}" "$2" || true; }
+          blocked_handoff() {
+            local detail label_state=applied comment_state=posted
+            detail="$(printf '%s' "${1:-unknown}" | tr -cd 'a-z_')"
+            type ensure_label_exists >/dev/null 2>&1 && { ensure_label_exists "ai:blocked" "${REPO_SLUG}" || true; }
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" --add-label 'ai:blocked' \
+              --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || label_state=failed
+            body="CI-triage pull request #${pr:-unknown} is no longer open, so implementation was not started (outcome: \`${detail}\`). The unblock judge decides whether to close or re-issue this issue."$'\n\n'"<!-- ai:implement-pr-not-open:v1 pr=${pr} run=${GITHUB_RUN_ID} -->"
+            # Comment only after the label landed, so a retry does not post it twice.
+            if [ "${label_state}" = "applied" ]; then
+              gh_retry gh api "repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 || comment_state=failed
+            else
+              comment_state=skipped
+            fi
+            log "reason=blocked_handoff detail=${detail} outcome=handed_off label=${label_state} comment=${comment_state}"
+            if [ "${label_state}" = "failed" ]; then
+              echo "::warning::Could not label #${ISSUE_NUMBER} ai:blocked; it is still ai:awaiting-approval."
+              notify "Implementation skipped for #${ISSUE_NUMBER}: CI-triage PR #${pr} is no longer open, and the ai:blocked hand-off failed; the issue is still ai:awaiting-approval." WARNING
+            else
+              notify "Implementation skipped for #${ISSUE_NUMBER}: CI-triage PR #${pr} is no longer open (${detail}); handed to the unblock judge." DEBUG
+            fi
+            exit 0
+          }
+          case "$(printf '%s' "${PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" in
+            false|0|no|off) blocked_handoff disabled ;;
+          esac
+          helper=""
+          for c in "${sup}/plan_superseded_merged_pr.py" "$(pwd)/.codex-workflow-src-main/scripts/plan_superseded_merged_pr.py"; do
+            if [ -f "${c}" ] && [ ! -L "${c}" ]; then helper="${c}"; break; fi
+          done
+          [ -n "${helper}" ] || blocked_handoff helper_missing
+          login="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+          result_file="${RUNTIME_DIR}/implement_pr_not_open.json"
+          python3 -I -B "${helper}" classify --issue-meta-file "${ISSUE_META_FILE}" \
+            --repo "${REPO_SLUG}" --pipeline-login "${login}" --out "${result_file}" || blocked_handoff classifier_failed
+          field() {
+            python3 -I -B -c 'import json, sys; value = json.load(open(sys.argv[1], encoding="utf-8")).get(sys.argv[2]); sys.stdout.write("" if value is None else str(value))' "${result_file}" "$1"
+          }
+          outcome="$(field outcome 2>/dev/null)" || outcome=""
+          [ -n "${outcome}" ] || blocked_handoff classifier_failed
+          if [ "${outcome}" != "superseded" ]; then
+            reason="$(field reason 2>/dev/null || true)"
+            blocked_handoff "${reason:-${outcome}}"
+          fi
+          cpr="$(field pr | tr -cd '0-9')"
+          head_sha="$(field final_head_sha | tr -cd '0-9a-f' | cut -c1-40)"
+          marker="<!-- ai:plan-superseded:v1 pr=${cpr} head=${head_sha} -->"
+          comment_state=present
+          # §14: issue comments are not fetched until "Fetch issue comments"
+          # (later, skipped here), so this one paginated read is new; it runs
+          # only on this superseded path to dedupe the pipeline's marker.
+          comments_file="${RUNTIME_DIR}/implement_pr_not_open_comments.json"
+          gh_retry gh api --paginate --slurp "repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}/comments?per_page=100" > "${comments_file}" 2>/dev/null || : > "${comments_file}"
+          if ! python3 -I -B -c '
+          import json, sys
+          try:
+              pages = json.load(open(sys.argv[1], encoding="utf-8"))
+          except Exception:
+              sys.exit(1)
+          comments = [c for p in (pages if isinstance(pages, list) else []) for c in (p if isinstance(p, list) else [p])]
+          sys.exit(0 if any(isinstance(c, dict) and (c.get("user") or {}).get("login") == sys.argv[2]
+              and sys.argv[3] in (c.get("body") or "") for c in comments) else 1)
+          ' "${comments_file}" "${login}" "${marker}" >/dev/null 2>&1; then
+            comment_file="${RUNTIME_DIR}/implement_pr_not_open_comment.md"
+            field comment_body > "${comment_file}"
+            if ! grep -qF -- "${marker}" "${comment_file}" || \
+              ! gh_retry gh api "repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}/comments" -f body="$(cat "${comment_file}")" >/dev/null 2>&1; then
+              blocked_handoff comment_failed
+            fi
+            comment_state=posted
+          fi
+          label_state=applied
+          close_state=done
+          type ensure_label_exists >/dev/null 2>&1 && { ensure_label_exists "ai:closed" "${REPO_SLUG}" || true; }
+          gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" --add-label 'ai:closed' \
+            --remove-label 'ai:awaiting-approval' --remove-label 'ai:planning' \
+            --remove-label 'ai:clarification' >/dev/null 2>&1 || label_state=failed
+          gh_retry gh issue close "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" --reason "not planned" >/dev/null 2>&1 || close_state=failed
+          log "reason=superseded outcome=closed label=${label_state} close=${close_state} comment=${comment_state}"
+          if [ "${label_state}" = "failed" ] || [ "${close_state}" = "failed" ]; then
+            echo "::warning::Superseded issue #${ISSUE_NUMBER} could not be fully closed (label=${label_state} close=${close_state})."
+            notify "Superseded CI-repair issue #${ISSUE_NUMBER} (merged PR #${cpr}) could not be closed: label=${label_state} close=${close_state}." WARNING
+          else
+            notify "Closed superseded CI-repair issue #${ISSUE_NUMBER}: PR #${cpr} merged with its check passing." DEBUG
+          fi
+          exit 0
 
       - name: Resolve checkout ref
         if: env.SKIP_IMPLEMENT != 'true'
@@ -6092,6 +6261,12 @@ jobs:
           SEMBLE_STATIC_CONTEXT_FILE: ./pre_assembled_static.txt
         run: |
           set -euo pipefail
+          # A failure before support staging (e.g. "Resolve integration ref")
+          # has no diagnose helper yet; skip instead of exiting 127 (#7540).
+          if [ ! -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_diagnose_post_codex_failure.sh" ]; then
+            echo "::warning::Diagnose helper not staged (failure before support staging); skipping fix-up diagnosis."
+            exit 0
+          fi
           diagnose_path="${PATH}"
           if [ "${CODEX_THREAD_REUSE_AVAILABLE:-false}" = 'true' ] && [ -x "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" ]; then
             # shellcheck source=/dev/null
