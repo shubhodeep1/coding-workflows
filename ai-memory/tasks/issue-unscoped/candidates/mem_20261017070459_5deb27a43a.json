@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:~1954-2027 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `claude_pool_daily_usage` job runs `bash scripts/claude_pool_daily_usage.sh send` from its own `actions/checkout@v5` (no `ref:`) instead of the verified `.codex-workflow-src` copy used by the `poll` job, with `TG_BOT_SECRET` and the pool OIDC token in scope.\n  WHY: Branch-dispatched runs would execute branch-supplied script content with the bot token in env. Severity MAJOR is mapped to high. anthropic_claude-sonnet-5_5 examined the same claim and rejected it: both jobs resolve to `github.sha`, and the job is gated on the `poll` job's slot output, so this is a reviewer disagreement.\n- scripts/tg_helpers.sh:167 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, anthropic_claude-sonnet-5_5]\n  PROBLEM: jq stderr is silenced in `tg_send_report_msg`, so a malformed Telegram response or missing jq yields only an opaque `outcome=not_delivered`.\n  WHY: The day is retried on each tick with no diagnostic trail. Severity differs by reviewer: NIT from anthropic_claude-sonnet-5_5 and minimax_minimax-m3, unstated from google_gemini-3_1-flash-lite. Low is used. google_gemini-3_1-flash-lite's line is 167 and anthropic_claude-sonnet-5_5 cites scripts/claude_pool_daily_usage.sh lines 127-131, so file and line differ across reviewers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/claude_pool_daily_usage.sh:127-131 | severity=NIT | confidence=2\n  PROBLEM: `tg_send_report_msg` discards jq stderr, so a jq failure or unparseable Telegram response logs only `outcome=not_delivered`.\n  WHY: The day is retried on the next tick with less diagnostic detail. ubuntu-latest ships jq, so this is unlikely to trigger.\n- HARDENING: scripts/tg_helpers.sh, the `curl` call in `tg_send_report_msg`, has no timeout. A stalled connection holds the job until its 15-minute `timeout-minutes`. Suggested fix: add `--max-time 30` (1 line). HARDENING_RISK_SCORE: 1\n- The reviewer rejected the pass-1 claim about the checkout `ref` and reported NONE for every other category and for task gaps.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/tg_helpers.sh:167 | confidence=4\n  PROBLEM: jq stderr is redirected to /dev/null while parsing the Telegram API response.\n  WHY: A malformed response makes jq fail silently, leaving an empty message ID and an opaque not_delivered outcome.\n- HARDENING: scripts/tg_helpers.sh line 153 (the curl call) has no timeout. Suggested fix: add `--max-time 30` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/orchestrate_poll.yml:~1962-2027 | severity=MAJOR | confidence=3\n  PROBLEM: The `claude_pool_daily_usage` job runs the script from its own `actions/checkout@v5` (no `ref:`) rather than from the verified `.codex-workflow-src`, and `TG_BOT_SECRET` and the pool OIDC token are in scope.\n  WHY: Branch-dispatched runs would execute branch-supplied script content while holding the bot token. This breaks the `poll` job's pattern.\n- scripts/tg_helpers.sh (`tg_send_report_msg`, the jq `msg_id` line) | severity=NIT | confidence=3\n  PROBLEM: `2>/dev/null` silences jq's stderr, so malformed JSON or a missing jq gives an empty `msg_id` and an opaque `outcome=not_delivered`.\n  WHY: The job retries on every tick with a silent parse failure.\n- .github/workflows/orchestrate_poll.yml:~1954-2027 | severity=MAJOR | confidence=3\n  PROBLEM: This is the same issue as the first finding, reported under IMPLICIT-EXECUTION. The job's script comes from the branch checkout while `poll` uses `.codex-workflow-src`. The report job also runs the pool action from `./.github/actions/...`.\n  WHY: Branch-dispatched runs execute PR-supplied script content with `TG_BOT_SECRET` and the pool OIDC token in scope.\n- HARDENING: scripts/tg_helpers.sh, the jq parsing line in `tg_send_report_msg`. Suggested fix: drop the trailing `2>/dev/null` or add a guard that warns when jq exits non-zero (~2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- HARDENING: scripts/tg_helpers.sh, the curl call in `tg_send_report_msg` at line 156, has no timeout. An unresponsive Telegram request can hold the job until its 15-minute timeout. Suggested fix: add `--max-time 30` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fe92b6ea2be1e7a730689539eccc8b7d109e37b1ab931c26cedbe2b4e2563f23",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7541,
+    "run_id": "39009996813",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39009996813",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017070459_5deb27a43a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7541,
+    "run_id": "39009996813"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T07:04:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
