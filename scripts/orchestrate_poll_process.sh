@@ -19373,8 +19373,8 @@ The project judge produced no usable output (${why}) ${failures} time(s) in a ro
 # bodies), so this adds one REST list page per 100 open issues (at most
 # ORPHAN_FIXUP_CLOSE_MAX_PAGES). With no fix-up whose item is closed or
 # unknown that is the whole cost. Otherwise: one aliased GraphQL query per 20
-# items not in the list (at most 5 queries; a query gh rejects is read once
-# more to keep the aliases when every error is NOT_FOUND), one
+# items not in the list (at most 5 queries; each is read once without retry
+# and kept when every error is NOT_FOUND, else read again through gh_retry), one
 # _issue_timeline_with_cross_refs_json read per fix-up checked (at most 4x
 # ORPHAN_FIXUP_CLOSE_MAX_PER_TICK, stopping once the cap of closable fix-ups is
 # found) and one `gh issue close -c` per fix-up closed. The `user` read is the
@@ -19457,16 +19457,17 @@ close_orphan_fixup_chains_sweep() {
   repository(owner: \"${GITHUB_REPOSITORY%%/*}\", name: \"${GITHUB_REPOSITORY##*/}\") {${ofc_fragment}
   }
 }"
-			if ! ofc_gql="$(gh_retry gh api graphql -f query="${ofc_query}" 2>/dev/null)"; then
-				# gh exits non-zero when one alias names a number that does not
-				# exist (NOT_FOUND), which would stall the sweep on every tick.
-				# One plain read keeps the other aliases when every error is
-				# NOT_FOUND; the missing number stays unknown and closes nothing.
-				ofc_gql="$(gh api graphql -f query="${ofc_query}" 2>/dev/null || true)"
-				if ! printf '%s' "${ofc_gql}" | jq -e '(.data.repository | type == "object") and ((.errors // []) | length > 0) and all(.errors[]; .type == "NOT_FOUND")' >/dev/null 2>&1; then
-					echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=parent_lookup_failed"
-					return 0
-				fi
+			# gh exits non-zero when one alias names a number that does not
+			# exist (NOT_FOUND), which would stall the sweep on every tick, and
+			# gh_retry does not treat NOT_FOUND as permanent (it would retry it
+			# 5 times). So read once without retry first and keep the other
+			# aliases when every error is NOT_FOUND (the missing number stays
+			# unknown and closes nothing); any other failure goes to gh_retry.
+			if ! ofc_gql="$(gh api graphql -f query="${ofc_query}" 2>/dev/null)" \
+				&& ! printf '%s' "${ofc_gql}" | jq -e '(.data.repository | type == "object") and ((.errors // []) | length > 0) and all(.errors[]; .type == "NOT_FOUND")' >/dev/null 2>&1 \
+				&& ! ofc_gql="$(gh_retry gh api graphql -f query="${ofc_query}" 2>/dev/null)"; then
+				echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=parent_lookup_failed"
+				return 0
 			fi
 			if ! printf '%s' "${ofc_gql}" | jq -c --slurpfile prev "${ofc_dir}/parents.json" '
 				$prev[0] + ((.data.repository // {}) | to_entries

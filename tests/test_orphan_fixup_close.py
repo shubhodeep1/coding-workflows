@@ -235,7 +235,8 @@ def test_timeline_check_refuses_open_unreadable_and_reopened() -> None:
 	assert check([_cross(7, None)]) == {"ok": False, "reason": "linked_pr_state_unknown"}
 	assert check([_cross(7, "closed", lookup_failed=True)]) == {"ok": False, "reason": "linked_pr_unreadable"}
 	assert check([{"event": "closed"}]) == {"ok": False, "reason": "previously_closed"}
-	assert check([_cross(9, "open", pull_request=False)])["ok"] is True
+	# pull_request null, a state and no html_url is the GraphQL shape of a cross-repo pull request.
+	assert check([_cross(9, "open", pull_request=False)]) == {"ok": False, "reason": "open_linked_pr"}
 	assert check({"event": "closed"}) == {"ok": False, "reason": "timeline_invalid"}
 	assert check(None) == {"ok": False, "reason": "timeline_invalid"}
 	assert check(["x"]) == {"ok": False, "reason": "timeline_invalid"}
@@ -244,6 +245,17 @@ def test_timeline_check_refuses_open_unreadable_and_reopened() -> None:
 	assert check([cross_repo]) == {"ok": False, "reason": "open_linked_pr"}
 	cross_repo["source"]["issue"]["state"] = "closed"
 	assert check([cross_repo])["ok"] is True
+	# The GraphQL shape (the path that runs first) has no html_url: a cross-repo
+	# pull request keeps its state, an issue source has state null.
+	graphql_pr = {"event": "cross-referenced", "source": {"issue": {"number": 5, "pull_request": None, "state": "open", "merged_at": None, "merged": False, "lookup_failed": False}}}
+	assert check([graphql_pr]) == {"ok": False, "reason": "open_linked_pr"}
+	graphql_pr["source"]["issue"]["state"] = "closed"
+	assert check([graphql_pr])["ok"] is True
+	graphql_issue = {"event": "cross-referenced", "source": {"issue": {"number": 6, "pull_request": None, "state": None, "merged_at": None, "merged": False, "lookup_failed": False}}}
+	assert check([graphql_issue])["ok"] is True
+	# A REST issue source (html_url without /pull/) with state open is not a pull request.
+	rest_issue = {"event": "cross-referenced", "source": {"issue": {"number": 7, "pull_request": None, "state": "open", "html_url": "https://github.com/o/r/issues/7"}}}
+	assert check([rest_issue])["ok"] is True
 
 
 # ---------------------------------------------------------------- CLI
