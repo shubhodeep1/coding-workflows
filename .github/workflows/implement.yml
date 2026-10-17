@@ -508,7 +508,7 @@ jobs:
           fi
           # A pinned support ref must be exactly the commit the caller pinned
           # (tele-funtoken-msg-scoring#4566); otherwise skip the helper.
-          if [[ "${DUPLICATE_NOTICE_SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${DUPLICATE_NOTICE_SCRIPT_REF}" ]; then
+          if [[ "${DUPLICATE_NOTICE_SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${DUPLICATE_NOTICE_SCRIPT_REF}" ]; then
             echo "::warning::Duplicate PR notice support checkout does not match the pinned commit ${DUPLICATE_NOTICE_SCRIPT_REF}; skipping the Telegram helper."
             tg_helper_src=""
           fi
