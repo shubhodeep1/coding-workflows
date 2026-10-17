@@ -7436,7 +7436,11 @@ jobs:
             # failure: this run releases nothing and the newer run carries on.
             # Report SUPERSEDED when the smoke test was cancelled, no other job
             # failed, and a newer run of this workflow exists. One API call;
-            # on any error the header stays FAILED.
+            # on any error the header stays FAILED. This step makes no other
+            # workflow-runs read, so the lookup has no existing call to join.
+            # Known limit: the runs API exposes neither the test_repo input nor
+            # who cancelled the job, so a manual cancel while any newer run
+            # exists is also reported SUPERSEDED (nothing is released either way).
             RELEASE_SUPERSEDED_BY=""
             if [ "$E2E" = "cancelled" ]; then
               release_hard_failure=false
