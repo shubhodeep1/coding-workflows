@@ -23,3 +23,16 @@ without these conditions; an interactive session updates both CLAUDE.md
 copies. The live copy's module docstring has `gh \<newline>api`, an invalid
 escape that Python reports as a warning; fix it as `\\<` in both copies
 together.
+Three review findings are still open, because the review editor cannot write
+`.claude/hooks/**`. An interactive session must fix them in both hook copies
+together, with tests. (1) `_placeholder_target_is_local` matches
+`_DIRECTORY_CHANGE_RE` only against the raw command, so `'cd' /x && gh api
+repos/{owner}/{repo}/...` (also `"cd"`, `\cd`, `c''d`) is still routine. Also
+match it against `_normalize_for_gh_api_scan(command)`. (2)
+`_may_invoke_gh_api` misses an expanding command word before `api` (`G=gh; $G
+api ...`), so `evaluate` returns no decision before `has_hidden_gh_api` can ask.
+Add a pattern such as
+``(?:^|[\s;&|(])(?:\$[^\s;&|]+|`[^`]*`)\s+api(?![\w-])`` and make
+`test_indirect_gh_command_word_is_never_allowed` expect `ask` for that form.
+(3) The module docstring still says the only subprocess is
+`git config --get remote.origin.url`. Also name the `--get-regexp` remote read.
