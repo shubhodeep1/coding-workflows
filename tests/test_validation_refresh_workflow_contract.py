@@ -61,6 +61,16 @@ def test_validation_refresh_workflow_bounds_discovery_with_budget() -> None:
 	assert "timeout-minutes: 60" in content
 
 
+def test_validation_refresh_workflow_wires_self_test_timeout() -> None:
+	# The runner's 300s executor default is too short for large monorepos
+	# (bitsafe.io exited 124); the workflow passes an explicit, overridable cap.
+	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert (
+		"VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS: "
+		"${{ vars.VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS || '900' }}"
+	) in content
+
+
 def test_validation_refresh_workflow_summarizes_and_notifies_on_failure() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert "GITHUB_STEP_SUMMARY" in content

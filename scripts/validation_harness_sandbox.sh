@@ -23,6 +23,8 @@
 #
 # Exit codes: the harness exit code for `run`; 3 for any sandbox failure.
 # Log prefix (stable): VALIDATION_HARNESS_SANDBOX phase=<p> outcome=ok|retry|fail reason=<token>
+# (`phase=stage outcome=ok|skip reason=<token> path=<name>` names each file the
+# screened copy admits or drops beyond readonly_allowed: env templates and .npmrc.)
 # (`retry` only from provision, when a test container would not start under the
 # systemd cgroup driver, or under a daemon reused from an earlier provision in
 # the job, and the daemon is restarted with cgroupfs: reasons
@@ -862,8 +864,15 @@ cmd_selfcheck()
 
 # Builds the screened copy as an uncompressed tar on stdout. Runs as the
 # runner user over the trusted workspace; the sandbox user only extracts it.
+# The copy holds tracked files and untracked files that are not ignored
+# (`git ls-files --cached --others --exclude-standard`), plus `validation/**`
+# and `.ai/validate.yml`, all screened by `readonly_allowed`. Staging alone
+# additionally admits env templates (`.env.example`, `.env.sample`,
+# `.env.template`) and an `.npmrc` whose content holds no credential material
+# (stage_npmrc_verdict); the shared `readonly_allowed` is unchanged because
+# agent sandboxes use it too. Logs name the file only, never its content.
 read -r -d '' STAGE_PY <<'PY' || true
-import os, stat, subprocess, sys, tarfile
+import io, os, re, stat, subprocess, sys, tarfile
 from pathlib import Path
 
 helper_dir, workspace, *overlay_args = sys.argv[1:]
@@ -873,10 +882,14 @@ from codex_isolated_workspace import readonly_allowed  # trusted sibling copy
 workspace = Path(workspace)
 env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
 listed = subprocess.run(
-	["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "ls-files", "-z", "--cached"],
+	["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
 	cwd=workspace, env=env, check=True, capture_output=True,
 ).stdout.split(b"\0")
 names = {item.decode("utf-8", "surrogateescape") for item in listed if item}
+# Staging-only admissions (env templates, .npmrc) apply only to names git lists
+# (tracked, or untracked and not ignored); the validation/ walk below can add
+# ignored files, which keep the plain readonly_allowed screen.
+git_listed = frozenset(names)
 for root in ("validation",):
 	base = workspace / root
 	if base.is_dir() and not base.is_symlink():
@@ -895,17 +908,97 @@ out = tarfile.open(fileobj=sys.stdout.buffer, mode="w|", format=tarfile.PAX_FORM
 def add(path, arcname):
 	info = os.lstat(path)
 	if not stat.S_ISREG(info.st_mode):
-		return
+		return False
 	member = tarfile.TarInfo(arcname)
 	member.size = info.st_size
 	member.mode = 0o755 if info.st_mode & 0o111 else 0o644
 	member.mtime = int(info.st_mtime)
 	with open(path, "rb", opener=lambda p, f: os.open(p, f | os.O_NOFOLLOW)) as handle:
 		out.addfile(member, handle)
+	return True
+
+# Staging-only admissions. Real env files (.env, .env.local, ...) and every
+# other readonly_allowed exclusion (*.pem, *.key, .config, ...) stay dropped.
+STAGE_ENV_TEMPLATE_NAMES = frozenset((".env.example", ".env.sample", ".env.template"))
+STAGE_NPMRC_MAX_BYTES = 64 * 1024
+# Any line holding one of these (lower-cased) is treated as credential material.
+STAGE_NPMRC_DENY_MARKERS = (
+	"_authtoken", "_auth", "_password", "password", "username", "email", "certfile", "keyfile", "cafile",
+	"token", "secret", "${", "-----begin",
+)
+STAGE_NPMRC_DENY_KEYS = frozenset(("cert", "key", "ca", "otp"))
+STAGE_NPMRC_URL_USERINFO = re.compile(r"://[^/\s]*@")
+
+def stage_log(outcome, reason, name):
+	print(f"VALIDATION_HARNESS_SANDBOX phase=stage outcome={outcome} reason={reason} path={name}", file=sys.stderr)
+
+def stage_special_kind(name):
+	"""Kind of staging-only admission for a name readonly_allowed refused, else None."""
+	pure = Path(name)
+	parent = str(pure.parent)
+	if parent != "." and not readonly_allowed(parent):
+		return None
+	if pure.name in STAGE_ENV_TEMPLATE_NAMES:
+		return "env_template"
+	if pure.name == ".npmrc":
+		return "npmrc"
+	return None
+
+def stage_npmrc_verdict(data):
+	"""Return None when .npmrc bytes hold no credential material, else a reject reason."""
+	if b"\0" in data:
+		return "npmrc_undecodable"
+	try:
+		text = data.decode("utf-8")
+	except UnicodeDecodeError:
+		return "npmrc_undecodable"
+	for raw_line in text.splitlines():
+		line = raw_line.strip().lower()
+		if not line:
+			continue
+		if line.startswith("//") or STAGE_NPMRC_URL_USERINFO.search(line):
+			return "npmrc_credential"
+		if any(marker in line for marker in STAGE_NPMRC_DENY_MARKERS):
+			return "npmrc_credential"
+		if line.split("=", 1)[0].strip() in STAGE_NPMRC_DENY_KEYS:
+			return "npmrc_credential"
+	return None
+
+def add_npmrc(path, arcname):
+	"""Read the file once without following symlinks, screen it, and stage those exact bytes."""
+	info = os.lstat(path)
+	if stat.S_ISLNK(info.st_mode):
+		return "npmrc_symlink"
+	if not stat.S_ISREG(info.st_mode):
+		return "npmrc_not_regular"
+	if info.st_size > STAGE_NPMRC_MAX_BYTES:
+		return "npmrc_too_large"
+	fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+	with os.fdopen(fd, "rb") as handle:
+		opened = os.fstat(handle.fileno())
+		if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+			return "npmrc_changed"
+		data = handle.read(STAGE_NPMRC_MAX_BYTES + 1)
+	if len(data) > STAGE_NPMRC_MAX_BYTES:
+		return "npmrc_too_large"
+	verdict = stage_npmrc_verdict(data)
+	if verdict is not None:
+		return verdict
+	member = tarfile.TarInfo(arcname)
+	member.size = len(data)
+	member.mode = 0o644
+	member.mtime = int(opened.st_mtime)
+	out.addfile(member, io.BytesIO(data))
+	return None
 
 for name in sorted(names):
-	if name in overlays or not readonly_allowed(name):
+	if name in overlays:
 		continue
+	special = None
+	if not readonly_allowed(name):
+		special = stage_special_kind(name) if name in git_listed else None
+		if special is None:
+			continue
 	path = workspace / name
 	try:
 		parent = workspace
@@ -913,7 +1006,22 @@ for name in sorted(names):
 			parent = parent / part
 			if not stat.S_ISDIR(os.lstat(parent).st_mode):
 				raise OSError("non-directory parent")
-		add(path, name)
+		if special == "npmrc":
+			try:
+				rejected = add_npmrc(path, name)
+			except OSError:
+				rejected = "npmrc_unreadable"
+			if rejected is None:
+				stage_log("ok", "npmrc_admitted", name)
+			else:
+				stage_log("skip", rejected, name)
+		elif special == "env_template":
+			if add(path, name):
+				stage_log("ok", "env_template_admitted", name)
+			else:
+				stage_log("skip", "env_template_not_regular", name)
+		else:
+			add(path, name)
 	except OSError:
 		continue
 for dest, src in sorted(overlays.items()):

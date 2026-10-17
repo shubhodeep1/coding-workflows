@@ -49,6 +49,7 @@ class FakeExecutor:
 	def __init__(self, calls: list[PlannedCall]) -> None:
 		self._calls = calls
 		self.seen: list[tuple[list[str], Path | None, bool, dict[str, str] | None]] = []
+		self.timeouts: list[tuple[list[str], int]] = []
 
 	def run(
 		self,
@@ -61,6 +62,7 @@ class FakeExecutor:
 		timeout: int = 300,
 	) -> subprocess.CompletedProcess[str]:
 		self.seen.append((list(command), cwd, check, env_overrides))
+		self.timeouts.append((list(command), timeout))
 		assert self._calls, f"unexpected command: {command}"
 		plan = self._calls.pop(0)
 		assert check == plan.check, f"expected check={plan.check}, got check={check} for {command}"
@@ -192,6 +194,7 @@ def test_process_repository_green_drift_records_no_push_diagnostic() -> None:
 				PlannedCall(SANDBOX_PROVISION_PREFIX),
 				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
+				PlannedCall(("git", "ls-files", "--", "validation"), stdout="validation/tests/00_canary.sh\n", check=False),
 			]
 		)
 
@@ -261,6 +264,7 @@ def test_process_repository_retries_a_transient_clone_failure() -> None:
 					PlannedCall(SANDBOX_PROVISION_PREFIX),
 					PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 					PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
+					PlannedCall(("git", "ls-files", "--", "validation"), stdout="validation/tests/00_canary.sh\n", check=False),
 				]
 			)
 
@@ -323,6 +327,7 @@ def test_process_repository_red_pipeline_failure_with_drift_records_no_push() ->
 					stderr="lint failed",
 				),
 				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
+				PlannedCall(("git", "ls-files", "--", "validation"), stdout="validation/tests/00_canary.sh\n", check=False),
 			]
 		)
 
@@ -567,6 +572,7 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 				PlannedCall(SANDBOX_PROVISION_PREFIX),
 				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=bootstrapped_untracked_status),
+				PlannedCall(("git", "ls-files", "--", "validation"), stdout="", check=False),
 			]
 		)
 
@@ -1024,7 +1030,7 @@ def test_dispatch_discovery_skips_codex_when_budget_exhausted() -> None:
 		assert result.discovery_outcome == "skipped_budget"
 		assert result.discovery_pr_url is None
 		assert any("discovery_budget_exhausted" in d for d in result.discovery_diagnostics)
-		assert stub.dedup_calls == []  # gate short-circuits before the dedup check
+		assert stub.dedup_calls == ["octo/demo-repo"]  # dedup runs first, misses, then the budget gate skips
 		assert stub.appended == []  # ...and before any memory write
 		executor.assert_consumed()  # no codex/git/gh calls were issued
 
@@ -1199,6 +1205,458 @@ def test_main_emits_summary_line_before_json_for_empty_repo_set() -> None:
 			"skipped": 0,
 			"error": 0,
 		}
+
+
+# ---------------------------------------------------------------------------
+# Self-test failure diagnostics, self-test timeout, drift diagnostics
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _patched_env(**values: str | None):
+	saved = {key: os.environ.get(key) for key in values}
+	try:
+		for key, value in values.items():
+			if value is None:
+				os.environ.pop(key, None)
+			else:
+				os.environ[key] = value
+		yield
+	finally:
+		for key, value in saved.items():
+			if value is None:
+				os.environ.pop(key, None)
+			else:
+				os.environ[key] = value
+
+
+_SANDBOX_OK_STDERR = (
+	"VALIDATION_HARNESS_SANDBOX phase=selfcheck outcome=ok reason=none\n"
+	"VALIDATION_HARNESS_SANDBOX phase=run outcome=ok reason=staged\n"
+)
+
+
+def _driver_json(**overrides: object) -> str:
+	payload: dict[str, object] = {
+		"result": "fail",
+		"phase": "startup",
+		"total_tests": 1,
+		"passed_tests": 0,
+		"failed_tests": 1,
+		"failures": [
+			{
+				"test": "app_starts",
+				"error": "service app exited with code 1",
+				"log_tail": "line one\nnpm ERR! missing script: start\nline three",
+			}
+		],
+		"duration_seconds": 12,
+	}
+	payload.update(overrides)
+	return json.dumps(payload)
+
+
+def _self_test_failure(*, stdout: str = "", stderr: str = "", returncode: int = 1) -> "refresh_runner.CommandFailure":
+	return refresh_runner.CommandFailure(
+		command=("bash", SANDBOX_SCRIPT, "checked-run"),
+		cwd=None,
+		returncode=returncode,
+		stdout=stdout,
+		stderr=stderr,
+	)
+
+
+def test_format_command_failure_skips_sandbox_ok_lines_and_surfaces_driver_result() -> None:
+	stderr = _SANDBOX_OK_STDERR + "docker: something broke\nsecond real line\nthird real line\nfourth line\n"
+	stdout = "starting\n" + _driver_json() + "\n"
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stdout=stdout, stderr=stderr))
+
+	assert message.startswith("self_test_failed(exit=1): docker: something broke | second real line | third real line")
+	assert "VALIDATION_HARNESS_SANDBOX phase=selfcheck outcome=ok" not in message
+	assert "fourth line" not in message
+	assert "phase=startup" in message
+	assert "test=app_starts" in message
+	assert "error=service app exited with code 1" in message
+	assert "log_tail=line one // npm ERR! missing script: start // line three" in message
+
+
+def test_format_command_failure_keeps_sandbox_failure_lines() -> None:
+	stderr = _SANDBOX_OK_STDERR + "VALIDATION_HARNESS_SANDBOX phase=selfcheck outcome=fail reason=pid_namespace_shared\n"
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stderr=stderr, returncode=3))
+
+	assert message == (
+		"self_test_failed(exit=3): "
+		"VALIDATION_HARNESS_SANDBOX phase=selfcheck outcome=fail reason=pid_namespace_shared"
+	)
+
+
+def test_format_command_failure_only_ok_lines_and_no_json_reports_no_output() -> None:
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stderr=_SANDBOX_OK_STDERR))
+
+	assert message == "self_test_failed(exit=1): no_output"
+
+
+def test_format_command_failure_handles_missing_or_invalid_driver_json() -> None:
+	for stdout in ("", "not json at all\n{broken\n", "[1, 2, 3]\n", '{"phase": 5, "failures": "nope"}\n', '{"failures": [3]}\n'):
+		message = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stdout=stdout, stderr=_SANDBOX_OK_STDERR + "real failure\n")
+		)
+		assert message.startswith("self_test_failed(exit=1): real failure"), (stdout, message)
+		assert "test=" not in message and "log_tail=" not in message, (stdout, message)
+
+
+def test_format_command_failure_takes_last_json_line_and_ignores_trailing_garbage() -> None:
+	stdout = _driver_json(phase="preflight") + "\n" + _driver_json(phase="health") + "\ntrailing noise\n"
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stdout=stdout))
+
+	assert "phase=health" in message
+	assert "phase=preflight" not in message
+
+
+def test_format_command_failure_tails_compose_log_when_present() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-compose-") as td:
+		compose_log = Path(td) / "compose.log"
+		compose_log.write_text("".join(f"app | line {index}\n" for index in range(100)), encoding="utf-8")
+		message = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stderr="boom\n"), compose_log_path=compose_log
+		)
+		assert "compose_log_tail=" in message
+		assert "app | line 99" in message
+		assert "app | line 80" in message
+		assert "app | line 79" not in message  # only the last 20 lines
+		assert "app | line 0 " not in message
+
+		missing = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stderr="boom\n"), compose_log_path=Path(td) / "absent.log"
+		)
+		assert missing == "self_test_failed(exit=1): boom"
+
+		link = Path(td) / "link.log"
+		link.symlink_to(compose_log)
+		linked = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stderr="boom\n"), compose_log_path=link
+		)
+		assert "compose_log_tail" not in linked
+
+
+def test_format_command_failure_only_reads_the_end_of_a_large_compose_log() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-compose-big-") as td:
+		compose_log = Path(td) / "compose.log"
+		compose_log.write_text("HEAD-MARKER\n" + ("x" * 80 + "\n") * 5000 + "TAIL-MARKER\n", encoding="utf-8")
+		message = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stderr="boom\n"), compose_log_path=compose_log
+		)
+		assert "TAIL-MARKER" in message
+		assert "HEAD-MARKER" not in message
+		assert len(message) <= refresh_runner.FAILURE_DETAIL_MAX_CHARS + 100
+
+
+def test_format_command_failure_bounds_total_size() -> None:
+	huge_tail = "\n".join("y" * 400 for _ in range(200))
+	stdout = _driver_json(failures=[{"test": "t" * 2000, "error": "e" * 2000, "log_tail": huge_tail}])
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stdout=stdout, stderr="s" * 5000))
+
+	prefix = "self_test_failed(exit=1): "
+	assert len(message) <= len(prefix) + refresh_runner.FAILURE_DETAIL_MAX_CHARS
+
+
+def test_format_command_failure_neutralises_workflow_commands_and_control_chars() -> None:
+	stderr = (
+		"\x1b[31mred\x1b[0m text\x07\x00 with\x08 controls\r\n"
+		"\x1b]0;window title\x07after-osc\n"
+		"::error::injected\n"
+		"  ::set-env name=EVIL::1\n"
+		"##[add-mask]value\n"
+	)
+	log_tail = "::stop-commands::token\nok line\x1b[2K\n::add-mask::secret"
+	stdout = _driver_json(
+		phase="::warning::phase",
+		failures=[{"test": "::notice::test", "error": "\x1b[1mbold::error\x1b[0m", "log_tail": log_tail}],
+	)
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stdout=stdout, stderr=stderr))
+
+	assert "\x1b" not in message and "\x07" not in message and "\x00" not in message and "\x08" not in message
+	assert "\r" not in message and "\n" not in message
+	assert "red text with controls" in message
+	assert "after-osc" in message
+	assert "window title" not in message
+	# No segment of the message starts a workflow command.
+	for segment in message.replace("//", "|").split("|"):
+		stripped = segment.strip()
+		assert not stripped.startswith("::"), segment
+		assert not stripped.startswith("##["), segment
+	for field in ("phase=", "test="):
+		index = message.index(field)
+		assert not message[index + len(field) :].startswith("::")
+	assert "[workflow-command-neutralised] ::error::injected" in message
+	assert "[workflow-command-neutralised] ::set-env name=EVIL::1" not in message  # beyond the 3-line head cap
+
+
+def test_format_command_failure_redacts_credential_values() -> None:
+	secret = "ghp_0123456789abcdefSECRET"
+	with _patched_env(GH_TOKEN=secret, OPENROUTER_API_KEY="short"):
+		message = refresh_runner._format_command_failure(
+			"self_test",
+			_self_test_failure(stdout=_driver_json(failures=[{"test": "t", "error": f"token {secret} leaked", "log_tail": secret}]), stderr=f"using {secret}\n"),
+		)
+	assert secret not in message
+	assert "[redacted]" in message
+
+
+def test_format_command_failure_non_self_test_stage_is_unchanged_in_shape() -> None:
+	failure = refresh_runner.CommandFailure(
+		command=("python3", "validation_lint.py"), cwd=None, returncode=2, stdout="", stderr="first\nsecond\nthird\nfourth\n"
+	)
+	assert refresh_runner._format_command_failure("lint", failure) == "lint_failed(exit=2): first | second | third"
+	only_stdout = refresh_runner.CommandFailure(
+		command=("git", "x"), cwd=None, returncode=1, stdout="from stdout\n", stderr=""
+	)
+	assert refresh_runner._format_command_failure("checkout", only_stdout) == "checkout_failed(exit=1): from stdout"
+	empty = refresh_runner.CommandFailure(command=("git", "x"), cwd=None, returncode=1, stdout="", stderr="")
+	assert refresh_runner._format_command_failure("checkout", empty) == "checkout_failed(exit=1): no_output"
+
+
+def test_format_command_failure_reports_self_test_timeout() -> None:
+	message = refresh_runner._format_command_failure(
+		"self_test", _self_test_failure(stderr=_SANDBOX_OK_STDERR, returncode=124), timeout_secs=900
+	)
+	assert message == "self_test_failed(exit=124): timeout_secs=900"
+
+
+def _run_self_test_failure_pipeline(
+	*, stdout: str, stderr: str, compose_text: str | None
+) -> tuple["refresh_runner.RefreshResult", FakeExecutor]:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-diag-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		log_dir = workspace / "octo__demo-repo__validation_logs"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		def on_self_test(_command: list[str], _cwd: Path | None) -> None:
+			if compose_text is not None:
+				log_dir.mkdir(parents=True, exist_ok=True)
+				(log_dir / "compose.log").write_text(compose_text, encoding="utf-8")
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(
+					SANDBOX_SELF_TEST_PREFIX,
+					returncode=1,
+					stdout=stdout,
+					stderr=stderr,
+					callback=on_self_test,
+				),
+				PlannedCall(("bash", SANDBOX_SCRIPT, "cleanup"), check=False),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+		result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+		executor.assert_consumed()
+		return result, executor
+
+
+def test_process_repository_self_test_failure_diagnostic_surfaces_real_cause() -> None:
+	result, _executor = _run_self_test_failure_pipeline(
+		stdout=_driver_json(),
+		stderr=_SANDBOX_OK_STDERR,
+		compose_text="db | ready\napp | Error: Cannot find module 'express'\n",
+	)
+
+	assert result.outcome == "red"
+	failure_lines = [line for line in result.diagnostics if line.startswith("self_test_failed")]
+	assert len(failure_lines) == 1
+	assert "test=app_starts" in failure_lines[0]
+	assert "error=service app exited with code 1" in failure_lines[0]
+	assert "npm ERR! missing script: start" in failure_lines[0]
+	assert "Cannot find module 'express'" in failure_lines[0]
+	assert "outcome=ok" not in failure_lines[0]
+
+
+def test_process_repository_self_test_failure_without_compose_log_or_json() -> None:
+	result, _executor = _run_self_test_failure_pipeline(stdout="", stderr=_SANDBOX_OK_STDERR + "real\n", compose_text=None)
+
+	assert [line for line in result.diagnostics if line.startswith("self_test_failed")] == [
+		"self_test_failed(exit=1): real"
+	]
+
+
+def _self_test_timeouts(executor: FakeExecutor) -> list[int]:
+	return [timeout for command, timeout in executor.timeouts if tuple(command[:3]) == SANDBOX_SELF_TEST_PREFIX]
+
+
+def test_self_test_timeout_defaults_to_900_and_other_stages_keep_theirs() -> None:
+	with _patched_env(VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS=None):
+		_result, executor = _run_self_test_failure_pipeline(stdout="", stderr="x\n", compose_text=None)
+	assert _self_test_timeouts(executor) == [900]
+	by_command = {tuple(command[:3]): timeout for command, timeout in executor.timeouts}
+	assert by_command[SANDBOX_PROVISION_PREFIX] == 600
+	assert by_command[("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"), "--manifest")] == 300
+
+
+def test_self_test_timeout_is_configurable_and_bad_values_fall_back() -> None:
+	cases = {
+		"1200": 1200,
+		" 45 ": 45,
+		"": 900,
+		"abc": 900,
+		"0": 900,
+		"-5": 900,
+		"1.5": 900,
+		"999999": refresh_runner.SELF_TEST_TIMEOUT_MAX_SECS,
+	}
+	for raw, expected in cases.items():
+		with _patched_env(VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS=raw):
+			assert refresh_runner._self_test_timeout_secs() == expected, raw
+	with _patched_env(VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS="1200"):
+		_result, executor = _run_self_test_failure_pipeline(stdout="", stderr="x\n", compose_text=None)
+	assert _self_test_timeouts(executor) == [1200]
+
+
+def test_self_test_timeout_exit_124_reports_configured_seconds() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-timeout-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX, returncode=124, stderr="timeout_expired"),
+				PlannedCall(("bash", SANDBOX_SCRIPT, "cleanup"), check=False),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+		with _patched_env(VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS="1500"):
+			result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+		assert "self_test_failed(exit=124): timeout_expired | timeout_secs=1500" in result.diagnostics
+
+
+def test_process_repository_drift_with_nothing_tracked_reports_assets_not_committed() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-uncommitted-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
+				PlannedCall(("git", "status"), stdout="?? validation/\n"),
+				PlannedCall(("git", "ls-files", "--", "validation"), stdout="", check=False),
+			]
+		)
+		result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+
+		assert result.outcome == "green"
+		assert result.changed is True
+		# The legacy key stays (§6), the new diagnostic is added after it.
+		assert "validation_assets_drifted_no_push" in result.diagnostics
+		assert result.diagnostics[-1].startswith("validation_assets_not_committed:")
+		assert "not drift" in result.diagnostics[-1]
+		executor.assert_consumed()
+
+		stdout = io.StringIO()
+		with contextlib.redirect_stdout(stdout):
+			refresh_runner._emit_repo_result(result)
+		line = stdout.getvalue().strip()
+		assert " drifted=1 " in line
+		assert 'detail="validation_assets_not_committed: ' in line
+
+
+def test_process_repository_drift_with_tracked_assets_has_no_not_committed_diagnostic() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-tracked-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		for ls_files in (
+			PlannedCall(("git", "ls-files", "--", "validation"), stdout="validation/Dockerfile\n", check=False),
+			# A failed lookup is not evidence of "nothing tracked".
+			PlannedCall(("git", "ls-files", "--", "validation"), returncode=128, check=False),
+		):
+			executor = FakeExecutor(
+				[
+					PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+					PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+					PlannedCall(("git", "fetch", "origin", "main")),
+					PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+					PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+					PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+					PlannedCall(SANDBOX_PROVISION_PREFIX),
+					PlannedCall(SANDBOX_SELF_TEST_PREFIX),
+					PlannedCall(("git", "status"), stdout=" M validation/Dockerfile\n"),
+					ls_files,
+				]
+			)
+			result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+			assert result.diagnostics[-1] == "validation_assets_drifted_no_push"
+			# The local index read is bounded to 30 s, not the 300 s default.
+			ls_files_timeouts = [t for c, t in executor.timeouts if tuple(c[:3]) == ("git", "ls-files", "--")]
+			assert ls_files_timeouts == [30]
+			assert not any(line.startswith("validation_assets_not_committed") for line in result.diagnostics)
+			executor.assert_consumed()
+
+
+def test_dispatch_discovery_dedup_check_runs_before_budget_gate() -> None:
+	# A repo with a recent successful discovery is `skipped_dedup` even when
+	# the aggregate budget is already exhausted (it used to report
+	# `skipped_budget`, hiding that the repo needed no discovery anyway).
+	with tempfile.TemporaryDirectory(prefix="discovery-dedup-first-") as td, _StubMemory(
+		dedup_returns=True
+	) as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		branch = "ai/validation-refresh"
+		executor = FakeExecutor([])
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx())
+		runner._discovery_deadline = time.monotonic() - 1.0  # budget exhausted
+		result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch=branch)
+		runner._dispatch_discovery(
+			result=result,
+			repo_dir=repo_dir,
+			repository="octo/demo-repo",
+			default_branch="main",
+		)
+		assert result.discovery_outcome == "skipped_dedup"
+		assert result.discovery_diagnostics == ["dedup_window_active"]
+		assert stub.dedup_calls == ["octo/demo-repo"]
+		assert stub.appended == []
+		executor.assert_consumed()
 
 
 # ---------------------------------------------------------------------------
