@@ -2429,6 +2429,8 @@ through `clarify → plan → implement → review`.
 | `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED` | `false` | Opt-in Phase A archive flag. When `true`, the implement, orchestrate-poll judge, review editor, and validate discover/diagnose success paths wrap their captured Codex output files into fail-open `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archives. Archive I/O failures do not fail the host phase; they only log `TRANSCRIPT_ARCHIVE_FAIL`. |
 | `CLAUDE_POOL_HEALTH_ALERT_ENABLED` | `true` | Hourly Telegram `DEBUG` from `orchestrate_poll.yml` when accounts are only at or above `gate_utilization`; rejected tokens or failed probes make the notice `WARNING`. `false` turns it off. See "Near-cap alert" under the Claude engine. |
 | `CLAUDE_POOL_HEALTH_WINDOW_MINUTES` | `5` | The near-cap alert is sent only by the poll cycle whose UTC minute is below this value, so it goes out at most once an hour. |
+| `CLAUDE_POOL_DAILY_USAGE_ENABLED` | `true` | Daily Telegram report from `orchestrate_poll.yml` (coding-workflows only) listing every Claude pool account's 5-hour and 7-day usage in one message. `false` turns it off. See "Daily usage report" under the Claude engine. |
+| `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` | `4` | First UTC hour (0-23) at which the daily usage report may be sent; `4` is 12:00 Singapore time. The first poll tick at or after this hour sends it, once per UTC day. Invalid values fall back to `4`. |
 | `UNATTENDED_NAG_REMINDER_ENABLED` | `false` | Opt-in wrapper-level `<reminder>` injection after repeated silent reviewer/editor/judge turns. When `false`, the wrappers keep the existing retry behavior unchanged. |
 | `UNATTENDED_NAG_SILENT_ROUNDS` | `3` | Consecutive silent-turn threshold before nag-reminder injection in the review editor, review reviewers, and orchestrate-poll judge paths. Invalid or out-of-range values clamp conservatively to `3`. |
 | `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` | `false` | Enables the additive local-only `.ai/workflow_traces/<run_id>.scenario.json` renderer in `workflow-log-analysis.yml`; parseable runs emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`, per-run parser drift fail-opens with `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`. |
@@ -2900,6 +2902,34 @@ twice. `CLAUDE_POOL_HEALTH_ALERT_ENABLED=false` (repo variable) turns it
 off. The step logs `CLAUDE_POOL_HEALTH accounts= gated= auth_failed=
 probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`
 and never fails the job.
+
+**Daily usage report.** Once a day `orchestrate_poll.yml` sends one Telegram
+message listing every Claude pool account with its 5-hour and 7-day
+utilization, the reset time of any window at or above `gate_utilization`,
+rejected tokens and failed probes. It runs in `shubhodeep1/coding-workflows`
+only, because the pool is shared by every consumer repo. In the poll job,
+"Check Claude pool daily usage slot" (`scripts/claude_pool_daily_usage.sh
+slot`) opens the slot from `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` (default `4`,
+12:00 SGT) to the end of the UTC day, and "Look up today's Claude pool daily
+usage marker" checks the `actions/cache` key
+`claude-pool-daily-usage-v1-<YYYY-MM-DD>`. When the key is missing, the
+separate `claude_pool_daily_usage` job probes the pool with
+`.github/actions/claude-pool-token`, sends the message
+(`scripts/claude_pool_daily_usage.sh send`, built by `claude_engine.py
+pool-usage`) and saves the day's key. The job has its own runner, so the probe
+never changes the poll job's credential or capacity-wait state. The message is
+labelled `📊` and is delivered at any `ALERT_MSG_LEVEL` except `SILENT`
+(`tg_send_report_msg` in `scripts/tg_helpers.sh`). Scheduled ticks arrive
+25-60 minutes apart, so expect it within about an hour of the configured
+hour. A failed send saves no key and is retried on the next tick; the slot
+stays closed while Telegram is not configured, so nothing is probed for a
+message that cannot be delivered. While the GitHub cache service is
+unavailable, the lookup reads as a miss and the save fails, so the message
+can repeat on later ticks that day; a lookup step that itself fails skips
+the tick. `CLAUDE_POOL_DAILY_USAGE_ENABLED=false` turns it off. The steps log
+`CLAUDE_POOL_DAILY_USAGE op=slot in_slot= reason=due|before_hour|disabled|silent|telegram_not_configured`
+and `CLAUDE_POOL_DAILY_USAGE op=send accounts= usable= gated= auth_failed=
+probe_failed= outcome=sent|not_delivered truncated=true|false`, and never fail the job.
 
 The token action accepts only the deployed broker URL in Actions jobs and
 only removes pool directories immediately under `$RUNNER_TEMP`; a rejected
