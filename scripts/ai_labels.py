@@ -742,6 +742,19 @@ def _warn_if_retired_label_in_use(*, repo: str, label_name: str, dry_run: bool) 
         for item in issue_items
         if isinstance(item, dict) and isinstance(item.get("number"), int)
     ]
+    if not issue_numbers:
+        # A non-empty page with no usable issue number is a malformed read,
+        # not proof that the label is in use.
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_CHECK_FAILED",
+            repo=repo,
+            label_name=label_name,
+            action="in_use_check",
+            dry_run=dry_run,
+            detail="issues response had no entries with an integer number",
+            extra_fields=(("level", "WARNING"),),
+        )
+        return
     # Count only entries with an issue number, so count= agrees with issues=.
     # The 100+ cap still follows the raw page size (a full page means more
     # issues may exist past it).

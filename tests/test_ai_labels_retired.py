@@ -235,6 +235,23 @@ def test_dry_run_reads_in_use_issues_but_never_deletes() -> None:
 	assert "LABEL_SYNC_RETIRED_ABSENT: repo=octo-org/octo-repo label=ai:old-absent" in stderr_text
 
 
+def test_in_use_page_without_issue_numbers_reports_check_failed_and_still_deletes() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-retired-malformed-") as tmpdir:
+		contract_path = _write_contract(Path(tmpdir), ["ai:old-present"])
+		responses = _unchanged_responses() + [_FakeHTTPResponse([{}, {"number": "7"}]), _EmptyResponse()]
+		rc, payload, stderr_text, _request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["deleted"] == 1
+	assert payload["errors"] == []
+	assert "LABEL_SYNC_RETIRED_IN_USE" not in stderr_text
+	assert (
+		"LABEL_SYNC_RETIRED_CHECK_FAILED: repo=octo-org/octo-repo label=ai:old-present action=in_use_check "
+		"dry_run=false level=WARNING"
+	) in stderr_text
+	assert "LABEL_SYNC_DELETED: repo=octo-org/octo-repo label=ai:old-present" in stderr_text
+
+
 def main() -> int:
 	for name in sorted(globals()):
 		if name.startswith("test_") and callable(globals()[name]):
