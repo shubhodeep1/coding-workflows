@@ -713,7 +713,7 @@ jobs:
               asset_src=".codex-workflow-src-main/${unblock_asset}"
             fi
             if [ ! -f "${asset_src}" ]; then
-              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the unblock scan is skipped."
+              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the step that needs it is skipped."
               continue
             fi
             install -m 0644 "${asset_src}" "${unblock_asset}"

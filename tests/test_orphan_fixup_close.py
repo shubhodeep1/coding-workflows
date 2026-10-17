@@ -256,6 +256,9 @@ def test_timeline_check_refuses_open_unreadable_and_reopened() -> None:
 	# A REST issue source (html_url without /pull/) with state open is not a pull request.
 	rest_issue = {"event": "cross-referenced", "source": {"issue": {"number": 7, "pull_request": None, "state": "open", "html_url": "https://github.com/o/r/issues/7"}}}
 	assert check([rest_issue])["ok"] is True
+	# The GraphQL helper's placeholder for a source it could not resolve fails closed.
+	unresolved = {"event": "cross-referenced", "source": {"issue": {"number": None, "pull_request": None, "state": None, "merged_at": None, "merged": False, "lookup_failed": False}}}
+	assert check([unresolved]) == {"ok": False, "reason": "linked_pr_unreadable"}
 
 
 # ---------------------------------------------------------------- CLI

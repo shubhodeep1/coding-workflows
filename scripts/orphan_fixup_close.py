@@ -63,7 +63,8 @@ and pass back in --parents-file; fix-ups waiting on them count as
 `{"ok": bool, "reason": s}`. It refuses a fix-up with an open or unreadable
 linked pull request (also one in another repository, recognised by its
 `/pull/` html_url in the REST shape, or by a non-null state in the GraphQL
-shape, which has no html_url), or one that was closed before (it was reopened, so a
+shape, which has no html_url), or a cross-reference whose source could
+not be resolved (null number), or one that was closed before (it was reopened, so a
 person wants it); a timeline that is not an array fails closed.
 
 No GitHub API calls and no network (CLAUDE.md §15). Exit 0 ok, 1 bad
@@ -256,6 +257,11 @@ def timeline_check(timeline: object) -> dict:
 		source = (event.get("source") or {}).get("issue") if isinstance(event.get("source"), dict) else None
 		if not isinstance(source, dict):
 			continue
+		# The GraphQL helper turns a source it could not resolve (an
+		# inaccessible or deleted subject) into a placeholder with a null
+		# number; it may be a pull request, so fail closed.
+		if source.get("number") is None:
+			return {"ok": False, "reason": "linked_pr_unreadable"}
 		# _issue_timeline_with_cross_refs_json sets `pull_request` to null for a
 		# pull request in another repository. The REST shape keeps html_url
 		# (it names /pull/); the GraphQL shape has no html_url and gives only
