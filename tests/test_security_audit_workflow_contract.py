@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1466,6 +1468,485 @@ def test_security_audit_findings_json_filters_without_github_side_effects() -> N
 	assert "=== END UNTRUSTED PROJECT SPECIFICATION ===" in prompt
 	project_spec_context = prompt.split("=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===\n", 1)[1]
 	assert project_spec_context.split("\n=== END UNTRUSTED PROJECT SPECIFICATION ===", 1)[0] == project_spec
+
+
+def _upstream_release_bytes(rel_path: str) -> bytes:
+	"""The bytes a sync from this checkout's HEAD writes to a consumer path."""
+	head_sha = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+	if rel_path.startswith(".github/workflows/"):
+		source = "workflow-templates/" + rel_path.rsplit("/", 1)[1]
+	elif rel_path.startswith(".claude/"):
+		source = "workflow-templates/" + rel_path
+	else:
+		source = rel_path
+	data = subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"HEAD:{source}"], check=True, capture_output=True).stdout
+	if rel_path.startswith(".github/workflows/"):
+		sys.path.insert(0, str(REPO_ROOT / "scripts"))
+		try:
+			import workflow_wrapper_refs
+		finally:
+			sys.path.pop(0)
+		data = workflow_wrapper_refs.pin_reusable_workflow_refs(data.decode("utf-8"), head_sha).encode("utf-8")
+	return data
+
+
+_SYNCED_FIXTURE_PATHS = (".github/workflows/ai-review.yml", ".claude/hooks/gh_api_write_guard.py", "CLAUDE.md")
+
+
+def _consumer_fixture_repo(base_dir: Path, *, modified_paths: tuple[str, ...] = ()) -> Path:
+	"""An audited consumer checkout holding synced (upstream-owned) and project files.
+
+	Synced files hold the exact bytes the upstream release writes, except the
+	ones named in ``modified_paths``, which carry a consumer edit.
+	"""
+	repo_dir, _first_sha, _head_sha = _git_fixture_repo(base_dir)
+	for rel_path in (*_SYNCED_FIXTURE_PATHS, "src/app.py"):
+		target = repo_dir / rel_path
+		target.parent.mkdir(parents=True, exist_ok=True)
+		if rel_path in _SYNCED_FIXTURE_PATHS:
+			content = _upstream_release_bytes(rel_path)
+			if rel_path in modified_paths:
+				content += b"\n# consumer edit\n"
+			target.write_bytes(content)
+		else:
+			target.write_text("line one\nline two\n", encoding="utf-8")
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update(
+		{
+			"GIT_AUTHOR_NAME": "t",
+			"GIT_AUTHOR_EMAIL": "t@example.invalid",
+			"GIT_COMMITTER_NAME": "t",
+			"GIT_COMMITTER_EMAIL": "t@example.invalid",
+		}
+	)
+	subprocess.run(["git", "add", "-A"], cwd=repo_dir, env=git_env, check=True, capture_output=True)
+	subprocess.run(["git", "commit", "-qm", "synced and project files"], cwd=repo_dir, env=git_env, check=True, capture_output=True)
+	return repo_dir
+
+
+_UPSTREAM_MANAGED_FINDINGS = [
+	_finding_payload("wrapper-ref-unpinned", file_path=".github/workflows/ai-review.yml"),
+	_finding_payload("hook-guard-bypass", file_path=".claude/hooks/gh_api_write_guard.py"),
+	_finding_payload("rules-doc-gap", file_path="CLAUDE.md"),
+	_finding_payload("app-input-validation", file_path="src/app.py"),
+	_finding_payload("hallucinated-path", file_path="apps/api/src/ghost.ts"),
+]
+
+
+def _run_consumer_findings_json(
+	extra_env: dict | None = None,
+	*,
+	repository: str = "owner/repo",
+	upstream_source_dir: str | None = str(REPO_ROOT),
+	modified_paths: tuple[str, ...] = (),
+):
+	with tempfile.TemporaryDirectory(prefix="security-audit-upstream-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = _consumer_fixture_repo(tmp_path, modified_paths=modified_paths)
+		output_path = tmp_path / "findings.json"
+		return _run_security_audit(
+			{},
+			codex_output=json.dumps(_UPSTREAM_MANAGED_FINDINGS),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+				"GITHUB_REPOSITORY": repository,
+				**({"SECURITY_AUDIT_UPSTREAM_SOURCE_DIR": upstream_source_dir} if upstream_source_dir else {}),
+				**(extra_env or {}),
+			},
+		)
+
+
+def test_security_audit_consumer_keeps_upstream_managed_findings_out_of_the_fix_queue() -> None:
+	proc, final_state = _run_consumer_findings_json()
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["app-input-validation"]
+	# The seven pre-existing counts keep their meaning; the nonexistent file is
+	# still counted as invalid and the synced paths are reported separately.
+	assert payload["counts"]["kept"] == 1
+	assert payload["counts"]["suppressed_invalid"] == 1
+	assert payload["upstream_managed"]["suppressed"] == 3
+	assert sorted(item["finding_id"] for item in payload["upstream_managed"]["findings"]) == [
+		"hook-guard-bypass",
+		"rules-doc-gap",
+		"wrapper-ref-unpinned",
+	]
+	assert "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=enabled patterns=" in proc.stdout
+	assert (
+		"SECURITY_AUDIT_UPSTREAM_MANAGED outcome=suppressed finding=wrapper-ref-unpinned "
+		"file=.github/workflows/ai-review.yml line=1 severity=high confidence=9"
+	) in proc.stdout
+	assert "finding=hook-guard-bypass file=.claude/hooks/gh_api_write_guard.py" in proc.stdout
+	assert "finding=rules-doc-gap file=CLAUDE.md" in proc.stdout
+	assert "finding=app-input-validation" not in proc.stdout.replace("SECURITY_AUDIT_FINDING_DROPPED", "")
+
+
+def test_security_audit_files_findings_on_a_consumer_modified_synced_file() -> None:
+	"""A consumer edit to a synced file is the consumer's own code until the next sync."""
+	proc, final_state = _run_consumer_findings_json(modified_paths=(".claude/hooks/gh_api_write_guard.py",))
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert sorted(finding["finding_id"] for finding in payload["findings"]) == ["app-input-validation", "hook-guard-bypass"]
+	assert sorted(item["finding_id"] for item in payload["upstream_managed"]["findings"]) == ["rules-doc-gap", "wrapper-ref-unpinned"]
+	assert (
+		"SECURITY_AUDIT_UPSTREAM_MANAGED outcome=filed reason=consumer_modified finding=hook-guard-bypass "
+		"file=.claude/hooks/gh_api_write_guard.py line=1"
+	) in proc.stdout
+
+
+def test_security_audit_suppresses_an_unmodified_wrapper_pinned_to_an_older_release() -> None:
+	"""A consumer that has not synced the newest release still holds an upstream-owned wrapper."""
+	with tempfile.TemporaryDirectory(prefix="security-audit-stale-pin-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = _consumer_fixture_repo(tmp_path)
+		wrapper = repo_dir / ".github" / "workflows" / "ai-review.yml"
+		head_sha = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+		older_sha = "1" * 40 if head_sha != "1" * 40 else "2" * 40
+		stale = wrapper.read_text(encoding="utf-8").replace(f"{head_sha} # stable", f"{older_sha} # stable")
+		assert stale != wrapper.read_text(encoding="utf-8")
+		wrapper.write_text(stale, encoding="utf-8")
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("wrapper-ref-unpinned", file_path=".github/workflows/ai-review.yml")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SECURITY_AUDIT_UPSTREAM_SOURCE_DIR": str(REPO_ROOT),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert payload["findings"] == []
+	assert payload["upstream_managed"]["suppressed"] == 1
+	assert "outcome=suppressed finding=wrapper-ref-unpinned" in proc.stdout
+
+
+def test_security_audit_wrapper_pin_normalization_keeps_body_edits_filed() -> None:
+	"""Normalizing pins must not hide a consumer edit to the wrapper body."""
+	with tempfile.TemporaryDirectory(prefix="security-audit-stale-pin-edit-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = _consumer_fixture_repo(tmp_path)
+		wrapper = repo_dir / ".github" / "workflows" / "ai-review.yml"
+		head_sha = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+		older_sha = "1" * 40 if head_sha != "1" * 40 else "2" * 40
+		edited = wrapper.read_text(encoding="utf-8").replace(f"{head_sha} # stable", f"{older_sha} # stable") + "\n# consumer edit\n"
+		wrapper.write_text(edited, encoding="utf-8")
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("wrapper-ref-unpinned", file_path=".github/workflows/ai-review.yml")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SECURITY_AUDIT_UPSTREAM_SOURCE_DIR": str(REPO_ROOT),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["wrapper-ref-unpinned"]
+	assert "outcome=filed reason=consumer_modified finding=wrapper-ref-unpinned" in proc.stdout
+
+
+def test_security_audit_files_findings_on_a_synced_path_replaced_by_a_symlink() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-symlink-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = _consumer_fixture_repo(tmp_path)
+		# A symlink holding the release's bytes is still not the file the
+		# sync writes (the updater writes a regular file), so it is filed.
+		in_repo_copy = repo_dir / "docs" / "claude-copy.md"
+		in_repo_copy.parent.mkdir(parents=True, exist_ok=True)
+		in_repo_copy.write_bytes(_upstream_release_bytes("CLAUDE.md"))
+		(repo_dir / "CLAUDE.md").unlink()
+		(repo_dir / "CLAUDE.md").symlink_to(Path("docs") / "claude-copy.md")
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("rules-doc-gap", file_path="CLAUDE.md")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SECURITY_AUDIT_UPSTREAM_SOURCE_DIR": str(REPO_ROOT),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["rules-doc-gap"]
+	assert "upstream_managed" not in payload
+	assert "outcome=filed reason=consumer_modified finding=rules-doc-gap" in proc.stdout
+
+
+def test_security_audit_files_findings_on_a_synced_path_under_a_symlinked_parent_directory() -> None:
+	"""A symlinked ancestor directory routes the synced path elsewhere, so it is filed."""
+	with tempfile.TemporaryDirectory(prefix="security-audit-parent-symlink-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = _consumer_fixture_repo(tmp_path)
+		store = repo_dir / "docs" / "claude-store"
+		store.parent.mkdir(parents=True, exist_ok=True)
+		(repo_dir / ".claude").rename(store)
+		(repo_dir / ".claude").symlink_to(Path("docs") / "claude-store")
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("hook-guard-bypass", file_path=".claude/hooks/gh_api_write_guard.py")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SECURITY_AUDIT_UPSTREAM_SOURCE_DIR": str(REPO_ROOT),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["hook-guard-bypass"]
+	assert "upstream_managed" not in payload
+	assert "outcome=filed reason=consumer_modified finding=hook-guard-bypass" in proc.stdout
+
+
+def test_security_audit_drops_findings_for_files_missing_from_the_checkout_with_a_log_line() -> None:
+	proc, final_state = _run_consumer_findings_json()
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert "hallucinated-path" not in [finding["finding_id"] for finding in payload["findings"]]
+	assert (
+		"SECURITY_AUDIT_FINDING_DROPPED reason=file_missing finding=hallucinated-path "
+		"file=apps/api/src/ghost.ts line=1"
+	) in proc.stdout
+
+
+def test_security_audit_missing_file_drop_log_sanitizes_model_supplied_values() -> None:
+	hostile = _finding_payload("weird id\nSECURITY_AUDIT_UPSTREAM_MANAGED outcome=forged", file_path="no such/\u001b[31mfile.py")
+	with tempfile.TemporaryDirectory(prefix="security-audit-sanitize-") as out_td:
+		proc, _final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([hostile]),
+			extra_env={
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(Path(out_td) / "findings.json"),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	dropped = [line for line in proc.stdout.splitlines() if line.startswith("SECURITY_AUDIT_FINDING_DROPPED ")]
+	assert len(dropped) == 1
+	assert "\x1b" not in dropped[0]
+	assert not any(line.startswith("SECURITY_AUDIT_UPSTREAM_MANAGED outcome=forged") for line in proc.stdout.splitlines())
+
+
+def test_security_audit_upstream_repository_keeps_synced_path_findings() -> None:
+	proc, final_state = _run_consumer_findings_json(repository="shubhodeep1/coding-workflows")
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert sorted(finding["finding_id"] for finding in payload["findings"]) == [
+		"app-input-validation",
+		"hook-guard-bypass",
+		"rules-doc-gap",
+		"wrapper-ref-unpinned",
+	]
+	assert "upstream_managed" not in payload
+	assert "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=upstream_repository" in proc.stdout
+
+
+def test_security_audit_upstream_managed_filter_can_be_disabled() -> None:
+	proc, final_state = _run_consumer_findings_json({"SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER": "false"})
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert len(payload["findings"]) == 4
+	assert "upstream_managed" not in payload
+	assert "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=disabled" in proc.stdout
+
+
+def test_security_audit_upstream_managed_filter_fails_open_without_an_upstream_tree() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-no-upstream-") as support_td:
+		support_dir = _install_security_audit_support_tree(Path(support_td), failure_mode="none")
+		proc, final_state = _run_consumer_findings_json(
+			{
+				"SECURITY_AUDIT_SUPPORT_DIR": str(support_dir),
+				"SECURITY_AUDIT_FP_EXCLUSIONS": str(REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"),
+			},
+			upstream_source_dir=None,
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert len(payload["findings"]) == 4
+	assert "upstream_managed" not in payload
+	assert "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=upstream_tree_missing" in proc.stdout
+
+
+def test_security_audit_upstream_source_dir_override_supplies_the_managed_list() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-override-") as support_td:
+		support_dir = _install_security_audit_support_tree(Path(support_td), failure_mode="none")
+		proc, final_state = _run_consumer_findings_json(
+			{
+				"SECURITY_AUDIT_SUPPORT_DIR": str(support_dir),
+				"SECURITY_AUDIT_FP_EXCLUSIONS": str(REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"),
+			},
+			upstream_source_dir=str(REPO_ROOT),
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["app-input-validation"]
+
+
+def _run_upstream_managed_resolver(tmp_path: Path, *, support_dir: Path, source_dir: str = "") -> tuple[str, str]:
+	"""Run only security_audit_resolve_upstream_managed_paths (and the flag helper) from the script."""
+	script_text = SCRIPT_PATH.read_text(encoding="utf-8")
+	functions = []
+	for name in ("security_audit_flag_enabled", "security_audit_resolve_upstream_managed_paths"):
+		match = re.search(rf"^{name}\(\)\s*\{{\n.*?^\}}\n", script_text, re.S | re.M)
+		assert match, name
+		functions.append(match.group(0))
+	paths_file = tmp_path / "managed-digests.json"
+	harness = "\n".join(functions) + "\nsecurity_audit_resolve_upstream_managed_paths\n"
+	env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	env.update(
+		{
+			"GITHUB_REPOSITORY": "owner/repo",
+			"SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER": "true",
+			"SECURITY_AUDIT_UPSTREAM_REPOSITORY": "shubhodeep1/coding-workflows",
+			"SECURITY_AUDIT_UPSTREAM_SOURCE_DIR": source_dir,
+			"SECURITY_AUDIT_SUPPORT_DIR": str(support_dir),
+			"UPSTREAM_MANAGED_DIGESTS_FILE": str(paths_file),
+			"UPSTREAM_MANAGED_ERROR_FILE": str(tmp_path / "managed-error.txt"),
+		}
+	)
+	proc = subprocess.run(["bash", "--noprofile", "--norc", "-c", harness], env=env, capture_output=True, text=True, encoding="utf-8")
+	assert proc.returncode == 0, proc.stderr
+	return proc.stdout.strip(), paths_file.read_text(encoding="utf-8")
+
+
+def _upstream_checkout_fixture(base_dir: Path, origin: str | None) -> Path:
+	checkout = base_dir / "upstream-checkout"
+	(checkout / "workflow-templates").mkdir(parents=True)
+	(checkout / "scripts").mkdir()
+	(checkout / "workflow-templates" / "ai-x.yml").write_text(
+		"name: x\njobs:\n  x:\n    uses: shubhodeep1/coding-workflows/.github/workflows/x.yml@stable\n", encoding="utf-8"
+	)
+	for script_name in ("build_sync_manifest.py", "workflow_wrapper_refs.py"):
+		(checkout / "scripts" / script_name).write_text(
+			(REPO_ROOT / "scripts" / script_name).read_text(encoding="utf-8"), encoding="utf-8"
+		)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update(
+		{
+			"GIT_AUTHOR_NAME": "t",
+			"GIT_AUTHOR_EMAIL": "t@example.invalid",
+			"GIT_COMMITTER_NAME": "t",
+			"GIT_COMMITTER_EMAIL": "t@example.invalid",
+		}
+	)
+	for git_args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "upstream"]):
+		subprocess.run(["git", *git_args], cwd=checkout, env=git_env, check=True, capture_output=True)
+	if origin:
+		subprocess.run(["git", "remote", "add", "origin", origin], cwd=checkout, env=git_env, check=True, capture_output=True)
+	return checkout
+
+
+@pytest.mark.parametrize(
+	"origin",
+	["https://github.com/shubhodeep1/coding-workflows", "https://github.com/shubhodeep1/coding-workflows.git", "git@github.com:shubhodeep1/coding-workflows.git"],
+)
+def test_upstream_managed_resolver_trusts_a_support_checkout_whose_origin_is_the_upstream(tmp_path: Path, origin: str) -> None:
+	checkout = _upstream_checkout_fixture(tmp_path, origin)
+	stdout, patterns = _run_upstream_managed_resolver(tmp_path, support_dir=checkout)
+	assert stdout.startswith("SECURITY_AUDIT_UPSTREAM_MANAGED outcome=enabled patterns="), stdout
+	assert list(json.loads(patterns)) == [".github/workflows/ai-x.yml"]
+
+
+def test_upstream_managed_resolver_finds_the_pollers_nested_support_checkout(tmp_path: Path) -> None:
+	workspace = tmp_path / "workspace"
+	workspace.mkdir()
+	nested = _upstream_checkout_fixture(tmp_path, "https://github.com/shubhodeep1/coding-workflows")
+	nested.rename(workspace / ".codex-workflow-src")
+	stdout, patterns = _run_upstream_managed_resolver(tmp_path, support_dir=workspace)
+	assert stdout.startswith("SECURITY_AUDIT_UPSTREAM_MANAGED outcome=enabled"), stdout
+	assert ".github/workflows/ai-x.yml" in json.loads(patterns)
+
+
+@pytest.mark.parametrize(
+	"origin",
+	[None, "https://github.com/owner/repo", "https://github.com/evil/coding-workflows", "https://evil.example/github.com/shubhodeep1/coding-workflows"],
+)
+def test_upstream_managed_resolver_never_runs_a_checkout_that_is_not_the_upstream(tmp_path: Path, origin: str | None) -> None:
+	"""A consumer's own checkout may hold a workflow-templates/ tree and a builder; it must not run."""
+	checkout = _upstream_checkout_fixture(tmp_path, origin)
+	stdout, patterns = _run_upstream_managed_resolver(tmp_path, support_dir=checkout)
+	assert stdout == "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=upstream_tree_untrusted"
+	assert patterns == ""
+
+
+def test_upstream_managed_resolver_explicit_source_dir_is_trusted_without_an_origin(tmp_path: Path) -> None:
+	checkout = _upstream_checkout_fixture(tmp_path, None)
+	stdout, patterns = _run_upstream_managed_resolver(tmp_path, support_dir=tmp_path / "empty-support", source_dir=str(checkout))
+	assert stdout.startswith("SECURITY_AUDIT_UPSTREAM_MANAGED outcome=enabled"), stdout
+	assert ".github/workflows/ai-x.yml" in json.loads(patterns)
+
+
+def test_upstream_managed_resolver_runs_python_isolated_from_the_audited_checkout() -> None:
+	"""The resolver runs from the audited repo root; a repo-local json.py must never be imported."""
+	script_text = SCRIPT_PATH.read_text(encoding="utf-8")
+	match = re.search(r"^security_audit_resolve_upstream_managed_paths\(\)\s*\{\n.*?^\}\n", script_text, re.S | re.M)
+	assert match
+	body = match.group(0)
+	python_calls = re.findall(r"\bpython3\b[^\n]*", body)
+	assert python_calls
+	for call in python_calls:
+		# -I implies -E, which ignores PYTHONDONTWRITEBYTECODE; -B keeps .pyc files
+		# out of the upstream support checkout.
+		assert re.match(r"python3 -I -B\b", call), call
+
+
+def test_upstream_managed_resolver_reports_an_invalid_explicit_source_dir(tmp_path: Path) -> None:
+	"""A bad override must not silently fall through to a discovered checkout."""
+	checkout = _upstream_checkout_fixture(tmp_path, "https://github.com/shubhodeep1/coding-workflows")
+	not_a_checkout = tmp_path / "not-a-checkout"
+	not_a_checkout.mkdir()
+	stdout, patterns = _run_upstream_managed_resolver(tmp_path, support_dir=checkout, source_dir=str(not_a_checkout))
+	assert stdout == "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=upstream_source_dir_invalid"
+	assert patterns == ""
+
+
+def test_security_audit_issues_mode_reports_upstream_managed_findings_without_filing_them() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-upstream-issues-") as fixture_td:
+		repo_dir = _consumer_fixture_repo(Path(fixture_td))
+		state = {"issue_list_responses": [[]], "api_responses": [[[]]], "next_issue_number": 9100}
+		proc, final_state = _run_security_audit(
+			state,
+			codex_output=json.dumps(_UPSTREAM_MANAGED_FINDINGS),
+			cwd=repo_dir,
+			extra_env={"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT)},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "tracker=#9100 findings=1 followups_created=1" in proc.stdout
+	followup_titles = [args[args.index("--title") + 1] for args in final_state["issue_create_args"][1:]]
+	assert followup_titles == ["[security-audit] app-input-validation: high src/app.py:1"]
+	comment_bodies = "\n".join(final_state.get("issue_comment_bodies", []))
+	assert "Suppressed upstream-managed findings (reported below, not filed; fix them in coding-workflows): 3" in comment_bodies
+	assert "### Upstream-managed findings (not filed)" in comment_bodies
+	for finding_id in ("wrapper-ref-unpinned", "hook-guard-bypass", "rules-doc-gap"):
+		assert f"Finding ID: `{finding_id}`" in comment_bodies
 
 
 def test_security_audit_explicit_diff_scope_filters_changed_files() -> None:
@@ -3189,6 +3670,12 @@ def main() -> int:
 	for name in sorted(globals()):
 		if name.startswith("test_") and callable(globals()[name]):
 			for kwargs in _parametrize_cases(globals()[name]):
+				# Supply pytest's tmp_path fixture when a test declares it,
+				# since this runner calls tests without pytest.
+				if "tmp_path" in inspect.signature(globals()[name]).parameters and "tmp_path" not in kwargs:
+					with tempfile.TemporaryDirectory(prefix="security-audit-tmp-path-") as tmp_dir:
+						globals()[name](tmp_path=Path(tmp_dir), **kwargs)
+					continue
 				globals()[name](**kwargs)
 	return 0
 

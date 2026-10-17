@@ -21,6 +21,28 @@ Subcommands:
 ``allowed-paths --repo-root R [--commit REV]``
     Prints the consumer path allowlist, one entry per line.
 
+``managed-paths --repo-root R [--commit REV]``
+    Prints the subset of the allowlist that the updater owns outright (a
+    consumer's copy is overwritten on the next sync): the wrapper workflows,
+    ``.claude/`` assets, ``CLAUDE.md``, the audit-gate ``managed_files``
+    targets and retired files. Consumer-edited entries (``CHANGELOG.md``,
+    ``agents.md``, ``package.json`` and the like) are excluded. The security
+    audit uses it to keep findings on these paths out of the consumer's
+    fix-up queue (a consumer cannot fix them).
+
+``managed-digests --repo-root R [--commit REV]``
+    Prints one JSON object mapping each upstream-managed consumer path to the
+    sha256 digests of the bytes a sync from ``REV`` leaves there: wrappers
+    rendered by ``scripts/workflow_wrapper_refs.py`` with the commit SHA,
+    ``.claude/`` assets and ``CLAUDE.md`` as stored, audit-gate
+    ``managed_files`` targets from their source, and every released version
+    listed for a retired file. A consumer file whose sha256 is in its list is
+    an unmodified upstream copy. Each wrapper also gets the digest of the
+    template rendered with ``PIN_NORMALIZED_SHA`` (40 zeros), so a consumer
+    still pinned to an older release can be matched after its pins are
+    normalized the same way. Paths with no computable digest (symlinks, a
+    wrapper the renderer rejects) are left out.
+
 ``check-paths --allowed-file A --paths-file P``
     Exits 0 when every newline-separated path in ``P`` matches an allowlist
     entry, otherwise prints the first offending path and exits 3. In an
@@ -62,6 +84,20 @@ STATIC_ALLOWED_PATHS = (
 	"agents.d/*.md",
 	"scripts/.gitignore",
 )
+
+
+# Static allowlist entries the updater overwrites wholesale. Every other
+# STATIC_ALLOWED_PATHS entry is edited in place and stays consumer-owned.
+STATIC_UPSTREAM_MANAGED_PATHS = (
+	"CLAUDE.md",
+)
+
+
+# Release SHA used for the pin-normalized wrapper digest. The security audit
+# replaces a consumer wrapper's pinned release SHAs with it before hashing, so
+# an unmodified wrapper from an older release whose body matches the current
+# template still matches.
+PIN_NORMALIZED_SHA = "0" * 40
 
 
 class ManifestError(Exception):
@@ -174,11 +210,15 @@ def build_files(repo_root: Path, commit: str) -> dict:
 	return files
 
 
-def derive_allowed_paths(repo_root: Path, commit: str = "HEAD") -> list:
-	"""Consumer paths the updater may stage for the release tree at ``commit``."""
+def derive_allowed_paths(repo_root: Path, commit: str = "HEAD", include_consumer_owned: bool = True) -> list:
+	"""Consumer paths the updater may stage for the release tree at ``commit``.
+
+	``include_consumer_owned=False`` keeps only the paths the updater owns
+	outright (see ``derive_managed_paths``).
+	"""
 	entries = list_tree(repo_root, commit)
 	by_path = {path: (mode, oid) for mode, _kind, oid, path in entries}
-	allowed = set(STATIC_ALLOWED_PATHS)
+	allowed = set(STATIC_ALLOWED_PATHS if include_consumer_owned else STATIC_UPSTREAM_MANAGED_PATHS)
 	for path in by_path:
 		if path.startswith("workflow-templates/") and path.count("/") == 1 and path.endswith(".yml"):
 			allowed.add(".github/workflows/" + path.split("/", 1)[1])
@@ -207,6 +247,97 @@ def derive_allowed_paths(repo_root: Path, commit: str = "HEAD") -> list:
 				continue
 			allowed.add(tokens[0])
 	return sorted(allowed)
+
+
+def derive_managed_paths(repo_root: Path, commit: str = "HEAD") -> list:
+	"""Allowlist entries the updater owns: a consumer edit is overwritten."""
+	return derive_allowed_paths(repo_root, commit, include_consumer_owned=False)
+
+
+def _load_wrapper_renderer():
+	"""Load scripts/workflow_wrapper_refs.py from this script's directory.
+
+	Imported by path because callers run this script with ``python3 -I``,
+	which keeps the script directory off ``sys.path``.
+	"""
+	import importlib.util
+
+	renderer_path = Path(__file__).resolve().with_name("workflow_wrapper_refs.py")
+	spec = importlib.util.spec_from_file_location("sync_manifest_wrapper_refs", renderer_path)
+	if spec is None or spec.loader is None:
+		raise ManifestError("wrapper renderer is missing")
+	module = importlib.util.module_from_spec(spec)
+	try:
+		spec.loader.exec_module(module)
+	except (OSError, SyntaxError) as exc:
+		raise ManifestError("wrapper renderer is unreadable") from exc
+	return module
+
+
+def derive_managed_digests(repo_root: Path, commit: str = "HEAD") -> dict:
+	"""Map each upstream-managed consumer path to the sha256 values a sync writes.
+
+	``commit`` must be a full commit SHA: wrappers are rendered with it, as
+	``update_workflows.yml`` renders them with the release SHA.
+	"""
+	if not COMMIT_RE.match(commit):
+		raise ManifestError("managed digests need a full commit SHA")
+	entries = list_tree(repo_root, commit)
+	by_path = {path: (mode, oid) for mode, _kind, oid, path in entries}
+	sources = {}
+	for path, (mode, oid) in by_path.items():
+		if mode == "120000":
+			continue
+		if path.startswith("workflow-templates/") and path.count("/") == 1 and path.endswith(".yml"):
+			sources[".github/workflows/" + path.split("/", 1)[1]] = ("wrapper", oid)
+		elif path.startswith("workflow-templates/.claude/"):
+			sources[".claude/" + path[len("workflow-templates/.claude/"):]] = ("copy", oid)
+	if "CLAUDE.md" in by_path and by_path["CLAUDE.md"][0] != "120000":
+		sources["CLAUDE.md"] = ("copy", by_path["CLAUDE.md"][1])
+	contract_entry = by_path.get("workflow-templates/audit-gate/contract.json")
+	retired_entry = by_path.get("workflow-templates/retired_files.txt")
+	extra = [entry[1] for entry in (contract_entry, retired_entry) if entry and entry[0] != "120000"]
+	meta_blobs = read_blobs(repo_root, extra)
+	if contract_entry and contract_entry[0] != "120000":
+		try:
+			contract = json.loads(meta_blobs[contract_entry[1]].decode("utf-8"))
+		except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+			raise ManifestError("audit-gate contract.json is not valid JSON") from exc
+		for item in contract.get("managed_files", []) or []:
+			if not isinstance(item, dict):
+				continue
+			source, target = item.get("source"), item.get("target")
+			if not (isinstance(source, str) and source and isinstance(target, str) and target):
+				continue
+			source_entry = by_path.get("workflow-templates/audit-gate/" + source)
+			if source_entry and source_entry[0] != "120000":
+				sources[target] = ("copy", source_entry[1])
+	blobs = read_blobs(repo_root, [oid for _kind, oid in sources.values()])
+	renderer = None
+	digests = {}
+	for target, (kind, oid) in sources.items():
+		data = blobs[oid]
+		if kind == "wrapper":
+			if renderer is None:
+				renderer = _load_wrapper_renderer()
+			try:
+				template_text = data.decode("utf-8")
+				rendered = renderer.pin_reusable_workflow_refs(template_text, commit).encode("utf-8")
+				normalized = renderer.pin_reusable_workflow_refs(template_text, PIN_NORMALIZED_SHA).encode("utf-8")
+			except (UnicodeDecodeError, ValueError):
+				continue
+			digests[target] = sorted({hashlib.sha256(rendered).hexdigest(), hashlib.sha256(normalized).hexdigest()})
+			continue
+		digests[target] = [hashlib.sha256(data).hexdigest()]
+	if retired_entry and retired_entry[0] != "120000":
+		for line in meta_blobs[retired_entry[1]].decode("utf-8", "replace").splitlines():
+			tokens = line.split()
+			if len(tokens) < 2 or tokens[0].startswith("#"):
+				continue
+			hashes = [token for token in tokens[1:] if re.fullmatch(r"[0-9a-f]{64}", token)]
+			if hashes and tokens[0] not in digests:
+				digests[tokens[0]] = sorted(set(hashes))
+	return dict(sorted(digests.items()))
 
 
 def render_manifest(repo_root: Path, commit: str, version: str) -> str:
@@ -250,6 +381,21 @@ def cmd_allowed_paths(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_managed_paths(args: argparse.Namespace) -> int:
+	repo_root = Path(args.repo_root)
+	commit = resolve_commit(repo_root, args.commit)
+	for entry in derive_managed_paths(repo_root, commit):
+		print(entry)
+	return 0
+
+
+def cmd_managed_digests(args: argparse.Namespace) -> int:
+	repo_root = Path(args.repo_root)
+	commit = resolve_commit(repo_root, args.commit)
+	print(json.dumps(derive_managed_digests(repo_root, commit), sort_keys=True))
+	return 0
+
+
 def cmd_check_paths(args: argparse.Namespace) -> int:
 	try:
 		# "\n" only: splitlines() would also split on U+2028/U+2029 and
@@ -288,11 +434,17 @@ def main(argv: list | None = None) -> int:
 	allowed = sub.add_parser("allowed-paths")
 	allowed.add_argument("--repo-root", required=True)
 	allowed.add_argument("--commit", default="HEAD")
+	managed = sub.add_parser("managed-paths")
+	managed.add_argument("--repo-root", required=True)
+	managed.add_argument("--commit", default="HEAD")
+	digests = sub.add_parser("managed-digests")
+	digests.add_argument("--repo-root", required=True)
+	digests.add_argument("--commit", default="HEAD")
 	check = sub.add_parser("check-paths")
 	check.add_argument("--allowed-file", required=True)
 	check.add_argument("--paths-file", required=True)
 	args = parser.parse_args(argv)
-	handlers = {"build": cmd_build, "allowed-paths": cmd_allowed_paths, "check-paths": cmd_check_paths}
+	handlers = {"build": cmd_build, "allowed-paths": cmd_allowed_paths, "managed-paths": cmd_managed_paths, "managed-digests": cmd_managed_digests, "check-paths": cmd_check_paths}
 	if args.command not in handlers:
 		parser.print_usage(sys.stderr)
 		return 2

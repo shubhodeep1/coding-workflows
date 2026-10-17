@@ -534,6 +534,22 @@ fi
 
 SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_FP_EXCLUSIONS:-scripts/security_audit_fp_exclusions.json}"
 
+# Findings on paths coding-workflows owns (the synced wrapper workflows,
+# .claude/ assets, CLAUDE.md, audit-gate files, retired files) can never be
+# fixed by a consumer: the next sync overwrites the fix. In a consumer repo the
+# filter keeps them out of the follow-up / fix-cycle queue and reports them in
+# the run log (SECURITY_AUDIT_UPSTREAM_MANAGED) and the tracker comment
+# instead, but only while the consumer's file is byte-identical to what the
+# release writes there (build_sync_manifest.py managed-digests). A
+# consumer-modified copy is the consumer's own change and is filed as before.
+# `false` restores the old behaviour. The upstream tree is looked up in
+# SECURITY_AUDIT_UPSTREAM_SOURCE_DIR, then <support dir>/.codex-workflow-src
+# (the orchestrate poller's support checkout), then the support dir itself
+# (the security-audit.yml support checkout); a miss files the finding as before.
+SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER="${SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER:-true}"
+SECURITY_AUDIT_UPSTREAM_REPOSITORY="${SECURITY_AUDIT_UPSTREAM_REPOSITORY:-shubhodeep1/coding-workflows}"
+SECURITY_AUDIT_UPSTREAM_SOURCE_DIR="${SECURITY_AUDIT_UPSTREAM_SOURCE_DIR:-}"
+
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "${REPO_ROOT}"
 
@@ -642,6 +658,8 @@ OVERSIZED_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-prompt.txt"
 OVERSIZED_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-error.txt"
 LINE_OWNERSHIP_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-summary.json"
 LINE_OWNERSHIP_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-error.txt"
+UPSTREAM_MANAGED_DIGESTS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/upstream-managed-digests.json"
+UPSTREAM_MANAGED_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/upstream-managed-error.txt"
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if [ -z "${SECURITY_AUDIT_FINDINGS_OUT}" ]; then
@@ -1796,6 +1814,84 @@ else
 	echo "security-audit: engine=codex"
 fi
 
+# security_audit_resolve_upstream_managed_paths — write the upstream-managed
+# path digests (a JSON object: consumer path -> sha256 values a sync writes) to
+# UPSTREAM_MANAGED_DIGESTS_FILE and log one SECURITY_AUDIT_UPSTREAM_MANAGED
+# outcome line. Reads local git objects only: no GitHub API calls (CLAUDE.md
+# §15). Fails open: any problem leaves the file empty, so every finding is
+# filed exactly as before.
+security_audit_resolve_upstream_managed_paths()
+{
+	local skip_reason="" skip_detail="" candidate_dir="" source_dir="" pattern_count=0 untrusted_seen="false" candidate_origin="" override_invalid="false"
+	: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
+	if ! security_audit_flag_enabled "${SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER}"; then
+		skip_reason="disabled"
+	elif [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		skip_reason="repository_unknown"
+	elif [ "${GITHUB_REPOSITORY}" = "${SECURITY_AUDIT_UPSTREAM_REPOSITORY}" ]; then
+		skip_reason="upstream_repository"
+	else
+		for candidate_dir in \
+			"${SECURITY_AUDIT_UPSTREAM_SOURCE_DIR}" \
+			"${SECURITY_AUDIT_SUPPORT_DIR}/.codex-workflow-src" \
+			"${SECURITY_AUDIT_SUPPORT_DIR}"; do
+			[ -n "${candidate_dir}" ] || continue
+			if [ -d "${candidate_dir}/workflow-templates" ] \
+				&& [ -f "${candidate_dir}/scripts/build_sync_manifest.py" ] \
+				&& env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${candidate_dir}" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
+				# The builder runs as the caller (its environment is reduced to
+				# PATH and HOME below, but the user's files stay readable), so
+				# only an explicit SECURITY_AUDIT_UPSTREAM_SOURCE_DIR or a checkout whose
+				# origin is the upstream repository is executed. A consumer's own
+				# checkout (the poller's working directory) is never trusted.
+				candidate_origin="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${candidate_dir}" remote get-url origin 2>/dev/null || true)"
+				if [ "${candidate_dir}" = "${SECURITY_AUDIT_UPSTREAM_SOURCE_DIR}" ]; then
+					source_dir="${candidate_dir}"
+					break
+				fi
+				case "${candidate_origin}" in
+					"https://github.com/${SECURITY_AUDIT_UPSTREAM_REPOSITORY}"|"https://github.com/${SECURITY_AUDIT_UPSTREAM_REPOSITORY}.git"|"git@github.com:${SECURITY_AUDIT_UPSTREAM_REPOSITORY}"|"git@github.com:${SECURITY_AUDIT_UPSTREAM_REPOSITORY}.git")
+						source_dir="${candidate_dir}"
+						break
+						;;
+				esac
+				untrusted_seen="true"
+			elif [ "${candidate_dir}" = "${SECURITY_AUDIT_UPSTREAM_SOURCE_DIR}" ]; then
+				# An explicit override that is not an upstream checkout is
+				# reported as such instead of falling through to another tree.
+				override_invalid="true"
+				break
+			fi
+		done
+		if [ "${override_invalid}" = "true" ]; then
+			skip_reason="upstream_source_dir_invalid"
+		elif [ -z "${source_dir}" ] && [ "${untrusted_seen}" = "true" ]; then
+			skip_reason="upstream_tree_untrusted"
+		elif [ -z "${source_dir}" ]; then
+			skip_reason="upstream_tree_missing"
+		elif ! env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
+			python3 -I -B "${source_dir}/scripts/build_sync_manifest.py" managed-digests \
+			--repo-root "${source_dir}" --commit HEAD \
+			> "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2> "${UPSTREAM_MANAGED_ERROR_FILE}"; then
+			: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
+			skip_reason="manifest_failed"
+			skip_detail="$(tail -n 1 "${UPSTREAM_MANAGED_ERROR_FILE}" 2>/dev/null | tr -c 'A-Za-z0-9._:/@+=-' '_' | head -c 200 || true)"
+		else
+			pattern_count="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); print(len(data) if isinstance(data, dict) else 0)' "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2>/dev/null || true)"
+			[[ "${pattern_count}" =~ ^[0-9]+$ ]] || pattern_count=0
+			[ "${pattern_count}" -gt 0 ] || skip_reason="empty_list"
+		fi
+	fi
+	if [ -n "${skip_reason}" ]; then
+		echo "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=${skip_reason}${skip_detail:+ detail=${skip_detail}}"
+	else
+		echo "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=enabled patterns=${pattern_count}"
+	fi
+	return 0
+}
+
+security_audit_resolve_upstream_managed_paths
+
 python3 - \
 	"${REPO_ROOT}" \
 	"${CODEX_OUTPUT_FILE}" \
@@ -1806,10 +1902,13 @@ python3 - \
 	"${AUDIT_SCOPE_MODE}" \
 	"${CHANGED_FILES_FILE}" \
 	"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
-	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" <<'PY'
+	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" \
+	"${UPSTREAM_MANAGED_DIGESTS_FILE}" <<'PY'
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -1825,6 +1924,7 @@ waived_findings_path = Path(sys.argv[9])
 # Still passed (and validated by the caller) to keep the argument order
 # stable; it no longer controls waiver suppression.
 _unused_waiver_line_window = int(sys.argv[10])
+upstream_managed_digests_path = Path(sys.argv[11]) if len(sys.argv) > 11 and sys.argv[11] else None
 
 # Incremental scope is enforced here deterministically: even if the model
 # ignores the prompt's changed-file restriction, out-of-scope findings never
@@ -1850,8 +1950,39 @@ allowed_exact_fields = {"finding_id", "owasp_or_stride_category", "severity", "f
 allowed_contains_fields = {"exploit_scenario", "recommendation"}
 
 
+# The error text normalize_finding returns for a cited file that is not in the
+# audited checkout; the drop log below keys its reason token on it.
+MISSING_FILE_ERROR = "file does not exist in checkout"
+
+
 def fail(message: str) -> None:
 	raise SystemExit(message)
+
+
+def log_safe_token(value: object) -> str:
+	"""A model-supplied value made safe for one key=value log field."""
+	token = re.sub(r"[^A-Za-z0-9._:/@+-]", "_", "" if value is None else str(value))[:120]
+	return token or "?"
+
+
+def load_upstream_managed_digests(path: Path | None) -> dict[str, frozenset[str]]:
+	"""Read the upstream-managed path digests; any problem means no filtering."""
+	if path is None:
+		return {}
+	try:
+		data = json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+		return {}
+	if not isinstance(data, dict):
+		return {}
+	digests: dict[str, frozenset[str]] = {}
+	for managed_path, values in data.items():
+		if not isinstance(managed_path, str) or not isinstance(values, list):
+			continue
+		valid = frozenset(value for value in values if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value))
+		if valid:
+			digests[managed_path] = valid
+	return digests
 
 
 def load_json(path: Path, *, label: str):
@@ -1966,7 +2097,7 @@ def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, st
 	except ValueError:
 		return None, f"{finding_id}: file escapes repository root"
 	if not resolved_path.is_file():
-		return None, f"{finding_id}: file does not exist in checkout"
+		return None, f"{finding_id}: {MISSING_FILE_ERROR}"
 
 	try:
 		line_count = len(resolved_path.read_text(encoding="utf-8", errors="replace").splitlines())
@@ -2011,6 +2142,58 @@ def matching_exclusion_rule(finding: dict[str, object], rules: list[dict[str, ob
 		if matched:
 			return str(rule["id"])
 	return None
+
+
+upstream_managed_digests = load_upstream_managed_digests(upstream_managed_digests_path)
+
+# Pinned release SHAs in a rendered wrapper (scripts/workflow_wrapper_refs.py):
+# reusable-workflow `uses:` refs and support-checkout `ref:` lines. A consumer
+# wrapper is also compared with its pins replaced by the 40-zero SHA that
+# build_sync_manifest.py managed-digests renders a second digest with, so an
+# unmodified wrapper from an older release whose body matches the current
+# template is still recognised as upstream-owned.
+WRAPPER_PIN_PATTERNS = (
+	re.compile(rb"(shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml@)[0-9a-f]{40}( # stable)"),
+	re.compile(rb"(ref: )[0-9a-f]{40}( # stable)"),
+)
+PIN_NORMALIZED_SHA = b"0" * 40
+
+
+def normalize_wrapper_pins(data: bytes) -> bytes:
+	for pattern in WRAPPER_PIN_PATTERNS:
+		data = pattern.sub(lambda match: match.group(1) + PIN_NORMALIZED_SHA + match.group(2), data)
+	return data
+
+
+def upstream_managed_status(file_path: str) -> str:
+	"""`unmanaged`, `unmodified` (the release's own bytes) or `modified`.
+
+	Only `unmodified` keeps a finding out of the consumer's queue: a consumer
+	change to a synced file is the consumer's own code until the next sync.
+	"""
+	expected = upstream_managed_digests.get(file_path)
+	if not expected:
+		return "unmanaged"
+	candidate = repo_root / file_path
+	try:
+		if candidate.is_symlink() or not candidate.is_file():
+			return "modified"
+		resolved = candidate.resolve()
+		resolved.relative_to(repo_root)
+		# repo_root is already resolved, so any symlinked parent directory
+		# makes the resolved path differ from the literal synced path.
+		if resolved != candidate:
+			return "modified"
+		data = resolved.read_bytes()
+	except (OSError, ValueError):
+		return "modified"
+	if hashlib.sha256(data).hexdigest() in expected:
+		return "unmodified"
+	if file_path.startswith(".github/workflows/"):
+		normalized = normalize_wrapper_pins(data)
+		if normalized != data and hashlib.sha256(normalized).hexdigest() in expected:
+			return "unmodified"
+	return "modified"
 
 
 raw_findings = load_json(codex_output_path, label="Codex output")
@@ -2066,16 +2249,32 @@ excluded_findings: list[dict[str, str]] = []
 low_confidence_findings: list[str] = []
 out_of_scope_findings: list[str] = []
 waived_findings: list[dict[str, str]] = []
+upstream_managed_findings: list[dict[str, object]] = []
 seen_ids: set[str] = set()
 
 for raw_finding in raw_findings:
 	normalized_finding, error_message = normalize_finding(raw_finding)
 	if normalized_finding is None:
 		invalid_findings.append({"error": error_message or "invalid finding"})
+		# A finding that cites a file the audited checkout does not have is
+		# dropped here (never filed, never a fix cycle); log it so the drop is
+		# searchable.
+		raw_view = raw_finding if isinstance(raw_finding, dict) else {}
+		dropped_reason = "file_missing" if (error_message or "").endswith(MISSING_FILE_ERROR) else "invalid"
+		print(
+			f"SECURITY_AUDIT_FINDING_DROPPED reason={dropped_reason}"
+			f" finding={log_safe_token(raw_view.get('finding_id'))}"
+			f" file={log_safe_token(raw_view.get('file'))}"
+			f" line={log_safe_token(raw_view.get('line'))}"
+		)
 		continue
 	finding_id = str(normalized_finding["finding_id"])
 	if finding_id in seen_ids:
 		invalid_findings.append({"error": f"{finding_id}: duplicate finding_id"})
+		print(
+			f"SECURITY_AUDIT_FINDING_DROPPED reason=duplicate_finding_id finding={log_safe_token(finding_id)}"
+			f" file={log_safe_token(normalized_finding['file'])} line={normalized_finding['line']}"
+		)
 		continue
 	seen_ids.add(finding_id)
 	if audit_scope_mode == "incremental" and str(normalized_finding["file"]) not in changed_files:
@@ -2091,6 +2290,35 @@ for raw_finding in raw_findings:
 	waived_id = matching_waiver(normalized_finding)
 	if waived_id is not None:
 		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
+		continue
+	managed_status = upstream_managed_status(str(normalized_finding["file"]))
+	if managed_status == "modified":
+		print(
+			f"SECURITY_AUDIT_UPSTREAM_MANAGED outcome=filed reason=consumer_modified finding={log_safe_token(finding_id)}"
+			f" file={log_safe_token(normalized_finding['file'])} line={normalized_finding['line']}"
+		)
+	if managed_status == "unmodified":
+		# The release's own bytes, owned by coding-workflows: the next sync
+		# overwrites any consumer fix and consumer pipelines may not edit the
+		# path, so a fix-up issue could never be resolved. Report it instead of
+		# filing it.
+		upstream_managed_findings.append(
+			{
+				"finding_id": finding_id,
+				"owasp_or_stride_category": normalized_finding["owasp_or_stride_category"],
+				"severity": normalized_finding["severity"],
+				"confidence": normalized_finding["confidence"],
+				"file": normalized_finding["file"],
+				"line": normalized_finding["line"],
+				"exploit_scenario": str(normalized_finding["exploit_scenario"])[:600],
+				"recommendation": str(normalized_finding["recommendation"])[:600],
+			}
+		)
+		print(
+			f"SECURITY_AUDIT_UPSTREAM_MANAGED outcome=suppressed finding={log_safe_token(finding_id)}"
+			f" file={log_safe_token(normalized_finding['file'])} line={normalized_finding['line']}"
+			f" severity={normalized_finding['severity']} confidence={normalized_finding['confidence']}"
+		)
 		continue
 	kept_findings.append(normalized_finding)
 
@@ -2117,6 +2345,8 @@ summary_path.write_text(
 			"suppressed_invalid": len(invalid_findings),
 			"suppressed_out_of_scope": len(out_of_scope_findings),
 			"suppressed_waived": len(waived_findings),
+			"suppressed_upstream_managed": len(upstream_managed_findings),
+			"upstream_managed": upstream_managed_findings,
 			"low_confidence_finding_ids": low_confidence_findings,
 			"excluded": excluded_findings,
 			"invalid": invalid_findings,
@@ -2776,6 +3006,14 @@ payload["coverage"] = {
 	"unscoped_oversized_skipped_count": oversized_manifest["unscoped_oversized_count"],
 	"unscoped_text_capped_count": oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"]),
 }
+# Additive: present only when findings on upstream-managed paths were kept out
+# of the result (a consumer cannot fix them; see the filter above).
+upstream_managed = summary.get("upstream_managed")
+if isinstance(upstream_managed, list) and upstream_managed:
+	payload["upstream_managed"] = {
+		"suppressed": len(upstream_managed),
+		"findings": upstream_managed[:50],
+	}
 # Additive (plan item 4b): present only when line ownership annotated the
 # findings; SECURITY_AUDIT_LINE_OWNERSHIP=off leaves the payload unchanged.
 if line_ownership_summary_path is not None and line_ownership_summary_path.is_file():
@@ -2977,6 +3215,7 @@ comment_lines = [
 	f"- Suppressed excluded findings: {int(summary.get('suppressed_excluded', 0))}",
 	f"- Suppressed invalid findings: {int(summary.get('suppressed_invalid', 0))}",
 	f"- Suppressed out-of-scope findings: {int(summary.get('suppressed_out_of_scope', 0))}",
+	*([f"- Suppressed upstream-managed findings (reported below, not filed; fix them in coding-workflows): {int(summary.get('suppressed_upstream_managed', 0))}"] if summary.get("suppressed_upstream_managed") else []),
 	f"- New follow-up issues planned this run: {len(planned_followups)}",
 	f"- Findings skipped because a marked follow-up issue already exists: {skipped_existing_count}",
 ]
@@ -2992,8 +3231,33 @@ if findings:
 				f"   - Recommendation: {finding['recommendation']}",
 			]
 		)
+elif summary.get("upstream_managed"):
+	comment_lines.extend(["", "No findings to file after exclusions; upstream-managed findings are listed below."])
 else:
 	comment_lines.extend(["", "No findings met the confidence gate after exclusions."])
+
+upstream_managed_report = summary.get("upstream_managed")
+if isinstance(upstream_managed_report, list) and upstream_managed_report:
+	comment_lines.extend(
+		[
+			"",
+			"### Upstream-managed findings (not filed)",
+			"",
+			"These cite files that coding-workflows syncs into this repository. A fix here is overwritten by the next sync, so no follow-up issue was filed; the defect belongs upstream.",
+			"",
+		]
+	)
+	for idx, finding in enumerate(upstream_managed_report, 1):
+		if not isinstance(finding, dict):
+			continue
+		comment_lines.extend(
+			[
+				f"{idx}. **[{finding.get('severity')} | {finding.get('confidence')}/10]** `{finding.get('file')}:{finding.get('line')}` — `{finding.get('owasp_or_stride_category')}`",
+				f"   - Finding ID: `{finding.get('finding_id')}`",
+				f"   - Exploit scenario: {finding.get('exploit_scenario')}",
+				f"   - Recommendation: {finding.get('recommendation')}",
+			]
+		)
 
 tracker_comment_path.write_text("\n".join(comment_lines) + "\n", encoding="utf-8")
 
