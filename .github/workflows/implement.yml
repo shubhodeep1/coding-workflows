@@ -2688,7 +2688,9 @@ jobs:
           also shows its newer commits reversed. Those are not your
           deletions, and the sandbox has no history that separates them
           (`git merge-base HEAD isolated-base` is `isolated-base` itself).
-          `git diff HEAD` shows only the edits you made in this run.
+          `git diff HEAD` shows the edits from this run that you have not
+          committed yet; commits you make come after the `isolated snapshot`
+          commit in `git log isolated-base..HEAD`.
 
           agents.md discipline: never add text to `agents.md` (or `AGENTS.md`)
           directly, even when the plan says "document in agents.md";

@@ -853,4 +853,5 @@ def test_isolated_runner_and_implement_step_pass_the_default_branch_base():
 	inline = implement[implement.index('mode-implement-inline.txt"\n'):]
 	inline = inline[: inline.index("\n          EOF\n")]
 	assert "git show isolated-base:<path>" in inline
-	assert "`git diff HEAD` shows only the edits you made in this run." in inline
+	assert "`git diff HEAD` shows the edits from this run that you have not" in inline
+	assert "`git log isolated-base..HEAD`." in inline
