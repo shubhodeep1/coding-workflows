@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:6542-6546 | severity=high | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The heal-report check at line 6542 and the REPORT_WRAPPER_SHA assignment at line 6546 run `git -C .codex-workflow-src rev-parse HEAD` without the `env -u GIT_DIR -u GIT_WORK_TREE` prefix added at line 1166.\n  WHY: qwen rated this MAJOR and said that with GIT_DIR set the check returns the workspace HEAD instead of the support checkout HEAD. Severity disagreement: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash found it is not a runtime failure today, because line 6542 is in the separate heal-report job where GIT_DIR is not exported. Highest severity is kept.\n- .github/workflows/implement.yml:511-1166 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The `env -u GIT_DIR -u GIT_WORK_TREE` hardening is applied only to the line 1166 pinned-HEAD check, while the identical checks at lines 511 and 6542 keep the bare form.\n  WHY: gemini rated this MAJOR (a future step reorder could make a bare check read the workspace HEAD). z-ai_glm-5_3-flash rated it NIT because no reachable failure exists today. Highest severity is kept.\n- tests/test_workflow_support_ref_follows_pin.py:131-157 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: `test_pinned_support_checkout_head_is_verified` never sets GIT_DIR or GIT_WORK_TREE, and the line 256 substring assertion matches both the bare and prefixed forms, so dropping the `env -u` prefix would not fail CI.\n  WHY: The reorder-safety guard is untested. Reviewers rated it NIT or a hardening suggestion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:1166 | severity=MAJOR | confidence=4\n  PROBLEM: The added hardening `env -u GIT_DIR -u GIT_WORK_TREE` is applied inconsistently to only one `git -C .codex-workflow-src rev-parse HEAD` check, while other identical checks across workflows lack this prefix.\n  WHY: If the job steps are reordered in the future, a bare git command might run after the `GITHUB_ENV` export, causing it to operate on the workspace repository instead of the pinned checkout, potentially executing unpinned or stale code.\n- tests/test_workflow_support_ref_follows_pin.py:141 | severity=NIT | confidence=3\n  PROBLEM: The test `test_pinned_support_checkout_head_is_verified` does not verify the effectiveness of the `env -u` prefix against manipulated environment variables.\n  WHY: The test passes regardless of whether the `env -u` hardening is implemented correctly, leaving this security critical path untested.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/implement.yml:6542, 6546 | severity=MAJOR | confidence=4\n  PROBLEM: The heal-report check at line 6542 and the REPORT_WRAPPER_SHA assignment at line 6546 run `git -C .codex-workflow-src rev-parse HEAD` without the `env -u GIT_DIR -u GIT_WORK_TREE` prefix that was added to line 1166. These checks run after \"Activate workspace shell context\" (line 1684), which exports GIT_DIR and GIT_WORK_TREE into $GITHUB_ENV.\n  WHY: When GIT_DIR is set, `git -C .codex-workflow-src rev-parse HEAD` returns the workspace HEAD instead of the support checkout HEAD. The pin verification at line 6542 could pass when it should fail, or fail when it should pass. Line 6546 would record the wrong SHA in REPORT_WRAPPER_SHA.\n- tests/test_workflow_support_ref_follows_pin.py:138-144 | severity=hardening suggestion (HARDENING_RISK_SCORE: 2)\n  PROBLEM: The test subprocess env does not include GIT_DIR or GIT_WORK_TREE, so it cannot detect whether the `env -u` prefix is present or missing in the step scripts.\n  WHY: Suggested fix: add a test case that sets GIT_DIR to a different repository path and verifies the step still validates the support checkout HEAD (about 8 lines).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_support_ref_follows_pin.py:131-157 (assertion at line 256) | severity=NIT | confidence=4\n  PROBLEM: The regression guard for the new `env -u GIT_DIR -u GIT_WORK_TREE` prefix at implement.yml:1166 is ineffective. `test_pinned_support_checkout_head_is_verified` never sets GIT_DIR or GIT_WORK_TREE in the subprocess env, and the substring assertion at line 256 matches both the bare and prefixed forms.\n  WHY: No CI failure occurs today. If steps are reordered, a dropped prefix would let the check compare the workspace HEAD against the pin and accept an unpinned support checkout.\n- .github/workflows/implement.yml:511, 6542 | severity=NIT | confidence=3\n  PROBLEM: The last run hardened only one of the three in-file pinned-HEAD checks with `env -u GIT_DIR -u GIT_WORK_TREE` (line 1166), while lines 511 (duplicate-PR notice) and 6542 (heal-report job) keep the bare form.\n  WHY: None today. Line 511 runs before the GIT_DIR export at line 1684, and line 6542 is in a separate job that never exports GIT_DIR. This is a consistency and hardening gap only.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "769d348d9aa0ef64a36c92cda6fa62f98a3aa699b06d192a56ef48357da1858e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7538,
+    "run_id": "39007099704",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39007099704",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017060205_a48b49807c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7538,
+    "run_id": "39007099704"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T06:02:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
