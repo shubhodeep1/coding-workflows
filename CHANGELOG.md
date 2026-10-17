@@ -1367,6 +1367,24 @@ What this means for operators: expect `ai:workflow-heal` issues for pipeline fai
 
 - **`gh_retry` no longer retries bad requests and authentication failures.** `gh_retry` and `gh_retry_to_file` in `scripts/gh_helpers.sh` now stop after one attempt when `gh` reports HTTP 400, HTTP 401, `Bad credentials` or `Requires authentication`, instead of spending the full attempt budget (5 by default, with backoff). Generic HTTP 403 is deliberately still retried: secondary rate limits and content-creation throttles also answer 403, and these loops check permanent failures before rate limits. Refs #7355.
 
+- **Workflow log analysis now names failed jobs that never ran a step.** The collector reports `step_name: "pre_runner_failure"` for a failed job whose step list is empty or whose steps were all skipped or never concluded, instead of no step.
+
+Such a job failed while queued or before a runner picked it up. Before this, run 35452034565 failed in `review / codex-agent` after 128 minutes and looked the same as an unknown failure. Run summaries now show `pre_runner_failure` instead of `unknown`. A failed job with a finished step (for example a successful `Set up job`) still reports no step, rows already in the analysis cache are not rewritten, and no GitHub API calls are added.
+
+- **A stall-killed review editor attempt now retries on the fallback model.** When the stall guard kills an editor attempt, the next attempt runs on `MODEL_EDITOR_FALLBACK` instead of the same primary model, and later attempts stay on it.
+
+Before this, the editor switched to the fallback only on its final attempt. Runs 35456293637 and 35473950832 each lost two stall-killed attempts on the primary model, roughly 10 to 25 minutes, before the fallback succeeded on attempt 3. The log now says `Editor attempt N: previous attempt was stall-killed; switching model to fallback <model>.` when it switches.
+
+The switch happens only when `MODEL_EDITOR_FALLBACK` is set and differs from `MODEL_EDITOR`, and only on the OpenCode engine: on the Claude engine the sandbox picks its own model, so nothing changes there. Failures that are not stall kills still retry the primary model, and the final-attempt fallback is unchanged.
+
+What this means for operators: a stalled editor recovers on the next attempt instead of the last one. `EDITOR_STALL_FALLBACK_ENABLED=false` in the editor step's environment turns this off; unset, empty or `true` keeps it on, and any other value turns it off with one warning. `review_autofix.yml` does not yet pass a repository variable of that name through, so setting it as a repository variable has no effect; to turn the fallback off from repository settings today, set `WORKFLOW_EDITOR_FALLBACK_MODEL` to the primary editor model, which also turns off the final-attempt fallback.
+
+- **A job stops waiting on an unreachable memory store after the first failure.** `scripts/ledger_emit_substate.sh` now opens a job-scoped circuit breaker when a `record-run-event` call times out or fails authentication, and later substate emissions in the same job return at once instead of each waiting up to 120 seconds.
+
+Before this change every substate emission tried the memory store again, so one unreachable store or one bad credential cost the full `LEDGER_EMIT_TIMEOUT_SECONDS` bound on every call; eight slow reviews logged 610 such timeouts. The helper now writes a sentinel file `circuit_open` in its per-job marker directory when a call times out, or when the failure text names an authentication error (`Authentication failed`, `could not read Username`, `Bad credentials`, `HTTP 401`, `HTTP 403`, `returned error: 403`, `Permission to ... denied`) and does not name a rate limit or abuse response. It prints one `::warning::ledger_emit_substate circuit opened (reason=timeout|auth); later substates in this job are skipped` line, and later calls in the job skip silently. Other failures keep today's per-call warning and leave the circuit closed. Skipped events are dropped, as timed-out events were before, and the helper still exits 0 on every telemetry failure.
+
+What this means for operators: after the circuit-opened warning, the rest of that job's run-substate events are missing from the ledger; a new job or a re-run starts with the circuit closed. Setting `LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED=false` in the environment of the step that runs the helper turns the breaker off; any value other than unset, empty, `true` or `false` also turns it off, with a warning. No workflow passes this variable from repository variables yet, so setting a repository variable of that name has no effect.
+
 ### For contributors
 
 `ai_engine_stage_support <source_root> <dest_root>` copies the fixed list of engine support files, and refuses missing files and symlinks. Callers source `ai_engine.sh` only from that root. `discover_manifest_via_codex` takes an optional `engine_resolver`. Refs #6664. Tests: `tests/test_claude_engine_utility_roles.py`, `tests/test_ai_engine.py`, `tests/test_claude_engine.py`.
@@ -2758,6 +2776,45 @@ Until now plan's "Resolve integration ref" step failed on every CI-triage routin
 | Closed without merging, or anything the check cannot verify | Skips planning with `PLAN_SUPERSEDED_MERGED_PR ... outcome=skip reason=pr_not_open_unresolved detail=<reason>` and one WARNING |
 
 What this means for operators: a triage issue whose pull request is gone is never planned against the wrong branch, and it no longer produces a failed run on every retry. A pull request that closed without merging still needs a person to close the issue. Every other routing refusal, and a rate-limited resolver while routing is on, still fails the step. With `CHECK_TRIAGE_BRANCH_GUARD_ENABLED=true` the check-triage branch guard still blocks these issues, because the step records `resolver_status=failed`.
+
+- **A failed project security pass now says why.** When the findings-JSON security audit exits with an error, the poller logs its stderr and names the failure on the project.
+
+Before this, `SECURITY_PASS_FAILED reason=engine_unavailable` was the only trace: the audit wrote its error to a file under the runner's temp directory that the job log never showed. tele-funtoken-msg-scoring#3928 failed this way on every poll, 0.2 seconds after the audit prompt was built, with no cause anywhere. The poller now logs `SECURITY_PASS_AUDIT_STDERR tracking_issue=<n> rc=<status> lines=<count>` followed by the last 40 stderr lines. The project's "security pass unavailable" comment and completion status give the exit status and the audit's last `phase` and `error`, or point to the job log when the audit failed before reporting one.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Stderr lines logged | last 40, each cut to 400 characters |
+| Text added to the project comment | at most 300 characters, from the audit's already-redacted failure line |
+
+What this means for operators: a project stuck in `ai:security-pass` with `engine_unavailable` now shows its cause in the next poll's log and on the tracking issue, so it can be fixed instead of retrying unchanged.
+
+### For contributors
+
+The raw stderr tail goes only to the job log, where Actions masks registered secrets, and every line is printable-only with `##[` escaped so it cannot act as a workflow command. The project comment quotes only the `phase` and `error` values of the last `security-audit: phase=... error=...` line, which `security_audit.sh` already passes through `security_audit_sanitize_log_value`.
+
+- **An orchestrator-managed issue that copies a CI-triage header now finds its project's branch.** Before this, the integration-ref resolver stopped such an issue with `label_missing` and the phase failed.
+
+An `ai:orchestrator-managed` issue whose body carries a copied `check-failure-triage:` header, but no `ai:check-triage` label, is not a triage issue to route to a PR head. When its body also has a `Tracking issue: #N` line, `scripts/resolve_integration_ref.sh` now skips the CI-triage routing and resolves the integration branch declared on that tracking issue, like any other managed issue. #7511 was stuck this way (heal #7512).
+
+What this means for operators: nothing to set. A managed issue without a tracking line, and any unlabelled non-managed issue with a triage header, is still refused with `label_missing`. Labelled `ai:check-triage` issues are routed exactly as before.
+
+- **A productive autofix push now starts one review run, not two.** After the review editor pushes an `[ai-autofix]` commit, the run that pushed it checks whether the push's own synchronize review run is already queued or running before it dispatches a continuation run.
+
+Before this, the continuation dispatch always skipped that check, on the assumption that the gate skips the synchronize run. The gate does that only when `AUTOFIX_SKIP_SELF_TRIGGERED=true`, and the default is `false`, so most pushes queued two review runs in the same `pr-autofix-<PR>` concurrency group. One of them was redundant and waited 31 to 159 minutes (for example cancelled run 35466085922 next to successful run 35466097830). The continuation now logs `AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight ... continuation=true` and leaves the next iteration to the synchronize run when it sees one. When it sees none, or the check fails, it dispatches as before.
+
+What this means for operators: under the default settings each productive autofix push gets one review run. With `AUTOFIX_SKIP_SELF_TRIGGERED=true` nothing changes: the continuation still bypasses the check and logs `AUTOFIX_PEER_CHECK_BYPASSED reason=continuation_dispatch`.
+
+- **A branch review without a pull request no longer diffs against `main` by mistake.** When `review_autofix.yml` runs with `force_claude_branch_review` and no `base_ref_override`, `scripts/review_collect_pr_metadata.sh` now reads the repository's default branch with retries and stops with an error if it cannot.
+
+Before this change the helper read the default branch once and fell back to `main` when the read failed, without a warning. A transient API failure, or a repository whose default branch is not `main`, made the review compare the branch against the wrong base. The read now goes through the helper's retrying `gh_retry` wrapper, the branch name is checked with `git check-ref-format`, and a failed or invalid read ends the job with `::error::No-PR claude-branch-review path: could not resolve the repository default branch; pass base_ref_override or retry.` A caller-supplied `base_ref_override` still takes precedence, and reviews of pull requests are unchanged.
+
+What this means for operators: if this error appears, re-run the review or pass `base_ref_override` with the branch to compare against.
+
+- **A short GitHub API error no longer drops the log-analysis failure label.** The three failure handlers in `workflow-log-analysis.yml` (the analysis, deep-audit and API-redundancy passes) now send the `ai:log-analysis-failed` label create and add-label through `gh_retry`. They fall back to a single call when `scripts/gh_helpers.sh` did not load.
+
+The label create is tried once first. When the label already exists it stops there, because `gh_retry` would otherwise retry gh's "already exists" error up to 5 times. Other create errors go through `gh_retry`. The per-run `AI_PHASE_FAILURE_V1` comment is still posted with a single attempt, because retrying a comment create could post it twice.
+
+What this means for operators: a failed log-analysis pass now carries the `ai:log-analysis-failed` label even when one GitHub API call fails along the way. An existing label still costs one API call.
 
 ### For contributors
 

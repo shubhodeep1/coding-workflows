@@ -3037,6 +3037,31 @@ committing the corresponding file:
   and `ai-memory/schemas/state_snapshot.v1.json` is the authoritative schema
   for that payload.
 
+- Job-scoped circuit breaker in `scripts/ledger_emit_substate.sh`
+  (`LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED`, defaulted in the helper: unset,
+  empty or `true` in any letter case is on, `false` is off, and any other
+  value is off with a `::warning::` that does not print the value). The
+  sentinel is the empty file `${marker_dir}/circuit_open`, in the same
+  per-job marker directory as the dedupe locks (`<seen file>.d`, scoped by
+  run id, run attempt and job, or by `LEDGER_SUBSTATES_SEEN_FILE`), so a
+  re-run attempt starts closed. An `emit_failed:timeout:*` result, or an
+  `emit_failed` detail matching (case-insensitive) `authentication failed`,
+  `could not read username`, `bad credentials`, `http 401`, `http 403`,
+  `returned error: 403` or `permission to .* denied`, creates the sentinel
+  with noclobber (an auth match whose detail also names `rate limit` or
+  `abuse` is a transient 403 and leaves the circuit closed); only the caller
+  that created it prints
+  `::warning::ledger_emit_substate circuit opened (reason=timeout|auth); later substates in this job are skipped`.
+  While the sentinel exists and the switch is on, the helper exits 0 before
+  building metadata or calling `record-run-event`, with no output; those
+  events are dropped. Other `emit_failed` results keep the per-call warning
+  and leave the circuit closed. Output tokens, `LEDGER_SUBSTATES_ENABLED`
+  and the timeout parsing are unchanged, and the helper still exits 0 on
+  every telemetry failure. The switch is read only from the helper's
+  environment: `implement.yml`, `review_autofix.yml` and `validate.yml` do
+  not pass it from `vars.*` (unlike `LEDGER_EMIT_TIMEOUT_SECONDS`), so a
+  repository variable alone does not turn the breaker off.
+
 ---
 
 ## Orchestrator tracking-issue comment markers
@@ -3744,6 +3769,7 @@ and shipped:
 - `PLAN_SPLIT_LINKED` (`.github/workflows/orchestrate.yml` "Create tracking issue": `source_issue=`, `tracking_issue=`)
 - `PLAN_SPLIT_RELEASED` (`.github/workflows/orchestrate.yml` "Release plan-split source issue": `source_issue=`)
 - `PLAN_SPLIT_SOURCE` (`scripts/orchestrate_poll_process.sh` `close_plan_split_source_if_needed`: `tracking_issue=`, `source_issue=`, `outcome=closed|already_closed|not_split|deferred`, `reason=source_lookup_failed|close_failed`)
+- `SECURITY_PASS_AUDIT_STDERR` (`scripts/orchestrate_poll_process.sh`: `tracking_issue=`, `rc=`, `lines=`; followed by the findings-JSON audit's last 40 stderr lines, each prefixed `| ` with `##[` escaped)
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -4077,6 +4103,7 @@ LOG_PREFIX.name=PLAN_SPLIT
 LOG_PREFIX.name=PLAN_SPLIT_LINKED
 LOG_PREFIX.name=PLAN_SPLIT_RELEASED
 LOG_PREFIX.name=PLAN_SPLIT_SOURCE
+LOG_PREFIX.name=SECURITY_PASS_AUDIT_STDERR
 
 ---
 
@@ -4274,6 +4301,8 @@ depend on it.
 - **Noop-suspicious force-merge trusts only pipeline evidence (#7126).** The poller's noop-suspicious sweep (`scripts/orchestrate_poll_process.sh`) skips fork PRs before any per-PR read. It uses `isCrossRepository` and `headRepositoryOwner`, which ride the existing `gh pr list` call, and re-checks `.head.repo.full_name` on the Gate A read; a missing field skips the PR. Noop warnings and the Gate B editor summary count only when `user.login` equals `unblock_trusted_login`, and an unresolved login skips the PR (no re-dispatch, no merge). A productive `[ai-autofix]` / `[judge-fix]` commit must have `NOOP_PRODUCTIVE_COMMIT_NAME` / `_EMAIL` (`codex-bot`, `codex@users.noreply.github.com`, the identity of every pipeline commit writer) as author or committer. Before the merge, one `repos/<repo>/activity?ref=refs/heads/<head>` read must show a push by that login covering such a commit: after the push's `before` in the PR commit list (or from the start when `before` is not in the list), up to and including its `after`. An unreadable listing re-checks next sweep without paging (`reason=activity_unreadable`); no covering push pages once (gate `C_pusher`; only one 100-record page is read, and a full page without a covering push names `reason=activity_page_full` in the alert). The snapshot `headRefOid` must equal the Gate A head, and the newest trusted noop warning's `review-autofix-failure:v1` marker must name that head (another head waits without paging; no marker pages once, gate `B_head`). Gate D now calls `_pr_wait_for_required_checks <pr> <head> <base> 0`, which evaluates once without sleeping and requires the named CI check (#6963); `orchestrate_poll.yml` does not forward `AUTO_MERGE_REQUIRED_CI_CHECK`, so in consumers no named check is required there. `timeout` (pending run, queued CI run, missing or pending named check) re-checks next sweep without paging. `query_failed` / `unresolved_head_sha`, and `ok` with an unreadable `actions/runs` listing (`PR_CHECKS_RUNS_READ=false`, `reason=ci_runs_unreadable`, checked before the empty-listing page), warn without paging. `ok` with no check-runs and any other outcome page once (`D_check`). The merge is `gh pr merge --squash --auto --match-head-commit <head>`. Every other poller merge site (`attempt_merge`, backward scan, ready-to-merge, the review-blocked `merge` / final `fix` / no-fix paths and the final integration merge) also passes `--match-head-commit` with the head its checks used, and skips the tick when that SHA is missing.
 - **Cancelled checks block; newest run per name (#7127).** `_pr_checks_completed` (`scripts/pr_checks_lib.sh`) accepts only `success`, `neutral` and `skipped`. A required check-run that ended `cancelled`, `timed_out`, `action_required`, `failure` or `startup_failure` blocks, and in `*` mode any such check-run blocks. A cancelled check-run blocks only while it is the newest check-run of its name (highest `id`, then latest `started_at`, decided before the unchanged `PR_CHECKS_SELF_RUN_ID` exclusion), so a re-run supersedes a cancelled attempt. For the configured CI check name (`AUTO_MERGE_REQUIRED_CI_CHECK`, `lint` here, also a job of `lint-pr-body-auto-close.yml` and `lint-plan-archival.yml`, which re-run on every PR body edit) only a newer run from the same Actions run (a re-run attempt) or, with `PR_CHECKS_CI_RUN_IDS` set, a newer bound CI run supersedes a cancelled one; the shared jq rules are `PR_CHECKS_JQ_SUPERSEDE_DEFS`. Every other check-run is still evaluated on its own: a failed or running run blocks even when a newer same-name run exists, because a check-run carries no workflow identity and this repo has three jobs named `lint`. `PR_CHECKS_LAST_PENDING` counts every running check-run, so a cancelled required check is a settled failure (`blocking`, pending 0) that `_pr_wait_for_required_checks` refuses at once when no other check-run is still running (pending runs, advisory ones included, keep the wait polling). The CI side channel (`PR_CHECKS_LAST_CI_STATE`) drops a cancelled run superseded by a newer run only when the runs are bound to CI run ids (`PR_CHECKS_CI_RUN_IDS`); name-only matching keeps every run. `PR_CHECKS_LAST_TOTAL` keeps the raw non-self count. `_summarize_final_merge_blockers` in `scripts/orchestrate_poll_process.sh` applies the same rules. The noop-suspicious force-merge Gate D there calls `_pr_checks_completed "${N_PR}" "${N_HEAD_SHA}" "${N_BASE_REF}"`, taking the base ref from the Gate A PR read (fallback: the `STANDALONE_PRS` cache), and blocks with `reason=helper_unavailable` when the library is not loaded. Gate D pages through `_noop_gate_failure_alert` (gates `D_helper` and `D_check`, once per PR head); while a check-run is still running, or when the check-runs read failed (`query_failed`, `unresolved_head_sha`), it skips the PR without paging and re-checks on the next sweep. This keeps the library the single source of truth for the gate.
 - `scripts/review_untrusted_workspace.py` reads each file up to 8 MiB (`MAX_FILE`; it was 2 MiB). `snapshot` fails closed on a larger tracked file, except when `REVIEW_SNAPSHOT_SKIP_OVERSIZED=1` is set (default `0`). Only `scripts/review_untrusted_sandbox.sh` sets it, for the review editor snapshot. There the file is left out of the snapshot and the baseline, and the step logs `REVIEW_ISOLATION_SNAPSHOT oversized_skipped=<n> max_file_bytes=<bytes>` with a count and no paths. The editor never sees the file, and `transfer` refuses a result that recreates it (`reason=result_conflicts_host`, or `reason=unsafe_file` when the recreated file is itself over 8 MiB, because the result read rejects it first). The heal editor (`heal_isolated_implement.sh`) and the pre-push test gate (`prepush_test_gate_run.sh`) never set the flag, so a missing file cannot turn into a false test failure there. A `snapshot` rejection now names `reason=unsafe_file` or `reason=file_changed` instead of `reason=unknown`.
+- **Continuation dispatch peer check.** `scripts/review_autofix_step_post_commit_retrigger.sh` bypasses `autofix_retrigger_has_inflight_peer` for a continuation dispatch (productive `[ai-autofix]` push, `AUTOFIX_CONTINUATION_ENABLED` not `false`) only when `AUTOFIX_SKIP_SELF_TRIGGERED` is exactly `true`, the same comparison the gate uses to skip the push's own synchronize run (`AUTOFIX_PEER_CHECK_BYPASSED reason=continuation_dispatch`). Otherwise that synchronize run is a real review run in the same `pr-autofix-<PR>` group, so the continuation runs the peer check and, when it finds a peer, logs `AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight ... source=post_commit_retrigger continuation=true` and dispatches nothing. No peer, a failed probe or a missing helper still dispatches (fail open). The non-continuation path and the default-branch dispatch chain (#4898) are unchanged.
+- **Editor stall fallback.** In the editor retry loop of `scripts/review_apply_fixes.sh`, an attempt the stall guard killed (`stall_state=killed`) sets `editor_prev_attempt_stall_killed`, and the next attempt runs on `MODEL_EDITOR_FALLBACK` instead of `MODEL_EDITOR` (`editor_stall_fallback_applies`). It switches only when `MODEL_EDITOR_FALLBACK` is set and differs from `MODEL_EDITOR`, `${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}` is not `claude` (the Claude sandbox ignores the OpenRouter slug), and `EDITOR_STALL_FALLBACK_ENABLED` is on: unset, empty or `true` (any letter case) is on, `false` is off, and any other value is off with one `::warning::`, read once inside the script from the step environment with no `:?` guard. `review_autofix.yml` does not map a `vars.EDITOR_STALL_FALLBACK_ENABLED` repository variable into the step, so a repository variable alone does not reach the script. Once switched, the remaining attempts stay on the fallback. It logs the plain line `Editor attempt N: previous attempt was stall-killed; switching model to fallback <model>.` with no new prefix. The final-attempt capacity fallback, retries after failures that are not stall kills, and the exit 78, 79 and 80 branches are unchanged. `tests/test_editor_capacity_fallback_contract.py` pins the condition and checks the selection behaviour.
 
 ## Integration-sync verifier + bootstrap contract
 
