@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says values of `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS` above 3600 are clamped to 3600.\n  expected_change_site: PR description text (code is `SELF_TEST_TIMEOUT_MAX_SECS = 1800` in scripts/validation_refresh_runner.py, `_self_test_timeout_secs`). Severity disagreement: google_gemini-3_1-flash-lite rated MAJOR; anthropic_claude-sonnet-5_5, minimax_minimax-m3 and openai_gpt-6-luna rated NIT.\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: scripts/validation_refresh_runner.py:67 `SELF_TEST_TIMEOUT_MAX_SECS = 1800`, README.md:3999, .github/workflows/validation-refresh.yml:177, agents.d/7556-validation-refresh-diagnostics.md, changelog.d/7556-validation-refresh-diagnostics.md all say 1800. Only the PR description, which lives on GitHub, still says 3600.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: The PR description says values of `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS` above 3600 are clamped to 3600.\nExpected change site: PR description text. The code is `SELF_TEST_TIMEOUT_MAX_SECS` in scripts/validation_refresh_runner.py.\nEvidence of absence: The code, README, workflow comment, changelog fragment and agents fragment all say the clamp is 1800. Only the PR description is stale.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nTASK_GAP:\nRequirement: The PR description says values above 3600 seconds for VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS are clamped to 3600.\nExpected change site: scripts/validation_refresh_runner.py (SELF_TEST_TIMEOUT_MAX_SECS = 1800) and the PR description.\nEvidence of absence: _self_test_timeout_secs caps the value at SELF_TEST_TIMEOUT_MAX_SECS = 1800; the README, workflow comment, and changelog also specify 1800. Values from 1801 through 3600 therefore run with a 1800-second cap, contrary to the PR description.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: The PR description states values above `3600` are clamped to `3600` for `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS`, but the code clamps to 1800.\nExpected change site: PR description body (not a repository file)\nEvidence of absence: All in-repo files (scripts/validation_refresh_runner.py:67 `SELF_TEST_TIMEOUT_MAX_SECS = 1800`, README.md:3999, .github/workflows/validation-refresh.yml:177, agents.d/7556-validation-refresh-diagnostics.md, changelog.d/7556-validation-refresh-diagnostics.md) consistently state the 1800 clamp. The PR description is the only stale reference.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\nRequirement: The PR description says values above 3600 seconds for `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS` are clamped to 3600.\nExpected change site: PR description, consistent with `scripts/validation_refresh_runner.py` (`_self_test_timeout_secs`).\nEvidence of absence: The implementation clamps at `SELF_TEST_TIMEOUT_MAX_SECS = 1800`, and the README, workflow comment, and changelog also specify 1800. The PR description still specifies 3600.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nHARDENING_SUGGESTIONS:\n- file: tests/test_validation_refresh_runner.py\n- location: test_process_repository_drift_with_tracked_assets_has_no_not_committed_diagnostic\n- issue: The `timeout=30` contract added to `_validation_assets_tracked` (scripts/validation_refresh_runner.py:611) is not pinned by any test.\n- suggested minimal fix: Assert the recorded timeout for the `git ls-files --` command equals 30.\n- estimated lines changed: 3\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "165c460e57e09636e1972061d42fb20c077f1c8809825abe6cb2c3273cd9ef10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7556,
+    "run_id": "39029658382",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39029658382",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017120038_97b20bde82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7556,
+    "run_id": "39029658382"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T12:00:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
