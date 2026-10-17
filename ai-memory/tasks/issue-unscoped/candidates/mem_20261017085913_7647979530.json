@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/codex_isolated_workspace.py:978-986 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If `git fetch` succeeds but `refs/codex-isolated/base` is not created, `base_commit` stays empty while `base_state` is \"unresolved\", and the code still tries to build the base tree from it in `seed_git_tree_entries`.\n  WHY: This can raise `subprocess.CalledProcessError` and fail the whole sandbox creation instead of falling back to seeding only HEAD. The reviewer rated it MAJOR. Another reviewer (qwen_qwen3_7-plus) judged this scenario unrealistic, but did not report it as a finding.\n- .github/workflows/implement.yml:3138-3140 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When `git fetch` fails, the workflow logs a warning but does not remove a stale `refs/codex-isolated/base` left from a previous run on the same runner.\n  WHY: An outdated `isolated-base` branch could be used if the fetch fails but git keeps the old refs. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: If the fetch fails, the run logs a warning and continues without that branch.\n  expected_change_site: .github/workflows/implement.yml (the `else` block for fetch failure)\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The workflow logs the warning and sets `CODEX_ISOLATED_GIT_BASE_REF=\"\"`, but does not explicitly handle or document that the `isolated-base` branch will be missing in the sandbox.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/codex_isolated_workspace.py:978-986 | severity=MAJOR | confidence=4\n  PROBLEM: If `git fetch` succeeds but the `refs/codex-isolated/base` ref is not created, `base_commit` remains empty while `base_state` is \"unresolved\".\n  WHY: The code then builds the base tree from the empty `base_commit` inside `seed_git_tree_entries`, which can raise `subprocess.CalledProcessError` and fail sandbox creation instead of falling back to seeding only HEAD.\n- .github/workflows/implement.yml:3138-3140 | severity=NIT | confidence=3\n  PROBLEM: If `git fetch` fails, the workflow logs a warning but does not remove a stale `refs/codex-isolated/base`.\n  WHY: An outdated `isolated-base` branch could be used if the fetch fails but git retains old refs in the clone.\n- TASK_GAP: Requirement: If the fetch fails, the run logs a warning and continues without that branch.\n  Expected change site: .github/workflows/implement.yml (the `else` block for fetch failure)\n  Evidence of absence: The workflow logs the warning and sets `CODEX_ISOLATED_GIT_BASE_REF=\"\"`, but does not explicitly handle or document that the `isolated-base` branch will be missing in the sandbox.\n  severity=NIT | confidence=3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0ebc88042313ce897c1fd6a6ea2c948e88fcb859012fc5dd95e2b0518fdbf626",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7548,
+    "run_id": "39018070458",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39018070458",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017085913_7647979530",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7548,
+    "run_id": "39018070458"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-17T08:59:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
