@@ -149,7 +149,18 @@ _GH_EXPANDED_SUBCOMMAND_RE = re.compile(r"(?<![\w.-])gh\s+[^\s;&|]*[$`]")
 # Bash could expand it into `gh` (issue #7555).
 # Each match is one shell word (backtick and `$(...)` groups kept whole) followed
 # by `api`; `_has_expanding_word_before_api` checks the word for `$` or a backtick.
-_WORD_BEFORE_API_RE = re.compile(r"((?:`[^`]*`|\$\([^)]*\)|[^\s;&|`()])+)[ \t]+api(?![\w-])")
+# The lookbehind starts each match at a word boundary, so a long token is scanned once.
+_WORD_BEFORE_API_RE = re.compile(r"(?<![^\s;&|`()])((?:`[^`]*`|\$\([^)]*\)|[^\s;&|`()])+)[ \t]+api(?![\w-])")
+# A `)` right before `api` in text with a `$(` substitution: a nested command word
+# such as `$(printf $(printf gh)) api`, which `_WORD_BEFORE_API_RE` cannot span
+# (issue #7555). Matching any `) api` after a `$(` only adds prompts.
+_SUBSTITUTION_CLOSE_BEFORE_API_RE = re.compile(r"\)[ \t]+api(?![\w-])")
+# `gh` glued to an expansion (`gh${IFS}api`, `gh$IFS'api'`): Bash can split the
+# word into `gh api` (issue #7555).
+_GH_GLUED_EXPANSION_RE = re.compile(r"(?<![\w.-])gh[$`]")
+# A brace expansion with a `gh` element (`{gh,api}`): Bash expands it into
+# separate words, so it can run `gh api` (issue #7555).
+_BRACE_WITH_GH_RE = re.compile(r"\{(?:[^{}\s]*,)?gh(?:,[^{}\s]*)?\}")
 # `gh` with a flag before the `api` subcommand (`gh -R other/repo api ...`,
 # `gh --hostname h api ...`): the flag could change where the call goes, so
 # the call prompts instead of being classified (issue #7555).
@@ -386,10 +397,11 @@ def _normalize_for_gh_api_scan(command: str) -> str:
 def _has_expanding_word_before_api(text: str) -> bool:
 	"""True when a word Bash expands (`$G`, `${G}`, `` `printf gh` ``, `$(printf gh)`)
 	stands before `api`, so Bash could run `gh api` from it (issue #7555)."""
-	for match in _WORD_BEFORE_API_RE.finditer(text.replace("\\\n", "")):
+	joined = text.replace("\\\n", "")
+	for match in _WORD_BEFORE_API_RE.finditer(joined):
 		if "$" in match.group(1) or "`" in match.group(1):
 			return True
-	return False
+	return "$(" in joined and bool(_SUBSTITUTION_CLOSE_BEFORE_API_RE.search(joined))
 
 
 def _may_invoke_gh_api(command: str) -> bool:
@@ -405,6 +417,8 @@ def _may_invoke_gh_api(command: str) -> bool:
 	if _has_expanding_word_before_api(joined) or _has_expanding_word_before_api(normalized):
 		return True
 	if _GH_FLAG_BEFORE_API_RE.search(joined) or _GH_FLAG_BEFORE_API_RE.search(normalized):
+		return True
+	if _GH_GLUED_EXPANSION_RE.search(normalized) or _BRACE_WITH_GH_RE.search(normalized):
 		return True
 	return bool(_GH_EXPANDED_SUBCOMMAND_RE.search(joined))
 
@@ -754,6 +768,11 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 			return True
 		# `$G api` / `` `printf gh` api ``: the command word itself expands.
 		if next_word == "api" and ("$" in command_word or "`" in command_word):
+			return True
+		# `gh${IFS}api`: an expansion glued to `gh` can split into `gh api`.
+		if ("$" in command_word or "`" in command_word) and _GH_GLUED_EXPANSION_RE.search(
+			_normalize_for_gh_api_scan(command_word)
+		):
 			return True
 		# `` `printf gh` 'api' ``: the tokenizer splits the backtick word, so find
 		# the token that closes it and check the word after it (issue #7555).

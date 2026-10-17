@@ -18,7 +18,7 @@ routine. The early filter (`_may_invoke_gh_api`) also matches quoted spellings
 (`'gh' api`, `gh a''pi`, `gh \<newline>api`), `gh <expansion>`, and a word with
 `$` or a backtick before `api` (`$G api`, `${G} api`, `` `printf gh` api ``,
 `$(printf gh) api`, also after quote removal, so `$G "api"` and `$G a''pi`
-count; `_has_expanding_word_before_api`), and `gh` followed by a flag and later
+count; `_has_expanding_word_before_api`, which also matches a `)` before `api` in text holding `$(`, so nested substitutions such as `$(printf $(printf gh)) api` count), `gh` glued to an expansion (`gh${IFS}api`, `_GH_GLUED_EXPANSION_RE`, also checked on the command word in `has_hidden_gh_api`), a brace expansion with a `gh` element (`{gh,api}`, `_BRACE_WITH_GH_RE`, which then asks as a shell-rewrite hazard), and `gh` followed by a flag and later
 `api` (`_GH_FLAG_BEFORE_API_RE`). `evaluate` asks when a `gh` token is followed
 by a flag and later an `api` token (`_gh_flag_before_api`, for example
 `gh -R other/repo api ...`), because the guard does not read gh's global flags.
