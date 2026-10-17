@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Changes in this repository cover cases such as missing metadata, runner failures, stalled work, and retry behavior. When planning workflow or script changes, identify failure boundaries and recovery behavior, and add targeted tests for those contracts.",
+  "fingerprint": "e964a0916a68bee522cc35b2ef6e444e2be620cd95a324ee5705fff96732ed3c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "38994942278",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38994942278",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7476",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7492",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7493",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7500",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7513",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7481",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7497",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7498",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7507",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7514"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261017023436_5684d80727",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow automation changes often address explicit failure and recovery paths, not just the success path.",
+  "timestamps": {
+    "created_at": "2026-10-17T02:34:36Z",
+    "promoted_at": "2026-10-17T02:36:28Z",
+    "superseded_at": null
+  }
+}
