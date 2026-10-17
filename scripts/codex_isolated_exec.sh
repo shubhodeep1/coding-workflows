@@ -65,6 +65,9 @@
 #       the sandbox image build only, waiting
 #       CODEX_ISOLATED_IMAGE_BUILD_RETRY_SLEEP_SECS (default 15) times the
 #       attempt number between tries; no other failure is retried.
+#       CODEX_ISOLATED_GIT_BASE_REF (default empty) names a ref or commit in
+#       the work directory's repository; the sandbox git then also has its
+#       filtered tree as branch `isolated-base`, the parent of HEAD.
 #   codex_isolated_exec.sh cleanup --root DIR
 #   codex_isolated_exec.sh image-context [--engine claude] --out DIR
 #       Write the generated image build context (the Dockerfile only) into
@@ -539,7 +542,10 @@ if [ "${mode}" = workspace ]; then
 else
 	workspace_py snapshot-readonly "${workdir}" "${root}/work" || fail "read-only snapshot failed"
 fi
-workspace_py seed-git "${workdir}" "${root}/work" || true
+# CODEX_ISOLATED_GIT_BASE_REF (default empty): a ref or commit in the host
+# checkout, normally the default branch the caller fetched. seed-git adds its
+# filtered tree as branch `isolated-base` (fun-token-multi-chain#639).
+workspace_py seed-git "${workdir}" "${root}/work" "${CODEX_ISOLATED_GIT_BASE_REF:-}" || true
 
 if [ "${engine}" = claude ]; then
 	install -m 0644 "${support_dir}/claude_anthropic_relay.py" "${root}/support/claude_anthropic_relay.py"

@@ -2759,6 +2759,9 @@ jobs:
           # their own, so this is what makes the documented override reach
           # the guard; the shell-side default remains as a fail-open.
           IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS: ${{ vars.IMPLEMENT_PROMPT_CODEX_STDIN_CAP_CHARS || '1048576' }}
+          # The default branch the sandbox git shows as `isolated-base`
+          # (fun-token-multi-chain#639).
+          IMPLEMENT_ISOLATED_BASE_BRANCH: ${{ github.event.repository.default_branch }}
           # Required by the Fix #5 diagnostics-posting branch. Without
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
@@ -2887,6 +2890,24 @@ jobs:
           codebase (function name mismatch, file path absent, API signature
           differs), proceed with the codebase truth and note the conflict in
           your output.
+
+          Default-branch reference: your git checkout has no remote and no
+          network, so `origin/...` refs do not exist. When `git branch --list
+          isolated-base` shows that branch, it is the repository's default
+          branch as it was when this run started, filtered like your checkout
+          (credential-like and oversized files are left out). Read what
+          production runs with `git show isolated-base:<path>`, `git diff
+          isolated-base -- <path>` or `git ls-tree -r --name-only
+          isolated-base`. A file missing there may only have been filtered
+          out. `isolated-base` is the default branch's current tip and the
+          direct parent of your HEAD commit, not the commit your branch was
+          cut from. If the default branch moved on, `git diff isolated-base`
+          also shows its newer commits reversed. Those are not your
+          deletions, and the sandbox has no history that separates them
+          (`git merge-base HEAD isolated-base` is `isolated-base` itself).
+          `git diff HEAD` shows the edits from this run that you have not
+          committed yet; commits you make come after the `isolated snapshot`
+          commit in `git log isolated-base..HEAD`.
 
           agents.md discipline: never add text to `agents.md` (or `AGENTS.md`)
           directly, even when the plan says "document in agents.md";
@@ -3333,6 +3354,24 @@ jobs:
               echo "::error::CODEX_ISOLATION trusted support copy missing (IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-<unset>}); Codex is never run on the host."
               exit 1
             fi
+            # The sandbox git has no remote and no network, so an agent that
+            # must keep production code working cannot read the default
+            # branch (fun-token-multi-chain#639). Fetch its tip into a private
+            # ref; seed-git adds it, filtered like the snapshot, as branch
+            # `isolated-base`. A failed fetch only leaves that branch out.
+            CODEX_ISOLATED_GIT_BASE_REF=""
+            if [[ "${IMPLEMENT_ISOLATED_BASE_BRANCH:-}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+              && git check-ref-format --branch "${IMPLEMENT_ISOLATED_BASE_BRANCH}" >/dev/null 2>&1; then
+              if git fetch --no-tags --depth=1 origin "+refs/heads/${IMPLEMENT_ISOLATED_BASE_BRANCH}:refs/codex-isolated/base" >/dev/null 2>&1; then
+                CODEX_ISOLATED_GIT_BASE_REF="refs/codex-isolated/base"
+                echo "CODEX_ISOLATION base_branch=${IMPLEMENT_ISOLATED_BASE_BRANCH} outcome=fetched"
+              else
+                echo "::warning::CODEX_ISOLATION base_branch=${IMPLEMENT_ISOLATED_BASE_BRANCH} outcome=fetch_failed; the sandbox git has no isolated-base branch."
+              fi
+            else
+              echo "::notice::CODEX_ISOLATION base_branch=unset_or_invalid outcome=skipped; the sandbox git has no isolated-base branch."
+            fi
+            export CODEX_ISOLATED_GIT_BASE_REF
             # Only the sandbox image build is retried (bounded, #7196); every
             # other isolation failure still fails the step on its first try.
             if ! CODEX_ISOLATED_ROOT="$(CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS=3 bash "${CODEX_ISOLATED_EXEC}" prepare --workdir "$(pwd)" --deps)"; then
