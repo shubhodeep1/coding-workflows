@@ -244,6 +244,53 @@ exit 0
 """
 
 
+# Issue #7516: a fake `gh` for the clarify label_missing hold. Every call's
+# argv is written NUL-separated to $FAKE_GH_DIR/call_<n>. FAKE_GH_LOGIN is the
+# `api user` login, FAKE_GH_COMMENTS_JSON the comment read and
+# FAKE_GH_FAIL=user|comments|comment_post|label_post fails that call.
+_FAKE_GH = """#!/usr/bin/env bash
+n="$(ls "$FAKE_GH_DIR" | wc -l | tr -d ' ')"
+printf '%s\\0' "$@" > "$FAKE_GH_DIR/call_$((n + 1))"
+method=GET
+endpoint=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-X" ]; then method="$a"; fi
+  case "$a" in user|repos/*) [ -z "$endpoint" ] && endpoint="$a" ;; esac
+  prev="$a"
+done
+case "$method $endpoint" in
+  "GET user") [ "${FAKE_GH_FAIL:-}" = user ] && exit 1; echo "${FAKE_GH_LOGIN:-pipeline-bot}" ;;
+  "GET repos/"*"/comments"*) [ "${FAKE_GH_FAIL:-}" = comments ] && exit 1; echo "${FAKE_GH_COMMENTS_JSON:-[[]]}" ;;
+  "POST repos/"*"/comments") [ "${FAKE_GH_FAIL:-}" = comment_post ] && exit 1; echo '{}' ;;
+  "POST repos/"*"/labels") [ "${FAKE_GH_FAIL:-}" = label_post ] && exit 1; echo '[]' ;;
+  *) exit 1 ;;
+esac
+exit 0
+"""
+
+
+def _step_text(wf: str, name: str) -> str:
+	start = wf.index(f"      - name: {name}\n")
+	end = wf.find("\n      - name:", start + 1)
+	heal = wf.find("\n  heal-report:", start + 1)
+	if heal != -1 and (end == -1 or heal < end):
+		end = heal
+	return wf[start:] if end == -1 else wf[start:end]
+
+
+def _step_run_body(workflow_name: str, step_name: str) -> str:
+	step = _step_text(_workflow_text(workflow_name), step_name)
+	lines = step.splitlines()
+	start = next(i for i, line in enumerate(lines) if line.strip() == "run: |")
+	body = textwrap.dedent("\n".join(lines[start + 1:])) + "\n"
+
+	def _sub(match: re.Match[str]) -> str:
+		return "consumer/repo" if "github.repository" in match.group(0) else "a" * 40
+
+	return re.sub(r"\$\{\{[^}]*\}\}", _sub, body)
+
+
 def _refctx_run_body(workflow_name: str) -> str:
 	step = _refctx_step(_workflow_text(workflow_name))
 	lines = step.splitlines()
@@ -257,6 +304,11 @@ def _refctx_run_body(workflow_name: str) -> str:
 
 
 def _run_refctx(workflow_name: str, mode: str, routing: str | None, extra_env: dict[str, str] | None = None) -> tuple[int, str, str]:
+	rc, out, gh_output, _calls = _run_refctx_gh(workflow_name, mode, routing, extra_env)
+	return rc, out, gh_output
+
+
+def _run_refctx_gh(workflow_name: str, mode: str, routing: str | None, extra_env: dict[str, str] | None = None) -> tuple[int, str, str, list[list[str]]]:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		bin_dir = tmp_path / "bin"
@@ -264,6 +316,11 @@ def _run_refctx(workflow_name: str, mode: str, routing: str | None, extra_env: d
 		fake_git = bin_dir / "git"
 		fake_git.write_text(_FAKE_GIT, encoding="utf-8")
 		fake_git.chmod(0o755)
+		fake_gh = bin_dir / "gh"
+		fake_gh.write_text(_FAKE_GH, encoding="utf-8")
+		fake_gh.chmod(0o755)
+		gh_dir = tmp_path / "gh_calls"
+		gh_dir.mkdir()
 		output = tmp_path / "github_output"
 		output.write_text("", encoding="utf-8")
 		env = {
@@ -278,6 +335,7 @@ def _run_refctx(workflow_name: str, mode: str, routing: str | None, extra_env: d
 			"RETARGET_DEFAULT_BRANCH": "main",
 			"FAKE_GIT_MODE": mode,
 			"FAKE_GIT_STATE": str(tmp_path / "clone_count"),
+			"FAKE_GH_DIR": str(gh_dir),
 		}
 		if routing is not None:
 			env["CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED"] = routing
@@ -287,7 +345,11 @@ def _run_refctx(workflow_name: str, mode: str, routing: str | None, extra_env: d
 			["bash", "-c", _refctx_run_body(workflow_name)],
 			env=env, capture_output=True, text=True, timeout=60,
 		)
-		return res.returncode, res.stdout + res.stderr, output.read_text(encoding="utf-8")
+		calls = []
+		for path in sorted(gh_dir.iterdir(), key=lambda p: int(p.name.split("_")[1])):
+			raw = path.read_text(encoding="utf-8")
+			calls.append(raw.split("\0")[:-1])
+		return res.returncode, res.stdout + res.stderr, output.read_text(encoding="utf-8"), calls
 
 
 def test_required_workflows_fail_closed_when_resolver_staging_fails() -> None:
@@ -385,6 +447,162 @@ def test_plan_pr_not_open_refusal_keeps_other_reasons_fatal() -> None:
 	assert rc == 0 and "pr_not_open" not in gh_output, gh_output
 
 
+_LABEL_MISSING_LINE = "::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=label_missing"
+_LABEL_MISSING_MARKER = "<!-- ai:integration-ref-label-missing:v1 issue=5 -->"
+
+
+def _label_missing_env(line: str = _LABEL_MISSING_LINE, **extra: str) -> dict[str, str]:
+	env = {"FAKE_RESOLVER_RC": "3", "FAKE_RESOLVER_STDERR": line, "FAKE_GH_LOGIN": "pipeline-bot"}
+	env.update(extra)
+	return env
+
+
+def _posts(calls: list[list[str]]) -> list[list[str]]:
+	return [c for c in calls if "POST" in c]
+
+
+def _post_body(call: list[str]) -> str:
+	for arg in call:
+		if arg.startswith("body="):
+			return arg[len("body="):]
+	raise AssertionError(f"no body in {call!r}")
+
+
+def test_clarify_label_missing_refusal_holds_issue() -> None:
+	"""Issue #7516: clarify on #7515 failed every run on the deterministic
+	reason=label_missing refusal and re-filed heal reports. It now holds the
+	issue (one comment, ai:blocked, label_missing_hold=true) and exits 0,
+	still without routing to the default branch."""
+	for line in (_LABEL_MISSING_LINE, "::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=none outcome=refused reason=label_missing"):
+		rc, out, gh_output, calls = _run_refctx_gh("clarify.yml", "ok", "true", _label_missing_env(line))
+		assert rc == 0, out
+		assert "label_missing_hold=true\n" in gh_output and "ref=\n" in gh_output, gh_output
+		assert "::warning::CI_TRIAGE_PR_BRANCH_ROUTING issue=5" in out, out
+		assert "::error::CI_TRIAGE" not in out, out
+		assert "INTEGRATION_REF_RESOLVE outcome=held reason=label_missing issue=5 comment=posted label=applied" in out, out
+		posts = _posts(calls)
+		assert len(posts) == 2, calls
+		assert posts[0][posts[0].index("POST") + 1] == "repos/consumer/repo/issues/5/comments", posts
+		body = _post_body(posts[0])
+		assert body.rstrip().endswith(_LABEL_MISSING_MARKER), body
+		assert not any(l.lstrip().startswith("/reclarify") for l in body.splitlines()), body
+		assert "ai:check-triage" in body and "Tracking issue (untrusted)" in body, body
+		assert posts[1][posts[1].index("POST") + 1] == "repos/consumer/repo/issues/5/labels", posts
+		assert "labels[]=ai:blocked" in posts[1], posts
+
+
+def test_clarify_label_missing_hold_dedups_on_trusted_marker() -> None:
+	trusted = '[[{"user":{"login":"pipeline-bot"},"body":"text\\n%s\\n"}]]' % _LABEL_MISSING_MARKER
+	rc, out, gh_output, calls = _run_refctx_gh("clarify.yml", "ok", "true", _label_missing_env(FAKE_GH_COMMENTS_JSON=trusted))
+	assert rc == 0 and "label_missing_hold=true" in gh_output, out
+	posts = _posts(calls)
+	assert len(posts) == 1 and "labels[]=ai:blocked" in posts[0], calls
+	assert "comment=present" in out, out
+	forged = '[[{"user":{"login":"someone-else"},"body":"%s"}]]' % _LABEL_MISSING_MARKER
+	rc, out, gh_output, calls = _run_refctx_gh("clarify.yml", "ok", "true", _label_missing_env(FAKE_GH_COMMENTS_JSON=forged))
+	assert rc == 0 and len(_posts(calls)) == 2, calls
+	assert "comment=posted" in out, out
+
+
+def test_clarify_label_missing_hold_fails_closed_on_write_errors() -> None:
+	reasons = {
+		"user": "identity_unavailable",
+		"comments": "comments_unavailable",
+		"comment_post": "comment_failed",
+		"label_post": "label_failed",
+	}
+	for fail, reason in reasons.items():
+		rc, out, gh_output, _calls = _run_refctx_gh("clarify.yml", "ok", "true", _label_missing_env(FAKE_GH_FAIL=fail))
+		assert rc != 0, f"{fail}\n{out}"
+		assert "label_missing_hold" not in gh_output and "ref=" not in gh_output, f"{fail}: {gh_output!r}"
+		assert f"INTEGRATION_REF_RESOLVE outcome=hold_failed reason={reason} issue=5" in out, out
+	rc, out, gh_output, _calls = _run_refctx_gh("clarify.yml", "ok", "true", _label_missing_env(FAKE_GH_COMMENTS_JSON="not json"))
+	assert rc != 0 and "reason=comments_unavailable" in out, out
+
+
+def test_label_missing_hold_is_clarify_only_and_exact() -> None:
+	"""Every other exit-3 refusal still fails clarify, and no other phase
+	holds: they all fail without a GitHub write."""
+	others = (
+		"::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=label_missing_extra",
+		"::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=branch_missing",
+		"::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=6 pr=7 outcome=refused reason=label_missing",
+		"note: outcome=refused reason=label_missing",
+		"",
+	)
+	for line in others:
+		rc, out, gh_output, calls = _run_refctx_gh("clarify.yml", "ok", "true", _label_missing_env(line))
+		assert rc != 0, f"{line!r}\n{out}"
+		assert "label_missing_hold" not in gh_output and calls == [], f"{line!r}: {calls!r}"
+	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS - {"clarify.yml"}):
+		rc, out, gh_output, calls = _run_refctx_gh(workflow_name, "ok", "true", _label_missing_env())
+		assert rc != 0 and "ref=" not in gh_output, f"{workflow_name}\n{out}"
+		assert calls == [], f"{workflow_name}: {calls!r}"
+
+
+# Steps after refctx that never run on the successful hold path (they need
+# failure() / cancelled()) or that guard themselves.
+_HOLD_GATE_FAILURE_STEPS = {
+	"Record clarification run failed",
+	"Comment on issue failure",
+	"Queue failed reclarify for poller",
+	"Telegram failure notification",
+}
+_HOLD_GATE_SELF_GUARDED_STEPS = {
+	"Record GH_PAT budget at clarify end",
+	"Report refused AI engine fallbacks",
+}
+
+
+def _clarify_job_steps() -> list[tuple[str, str]]:
+	wf = _workflow_text("clarify.yml")
+	job = wf[wf.index("\n  clarify:\n"):wf.index("\n  heal-report:")]
+	chunks = job.split("\n      - name: ")[1:]
+	return [(chunk.split("\n", 1)[0].strip(), chunk) for chunk in chunks]
+
+
+def test_clarify_steps_after_refctx_honour_label_missing_hold() -> None:
+	gate = "steps.refctx.outputs.label_missing_hold != 'true'"
+	steps = _clarify_job_steps()
+	names = [name for name, _ in steps]
+	refctx = names.index("Resolve integration ref")
+	assert len(steps) - refctx > 20, names
+	for name, chunk in steps[refctx + 1:]:
+		ifs = [l for l in chunk.splitlines() if l.startswith("        if: ")]
+		cond = ifs[0] if ifs else ""
+		if name in _HOLD_GATE_FAILURE_STEPS:
+			assert "failure()" in cond or "cancelled()" in cond, name
+		elif name in _HOLD_GATE_SELF_GUARDED_STEPS:
+			continue
+		else:
+			assert gate in cond, f"{name} is not gated on label_missing_hold: {cond!r}"
+
+
+def test_clarify_always_steps_tolerate_missing_setup() -> None:
+	"""Run 38983115876: after the job stopped early, the always()/failure()
+	steps failed on RUNTIME_DIR and a missing scripts/tg_helpers.sh."""
+	for step_name in ("Semantic cache lookup", "Write run summary", "Telegram failure notification"):
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_path = Path(tmp)
+			output = tmp_path / "github_output"
+			summary = tmp_path / "summary"
+			env = {
+				"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+				"GITHUB_OUTPUT": str(output),
+				"GITHUB_STEP_SUMMARY": str(summary),
+				"ISSUE_NUMBER": "5",
+			}
+			res = subprocess.run(
+				["bash", "-c", _step_run_body("clarify.yml", step_name)],
+				env=env, cwd=tmp, capture_output=True, text=True, timeout=60,
+			)
+			out = res.stdout + res.stderr
+			assert res.returncode == 0, f"{step_name}\n{out}"
+			assert "::warning::" in out, f"{step_name}\n{out}"
+			if step_name == "Semantic cache lookup":
+				assert "cache_hit=false" in output.read_text(encoding="utf-8")
+
+
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
@@ -393,6 +611,12 @@ def main() -> int:
 	test_required_workflows_fail_closed_when_resolver_staging_fails()
 	test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit()
 	test_plan_pr_not_open_refusal_keeps_other_reasons_fatal()
+	test_clarify_label_missing_refusal_holds_issue()
+	test_clarify_label_missing_hold_dedups_on_trusted_marker()
+	test_clarify_label_missing_hold_fails_closed_on_write_errors()
+	test_label_missing_hold_is_clarify_only_and_exact()
+	test_clarify_steps_after_refctx_honour_label_missing_hold()
+	test_clarify_always_steps_tolerate_missing_setup()
 	return 0
 
 
