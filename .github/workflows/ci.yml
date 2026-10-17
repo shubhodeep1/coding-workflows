@@ -848,31 +848,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
 
-      # Moved back from tests-release-and-log-analysis, which took 20m16s of
-      # its 20 minutes on main (run 39030079651, budget-watch issue #7560).
-      # It first moved there from this job when this job measured 19.6 of its
-      # 20 minutes on main (2026-10-09) and timed out on PR heads; it took
-      # about 4.5 minutes then. This job has had room since #7366 moved six
-      # steps out of it. Step timings were not readable when this was planned
-      # (estimated, not measured). The step seeds its own git repositories and
-      # needs no Node or prepared .claude/ live copies. Name and body unchanged.
-      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
-        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
-        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
-        # PR per release tick), plus _parse_reset_header's Retry-After
-        # precedence, gh_retry's per-attempt stdout buffering (#5495) and
-        # the non-retryable HTTP 400/401 classification in
-        # scripts/gh_helpers.sh.
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_review_merge_train.py \
-            tests/test_gh_helpers_parse_reset_header.py \
-            tests/test_gh_retry_stdout_isolation.py \
-            tests/test_gh_retry_permanent_auth_failures.py \
-            tests/test_gh_api_retry.py \
-            tests/test_gh_api_retry_py.py
-
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -2207,6 +2182,36 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
             PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
           fi
+
+      # Moved from tests-hooks-and-orchestrator, which took 15m52s of its 20
+      # minutes on main (run 39038112755, budget-watch issue #7575). Before
+      # that it moved there from tests-release-and-log-analysis (20m16s, run
+      # 39030079651, #7560), and earlier out of tests-hooks-and-orchestrator
+      # when it measured 19.6 of its 20 minutes (2026-10-09). The single test
+      # jobs record 12.8 minutes to 20m16s while poll groups record about 5
+      # minutes (#4707); group 0 already carries the fast-fail subset and the
+      # single-file modules, so the step runs in group 1 only, once per CI run.
+      # About 4.5 minutes is the recorded estimate, not a measurement from run
+      # 39038112755 (step timings were not readable when this was planned).
+      # The step seeds its own git repositories and needs no Node or prepared
+      # .claude/ live copies. Name and body unchanged.
+      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
+        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
+        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
+        # PR per release tick), plus _parse_reset_header's Retry-After
+        # precedence, gh_retry's per-attempt stdout buffering (#5495) and
+        # the non-retryable HTTP 400/401 classification in
+        # scripts/gh_helpers.sh.
+        if: strategy.job-index == 1
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_review_merge_train.py \
+            tests/test_gh_helpers_parse_reset_header.py \
+            tests/test_gh_retry_stdout_isolation.py \
+            tests/test_gh_retry_permanent_auth_failures.py \
+            tests/test_gh_api_retry.py \
+            tests/test_gh_api_retry_py.py
 
   budget-watch:
     # Early warning for the two budgets CI has hit without notice (workflow
