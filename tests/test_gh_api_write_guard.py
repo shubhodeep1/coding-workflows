@@ -1433,6 +1433,8 @@ def test_quoted_read_or_routine_call_is_classified_like_the_plain_form(command):
 	"G=gh; $G a''pi -X DELETE repos/a/b",
 	"$(printf gh) \"api\" -X DELETE repos/a/b",
 	"`printf gh` 'api' -X DELETE repos/a/b",
+	"$(printf gh) 'api' -X DELETE repos/a/b",
+	"$(printf gh) a'p'i -X DELETE repos/a/b",
 ])
 def test_expanding_command_word_before_api_asks(command):
 	# The early filter must not drop these: Bash can expand the word into `gh`.

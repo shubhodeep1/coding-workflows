@@ -738,6 +738,10 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 			_normalize_for_gh_api_scan(outside_text)
 		):
 			return True
+		# `$(printf gh) 'api'`: `_outside_single_quotes` drops the quoted `api`, so
+		# with a live substitution also check the whole command after quote removal.
+		if has_real_substitution and _has_expanding_word_before_api(_normalize_for_gh_api_scan(command)):
+			return True
 	for tokens in segments:
 		index = _command_word_index(tokens)
 		if index >= len(tokens):
