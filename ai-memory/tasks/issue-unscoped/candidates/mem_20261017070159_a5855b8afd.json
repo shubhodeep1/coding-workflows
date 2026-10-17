@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:4412 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The \"GitHub API rate-limits\" bullet says the retry helper comes from a git clone of `main` here / `stable` in consumers, but the \"Bootstrap GitHub API retry helper\" step now fetches the pinned commit when the job `workflow_ref` pins a 40-hex SHA.\n  WHY: It is a documentation inaccuracy, not a runtime failure. It contradicts `agents.d/7538-immutable-support-pins.md` and the workflows. The reviewers rated it NIT, mapped here to low, with no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update the \"GitHub API rate-limits\" bullet in `agents.md` to reflect that support code now follows pinned commits for pinned runs.\n  expected_change_site: agents.md (line 4412, the `gh_api_retry` bootstrap bullet)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The outdated documentation was identified in the preliminary pass but is not addressed in the LAST RUN DIFF for `agents.md`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:4412 | severity=NIT | confidence=4\n  PROBLEM: The \"GitHub API rate-limits\" bullet about `gh_api_retry` is stale. The bootstrap step now fetches the pinned commit when `workflow_ref` pins a 40-hex SHA, and only unpinned consumer runs use `stable`.\n  WHY: It is a documentation inaccuracy that contradicts `agents.d/7538-immutable-support-pins.md`. The last autofix run fixed the `validate.yml` bullet at line 2982 but left this one.\n- HARDENING_SUGGESTIONS: agents.md line 4412, change the text to \"git clone of `main` here, the `workflow_ref`-pinned commit in pinned consumers, else `stable`\" (HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Update the \"GitHub API rate-limits\" bullet in `agents.md` to reflect that support code now follows pinned commits for pinned runs.\n  Expected change site: `agents.md`\n  Evidence of absence: The consensus finding from the preliminary pass correctly identified this outdated documentation, but it remains unaddressed in the `LAST RUN DIFF` for `agents.md`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTIONS: update `agents.md` to describe the support-code fetching behavior (HARDENING_RISK_SCORE: 1).\n- Otherwise no defects were reported in security, correctness, error paths, naming or trust-boundary checks.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:4412 | severity=NIT | confidence=4\n  PROBLEM: The bullet describes `gh_helpers.sh` as sourced from \"git clone of `main` (here) or `stable` (consumers)\". The step now follows the job `workflow_ref` pin for consumers, fetching the pinned commit when the caller pins and using `stable` otherwise.\n  WHY: Nothing executes differently, but the text contradicts `agents.d/7538-immutable-support-pins.md` and the workflows. The previous autofix round fixed line 2982 but not this one.\n- HARDENING_SUGGESTIONS: agents.md line 4412, replace the parenthetical with \"git clone of `main` here, the job `workflow_ref`-pinned commit in pinned consumers, else `stable`\" (HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:4412 | severity=NIT | confidence=4\n  PROBLEM: The documentation says the helper is cloned from `main` here and `stable` in consumers, but pinned consumer runs now fetch it from the commit in `workflow_ref`.\n  WHY: Runtime behavior is unaffected, but the documented source is wrong for pinned runs and can mislead maintainers.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- agents.md:4412 | severity=NIT | confidence=4\n  PROBLEM: The \"GitHub API rate-limits\" bullet is out of date. In `implement.yml`, `validate.yml`, `orchestrate_clarify_respond.yml`, `security-audit.yml` and `review_autofix.yml`, the bootstrap step now fetches the pinned commit and reads the helper only when `FETCH_HEAD` equals the pin.\n  WHY: Nothing runs differently, but the text contradicts `agents.d/7538-immutable-support-pins.md` and the workflows. The last autofix run corrected line 2982 but left line 4412 unchanged.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0edd98eb954926e539fc0fa8d823c6351841b34ece51c1a3e93ca702a2110c92",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7538,
+    "run_id": "39010180887",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39010180887",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017070159_a5855b8afd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7538,
+    "run_id": "39010180887"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T07:01:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
