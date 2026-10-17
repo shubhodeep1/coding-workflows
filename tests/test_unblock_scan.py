@@ -902,6 +902,8 @@ def test_poller_passes_the_escalated_recheck_to_both_scan_calls() -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	body = text[text.index("run_unblock_scan() {"):text.index("\n}\n", text.index("run_unblock_scan() {"))]
 	assert body.count('--escalated-recheck-hours "${UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS:-24}"') == 2
+	# _last_run_times reads `conclusion` to ignore cancelled and startup-failed runs.
+	assert "{display_title, name, status, conclusion, created_at}" in body
 
 
 def test_cli_escalated_recheck_flag(tmp_path: Path) -> None:
