@@ -274,3 +274,161 @@ def test_resolver_fixtures_for_check_triage_bodies() -> None:
 	result = subprocess.run(["bash", str(RESOLVER), "--self-test"], capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	assert "self-test passed" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Failure path after an early resolver refusal (heal #7526, source #7511).
+#
+# "Resolve integration ref" runs before "Checkout repository", so a resolver
+# refusal fails the job with no scripts/ tree and no RUNTIME_DIR. The
+# failure/always steps below used to add misleading errors in that state
+# (run 38989786896); they now skip with a ::warning:: instead.
+# ---------------------------------------------------------------------------
+
+FAILURE_PATH_GUARDED_STEPS = {
+	"Complete /answer command (failure/cancel)": "memory_helpers.sh",
+	"Record planning run failed": "memory_helpers.sh",
+	"Revert label on planning failure": "label_helpers.sh",
+	"Telegram failure notification": "tg_helpers.sh",
+}
+
+FAILURE_PATH_STEP_GATES = {
+	"Complete /answer command (failure/cancel)": "if: (failure() || cancelled()) && env.SKIP_PLAN != 'true' && env.PROCESSED_ANSWER_CLAIMED == 'true' && env.PROCESSED_ANSWER_COMPLETED != 'true'",
+	"Record planning run failed": "if: (failure() || cancelled()) && env.SKIP_PLAN != 'true'",
+	"Revert label on planning failure": "if: failure() || cancelled()",
+	"Telegram failure notification": "if: failure() || cancelled()",
+	"Write run summary": "if: env.SKIP_PLAN != 'true' && always()",
+}
+
+FAILURE_PATH_STUB_FUNCTIONS = {
+	"Complete /answer command (failure/cancel)": "memory_processed_command_complete",
+	"Record planning run failed": "memory_record_run_event",
+	"Revert label on planning failure": "ensure_label_exists",
+	"Telegram failure notification": "tg_send_phase_failure",
+}
+
+
+def _failure_path_body(name: str) -> str:
+	body = _run_body(name)
+	for expr, value in (
+		("${{ job.status }}", "failure"),
+		("${{ github.repository }}", "example/repo"),
+		("${{ github.run_id }}", "123456"),
+		("${{ github.actor }}", "example-actor"),
+		("${{ github.server_url }}", "https://github.com"),
+	):
+		body = body.replace(expr, value)
+	assert "${{" not in body, name
+	return body
+
+
+def _run_failure_path_step(body: str, cwd: Path, extra_env: dict | None = None) -> dict:
+	fake_bin = cwd / "_fake_bin"
+	fake_bin.mkdir(exist_ok=True)
+	gh_log = cwd / "_gh_calls.log"
+	gh = fake_bin / "gh"
+	gh.write_text(f'#!/usr/bin/env bash\necho "$*" >> "{gh_log}"\nexit 1\n', encoding="utf-8")
+	gh.chmod(0o755)
+	step_file = cwd / "_step.sh"
+	step_file.write_text(body, encoding="utf-8")
+	github_env = cwd / "_github_env"
+	summary = cwd / "_step_summary"
+	github_env.write_text("", encoding="utf-8")
+	summary.write_text("", encoding="utf-8")
+	env = {
+		"PATH": f"{fake_bin}:{os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}",
+		"HOME": str(cwd),
+		"ISSUE_NUMBER": "7511",
+		"ISSUE_URL": "https://github.com/example/repo/issues/7511",
+		"MODEL_EDITOR": "example-model",
+		"PLAN_FAILURE_CONTEXT": "AI Plan phase failed before posting the implementation plan.",
+		"TOKEN_WARN_THRESHOLD": "200000",
+		"TRIGGER_COMMENT_ID": "42",
+		"GITHUB_ENV": str(github_env),
+		"GITHUB_STEP_SUMMARY": str(summary),
+	}
+	if extra_env:
+		env.update(extra_env)
+	result = subprocess.run(
+		["bash", "--noprofile", "--norc", "-e", str(step_file)],
+		cwd=str(cwd),
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	return {
+		"rc": result.returncode,
+		"stdout": result.stdout,
+		"stderr": result.stderr,
+		"gh_calls": gh_log.read_text(encoding="utf-8") if gh_log.exists() else "",
+		"summary": summary.read_text(encoding="utf-8"),
+	}
+
+
+@pytest.mark.parametrize("name", sorted(FAILURE_PATH_GUARDED_STEPS))
+def test_failure_path_steps_skip_without_checkout(tmp_path: Path, name: str) -> None:
+	helper = FAILURE_PATH_GUARDED_STEPS[name]
+	assert not (tmp_path / "scripts").exists()
+	result = _run_failure_path_step(_failure_path_body(name), tmp_path)
+	assert result["rc"] == 0, result["stderr"]
+	assert "No such file or directory" not in result["stderr"]
+	warnings = [line for line in result["stdout"].splitlines() if line.startswith("::warning::")]
+	assert len(warnings) == 1, result["stdout"]
+	assert f"scripts/{helper}" in warnings[0]
+	assert warnings[0].startswith(f"::warning::{name}: skipped")
+	assert result["gh_calls"] == ""
+
+
+def test_write_run_summary_without_runtime_dir(tmp_path: Path) -> None:
+	result = _run_failure_path_step(_failure_path_body("Write run summary"), tmp_path)
+	assert result["rc"] == 0, result["stderr"]
+	assert "unbound variable" not in result["stderr"]
+	assert any(
+		line.startswith("::warning::") and "RUNTIME_DIR" in line for line in result["stdout"].splitlines()
+	), result["stdout"]
+	assert "## AI Plan Summary" in result["summary"]
+	assert "| Issue | #7511 |" in result["summary"]
+	assert "Tokens used" not in result["summary"]
+
+
+def test_write_run_summary_with_runtime_dir_keeps_token_row(tmp_path: Path) -> None:
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	(runtime / "codex_log.txt").write_text("tokens used\n1,234\n", encoding="utf-8")
+	result = _run_failure_path_step(
+		_failure_path_body("Write run summary"), tmp_path, {"RUNTIME_DIR": str(runtime)}
+	)
+	assert result["rc"] == 0, result["stderr"]
+	assert "::warning::" not in result["stdout"]
+	assert "| Tokens used | 1,234 |" in result["summary"]
+
+
+@NEEDS_JQ
+@pytest.mark.parametrize("name", sorted(FAILURE_PATH_GUARDED_STEPS))
+def test_failure_path_steps_still_source_staged_helpers(tmp_path: Path, name: str) -> None:
+	helper = FAILURE_PATH_GUARDED_STEPS[name]
+	func = FAILURE_PATH_STUB_FUNCTIONS[name]
+	stub_log = tmp_path / "_stub.log"
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / helper).write_text(f'{func}() {{ echo "{func}" >> "$STUB_LOG"; }}\n', encoding="utf-8")
+	extra = {"STUB_LOG": str(stub_log)}
+	if name == "Revert label on planning failure":
+		# Labels include ai:planning so the rollback reaches ensure_label_exists.
+		meta = tmp_path / "issue_meta.json"
+		meta.write_text(json.dumps({"labels": [{"name": "ai:planning"}]}), encoding="utf-8")
+		extra["ISSUE_META_FILE"] = str(meta)
+		# The real support tree provides gh_retry through gh_helpers.sh.
+		(scripts / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+	result = _run_failure_path_step(_failure_path_body(name), tmp_path, extra)
+	assert result["rc"] == 0, result["stderr"]
+	assert "skipped" not in result["stdout"]
+	assert stub_log.exists() and func in stub_log.read_text(encoding="utf-8")
+
+
+def test_failure_path_step_gates_unchanged() -> None:
+	for name, gate in FAILURE_PATH_STEP_GATES.items():
+		step = _step_text(name)
+		assert f"        {gate}\n" in step, name
+	assert len(_workflow_text().encode("utf-8")) < 480_000

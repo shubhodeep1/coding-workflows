@@ -1713,7 +1713,9 @@ jobs:
         run: |
           set -euo pipefail
           TOKENS=""
-          if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
+          if [ -z "${RUNTIME_DIR:-}" ]; then
+            echo "::warning::Write run summary: RUNTIME_DIR is unset (Checkout repository did not run); token usage omitted."
+          elif [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
             TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
           fi
           {
@@ -2911,6 +2913,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::Complete /answer command (failure/cancel): skipped, scripts/memory_helpers.sh is not staged (Checkout repository did not run)."
+            exit 0
+          fi
           source scripts/memory_helpers.sh
 
           STATUS="failed"
@@ -2933,6 +2939,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          if [ ! -f scripts/memory_helpers.sh ]; then
+            echo "::warning::Record planning run failed: skipped, scripts/memory_helpers.sh is not staged (Checkout repository did not run)."
+            exit 0
+          fi
           source scripts/memory_helpers.sh
 
           STATUS="error"
@@ -2983,6 +2993,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          if [ ! -f scripts/label_helpers.sh ]; then
+            echo "::warning::Revert label on planning failure: skipped, scripts/label_helpers.sh is not staged (Checkout repository did not run)."
+            exit 0
+          fi
           source scripts/gh_helpers.sh 2>/dev/null || true
           source scripts/label_helpers.sh
           # Reuse the cached issue snapshot from the "Fetch issue
@@ -3030,6 +3044,10 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::Telegram failure notification: skipped, scripts/tg_helpers.sh is not staged (Checkout repository did not run)."
+            exit 0
+          fi
           source scripts/tg_helpers.sh
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
