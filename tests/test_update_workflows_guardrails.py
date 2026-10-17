@@ -322,10 +322,14 @@ def test_renderer_pins_security_hold_support_checkout_to_release_sha() -> None:
 		"          ref: stable\n          path: .security-hold-support\n          persist-credentials: false",
 		f"          ref: {VALID_RELEASE_SHA} # stable\n          path: .security-hold-support\n          persist-credentials: false",
 		1,
+	).replace(
+		"          ref: stable\n          path: .provider-outage-support\n",
+		f"          ref: {VALID_RELEASE_SHA} # stable\n          path: .provider-outage-support\n",
+		1,
 	)
 	assert rendered_text == expected
-	# Other repositories, other paths and non-checkout steps keep `ref: stable`.
-	assert rendered_text.count("ref: stable\n") == 3
+	# Other repositories and non-checkout steps keep `ref: stable`.
+	assert rendered_text.count("ref: stable\n") == 2
 
 
 def test_renderer_fails_closed_on_unpinnable_support_checkout() -> None:
@@ -345,7 +349,7 @@ def test_ai_review_template_pins_only_the_sweep_support_checkout() -> None:
 	template_path = WORKFLOW_TEMPLATES_DIR / "ai-review.yml"
 	template_text = template_path.read_text(encoding="utf-8")
 	rendered_text = pin_reusable_workflow_refs(template_text, VALID_RELEASE_SHA)
-	assert rendered_text.count(f"ref: {VALID_RELEASE_SHA} # stable") == 2
+	assert rendered_text.count(f"ref: {VALID_RELEASE_SHA} # stable") == 3
 	try:
 		import yaml
 	except ImportError:
@@ -354,7 +358,11 @@ def test_ai_review_template_pins_only_the_sweep_support_checkout() -> None:
 	assert jobs["security-hold-sweep"]["steps"][0]["with"]["ref"] == VALID_RELEASE_SHA
 	# Issue #7291: the non-retryable backfill runs the pinned release too.
 	assert jobs["non-retryable-backfill"]["steps"][0]["with"]["ref"] == VALID_RELEASE_SHA
-	assert jobs["provider-outage-resume"]["steps"][0]["with"]["ref"] == "stable"
+	# tele-funtoken-msg-scoring#4566: the outage resume runs its helper with
+	# GH_PAT, so it runs the pinned release as well; no support checkout is
+	# left on the moving tag.
+	assert jobs["provider-outage-resume"]["steps"][0]["with"]["ref"] == VALID_RELEASE_SHA
+	assert "ref: stable\n" not in rendered_text
 
 
 def test_other_templates_render_unchanged_by_support_pin() -> None:

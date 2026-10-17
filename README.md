@@ -111,6 +111,11 @@ deployment fallback.
 | `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES` | No | `30` | orchestrate_poll | How long an item must carry its block label (or a project must have been failed) before the scan sends it to the judge. |
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
+| `UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS` | No | `24` | orchestrate_poll | The scan skips an escalated fix-up (one the judge marked `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->`, which every later judge run only skips) while its last judge run is younger than this, so it gets one judge run per day (for the scope re-grant check) instead of one per hour. `0` restores a run per `UNBLOCK_JUDGE_INFLIGHT_MINUTES`. |
+| `ORPHAN_FIXUP_CLOSE_ENABLED` | No | `true` | orchestrate_poll | Closes open unblock fix-up issues whose source issue is closed (`scripts/orphan_fixup_close.py`, run once per tick from the top of `run_unblock_scan`, also while `UNBLOCK_JUDGE_ENABLED=false`). A fix-up is the issue whose first body line is `<!-- ai:unblock-fixup:v1 item=<n> round=<k> -->`; it is closed as not planned with one comment ending in `<!-- ai:orphan-fixup-closed:v1 item=<n> parent=<p> root=<r> -->` when issue `<n>` is closed (any close reason) or is itself an open fix-up that closes in the same pass, so a whole chain goes at once. Only issues authored by the pipeline login, carrying no label other than `ai:blocked`, `ai:scope-blocked`, `ai:destructive-blocked`, `ai:needs-human`, `ai:unblock-closed`, `ai:security` or `ai:done`, with no `ai:orchestrator-tracking` / `ai:orchestrator-managed` label, no open or unreadable linked pull request (in any repository) and no earlier close (a reopened fix-up stays open, and so do the fix-ups under it) are closed. Every timeline is read before anything closes, so a failed read closes nothing that tick. Re-issues, `Accepted with this follow-up` issues and `Source issue` / `Parent issue` links are never matched. `false` turns the sweep off. Log prefix `ORPHAN_FIXUP_CLOSE`. |
+| `ORPHAN_FIXUP_CLOSE_DRY_RUN` | No | `false` | orchestrate_poll | `true` makes the orphan fix-up close log `outcome=would_close` for each fix-up it would close and change nothing. |
+| `ORPHAN_FIXUP_CLOSE_MAX_PER_TICK` | No | `5` | orchestrate_poll | At most this many fix-ups are closed per tick, nearest the closed source issue first (`0` closes nothing). Fix-ups the timeline check refuses do not use up the cap (up to four times this many are checked), and a fix-up under a refused one stays open with it. A 17-deep chain clears in four batches, but each batch after the first waits out `ORPHAN_FIXUP_CLOSE_GRACE_MINUTES` after its parent closed, so about an hour apart. An invalid value falls back to 5. |
+| `ORPHAN_FIXUP_CLOSE_GRACE_MINUTES` | No | `60` | orchestrate_poll | How long the source issue must have been closed before its fix-ups close, so a source issue closed by mistake and reopened keeps its fix-up. An invalid value falls back to 60. |
 | `UNBLOCK_JUDGE_FIXUP_WAIT_HOURS` | No | `72` | unblock_judge | How long the judge waits for the fix-up issue of a `descope` or `operator_step` verdict to merge before it decides again. |
 | `UNBLOCK_JUDGE_WAIT_ENABLED` | No | `true` | unblock_judge | The `wait` verdict and operator-step holds. The judge can hold a blocked item until a pull request is merged and on a branch, another issue or pull request closes, or an `_UNSET_OPERATOR_STEP` operator step is done: its placeholder no longer appears on the default branch, or a repository Actions variable or secret with that name exists. After an `operator_step` fix-up whose placeholder needs a person merges, the item waits for that step instead of resuming at once. A hold keeps the block label, posts no resume command and uses no round; once the condition holds the judge posts the stop's resume command. `false` turns waits off, ends open holds and restores the immediate resume. |
 | `UNBLOCK_JUDGE_WAIT_MAX_DAYS` | No | `14` | unblock_judge | How many days a hold may last before the judge decides again. An invalid value falls back to 14. |
@@ -2425,6 +2430,8 @@ through `clarify → plan → implement → review`.
 | `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED` | `false` | Opt-in Phase A archive flag. When `true`, the implement, orchestrate-poll judge, review editor, and validate discover/diagnose success paths wrap their captured Codex output files into fail-open `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archives. Archive I/O failures do not fail the host phase; they only log `TRANSCRIPT_ARCHIVE_FAIL`. |
 | `CLAUDE_POOL_HEALTH_ALERT_ENABLED` | `true` | Hourly Telegram `DEBUG` from `orchestrate_poll.yml` when accounts are only at or above `gate_utilization`; rejected tokens or failed probes make the notice `WARNING`. `false` turns it off. See "Near-cap alert" under the Claude engine. |
 | `CLAUDE_POOL_HEALTH_WINDOW_MINUTES` | `5` | The near-cap alert is sent only by the poll cycle whose UTC minute is below this value, so it goes out at most once an hour. |
+| `CLAUDE_POOL_DAILY_USAGE_ENABLED` | `true` | Daily Telegram report from `orchestrate_poll.yml` (coding-workflows only) listing every Claude pool account's 5-hour and 7-day usage in one message. `false` turns it off. See "Daily usage report" under the Claude engine. |
+| `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` | `4` | First UTC hour (0-23) at which the daily usage report may be sent; `4` is 12:00 Singapore time. The first poll tick at or after this hour sends it, once per UTC day. Invalid values fall back to `4`. |
 | `UNATTENDED_NAG_REMINDER_ENABLED` | `false` | Opt-in wrapper-level `<reminder>` injection after repeated silent reviewer/editor/judge turns. When `false`, the wrappers keep the existing retry behavior unchanged. |
 | `UNATTENDED_NAG_SILENT_ROUNDS` | `3` | Consecutive silent-turn threshold before nag-reminder injection in the review editor, review reviewers, and orchestrate-poll judge paths. Invalid or out-of-range values clamp conservatively to `3`. |
 | `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` | `false` | Enables the additive local-only `.ai/workflow_traces/<run_id>.scenario.json` renderer in `workflow-log-analysis.yml`; parseable runs emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`, per-run parser drift fail-opens with `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`. |
@@ -2896,6 +2903,34 @@ twice. `CLAUDE_POOL_HEALTH_ALERT_ENABLED=false` (repo variable) turns it
 off. The step logs `CLAUDE_POOL_HEALTH accounts= gated= auth_failed=
 probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`
 and never fails the job.
+
+**Daily usage report.** Once a day `orchestrate_poll.yml` sends one Telegram
+message listing every Claude pool account with its 5-hour and 7-day
+utilization, the reset time of any window at or above `gate_utilization`,
+rejected tokens and failed probes. It runs in `shubhodeep1/coding-workflows`
+only, because the pool is shared by every consumer repo. In the poll job,
+"Check Claude pool daily usage slot" (`scripts/claude_pool_daily_usage.sh
+slot`) opens the slot from `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` (default `4`,
+12:00 SGT) to the end of the UTC day, and "Look up today's Claude pool daily
+usage marker" checks the `actions/cache` key
+`claude-pool-daily-usage-v1-<YYYY-MM-DD>`. When the key is missing, the
+separate `claude_pool_daily_usage` job probes the pool with
+`.github/actions/claude-pool-token`, sends the message
+(`scripts/claude_pool_daily_usage.sh send`, built by `claude_engine.py
+pool-usage`) and saves the day's key. The job has its own runner, so the probe
+never changes the poll job's credential or capacity-wait state. The message is
+labelled `📊` and is delivered at any `ALERT_MSG_LEVEL` except `SILENT`
+(`tg_send_report_msg` in `scripts/tg_helpers.sh`). Scheduled ticks arrive
+25-60 minutes apart, so expect it within about an hour of the configured
+hour. A failed send saves no key and is retried on the next tick; the slot
+stays closed while Telegram is not configured, so nothing is probed for a
+message that cannot be delivered. While the GitHub cache service is
+unavailable, the lookup reads as a miss and the save fails, so the message
+can repeat on later ticks that day; a lookup step that itself fails skips
+the tick. `CLAUDE_POOL_DAILY_USAGE_ENABLED=false` turns it off. The steps log
+`CLAUDE_POOL_DAILY_USAGE op=slot in_slot= reason=due|before_hour|disabled|silent|telegram_not_configured`
+and `CLAUDE_POOL_DAILY_USAGE op=send accounts= usable= gated= auth_failed=
+probe_failed= outcome=sent|not_delivered truncated=true|false`, and never fail the job.
 
 The token action accepts only the deployed broker URL in Actions jobs and
 only removes pool directories immediately under `$RUNNER_TEMP`; a rejected
@@ -3560,6 +3595,14 @@ and resolver chains, a failed project) now goes to the unblock judge
   `ai:unblock` marker younger than `UNBLOCK_JUDGE_RETRY_HOURS` and no judge
   running, oldest first, at most one per tick. The scan waits for an active
   judge; `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK=0` disables dispatch.
+  The scan also leaves two terminal states alone while nothing changed
+  (`skipped` keys `fixup_escalated` and `terminal_unchanged`): an escalated
+  fix-up (see `UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS`), and an issue or project
+  whose newest trusted verdict is a `close` for its current stop, whose
+  `ai:needs-human` park label was applied and has since been dropped (the
+  poller's label repair keeps `ai:blocked` over it), with no new block label
+  event or non-bot comment since the verdict. It reads only the label events,
+  comments and run list it already fetched.
   Failed projects are added from the poller's own state and take priority in
   the 30-item details batch. When more than 30 projects have failed, that
   batch rotates each five-minute tick so none is permanently left out. A
