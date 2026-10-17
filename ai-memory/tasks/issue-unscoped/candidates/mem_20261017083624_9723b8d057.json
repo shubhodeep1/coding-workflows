@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:628-667 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The `_run_diagnose_step` harness never sets `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`, so the new guard at .github/workflows/implement.yml:6277 prints \"Diagnose helper not staged\" and exits 0 before running the helper. 16 diagnose tests then fail in the static-checks job.\n  WHY: Reviewers rated this BLOCKER with confidence 5. The fix is to add `\"IMPLEMENT_STAGED_SUPPORT_RUN_DIR\": str(repo_dir / \"scripts\")` to the env dict and keep the workflow guard unchanged. Severity is mapped from BLOCKER to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_implement_post_codex_recovery.py:630-660 (`_run_diagnose_step` env.update block) | severity=BLOCKER | confidence=5\n  PROBLEM: The harness never sets `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`, and tests/conftest.py strips it. The new guard at .github/workflows/implement.yml:6277 therefore exits 0 before the helper runs.\n  WHY: The old `:-scripts` fallback resolved to the helper copied to repo_dir/scripts (line 521). Every test that goes through `_run_diagnose_step` now sees no diagnosis output, and static-checks shows 16 failures.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:6277 | severity=BLOCKER | confidence=5\n  PROBLEM: The new `-z` guard skips the diagnose helper when `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` is unset, but the diagnose test harness does not set it. 16 tests in tests/test_implement_post_codex_recovery.py fail.\n  WHY: The helper is never executed, so no fix-up issues are created and the test assertions fail.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_implement_post_codex_recovery.py:628-666 (`_run_diagnose_step` env dict; `env.update` block ending at line 659) | severity=BLOCKER | confidence=5\n  PROBLEM: The guard at .github/workflows/implement.yml:6277 now requires `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`, but the harness never sets it. tests/conftest.py:91 also strips it, so the step prints `::warning::Diagnose helper not staged` and exits 0.\n  WHY: 16 diagnose tests fail in the static-checks job (run 39016403020). The fix is a one-line env addition `\"IMPLEMENT_STAGED_SUPPORT_RUN_DIR\": str(repo_dir / \"scripts\")`, keeping the workflow guard. An optional test could assert the unset-variable skip.\n- HARDENING_SUGGESTIONS: tests/test_implement_post_codex_recovery.py `_run_diagnose_step` env dict (line 631-659) | HARDENING_RISK_SCORE: 5\n  PROBLEM: The harness provides no staged support directory.\n  WHY: Add the env entry (1-2 lines changed). Optionally add `test_diagnose_step_skips_when_helper_not_staged`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/implement.yml:6277-6279; tests/test_implement_post_codex_recovery.py:628-667 | severity=BLOCKER | confidence=5\n  PROBLEM: The new guard exits before diagnosis whenever `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` is unset. tests/conftest.py strips the variable, and `_run_diagnose_step` copies assets into its scratch repo without assigning it.\n  WHY: The step exits 0 before invoking the helper, so the diagnose tests receive none of the expected outputs. The static-checks log shows 16 failures.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_implement_post_codex_recovery.py:630-660 (`_run_diagnose_step` env dict) | severity=BLOCKER | confidence=5\n  PROBLEM: The harness does not set `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`, so the guard at implement.yml line 6277 triggers on every test invocation. It exits 0 with the \"Diagnose helper not staged\" warning and never runs the helper.\n  WHY: 16 static-checks tests fail because the step produces no output, no claude_calls.log and no JSON result. The helper is present at repo_dir/\"scripts\" (copied at line 521), so the fix is to add `\"IMPLEMENT_STAGED_SUPPORT_RUN_DIR\": str(repo_dir / \"scripts\")` to the env dict.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "32e0dbd48bcbd6e25e074a9ecd0d4a92d2696dfebf847932758ee80abbcff7ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7550,
+    "run_id": "39016403095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39016403095",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017083624_9723b8d057",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7550,
+    "run_id": "39016403095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T08:36:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
