@@ -99,6 +99,7 @@ import json, sys
 print("accounts=%(accounts)s usable=%(usable)s gated=%(gated)s auth_failed=%(auth_failed)s probe_failed=%(probe_failed)s" % json.load(sys.stdin))
 ')"
 	else
+		echo "::warning::CLAUDE_POOL_DAILY_USAGE op=send reason=pool_usage_failed; sending the fallback text"
 		text="Claude pool daily usage: probe results unreadable."
 		counts="accounts=0 usable=0 gated=0 auth_failed=0 probe_failed=0"
 	fi
@@ -110,6 +111,9 @@ print("accounts=%(accounts)s usable=%(usable)s gated=%(gated)s auth_failed=%(aut
 		text="${text}
 Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 	fi
+	# Telegram rejects messages over 4096 characters; a rejected send would
+	# be retried on every tick for the rest of the day.
+	text="${text:0:3900}"
 	# Only a message id means the message reached Telegram.
 	message_id="$(tg_send_report_msg "${text}" 2>/dev/null)" || message_id=""
 	if [ -n "${message_id}" ]; then

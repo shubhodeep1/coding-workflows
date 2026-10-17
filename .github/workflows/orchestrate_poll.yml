@@ -2014,6 +2014,7 @@ jobs:
       - name: Write today's Claude pool daily usage marker
         if: steps.pool_daily_send.outputs.sent == 'true'
         run: |
+          set -euo pipefail
           mkdir -p .claude-pool-daily-usage
           date -u +%Y-%m-%dT%H:%M:%SZ > .claude-pool-daily-usage/sent
 
