@@ -1870,14 +1870,14 @@ security_audit_resolve_upstream_managed_paths()
 		elif [ -z "${source_dir}" ]; then
 			skip_reason="upstream_tree_missing"
 		elif ! env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
-			python3 -I "${source_dir}/scripts/build_sync_manifest.py" managed-digests \
+			python3 -I -B "${source_dir}/scripts/build_sync_manifest.py" managed-digests \
 			--repo-root "${source_dir}" --commit HEAD \
 			> "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2> "${UPSTREAM_MANAGED_ERROR_FILE}"; then
 			: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
 			skip_reason="manifest_failed"
 			skip_detail="$(tail -n 1 "${UPSTREAM_MANAGED_ERROR_FILE}" 2>/dev/null | tr -c 'A-Za-z0-9._:/@+=-' '_' | head -c 200 || true)"
 		else
-			pattern_count="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 python3 -I -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); print(len(data) if isinstance(data, dict) else 0)' "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2>/dev/null || true)"
+			pattern_count="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); print(len(data) if isinstance(data, dict) else 0)' "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2>/dev/null || true)"
 			[[ "${pattern_count}" =~ ^[0-9]+$ ]] || pattern_count=0
 			[ "${pattern_count}" -gt 0 ] || skip_reason="empty_list"
 		fi

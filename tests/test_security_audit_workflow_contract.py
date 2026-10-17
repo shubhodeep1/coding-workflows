@@ -1912,7 +1912,9 @@ def test_upstream_managed_resolver_runs_python_isolated_from_the_audited_checkou
 	python_calls = re.findall(r"\bpython3\b[^\n]*", body)
 	assert python_calls
 	for call in python_calls:
-		assert re.match(r"python3 -I\b", call), call
+		# -I implies -E, which ignores PYTHONDONTWRITEBYTECODE; -B keeps .pyc files
+		# out of the upstream support checkout.
+		assert re.match(r"python3 -I -B\b", call), call
 
 
 def test_upstream_managed_resolver_reports_an_invalid_explicit_source_dir(tmp_path: Path) -> None:
