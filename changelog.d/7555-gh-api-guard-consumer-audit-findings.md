@@ -1,0 +1,12 @@
+<!-- changelog: security -->
+- **The `gh api` permission guard now prompts for placeholder writes that could reach another repository, and for quoted spellings of `gh api`.** Consumer security audits filed nine findings against the guard (#7555); two of the three claims were real gaps.
+
+The guard (`.claude/hooks/gh_api_write_guard.py` and its `workflow-templates/` copy, still byte-identical) changes in three ways:
+
+- **`{owner}/{repo}` placeholders.** gh fills them from `GH_REPO`, a `remote.<name>.gh-resolved` setting or the remote priority order, not only from `origin`. A write such as `gh api repos/{owner}/{repo}/issues/5/comments -f body=hi` is now routine only when every git remote names the repository `origin` names, no `gh-resolved` value names another one, the command does not change directory (`cd`, `pushd`, `popd`) or set any `GH_*` or `GIT_*` variable, and neither the session environment nor `CLAUDE_ENV_FILE` sets `GH_REPO` or a `GH_HOST` other than github.com. Otherwise it prompts, and the prompt suggests naming the repository explicitly.
+- **Explicit-slug writes.** A write to the local repository now prompts when the command sets a `GH_*` variable (`GH_HOST=... gh api repos/<local>/...`), when the session's `GH_HOST` or `CLAUDE_ENV_FILE` sends gh elsewhere, or when `--hostname` names a host other than github.com.
+- **Quoted and expanded spellings.** `'gh' api`, `"gh" "api"`, `g''h api`, `gh a''pi` and `gh \<newline>api` used to skip the guard, so a file-backed field such as `-F body=@~/.config/gh/hosts.yml` could be sent without a prompt. They are now read like the plain form, so reads and routine writes are still allowed and everything else prompts. `gh $'api'`, `gh $SUB` and `env -S '<gh api ...>'` always prompt.
+
+Every direct file-backed field form the audits cite (`-F body=@file`, `--field=k=@-`, glued `-Fbody=@x`, `-iFbody=@x` and others) already prompted; they are now pinned by regression tests.
+
+What this means for operators: sessions that run `gh api repos/{owner}/{repo}/...` writes after a `cd`, or in a fork checkout with an `upstream` remote, now see a prompt. Use the explicit `owner/repo` of the checkout to keep the call routine. Reads are unchanged.
