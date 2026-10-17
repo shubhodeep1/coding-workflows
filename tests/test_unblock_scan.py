@@ -808,6 +808,10 @@ def test_escalated_fixup_is_not_dispatched_every_hour() -> None:
 	assert _select(search, details, [_judge_run(77, 25)])["dispatch"] == [{"item": 77, "kind": "issue"}]
 	# A run that fell out of the 50-run window is never a reason to skip.
 	assert _select(search, details, [_judge_run(5, 1.5)])["dispatch"] == [{"item": 77, "kind": "issue"}]
+	# A cancelled or startup-failed run never judged the item, so it starts no window.
+	for conclusion in ("cancelled", "startup_failure"):
+		run = dict(_judge_run(77, 1.5), conclusion=conclusion)
+		assert _select(search, details, [run])["dispatch"] == [{"item": 77, "kind": "issue"}], conclusion
 	# The recheck window is a knob; 0 restores the old behaviour.
 	assert _select(search, details, [_judge_run(77, 1.5)], escalated_recheck=dt.timedelta(hours=1))["dispatch"] == [{"item": 77, "kind": "issue"}]
 	assert _select(search, details, [_judge_run(77, 1.5)], escalated_recheck=dt.timedelta(0))["dispatch"] == [{"item": 77, "kind": "issue"}]
@@ -849,6 +853,10 @@ def test_parked_close_is_judged_again_once_something_material_changes() -> None:
 	issue = [{"item": 639, "kind": "issue"}]
 	# The block was applied again after the verdict: a new block episode.
 	details["639"]["labeled"].append({"label": "ai:blocked", "created_at": _iso(3)})
+	assert _select(search, details)["dispatch"] == issue
+	details["639"]["labeled"].pop()
+	# So does another block label applied after the verdict and since removed.
+	details["639"]["labeled"].append({"label": "ai:validation-failed", "created_at": _iso(3)})
 	assert _select(search, details)["dispatch"] == issue
 	details["639"]["labeled"].pop()
 	# A new pipeline comment (new evidence) or a human comment re-arms it...

@@ -243,7 +243,9 @@ def _terminal_unchanged(info: dict, labels: set[str], number: int, trusted_login
 	if not found or found[1].group("verdict") != "close" or found[1].group("stop") != stop:
 		return False
 	closed_at = found[0]
-	carried = labels & set(unblock_ledger.BLOCK_LABELS)
+	# Any block label applied after the verdict re-arms the item, including one
+	# that was removed again; only the park's own ai:needs-human does not.
+	carried = set(unblock_ledger.BLOCK_LABELS) - {NEEDS_HUMAN_LABEL}
 	parked = False
 	episode = None
 	for event in info.get("labeled") or []:
@@ -266,6 +268,9 @@ def _last_run_times(runs: object) -> dict[int, dt.datetime]:
 	newest: dict[int, dt.datetime] = {}
 	for run in runs if isinstance(runs, list) else []:
 		if not isinstance(run, dict) or run.get("status") in ("cancelled", "skipped"):
+			continue
+		# GitHub reports these outcomes as status=completed with a conclusion.
+		if run.get("conclusion") in ("cancelled", "skipped", "startup_failure"):
 			continue
 		match = RUN_NAME_RE.match(str(run.get("display_title") or run.get("name") or ""))
 		created = _time(run.get("created_at"))

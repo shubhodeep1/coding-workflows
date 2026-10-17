@@ -19462,7 +19462,7 @@ run_unblock_scan() {
     | from_entries' 2>/dev/null || echo '{}')"
   printf '%s' "${details}" > "${work_dir}/details.json"
   if ! runs="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/unblock_judge_dispatch.yml/runs?per_page=50" \
-    --jq '[.workflow_runs[]? | {display_title, name, status, created_at}]' 2>/dev/null)"; then
+    --jq '[.workflow_runs[]? | {display_title, name, status, conclusion, created_at}]' 2>/dev/null)"; then
     echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=dispatch_workflow_unavailable"
     return 0
   fi
