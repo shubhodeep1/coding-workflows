@@ -607,6 +607,8 @@ class ValidationRefreshRunner:
 				["git", "ls-files", "--", "validation"],
 				cwd=repo_dir,
 				check=False,
+				# A local index read; fail fast instead of the 300 s default.
+				timeout=30,
 			)
 		except CommandFailure:
 			# Timeout or missing binary raise even with check=False.
