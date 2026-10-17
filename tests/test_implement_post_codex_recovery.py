@@ -656,6 +656,9 @@ def _run_diagnose_step(
 			"MOCK_CODEX_CALLS_FILE": str(calls_file),
 			"MOCK_CODEX_STDIN_FILE": str(stdin_file),
 			"TMPDIR": str(runtime_dir),
+			# The step skips when the staged support run dir is unset (#7540);
+			# point it at the helper copy _copy_diagnose_assets made.
+			"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(repo_dir / "scripts"),
 		}
 	)
 	if extra_env:
