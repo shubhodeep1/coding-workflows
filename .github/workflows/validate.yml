@@ -691,6 +691,12 @@ jobs:
           set -euo pipefail
           engine="codex"
           engine_script="${CLAUDE_ENGINE_SUPPORT_DIR:-}/scripts/ai_engine.sh"
+          # Scheduled mode (#7553) calls no model: keep codex so the Claude CLI
+          # install and the pool-token probes below are skipped.
+          if [ "${VALIDATE_SCHEDULED_MODE:-false}" = "true" ]; then
+            echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ -n "${CLAUDE_ENGINE_SUPPORT_DIR:-}" ] && [ -f "${engine_script}" ] && [ ! -L "${engine_script}" ]; then
             if [[ "${TRACKING_ISSUE_INPUT}" =~ ^[1-9][0-9]*$ ]]; then
               # API audit (unattended section 14): no earlier step of this job
@@ -1601,9 +1607,10 @@ jobs:
       # ai:scheduled-validation-failed issue in this repository (opened with one
       # Telegram WARNING, updated in place, closed when a later run passes).
       # Runs only the trusted support copy of the helper, never the checkout.
+      # A cancelled run is not evidence of a red branch, so it reports nothing.
       - name: Report scheduled validation result
         id: scheduled_sink
-        if: always() && env.VALIDATE_SCHEDULED_MODE == 'true' && env.CLAUDE_CAPACITY_WAIT != 'true'
+        if: "!cancelled() && env.VALIDATE_SCHEDULED_MODE == 'true' && env.CLAUDE_CAPACITY_WAIT != 'true'"
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}

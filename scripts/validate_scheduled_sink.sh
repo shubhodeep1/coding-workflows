@@ -207,7 +207,7 @@ try:
 			for failure in (data.get("failures") or [])[:20]:
 				if isinstance(failure, dict):
 					failing.append(cell(failure.get("test"), 200))
-except (OSError, ValueError, AttributeError):
+except (OSError, ValueError, AttributeError, TypeError):
 	failing = []
 
 run_url = env.get("SINK_RUN_URL", "")

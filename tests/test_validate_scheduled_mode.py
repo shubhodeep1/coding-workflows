@@ -76,7 +76,7 @@ def test_run_step_disables_model_phases_and_alerts_in_scheduled_mode() -> None:
 def test_sink_step_runs_trusted_copy_before_outcome() -> None:
 	text = REUSABLE.read_text(encoding="utf-8")
 	step = _step_block(text, "Report scheduled validation result")
-	assert "if: always() && env.VALIDATE_SCHEDULED_MODE == 'true' && env.CLAUDE_CAPACITY_WAIT != 'true'" in step
+	assert "if: \"!cancelled() && env.VALIDATE_SCHEDULED_MODE == 'true' && env.CLAUDE_CAPACITY_WAIT != 'true'\"" in step
 	assert "continue-on-error: true" in step
 	run = step.split("        run: |\n", 1)[1]
 	assert "${{" not in run
@@ -85,6 +85,14 @@ def test_sink_step_runs_trusted_copy_before_outcome() -> None:
 	assert "VALIDATE_SCHEDULED_SINK outcome=skip reason=support_missing" in run
 	assert text.index("- name: Record validation run end") < text.index("- name: Report scheduled validation result")
 	assert text.index("- name: Report scheduled validation result") < text.index("- name: Enforce validation outcome")
+
+
+def test_engine_resolution_stays_codex_in_scheduled_mode() -> None:
+	step = _step_block(REUSABLE.read_text(encoding="utf-8"), "Resolve AI engine")
+	run = step.split("        run: |\n", 1)[1]
+	guard = run.index('if [ "${VALIDATE_SCHEDULED_MODE:-false}" = "true" ]; then')
+	assert guard < run.index('source "${engine_script}"')
+	assert guard < run.index("labels_json=")
 
 
 def _run_gate(script: str, cwd: Path, env_extra: dict[str, str]) -> subprocess.CompletedProcess[str]:

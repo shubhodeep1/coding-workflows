@@ -174,3 +174,11 @@ def test_body_neutralises_untrusted_text_and_is_capped(tmp_path: Path) -> None:
 	assert "| Status | unknown |" in body
 	assert len(body.encode("utf-8")) < 60000 + 100
 	assert "outcome=opened" in proc.stdout
+
+
+def test_non_list_failures_still_reports(tmp_path: Path) -> None:
+	result = tmp_path / "validation_result.json"
+	result.write_text(json.dumps({"failures": 5}), encoding="utf-8")
+	proc, calls, _ = _run(tmp_path, "fail", SINK_RESULT_FILE=str(result))
+	assert "outcome=opened" in proc.stdout
+	assert "- (none recorded)" in _field(_writes(calls)[0], "body")
