@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7576,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7576\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7578\",\"pr_number\":7578,\"branch\":\"ai/issue-7576\",\"run_id\":\"39042660402\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39042660402\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/7576-ci-rebalance-promote-stall-review.md\"]}",
+  "fingerprint": "28269fff2311aa0324bbab36608394cc01ee25d65547b4a1cad377d8d2be5de7",
+  "lineage": {
+    "issue_number": 7576,
+    "parent_ids": [],
+    "pr_number": 7578,
+    "run_id": "39042660402",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39042660402",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7578"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261017151529_251ead3213",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7576,
+    "level": "run",
+    "pr_number": 7578,
+    "run_id": "39042660402"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7576: https://github.com/shubhodeep1/coding-workflows/pull/7578",
+  "timestamps": {
+    "created_at": "2026-10-17T15:15:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
