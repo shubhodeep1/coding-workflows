@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description lists the Pinned-SHA paragraph as added to prompts/mode-implement.txt and prompts/_templates/mode-implement.txt; the agents.d fragment says the rule lives in three places (those two files plus the inline heredoc in implement.yml). The changelog should document that full scope.\n  expected_change_site: changelog.d/7544-skip-activation-verify-for-sync-prs.md (paragraph beginning \"`prompts/mode-implement.txt` also gains...\")\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The changelog paragraph names only prompts/mode-implement.txt. It omits prompts/_templates/mode-implement.txt and the inline heredoc in .github/workflows/implement.yml, which is the prompt the implement job actually sends. All four reviewers rated it NIT. The reviewers cite different changelog lines (line 6, line 8, or none).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: The PR description lists the Pinned-SHA paragraph as added to `prompts/mode-implement.txt` and `prompts/_templates/mode-implement.txt`. The agents.d fragment says it lives in three places: those two files and the inline heredoc in `implement.yml`.\n  Expected change site: `changelog.d/7544-skip-activation-verify-for-sync-prs.md`, the paragraph beginning \"`prompts/mode-implement.txt` also gains...\"\n  Evidence of absence: That paragraph names only `prompts/mode-implement.txt`. It does not mention the `_templates` twin or the `implement.yml` inline heredoc. This is a precision gap in the changelog, not a runtime defect. SEVERITY: NIT. ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: PR DESCRIPTION \"What changed\" names the Pinned-SHA paragraph as added to prompts/mode-implement.txt and prompts/_templates/mode-implement.txt. The agents.d fragment confirms the rule lives in three places. The changelog names only one file.\n  Expected change site: changelog.d/7544-skip-activation-verify-for-sync-prs.md\n  Evidence of absence: The changelog entry at line 8 only mentions prompts/mode-implement.txt. It omits prompts/_templates/mode-implement.txt and the inline heredoc in .github/workflows/implement.yml. SEVERITY: NIT. ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: PR DESCRIPTION \"What changed\" names the \"Pinned-SHA test discipline\" paragraph as added to both `prompts/mode-implement.txt` and `prompts/_templates/mode-implement.txt`. The agents.d fragment `agents.d/7544-activation-verify-skips-sync-prs.md:2` and the contract test confirm the rule lives in three places, including the inline heredoc at `.github/workflows/implement.yml:2709-2716`. The changelog names only one of the three.\n  Expected change site: `changelog.d/7544-skip-activation-verify-for-sync-prs.md` line 6\n  Evidence of absence: Changelog line 6 mentions only `prompts/mode-implement.txt`. It omits `prompts/_templates/mode-implement.txt` and the inline heredoc in `.github/workflows/implement.yml`. `agents.d/7544-activation-verify-skips-sync-prs.md:2` and `tests/test_implement_prompt_pinned_sha_contract.py:62-68` both confirm all three places. SEVERITY: NIT. ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\n- Requirement: The PR description states \"prompts/mode-implement.txt and prompts/_templates/mode-implement.txt: a 'Pinned-SHA test discipline' paragraph\". The agents.d fragment confirms the rule lives in three places. The changelog should document the complete scope.\n  Expected change site: changelog.d/7544-skip-activation-verify-for-sync-prs.md line 8\n  Evidence of absence: Line 8 mentions only `prompts/mode-implement.txt`. It omits `prompts/_templates/mode-implement.txt` and the inline heredoc in `.github/workflows/implement.yml`. SEVERITY: NIT. ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ca7d4eafb683bdb8b89a0737e89f84cdbd860a24bef66fa2bf2017dc4ba0cf2e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7544,
+    "run_id": "39006979192",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39006979192",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017055841_b9d467e1c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7544,
+    "run_id": "39006979192"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T05:58:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
