@@ -36,9 +36,8 @@
   - `install-codex` is referenced by commit
     (`install-codex@91b30f6fba400686c5dded34423f88f1ea10e163`), in the
     workflows and inside `setup-runtime`. Bump that pin in the same PR when the
-    action changes. `validate.yml` calls `setup-runtime` by commit
-    (`setup-runtime@18e876fa6b0f9f285c71789c937af17e31fd7411`, #7551); bump it
-    in the same PR as any change to `setup-runtime/action.yml`.
+    action changes. `validate.yml` still calls `setup-runtime@stable`; its
+    pin moves to the commit that carries this change in a follow-up.
   - The `ai-review.yml` wrapper's `.provider-outage-support` checkout joins
     `.security-hold-support` and `.non-retryable-backfill-support` in
     `scripts/workflow_wrapper_refs.py`'s `_PINNED_SUPPORT_CHECKOUT_PATHS`, so an
