@@ -487,7 +487,7 @@ def test_clarify_label_missing_refusal_holds_issue() -> None:
 		body = _post_body(posts[0])
 		assert body.rstrip().endswith(_LABEL_MISSING_MARKER), body
 		assert not any(l.lstrip().startswith("/reclarify") for l in body.splitlines()), body
-		assert "ai:check-triage" in body and "Tracking issue (untrusted)" in body, body
+		assert "ai:check-triage" in body and "`- Tracking issue: #N`" in body and "(untrusted)" not in body, body
 		assert posts[1][posts[1].index("POST") + 1] == "repos/consumer/repo/issues/5/labels", posts
 		assert "labels[]=ai:blocked" in posts[1], posts
 
@@ -645,17 +645,24 @@ def test_clarify_reclarify_releases_label_missing_hold_block() -> None:
 	"""Issue #7516: after the operator repairs the labels and posts /reclarify,
 	the hold's ai:blocked label is removed, but only for the GH_PAT login's
 	hold marker. Plan keeps ai:blocked when ai:clarification is also present."""
-	trusted = [{"user": {"login": "pipeline-bot"}, "body": f"text\n{_LABEL_MISSING_MARKER}\n"}]
+	trusted = [{"id": 41, "user": {"login": "pipeline-bot"}, "body": f"text\n{_LABEL_MISSING_MARKER}\n"}]
 	delete = "api -X DELETE repos/consumer/repo/issues/5/labels/ai:blocked"
+	patch = "api -X PATCH repos/consumer/repo/issues/comments/41 -f body=text"
+	released = "<!-- ai:integration-ref-label-missing:v1 issue=5 released -->"
 	rc, out, calls = _run_phase_label_step(["ai:clarification", "ai:blocked"], trusted)
 	assert rc == 0, out
 	assert any(delete in c for c in calls), calls
+	# The marker is retired before the label goes, so the release is one-shot.
+	assert patch in calls and calls.index(patch) + 1 < len(calls) and calls[calls.index(patch) + 1] == released, calls
+	assert calls.index(patch) < next(i for i, c in enumerate(calls) if delete in c), calls
 	assert "INTEGRATION_REF_RESOLVE outcome=released reason=label_missing issue=5" in out, out
-	forged = [{"user": {"login": "someone-else"}, "body": _LABEL_MISSING_MARKER}]
-	for labels, comments in ((["ai:blocked"], forged), (["ai:clarification"], trusted), (["ai:blocked"], [])):
+	forged = [{"id": 42, "user": {"login": "someone-else"}, "body": _LABEL_MISSING_MARKER}]
+	# A hold marker already released never removes a later, unrelated ai:blocked.
+	already_released = [{"id": 43, "user": {"login": "pipeline-bot"}, "body": f"text\n{released}"}]
+	for labels, comments in ((["ai:blocked"], forged), (["ai:clarification"], trusted), (["ai:blocked"], []), (["ai:blocked"], already_released)):
 		rc, out, calls = _run_phase_label_step(labels, comments)
 		assert rc == 0, out
-		assert not any(delete in c for c in calls), (labels, calls)
+		assert not any(delete in c or "PATCH" in c for c in calls), (labels, calls)
 
 
 def main() -> int:

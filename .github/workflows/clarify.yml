@@ -262,7 +262,7 @@ jobs:
               hold_run_url="${GITHUB_SERVER_URL:-https://github.com}/${hold_repo}/actions/runs/${GITHUB_RUN_ID}"
               hold_body="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n\n%s' \
                 "**Clarify is on hold: CI-triage routing refused (\`reason=label_missing\`).**" \
-                "This issue carries the check-failure-triage markers but not the \`ai:check-triage\` label. On an \`ai:orchestrator-managed\` issue, the canonical \`- Tracking issue (untrusted): #N\` line is missing as well. The integration-ref resolver cannot verify a branch, so clarify does not fall back to the default branch." \
+                "This issue carries the check-failure-triage markers but not the \`ai:check-triage\` label. On an \`ai:orchestrator-managed\` issue, the canonical \`- Tracking issue: #N\` line is missing as well. The integration-ref resolver cannot verify a branch, so clarify does not fall back to the default branch." \
                 "To fix it, either restore \`ai:check-triage\` and remove \`ai:orchestrator-managed\`, or add the canonical tracking line to the issue body. Then comment \`/reclarify\` to run clarify again. The issue is labelled \`ai:blocked\` until then." \
                 "Run: ${hold_run_url}" \
                 "_Posted by the clarify workflow._" \
@@ -990,20 +990,41 @@ jobs:
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
           # Issue #7516: once routing passes again, a /reclarify after a
           # label_missing hold drops the hold's ai:blocked label, so plan and
-          # the unblock scan do not see a stale block. Only the GH_PAT login's
-          # hold marker counts; any failure leaves the label (fail open).
+          # the unblock scan do not see a stale block. Only an open hold marker
+          # by the GH_PAT login counts. The marker is first rewritten to its
+          # "released" form, so a later ai:blocked set for another reason is
+          # never removed by this step; any failure leaves the label on.
           if [ "${{ github.event_name }}" = "issue_comment" ] \
             && [ -s "${ISSUE_ALL_COMMENTS_FILE:-}" ] \
             && jq -e '[(.labels // [])[]?.name] | index("ai:blocked") != null' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
             hold_release_login="$(gh api user --jq .login 2>/dev/null || true)"
-            if [ -n "${hold_release_login}" ] && jq -e --arg login "${hold_release_login}" \
-              --arg marker "<!-- ai:integration-ref-label-missing:v1 issue=${ISSUE_NUMBER} -->" \
-              'any(.[]?; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' \
-              "${ISSUE_ALL_COMMENTS_FILE}" >/dev/null 2>&1; then
-              if gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:blocked" >/dev/null 2>&1; then
+            hold_release_marker="<!-- ai:integration-ref-label-missing:v1 issue=${ISSUE_NUMBER} -->"
+            hold_release_done="<!-- ai:integration-ref-label-missing:v1 issue=${ISSUE_NUMBER} released -->"
+            hold_release_ids=""
+            if [ -n "${hold_release_login}" ]; then
+              hold_release_ids="$(jq -r --arg login "${hold_release_login}" --arg marker "${hold_release_marker}" \
+                '[.[]? | select((.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker))) | .id | tostring] | join(" ")' \
+                "${ISSUE_ALL_COMMENTS_FILE}" 2>/dev/null || true)"
+            fi
+            if [ -n "${hold_release_ids}" ]; then
+              hold_release_ok=true
+              for hold_release_id in ${hold_release_ids}; do
+                hold_release_body=""
+                if [[ "${hold_release_id}" =~ ^[0-9]+$ ]]; then
+                  hold_release_body="$(jq -r --argjson id "${hold_release_id}" --arg marker "${hold_release_marker}" --arg done "${hold_release_done}" \
+                    'first(.[]? | select(.id == $id)) | (.body | sub("\\s+$"; "")) as $b | $b[0:(($b | length) - ($marker | length))] + $done' \
+                    "${ISSUE_ALL_COMMENTS_FILE}" 2>/dev/null || true)"
+                fi
+                if [ -z "${hold_release_body}" ] \
+                  || ! gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${hold_release_id}" -f body="${hold_release_body}" >/dev/null 2>&1; then
+                  hold_release_ok=false
+                fi
+              done
+              if [ "${hold_release_ok}" = "true" ] \
+                && GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:blocked" >/dev/null 2>&1; then
                 echo "::notice::INTEGRATION_REF_RESOLVE outcome=released reason=label_missing issue=${ISSUE_NUMBER} label=removed"
               else
-                echo "::warning::Could not remove the label_missing hold's ai:blocked from issue #${ISSUE_NUMBER}."
+                echo "::warning::Could not release the label_missing hold on issue #${ISSUE_NUMBER}; ai:blocked may need removing by hand."
               fi
             fi
           fi
