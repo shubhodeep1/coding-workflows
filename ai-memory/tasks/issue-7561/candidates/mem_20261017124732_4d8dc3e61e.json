@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) The review/autofix pipeline (`review_autofix.yml` and the `scripts/review_*` helpers)\nB) The orchestrator poller and project flow (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nC) The clarify, plan and implement phases (`clarify.yml`, `plan.yml`, `implement.yml`)\nD) Documentation only (README, `docs/`)\nE) None of these. Close this issue and open a new one that names the component, the current problem and the expected result. (RECOMMENDED)\nQ2: What should \"better\" mean for the part you chose?\nChoices:\nA) Fix a specific bug or failure (link the failing run, issue or PR)\nB) Reduce cost or run time (name the metric and the target)\nC) Improve reliability or security (name the failure mode)\nD) Add a specific missing feature (describe the expected behaviour)\nE) Give the answer in the issue body, with the current behaviour and the desired behaviour (RECOMMENDED)\n**Note:** If you choose Q1:E, this question does not apply; put the answer in the new issue.",
+  "fingerprint": "a192d25fd519512fa2a868caebc1071262b08987ec0396bbfcc443d422276308",
+  "lineage": {
+    "issue_number": 7561,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39033598920",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39033598920",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261017124732_4d8dc3e61e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7561,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39033598920"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7561 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-17T12:47:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
