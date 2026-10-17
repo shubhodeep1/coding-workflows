@@ -1049,6 +1049,8 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py
+          # Scheduled validation (issue #7553): wrapper schedule, deterministic mode and failure sink.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_scheduled_mode.py tests/test_validate_scheduled_sink.py
 
       # Moved from tests-release-and-log-analysis, which took 15m33s of its
       # 20 minutes on main (run 38663329196, budget-watch issue #7406). Step

@@ -338,6 +338,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/validation_harness_sandbox.sh` — Runs the generated validation harness as an unprivileged user with rootless Docker, an allowlisted environment and bounded log copy-back (invoked by `scripts/validate_process.sh` Phase 3).
 - `scripts/validate_editor_audit.sh` — when the helper exits non-zero (caller-side).
 - `scripts/validate_process.sh` — validate_process.sh — Generate and execute runtime validation harness.
+- `scripts/validate_scheduled_sink.sh` — Reports a scheduled validation run (issue #7553) in one `ai:scheduled-validation-failed` issue: open with one WARNING, update in place, close when a later scheduled run passes (invoked by `validate.yml`).
 - `scripts/validation_discovery_bootstrap.py` — Codex-driven .ai/validate.yml discovery for consumer repositories.
 - `scripts/validation_lint.py` — Deterministic lint checks for rendered validation harness output.
 - `scripts/validation_refresh_runner.py` — Render and self-test validation assets against consumer repositories.
