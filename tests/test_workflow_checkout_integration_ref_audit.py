@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -430,6 +431,36 @@ def test_implement_pr_not_open_skips_without_a_ref() -> None:
 	assert "SKIP_IMPLEMENT" not in env_text, env_text
 
 
+CI_TRIAGE_FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "integration_ref_resolver_ci_triage"
+
+
+def test_implement_pr_not_open_fixtures_skip_without_a_ref() -> None:
+	"""Issue #7540: drive implement's step with the refusal the real resolver
+	emits for the merged and closed-unmerged pr_not_open fixtures."""
+	resolver = REPO_ROOT / "scripts" / "resolve_integration_ref.sh"
+	for name in ("pr_not_open_merged.json", "pr_not_open_closed.json"):
+		fixture_path = CI_TRIAGE_FIXTURE_DIR / name
+		fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+		assert fixture["expected_exit_code"] == 3 and fixture["expected_error_reason"] == "pr_not_open", name
+		# The real resolver must still refuse this fixture with pr_not_open.
+		self_test = subprocess.run(
+			["bash", str(resolver), "--self-test-case", str(fixture_path)],
+			capture_output=True, text=True, timeout=120,
+		)
+		assert self_test.returncode == 0, f"{name}\n{self_test.stdout}{self_test.stderr}"
+		(issue_number,) = fixture["issues"].keys()
+		(pr_number,) = fixture["pulls"].keys()
+		refusal = (f"::error::CI_TRIAGE_PR_BRANCH_ROUTING issue={issue_number} pr={pr_number} "
+			f"outcome=refused reason={fixture['expected_error_reason']}")
+		rc, out, gh_output, env_text = _run_refctx_full("implement.yml", "ok", "true",
+			{"FAKE_RESOLVER_RC": "3", "FAKE_RESOLVER_STDERR": refusal})
+		assert rc == 0, f"{name}\n{out}"
+		assert "SKIP_IMPLEMENT=true" in env_text, f"{name}: {env_text!r}"
+		assert "ref=" not in gh_output, f"{name}: {gh_output!r}"
+		assert "pr_not_open=true\n" in gh_output and f"pr_not_open_pr={pr_number}\n" in gh_output, gh_output
+		assert "::error::" not in out, out
+
+
 def test_implement_diagnose_step_skips_when_helper_not_staged() -> None:
 	"""Issue #7540: a failure before support staging must not run the
 	missing diagnose helper (bash exit 127)."""
@@ -454,6 +485,7 @@ def main() -> int:
 	test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit()
 	test_plan_pr_not_open_refusal_keeps_other_reasons_fatal()
 	test_implement_pr_not_open_skips_without_a_ref()
+	test_implement_pr_not_open_fixtures_skip_without_a_ref()
 	test_implement_diagnose_step_skips_when_helper_not_staged()
 	return 0
 

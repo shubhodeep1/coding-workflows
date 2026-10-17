@@ -740,7 +740,12 @@ jobs:
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" --add-label 'ai:blocked' \
               --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || label_state=failed
             body="CI-triage pull request #${pr:-unknown} is no longer open, so implementation was not started (outcome: \`${detail}\`). The unblock judge decides whether to close or re-issue this issue."$'\n\n'"<!-- ai:implement-pr-not-open:v1 pr=${pr} run=${GITHUB_RUN_ID} -->"
-            gh_retry gh api "repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 || comment_state=failed
+            # Comment only after the label landed, so a retry does not post it twice.
+            if [ "${label_state}" = "applied" ]; then
+              gh_retry gh api "repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 || comment_state=failed
+            else
+              comment_state=skipped
+            fi
             log "reason=blocked_handoff detail=${detail} outcome=handed_off label=${label_state} comment=${comment_state}"
             if [ "${label_state}" = "failed" ]; then
               echo "::warning::Could not label #${ISSUE_NUMBER} ai:blocked; it is still ai:awaiting-approval."

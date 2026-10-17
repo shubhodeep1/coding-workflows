@@ -643,5 +643,7 @@ def test_implement_handoff_switch_off_is_blocked_without_classifier_reads(tmp_pa
 def test_implement_handoff_edit_failure_still_exits_zero(tmp_path):
 	proc, calls = _run_handoff(tmp_path, merged=False, env_extra={"FAKE_EDIT_FAIL": "1"})
 	assert proc.returncode == 0
-	assert "label=failed" in proc.stdout
+	assert "label=failed comment=skipped" in proc.stdout
 	assert "::warning::" in proc.stdout + proc.stderr
+	# No hand-off comment while the label is missing, so a retry cannot duplicate it.
+	assert _posted_bodies(calls) == []
