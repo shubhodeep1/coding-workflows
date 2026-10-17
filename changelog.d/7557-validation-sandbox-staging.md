@@ -11,7 +11,7 @@
 | `.npmrc` reject markers | lines starting with `//`, URL userinfo, `_auth*`, `_password`, `password`, `username`, `email`, `certfile`, `keyfile`, `cafile`, `token`, `secret`, `${`, `-----begin`, keys `cert`/`key`/`ca`/`otp` |
 | Consumer validations unblocked | 4 |
 
-What this means for operators: the validation log now shows `VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=env_template_admitted|npmrc_admitted path=<name>` for each extra file staged, and `outcome=skip reason=npmrc_credential` (or `npmrc_symlink`, `npmrc_too_large`, `npmrc_undecodable`) when an `.npmrc` was left out. A project whose `npm ci` needs a registry token still has to supply it another way; the sandbox never receives it. Files you do not want in the sandbox copy belong in `.gitignore`.
+What this means for operators: the validation log now shows `VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=env_template_admitted|npmrc_admitted path=<name>` for each extra file staged, and `outcome=skip reason=npmrc_credential` (or `npmrc_symlink`, `npmrc_too_large`, `npmrc_undecodable`) when an `.npmrc` was left out, and `outcome=skip reason=env_template_not_regular` for a symlinked env template. A project whose `npm ci` needs a registry token still has to supply it another way; the sandbox never receives it. Files you do not want in the sandbox copy belong in `.gitignore`.
 
 ### For contributors
 

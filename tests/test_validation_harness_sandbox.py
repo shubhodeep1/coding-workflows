@@ -1953,6 +1953,31 @@ def test_stage_copy_drops_a_symlinked_oversized_or_undecodable_npmrc(tmp_path: P
 	assert "outcome=skip reason=npmrc_undecodable path=bin/.npmrc\n" in stderr
 
 
+def test_stage_copy_logs_a_skip_for_a_symlinked_env_template(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "target.txt", "KEY=value\n")
+	(workspace / ".env.example").symlink_to("target.txt")
+	_git_add(workspace, ".env.example", "target.txt")
+	members, stderr = _stage(helper_dir, workspace)
+	assert ".env.example" not in members
+	assert "VALIDATION_HARNESS_SANDBOX phase=stage outcome=skip reason=env_template_not_regular path=.env.example\n" in stderr
+
+
+def test_stage_copy_keeps_ignored_special_files_under_validation_out(tmp_path: Path) -> None:
+	# The validation/ walk adds files git ignores; the staging-only admissions
+	# must not apply to them.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, ".gitignore", "validation/.env.example\nvalidation/.npmrc\n")
+	_git_add(workspace, ".gitignore")
+	_write(workspace, "validation/.env.example", "KEY=value\n")
+	_write(workspace, "validation/.npmrc", "legacy-peer-deps=true\n")
+	_write(workspace, "validation/tests/ok.sh", "#!/bin/bash\n")
+	members, stderr = _stage(helper_dir, workspace)
+	assert "validation/tests/ok.sh" in members
+	assert "validation/.env.example" not in members and "validation/.npmrc" not in members, sorted(members)
+	assert "path=validation/.env.example" not in stderr and "path=validation/.npmrc" not in stderr
+
+
 def test_stage_copy_leaves_the_shared_readonly_screen_unchanged() -> None:
 	# Agent sandboxes use readonly_allowed too; the staging admissions live
 	# only in STAGE_PY.

@@ -886,6 +886,10 @@ listed = subprocess.run(
 	cwd=workspace, env=env, check=True, capture_output=True,
 ).stdout.split(b"\0")
 names = {item.decode("utf-8", "surrogateescape") for item in listed if item}
+# Staging-only admissions (env templates, .npmrc) apply only to names git lists
+# (tracked, or untracked and not ignored); the validation/ walk below can add
+# ignored files, which keep the plain readonly_allowed screen.
+git_listed = frozenset(names)
 for root in ("validation",):
 	base = workspace / root
 	if base.is_dir() and not base.is_symlink():
@@ -992,7 +996,7 @@ for name in sorted(names):
 		continue
 	special = None
 	if not readonly_allowed(name):
-		special = stage_special_kind(name)
+		special = stage_special_kind(name) if name in git_listed else None
 		if special is None:
 			continue
 	path = workspace / name
@@ -1011,8 +1015,13 @@ for name in sorted(names):
 				stage_log("ok", "npmrc_admitted", name)
 			else:
 				stage_log("skip", rejected, name)
-		elif add(path, name) and special == "env_template":
-			stage_log("ok", "env_template_admitted", name)
+		elif special == "env_template":
+			if add(path, name):
+				stage_log("ok", "env_template_admitted", name)
+			else:
+				stage_log("skip", "env_template_not_regular", name)
+		else:
+			add(path, name)
 	except OSError:
 		continue
 for dest, src in sorted(overlays.items()):
