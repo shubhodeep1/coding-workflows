@@ -61,7 +61,8 @@ and pass back in --parents-file; fix-ups waiting on them count as
 `timeline-check` reads the issue's timeline (the array
 `_issue_timeline_with_cross_refs_json` prints) and prints
 `{"ok": bool, "reason": s}`. It refuses a fix-up with an open or unreadable
-linked pull request, or one that was closed before (it was reopened, so a
+linked pull request (also one in another repository, recognised by its
+`/pull/` html_url), or one that was closed before (it was reopened, so a
 person wants it); a timeline that is not an array fails closed.
 
 No GitHub API calls and no network (CLAUDE.md §15). Exit 0 ok, 1 bad
@@ -252,7 +253,12 @@ def timeline_check(timeline: object) -> dict:
 		if event.get("event") != "cross-referenced":
 			continue
 		source = (event.get("source") or {}).get("issue") if isinstance(event.get("source"), dict) else None
-		if not isinstance(source, dict) or not source.get("pull_request"):
+		if not isinstance(source, dict):
+			continue
+		# _issue_timeline_with_cross_refs_json sets `pull_request` to null for a
+		# pull request in another repository; its html_url still names /pull/.
+		html_url = source.get("html_url")
+		if not source.get("pull_request") and not (isinstance(html_url, str) and "/pull/" in html_url):
 			continue
 		if source.get("lookup_failed"):
 			return {"ok": False, "reason": "linked_pr_unreadable"}

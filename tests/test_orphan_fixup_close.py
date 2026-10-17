@@ -239,6 +239,11 @@ def test_timeline_check_refuses_open_unreadable_and_reopened() -> None:
 	assert check({"event": "closed"}) == {"ok": False, "reason": "timeline_invalid"}
 	assert check(None) == {"ok": False, "reason": "timeline_invalid"}
 	assert check(["x"]) == {"ok": False, "reason": "timeline_invalid"}
+	# The timeline helper nulls `pull_request` for a pull request in another repository.
+	cross_repo = {"event": "cross-referenced", "source": {"issue": {"number": 5, "pull_request": None, "state": "open", "html_url": "https://github.com/other/repo/pull/5"}}}
+	assert check([cross_repo]) == {"ok": False, "reason": "open_linked_pr"}
+	cross_repo["source"]["issue"]["state"] = "closed"
+	assert check([cross_repo])["ok"] is True
 
 
 # ---------------------------------------------------------------- CLI
@@ -312,6 +317,7 @@ printf '%s\n' "$(printf '%s' "gh $*" | tr '\n' '~')" >> "${FAKE_LOG}"
 if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
 	[ -f "${FAKE_DIR}/graphql.json" ] || exit 1
 	cat "${FAKE_DIR}/graphql.json"
+	[ -f "${FAKE_DIR}/graphql_fails" ] && exit 1
 	exit 0
 fi
 if [ "$1" = "api" ]; then
@@ -336,7 +342,7 @@ exit 1
 """
 
 
-def _run_sweep(tmp_path: Path, pages: list[list[dict]], graphql: dict | None, timelines: dict[int, object] | None = None, env: dict[str, str] | None = None, list_fails: bool = False, close_fails: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
+def _run_sweep(tmp_path: Path, pages: list[list[dict]], graphql: dict | None, timelines: dict[int, object] | None = None, env: dict[str, str] | None = None, list_fails: bool = False, close_fails: bool = False, graphql_fails: bool = False, timeline_fails: list[int] | None = None) -> tuple[subprocess.CompletedProcess, list[str]]:
 	fake_dir = tmp_path / "fake"
 	bin_dir = tmp_path / "bin"
 	fake_dir.mkdir()
@@ -358,6 +364,10 @@ def _run_sweep(tmp_path: Path, pages: list[list[dict]], graphql: dict | None, ti
 		(fake_dir / "list_fails").write_text("")
 	if close_fails:
 		(fake_dir / "close_fails").write_text("")
+	if graphql_fails:
+		(fake_dir / "graphql_fails").write_text("")
+	for number in timeline_fails or []:
+		(fake_dir / f"timeline_fail_{number}").write_text("")
 	for number, timeline in (timelines or {}).items():
 		(fake_dir / f"timeline_{number}.json").write_text(json.dumps(timeline))
 	funcs = tmp_path / "funcs.sh"
@@ -370,6 +380,7 @@ def _run_sweep(tmp_path: Path, pages: list[list[dict]], graphql: dict | None, ti
 		_safe_gh_jq() {{ gh api "$@"; }}
 		unblock_trusted_login() {{ UNBLOCK_TRUSTED_LOGIN="{BOT}"; printf '%s' "${{UNBLOCK_TRUSTED_LOGIN}}"; }}
 		_issue_timeline_with_cross_refs_json() {{
+			[ -f "${{FAKE_DIR}}/timeline_fail_$1" ] && return 1
 			if [ -f "${{FAKE_DIR}}/timeline_$1.json" ]; then cat "${{FAKE_DIR}}/timeline_$1.json"; else echo '[]'; fi
 		}}
 		export GITHUB_REPOSITORY="owner/repo"
@@ -419,17 +430,53 @@ def test_sweep_with_nothing_to_do_costs_one_list_call(tmp_path: Path) -> None:
 	assert "selected=0 closed=0 held=0" in result.stdout and len(calls) == 1 and _closes(calls) == []
 
 
-def test_sweep_skips_a_fixup_with_an_open_pr_or_a_reopen_and_keeps_going(tmp_path: Path) -> None:
+def test_sweep_keeps_a_refused_fixup_and_everything_under_it(tmp_path: Path) -> None:
+	"""A reopened fix-up stays open, and so do the fix-ups below it: a chain only closes from its closed root."""
 	issues = _chain(144, 3)
-	timelines = {
-		145: [_cross(900, "open")],
-		146: [{"event": "closed"}],
-	}
+	timelines = {146: [{"event": "closed"}]}
 	result, calls = _run_sweep(tmp_path, [issues], _gql(**{"p144": {"state": "CLOSED", "state_reason": "NOT_PLANNED", "closed_at": _iso(72)}}), timelines)
-	assert [line.split()[3] for line in _closes(calls)] == ["147"]
-	assert "item=145 parent=144 root=144 outcome=skip reason=open_linked_pr" in result.stdout
+	assert [line.split()[3] for line in _closes(calls)] == ["145"]
 	assert "item=146 parent=145 root=144 outcome=skip reason=previously_closed" in result.stdout
+	assert "item=147 parent=146 root=144 outcome=skip reason=parent_held held=146" in result.stdout
 	assert "selected=3 closed=1 held=2" in result.stdout
+
+
+def test_sweep_open_pr_on_the_nearest_fixup_holds_the_whole_chain(tmp_path: Path) -> None:
+	timelines = {145: [_cross(900, "open")]}
+	result, calls = _run_sweep(tmp_path, [_chain(144, 3)], _gql(**{"p144": {"state": "CLOSED", "state_reason": "COMPLETED", "closed_at": _iso(72)}}), timelines)
+	assert _closes(calls) == []
+	assert "item=145 parent=144 root=144 outcome=skip reason=open_linked_pr" in result.stdout
+	assert "item=146 parent=145 root=144 outcome=skip reason=parent_held held=145" in result.stdout
+	assert "selected=3 closed=0 held=3" in result.stdout
+
+
+def test_sweep_held_fixups_do_not_use_up_the_cap(tmp_path: Path) -> None:
+	"""Five siblings with open pull requests sit nearest the root; the sixth still closes."""
+	issues = [_fixup(number, 144) for number in range(145, 151)]
+	timelines = {number: [_cross(900 + number, "open")] for number in range(145, 150)}
+	result, calls = _run_sweep(tmp_path, [issues], _gql(**{"p144": {"state": "CLOSED", "state_reason": "COMPLETED", "closed_at": _iso(72)}}), timelines)
+	assert [line.split()[3] for line in _closes(calls)] == ["150"]
+	assert "closed=1 held=5" in result.stdout
+
+
+def test_sweep_failed_timeline_read_closes_nothing_this_tick(tmp_path: Path) -> None:
+	result, calls = _run_sweep(tmp_path, [_chain(144, 3)], _gql(**{"p144": {"state": "CLOSED", "state_reason": "COMPLETED", "closed_at": _iso(72)}}), timeline_fails=[146])
+	assert _closes(calls) == []
+	assert "item=146 parent=145 root=144 outcome=skip reason=timeline_fetch_failed" in result.stdout
+	assert "outcome=done" not in result.stdout and "rc=0" in result.stdout
+
+
+def test_sweep_keeps_the_other_aliases_when_one_number_is_not_found(tmp_path: Path) -> None:
+	graphql = _gql(**{"p144": {"state": "CLOSED", "state_reason": "COMPLETED", "closed_at": _iso(72)}, "p999": None})
+	graphql["errors"] = [{"type": "NOT_FOUND", "path": ["repository", "p999"]}]
+	issues = _chain(144, 1) + [_fixup(300, 999)]
+	result, calls = _run_sweep(tmp_path, [issues], graphql, graphql_fails=True)
+	assert [line.split()[3] for line in _closes(calls)] == ["145"]
+	other = tmp_path / "other"
+	other.mkdir()
+	graphql["errors"] = [{"type": "RATE_LIMITED"}]
+	result, calls = _run_sweep(other, [issues], graphql, graphql_fails=True)
+	assert "outcome=skip reason=parent_lookup_failed" in result.stdout and _closes(calls) == []
 
 
 def test_sweep_dry_run_and_kill_switch_change_nothing(tmp_path: Path) -> None:
@@ -445,7 +492,7 @@ def test_sweep_dry_run_and_kill_switch_change_nothing(tmp_path: Path) -> None:
 def test_sweep_honours_the_per_tick_cap_and_survives_bad_numbers(tmp_path: Path) -> None:
 	graphql = _gql(**{"p144": {"state": "CLOSED", "state_reason": "COMPLETED", "closed_at": _iso(72)}})
 	result, calls = _run_sweep(tmp_path, [_chain(144, 8)], graphql, env={"ORPHAN_FIXUP_CLOSE_MAX_PER_TICK": "2"})
-	assert len(_closes(calls)) == 2 and '"over_cap":6' in result.stdout
+	assert [line.split()[3] for line in _closes(calls)] == ["145", "146"]
 	bad = tmp_path / "bad"
 	bad.mkdir()
 	result, calls = _run_sweep(bad, [_chain(144, 8)], graphql, env={"ORPHAN_FIXUP_CLOSE_MAX_PER_TICK": "lots", "ORPHAN_FIXUP_CLOSE_GRACE_MINUTES": "soon", "ORPHAN_FIXUP_CLOSE_MAX_PAGES": "0"})

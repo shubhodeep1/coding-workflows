@@ -5,13 +5,13 @@ The unblock judge files a fix-up issue (`<!-- ai:unblock-fixup:v1 item=<n> round
 
 | The numbers that matter | Value |
 | --- | --- |
-| Closes per tick (`ORPHAN_FIXUP_CLOSE_MAX_PER_TICK`) | 5, nearest the closed issue first |
+| Closes per tick (`ORPHAN_FIXUP_CLOSE_MAX_PER_TICK`) | 5, nearest the closed issue first; later batches of one chain about an hour apart (the grace applies to fix-ups the sweep closed) |
 | Grace after the source issue closed (`ORPHAN_FIXUP_CLOSE_GRACE_MINUTES`) | 60 minutes |
 | Extra API calls with nothing to close | 1 REST list page per 100 open issues, at most 5 pages |
-| Extra API calls when something closes | 1 aliased GraphQL read, then 1 timeline read and 1 close per closed fix-up |
+| Extra API calls when something closes | 1 aliased GraphQL read per 20 unknown issues, 1 timeline read per fix-up checked, 1 close per closed fix-up |
 | Switches | `ORPHAN_FIXUP_CLOSE_ENABLED` (default `true`), `ORPHAN_FIXUP_CLOSE_DRY_RUN` (default `false`) |
 
-What this means for operators: nothing to set. Only issues authored by the pipeline login that carry no label other than a block label (`ai:blocked`, `ai:scope-blocked`, `ai:destructive-blocked`, `ai:needs-human`, `ai:unblock-closed`, `ai:security`, `ai:done`) are closed, and never a project issue, one with an open or unreadable linked pull request, or one that was reopened. Re-issues and `Accepted with this follow-up` issues are new work and are left alone. Set `ORPHAN_FIXUP_CLOSE_DRY_RUN=true` to see `ORPHAN_FIXUP_CLOSE ... outcome=would_close` lines first, or `ORPHAN_FIXUP_CLOSE_ENABLED=false` to turn it off. Reopen a fix-up you still want; the sweep never closes it again.
+What this means for operators: nothing to set. Only issues authored by the pipeline login that carry no label other than a block label (`ai:blocked`, `ai:scope-blocked`, `ai:destructive-blocked`, `ai:needs-human`, `ai:unblock-closed`, `ai:security`, `ai:done`) are closed, and never a project issue, one with an open or unreadable linked pull request, one that was reopened, or one under a fix-up that stays open. Every timeline is read before anything closes, so a failed read closes nothing that tick. Re-issues and `Accepted with this follow-up` issues are new work and are left alone. Set `ORPHAN_FIXUP_CLOSE_DRY_RUN=true` to see `ORPHAN_FIXUP_CLOSE ... outcome=would_close` lines first, or `ORPHAN_FIXUP_CLOSE_ENABLED=false` to turn it off. Reopen a fix-up you still want; the sweep never closes it again.
 
 ### For contributors
 
