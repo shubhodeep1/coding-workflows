@@ -20,6 +20,9 @@ IMPLEMENT_PROMPTS = (
 	REPO_ROOT / "prompts" / "mode-implement.txt",
 	REPO_ROOT / "prompts" / "_templates" / "mode-implement.txt",
 )
+# The prompt implement.yml actually sends is its inline
+# `mode-implement-inline.txt` heredoc, not prompts/mode-implement.txt.
+IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 PINNED_SHA_RULE_PARTS = (
 	"Pinned-SHA test discipline: never write a test that asserts a specific",
 	"upstream commit SHA in a file the workflow sync manages",
@@ -45,6 +48,27 @@ def test_pinned_sha_rule_sits_before_the_verification_loop() -> None:
 		assert text.count("Pinned-SHA test discipline:") == 1, prompt
 
 
+def _collapsed(text: str) -> str:
+	return " ".join(text.split())
+
+
+def _inline_implement_prompt() -> str:
+	workflow = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	parts = workflow.split('cat > "${PROMPT_TEMPLATE_FILE}" <<\'EOF\'', 1)[1].split("\n          EOF\n", 1)
+	assert len(parts) == 2, "inline implement prompt heredoc terminator not found"
+	return parts[0]
+
+
+def test_inline_implement_prompt_the_workflow_sends_carries_the_rule() -> None:
+	inline = _inline_implement_prompt()
+	flat = _collapsed(inline)
+	for part in PINNED_SHA_RULE_PARTS:
+		assert _collapsed(part) in flat, f"inline implement prompt lost: {part!r}"
+	assert inline.count("Pinned-SHA test discipline:") == 1
+	assert inline.index("Pinned-SHA test discipline:") < inline.index("Restrictions:")
+
+
 if __name__ == "__main__":
 	test_implement_prompts_forbid_tests_that_pin_a_specific_upstream_sha()
 	test_pinned_sha_rule_sits_before_the_verification_loop()
+	test_inline_implement_prompt_the_workflow_sends_carries_the_rule()
