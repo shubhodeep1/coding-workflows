@@ -48,10 +48,16 @@ Subcommands:
       any host path that no longer matches the manifest rejects the whole
       transfer before the first host write.
 
-  seed-git HOST DEST
+  seed-git HOST DEST [BASE_REF]
       Best effort: create a credential-free git repository in DEST whose
       HEAD contains only allowed blobs from HOST's HEAD tree. Filtered
       paths and their objects are not available through git show.
+      With BASE_REF (a ref or commit in HOST, normally the default branch
+      fetched by the caller), the same filter builds a second commit from
+      it: branch `isolated-base`, and the parent of HEAD. The agent can then
+      read the default branch's files offline (`git show isolated-base:PATH`,
+      `git diff isolated-base`) without any remote (fun-token-multi-chain#639).
+      An unresolvable BASE_REF is logged and left out.
 
   copy-include SRC TARGET
       Copy a trusted runtime file or directory SRC (regular files only, no
@@ -905,7 +911,49 @@ def remove_node(path):
 		path.unlink()
 
 
-def seed_git(host, dest):
+def seed_git_tree_entries(treeish, host, dest, env, *, readonly_limit_only=False):
+	"""Return (index entries, blob ids) for the allowed blobs of TREEISH in HOST.
+
+	Applies the read-only snapshot filter (readonly_allowed) and the size
+	limits, so a filtered path never becomes readable through `git show`.
+	With readonly_limit_only every blob is held to MAX_READONLY_FILE; the
+	larger workspace limit applies only to HEAD files present in DEST.
+	"""
+	ls_tree = subprocess.run(GIT_SAFE + ["ls-tree", "-rz", "--full-tree", treeish], cwd=host, env=env, check=True, capture_output=True).stdout
+	index_entries = []
+	blob_ids = set()
+	eligible = []
+	for record in ls_tree.split(b"\0"):
+		if not record:
+			continue
+		meta, path = record.split(b"\t", 1)
+		mode, kind, oid = meta.split(b" ")
+		name = path.decode("utf-8")
+		if kind != b"blob" or mode not in (b"100644", b"100755") or not readonly_allowed(name):
+			continue
+		eligible.append((mode, oid, path, name))
+	blob_sizes = {}
+	if eligible:
+		blob_input = b"\n".join(sorted({oid for _mode, oid, _path, _name in eligible})) + b"\n"
+		blob_metadata = subprocess.run(GIT_SAFE + ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], cwd=host, env=env, input=blob_input, check=True, capture_output=True).stdout
+		for line in blob_metadata.splitlines():
+			object_id, object_type, object_size = line.split()
+			if object_type != b"blob":
+				raise Rejected("non-blob in synthetic Git tree")
+			blob_sizes[object_id] = int(object_size)
+	for mode, oid, path, name in eligible:
+		if readonly_limit_only:
+			limit = MAX_READONLY_FILE
+		else:
+			limit = MAX_READONLY_FILE if (dest / name).is_dir() or not (dest / name).exists() else MAX_WORKSPACE_FILE
+		if blob_sizes[oid] > limit:
+			continue
+		index_entries.append(mode + b" " + oid + b"\t" + path + b"\0")
+		blob_ids.add(oid)
+	return index_entries, blob_ids
+
+
+def seed_git(host, dest, base_ref=""):
 	home = Path(tempfile.mkdtemp(prefix="codex-isolated-git-"))
 	try:
 		env = git_env(home)
@@ -917,37 +965,27 @@ def seed_git(host, dest):
 		if not tree or not all(c in "0123456789abcdef" for c in tree):
 			log("seed-git outcome=skipped reason=bad_tree")
 			return
+		base_commit = ""
+		base_state = "none"
+		if base_ref:
+			try:
+				base_commit = subprocess.run(
+					GIT_SAFE + ["rev-parse", "--verify", "--end-of-options", f"{base_ref}^{{commit}}"],
+					cwd=host, env=env, check=True, capture_output=True, text=True,
+				).stdout.strip()
+			except (OSError, subprocess.CalledProcessError):
+				base_commit = ""
+			if not base_commit or not all(c in "0123456789abcdef" for c in base_commit):
+				base_commit = ""
+				base_state = "unresolved"
 		# HEAD may contain tracked credentials excluded from the snapshot.
 		# Construct a fresh index/tree from allowed blobs only, rather than
 		# packing HEAD (which would make filtered files readable via git show).
-		ls_tree = subprocess.run(GIT_SAFE + ["ls-tree", "-rz", "--full-tree", "HEAD"], cwd=host, env=env, check=True, capture_output=True).stdout
-		index_entries = []
-		blob_ids = set()
-		eligible = []
-		for record in ls_tree.split(b"\0"):
-			if not record:
-				continue
-			meta, path = record.split(b"\t", 1)
-			mode, kind, oid = meta.split(b" ")
-			name = path.decode("utf-8")
-			if kind != b"blob" or mode not in (b"100644", b"100755") or not readonly_allowed(name):
-				continue
-			eligible.append((mode, oid, path, name))
-		blob_sizes = {}
-		if eligible:
-			blob_input = b"\n".join(sorted({oid for _mode, oid, _path, _name in eligible})) + b"\n"
-			blob_metadata = subprocess.run(GIT_SAFE + ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], cwd=host, env=env, input=blob_input, check=True, capture_output=True).stdout
-			for line in blob_metadata.splitlines():
-				object_id, object_type, object_size = line.split()
-				if object_type != b"blob":
-					raise Rejected("non-blob in synthetic Git tree")
-				blob_sizes[object_id] = int(object_size)
-		for mode, oid, path, name in eligible:
-			limit = MAX_READONLY_FILE if (dest / name).is_dir() or not (dest / name).exists() else MAX_WORKSPACE_FILE
-			if blob_sizes[oid] > limit:
-				continue
-			index_entries.append(mode + b" " + oid + b"\t" + path + b"\0")
-			blob_ids.add(oid)
+		index_entries, blob_ids = seed_git_tree_entries("HEAD", host, dest, env)
+		base_index_entries = []
+		if base_commit:
+			base_index_entries, base_blob_ids = seed_git_tree_entries(base_commit, host, dest, env, readonly_limit_only=True)
+			blob_ids |= base_blob_ids
 		pack = home / "objects.pack"
 		with open(pack, "wb") as sink:
 			objects = b"\n".join(sorted(blob_ids)) + b"\n" if blob_ids else b""
@@ -966,13 +1004,24 @@ def seed_git(host, dest):
 		subprocess.run(["git", "init", "-q", str(dest)], env=local, check=True, capture_output=True)
 		with open(pack, "rb") as source:
 			subprocess.run(["git", "unpack-objects", "-q"], env=local, stdin=source, check=True, capture_output=True)
+		head_parents = []
+		if base_commit:
+			# The base tree is built in a scratch index outside DEST, so the
+			# agent's index only ever holds HEAD's filtered tree.
+			base_local = dict(local, GIT_INDEX_FILE=str(home / "base.index"))
+			subprocess.run(["git", "update-index", "-z", "--index-info"], env=base_local, input=b"".join(base_index_entries), check=True, capture_output=True)
+			base_tree = subprocess.run(["git", "write-tree"], env=base_local, check=True, capture_output=True, text=True).stdout.strip()
+			base_synthetic = subprocess.run(["git", "commit-tree", base_tree, "-m", "isolated base (default branch)"], env=local, check=True, capture_output=True, text=True).stdout.strip()
+			subprocess.run(["git", "update-ref", "refs/heads/isolated-base", base_synthetic], env=local, check=True, capture_output=True)
+			head_parents = ["-p", base_synthetic]
+			base_state = "present"
 		subprocess.run(["git", "update-index", "-z", "--index-info"], env=local, input=b"".join(index_entries), check=True, capture_output=True)
 		filtered_tree = subprocess.run(["git", "write-tree"], env=local, check=True, capture_output=True, text=True).stdout.strip()
-		commit = subprocess.run(["git", "commit-tree", filtered_tree, "-m", "isolated snapshot"], env=local, check=True, capture_output=True, text=True).stdout.strip()
+		commit = subprocess.run(["git", "commit-tree", filtered_tree, *head_parents, "-m", "isolated snapshot"], env=local, check=True, capture_output=True, text=True).stdout.strip()
 		subprocess.run(["git", "update-ref", "refs/heads/isolated", commit], env=local, check=True, capture_output=True)
 		subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/isolated"], env=local, check=True, capture_output=True)
 		subprocess.run(["git", "read-tree", filtered_tree], env=local, check=True, capture_output=True)
-		log("seed-git outcome=ok")
+		log(f"seed-git outcome=ok base={base_state}")
 	except (OSError, subprocess.CalledProcessError) as exc:
 		log(f"seed-git outcome=skipped reason={type(exc).__name__}")
 		remove_node(dest / ".git")
@@ -1020,12 +1069,16 @@ def main():
 	command = sys.argv[1] if len(sys.argv) > 1 else ""
 	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "stage-deps": 2, "transfer": 3, "seed-git": 2, "copy-include": 2}
 	if command not in arity or (len(sys.argv) != arity[command] + 2
-		and not (command == "export-oversized" and len(sys.argv) == 8)):
+		and not (command == "export-oversized" and len(sys.argv) == 8)
+		and not (command == "seed-git" and len(sys.argv) == 5)):
 		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|stage-deps|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
 		raise SystemExit(2)
 	args = [Path(value) for value in sys.argv[2:]]
 	if command == "export-oversized" and len(args) == 6:
 		args[-1] = str(args[-1])
+	if command == "seed-git" and len(args) == 3:
+		# BASE_REF is a git ref, not a path; an empty value means none.
+		args[-1] = sys.argv[4]
 	global HIDDEN_NAMES
 	try:
 		HIDDEN_NAMES = hidden_names()

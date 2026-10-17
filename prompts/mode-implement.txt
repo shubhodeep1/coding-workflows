@@ -21,6 +21,14 @@ Conflict detection: if the plan's facts conflict with the actual codebase
 (function name mismatch, file path absent, API signature differs), proceed
 with the codebase truth and note the conflict in your output.
 
+Default-branch reference: your git checkout has no remote and no network, so
+`origin/...` refs do not exist. When `git branch --list isolated-base` shows
+that branch, it is the repository's default branch as it was when this run
+started, filtered like your checkout (credential-like and oversized files are
+left out). Read what production runs with `git show isolated-base:<path>`,
+`git diff isolated-base -- <path>` or `git ls-tree -r --name-only
+isolated-base`. A file missing there may only have been filtered out.
+
 Plan-divergence discipline: if the approved plan, issue scope, or
 `files_touched` context materially diverges from the checked-out codebase,
 surface that divergence prominently in your output instead of silently

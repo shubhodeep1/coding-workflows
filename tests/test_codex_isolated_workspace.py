@@ -788,3 +788,64 @@ def test_invalid_hidden_path_is_refused(repo, tmp_path, value):
 	proc = run("snapshot-readonly", repo, tmp_path / "ro", check=False, hide=value)
 	assert proc.returncode == 1
 	assert "invalid hidden path" in proc.stderr
+
+
+def test_seed_git_adds_the_filtered_default_branch_as_isolated_base(repo, tmp_path):
+	"""fun-token-multi-chain#639: the agent can read the default branch offline."""
+	git(repo, "branch", "base-tip")
+	(repo / "src" / "app.py").write_text("print('changed on the project branch')\n")
+	(repo / "src" / "new.py").write_text("NEW = 1\n")
+	git(repo, "add", "src/app.py", "src/new.py")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "project change")
+	dest = tmp_path / "copy"
+	run("snapshot-readonly", repo, dest)
+	proc = run("seed-git", repo, dest, "base-tip")
+	assert "seed-git outcome=ok base=present" in proc.stderr
+	assert git(dest, "show", "isolated-base:src/app.py") == "print('app')\n"
+	assert git(dest, "show", "HEAD:src/app.py") == "print('changed on the project branch')\n"
+	assert git(dest, "rev-parse", "HEAD^").strip() == git(dest, "rev-parse", "isolated-base").strip()
+	assert git(dest, "diff", "--name-only", "isolated-base", "HEAD").split() == ["src/app.py", "src/new.py"]
+	assert git(dest, "status", "--porcelain") == ""
+	assert git(dest, "rev-parse", "--abbrev-ref", "HEAD").strip() == "isolated"
+	for hidden in (".env", "deploy.pem", "big.bin"):
+		assert subprocess.run(["git", "show", f"isolated-base:{hidden}"], cwd=dest, capture_output=True).returncode != 0
+	config = (dest / ".git" / "config").read_text()
+	assert TOKEN not in config and "remote" not in config
+
+
+def test_seed_git_base_never_exposes_a_credential_only_present_on_the_base(repo, tmp_path):
+	(repo / "client_secret.json").write_text("credential value\n")
+	git(repo, "add", "client_secret.json")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base with a credential")
+	git(repo, "branch", "base-tip")
+	git(repo, "rm", "-q", "client_secret.json")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "drop it")
+	dest = tmp_path / "copy"
+	run("snapshot-readonly", repo, dest)
+	run("seed-git", repo, dest, "base-tip")
+	assert subprocess.run(["git", "show", "isolated-base:client_secret.json"], cwd=dest, capture_output=True).returncode != 0
+	objects = subprocess.run(["git", "cat-file", "--batch-all-objects", "--batch"], cwd=dest, capture_output=True).stdout
+	assert b"credential value" not in objects
+
+
+@pytest.mark.parametrize("base_ref", ["no-such-ref", "", "--output=/tmp/x"])
+def test_seed_git_without_a_resolvable_base_keeps_a_single_commit(repo, tmp_path, base_ref):
+	dest = tmp_path / "copy"
+	run("snapshot-readonly", repo, dest)
+	proc = run("seed-git", repo, dest, base_ref)
+	expected = "base=none" if base_ref == "" else "base=unresolved"
+	assert f"seed-git outcome=ok {expected}" in proc.stderr
+	assert subprocess.run(["git", "rev-parse", "--verify", "HEAD^"], cwd=dest, capture_output=True).returncode != 0
+	assert git(dest, "branch", "--list", "isolated-base") == ""
+	assert git(dest, "show", "HEAD:src/app.py") == "print('app')\n"
+
+
+def test_isolated_runner_and_implement_step_pass_the_default_branch_base():
+	exec_script = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text()
+	assert 'workspace_py seed-git "${workdir}" "${root}/work" "${CODEX_ISOLATED_GIT_BASE_REF:-}" || true' in exec_script
+	implement = (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text()
+	assert "IMPLEMENT_ISOLATED_BASE_BRANCH: ${{ github.event.repository.default_branch }}" in implement
+	assert '"+refs/heads/${IMPLEMENT_ISOLATED_BASE_BRANCH}:refs/codex-isolated/base"' in implement
+	assert implement.index("export CODEX_ISOLATED_GIT_BASE_REF") < implement.index('prepare --workdir "$(pwd)" --deps')
+	prompt = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text()
+	assert "git show isolated-base:<path>" in prompt
