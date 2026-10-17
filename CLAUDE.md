@@ -879,6 +879,24 @@ still sitting on the merged commits (block). Squash- and rebase-merged PRs
 never put the merged head into the default branch, so plain ancestry
 already decides for them.
 
+The guard finds `git commit` and `git push` behind the shell forms that still
+run them in the same repository, and judges them like a bare command:
+- leading `VAR=value` assignments and an `env` wrapper;
+- `time`, `command`, `nice`, `ionice`, `exec`, `nohup`, `setsid` and
+  `timeout` prefixes, with their options;
+- control words, `( ... )` subshells and `bash -c` / `eval` scripts.
+
+When it cannot tell where the Git write runs, it asks for confirmation
+instead of passing silently. That covers:
+- another command that runs its words as a command, such as `sudo git push`
+  or `xargs git push`;
+- a prefix option it does not understand;
+- a `cd` whose destination depends on a `CDPATH` set in the same command;
+- a `cd` after `cd` is redefined (a function, an alias or `enable -n cd`).
+
+`command -v git`, `time git status` and `echo "git push"` are not Git writes
+and pass without a prompt.
+
 The same hook guards the GitHub MCP push tools — `mcp__github__push_files`
 and `mcp__github__create_or_update_file` — through a second `PreToolUse`
 matcher in `.claude/settings.json`. Those tools write to a remote branch
