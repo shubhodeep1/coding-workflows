@@ -1903,6 +1903,18 @@ def test_upstream_managed_resolver_explicit_source_dir_is_trusted_without_an_ori
 	assert ".github/workflows/ai-x.yml" in json.loads(patterns)
 
 
+def test_upstream_managed_resolver_runs_python_isolated_from_the_audited_checkout() -> None:
+	"""The resolver runs from the audited repo root; a repo-local json.py must never be imported."""
+	script_text = SCRIPT_PATH.read_text(encoding="utf-8")
+	match = re.search(r"^security_audit_resolve_upstream_managed_paths\(\)\s*\{\n.*?^\}\n", script_text, re.S | re.M)
+	assert match
+	body = match.group(0)
+	python_calls = re.findall(r"\bpython3\b[^\n]*", body)
+	assert python_calls
+	for call in python_calls:
+		assert re.match(r"python3 -I\b", call), call
+
+
 def test_upstream_managed_resolver_reports_an_invalid_explicit_source_dir(tmp_path: Path) -> None:
 	"""A bad override must not silently fall through to a discovered checkout."""
 	checkout = _upstream_checkout_fixture(tmp_path, "https://github.com/shubhodeep1/coding-workflows")
