@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:2913-2917, 2939-2943, 2993-2997, 3044-3048 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The file existence guards `[ ! -f scripts/... ]` do not ensure the file is readable.\n  WHY: If the file exists but lacks read permissions, `source` fails with a non-zero exit code and fails the job instead of skipping gracefully; the source labeled this MAJOR, which is mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a regression test that runs that path's output labels and body through scripts/resolve_integration_ref.sh and expects the tracking issue's branch.\"\n  expected_change_site: tests/test_plan_check_triage_branch_guard.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR adds tests for the failure path skipping without checkout but no regression test for the #7511 branch guard or the branch resolution failure, and `test_resolver_fixtures_for_check_triage_bodies` does not cover a managed issue missing `ai:check-triage`.\n- requirement: \"Record in the PR that you ran it both ways\" (the regression test against the reported head and against the fixed code).\n  expected_change_site: PR description or verification record\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR description and the provided verification context contain no record of running the regression test against both versions, and the check-run collection does not confirm either run.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:2913-2917, 2939-2943, 2993-2997, 3044-3048 | severity=MAJOR | confidence=3\n  PROBLEM: The file existence guards `[ ! -f scripts/... ]` do not ensure the file is readable.\n  WHY: If the file exists but lacks read permissions, `source` fails with a non-zero exit code, causing the job to fail unexpectedly instead of skipping gracefully.\n- TASK_GAP\n  Requirement: \"Add a regression test that runs that path's output labels and body through scripts/resolve_integration_ref.sh and expects the tracking issue's branch.\"\n  Expected change site: tests/test_plan_check_triage_branch_guard.py\n  Evidence of absence: The PR adds tests for the failure path skipping without checkout, but does not add a regression test for the #7511 branch guard or the branch resolution failure. The existing `test_resolver_fixtures_for_check_triage_bodies` does not cover a managed issue missing `ai:check-triage`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"Record in the PR that you ran it both ways\" (the regression test against the reported head and against the fixed code).\n  Expected change site: PR description or verification record\n  Evidence of absence: The PR description does not report running the regression test against both versions, and the check-run context does not confirm those specific runs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Record in the PR that you ran it both ways\" against the reported head and the fixed code.\n  Expected change site: PR description or verification record.\n  Evidence of absence: The PR description and provided verification context contain no record of running the regression test against both versions; the check-run collection is still in progress and does not confirm either run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ff2319f571e0543c61a591bc7915671a265b3311dbb9a69f7e2eaa207d33357b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7531,
+    "run_id": "38993455815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "38993455815",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017022357_85526c4307",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7531,
+    "run_id": "38993455815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T02:23:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
