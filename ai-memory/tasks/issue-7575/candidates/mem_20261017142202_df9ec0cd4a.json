@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: DERIVE_FROM_REPO\nQ2: REFRAME\nQ3: A\nQ4: A\n\nRATIONALE:\nQ1: I can't use option A. The GITHUB FACTS for run 39038112755 give only its conclusion, not job or step durations, and this sandbox has no GitHub access. Option B would ask a person for data, which this pipeline must not do. The repo itself records the cause. The comment at `.github/workflows/ci.yml:851-858` says \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\" was moved back into this job by #7560, and that it took about 4.5 minutes. The same comment says the job \"has had room since #7366 moved six steps out of it\". So that one step is the slowest recent addition and the reason the job went from having room to 15m52s.\nQ2: The previous answer's target, `tests-heal-plan-and-validation`, is wrong. It measured 15m04s, 15m08s, 15m12s and 15m19s (ci.yml:457, 446, 899, 1052), and #7406 then added \"Regression tests wired by the CI wiring guard (part 1)\" to it (ci.yml:1080-1086). The other single test jobs have no evidenced room either:\n- `static-checks` took 15m18s of its 15 minutes (ci.yml:35).\n- `tests-release-and-log-analysis` took 20m16s (ci.yml:851-852).\n- `tests-promote-stall-and-review` used 12.8 minutes (ci.yml:902), then gained the check-failure triage step in #7560 (ci.yml:1481-1491).\n\nThe only job with recorded room for about 4.5 minutes is the `orchestrate-poll` matrix: about 5 minutes per group, with group 0 the critical path at 8.7 minutes (ci.yml:1932-1934; agents.md \"CI job layout\" #4707). The step goes there, run in one group other than group 0, because group 0 already carries the fast-fail subset and the single-file modules.\nQ3: Moving only the merge-train step takes about 4.5 minutes off a 15m52s job, an estimated 11.3 minutes. That is under the 12-minute (60%) mark without moving anything else.\nQ4: The merge-train step \"seeds its own git repositories and needs no Node or prepared .claude/ live copies\" (ci.yml:857-858). It needs only Checkout, Setup Python and the shared pip install, and `orchestrate-poll` has all three with the same pip set (ci.yml:1944-1955). The parity, guard-hook and SessionStart steps and the Node/vitest pair stay where they are.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/ci.yml:851-874 (the \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\" step and its comment, which records about 4.5 minutes)\n    - .github/workflows/ci.yml:1044-1052 (#7366 moved six steps out of `tests-hooks-and-orchestrator` after it measured 15m09s)\n  steps:\n    - Treat the merge-train step as the one slowest step to move. Move nothing else from `tests-hooks-and-orchestrator`.\n    - In the moved comment, say the timing is the recorded estimate from ci.yml (about 4.5 minutes) and not a measurement from run 39038112755, because that run's step timings were not readable when this was planned. Earlier moves in this file say the same.\n  replaces_acceptance_criterion: \"pick the slowest steps from run 39038112755's step timings\"\n  equivalence_argument: The only change since the job last had room is this step coming back in #7560. Moving it out undoes the cause of the overrun. The PR's own CI run (every job inside its timeout) and the next budget-watch run on main confirm the result with measured times.\n  reversibility: If budget-watch still flags `tests-hooks-and-orchestrator` after merge, it opens a new `ai:ci-budget` issue, and the next-slowest step can be moved then.\nQ2:\n  strategy: reframe\n  inputs:\n    - .github/workflows/ci.yml:1930-1942 (`orchestrate-poll` matrix, `poll-group: [0, 1, 2, 3]`, about 5 minutes per group, `timeout-minutes: 20`)\n    - .github/workflows/ci.yml:1989-1991 (existing single-group step pattern `if: strategy.job-index == 0`)\n    - .github/workflows/ci.yml:2204-2209 (group 0 already runs the single-file modules)\n    - tests/test_ci_job_split_contract.py `test_no_step_runs_in_more_than_one_job`; tests/test_ci_poll_test_sharding.py (looks steps up by name, so an extra step is allowed)\n  steps:\n    - Cut the \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\" step, with its comment block, from `tests-hooks-and-orchestrator` (ci.yml:851-874). Paste it as the last step of the `orchestrate-poll` job, after \"Orchestrate poll process unit tests\". Keep its name, its inline comments and its `run:` body byte for byte.\n    - Add exactly one key to the step, `if: strategy.job-index == 1`. A matrix runs every step in all four groups; without the guard the tests would run four times and add about 4.5 minutes to every group. The fast-fail step already uses this form, and the guard keeps the step running once, as it did before.\n    - Add a comment above the step: it moved from `tests-hooks-and-orchestrator`, which took 15m52s of its 20 minutes on main (run 39038112755, budget-watch issue #7575); group 1 was chosen because single test jobs record 12.8 to 20m16s and poll groups record about 5 minutes (#4707); group 0 already carries the fast-fail subset and the single-file modules; the time is an estimate, not a measurement.\n    - Do not copy the step. It must exist only in `orchestrate-poll`, or `test_no_step_runs_in_more_than_one_job` fails.\n    - Leave `timeout-minutes`, job names, the `lint` aggregate `needs` list and the matrix unchanged.\n    - Add `changelog.d/7575-ci-merge-train-step-to-poll-group.md` describing the move.\n  replaces_acceptance_criterion: \"move into the job with the most headroom per run 39038112755's per-job durations\"\n  equivalence_argument: Among the existing required jobs, the poll groups are the only ones whose recorded durations leave room for about 4.5 minutes under 75% of 20 minutes. Group 1 at about 5 minutes plus 4.5 is roughly 9.5 minutes, against a 15-minute warning line. No new job name is created, the step keeps its name and body, and it still runs exactly once per CI run.\n  reversibility: Budget-watch checks each poll group on every push to main. If `orchestrate-poll` group 1 reaches 75% of its timeout, budget-watch opens a new `ai:ci-budget` issue, and the step can move to another group by editing the single `if:` value, or move elsewhere.\n\nSETUP REQUIRED: none.",
+  "fingerprint": "2fd5ef44b4d0b4ab776340690e0fe6ad17520ebaa2d6bb5a3dd731c15f9d5fd6",
+  "lineage": {
+    "issue_number": 7575,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39039507032",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39039507032",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7575"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261017142202_df9ec0cd4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7575,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39039507032"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7575",
+  "timestamps": {
+    "created_at": "2026-10-17T14:22:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
