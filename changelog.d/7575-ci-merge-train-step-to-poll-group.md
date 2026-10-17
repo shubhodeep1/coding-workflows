@@ -5,7 +5,7 @@
 | --- | --- |
 | `tests-hooks-and-orchestrator` on main before the move | 15m52s of 20 minutes (run 39038112755) |
 | Moved step's duration | about 4.5 minutes (recorded estimate, not measured on that run) |
-| `orchestrate-poll` group duration | about 5 minutes per group (#4707), 20-minute timeout |
+| `orchestrate-poll` group duration | about 5 minutes per group before the move (#4707); group 1 now adds about 4.5 minutes; 20-minute timeout |
 | Group that runs the step | 1 (group 0 carries the fast-fail subset) |
 
 What this means for operators: nothing to do. A failure in these tests now shows on `orchestrate-poll (1)`, and `CI / lint` still fails when any job fails.
