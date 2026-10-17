@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2225-2231 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Predictable temporary file names in /tmp/ (e.g., /tmp/merge_train_collect.log, /tmp/merge_train_shard_*.log) are used.\n  WHY: Predictable /tmp paths can expose the script to symlink attacks in multi-user environments (reported as MAJOR; sonnet-5_5 and glm-5_3-flash explicitly dismissed this as unrealistic on an ephemeral single-tenant runner).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, the orchestrate-poll \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\" step and the destination CI job\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  EVIDENCE: The step stays in orchestrate-poll (1) under `if: strategy.job-index == 1` (lines 2214-2222), its body is replaced with local sharding and no step is moved to another job, the savings rest on estimates rather than the run's step timings (lines 2211-2212), the PR documents the deviation (other jobs at or above the 15-minute line, step already moved three times, precedent #7387), and the timeout, job names and step names are preserved. Severity disagreement: gemini BLOCKER, luna MAJOR, sonnet/minimax/qwen/glm NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, relocating the slow step to another job.\nEvidence of absence: The step stays in `orchestrate-poll (1)` and its body is replaced with local sharding. The PR documents the reason, and the other constraints are met.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n\nHARDENING_SUGGESTIONS:\n- .github/workflows/ci.yml, the three pytest launches: add `timeout 600` (HARDENING_RISK_SCORE: 1)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2225-2231 | severity=MAJOR | confidence=4\n  PROBLEM: Predictable temporary file names in /tmp/ (e.g., /tmp/merge_train_collect.log, /tmp/merge_train_shard_*.log).\n  WHY: Predictable paths in /tmp/ can expose the script to symlink attacks in multi-user environments.\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml\nEvidence of absence: The slowest step was not moved to another CI job. The step itself was modified to use parallel sharding within its existing job.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n\nHARDENING_SUGGESTIONS:\n- .github/workflows/ci.yml lines 2243, 2253, 2267: prefix pytest invocations with `timeout 600` (HARDENING_RISK_SCORE: 1)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\nExpected change site: .github/workflows/ci.yml, relocating the \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\" step out of orchestrate-poll (1) into another job.\nEvidence of absence: The step stays in orchestrate-poll with its body rewritten to shard tests in place. The changelog documents the rationale, and the other constraints are honored.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n\nHARDENING_SUGGESTIONS: none (HARDENING_RISK_SCORE: 1)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the `orchestrate-poll` merge-train step and the destination CI job.\nEvidence of absence: The step remains in `orchestrate-poll (1)` under `if: strategy.job-index == 1` (lines 2214-2222). No step or tests are moved to another job. The workflow comments at lines 2211-2212 say the new step-time figures are estimates.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n\nHARDENING_SUGGESTIONS: NONE (HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml, the orchestrate-poll merge-train step and the destination CI job.\nEvidence of absence: The step remains in orchestrate-poll group 1 and is sharded in place instead of moved. The PR documents this as a justified deviation, and the step name is kept.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n\nHARDENING_SUGGESTIONS:\n- .github/workflows/ci.yml lines 2243 and 2252: prefix pytest launches with `timeout 600` (HARDENING_RISK_SCORE: 1)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: merge-train step sharding for orchestrate-poll (ci.yml), reported under tests/test_ci_poll_test_sharding.py\nEvidence of absence: No step was moved to another CI job. The step is split into 3 local shards inside the same job, and the PR comment documents the deviation with precedent PR #7387.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e9b00c566e4196c171a1d85908bd891ecfff9f97b64a67d52224c5d9643e5709",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7580,
+    "run_id": "39052600398",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39052600398",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261017173143_261e39d963",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7580,
+    "run_id": "39052600398"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-17T17:31:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
