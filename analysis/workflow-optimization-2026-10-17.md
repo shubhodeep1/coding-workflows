@@ -251,3 +251,301 @@ Other MCP servers observed: none.
 - There are no Claude token fields, no `AI_MEMORY_TELEMETRY`, and no Serena events.
 - Log summaries were truncated by 55K–940K characters.
 - No merged-PR or review-iteration counts were available.
+## Deep Audit — Workflows & Scripts (2026-10-17)
+
+> **Scope and method.** I read these files in depth: `clarify.yml`, `workflow-failure-heal-intake.yml`, `sync_ai_labels.yml`, `pr6576-shard-followup.yml`, the resolver-handling parts of `plan.yml` and `implement.yml`, the wait-loop steps of `test-and-mark-stable.yml` and the `Checkout PR head branch` step of `review_autofix.yml`. On the script side I read `resolve_integration_ref.sh`, `gh_helpers.sh` (the retry and budget helpers), `unblock_judge.sh`, `comprehensive_test_and_release_gh_api.sh`, `workflow_failure_heal_intake.sh` (fingerprint, dedup and diagnosis order), the `budget`, `error_signature` and `fingerprint` functions in `workflow_failure_heal.py`, the `reissue` op in `unblock_actions.py`, and the wave loop and GraphQL batch helpers in `orchestrate_poll_process.sh`. For the other files I only counted patterns. Workflow sizes are character counts (1,000-character chunk counts plus non-ASCII counts), not exact byte counts. Where a finding repeats a point already in this report I give a cross-reference instead of restating it.
+
+### Section 1: Bug & Correctness Sweep
+
+**BUG-001 — The resolver refuses any unlabelled issue whose body contains the triage marker text anywhere (`label_missing`)**
+- **File:** `scripts/resolve_integration_ref.sh:197-225`. Related: `scripts/unblock_actions.py:706-744`.
+- **Severity:** High
+- **Category:** `bug`
+- **Description:** `CI_TRIAGE_PARSE_PY` sets `has_marker = re.search(r"<!--\s*check-failure-triage:", body) is not None` (line 198). That search runs over the whole issue body, including code fences, quoted logs and prose.
+  - The only escapes for an unlabelled issue are a `pr=`-only marker (line 205) or an `ai:orchestrator-managed` child with a `Tracking issue:` line (lines 213-216). Every other unlabelled issue gets `refuse("label_missing")` at line 225.
+  - That refusal becomes exit 3, and the callers turn exit 3 into a hard `exit 1` (`clarify.yml:205-207`, `plan.yml:281-283`, `implement.yml:630-632`). Retrying never helps.
+  - The line-by-line header check that defines a real triage issue (lines 226-235) only runs after the label check. So an issue that merely mentions the marker is refused before the header is ever checked.
+  - In this repository, which builds the triage feature, any human-written issue, heal issue or plan comment copied into an issue body that quotes `<!-- check-failure-triage:fp=…` will permanently block clarify and plan.
+  - A second path: the unblock judge's `reissue` op writes model-authored text into the body (`Specification: {verdict['instructions']}` and `Why: {verdict['reason']}`, `unblock_actions.py:708`). It prepends only a `pr=` marker (line 741) and adds an `Integration branch:` line only when the owner is `open` (lines 742-744). If the model quotes a non-`pr=` header and the owner state is `verified`, the re-issue is refused the same way.
+  - This is a concrete root-cause candidate for the 8 `Resolve integration ref` failures in the Executive Summary and Reliability #1 of this report. `[NEEDS VERIFICATION]`: the bodies of the affected issues were not inspected.
+- **Recommended fix:** Only treat the marker as present when it is the opening line of the body, which is where `check_failure_triage.sh` writes it (header tuple at lines 227-232) and where `unblock_actions.py:741` writes the `pr=` lineage marker:
+  ```python
+  has_marker = re.match(r"\s*<!--\s*check-failure-triage:", body) is not None
+  ```
+  Apply the same anchoring to the line-205 lookahead. Keep the fail-closed `label_missing` refusal for bodies whose first line is a triage header but which have no label; that case is a genuine removed-label triage issue. Add two fixtures under `tests/fixtures/integration_ref_resolver_ci_triage/`:
+  - marker quoted mid-body, no label → `expected_stdout: ""`, rc 0;
+  - header at the top, no label → `expected_error_reason: label_missing`.
+
+**BUG-002 — Clarify and plan fall back to the default branch when the resolver hits an API failure; implement fails closed**
+- **File:** `.github/workflows/clarify.yml:205-214`, `.github/workflows/plan.yml:281-291`. Compare `.github/workflows/implement.yml:633-650`.
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** The resolver exits 2 on API failure (`get_issue_body`, `resolve_integration_ref.sh:77-82`, after `gh_api_retry` has used up its retries). This includes the tracking-issue read for a managed child (line 437).
+  - `implement.yml:645-648` treats rc 2 as `::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable` and exits 1. It also fails closed on rc 75 whatever the routing setting (lines 639-642).
+  - `clarify.yml:211-213` and `plan.yml:287-290` send rc 2 to `::warning::Canonical integration resolver failed; falling back to default branch.` They also fall back on rc 75 whenever CI-triage routing is off (`clarify.yml:208`, `plan.yml:284`).
+  - Result: a single GitHub API failure lets an orchestrator child be clarified or planned against the default branch instead of its integration branch, and only a warning is logged.
+  - `[NEEDS VERIFICATION]`: whether `plan.yml`'s downstream `resolver_status=failed` guard stops the plan before Codex runs.
+- **Recommended fix:** Copy `implement.yml:639-648` into both workflows. That means `exit 1` with `INTEGRATION_REF_RESOLVE outcome=api_unavailable rc=2`, plus `outcome=rate_limited` on rc 75 regardless of routing. Keep the default-branch fallback only for rc 1. Better still, remove the drift entirely by doing DUP-001.
+
+**BUG-003 — The `RATE_LIMIT_BACKOFF` guard in the release smoke-test wait loops can never fire**
+- **File:** `.github/workflows/test-and-mark-stable.yml:861`, `:1056-1058`, `:1387`, `:2140`, `:3706`. Root cause: `scripts/comprehensive_test_and_release_gh_api.sh:11-34`.
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** `gh_api_safe` updates `RATE_LIMIT_BACKOFF` (lines 17, 28-31). Every loop calls it as `LABELS=$(gh_api_safe_print …)` (for example line 1052), which runs in a command-substitution subshell, so the update is lost.
+  - In the parent shell the variable stays at the `0` set at lines 789, 943, 1257, 1877 and 3556. The guard `if [ "$RATE_LIMIT_BACKOFF" -gt 0 ] && [ -z "$LABELS" ]; then continue; fi` is therefore dead code.
+  - Its comment says it should "skip this cycle (don't corrupt state)". Instead, a rate-limited empty `LABELS` goes into `CUR_STATE` and resets the inactivity timer (lines 1081-1091), which hides stalls.
+  - If the guard ever did fire, its `continue` skips the `sleep "$POLL_INTERVAL"` at line 1202, which would make it a tight loop.
+- **Recommended fix:** In the loops, call `gh_api_safe` in the parent shell and read `GH_API_SAFE_OUTPUT`, so the backoff state survives:
+  ```bash
+  LABELS=""
+  if gh_api_safe "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name] | join(",")'
+  then
+  	LABELS="${GH_API_SAFE_OUTPUT}"
+  fi
+  ```
+  Add `sleep "$POLL_INTERVAL"` before each guarded `continue`.
+
+**BUG-004 — `gh_api_safe` writes its `::error::` line to stdout, where callers capture it as data**
+- **File:** `scripts/comprehensive_test_and_release_gh_api.sh:39-43`. Consumers: `.github/workflows/test-and-mark-stable.yml:1052-1063`.
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:** `echo "::error::gh api call failed: $*"` (line 41) has no `>&2`. The step's own comment admits this (`test-and-mark-stable.yml:974-976`: "gh_api_safe_print echoes its "::error::gh api call failed" line to stdout").
+  - Inside `$(…)`, the annotation is never shown. Its text ends up in `LABELS` and `COMMENTS_JSON`, and then in `CUR_STATE`.
+  - Only `find_latest_scoped_run_field` shape-checks its input (lines 125-127).
+- **Recommended fix:** Change line 41 to `echo "::error::gh api call failed: $*" >&2`. The existing shape checks still hold. The `LABELS` and `COMMENTS_JSON` callers already fall back with `|| echo ""` / `|| echo "[]"`.
+
+**BUG-005 — The label recheck uses raw `gh api … 2>/dev/null || echo ""`, which can capture an error body**
+- **File:** `.github/workflows/test-and-mark-stable.yml:1117-1118`, `:1188`
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:** `gh_helpers.sh:1225-1236` documents that a failed `gh api` writes its error JSON to stdout without applying `--jq`. On a transient failure, `LABELS_RECHECK` therefore holds `{"message":…}`. The step then reports `Plan workflow completed but issue lacks expected labels (current: {"message":…})` and fails with `status=plan_failed`. The same step uses `gh_api_safe_print` at line 1052.
+- **Recommended fix:** Use `gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name] | join(",")' || echo ""`. If the recheck stays empty, treat that as "retry next tick" rather than a failure.
+
+**SEC-001 — Event context is interpolated straight into a `run:` body**
+- **File:** `.github/workflows/clarify.yml:66-73`
+- **Severity:** Low
+- **Category:** `security`
+- **Description:** `Log trigger context` interpolates `${{ github.event.comment.user.login }}`, `${{ github.event_name }}` and `${{ github.event.action }}` into the script. Their character sets are restricted (GitHub logins are `[A-Za-z0-9-]`), so nothing can be injected today. But the step goes against the repo's own trust-boundary convention: `workflow-failure-heal-intake.yml:169-176` says "bound as env … never interpolated into the script". It is also an easy template to copy-paste with an `issue.title` field.
+- **Recommended fix:** Move the three values into `env:` (`TRIGGER_EVENT`, `TRIGGER_ACTION`, `COMMENT_AUTHOR`) and reference them as `"${COMMENT_AUTHOR}"`.
+
+**SEC-002 — If the pinned or `stable` support checkout fails, the workflow silently runs `main` scripts with production secrets**
+- **File:** `.github/workflows/clarify.yml:274-301`. The same fallback appears 12 times across 10 workflows, including `plan.yml`, `implement.yml`, `orchestrate.yml` (×2), `orchestrate_poll.yml` (×2), `check_failure_triage.yml`, `cancel_on_pr_close.yml`, `workflow_failure_heal.yml`, `orchestrate_clarify_respond.yml` and `sync_ai_labels.yml:58-66`.
+- **Severity:** Medium
+- **Category:** `security`
+- **Description:** The primary step `Checkout workflow support source` is `continue-on-error: true`. The fallback then checks out `ref: main`.
+  - For a consumer that deliberately pinned this workflow to a 40-hex SHA (Q64, `clarify.yml:261-269`), a transient checkout failure swaps the pinned support scripts for unreleased `main` code. That code then runs with `GH_PAT` and `OPENROUTER_API_KEY`.
+  - No structured line records the substitution: the only signal is the fallback step's outcome.
+  - `[NEEDS VERIFICATION]`: whether the fallback-to-main is an intentional availability trade-off for consumers on `stable`.
+- **Recommended fix:** Fail closed when `SCRIPT_REF` is a 40-hex pin: add `if: steps.checkout_support_source.outcome == 'failure' && !startsWith(env.SCRIPT_REF, …)`, or handle it in a pre-check step. When the fallback does run, emit `SUPPORT_REF ref=main outcome=fallback requested=${SCRIPT_REF}`. That reuses the existing `SUPPORT_REF` prefix (`clarify.yml:270`).
+
+### Section 2: GitHub API Call Redundancy Audit
+
+**BATCH-001 — The wave reconcile loop makes per-issue timeline and per-candidate PR REST calls**
+- **File:** `scripts/orchestrate_poll_process.sh:24724-24765`. Helpers: `:4420-4453` (timeline), `:2215-2219` (`_fetch_pr_json`).
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:** For every issue in the wave, `_issue_cross_ref_pr_numbers_unique` runs `gh_retry gh api --paginate …/issues/${issue_num}/timeline` (line 4435, or the `gh_issue_timeline_with_cross_refs` variant). Then each cross-referenced PR gets its own `_fetch_pr_json` REST read (line 24750).
+  - The §14 comment at 24746-24747 justifies this because "the existing timeline call omits PR body/head".
+  - This is a per-iteration call inside a `for` over issues, which is review-blocking under §14.
+  - **Current:** N × (≥1 timeline page + K PR reads) per wave.
+  - **Projected:** ⌈N/25⌉ GraphQL calls, with REST kept only on cache miss.
+- **Recommended fix:** Extend `_fetch_linked_pr_status_graphql` (`:18173-18221`, cache `STALL_MANAGED_LINKED_PR_CACHE`), or add a sibling mode that keeps all `CrossReferencedEvent` sources rather than only `willCloseTarget == true` (line 18248). Add `headRefName baseRefName body mergedAt headRepository { nameWithOwner }` to the `... on PullRequest` selection, then build the `_pr_json_is_issue_implementation_pr` input from that cache. Fail open: an issue missing from the batch drops back to today's REST path. Document input and output shape, call count and fail-open behaviour per §14. `[NEEDS VERIFICATION]`: the exact fields `_pr_json_is_issue_implementation_pr` reads.
+
+**BATCH-002 — Sibling fix-PR lookups in `unblock_heal_already_fixed` are one REST call per candidate**
+- **File:** `scripts/unblock_judge.sh:404-431`
+- **Severity:** Low
+- **Category:** `api-batching`
+- **Description:** A `while read` loop issues `gh api -X GET repos/…/pulls -f state=closed -f head=owner:ai/issue-<N>` for each candidate (line 407). The header comment says there are at most 3 candidates (line 86). **Current:** up to 3 calls. **Projected:** 1.
+- **Recommended fix:** Build one aliased query, `query { repository(owner:…, name:…) { c<N>: pullRequests(headRefName:"ai/issue-<N>", states:MERGED, last:1) { nodes { number mergedAt mergeCommit { oid } baseRefName headRefName } } } }`, using the same alias style as `_fetch_candidate_issue_details_graphql` (`orchestrate_poll_process.sh:18015-18045`). Candidates are already validated numeric at line 405. If the query fails, return 1 (judge as usual).
+
+**API-001 — Every heal intake and unblock run re-downloads the full `state=all` heal-issue history**
+- **File:** `scripts/workflow_failure_heal_intake.sh:1012-1014`, `:1024-1026`; `scripts/unblock_judge.sh:371-373`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:** Each intake run paginates every `ai:workflow-heal` issue ever filed, in both the self repo and the source repo, with full bodies. The unblock judge repeats the same list. Pages grow without bound (⌈total heal issues / 100⌉ per repo per run) while the per-day cap allows up to 20 new issues a day. That makes this a large share of the roughly 398 calls in 40 minutes noted in the GH API Call Audit (inference).
+  - `budget()` (`workflow_failure_heal.py:4115-4149`) only needs:
+    - open issues (duplicate check and `max_open`);
+    - issues created today (`created_today`);
+    - closed issues carrying the same `fp` or `source`, or the linked heal issue (lineage).
+  - **Current:** P_self + P_source pages per intake, growing over time.
+  - **Projected:** about 3 bounded calls: `state=open`, `created>=<today>` via search, and a search for `"fp=<FP>" OR "source=<key>"` in the body for closed lineage.
+- **Recommended fix:** Add a bounded fetch helper that produces the same JSON array shape fed to `--issues-json`. Fall back to today's full list when the search API returns `incomplete_results` or fails. `[NEEDS VERIFICATION]`: whether `resolve_reissue_roots` (used at line 4169) needs closed issues outside the lineage set.
+
+**API-002 — The smoke-test wait loops make three REST calls on every poll tick**
+- **File:** `.github/workflows/test-and-mark-stable.yml:1052-1076`, with the same shape in the other wait loops.
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:** Each `POLL_INTERVAL` reads the issue (labels), its comments (`per_page=100`, used only for count and newest `updated_at`) and a runs page. **Current:** 3 calls per tick. **Projected:** 2.
+- **Recommended fix:** Replace the first two with one GraphQL call: `issue(number:N){ labels(first:50){nodes{name}} comments(last:1){totalCount nodes{updatedAt}} }`. Keep the runs REST call, since GraphQL does not expose run lists.
+
+**Retry hygiene:** I found no tight retry loops in `gh_api_retry` or `gh_retry`. They use exponential backoff with a cap (`gh_helpers.sh:1025-1026`, `:1116`) and do not retry permanent errors (`:988-993`, `:1099-1106`). The non-transient `git fetch` retry in `review_autofix.yml:2856-2871` (a deleted head branch is retried 4 times) is already covered by Reliability #2 in this report, so I have not repeated it.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001 — The ~125-line "Resolve integration ref" staging block exists in 5 copies, and the copies have drifted**
+- **File:** `.github/workflows/clarify.yml:89-214`, `.github/workflows/plan.yml:146-291`, `.github/workflows/implement.yml:530-651`, `.github/workflows/validate.yml:157-265`, `.github/workflows/orchestrate_clarify_respond.yml:247` (`resolver_stage_fail_closed` definition).
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** All five copies contain the same clone, pin and fail-closed logic. Their exit-code mapping has already diverged (BUG-002), and any fix for #7516 or BUG-001 has to be made five times. The step has to run before the repository checkout, so a `scripts/` file cannot be sourced.
+- **Recommended fix:** Create a composite action `.github/actions/resolve-integration-ref/action.yml`. Reference it as `shubhodeep1/coding-workflows/.github/actions/resolve-integration-ref@stable`, the same way `install-codex` is pulled in before checkout (`clarify.yml:248`).
+  - Inputs: `issue_number`, `stage` (`clarify|clarify_respond|plan|implement|validate`), `allow_pr_not_open` (true only for clarify and plan), `routing_enabled`.
+  - Outputs: `ref`, `resolver_status`, `pr_not_open`.
+  - Use one rc table: 0 = ref, 1 = fallback, 2/3/75 = fail closed.
+
+**DUP-002 — Three GraphQL batch helpers share the same 25-alias skeleton**
+- **File:** `scripts/orchestrate_poll_process.sh:4336-4366` (`_fetch_issue_labels_batch_graphql`), `:18015-18045` (`_fetch_candidate_issue_details_graphql`), `:18173-18239` (`_fetch_linked_pr_status_graphql`)
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:** All three repeat the same count check, `batch_size=25`, `while start < count` loop, `jq -r ".[$i]"` per index, `i${i}: issue(number: N)` fragment, `gh_retry gh api graphql`, fail-open `continue` and `.[0] * .[1]` merge. Only the field selection and the jq transform differ.
+- **Recommended fix:** Add one shared helper and turn the three into thin wrappers. BATCH-001 then becomes a fourth wrapper rather than a fourth copy.
+  ```bash
+  _graphql_issue_alias_batch()
+  {
+  	local numbers_json="$1" selection="$2" transform="$3"
+  	...
+  }
+  ```
+
+**DUP-003 — "Resolve workflow support ref" exists 17 times in 11 workflows, and only 8 copies have the commit pin**
+- **File:** pinned copies: `clarify.yml:252-272` (×2), `plan.yml` (×2), `implement.yml` (×3), `orchestrate_clarify_respond.yml` (×1). Unpinned copies: `check_failure_triage.yml:306-314`, `orchestrate_poll.yml:113-121` and `:469-478`, `sync_ai_labels.yml:37-45`, `cancel_on_pr_close.yml`, `orchestrate.yml` (×2), `workflow_failure_heal.yml`. (`review_autofix.yml:2027-2040` uses its own stronger identity check.)
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** These are near-identical bodies. The Q64 pin (`SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}`) appears in only 8 of the 17 copies; see CONSIST-002.
+- **Recommended fix:** Create a composite action `.github/actions/resolve-support-ref` with input `workflow_file` (e.g. `clarify.yml`) that writes `SCRIPT_REF` to `GITHUB_ENV`. Replace all 16 non-review copies with it.
+
+**DUP-004 — The inline "Resolve AI engine" block appears 11 times in 10 workflows**
+- **File:** `.github/workflows/workflow-failure-heal-intake.yml:243-261` and `:421-439` (byte-identical). Also in `clarify.yml`, `plan.yml`, `implement.yml`, `orchestrate.yml`, `orchestrate_clarify_respond.yml`, `check_failure_triage.yml`, `issue_pr_status.yml`, `security-audit.yml` and `validation-refresh.yml`.
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Each copy sources `scripts/ai_engine.sh`, calls `ai_engine_for_role <ROLE> || echo codex`, normalises to `claude|codex` and writes `engine=` to `GITHUB_OUTPUT`.
+- **Recommended fix:** Add `ai_engine_emit_output()` (role as `$1`) to `scripts/ai_engine.sh`, containing the normalise-and-write logic. Each step body then shrinks to a symlink check plus `source scripts/ai_engine.sh && ai_engine_emit_output WORKFLOW_HEAL`.
+
+**DUP-005 — The inline GH_PAT start-budget block duplicates `gh_pat_budget start`**
+- **File:** `.github/workflows/clarify.yml:75-87`, `.github/workflows/workflow-failure-heal-intake.yml:137-148` and `:381-392`. 13 occurrences across 6 workflows, including `review_autofix.yml` (×6).
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** These steps re-implement `gh_pat_budget start` (`scripts/gh_helpers.sh:31-77`) inline, because they run before checkout. They also differ from the helper: they read the body only, while the helper prefers the `x-ratelimit-*` headers (lines 52-60).
+- **Recommended fix:** Create a composite action `.github/actions/gh-pat-budget` (input `phase`, `workflow`, `job`, `snapshot_file`) that stages `gh_helpers.sh` from `@stable` and calls `gh_pat_budget`. Use it for both the start and end steps.
+
+**DUP-006 — The heal-issue list fetch and its jq projection are copied three times**
+- **File:** `scripts/workflow_failure_heal_intake.sh:1012-1014`, `:1024-1026`; `scripts/unblock_judge.sh:371-373`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** Each copy has the same `gh api --paginate … -F state=all -F labels=… -F per_page=100 --jq '.[] | {number, state, state_reason, … }' | jq -s 'map(. + {repository: $repository})'` pipeline. The projections differ slightly (`title`, `created_at` and `closed_at` versus `labels`).
+- **Recommended fix:** Add `heal_issue_list_fetch()` (`<repo> <out_file>`) to `scripts/gh_helpers.sh`, using `gh_api_retry` and the union of the fields. Call it from both scripts. This is also the single place to land API-001.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+A CI guard already exists: `tests/test_workflow_file_size_limit.py:66-98` fails any step `run:` body that contains `${{` and is at least `RUN_EXPRESSION_GUARD_CHARS = 18_000` characters. The findings below sit under that guard, or are gaps in what it checks.
+
+**EXPR-001 — `Phase 2: Wait for plan to complete` is an interpolated body of about 16K characters**
+- **File:** `.github/workflows/test-and-mark-stable.yml:936-1203`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The body is 267 lines. Its only interpolations are three copies of `${{ steps.create-issue.outputs.created_after }}` (lines 954, 966, 984). Estimated size is about 16,000–17,000 characters, which puts it in the 71–85% band of the 21,000 limit, with roughly 4,000–5,000 characters of headroom. Every PR-review round in this step's history has added comments. `[NEEDS VERIFICATION]`: exact length, which `len(step["run"])` from the existing test will give.
+- **Recommended fix:** Add `CREATED_AFTER: ${{ steps.create-issue.outputs.created_after }}` to the step's `env:` and use `"${CREATED_AFTER}"`. The body then has no `${{ }}` and drops out of expression evaluation entirely. This is the pattern already used at lines 1825 and 2606 ("Promoted to env so the run: script body contains no ${{ }}").
+
+**EXPR-002 — `Phase 3b: Wait for PR creation` is an interpolated body of about 16K characters**
+- **File:** `.github/workflows/test-and-mark-stable.yml:1243-1503`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:** The body is about 260 lines. Its single interpolation is `IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"` (line 1281). Estimated size is about 15,500–17,000 characters, leaving roughly 4,000–5,500 characters of headroom. `[NEEDS VERIFICATION]`.
+- **Recommended fix:** Move the value to `env: IMPL_CREATED_AFTER: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}` and delete line 1281.
+
+**EXPR-003 — The smoke-test result summary step has about 14 inline step-output interpolations**
+- **File:** `.github/workflows/test-and-mark-stable.yml:4474-4630`
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:** Lines such as `HOT_POLLER_GUARD="${{ steps.hot-poller-guard.outputs.status }}"` (4484) through `CANCEL_UNCONFLICT=…` (4610) make an interpolated body of about 8,000–9,000 characters (estimate), leaving roughly 12,000 of headroom. It grows by one phase line each time a smoke phase is added.
+- **Recommended fix:** Move each `steps.*.outputs.*` value into the step's `env:` block.
+
+**EXPR-004 — `Run Codex` in clarify is about 14K characters with an inline prompt, one `${{ }}` away from the limit band**
+- **File:** `.github/workflows/clarify.yml:1239-1478`. Prompt heredoc at `:1249-1405`.
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:** The body is about 240 lines, roughly 14,000 characters (estimate), with no `${{ }}` today, so the limit does not apply yet. Adding any interpolation would turn the whole body into an expression of about 14,000 characters. The 157-line clarification prompt is embedded inline rather than living under `prompts/`; a search of `prompts/` finds none of its headings (`QUESTION BUDGET`, `ANSWER COMPATIBILITY`).
+- **Recommended fix:** Move the heredoc to `prompts/mode-clarify-inline.txt` and set `PROMPT_TEMPLATE_FILE` to that path. This shrinks `clarify.yml` by about 9,000 characters and keeps prompt edits out of workflow diffs.
+
+**EXPR-005 — Workflow file size headroom**
+- **File:** `.github/workflows/test-and-mark-stable.yml` (about 416,000 characters plus 425 non-ASCII characters, so about 417,000 bytes estimated); `implement.yml` (about 371,000); `review_autofix.yml` (about 356,000)
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:** Nothing is near the prompt's 800 KB threshold. That threshold does not apply to this repository, though: the effective limit is 512,000 bytes, with a 480,000-byte guard (`tests/test_workflow_file_size_limit.py:26-27` and §24 of `unattended_system_instructions.md`). `test-and-mark-stable.yml` has about 63,000 bytes of headroom to the guard, only just above §24's "aim for 50,000+".
+- **Recommended fix:** Make EXPR-001, EXPR-002 and EXPR-003 the next extraction targets. Move the 780-line body at `test-and-mark-stable.yml:1830-2611` and the 660-line body at `:2611-3273` (neither contains `${{ }}`) into `scripts/test_and_mark_stable_step_<slug>.sh`, following the `review_autofix_step_<slug>.sh` pattern from agents.md "Workflow file size limit".
+
+**EXPR-006 — Gaps in what the expression guard checks**
+- **File:** `tests/test_workflow_file_size_limit.py:66-98`
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:**
+  - It only scans `.github/workflows/*.yml` → `jobs.*.steps[].run`. Composite actions under `.github/actions/*/action.yml` (e.g. `install-codex`, `run-soft-error-analyzer`, `claude-pool-token`) are not scanned. `[NEEDS VERIFICATION]`: whether any of their `run:` bodies contain `${{ inputs.* }}`.
+  - It does not scan `if:` expressions. The largest one I saw is clarify's job `if:` (`clarify.yml:24-27`, about 1,600 characters), so that is not a risk today.
+  - There is no early-warning tier at 15,000 characters.
+- **Recommended fix:** Extend the glob to `.github/actions/*/action.yml` (`runs.steps[].run`). Also emit a non-failing warning (via `print`, from `main()`) for bodies at or above 15,000 characters, so EXPR-001 and EXPR-002 show up in CI output.
+
+### Section 5: Cross-Cutting Concerns
+
+**DEAD-001 — The single-use `pr6576-shard-followup.yml` still runs a test job on every push to `main`**
+- **File:** `.github/workflows/pr6576-shard-followup.yml:14-64`. Registry entry: `docs/scripts-pending-removal.md:331-340`.
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:** The `self-test` job (pip install plus pytest, up to 10 minutes) runs on every `push: branches: [main]`. Only the later `locate` job checks for the completion marker (line 77, `steps.guard.outputs.done`). Once #7072 has its marker comment, every push still uses a runner and adds to the collector's run window.
+- **Recommended fix:** Run the three removal preflight checks in the registry entry. If they pass, delete the workflow, `scripts/pr6576_shard_followup.py`, the test file and the registry entry in one PR (§20.F). Otherwise, restrict `self-test` to `pull_request` events.
+
+**CONSIST-001 — `unblock_judge.sh` uses raw `gh api` everywhere instead of the rate-limit-aware helpers**
+- **File:** `scripts/unblock_judge.sh:94-106` (sources only `label_helpers.sh`). Call sites include `:131`, `:234`, `:248`, `:262`, `:371`, `:1070`, `:1075`, `:1113` and `:1197`, about 45 in total.
+- **Severity:** Medium
+- **Category:** `consistency`
+- **Description:** None of the reads use `gh_api_retry` or `gh_retry`, unlike `resolve_integration_ref.sh:14-17`, which uses `gh_api_retry` when `gh_helpers.sh` is present. A single 5xx or secondary rate limit ends the run with `outcome=skip reason=item_unreadable`, `comments_unavailable` or `fixup_unavailable`, and the blocked item waits for the next dispatch. Several call sites use the `gh api … --jq … 2>/dev/null || echo '{}'` shape that `gh_helpers.sh:1225-1236` warns about (e.g. line 1197). They happen to fail closed through the follow-up `jq -e`.
+- **Recommended fix:** Source `${SUPPORT_DIR}/scripts/gh_helpers.sh` with the same guard used in `resolve_integration_ref.sh:14-17`. Wrap the GET reads in `gh_api_retry`. Writes are safe to route the same way, because `gh_api_retry` already drops unsafe POSTs to a single attempt (`gh_helpers.sh:931-933`).
+
+**CONSIST-002 — The support-ref commit pin (Q64) is only applied in some workflows**
+- **File:** `.github/workflows/check_failure_triage.yml:306-314`, `.github/workflows/orchestrate_poll.yml:113-121` and `:469-478`, `.github/workflows/sync_ai_labels.yml:37-45`, plus `cancel_on_pr_close.yml`, `orchestrate.yml` (×2) and `workflow_failure_heal.yml`
+- **Severity:** Medium
+- **Category:** `consistency`
+- **Description:** In consumers, these copies always set `SCRIPT_REF=stable`. A consumer that pins wrappers to a SHA (as `clarify.yml:261-269` supports) runs pinned workflow YAML against newer `stable` scripts in these workflows only, which risks version skew between step contracts and helpers.
+- **Recommended fix:** Apply the `SUPPORT_REF_WORKFLOW_JOB_JSON` pin logic to every reusable workflow that has a `workflow_call` trigger. The fix lands for free with DUP-003.
+
+**CONSIST-003 — The heal-intake `used_in_job=unknown` gap is not a missing start reading `[NEEDS VERIFICATION]`**
+- **File:** `.github/workflows/workflow-failure-heal-intake.yml:137-148` and `:300-310`; `scripts/gh_helpers.sh:66-72`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:** This report's GH API Call Audit recommends adding a `phase=start` capture to `workflow-failure-heal-intake`. That step already exists (lines 137-148) and writes the same snapshot file the end step reads. `used` stays `unknown` only when the snapshot is missing or unreadable, the `reset` values differ, or `previous_remaining < remaining` (lines 68-70). The real cause has not been found.
+- **Recommended fix:** In `gh_pat_budget`, when `used` stays `unknown`, add `used_reason=snapshot_missing|reset_changed|counter_increased` to the log line. Update the report's recommendation to match.
+
+**CONSIST-004 — Heal intake already de-duplicates by fingerprint before the model runs `[NEEDS VERIFICATION]`**
+- **File:** `scripts/workflow_failure_heal_intake.sh:936-1069` (fingerprint and budget) versus `:1688-1747` (diagnosis); `scripts/workflow_failure_heal.py:2067-2076` and `:4135-4166`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:** Speed #1 and Cost #3 in this report propose de-duplicating heal intake by failure reason. The intake already runs `budget()` before diagnosis, and returns `action: duplicate` when an open heal issue has the same `fp`. `normalize_error_line` replaces digits with `<n>`, so issue numbers do not split the fingerprint. As far as the source shows, the four intake runs of 72–278s could have ended as duplicates without any model call.
+- **Recommended fix:** Before implementing a new de-duplication step, check the `fingerprint fp=` and decision `log` lines in runs 38983250046, 38983567905, 38984163249 and 38986445246. If they show `duplicate`, re-estimate the Opus savings.
+
+**SHELL-001 — Unquoted numeric tests (SC2086)**
+- **File:** `.github/workflows/test-and-mark-stable.yml:1194` (`if [ $IDLE -ge $INACTIVITY_LIMIT ]; then`)
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:** If either variable is ever empty, for example after a failed `$((…))`, `[` reports `integer expression expected` and `set -e` kills the step. Other tests in the same step are quoted (e.g. line 1010).
+- **Recommended fix:** Quote both operands: `[ "$IDLE" -ge "$INACTIVITY_LIMIT" ]`.
+
+**Debt markers:** none found. A case-sensitive search for `TODO`, `FIXME` and `HACK` over `scripts/*.sh`, `scripts/*.py` and `.github/workflows/*.yml` returned zero matches.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---|---|
+| Critical | 0 | — |
+| High | 1 | BUG-001 |
+| Medium | 11 | BUG-002, BUG-003, SEC-002, BATCH-001, API-001, DUP-001, DUP-002, EXPR-001, EXPR-002, CONSIST-001, CONSIST-002 |
+| Low | 17 | BUG-004, BUG-005, SEC-001, BATCH-002, API-002, DUP-003, DUP-004, DUP-005, DUP-006, EXPR-003, EXPR-004, EXPR-005, EXPR-006, DEAD-001, CONSIST-003, CONSIST-004, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | `scripts/resolve_integration_ref.sh`, `tests/fixtures/integration_ref_resolver_ci_triage/*.json` (2 new) | Small |
+| API call optimization | `scripts/orchestrate_poll_process.sh`, `scripts/unblock_judge.sh`, `scripts/workflow_failure_heal_intake.sh`, `scripts/gh_helpers.sh`, `.github/workflows/test-and-mark-stable.yml` | Medium |
+| Code modularization | New `.github/actions/resolve-integration-ref`, `.github/actions/resolve-support-ref` and `.github/actions/gh-pat-budget`; `scripts/ai_engine.sh`; `scripts/orchestrate_poll_process.sh`; `clarify.yml`, `plan.yml`, `implement.yml`, `validate.yml`, `orchestrate_clarify_respond.yml` and about 8 other workflows | Large |
+| Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/clarify.yml`, new `prompts/mode-clarify-inline.txt`, `tests/test_workflow_file_size_limit.py` | Small |
+| Medium/Low fixes | `clarify.yml`, `plan.yml`, `scripts/comprehensive_test_and_release_gh_api.sh`, `scripts/unblock_judge.sh`, `scripts/gh_helpers.sh`, `.github/workflows/pr6576-shard-followup.yml` (and its script, test and registry entry), the support-checkout fallbacks in 10 workflows | Medium |
