@@ -4477,7 +4477,8 @@ post-sync repair) are follow-ups; until they land no pipeline runs the gate.
   `PreToolUse` `Bash` hook (its own settings entry, timeout 30) parses pushes
   with `pr_merge_status_guard._guarded_git_invocations` (conservative regex
   plus a warning if that module cannot load; a `git push` that module does
-  not parse, such as `command git push`, is checked as a push of `HEAD`;
+  not parse is checked as a push of `HEAD` (since #6038 the guard parses
+  `command git push` and the other transparent prefixes itself);
   quoted words are ignored for that check). It
   resolves each pushed source ref (the guard's `_push_targets` tip, `HEAD`
   for a bare push) to a commit and asks when that commit's stamp is missing,
