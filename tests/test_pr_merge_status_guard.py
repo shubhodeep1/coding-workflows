@@ -3284,3 +3284,156 @@ def test_mcp_push_never_reads_the_cache(monkeypatch, tmp_path: Path) -> None:
 	assert fresh_state_guard.evaluate(payload) == (0, "")
 	assert calls == ["feature/x"]
 	assert cache_writes == [("o/r", "feature/x", pull_requests)]
+
+
+# ──────────────────────────────────────────────────────────────────
+# #6038: command prefixes, subshells and cd that changes how it resolves
+# ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("command", [
+	"time -p git push origin HEAD:feature/x",
+	"time git commit -m x",
+	"/usr/bin/time -o out.txt git push origin HEAD:feature/x",
+	"command git push origin HEAD:feature/x",
+	"command -p git commit -m x",
+	"nice -n 5 git push origin HEAD:feature/x",
+	"nice -5 git push origin HEAD:feature/x",
+	"nice --adjustment=5 git commit -m x",
+	"ionice -c 2 -n 7 git push origin HEAD:feature/x",
+	"exec git push origin HEAD:feature/x",
+	"exec -a name git commit -m x",
+	"nohup git push origin HEAD:feature/x",
+	"setsid -f git push origin HEAD:feature/x",
+	"timeout 30 git push origin HEAD:feature/x",
+	"timeout -s KILL 1.5m git push origin HEAD:feature/x",
+	"time nice env FOO=1 git commit -m x",
+	"nohup env -C /tmp git push origin HEAD:feature/x",
+	"(git push origin HEAD:feature/x)",
+	"( git push origin HEAD:feature/x )",
+	"sudo git push origin HEAD:feature/x",
+	"sudo -u bot git commit -m x",
+	"xargs git push origin",
+	"stdbuf -oL git push origin HEAD:feature/x",
+	"sudo sh -c 'git push origin HEAD:feature/x'",
+	"ssh host 'cd repo && git commit -m x'",
+	"find . -name x -exec git commit -m x ;",
+	"time --bogus git push origin HEAD:feature/x",
+])
+def test_prefixed_git_writes_are_detected(command: str) -> None:
+	assert guard.git_subcommands(command) & guard.GUARDED_SUBCOMMANDS, command
+
+
+@pytest.mark.parametrize("command", [
+	"command -v git",
+	"command -V git",
+	"time git status",
+	"nice -n 5 git status",
+	"timeout 30 git fetch origin main",
+	'echo "git push"',
+	"echo git push origin feature/x",
+	"printf '%s\\n' git push",
+	"grep -rn git push scripts/",
+	"sudo apt-get install git",
+	"gh pr create --title t --body 'run git push later'",
+	"nice -n 5 make",
+])
+def test_prefixed_non_writes_are_ignored(command: str) -> None:
+	assert not (guard.git_subcommands(command) & guard.GUARDED_SUBCOMMANDS), command
+
+
+@pytest.mark.parametrize("command", [
+	"command -v git",
+	"time git status",
+	"nice -n 5 git status",
+	"echo git push origin feature/x",
+	'echo "git push"',
+])
+def test_prefixed_non_writes_do_not_prompt(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None, proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"time -p git push origin HEAD:feature/x",
+	"command git push origin HEAD:feature/x",
+	"nice -n 5 git push origin HEAD:feature/x",
+	"exec git push origin HEAD:feature/x",
+	"nohup git push origin HEAD:feature/x",
+	"timeout 30 git push origin HEAD:feature/x",
+	"(git push origin HEAD:feature/x)",
+	"( git push origin HEAD:feature/x )",
+	"time -p git commit -m next",
+	"export CDPATH={parent}; cd {name} && git push origin HEAD:feature/x",
+	"CDPATH={parent}; cd {name} && git push origin HEAD:feature/x",
+	"enable -n cd; cd {worktree}; git push origin HEAD:feature/x",
+	"cd() {{ :; }}; cd {worktree} && git push origin HEAD:feature/x",
+	"function cd {{ :; }}; cd {worktree} && git push origin HEAD:feature/x",
+])
+def test_stranded_checkout_is_judged_behind_prefixes_and_redefined_cd(merged_branch_repo, command: str) -> None:
+	"""Scenario A: the session checkout sits on merged `feature/x`; a clean
+	worktree sits on `main`. Before #6038 each of these passed silently."""
+	repo, stub_bin = merged_branch_repo
+	worktree = repo.parent / "clean"
+	_git(repo, "worktree", "add", "-b", "clean", str(worktree), "main")
+	formatted = command.format(parent=worktree.parent, name=worktree.name, worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 2, formatted + "\n" + proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+@pytest.mark.parametrize("command", [
+	"cd {worktree} && time -p git push origin HEAD:feature/x",
+	"cd {worktree} && command git push origin HEAD:feature/x",
+	"X=1 cd {worktree} && git push origin HEAD:feature/x",
+	"builtin cd {worktree} && git push origin HEAD:feature/x",
+	"command cd {worktree} && git push origin HEAD:feature/x",
+])
+def test_worktree_push_is_judged_behind_prefixes(merged_branch_repo, command: str) -> None:
+	"""Scenario B: the session checkout is clean on `main`; the worktree sits
+	on the merged head."""
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "feature/x")
+	_git(repo, "checkout", "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	formatted = command.format(worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 2, formatted + "\n" + proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+@pytest.mark.parametrize("command", [
+	"CDPATH={parent} cd {name} && git push origin HEAD:feature/x",
+	"export CDPATH={parent}; cd {name} && git push origin HEAD:feature/x",
+	"enable -n cd; cd {worktree} && git push origin HEAD:feature/x",
+	"sudo git push origin HEAD:feature/x",
+	"stdbuf -oL git push origin HEAD:feature/x",
+	"sudo sh -c 'git push origin HEAD:feature/x'",
+	"time --bogus git push origin HEAD:feature/x",
+])
+def test_unknown_directory_or_prefix_asks_instead_of_passing(merged_branch_repo, command: str) -> None:
+	"""Scenario B again: where the cd lands, or where a prefix runs Git, is
+	unknown, and the clean session checkout alone cannot authorize the push."""
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "feature/x")
+	_git(repo, "checkout", "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	formatted = command.format(parent=worktree.parent, name=worktree.name, worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 0, formatted + "\n" + proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None, formatted + "\n" + proc.stdout
+
+
+def test_cdpath_set_before_a_shell_wrapper_reaches_its_cd(monkeypatch) -> None:
+	monkeypatch.delenv("CDPATH", raising=False)
+	invocations = guard._guarded_git_invocations(
+		"export CDPATH=/srv; bash -c 'cd repo && git push origin HEAD:feature/x'", "/tmp"
+	)
+	assert [invocation.subcommand for invocation in invocations] == ["push"]
+	assert invocations[0].warning, invocations

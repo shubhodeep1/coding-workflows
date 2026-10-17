@@ -701,7 +701,9 @@ def test_hook_asks_when_the_pushed_ref_does_not_resolve(tmp_path):
 
 def test_hook_falls_back_for_a_push_the_guard_does_not_parse(tmp_path):
 	root = _repo(tmp_path, {"a.txt": ""})
-	out = _hook(_push(root, "command git push origin HEAD"), {"TMPDIR": str(tmp_path)})
+	# Since #6038 the guard parses `command git push`; a bare `git push)`
+	# closing a multi-segment subshell still reaches the fallback.
+	out = _hook(_push(root, "(cd . && git push)"), {"TMPDIR": str(tmp_path)})
 	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
 	assert _hook(_push(root, 'git commit -m "push later"'), {"TMPDIR": str(tmp_path)}) == {}
 
