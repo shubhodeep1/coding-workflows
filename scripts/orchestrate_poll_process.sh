@@ -19524,6 +19524,7 @@ run_unblock_scan() {
     --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
     --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
     --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+    --escalated-recheck-hours "${UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS:-24}" \
     --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")"; then
     echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=select_failed"
     return 0
@@ -19552,6 +19553,7 @@ run_unblock_scan() {
           --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
           --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
           --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+          --escalated-recheck-hours "${UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS:-24}" \
           --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")" || {
           echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=reselect_failed"
           return 0

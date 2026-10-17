@@ -111,6 +111,7 @@ deployment fallback.
 | `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES` | No | `30` | orchestrate_poll | How long an item must carry its block label (or a project must have been failed) before the scan sends it to the judge. |
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
+| `UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS` | No | `24` | orchestrate_poll | The scan skips an escalated fix-up (one the judge marked `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->`, which every later judge run only skips) while its last judge run is younger than this, so it gets one judge run per day (for the scope re-grant check) instead of one per hour. `0` restores a run per `UNBLOCK_JUDGE_INFLIGHT_MINUTES`. |
 | `UNBLOCK_JUDGE_FIXUP_WAIT_HOURS` | No | `72` | unblock_judge | How long the judge waits for the fix-up issue of a `descope` or `operator_step` verdict to merge before it decides again. |
 | `UNBLOCK_JUDGE_WAIT_ENABLED` | No | `true` | unblock_judge | The `wait` verdict and operator-step holds. The judge can hold a blocked item until a pull request is merged and on a branch, another issue or pull request closes, or an `_UNSET_OPERATOR_STEP` operator step is done: its placeholder no longer appears on the default branch, or a repository Actions variable or secret with that name exists. After an `operator_step` fix-up whose placeholder needs a person merges, the item waits for that step instead of resuming at once. A hold keeps the block label, posts no resume command and uses no round; once the condition holds the judge posts the stop's resume command. `false` turns waits off, ends open holds and restores the immediate resume. |
 | `UNBLOCK_JUDGE_WAIT_MAX_DAYS` | No | `14` | unblock_judge | How many days a hold may last before the judge decides again. An invalid value falls back to 14. |
@@ -3560,6 +3561,14 @@ and resolver chains, a failed project) now goes to the unblock judge
   `ai:unblock` marker younger than `UNBLOCK_JUDGE_RETRY_HOURS` and no judge
   running, oldest first, at most one per tick. The scan waits for an active
   judge; `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK=0` disables dispatch.
+  The scan also leaves two terminal states alone while nothing changed
+  (`skipped` keys `fixup_escalated` and `terminal_unchanged`): an escalated
+  fix-up (see `UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS`), and an issue or project
+  whose newest trusted verdict is a `close` for its current stop, whose
+  `ai:needs-human` park label was applied and has since been dropped (the
+  poller's label repair keeps `ai:blocked` over it), with no new block label
+  event or non-bot comment since the verdict. It reads only the label events,
+  comments and run list it already fetched.
   Failed projects are added from the poller's own state and take priority in
   the 30-item details batch. When more than 30 projects have failed, that
   batch rotates each five-minute tick so none is permanently left out. A

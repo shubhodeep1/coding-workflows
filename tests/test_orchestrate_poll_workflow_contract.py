@@ -204,6 +204,7 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 		("UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES", "30"),
 		("UNBLOCK_JUDGE_RETRY_HOURS", "6"),
 		("UNBLOCK_JUDGE_INFLIGHT_MINUTES", "60"),
+		("UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS", "24"),
 	):
 		assert f"{name}: ${{{{ vars.{name} || '{default}' }}}}" in step
 	assert (
