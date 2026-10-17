@@ -55,9 +55,10 @@ otherwise) and classifies the call:
              permission mode. `gh api` text handed to any other command
              (`git commit -m`, `grep`, `echo`) is data and is ignored.
              Quoted or escaped spellings (`'gh' api`, `gh a''pi`,
-             `gh \<newline>api`) are read like the plain form; an expansion
-             in the subcommand position (`gh $'api'`, `gh $SUB`) and
-             `env -S '<gh api ...>'` count as hidden calls (issue #7555).
+             `gh \\<newline>api`, `gh a\\<newline>pi`) are read like the plain
+             form; an expansion in the subcommand position (`gh $'api'`,
+             `gh $SUB`), an expanding command word before `api` (`$G api`)
+             and `env -S '<gh api ...>'` count as hidden calls (issue #7555).
              A write with `--hostname` naming a host other than github.com,
              or with a `GH_*` assignment in the command, is not routine.
              An unquoted `$` or backtick in a direct `gh api` argument also
@@ -104,8 +105,10 @@ invalid, or non-object payload, or an internal error, asks instead of allowing,
 because it is the only thing standing where the ask rules were. Empty or
 whitespace-only input carries no command and is allowed silently.
 
-The hook issues no GitHub API calls (§15). The only subprocess is one
-`git config --get remote.origin.url`, run only when a call could be routine.
+The hook issues no GitHub API calls (§15). The only subprocesses are one
+`git config --get remote.origin.url` and, for a `{owner}/{repo}` write, one
+`git config --get-regexp` read of the remote URLs and `gh-resolved` values,
+run only when a call could be routine.
 There is deliberately no environment-variable escape hatch.
 
 Exit code is always 0 (Claude Code hook protocol); the decision travels in the
@@ -141,6 +144,11 @@ _RAW_GH_API_RE = re.compile(r"(?<![\w.-])gh\s+api(?![\w-])")
 # `gh` followed by a word with an expansion in it (`gh $'api'`, `gh $SUB`,
 # `gh "$X"`): Bash could expand that word into `api` (issue #7555).
 _GH_EXPANDED_SUBCOMMAND_RE = re.compile(r"(?<![\w.-])gh\s+[^\s;&|]*[$`]")
+# An expanding command word before `api` (`G=gh; $G api`, `` `printf gh` api ``):
+# Bash could expand it into `gh` (issue #7555).
+# Each match is one shell word (backtick and `$(...)` groups kept whole) followed
+# by `api`; `_has_expanding_word_before_api` checks the word for `$` or a backtick.
+_WORD_BEFORE_API_RE = re.compile(r"((?:`[^`]*`|\$\([^)]*\)|[^\s;&|`()])+)[ \t]+api(?![\w-])")
 # A `GH_*` (gh settings: GH_REPO, GH_HOST, GH_TOKEN, ...) or `GIT_*` (which
 # repository's remotes gh reads) assignment anywhere in the command: a prefix,
 # `export`, `env NAME=`, `declare -x`. Matching quoted text too only prompts.
@@ -370,13 +378,25 @@ def _normalize_for_gh_api_scan(command: str) -> str:
 	return re.sub(r"['\"\\]", "", text)
 
 
+def _has_expanding_word_before_api(text: str) -> bool:
+	"""True when a word Bash expands (`$G`, `${G}`, `` `printf gh` ``, `$(printf gh)`)
+	stands before `api`, so Bash could run `gh api` from it (issue #7555)."""
+	for match in _WORD_BEFORE_API_RE.finditer(text.replace("\\\n", "")):
+		if "$" in match.group(1) or "`" in match.group(1):
+			return True
+	return False
+
+
 def _may_invoke_gh_api(command: str) -> bool:
 	"""True when Bash could run `gh api` from this text, however it is quoted."""
 	if _RAW_GH_API_RE.search(command):
 		return True
 	if _RAW_GH_API_RE.search(_normalize_for_gh_api_scan(command)):
 		return True
-	return bool(_GH_EXPANDED_SUBCOMMAND_RE.search(command.replace("\\\n", "")))
+	joined = command.replace("\\\n", "")
+	if _has_expanding_word_before_api(joined):
+		return True
+	return bool(_GH_EXPANDED_SUBCOMMAND_RE.search(joined))
 
 
 def strip_heredoc_bodies(command: str) -> tuple[str, list[tuple[str, bool, str]]]:
@@ -498,7 +518,9 @@ def shell_segments(command: str) -> list[list[str]]:
 	so it is never mistaken for an argument. Quoted text stays one token.
 	Raises ValueError on unbalanced quotes.
 	"""
-	lexer = shlex.shlex(command.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	# Bash removes a backslash-newline outright, so `gh a<backslash-newline>pi`
+	# runs `gh api` (issue #7555); a space here would split the word.
+	lexer = shlex.shlex(command.replace("\\\n", ""), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
@@ -689,6 +711,10 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 	else:
 		outside_text, has_real_substitution = _outside_single_quotes(command)
 		token_substitution_check = has_real_substitution and _may_invoke_gh_api(outside_text)
+		# `$(printf gh) api`, `` `printf gh` api ``, `$G api`: the tokenizer splits
+		# these words, so check the text outside single quotes (issue #7555).
+		if _has_expanding_word_before_api(outside_text):
+			return True
 	for tokens in segments:
 		index = _command_word_index(tokens)
 		if index >= len(tokens):
@@ -910,7 +936,8 @@ def _placeholder_target_is_local(command: str, repo_slug_lookup, placeholder_loo
 	"""
 	if _GH_ENV_ASSIGNMENT_RE.search(command) or _GIT_ENV_ASSIGNMENT_RE.search(command):
 		return False, "the command sets a GH_* or GIT_* variable"
-	if _DIRECTORY_CHANGE_RE.search(command):
+	# Quoted or escaped spellings (`'cd'`, `"cd"`, `c''d`) change directory too.
+	if _DIRECTORY_CHANGE_RE.search(command) or _DIRECTORY_CHANGE_RE.search(_normalize_for_gh_api_scan(command)):
 		return False, "the command changes directory"
 	if placeholder_lookup is None:
 		return False, "remote resolution not checked"

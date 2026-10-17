@@ -1424,11 +1424,41 @@ def test_quoted_read_or_routine_call_is_classified_like_the_plain_form(command):
 
 @pytest.mark.parametrize("command", [
 	"G=gh; $G api repos/a/b/issues/1/comments -f body=x",
-	"alias q=gh; q api repos/a/b/issues/1/comments -f body=x",
+	"G=gh; ${G} api -X DELETE repos/a/b",
 	"`printf gh` api -X DELETE repos/a/b",
+	"`printf g``printf h` api -X DELETE repos/a/b",
+	"$(printf gh) api -X DELETE repos/a/b",
 ])
-def test_indirect_gh_command_word_is_never_allowed(command):
-	assert _decide(command) != guard.DECISION_ALLOW
+def test_expanding_command_word_before_api_asks(command):
+	# The early filter must not drop these: Bash can expand the word into `gh`.
+	assert _decide(command) == guard.DECISION_ASK
+
+
+def test_indirect_gh_command_word_is_never_allowed():
+	# An alias cannot be resolved from the text alone; it must never be allowed.
+	assert _decide("alias q=gh; q api repos/a/b/issues/1/comments -f body=x") != guard.DECISION_ALLOW
+
+
+@pytest.mark.parametrize("command", [
+	"gh a\\\npi repos/evil/x/issues/1/comments -f body=x",
+	"g\\\nh api repos/evil/x/issues/1/comments -f body=x",
+	f"gh a\\\npi {LOCAL_COMMENTS} -F body=@x",
+])
+def test_mid_word_line_continuation_is_read_as_gh_api(command):
+	assert _decide(command) == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	"'cd' /tmp && " + PLACEHOLDER_WRITE,
+	"\"cd\" /tmp && " + PLACEHOLDER_WRITE,
+	"\\cd /tmp && " + PLACEHOLDER_WRITE,
+	"c''d /tmp && " + PLACEHOLDER_WRITE,
+	"'pushd' /tmp && " + PLACEHOLDER_WRITE,
+])
+def test_quoted_directory_change_before_placeholder_write_asks(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard.DECISION_ASK
+	assert "changes directory" in reason or "may resolve to another repository" in reason
 
 
 @pytest.mark.parametrize("command", [
