@@ -848,6 +848,31 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
 
+      # Moved back from tests-release-and-log-analysis, which took 20m16s of
+      # its 20 minutes on main (run 39030079651, budget-watch issue #7560).
+      # It first moved there from this job when this job measured 19.6 of its
+      # 20 minutes on main (2026-10-09) and timed out on PR heads; it took
+      # about 4.5 minutes then. This job has had room since #7366 moved six
+      # steps out of it. Step timings were not readable when this was planned
+      # (estimated, not measured). The step seeds its own git repositories and
+      # needs no Node or prepared .claude/ live copies. Name and body unchanged.
+      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
+        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
+        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
+        # PR per release tick), plus _parse_reset_header's Retry-After
+        # precedence, gh_retry's per-attempt stdout buffering (#5495) and
+        # the non-retryable HTTP 400/401 classification in
+        # scripts/gh_helpers.sh.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_review_merge_train.py \
+            tests/test_gh_helpers_parse_reset_header.py \
+            tests/test_gh_retry_stdout_isolation.py \
+            tests/test_gh_retry_permanent_auth_failures.py \
+            tests/test_gh_api_retry.py \
+            tests/test_gh_api_retry_py.py
+
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -1451,6 +1476,19 @@ jobs:
             tests/test_verify_integration_fingerprints_baseline.py \
             tests/test_workflow_untrusted_input_contract.py
 
+      # Moved from tests-release-and-log-analysis, which took 20m16s of its
+      # 20 minutes on main (run 39030079651, budget-watch issue #7560). It
+      # moved there from tests-heal-plan-and-validation in #7383. Step timings
+      # were not readable when this was planned; it was chosen as that job's
+      # most bash-driven step after the merge-train step (estimated, not
+      # measured). It needs no git history, Node or prepared .claude/ live
+      # copies. Name and body unchanged.
+      - name: Check-failure triage workflow security tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
+
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -1474,28 +1512,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
-
-      # Moved from tests-hooks-and-orchestrator, which measured 19.6 of its
-      # 20 minutes on main (2026-10-09) and timed out on PR heads; these two
-      # steps take about 4.5 minutes each and this job about 4.
-      # (The "this job about 4" figure dates from 2026-10-09 and predates
-      # later moves into and out of this job, #7382, #7383 and #7406.)
-      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
-        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
-        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
-        # PR per release tick), plus _parse_reset_header's Retry-After
-        # precedence, gh_retry's per-attempt stdout buffering (#5495) and
-        # the non-retryable HTTP 400/401 classification in
-        # scripts/gh_helpers.sh.
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_review_merge_train.py \
-            tests/test_gh_helpers_parse_reset_header.py \
-            tests/test_gh_retry_stdout_isolation.py \
-            tests/test_gh_retry_permanent_auth_failures.py \
-            tests/test_gh_api_retry.py \
-            tests/test_gh_api_retry_py.py
 
       - name: Integration-ahead-by gate regression tests
         run: |
@@ -1898,6 +1914,7 @@ jobs:
       # measured 535-604s on 2026-10-12, the only job with measured headroom.
       # None of the three needs Node or the prepared .claude/ live copies, and
       # this job already has full git history and the same pip set.
+      # The check-failure triage step moved on to tests-promote-stall-and-review (#7560).
       - name: Orchestrator judges on the Claude engine tests (Phase 5c)
         run: |
           set -euo pipefail
@@ -1907,12 +1924,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
-
-      - name: Check-failure triage workflow security tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
