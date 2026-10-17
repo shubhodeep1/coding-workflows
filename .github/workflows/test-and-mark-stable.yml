@@ -7451,8 +7451,11 @@ jobs:
                 esac
               done
               if [ "$release_hard_failure" = "false" ] && [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
-                RELEASE_SUPERSEDED_BY="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml/runs?per_page=20" \
-                  --jq "[.workflow_runs[] | select(.id > ${GITHUB_RUN_ID}) | .id] | min // empty" 2>/dev/null || true)"
+                if ! RELEASE_SUPERSEDED_BY="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml/runs?per_page=20" \
+                  --jq "[.workflow_runs[] | select(.id > ${GITHUB_RUN_ID}) | .id] | min // empty" 2>/dev/null)"; then
+                  echo "::warning::Superseded-run lookup failed; keeping the FAILED header"
+                  RELEASE_SUPERSEDED_BY=""
+                fi
                 if ! [[ "${RELEASE_SUPERSEDED_BY}" =~ ^[0-9]+$ ]]; then
                   RELEASE_SUPERSEDED_BY=""
                 fi

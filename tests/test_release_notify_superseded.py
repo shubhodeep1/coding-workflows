@@ -126,6 +126,12 @@ def test_cancelled_smoke_test_with_newer_run_is_superseded(tmp_path: Path) -> No
 		("smoke test failed", "failure", NEWER_RUN_ID, {}, False),
 		("another job failed", "cancelled", NEWER_RUN_ID, {"needs.validate-scripts.result": "failure"}, False),
 		("release failed", "cancelled", NEWER_RUN_ID, {"needs.release.result": "failure"}, False),
+		("orphans failed", "cancelled", NEWER_RUN_ID, {"needs.orphan-workflows-test.result": "failure"}, False),
+		("decompose failed", "cancelled", NEWER_RUN_ID, {"needs.orchestrate-decompose-test.result": "failure"}, False),
+		("validate-fx failed", "cancelled", NEWER_RUN_ID, {"needs.validate-standalone-test.result": "failure"}, False),
+		("negative failed", "cancelled", NEWER_RUN_ID, {"needs.clarify-rejects-unsolvable-test.result": "failure"}, False),
+		("alt-model failed", "cancelled", NEWER_RUN_ID, {"needs.e2e-alt-model-test.result": "failure"}, False),
+		("validate failed", "cancelled", NEWER_RUN_ID, {"needs.validate.result": "failure"}, False),
 	],
 )
 def test_other_outcomes_stay_failed(
@@ -140,6 +146,7 @@ def test_other_outcomes_stay_failed(
 	assert header == "Release v1.35.2 FAILED", case
 	assert gh_called is expect_gh_call, case
 	assert "RELEASE_NOTIFY_V1" not in stdout, case
+	assert ("Superseded-run lookup failed" in stdout) is (case == "gh fails"), case
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
