@@ -17,7 +17,12 @@ takes an optional `placeholder_lookup`; without it a placeholder write is not
 routine. The early filter (`_may_invoke_gh_api`) also matches quoted spellings
 (`'gh' api`, `gh a''pi`, `gh \<newline>api`), `gh <expansion>`, and a word with
 `$` or a backtick before `api` (`$G api`, `${G} api`, `` `printf gh` api ``,
-`$(printf gh) api`; `_has_expanding_word_before_api`). `shell_segments` removes
+`$(printf gh) api`, also after quote removal, so `$G "api"` and `$G a''pi`
+count; `_has_expanding_word_before_api`), and `gh` followed by a flag and later
+`api` (`_GH_FLAG_BEFORE_API_RE`). `evaluate` asks when a `gh` token is followed
+by a flag and later an `api` token (`_gh_flag_before_api`, for example
+`gh -R other/repo api ...`), because the guard does not read gh's global flags.
+`_unquoted_gh_api_expansion` also removes backslash-newlines first. `shell_segments` removes
 a backslash-newline instead of turning it into a space, so `gh a\<newline>pi`
 parses as `gh api`. `gh $'api'`, an expanding word before `api` and
 `env -S '...'` count as hidden calls and prompt. The guard reads only

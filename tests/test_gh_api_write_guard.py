@@ -1428,6 +1428,11 @@ def test_quoted_read_or_routine_call_is_classified_like_the_plain_form(command):
 	"`printf gh` api -X DELETE repos/a/b",
 	"`printf g``printf h` api -X DELETE repos/a/b",
 	"$(printf gh) api -X DELETE repos/a/b",
+	"G=gh; $G \"api\" repos/a/b/issues/1/comments -f body=x",
+	"G=gh; $G 'api' -X DELETE repos/a/b",
+	"G=gh; $G a''pi -X DELETE repos/a/b",
+	"$(printf gh) \"api\" -X DELETE repos/a/b",
+	"`printf gh` 'api' -X DELETE repos/a/b",
 ])
 def test_expanding_command_word_before_api_asks(command):
 	# The early filter must not drop these: Bash can expand the word into `gh`.
@@ -1443,6 +1448,7 @@ def test_indirect_gh_command_word_is_never_allowed():
 	"gh a\\\npi repos/evil/x/issues/1/comments -f body=x",
 	"g\\\nh api repos/evil/x/issues/1/comments -f body=x",
 	f"gh a\\\npi {LOCAL_COMMENTS} -F body=@x",
+	f"gh a\\\npi {LOCAL_COMMENTS} -f body=$FIELDS",
 ])
 def test_mid_word_line_continuation_is_read_as_gh_api(command):
 	assert _decide(command) == guard.DECISION_ASK
@@ -1467,3 +1473,23 @@ def test_quoted_directory_change_before_placeholder_write_asks(command):
 ])
 def test_quoted_gh_api_text_handed_to_data_commands_gets_no_decision(command):
 	assert _decide(command) is None
+
+
+# Claim 1, `-R`: a flag between `gh` and `api` could change the target repository
+# or host, so the guard prompts instead of classifying the call (issue #7555).
+@pytest.mark.parametrize("command", [
+	"gh -R evil/repo api repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"gh --repo evil/repo api repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"gh --hostname evil.example api repos/shubhodeep1/coding-workflows/issues/5/comments -f body=x",
+	"gh -R evil/repo a''pi repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"'gh' -R evil/repo 'api' repos/{owner}/{repo}/issues/5/comments -f body=x",
+	"sudo gh -R evil/repo api repos/a/b -X DELETE",
+])
+def test_flag_between_gh_and_api_asks(command):
+	decision, reason = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert decision == guard.DECISION_ASK
+	assert reason
+
+
+def test_flag_before_other_gh_subcommand_gets_no_decision():
+	assert _decide("gh -R a/b issue comment 1 --body 'api change'") is None

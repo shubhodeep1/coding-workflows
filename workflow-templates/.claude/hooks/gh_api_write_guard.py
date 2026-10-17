@@ -59,6 +59,7 @@ otherwise) and classifies the call:
              form; an expansion in the subcommand position (`gh $'api'`,
              `gh $SUB`), an expanding command word before `api` (`$G api`)
              and `env -S '<gh api ...>'` count as hidden calls (issue #7555).
+             A flag between `gh` and `api` (`gh -R x api ...`) also prompts.
              A write with `--hostname` naming a host other than github.com,
              or with a `GH_*` assignment in the command, is not routine.
              An unquoted `$` or backtick in a direct `gh api` argument also
@@ -149,6 +150,10 @@ _GH_EXPANDED_SUBCOMMAND_RE = re.compile(r"(?<![\w.-])gh\s+[^\s;&|]*[$`]")
 # Each match is one shell word (backtick and `$(...)` groups kept whole) followed
 # by `api`; `_has_expanding_word_before_api` checks the word for `$` or a backtick.
 _WORD_BEFORE_API_RE = re.compile(r"((?:`[^`]*`|\$\([^)]*\)|[^\s;&|`()])+)[ \t]+api(?![\w-])")
+# `gh` with a flag before the `api` subcommand (`gh -R other/repo api ...`,
+# `gh --hostname h api ...`): the flag could change where the call goes, so
+# the call prompts instead of being classified (issue #7555).
+_GH_FLAG_BEFORE_API_RE = re.compile(r"(?<![\w.-])gh\s+-[^;&|\n]*?(?<![\w-])api(?![\w-])")
 # A `GH_*` (gh settings: GH_REPO, GH_HOST, GH_TOKEN, ...) or `GIT_*` (which
 # repository's remotes gh reads) assignment anywhere in the command: a prefix,
 # `export`, `env NAME=`, `declare -x`. Matching quoted text too only prompts.
@@ -391,12 +396,28 @@ def _may_invoke_gh_api(command: str) -> bool:
 	"""True when Bash could run `gh api` from this text, however it is quoted."""
 	if _RAW_GH_API_RE.search(command):
 		return True
-	if _RAW_GH_API_RE.search(_normalize_for_gh_api_scan(command)):
+	normalized = _normalize_for_gh_api_scan(command)
+	if _RAW_GH_API_RE.search(normalized):
 		return True
 	joined = command.replace("\\\n", "")
-	if _has_expanding_word_before_api(joined):
+	# The normalized text also catches a quoted `api` after an expanding word
+	# (`$G "api"`, `$G a''pi`), which Bash runs as `gh api`.
+	if _has_expanding_word_before_api(joined) or _has_expanding_word_before_api(normalized):
+		return True
+	if _GH_FLAG_BEFORE_API_RE.search(joined) or _GH_FLAG_BEFORE_API_RE.search(normalized):
 		return True
 	return bool(_GH_EXPANDED_SUBCOMMAND_RE.search(joined))
+
+
+def _gh_flag_before_api(segments: list[list[str]]) -> bool:
+	"""True when a `gh` word is followed by a flag and later an `api` word
+	(`gh -R other/repo api ...`): the guard does not read gh's global flags, so
+	it cannot tell which repository or host the call targets (issue #7555)."""
+	for tokens in segments:
+		for position, token in enumerate(tokens[:-1]):
+			if _is_gh(token) and tokens[position + 1].startswith("-") and "api" in tokens[position + 2 :]:
+				return True
+	return False
 
 
 def strip_heredoc_bodies(command: str) -> tuple[str, list[tuple[str, bool, str]]]:
@@ -713,7 +734,9 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 		token_substitution_check = has_real_substitution and _may_invoke_gh_api(outside_text)
 		# `$(printf gh) api`, `` `printf gh` api ``, `$G api`: the tokenizer splits
 		# these words, so check the text outside single quotes (issue #7555).
-		if _has_expanding_word_before_api(outside_text):
+		if _has_expanding_word_before_api(outside_text) or _has_expanding_word_before_api(
+			_normalize_for_gh_api_scan(outside_text)
+		):
 			return True
 	for tokens in segments:
 		index = _command_word_index(tokens)
@@ -728,6 +751,14 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 		# `$G api` / `` `printf gh` api ``: the command word itself expands.
 		if next_word == "api" and ("$" in command_word or "`" in command_word):
 			return True
+		# `` `printf gh` 'api' ``: the tokenizer splits the backtick word, so find
+		# the token that closes it and check the word after it (issue #7555).
+		if command_word.startswith("`"):
+			for position in range(index, len(tokens) - 1):
+				if tokens[position].endswith("`") and (position > index or tokens[position].count("`") >= 2):
+					if tokens[position + 1] == "api":
+						return True
+					break
 		executor = os.path.basename(command_word) in _EXECUTOR_COMMANDS or command_word.startswith("$")
 		# `env -S '<command>'`, `env -i ...`: `env` options before the command
 		# word, so the guard cannot tell which word env will run.
@@ -1107,6 +1138,8 @@ def _unquoted_gh_api_expansion(command: str) -> bool:
 	argument parser runs. Only words belonging to a direct call count; an
 	expansion in a neighbouring echo/loop is not a gh api argument.
 	"""
+	# Bash removes a backslash-newline outright (`gh a<backslash-newline>pi`).
+	command = command.replace("\\\n", "")
 	segments: list[list[tuple[str, bool]]] = []
 	words: list[tuple[str, bool]] = []
 	word = ""
@@ -1700,6 +1733,11 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"gh api guard (CLAUDE.md §23.H): a gh api call could run hidden inside a $(...) or backtick word, "
 			"an executor (bash -c, sudo, xargs, python3, ...), or a heredoc fed to one, so it is treated as a "
 			"write. Run it as its own plain command." + (_ECHO_READ_HINT if "$(" in command else "")
+		)
+	if _gh_flag_before_api(segments):
+		return DECISION_ASK, (
+			"gh api guard (CLAUDE.md §23.H): a flag stands between `gh` and `api` (such as -R or --hostname), "
+			"which could send the call to another repository or host. Put `api` right after `gh`."
 		)
 
 	cwd = payload.get("cwd")
