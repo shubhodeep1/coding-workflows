@@ -134,21 +134,40 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
           # (issue #6634): main in this repo, stable in consumers, never the PR
           # head or the caller checkout. emit_event.sh is fetched next to it so
           # the helper never sources a checkout copy. Git transport spends no
           # REST budget. On failure the steps below fall back to plain gh api.
+          # A consumer run whose job workflow_ref pins a coding-workflows file
+          # to a commit fetches that commit instead, never stable
+          # (tele-funtoken-msg-scoring#4566); a fetch that does not land
+          # exactly on it leaves the helper unset.
           ghr_ref=stable
           if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then ghr_ref=main; fi
+          ghr_pin=""
+          ghr_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [ "${ghr_ref}" = "stable" ] && [[ "${ghr_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml@[0-9a-f]{40}$ ]]; then
+            ghr_pin="${ghr_workflow_ref##*@}"
+            ghr_ref="${ghr_pin}"
+          fi
           ghr_dir="${RUNNER_TEMP}/gh-api-retry-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           ghr_auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
           for ghr_try in 1 2 3; do
             rm -rf "${ghr_dir}"
             mkdir -p "${ghr_dir}"
-            if git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
-                --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null \
+            if { if [ -n "${ghr_pin}" ]; then
+                  git init -q "${ghr_dir}/src" 2>/dev/null \
+                    && git -C "${ghr_dir}/src" remote add origin https://github.com/shubhodeep1/coding-workflows \
+                    && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" fetch -q --no-tags --depth 1 --filter=blob:none origin "${ghr_pin}" 2>/dev/null \
+                    && [ "$(git -C "${ghr_dir}/src" rev-parse FETCH_HEAD 2>/dev/null)" = "${ghr_pin}" ] \
+                    && git -C "${ghr_dir}/src" update-ref HEAD FETCH_HEAD
+                else
+                  git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
+                    --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null
+                fi; } \
               && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/gh_helpers.sh > "${ghr_dir}/gh_helpers.sh" 2>/dev/null \
               && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/emit_event.sh > "${ghr_dir}/emit_event.sh" 2>/dev/null; then
               break
@@ -251,7 +270,7 @@ jobs:
 
       - name: Install dependencies
         if: env.SKIP_IMPLEMENT != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
@@ -452,7 +471,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout support source fallback for duplicate PR notice
-        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && steps.checkout_support_source_duplicate_notice.outcome == 'failure'
+        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && steps.checkout_support_source_duplicate_notice.outcome == 'failure' && env.DUPLICATE_NOTICE_SCRIPT_REF == 'stable'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -463,7 +482,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout support source main snapshot for duplicate PR notice
-        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && env.DUPLICATE_NOTICE_SCRIPT_REF != 'main'
+        if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true' && env.DUPLICATE_NOTICE_SCRIPT_REF == 'stable'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -487,7 +506,13 @@ jobs:
           if [ ! -f "${tg_helper_src}" ] && [ -f ".codex-workflow-src-main/scripts/tg_helpers.sh" ]; then
             tg_helper_src=".codex-workflow-src-main/scripts/tg_helpers.sh"
           fi
-          if [ -f "${tg_helper_src}" ]; then
+          # A pinned support ref must be exactly the commit the caller pinned
+          # (tele-funtoken-msg-scoring#4566); otherwise skip the helper.
+          if [[ "${DUPLICATE_NOTICE_SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${DUPLICATE_NOTICE_SCRIPT_REF}" ]; then
+            echo "::warning::Duplicate PR notice support checkout does not match the pinned commit ${DUPLICATE_NOTICE_SCRIPT_REF}; skipping the Telegram helper."
+            tg_helper_src=""
+          fi
+          if [ -n "${tg_helper_src}" ] && [ -f "${tg_helper_src}" ]; then
             install -m 0755 "${tg_helper_src}" scripts/tg_helpers.sh
             source scripts/tg_helpers.sh
           fi
@@ -518,6 +543,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         id: refctx
         env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
           RETARGET_MERGED_BASE_ENABLED: ${{ vars.RETARGET_MERGED_BASE_ENABLED || 'true' }}
@@ -534,6 +560,14 @@ jobs:
 
           resolver_repo="shubhodeep1/coding-workflows"
           resolver_ref="stable"
+          resolver_ref_pinned=false
+          # A consumer wrapper pinned to a commit runs the resolver from that
+          # commit, never from stable or main (issue tele-funtoken#4566).
+          resolver_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [[ "${resolver_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@[0-9a-f]{40}$ ]]; then
+            resolver_ref="${resolver_workflow_ref##*@}"
+            resolver_ref_pinned=true
+          fi
           if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
             resolver_ref="${{ github.sha }}"
           fi
@@ -564,8 +598,15 @@ jobs:
             [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
           esac
           resolver_stage_fail_closed() {
-            [ "${resolver_ci_triage_routing_on}" = "true" ] || return 0
-            echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 ci_triage_routing=on; refusing to fall back to the default branch."
+            if [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+              resolver_pin_log=""
+              if [ "${resolver_ref_pinned}" = "true" ]; then resolver_pin_log=" pinned_ref=${resolver_ref}"; fi
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 ci_triage_routing=on${resolver_pin_log}; refusing to fall back to the default branch."
+            elif [ "${resolver_ref_pinned}" = "true" ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 pinned_ref=${resolver_ref}; refusing to run resolver code from another ref."
+            else
+              return 0
+            fi
             if [ -s "${resolver_clone_log}" ]; then
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
             fi
@@ -575,7 +616,8 @@ jobs:
           if resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
             if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
-               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
+               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}" || \
+               { [ "${resolver_ref_pinned}" = "true" ] && [ "$(git -C "${resolver_stage_primary}" rev-parse HEAD 2>/dev/null || true)" != "${resolver_ref}" ]; }; then
               resolver_stage_fail_closed pin_failed
               echo "::warning::Failed to stage canonical integration resolver ref ${resolver_ref}; using main fallback."
               if [ -s "${resolver_clone_log}" ]; then
@@ -1102,7 +1144,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: env.SKIP_IMPLEMENT != 'true' && steps.checkout_support_source.outcome == 'failure'
+        if: env.SKIP_IMPLEMENT != 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable'
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -1119,9 +1161,15 @@ jobs:
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot
-        if: env.SKIP_IMPLEMENT != 'true' && env.SCRIPT_REF != 'main'
+        if: env.SKIP_IMPLEMENT != 'true' && env.SCRIPT_REF == 'stable'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -2705,6 +2753,15 @@ jobs:
             UNVERIFIED in your summary.
           - For `npm test`, treat "Missing script" errors as a pass; treat any
             other test failure as a real error.
+
+          Pinned-SHA test discipline: never write a test that asserts a specific
+          upstream commit SHA in a file the workflow sync manages, such as a wrapper's
+          `uses: shubhodeep1/coding-workflows/...@<40-hex>` line or a constant like
+          `PINNED_SUPPORT_SHA` holding the SHA you just read. Every `@stable` sync
+          rewrites those pins, so the test fails on the next sync PR. Assert the shape
+          instead: the ref matches `^[0-9a-f]{40}$` (a full commit, not a branch or
+          tag), and where two pins must agree (a checkout `ref:` and a reusable
+          workflow `uses:`), read one from the file and compare it to the other.
 
           Restrictions:
           - Do not ask clarification questions (unattended runtime).
@@ -6487,6 +6544,12 @@ jobs:
           reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
           if [ ! -f "${reporter}" ]; then
             echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          # A pinned support ref must be exactly the commit the caller pinned
+          # (tele-funtoken-msg-scoring#4566); never run another ref's reporter.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=support_ref_mismatch ref=${SCRIPT_REF}"
             exit 0
           fi
           REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \

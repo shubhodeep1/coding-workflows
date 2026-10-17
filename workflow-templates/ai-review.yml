@@ -152,6 +152,7 @@ jobs:
       pull-requests: read
       issues: write
     steps:
+      # `ref: stable` is a render token here too (tele-funtoken-msg-scoring#4566).
       - name: Check out trusted provider-outage support
         uses: actions/checkout@v5
         with:

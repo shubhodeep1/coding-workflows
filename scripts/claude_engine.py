@@ -874,6 +874,60 @@ def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 	}
 
 
+def _usage_percent(probe: dict[str, Any], name: str, label: str, gate: float) -> str:
+	"""``5h 12%`` for one window; ``5h ?`` when the probe had no reading."""
+	return _window_summary(probe, name, label, gate) or f"{label} ?"
+
+
+def pool_usage_report(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
+	"""The once-a-day Claude pool usage message: every account, in one message.
+
+	Input: the probe records ``parse_probe`` produced (the ``probes`` output of
+	``.github/actions/claude-pool-token``). Output: ``accounts``, ``usable``,
+	``gated``, ``auth_failed`` and ``probe_failed`` counts, and ``text``, a
+	headline plus one line per account, sorted by name: both windows'
+	utilization, the reset time of each window at or above ``gate``, a
+	``rejected`` status, a rejected token, or a failed probe. Unlike
+	``pool_health`` it lists every account, below the gate too, and ``text`` is
+	never empty. Never raises on a malformed record: a record without a name is
+	reported as ``?``.
+	"""
+	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
+	counts = {"usable": 0, "gated": 0, "auth_failed": 0, "probe_failed": 0}
+	lines: list[str] = []
+	for probe in ordered:
+		name = str(probe.get("account") or "?")
+		error = probe.get("error")
+		if error == "auth_failed":
+			counts["auth_failed"] += 1
+			lines.append(f"{name}: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_{name}")
+			continue
+		if error:
+			counts["probe_failed"] += 1
+			lines.append(f"{name}: probe failed ({error})")
+			continue
+		parts = [_usage_percent(probe, "five_hour", "5h", gate), _usage_percent(probe, "seven_day", "7d", gate)]
+		known = _known_peak(probe)
+		rejected = probe.get("status") == "rejected"
+		if rejected or (known is not None and known >= gate):
+			counts["gated"] += 1
+			if rejected and (known is None or known < gate):
+				parts.append(f"usage limit reached (resets {_format_reset(probe.get('resets_at'))})")
+		else:
+			counts["usable"] += 1
+		lines.append(f"{name}: {', '.join(parts)}")
+	headline = f"Claude pool daily usage: {len(ordered)} account(s), {counts['usable']} usable"
+	if counts["gated"]:
+		headline += f", {counts['gated']} at or above the {round(gate * 100)}% gate"
+	if counts["auth_failed"]:
+		headline += f", {counts['auth_failed']} with a rejected token"
+	if counts["probe_failed"]:
+		headline += f", {counts['probe_failed']} not probed"
+	if not ordered:
+		headline = "Claude pool daily usage: no probe results"
+	return {"accounts": len(ordered), **counts, "text": "\n".join([headline + ".", *lines])}
+
+
 # --- command line ------------------------------------------------------------
 
 
@@ -1053,6 +1107,23 @@ def cmd_pool_health(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_pool_usage(args: argparse.Namespace) -> int:
+	try:
+		probes = json.loads(sys.stdin.read() or "[]")
+	except ValueError as exc:
+		raise EngineError(f"probes are not JSON: {exc}") from exc
+	if not isinstance(probes, list) or not all(isinstance(probe, dict) for probe in probes):
+		raise EngineError("probes must be a JSON list of objects")
+	gate = args.gate
+	if gate is None:
+		config, _ = load_config(Path(args.config) if args.config else None)
+		gate = config["gate_utilization"]
+	if not (0 < gate <= 1):
+		raise EngineError("gate must be in (0, 1]")
+	_print_json(pool_usage_report(probes, gate))
+	return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -1116,6 +1187,11 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--gate", type=float, default=None)
 	p.add_argument("--config", default="")
 	p.set_defaults(func=cmd_pool_health)
+
+	p = sub.add_parser("pool-usage")
+	p.add_argument("--gate", type=float, default=None)
+	p.add_argument("--config", default="")
+	p.set_defaults(func=cmd_pool_usage)
 	return parser
 
 
