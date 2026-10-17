@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7575,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7575\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7577\",\"pr_number\":7577,\"branch\":\"ai/issue-7575\",\"run_id\":\"39041006792\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39041006792\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/7575-ci-merge-train-step-to-poll-group.md\"]}",
+  "fingerprint": "2fe42299bf1c8ab673b6e0a5a0c0fc6360f001d710a6f221710ead78156a5cb8",
+  "lineage": {
+    "issue_number": 7575,
+    "parent_ids": [],
+    "pr_number": 7577,
+    "run_id": "39041006792",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39041006792",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7577"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261017145206_62aa8c0e24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7575,
+    "level": "run",
+    "pr_number": 7577,
+    "run_id": "39041006792"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7575: https://github.com/shubhodeep1/coding-workflows/pull/7577",
+  "timestamps": {
+    "created_at": "2026-10-17T14:52:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
