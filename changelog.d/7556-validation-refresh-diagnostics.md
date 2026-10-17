@@ -6,7 +6,7 @@ Since the harness moved into the sandbox (`scripts/validation_harness_sandbox.sh
 | The numbers that matter | Value |
 | --- | --- |
 | Self-test timeout, before | 300 s (executor default) |
-| Self-test timeout, now | 900 s default, `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS`, clamped to 3600 s |
+| Self-test timeout, now | 900 s default, `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS`, clamped to 1800 s |
 | Failure detail cap | 4096 characters, last 20 lines of each log |
 
 What this means for operators: set `VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS` as a repo variable to change the cap, and read the `self_test_failed(...)` entry in the run's summary JSON for the cause. `drifted=1` still means the clone is not clean after the render. When no file under `validation/` is tracked on a consumer's default branch, the result now ends with `validation_assets_not_committed`, which means the repo has not committed its validation assets, not that they drifted.

@@ -176,7 +176,7 @@ jobs:
           # Wall-clock cap (seconds) for ONE consumer's sandboxed self-test. The
           # runner default of 300s is too short for large monorepos (bitsafe.io
           # exited 124). Invalid values fall back to 900; the runner clamps the
-          # value to 3600. See scripts/validation_refresh_runner.py.
+          # value to 1800 (half the job's timeout-minutes). See scripts/validation_refresh_runner.py.
           VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS: ${{ vars.VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS || '900' }}
           VALIDATION_DISCOVERY_MODEL: ${{ vars.VALIDATION_DISCOVERY_MODEL || 'openai/gpt-6-sol' }}
           VALIDATION_DISCOVERY_REASONING_EFFORT: ${{ vars.VALIDATION_DISCOVERY_REASONING_EFFORT || 'high' }}

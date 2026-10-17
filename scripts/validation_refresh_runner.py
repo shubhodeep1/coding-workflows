@@ -67,10 +67,12 @@ CLONE_RETRY_DELAYS_SECS = (5, 15)
 # `docker compose build` + tests exceeds (bitsafe.io exits 124). Override with
 # VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS; a missing, non-numeric or
 # non-positive value falls back to the default and a larger value is clamped
-# to the maximum so one repo cannot outlast the job's `timeout-minutes`.
+# to the maximum. The maximum is half the job's 60-minute `timeout-minutes`,
+# so the runner's own timeout fires (and its exit-124 diagnostic and run
+# summary are written) before GitHub kills the job.
 SELF_TEST_TIMEOUT_ENV = "VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS"
 SELF_TEST_TIMEOUT_DEFAULT_SECS = 900
-SELF_TEST_TIMEOUT_MAX_SECS = 3600
+SELF_TEST_TIMEOUT_MAX_SECS = 1800
 
 # Bounds for the failure text a stage puts into its diagnostic. The text is
 # consumer-controlled and ends up in the Actions log, so it is size-limited
@@ -404,13 +406,13 @@ class ValidationRefreshRunner:
 		result.diagnostics.append("validation_assets_drifted_no_push")
 		if not self._validation_assets_tracked(repo_dir):
 			# `changed` only means "working tree not clean after render". With
-			# nothing tracked under validation/ the rendered files are simply
-			# untracked, so this is not drift against committed assets. The
+			# nothing tracked under validation/ the dirty files (rendered output,
+			# or the bootstrapped manifest stubs) are simply untracked, so this is not drift against committed assets. The
 			# line above (and `drifted=1`) is kept for log compatibility;
 			# this last diagnostic is the one `detail=` shows.
 			result.diagnostics.append(
 				"validation_assets_not_committed: no files under validation/ are tracked on the "
-				"default branch, so the dirty tree is rendered output that is not committed, "
+				"default branch, so the dirty tree is uncommitted rendered or bootstrapped files, "
 				"not drift against committed assets"
 			)
 		result.outcome = "green" if pipeline_green else "red"
@@ -600,11 +602,15 @@ class ValidationRefreshRunner:
 		A failed lookup counts as tracked, so the not-committed diagnostic is
 		only emitted on positive evidence.
 		"""
-		proc = self.executor.run(
-			["git", "ls-files", "--", "validation"],
-			cwd=repo_dir,
-			check=False,
-		)
+		try:
+			proc = self.executor.run(
+				["git", "ls-files", "--", "validation"],
+				cwd=repo_dir,
+				check=False,
+			)
+		except CommandFailure:
+			# Timeout or missing binary raise even with check=False.
+			return True
 		if proc.returncode != 0:
 			return True
 		return bool((proc.stdout or "").strip())
