@@ -1,0 +1,17 @@
+<!-- changelog: fixed -->
+- **The security audit no longer files fix-ups for files that coding-workflows syncs into a consumer repo, or for files that are not in the audited checkout.** Findings on the `ai-*.yml` wrapper workflows, `.claude/**`, `CLAUDE.md` and the audit-gate files are reported in the run log and the tracker comment instead of becoming `ai:security` follow-ups or project security-pass fix cycles.
+
+A consumer cannot resolve those findings: the next `@stable` sync overwrites the fix and consumer pipelines may not edit the paths. In tele-funtoken-msg-scoring #4566 (project #4038 fix cycle 2), thirteen `*-runtime-support-ref-unpinned` rows cited `.github/workflows/ai-*.yml` wrappers, so the project could never clear its security pass. `scripts/security_audit.sh` now asks `scripts/build_sync_manifest.py managed-paths` which paths the updater owns and drops matching findings from the kept set. Findings that cite a file missing from the checkout were already discarded as invalid; each drop now logs `SECURITY_AUDIT_FINDING_DROPPED reason=file_missing finding= file= line=`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Upstream-managed paths in the current release | 51 (48 wrapper and `.claude/` entries, `CLAUDE.md`, 2 audit-gate files) |
+| New repo variable | `SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER`, default `true` |
+| New log prefixes | `SECURITY_AUDIT_UPSTREAM_MANAGED`, `SECURITY_AUDIT_FINDING_DROPPED` |
+| Output additions | `upstream_managed` in `security_audit_findings.v1`, `suppressed_upstream_managed` in the filter summary |
+
+What this means for consumer operators: security-pass fix cycles and `[security-audit]` issues now cover only code the consumer owns. A real defect in a synced file shows up under "Upstream-managed findings (not filed)" in the audit tracker comment and in the `SECURITY_AUDIT_UPSTREAM_MANAGED outcome=suppressed` log lines; it is not reported to coding-workflows automatically. Set `SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER=false` to get the old behaviour.
+
+### For contributors
+
+The filter runs after the confidence gate, exclusion catalog and waivers, so only findings that would have been filed are classified. It never runs in `shubhodeep1/coding-workflows` itself, and and it fails open: when no upstream checkout with `workflow-templates/` is found (`SECURITY_AUDIT_UPSTREAM_SOURCE_DIR`, then `<support dir>/.codex-workflow-src`, then the support dir) the log shows `outcome=skipped reason=upstream_tree_missing` and findings are filed as before. A discovered checkout is executed only when its `origin` is `github.com/shubhodeep1/coding-workflows` (`upstream_tree_untrusted` otherwise), because the builder runs with the caller's credentials and a consumer's own checkout must not supply it. `managed-paths` is the allowlist from `allowed-paths` minus the entries the updater edits in place (`CHANGELOG.md`, `changelog.d/*`, `agents.md`, `AGENTS.md`, `agents.d/*`, `package.json`, `.gitattributes`, `scripts/.gitignore`).

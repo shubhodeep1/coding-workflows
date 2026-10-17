@@ -105,6 +105,34 @@ def test_build_is_deterministic_and_covers_the_cone(tmp_path):
 	assert allowed == sorted(allowed)
 
 
+def test_managed_paths_are_the_allowlist_minus_consumer_edited_entries(tmp_path):
+	repo, sha = make_upstream_repo(tmp_path)
+	result = run_builder("managed-paths", "--repo-root", str(repo), "--commit", sha)
+	assert result.returncode == 0, result.stderr
+	managed = result.stdout.splitlines()
+	assert managed == sorted(managed)
+	assert set(managed) == {
+		".github/workflows/ai-review.yml",
+		".claude/commands/do.md",
+		"scripts/security/x.js",
+		".claude/commands/old.md",
+		"CLAUDE.md",
+	}
+	allowed = run_builder("allowed-paths", "--repo-root", str(repo), "--commit", sha).stdout.splitlines()
+	assert set(managed) < set(allowed)
+	# Files the updater edits in place stay consumer-owned.
+	for consumer_owned in ("CHANGELOG.md", "changelog.d/*.md", "agents.md", "AGENTS.md", "agents.d/*.md", "package.json", ".gitattributes", "scripts/.gitignore"):
+		assert consumer_owned in allowed
+		assert consumer_owned not in managed
+
+
+def test_managed_paths_defaults_to_head_and_rejects_a_missing_commit(tmp_path):
+	repo, _sha = make_upstream_repo(tmp_path)
+	assert run_builder("managed-paths", "--repo-root", str(repo)).returncode == 0
+	assert run_builder("managed-paths", "--repo-root", str(repo), "--commit", "0" * 40).returncode == 1
+	assert run_builder("managed-paths").returncode == 2
+
+
 def test_build_rejects_bad_arguments(tmp_path):
 	repo, sha = make_upstream_repo(tmp_path)
 	out = str(tmp_path / "m.json")
