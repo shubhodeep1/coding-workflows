@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-16T08:24:24Z",
+  "tick_at": "2026-10-17T06:10:23Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -35,8 +35,7 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
@@ -45,14 +44,14 @@
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
-        "review_blocked": 1,
+        "review_blocked": 0,
         "skipped": 0
       },
-      "number": 7489,
+      "number": 7490,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 38863287484)",
-      "total_waves": 1,
+      "title": "[Orchestrator] Apply workflow-optimization-2026-09-20-2 recommendations (verified subset)",
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
