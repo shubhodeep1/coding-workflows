@@ -45,7 +45,7 @@ def _details(label: str, labeled_hours_ago: float, comments: list[dict] | None =
 	return {"labeled": [{"label": label, "created_at": _iso(labeled_hours_ago)}], "comments": comments or []}
 
 
-def _select(search, details, runs=None, failed=None, limit=5, parked=None) -> dict:
+def _select(search, details, runs=None, failed=None, limit=5, parked=None, **kwargs) -> dict:
 	return scan.select(
 		search,
 		details,
@@ -58,6 +58,7 @@ def _select(search, details, runs=None, failed=None, limit=5, parked=None) -> di
 		dt.timedelta(minutes=60),
 		limit,
 		parked,
+		**kwargs,
 	)
 
 
@@ -705,6 +706,7 @@ def test_poll_workflow_stages_the_scan_and_passes_its_knobs() -> None:
 		("UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES", "30"),
 		("UNBLOCK_JUDGE_RETRY_HOURS", "6"),
 		("UNBLOCK_JUDGE_INFLIGHT_MINUTES", "60"),
+		("UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS", "24"),
 		("JUDGE_OUTPUT_FAILURE_MAX", "3"),
 	):
 		assert f"{name}: ${{{{ vars.{name} || '{default}' }}}}" in text
@@ -782,3 +784,136 @@ def test_poller_passes_the_digest_items_to_the_scan() -> None:
 	assert body.count('${parked_args[@]+"${parked_args[@]}"}') == 2
 	prune = text[text.index("needs_human_digest_prune() {"):text.index("\n}\n", text.index("needs_human_digest_prune() {"))]
 	assert prune.index('rm -f "${NEEDS_HUMAN_PARKED_ITEMS_FILE}"') < prune.index("needs-human prune")
+
+
+# --- terminal items that nothing has changed for (issue: escalated fix-ups and
+# parked `close` verdicts were re-dispatched every hour / every six hours) -----
+
+def _escalated(item: int, hours_ago: float, login: str = BOT) -> dict:
+	return {"login": login, "created_at": _iso(hours_ago),
+		"body": f"This is the unblock judge's fix-up, and it is blocked.\n<!-- ai:unblock-fixup-escalated:v1 item={item} -->"}
+
+
+def _judge_run(item: int, hours_ago: float) -> dict:
+	return {"display_title": f"Unblock judge #{item}", "status": "completed", "created_at": _iso(hours_ago)}
+
+
+def test_escalated_fixup_is_not_dispatched_every_hour() -> None:
+	search = [_item(77, ["ai:blocked"])]
+	details = {"77": _details("ai:blocked", 80, [_escalated(77, 70)])}
+	# Judged an hour ago (the hourly in-flight cooldown has just ended): skipped.
+	result = _select(search, details, [_judge_run(77, 1.5)])
+	assert result["dispatch"] == [] and result["skipped"] == {"fixup_escalated": 1}
+	# One recheck per day goes through, for the automation-path re-grant.
+	assert _select(search, details, [_judge_run(77, 25)])["dispatch"] == [{"item": 77, "kind": "issue"}]
+	# A run that fell out of the 50-run window is never a reason to skip.
+	assert _select(search, details, [_judge_run(5, 1.5)])["dispatch"] == [{"item": 77, "kind": "issue"}]
+	# A cancelled or startup-failed run never judged the item, so it starts no window.
+	for conclusion in ("cancelled", "startup_failure"):
+		run = dict(_judge_run(77, 1.5), conclusion=conclusion)
+		assert _select(search, details, [run])["dispatch"] == [{"item": 77, "kind": "issue"}], conclusion
+	# The recheck window is a knob; 0 restores the old behaviour.
+	assert _select(search, details, [_judge_run(77, 1.5)], escalated_recheck=dt.timedelta(hours=1))["dispatch"] == [{"item": 77, "kind": "issue"}]
+	assert _select(search, details, [_judge_run(77, 1.5)], escalated_recheck=dt.timedelta(0))["dispatch"] == [{"item": 77, "kind": "issue"}]
+
+
+def test_escalated_marker_counts_only_from_the_pipeline_and_for_the_same_item() -> None:
+	search = [_item(77, ["ai:blocked"])]
+	runs = [_judge_run(77, 1.5)]
+	for comment in (_escalated(77, 70, login="mallory"), _escalated(78, 70),
+			dict(_escalated(77, 70), body="quoted\n<!-- ai:unblock-fixup-escalated:v1 item=77 -->\nand more")):
+		result = _select(search, {"77": _details("ai:blocked", 80, [comment])}, runs)
+		assert result["dispatch"] == [{"item": 77, "kind": "issue"}], comment
+
+
+def test_parked_close_with_a_dropped_park_label_is_not_judged_again() -> None:
+	# fun-token-multi-chain#639: round 3 `close` at T, ai:needs-human applied a
+	# second later, then the poller's label repair dropped it (ai:blocked wins
+	# the phase group). Round 4 followed six hours later with the same fingerprint.
+	search = [_item(639, ["ai:orchestrator-managed", "ai:blocked"])]
+	closed = _verdict_comment("close", 8)
+	closed["body"] = closed["body"].replace("item=1", "item=639")
+	details = {"639": {"labeled": [{"label": "ai:blocked", "created_at": _iso(15)}, {"label": "ai:needs-human", "created_at": _iso(7.99)}],
+		"comments": [closed]}}
+	result = _select(search, details)
+	assert result["dispatch"] == [] and result["skipped"] == {"terminal_unchanged": 1}
+
+
+def _dropped_park_case() -> tuple[list, dict]:
+	closed = _verdict_comment("close", 8)
+	closed["body"] = closed["body"].replace("item=1", "item=639")
+	details = {"labeled": [{"label": "ai:blocked", "created_at": _iso(15)}, {"label": "ai:needs-human", "created_at": _iso(7.99)}],
+		"comments": [closed]}
+	return [_item(639, ["ai:blocked"])], {"639": details}
+
+
+def test_parked_close_is_judged_again_once_something_material_changes() -> None:
+	search, details = _dropped_park_case()
+	assert _select(search, details)["skipped"] == {"terminal_unchanged": 1}
+	issue = [{"item": 639, "kind": "issue"}]
+	# The block was applied again after the verdict: a new block episode.
+	details["639"]["labeled"].append({"label": "ai:blocked", "created_at": _iso(3)})
+	assert _select(search, details)["dispatch"] == issue
+	details["639"]["labeled"].pop()
+	# So does another block label applied after the verdict and since removed.
+	details["639"]["labeled"].append({"label": "ai:validation-failed", "created_at": _iso(3)})
+	assert _select(search, details)["dispatch"] == issue
+	details["639"]["labeled"].pop()
+	# A new pipeline comment (new evidence) or a human comment re-arms it...
+	for login in (BOT, "alice"):
+		comments = details["639"]["comments"]
+		comments.append({"login": login, "body": "Implementation blocked: human input required.", "created_at": _iso(2)})
+		assert _select(search, details)["dispatch"] == issue, login
+		comments.pop()
+	# ...but the judge's own markers, orchestrator state and bots do not.
+	for login, body in ((BOT, "<!-- ai:unblock-wait:v1 item=639 fixup=9 -->"), (BOT, "<!-- ORCHESTRATOR_STATE_V2 part=1/1 -->"),
+			("github-actions[bot]", "CI finished")):
+		comments = details["639"]["comments"]
+		comments.append({"login": login, "body": body, "created_at": _iso(2)})
+		assert _select(search, details)["dispatch"] == [], body
+		comments.pop()
+	# A different stop is a different fingerprint.
+	assert _select([_item(639, ["ai:blocked", "ai:validation-failed"])], details)["skipped"] == {"terminal_unchanged": 1}
+	assert _select([_item(639, ["ai:scope-blocked", "ai:blocked"])], details)["dispatch"] == issue
+
+
+def test_parked_close_skip_needs_proof_the_park_ran_and_stays_off_for_other_cases(monkeypatch: pytest.MonkeyPatch) -> None:
+	search, details = _dropped_park_case()
+	issue = [{"item": 639, "kind": "issue"}]
+	# No ai:needs-human event after the verdict: the park may have failed, so the judge retries it.
+	no_park = {"639": dict(details["639"], labeled=[details["639"]["labeled"][0]])}
+	assert _select(search, no_park)["dispatch"] == issue
+	# A non-close verdict is not terminal.
+	retry = {"639": dict(details["639"], comments=[dict(_verdict_comment("retry_budget", 8), body=_verdict_comment("retry_budget", 8)["body"].replace("item=1", "item=639"))])}
+	assert _select(search, retry)["dispatch"] == issue
+	# A marker for another item (on a tracking issue) does not count.
+	other = {"639": dict(details["639"], comments=[_verdict_comment("close", 8)])}
+	assert _select(search, other)["dispatch"] == issue
+	# Pull requests keep being judged (their fingerprint holds failing checks the scan cannot see).
+	assert _select([_item(639, ["ai:blocked"], pr=True)], details)["dispatch"] == [{"item": 639, "kind": "pr"}]
+	# A failed project is handled by the park label as before.
+	assert _select([_item(639, ["ai:orchestrator-tracking", "ai:blocked"])], details, failed=[639])["dispatch"] == [{"item": 639, "kind": "project"}]
+	# With the digest off the judge's close really closes the item.
+	monkeypatch.setenv("NEEDS_HUMAN_DIGEST_ENABLED", "false")
+	assert _select(search, details)["dispatch"] == issue
+
+
+def test_poller_passes_the_escalated_recheck_to_both_scan_calls() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	body = text[text.index("run_unblock_scan() {"):text.index("\n}\n", text.index("run_unblock_scan() {"))]
+	assert body.count('--escalated-recheck-hours "${UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS:-24}"') == 2
+	# _last_run_times reads `conclusion` to ignore cancelled and startup-failed runs.
+	assert "{display_title, name, status, conclusion, created_at}" in body
+
+
+def test_cli_escalated_recheck_flag(tmp_path: Path) -> None:
+	(tmp_path / "search.json").write_text(json.dumps([_item(77, ["ai:blocked"])]), encoding="utf-8")
+	(tmp_path / "details.json").write_text(json.dumps({"77": _details("ai:blocked", 80, [_escalated(77, 70)])}), encoding="utf-8")
+	(tmp_path / "runs.json").write_text(json.dumps([_judge_run(77, 1.5)]), encoding="utf-8")
+	base = [sys.executable, str(SCRIPT), "select", "--search-file", str(tmp_path / "search.json"), "--details-file", str(tmp_path / "details.json"),
+		"--runs-file", str(tmp_path / "runs.json"), "--trusted-login", BOT, "--now", "2026-10-04T12:00:00Z"]
+	held = subprocess.run(base, capture_output=True, text=True, check=False)
+	assert json.loads(held.stdout)["skipped"] == {"fixup_escalated": 1}
+	off = subprocess.run(base + ["--escalated-recheck-hours", "0"], capture_output=True, text=True, check=False)
+	assert json.loads(off.stdout)["dispatch"] == [{"item": 77, "kind": "issue"}]
+	assert subprocess.run(base + ["--escalated-recheck-hours", "-1"], capture_output=True, text=True, check=False).returncode == 1

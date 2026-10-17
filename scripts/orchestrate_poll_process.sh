@@ -19686,7 +19686,7 @@ run_unblock_scan() {
     | from_entries' 2>/dev/null || echo '{}')"
   printf '%s' "${details}" > "${work_dir}/details.json"
   if ! runs="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/unblock_judge_dispatch.yml/runs?per_page=50" \
-    --jq '[.workflow_runs[]? | {display_title, name, status, created_at}]' 2>/dev/null)"; then
+    --jq '[.workflow_runs[]? | {display_title, name, status, conclusion, created_at}]' 2>/dev/null)"; then
     echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=dispatch_workflow_unavailable"
     return 0
   fi
@@ -19748,6 +19748,7 @@ run_unblock_scan() {
     --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
     --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
     --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+    --escalated-recheck-hours "${UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS:-24}" \
     --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")"; then
     echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=select_failed"
     return 0
@@ -19776,6 +19777,7 @@ run_unblock_scan() {
           --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
           --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
           --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+          --escalated-recheck-hours "${UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS:-24}" \
           --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")" || {
           echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=reselect_failed"
           return 0
