@@ -155,7 +155,10 @@ def test_managed_digests_hold_the_bytes_a_sync_writes(tmp_path):
 		return [hashlib.sha256(text.encode("utf-8")).hexdigest()]
 
 	rendered = wrapper.replace("@stable", f"@{sha} # stable")
-	assert digests[".github/workflows/ai-review.yml"] == sha256(rendered)
+	normalized = wrapper.replace("@stable", f"@{'0' * 40} # stable")
+	# The release's own bytes plus the pin-normalized form an older release's
+	# wrapper reduces to after the audit replaces its pinned SHA.
+	assert digests[".github/workflows/ai-review.yml"] == sorted(sha256(rendered) + sha256(normalized))
 	assert digests[".claude/commands/do.md"] == sha256("do\n")
 	assert digests["CLAUDE.md"] == sha256("rules\n")
 	assert digests["scripts/security/x.js"] == sha256("audit()\n")

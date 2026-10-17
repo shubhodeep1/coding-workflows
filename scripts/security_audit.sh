@@ -1822,7 +1822,7 @@ fi
 # filed exactly as before.
 security_audit_resolve_upstream_managed_paths()
 {
-	local skip_reason="" candidate_dir="" source_dir="" pattern_count=0 untrusted_seen="false" candidate_origin="" override_invalid="false"
+	local skip_reason="" skip_detail="" candidate_dir="" source_dir="" pattern_count=0 untrusted_seen="false" candidate_origin="" override_invalid="false"
 	: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
 	if ! security_audit_flag_enabled "${SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER}"; then
 		skip_reason="disabled"
@@ -1875,14 +1875,15 @@ security_audit_resolve_upstream_managed_paths()
 			> "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2> "${UPSTREAM_MANAGED_ERROR_FILE}"; then
 			: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
 			skip_reason="manifest_failed"
+			skip_detail="$(tail -n 1 "${UPSTREAM_MANAGED_ERROR_FILE}" 2>/dev/null | tr -c 'A-Za-z0-9._:/@+=-' '_' | head -c 200 || true)"
 		else
-			pattern_count="$(python3 -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); print(len(data) if isinstance(data, dict) else 0)' "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2>/dev/null || true)"
+			pattern_count="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 python3 -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); print(len(data) if isinstance(data, dict) else 0)' "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2>/dev/null || true)"
 			[[ "${pattern_count}" =~ ^[0-9]+$ ]] || pattern_count=0
 			[ "${pattern_count}" -gt 0 ] || skip_reason="empty_list"
 		fi
 	fi
 	if [ -n "${skip_reason}" ]; then
-		echo "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=${skip_reason}"
+		echo "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=${skip_reason}${skip_detail:+ detail=${skip_detail}}"
 	else
 		echo "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=enabled patterns=${pattern_count}"
 	fi
@@ -2145,6 +2146,24 @@ def matching_exclusion_rule(finding: dict[str, object], rules: list[dict[str, ob
 
 upstream_managed_digests = load_upstream_managed_digests(upstream_managed_digests_path)
 
+# Pinned release SHAs in a rendered wrapper (scripts/workflow_wrapper_refs.py):
+# reusable-workflow `uses:` refs and support-checkout `ref:` lines. A consumer
+# wrapper is also compared with its pins replaced by the 40-zero SHA that
+# build_sync_manifest.py managed-digests renders a second digest with, so an
+# unmodified wrapper from an older release whose body matches the current
+# template is still recognised as upstream-owned.
+WRAPPER_PIN_PATTERNS = (
+	re.compile(rb"(shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml@)[0-9a-f]{40}( # stable)"),
+	re.compile(rb"(ref: )[0-9a-f]{40}( # stable)"),
+)
+PIN_NORMALIZED_SHA = b"0" * 40
+
+
+def normalize_wrapper_pins(data: bytes) -> bytes:
+	for pattern in WRAPPER_PIN_PATTERNS:
+		data = pattern.sub(lambda match: match.group(1) + PIN_NORMALIZED_SHA + match.group(2), data)
+	return data
+
 
 def upstream_managed_status(file_path: str) -> str:
 	"""`unmanaged`, `unmodified` (the release's own bytes) or `modified`.
@@ -2161,10 +2180,16 @@ def upstream_managed_status(file_path: str) -> str:
 			return "modified"
 		resolved = candidate.resolve()
 		resolved.relative_to(repo_root)
-		actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+		data = resolved.read_bytes()
 	except (OSError, ValueError):
 		return "modified"
-	return "unmodified" if actual in expected else "modified"
+	if hashlib.sha256(data).hexdigest() in expected:
+		return "unmodified"
+	if file_path.startswith(".github/workflows/"):
+		normalized = normalize_wrapper_pins(data)
+		if normalized != data and hashlib.sha256(normalized).hexdigest() in expected:
+			return "unmodified"
+	return "modified"
 
 
 raw_findings = load_json(codex_output_path, label="Codex output")

@@ -37,7 +37,10 @@ Subcommands:
     ``.claude/`` assets and ``CLAUDE.md`` as stored, audit-gate
     ``managed_files`` targets from their source, and every released version
     listed for a retired file. A consumer file whose sha256 is in its list is
-    an unmodified upstream copy. Paths with no computable digest (symlinks, a
+    an unmodified upstream copy. Each wrapper also gets the digest of the
+    template rendered with ``PIN_NORMALIZED_SHA`` (40 zeros), so a consumer
+    still pinned to an older release can be matched after its pins are
+    normalized the same way. Paths with no computable digest (symlinks, a
     wrapper the renderer rejects) are left out.
 
 ``check-paths --allowed-file A --paths-file P``
@@ -88,6 +91,13 @@ STATIC_ALLOWED_PATHS = (
 STATIC_UPSTREAM_MANAGED_PATHS = (
 	"CLAUDE.md",
 )
+
+
+# Release SHA used for the pin-normalized wrapper digest. The security audit
+# replaces a consumer wrapper's pinned release SHAs with it before hashing, so
+# an unmodified wrapper from an older release whose body matches the current
+# template still matches.
+PIN_NORMALIZED_SHA = "0" * 40
 
 
 class ManifestError(Exception):
@@ -311,9 +321,13 @@ def derive_managed_digests(repo_root: Path, commit: str = "HEAD") -> dict:
 			if renderer is None:
 				renderer = _load_wrapper_renderer()
 			try:
-				data = renderer.pin_reusable_workflow_refs(data.decode("utf-8"), commit).encode("utf-8")
+				template_text = data.decode("utf-8")
+				rendered = renderer.pin_reusable_workflow_refs(template_text, commit).encode("utf-8")
+				normalized = renderer.pin_reusable_workflow_refs(template_text, PIN_NORMALIZED_SHA).encode("utf-8")
 			except (UnicodeDecodeError, ValueError):
 				continue
+			digests[target] = sorted({hashlib.sha256(rendered).hexdigest(), hashlib.sha256(normalized).hexdigest()})
+			continue
 		digests[target] = [hashlib.sha256(data).hexdigest()]
 	if retired_entry and retired_entry[0] != "120000":
 		for line in meta_blobs[retired_entry[1]].decode("utf-8", "replace").splitlines():

@@ -1599,6 +1599,66 @@ def test_security_audit_files_findings_on_a_consumer_modified_synced_file() -> N
 	) in proc.stdout
 
 
+def test_security_audit_suppresses_an_unmodified_wrapper_pinned_to_an_older_release() -> None:
+	"""A consumer that has not synced the newest release still holds an upstream-owned wrapper."""
+	with tempfile.TemporaryDirectory(prefix="security-audit-stale-pin-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = _consumer_fixture_repo(tmp_path)
+		wrapper = repo_dir / ".github" / "workflows" / "ai-review.yml"
+		head_sha = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+		older_sha = "1" * 40 if head_sha != "1" * 40 else "2" * 40
+		stale = wrapper.read_text(encoding="utf-8").replace(f"{head_sha} # stable", f"{older_sha} # stable")
+		assert stale != wrapper.read_text(encoding="utf-8")
+		wrapper.write_text(stale, encoding="utf-8")
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("wrapper-ref-unpinned", file_path=".github/workflows/ai-review.yml")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SECURITY_AUDIT_UPSTREAM_SOURCE_DIR": str(REPO_ROOT),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert payload["findings"] == []
+	assert payload["upstream_managed"]["suppressed"] == 1
+	assert "outcome=suppressed finding=wrapper-ref-unpinned" in proc.stdout
+
+
+def test_security_audit_wrapper_pin_normalization_keeps_body_edits_filed() -> None:
+	"""Normalizing pins must not hide a consumer edit to the wrapper body."""
+	with tempfile.TemporaryDirectory(prefix="security-audit-stale-pin-edit-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir = _consumer_fixture_repo(tmp_path)
+		wrapper = repo_dir / ".github" / "workflows" / "ai-review.yml"
+		head_sha = subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+		older_sha = "1" * 40 if head_sha != "1" * 40 else "2" * 40
+		edited = wrapper.read_text(encoding="utf-8").replace(f"{head_sha} # stable", f"{older_sha} # stable") + "\n# consumer edit\n"
+		wrapper.write_text(edited, encoding="utf-8")
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps([_finding_payload("wrapper-ref-unpinned", file_path=".github/workflows/ai-review.yml")]),
+			cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SECURITY_AUDIT_UPSTREAM_SOURCE_DIR": str(REPO_ROOT),
+			},
+		)
+
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["wrapper-ref-unpinned"]
+	assert "outcome=filed reason=consumer_modified finding=wrapper-ref-unpinned" in proc.stdout
+
+
 def test_security_audit_files_findings_on_a_synced_path_replaced_by_a_symlink() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-symlink-") as fixture_td:
 		tmp_path = Path(fixture_td)
