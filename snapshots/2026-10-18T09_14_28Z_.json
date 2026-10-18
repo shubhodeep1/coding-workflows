@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-17T12:57:32Z",
+  "tick_at": "2026-10-18T09:14:28Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 3
+    "tracking_issues": 5
   },
   "tracking_issues": [
     {
@@ -55,10 +55,9 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
+      "current_wave": 0,
       "issue_counts": {
-        "closed": 2,
+        "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
@@ -68,12 +67,54 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 7564,
-      "project_complete": true,
-      "status": "failed",
-      "title": "[Orchestrator] [E2E Orchestrate Smoke 39033435276] Update two smoke canary files in parallel",
-      "total_waves": 1,
-      "wave_complete": true
+      "number": 7590,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply workflow-optimization-2026-09-21 recommendations (verified subset)",
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 2,
+      "integration_ahead_by": "6",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 1,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 7604,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Report synced-file security findings to coding-workflows through heal intake",
+      "total_waves": 2,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "4",
+      "issue_counts": {
+        "closed": 0,
+        "done": 1,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 2,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 7614,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply workflow-optimization-2026-09-21-2 recommendations (verified subset)",
+      "total_waves": 3,
+      "wave_complete": false
     }
   ]
 }
