@@ -81,7 +81,7 @@ MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 # project validations fail on it.
 SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding")
 
 # A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
 # non-capacity reason and the role failed instead of running codex. The report
@@ -93,6 +93,53 @@ ENGINE_FALLBACK_CAPACITY_REASONS: tuple[str, ...] = ("all_gated", "all_usage_lim
 _ENGINE_ROLE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
 _ENGINE_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
 ENGINE_FALLBACK_MAX_RECORDS = 20
+
+# A consumer security audit finding on an unmodified file the @stable sync
+# manages (plan docs/plans/synced-file-security-findings-heal-intake-plan.md,
+# Phase 1). The fix belongs in this repository's source of that file, so the
+# intake files (or adds an occurrence to) one shared issue per path, category
+# and line area (Q246). coding-workflows is public, so the report carries the
+# location and the audit's enums only (Q245): file, line, category, severity,
+# confidence and finding id. The exploit scenario and the recommendation stay
+# in the consumer's tracker comment; any other key is rejected. Only high and
+# critical findings are reported (Q247).
+SYNCED_SECURITY_SEVERITIES: tuple[str, ...] = ("high", "critical")
+SYNCED_SECURITY_MAX_FINDINGS = 50
+SYNCED_SECURITY_LINE_MAX = 1_000_000
+SYNCED_SECURITY_DEFAULT_LINE_BUCKET = 25
+SYNCED_SECURITY_FINDING_KEYS = frozenset({"file", "line", "category", "severity", "confidence", "finding_id"})
+# Top-level keys a synced_security_finding report may carry; any other key
+# (free text such as an exploit scenario or failure evidence) rejects it.
+# reporter_run_id (plan step 5) is accepted only as digits and never published.
+SYNCED_SECURITY_PAYLOAD_KEYS = frozenset({"schema_version", "source_repo", "source_kind", "findings", "wrapper_sha", "reporter_run_url", "reporter_run_id", "reported_at", "run_refs"})
+SYNCED_SECURITY_FAILURE_REASON = "synced_security_finding"
+SYNCED_SECURITY_ISSUE_TITLE = "Synced-file security findings"
+SYNCED_SECURITY_WORKFLOW_NAME = "AI Security Audit"
+_SYNCED_SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
+_SYNCED_SECURITY_FILE_RE = re.compile(r"^[A-Za-z0-9._/+-]{1,300}$")
+_SYNCED_SECURITY_OWASP_RE = re.compile(r"^\s*(A0[1-9]|A10):2021(?![0-9])", re.IGNORECASE)
+# The audit's categories (prompts/mode-security-audit.txt): OWASP Top 10 2021
+# and STRIDE. Only these canonical tokens are ever published.
+SYNCED_SECURITY_OWASP_2021: dict[str, str] = {
+	"A01": "Broken Access Control",
+	"A02": "Cryptographic Failures",
+	"A03": "Injection",
+	"A04": "Insecure Design",
+	"A05": "Security Misconfiguration",
+	"A06": "Vulnerable and Outdated Components",
+	"A07": "Identification and Authentication Failures",
+	"A08": "Software and Data Integrity Failures",
+	"A09": "Security Logging and Monitoring Failures",
+	"A10": "Server-Side Request Forgery",
+}
+SYNCED_SECURITY_STRIDE: tuple[str, ...] = (
+	"Spoofing",
+	"Tampering",
+	"Repudiation",
+	"Information Disclosure",
+	"Denial of Service",
+	"Elevation of Privilege",
+)
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
 # `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
@@ -269,6 +316,8 @@ REPORT_IDENTITY_WORKFLOW_BY_KIND = {
 	"autofix_failure": ("review_autofix.yml",),
 	# The heal-report job of the clarify / plan / implement reusable workflows.
 	"phase_failure": ("clarify.yml", "plan.yml", "implement.yml"),
+	# The consumer's security audit run (reusable security-audit.yml).
+	"synced_security_finding": ("security-audit.yml",),
 }
 # Kinds whose run_refs the intake's provenance gate already binds to the
 # source repository (run repository, workflow path, failure, issue/PR link);
@@ -1426,6 +1475,23 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		failure_reason = ENGINE_FALLBACK_FAILURE_REASON
 		failure_streak = 1
 		failure_fingerprint = None
+	elif kind == "synced_security_finding":
+		extra_keys = sorted(key for key in payload if key not in SYNCED_SECURITY_PAYLOAD_KEYS)
+		if extra_keys:
+			raise ValueError("synced_security_finding reports carry no other fields: " + ", ".join(safe_token(key, 40) or "?" for key in extra_keys[:5]))
+		if payload.get("run_refs"):
+			raise ValueError("synced_security_finding reports carry no run references")
+		raw_reporter_run_id = payload.get("reporter_run_id")
+		if raw_reporter_run_id is not None and not re.fullmatch(r"[1-9][0-9]{0,19}", str(raw_reporter_run_id) if not isinstance(raw_reporter_run_id, bool) else ""):
+			raise ValueError("reporter_run_id must be a positive integer")
+		raw_release = payload.get("wrapper_sha")
+		if not (isinstance(raw_release, str) and is_valid_sha(raw_release.lower())):
+			raise ValueError("wrapper_sha (the consumer's release SHA) is required for synced_security_finding reports")
+		issue_number = None
+		label = None
+		failure_reason = SYNCED_SECURITY_FAILURE_REASON
+		failure_streak = 1
+		failure_fingerprint = None
 	elif kind == "phase_failure":
 		if issue_number is None:
 			raise ValueError("issue_number is required for phase_failure reports")
@@ -1515,6 +1581,25 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	}
 	if kind == "engine_fallback":
 		normalized.update({"engine_role": payload["engine_role"], "engine_reason": payload["engine_reason"]})
+	if kind == "synced_security_finding":
+		# Only validated fields: no title, excerpt, label, branch or conclusion
+		# text from the report reaches the public issue (Q245).
+		normalized.update({
+			"issue_title": SYNCED_SECURITY_ISSUE_TITLE,
+			"issue_url": None,
+			"labels": [],
+			"source_gen": None,
+			"source_root": None,
+			"issue_excerpt": "",
+			"comments_excerpt": "",
+			"workflow_name": SYNCED_SECURITY_WORKFLOW_NAME,
+			"head_branch": None,
+			"head_sha": None,
+			"conclusion": None,
+			"failure_evidence": "",
+			"reported_at": _iso(_utc_now()),
+			"findings": validate_synced_security_findings(payload.get("findings")),
+		})
 	if label == _SCOPE_AUTHOR_LABEL and kind != "workflow_run":
 		normalized["issue_author_login"] = _scope_author_login(payload.get("issue_author_login"))
 		normalized["issue_author_association"] = _scope_author_association(payload.get("issue_author_association"))
@@ -4535,6 +4620,365 @@ def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str) 
 
 
 # ---------------------------------------------------------------------------
+# Synced-file security findings (source_kind synced_security_finding)
+# ---------------------------------------------------------------------------
+
+
+def normalize_synced_security_category(raw: Any) -> str:
+	"""Map an audit category onto a fixed OWASP 2021 / STRIDE token.
+
+	``A01:2021`` .. ``A10:2021`` (any name or separator after it) becomes
+	``A0x:2021-<canonical name>``; exactly one STRIDE term (any letter case)
+	becomes that term. Anything else raises ValueError, so the consumer's own
+	wording is never published.
+	"""
+	if not isinstance(raw, str) or not raw or len(raw) > 200:
+		raise ValueError("category is missing or too long")
+	match = _SYNCED_SECURITY_OWASP_RE.match(raw)
+	if match:
+		code = match.group(1).upper()
+		return f"{code}:2021-{SYNCED_SECURITY_OWASP_2021[code]}"
+	collapsed = " ".join(raw.split()).lower()
+	for term in SYNCED_SECURITY_STRIDE:
+		if collapsed == term.lower():
+			return term
+	raise ValueError("category is not an OWASP Top 10 2021 or STRIDE category")
+
+
+def _synced_security_file_ok(value: Any) -> bool:
+	if not isinstance(value, str) or not _SYNCED_SECURITY_FILE_RE.match(value):
+		return False
+	if value.startswith("/") or value.endswith("/") or "//" in value:
+		return False
+	return not any(part in ("", ".", "..") for part in value.split("/"))
+
+
+def _synced_security_int(value: Any, low: int, high: int) -> int | None:
+	if isinstance(value, bool) or not isinstance(value, int):
+		return None
+	return value if low <= value <= high else None
+
+
+def validate_synced_security_findings(raw: Any) -> list[dict[str, Any]]:
+	"""Validate a synced_security_finding report's findings list (Q245, Q247).
+
+	Raises ValueError on anything outside the allowed shape; returns new dicts
+	holding only the six allowed keys, the category canonicalised and the
+	severity lower-cased.
+	"""
+	if not isinstance(raw, list) or not raw:
+		raise ValueError("findings must be a non-empty list")
+	if len(raw) > SYNCED_SECURITY_MAX_FINDINGS:
+		raise ValueError(f"findings holds more than {SYNCED_SECURITY_MAX_FINDINGS} entries")
+	seen_ids: set[str] = set()
+	result: list[dict[str, Any]] = []
+	for index, item in enumerate(raw):
+		where = f"findings[{index}]"
+		if not isinstance(item, dict):
+			raise ValueError(f"{where} is not an object")
+		unknown = sorted(key for key in item if key not in SYNCED_SECURITY_FINDING_KEYS)
+		if unknown:
+			raise ValueError(f"{where} carries unsupported fields: " + ", ".join(safe_token(key, 40) or "?" for key in unknown[:5]))
+		missing = sorted(key for key in SYNCED_SECURITY_FINDING_KEYS if key not in item)
+		if missing:
+			raise ValueError(f"{where} is missing: " + ", ".join(missing))
+		finding_id = item.get("finding_id")
+		if not isinstance(finding_id, str) or not _SYNCED_SECURITY_FINDING_ID_RE.match(finding_id):
+			raise ValueError(f"{where}.finding_id is malformed")
+		if finding_id in seen_ids:
+			raise ValueError(f"{where}.finding_id is repeated")
+		seen_ids.add(finding_id)
+		if not _synced_security_file_ok(item.get("file")):
+			raise ValueError(f"{where}.file is not a safe relative path")
+		line = _synced_security_int(item.get("line"), 1, SYNCED_SECURITY_LINE_MAX)
+		if line is None:
+			raise ValueError(f"{where}.line must be an integer from 1 to {SYNCED_SECURITY_LINE_MAX}")
+		severity = item.get("severity")
+		severity = severity.lower() if isinstance(severity, str) else ""
+		if severity not in SYNCED_SECURITY_SEVERITIES:
+			raise ValueError(f"{where}.severity must be one of " + ", ".join(SYNCED_SECURITY_SEVERITIES))
+		confidence = _synced_security_int(item.get("confidence"), 1, 10)
+		if confidence is None:
+			raise ValueError(f"{where}.confidence must be an integer from 1 to 10")
+		category = normalize_synced_security_category(item.get("category"))
+		result.append({
+			"file": item["file"],
+			"line": line,
+			"category": category,
+			"severity": severity,
+			"confidence": confidence,
+			"finding_id": finding_id,
+		})
+	return result
+
+
+def synced_security_line_bucket(value: Any) -> int:
+	"""Line bucket size: unset/empty -> 25, non-integer -> 25 with a warning, minimum 1."""
+	text = "" if value is None else str(value).strip()
+	if not text:
+		return SYNCED_SECURITY_DEFAULT_LINE_BUCKET
+	try:
+		bucket = int(text)
+	except ValueError:
+		print("WORKFLOW_HEAL warn invalid_line_bucket name=HEAL_SYNCED_SECURITY_LINE_BUCKET; using 25", file=sys.stderr)
+		return SYNCED_SECURITY_DEFAULT_LINE_BUCKET
+	return max(1, bucket)
+
+
+def synced_security_fingerprint(path: str, category: str, line: int, bucket: int) -> str:
+	"""One fingerprint per managed path, canonical category and line area (Q246)."""
+	return hashlib.sha256(f"{path}|{category}|{line // max(1, bucket)}".encode("utf-8")).hexdigest()
+
+
+def check_synced_security_managed_paths(findings: Iterable[dict[str, Any]], digests: Any) -> str | None:
+	"""None when every finding's file is a managed path of the release, else a reason token."""
+	if not isinstance(digests, dict) or not digests:
+		return "release_unavailable"
+	for finding in findings:
+		if not isinstance(finding, dict) or finding.get("file") not in digests:
+			return "unmanaged_path"
+	return None
+
+
+def synced_security_source_paths(file: str, audit_gate_contract: Any = None) -> list[str]:
+	"""The coding-workflows paths a fix of a consumer's synced ``file`` edits.
+
+	Same mapping as build_sync_manifest.derive_managed_digests: a top-level
+	wrapper comes from workflow-templates/<name>.yml, a .claude/ file from
+	workflow-templates/.claude/, CLAUDE.md from CLAUDE.md, an audit-gate target
+	from its contract source. A retired file maps to nothing.
+	"""
+	paths: list[str] = []
+	prefix = ".github/workflows/"
+	if file.startswith(prefix) and "/" not in file[len(prefix):] and file.endswith(".yml"):
+		paths.append("workflow-templates/" + file[len(prefix):])
+	elif file.startswith(".claude/"):
+		paths.append("workflow-templates/" + file)
+	elif file == "CLAUDE.md":
+		paths.append("CLAUDE.md")
+	contract = audit_gate_contract if isinstance(audit_gate_contract, dict) else {}
+	for item in contract.get("managed_files") or []:
+		if not isinstance(item, dict):
+			continue
+		source, target = item.get("source"), item.get("target")
+		if target == file and isinstance(source, str) and source and is_valid_repo_path("workflow-templates/audit-gate/" + source):
+			candidate = "workflow-templates/audit-gate/" + source
+			if candidate not in paths:
+				paths.append(candidate)
+	return paths
+
+
+def group_synced_security_findings(findings: Iterable[dict[str, Any]], bucket: int, audit_gate_contract: Any = None) -> list[dict[str, Any]]:
+	"""Group validated findings by fingerprint, in order of first appearance."""
+	bucket = max(1, int(bucket))
+	groups: dict[str, dict[str, Any]] = {}
+	for finding in findings:
+		fp = synced_security_fingerprint(finding["file"], finding["category"], finding["line"], bucket)
+		group = groups.get(fp)
+		if group is None:
+			start = (finding["line"] // bucket) * bucket
+			group = groups[fp] = {
+				"fingerprint": fp,
+				"file": finding["file"],
+				"category": finding["category"],
+				"bucket_start": max(1, start),
+				"bucket_end": start + bucket - 1,
+				"source_paths": synced_security_source_paths(finding["file"], audit_gate_contract),
+				"findings": [],
+			}
+		group["findings"].append(dict(finding))
+	for group in groups.values():
+		group["findings"].sort(key=lambda item: (item["line"], item["finding_id"]))
+	return list(groups.values())
+
+
+def _synced_security_rows(group: dict[str, Any]) -> list[str]:
+	rows = ["| Finding id | Line | Severity | Confidence |", "| --- | --- | --- | --- |"]
+	for finding in group.get("findings") or []:
+		rows.append(f"| `{finding['finding_id']}` | {int(finding['line'])} | {finding['severity']} | {int(finding['confidence'])} |")
+	return rows
+
+
+def _synced_security_run_url(payload: dict[str, Any]) -> str:
+	url = str(payload.get("reporter_run_url") or "")
+	match = _RUN_URL_RE.fullmatch(url)
+	return match.group(0) if match and match.group("repo") == payload.get("source_repo") else "(unavailable)"
+
+
+def compose_synced_security_issue(
+	*,
+	payload: dict[str, Any],
+	group: dict[str, Any],
+	gen: int,
+	root: str,
+	scope_marker: str,
+	max_depth: int,
+	intake_run_url: str,
+) -> tuple[str, str]:
+	"""Title and body of a synced-file security heal issue, from validated fields only (Q245)."""
+	fp = group["fingerprint"]
+	if not _FP_HEX_RE.match(fp) or not _FP_HEX_RE.match(root or ""):
+		raise ValueError("invalid fingerprint")
+	repo = payload["source_repo"]
+	release = payload.get("wrapper_sha") or ""
+	if not is_valid_repo_slug(repo) or not is_valid_sha(release):
+		raise ValueError("invalid source repository or release SHA")
+	title = f"[security] {group['category']} in {group['file']} (lines {int(group['bucket_start'])}-{int(group['bucket_end'])})"
+	sources = ", ".join(f"`{path}`" for path in group.get("source_paths") or []) or "the source of this file"
+	parts = [
+		f"<!-- {MARKER_PREFIX}fp={fp} -->",
+		f"<!-- {MARKER_PREFIX}gen={int(gen)} -->",
+		f"<!-- {MARKER_PREFIX}root={root} -->",
+		f"<!-- {MARKER_PREFIX}source={repo}#run -->",
+		f"<!-- {MARKER_PREFIX}classification=workflow-defect -->",
+		"",
+		f"## Synced-file security finding (generation {int(gen)} of max {int(max_depth)})",
+		"",
+		"A consumer's security audit reported a high or critical finding in a file the `@stable` "
+		"workflow sync manages and the consumer has not modified. This issue was filed automatically for "
+		"the clarify -> plan -> implement -> review pipeline to fix it here.",
+		"",
+		f"- **File:** `{group['file']}`",
+		f"- **Category:** {group['category']}",
+		f"- **Lines:** {int(group['bucket_start'])}-{int(group['bucket_end'])}",
+		f"- **Consumer repository:** `{repo}`",
+		f"- **Release SHA:** `{release}`",
+		f"- **Reporting audit run:** {_synced_security_run_url(payload)}",
+		f"- **Heal intake run:** {intake_run_url}",
+		"",
+		*_synced_security_rows(group),
+		"",
+		"The exploit scenario and the recommendation stay in the consumer's security audit tracker comment; "
+		"they are not copied into this public repository.",
+		"",
+		f"Fix the source of this file in this repository ({sources}), never the consumer's copy: "
+		"the next workflow sync overwrites the consumer copy.",
+		"",
+		"## Fix constraints",
+		"",
+		"- Keep the change minimal and backward compatible; never rename or remove existing identifiers, env vars, labels, or log prefixes.",
+		"- Verify the finding against the source before changing it; if it is a false positive, say so in the plan.",
+		"",
+		f"_Filed by the workflow failure heal intake. Lineage generation {int(gen)} (cap {int(max_depth)}). "
+		"Further reports of the same file, category and line area are recorded as occurrence comments on this issue while it stays open._",
+	]
+	marker = (scope_marker or "").strip()
+	if marker:
+		parts.extend(["", marker])
+	return title, "\n".join(parts) + "\n"
+
+
+def compose_synced_security_occurrence(*, payload: dict[str, Any], group: dict[str, Any], intake_run_url: str) -> str:
+	"""Occurrence comment for a further synced-file security report (validated fields only)."""
+	lines = [
+		f"<!-- {MARKER_PREFIX}occurrence -->",
+		"Another occurrence of this synced-file security finding was reported:",
+		"",
+		f"- **Consumer repository:** `{payload['source_repo']}`",
+		f"- **Release SHA:** `{payload.get('wrapper_sha') or ''}`",
+		f"- **Reporting audit run:** {_synced_security_run_url(payload)}",
+		f"- **Heal intake run:** {intake_run_url}",
+		"",
+		*_synced_security_rows(group),
+	]
+	return "\n".join(lines) + "\n"
+
+
+def _synced_security_bucket_arg(value: Any) -> int:
+	return synced_security_line_bucket(os.environ.get("HEAL_SYNCED_SECURITY_LINE_BUCKET") if value is None else value)
+
+
+def _load_synced_security_payload(path: str) -> dict[str, Any]:
+	payload = _load_json_file(path)
+	if not isinstance(payload, dict) or payload.get("source_kind") != "synced_security_finding":
+		raise ValueError("not a synced_security_finding payload")
+	payload = dict(payload)
+	payload["findings"] = validate_synced_security_findings(payload.get("findings"))
+	return payload
+
+
+def _cmd_synced_security_fingerprint(args: argparse.Namespace) -> int:
+	finding = validate_synced_security_findings([{
+		"file": args.file,
+		"line": args.line,
+		"category": args.category,
+		"severity": "high",
+		"confidence": 10,
+		"finding_id": "fingerprint",
+	}])[0]
+	print(synced_security_fingerprint(finding["file"], finding["category"], finding["line"], _synced_security_bucket_arg(args.bucket)))
+	return 0
+
+
+def _cmd_synced_security_check_paths(args: argparse.Namespace) -> int:
+	payload = _load_synced_security_payload(args.payload_json)
+	try:
+		digests = _load_json_file(args.managed_digests_json)
+	except (OSError, ValueError):
+		digests = None
+	reason = check_synced_security_managed_paths(payload["findings"], digests)
+	if reason:
+		_write_json({"reason": reason})
+		return 1
+	_write_json({"reason": "managed"})
+	return 0
+
+
+def _cmd_synced_security_groups(args: argparse.Namespace) -> int:
+	payload = _load_synced_security_payload(args.payload_json)
+	contract: Any = {}
+	if args.audit_gate_contract_json:
+		try:
+			contract = _load_json_file(args.audit_gate_contract_json)
+		except (OSError, ValueError):
+			contract = {}
+	_write_json(group_synced_security_findings(payload["findings"], _synced_security_bucket_arg(args.bucket), contract))
+	return 0
+
+
+def _load_synced_security_group(path: str) -> dict[str, Any]:
+	group = _load_json_file(path)
+	if not isinstance(group, dict) or not _FP_HEX_RE.match(str(group.get("fingerprint") or "")):
+		raise ValueError("invalid group")
+	findings = validate_synced_security_findings(group.get("findings"))
+	if not _synced_security_file_ok(group.get("file")) or any(item["file"] != group["file"] for item in findings):
+		raise ValueError("invalid group file")
+	category = normalize_synced_security_category(group.get("category"))
+	start, end = _synced_security_int(group.get("bucket_start"), 0, SYNCED_SECURITY_LINE_MAX * 2), _synced_security_int(group.get("bucket_end"), 0, SYNCED_SECURITY_LINE_MAX * 2)
+	if start is None or end is None:
+		raise ValueError("invalid group bucket")
+	source_paths = [path for path in group.get("source_paths") or [] if isinstance(path, str) and is_valid_repo_path(path) and "`" not in path]
+	return {"fingerprint": group["fingerprint"], "file": group["file"], "category": category, "bucket_start": start, "bucket_end": end, "source_paths": source_paths, "findings": findings}
+
+
+def _cmd_compose_synced_security_issue(args: argparse.Namespace) -> int:
+	payload = _load_synced_security_payload(args.payload_json)
+	group = _load_synced_security_group(args.group_json)
+	marker = Path(args.scope_marker_file).read_text(encoding="utf-8").strip() if args.scope_marker_file else ""
+	if marker and not HEAL_SCOPE_RE.fullmatch(marker):
+		raise ValueError("scope marker is malformed")
+	title, body = compose_synced_security_issue(
+		payload=payload,
+		group=group,
+		gen=args.gen,
+		root=args.root or group["fingerprint"],
+		scope_marker=marker,
+		max_depth=args.max_depth,
+		intake_run_url=args.intake_run_url,
+	)
+	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
+	Path(args.body_out).write_text(body, encoding="utf-8")
+	return 0
+
+
+def _cmd_compose_synced_security_occurrence(args: argparse.Namespace) -> int:
+	payload = _load_synced_security_payload(args.payload_json)
+	group = _load_synced_security_group(args.group_json)
+	sys.stdout.write(compose_synced_security_occurrence(payload=payload, group=group, intake_run_url=args.intake_run_url))
+	return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -5622,6 +6066,42 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--role", required=True)
 	p.add_argument("--reason", required=True)
 	p.set_defaults(func=_cmd_engine_fallback_fingerprint)
+
+	p = sub.add_parser("synced-security-fingerprint", help="Print the dedup fingerprint of a synced-file security finding (path, category, line bucket)")
+	p.add_argument("--file", required=True)
+	p.add_argument("--category", required=True)
+	p.add_argument("--line", required=True, type=int)
+	p.add_argument("--bucket", default=None, help="line bucket size (default: HEAL_SYNCED_SECURITY_LINE_BUCKET, else 25; minimum 1)")
+	p.set_defaults(func=_cmd_synced_security_fingerprint)
+
+	p = sub.add_parser("synced-security-check-paths", help="Exit 0 when every finding's file is a managed path of the release, else print {reason} and exit 1")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--managed-digests-json", required=True)
+	p.set_defaults(func=_cmd_synced_security_check_paths)
+
+	p = sub.add_parser("synced-security-groups", help="Print the synced-file security findings grouped by fingerprint")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--bucket", default=None)
+	p.add_argument("--audit-gate-contract-json", default="")
+	p.set_defaults(func=_cmd_synced_security_groups)
+
+	p = sub.add_parser("compose-synced-security-issue", help="Compose the heal issue of one synced-file security finding group")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--group-json", required=True)
+	p.add_argument("--scope-marker-file", default="")
+	p.add_argument("--gen", type=int, default=1)
+	p.add_argument("--root", default="")
+	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
+	p.add_argument("--intake-run-url", required=True)
+	p.add_argument("--title-out", required=True)
+	p.add_argument("--body-out", required=True)
+	p.set_defaults(func=_cmd_compose_synced_security_issue)
+
+	p = sub.add_parser("compose-synced-security-occurrence", help="Print the occurrence comment of one synced-file security finding group")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--group-json", required=True)
+	p.add_argument("--intake-run-url", required=True)
+	p.set_defaults(func=_cmd_compose_synced_security_occurrence)
 
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
 	p.add_argument("--payload-json", required=True)
