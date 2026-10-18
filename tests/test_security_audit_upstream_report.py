@@ -295,6 +295,19 @@ def test_hostile_text_is_dropped_and_never_printed(env_setup) -> None:
 	assert "HOSTILE-SCENARIO" not in raw and "ghp_FAKETOKEN" not in raw
 
 
+def test_trailing_newline_in_file_or_finding_id_is_dropped(env_setup) -> None:
+	tmp_path, env = env_setup
+	_write_export(env, [
+		_finding(0, file=".claude/hooks/pr_merge_status_guard.py\n"),
+		_finding(1, finding_id="guard-bypass-1\n"),
+		_finding(2),
+	])
+	result = _run(env)
+	assert "outcome=dispatched findings=1" in result.stdout and "dropped=2" in result.stdout
+	report = _body(tmp_path)["client_payload"]["report"]
+	assert [f["finding_id"] for f in report["findings"]] == ["guard-bypass-2"]
+
+
 def test_unmappable_category_is_dropped_not_the_whole_report(env_setup) -> None:
 	tmp_path, env = env_setup
 	_write_export(env, [_finding(0, owasp_or_stride_category="Made Up Category"), _finding(1)])

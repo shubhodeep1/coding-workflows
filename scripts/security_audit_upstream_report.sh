@@ -185,7 +185,7 @@ def as_int(value, low, high):
 
 
 def file_ok(value):
-	if not isinstance(value, str) or not FILE_RE.match(value):
+	if not isinstance(value, str) or not FILE_RE.fullmatch(value):
 		return False
 	if value.startswith("/") or "//" in value:
 		return False
@@ -222,7 +222,7 @@ for item in entries:
 		or line is None
 		or confidence is None
 		or not isinstance(finding_id, str)
-		or not ID_RE.match(finding_id)
+		or not ID_RE.fullmatch(finding_id)
 		or not CATEGORY_RE.match(category)
 	):
 		dropped += 1
