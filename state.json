@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-18T06:29:00Z",
+  "tick_at": "2026-10-18T06:43:35Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 4
+    "tracking_issues": 5
   },
   "tracking_issues": [
     {
@@ -93,6 +93,27 @@
       "status": "failed",
       "title": "[Orchestrator] Report synced-file security findings to coding-workflows through heal intake",
       "total_waves": 2,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 1,
+      "integration_ahead_by": "0",
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 3,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 7614,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply workflow-optimization-2026-09-21-2 recommendations (verified subset)",
+      "total_waves": 3,
       "wave_complete": false
     }
   ]
