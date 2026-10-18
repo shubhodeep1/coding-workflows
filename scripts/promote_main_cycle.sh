@@ -164,15 +164,26 @@ gate_failure_location()
 {
 	local run_id="$1"
 	local jobs_json="" located="" job_name="" step_name=""
+	# Cap this diagnostic read at 2 attempts so a failing jobs read cannot
+	# hold up the failure exit (gh_retry defaults to 5 attempts).
+	local jobs_attempts="${GH_RETRY_MAX_ATTEMPTS:-2}"
+	if ! [[ "${jobs_attempts}" =~ ^[0-9]+$ ]] || [ "${jobs_attempts}" -gt 2 ] || [ "${jobs_attempts}" -lt 1 ]; then
+		jobs_attempts=2
+	fi
 	# API-call audit (CLAUDE.md §15 / unattended §14): the calls this run
 	# already makes are the self-runs listing, the in-flight issues listing,
-	# the default-branch ref, the gate idle check, the before-dispatch listing
-	# and the poll loop's actions/workflows/<gate>/runs listing. None of them
-	# returns job or step data (workflow-run objects carry only status and
-	# conclusion), so one jobs read is needed. It is made only on the failure
-	# path; a successful or cancelled gate makes no extra call.
+	# the default-branch ref, the stable tag ref and tag object reads, the
+	# compare read, the operator-step search/issues and issue-comments reads,
+	# the gate idle check, the before-dispatch listing and the poll loop's
+	# actions/workflows/<gate>/runs listing. None of them returns job or step
+	# data (workflow-run objects carry only status and conclusion), so one
+	# jobs read is needed. It is made only on the failure path; a successful
+	# or cancelled gate makes no extra call.
 	if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
-		jobs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null || true)"
+		if ! jobs_json="$(GH_RETRY_MAX_ATTEMPTS="${jobs_attempts}" gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null)"; then
+			jobs_json=""
+			echo "::notice::promote cycle: jobs read for smoke-gate run ${run_id} failed; failed job and step are logged as unknown" >&2
+		fi
 	fi
 	if [ -n "${jobs_json}" ]; then
 		located="$(printf '%s' "${jobs_json}" | jq -r '
