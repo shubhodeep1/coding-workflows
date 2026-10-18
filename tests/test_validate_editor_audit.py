@@ -23,6 +23,7 @@ poller in test-and-mark-stable.yml) keep passing.
 from __future__ import annotations
 
 import inspect
+import os
 import subprocess
 import tempfile
 import textwrap
@@ -131,6 +132,60 @@ def test_exit_three_when_summary_file_missing(tmp_path):
 	"""A non-existent summary file path is a usage error → rc=3."""
 	cmd = ["bash", str(HELPER), str(tmp_path / "does-not-exist.txt")]
 	result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+	assert result.returncode == 3
+	assert "missing or unreadable" in result.stderr
+
+
+_BALANCED_SUMMARY = textwrap.dedent(
+	"""\
+	Review file issue audit:
+	- review_a.md: total issues listed 3, issues applied 1, issues already applied 1, issues ignored 1
+
+	PR comment audit:
+	- none
+	"""
+)
+
+
+def test_exit_three_when_summary_file_unreadable(tmp_path):
+	"""An existing file the caller cannot read is a usage error (rc=3),
+	not an empty audit (rc=1). Root can read mode-000 files, so the case
+	returns early (a pass) under root; the awk-failure test below covers
+	the same branch for root runners."""
+	if os.geteuid() == 0:
+		return
+	summary = tmp_path / "summary.txt"
+	summary.write_text(_BALANCED_SUMMARY, encoding="utf-8")
+	summary.chmod(0o000)
+	try:
+		result = subprocess.run(["bash", str(HELPER), str(summary), "1"], capture_output=True, text=True, check=False)
+	finally:
+		summary.chmod(0o600)
+	assert result.returncode == 3, result.stderr
+	assert "missing or unreadable" in result.stderr
+	assert "empty or contains only fallback text" not in result.stderr
+
+
+def test_exit_three_when_awk_fails_on_readable_file(tmp_path):
+	"""A failing awk read must return rc=3 with the usage-error warning
+	instead of falling through to the empty-audit path."""
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	stub = bin_dir / "awk"
+	stub.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+	stub.chmod(0o755)
+	summary = tmp_path / "summary.txt"
+	summary.write_text(_BALANCED_SUMMARY, encoding="utf-8")
+	env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+	result = subprocess.run(["bash", str(HELPER), str(summary), "1"], capture_output=True, text=True, check=False, env=env)
+	assert result.returncode == 3, result.stderr
+	assert "missing or unreadable" in result.stderr
+	assert "empty or contains only fallback text" not in result.stderr
+
+
+def test_exit_three_when_summary_path_is_empty_string(tmp_path):
+	"""An empty summary path is a usage error (rc=3)."""
+	result = subprocess.run(["bash", str(HELPER), ""], capture_output=True, text=True, check=False)
 	assert result.returncode == 3
 	assert "missing or unreadable" in result.stderr
 
