@@ -772,7 +772,8 @@ _synced_security_finding_intake()
 		FP="$(jq -r '.fingerprint' "${ss_group}")"
 		ss_decision="${ss_dir}/decision_${ss_index}.json"
 		python3 "${HEAL_PY}" budget --issues-json "${ss_issues}" --fingerprint "${FP}" --preferred-repo "${SELF_REPO}" \
-			--max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}" > "${ss_decision}"
+			--max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}" > "${ss_decision}" \
+			|| { log "error budget_failed fp=${FP} source=${SOURCE_REPO}"; ss_skipped=$((ss_skipped + 1)); ss_failed=1; continue; }
 		ss_action="$(jq -r '.action' "${ss_decision}")"
 		ss_gen="$(jq -r '.gen // 1' "${ss_decision}")"
 		ss_root="$(jq -r '.root // ""' "${ss_decision}")"
@@ -789,6 +790,8 @@ _synced_security_finding_intake()
 				else
 					log "warn occurrence_comment_failed fp=${FP} existing_issue=${ss_existing:-none} source=${SOURCE_REPO}"
 					ss_skipped=$((ss_skipped + 1))
+					# A lost occurrence is not retried, so the summary alert goes out at WARNING.
+					ss_attention=1
 				fi
 				;;
 			escalate)
