@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-18T05:07:28Z",
+  "tick_at": "2026-10-18T05:20:43Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -81,7 +81,7 @@
         "closed": 1,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
+        "in_progress": 1,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -93,7 +93,7 @@
       "status": "failed",
       "title": "[Orchestrator] Report synced-file security findings to coding-workflows through heal intake",
       "total_waves": 2,
-      "wave_complete": true
+      "wave_complete": false
     }
   ]
 }
