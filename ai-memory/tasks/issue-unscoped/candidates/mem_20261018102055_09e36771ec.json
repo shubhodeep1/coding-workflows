@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5718-5722,5848-5853 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: `PASS2_DIFF_LOC` is counted from `LAST_RUN_DIFF_FILE`, which holds a placeholder on a first review pass, so `diff_loc=0` and `reason=large_diff` cannot appear on a first pass.\n  WHY: The shadow telemetry is biased toward `eligible` for large first-pass PRs. No control flow reads the value, and this matches the pass-2 gate's definition as the issue specifies. The reviewer rated it NIT.\n- scripts/review_run_reviewers.sh:reviewer_pass2_shadow_switch_state() | severity=low | confidence=1\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The `REVIEWER_PASS2_SHADOW_ENABLED` value is lower-cased but not trimmed of whitespace. This was raised as a hardening suggestion (HARDENING_RISK_SCORE 1), not a standard finding.\n  WHY: A value with surrounding spaces would warn and turn the shadow off for that run. The suggested fix is to add `| tr -d '[:space:]'` to the pipeline.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_run_reviewers.sh:5718-5722,5848-5853 | severity=NIT | confidence=4\n  PROBLEM: `PASS2_DIFF_LOC` is counted from `LAST_RUN_DIFF_FILE`, which holds a placeholder on a first review pass, so `diff_loc=0` and `reason=large_diff` cannot appear on a first pass.\n  WHY: The only effect is skewed telemetry. No control flow reads the value.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh:reviewer_pass2_shadow_switch_state() | hardening, HARDENING_RISK_SCORE=1\n  PROBLEM: The `REVIEWER_PASS2_SHADOW_ENABLED` switch is lower-cased but not trimmed of whitespace.\n  WHY: Suggested minimal fix: add `| tr -d '[:space:]'` to the `tr` pipeline (1 line).\n- TASK COMPLETENESS note: the requirement \"Add the changelog fragment (CLAUDE.md \u00a720).\" is satisfied by `changelog.d/7625-reviewer-pass2-shadow.md`. This is not a gap.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_run_reviewers.sh:reviewer_pass2_shadow_switch_state() | hardening, HARDENING_RISK_SCORE=1\n  PROBLEM: The switch value is lower-cased but not whitespace-trimmed.\n  WHY: A value such as `\" true \"` makes the switch warn and turn off, so the shadow is silently disabled for that run. Suggested minimal fix: add `| tr -d '[:space:]'` after the lowercase step (1 line).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "706dcb9d30daa3b43b70da15bafcb806e21f5eb7a6ec735ef6771dc24c9189e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7627,
+    "run_id": "39117738860",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39117738860",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018102055_09e36771ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7627,
+    "run_id": "39117738860"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T10:20:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
