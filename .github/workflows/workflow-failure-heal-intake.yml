@@ -125,6 +125,11 @@ jobs:
       # Non-retryable review/autofix failures (#6756): 'false' skips the PR
       # diagnosis; host-only stops then keep #6745's skip, others are healed.
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
+      # Synced-file security findings (source_kind synced_security_finding,
+      # project #7604): 'false' skips them; findings in the same file, category
+      # and line bucket (default 25 lines, minimum 1) share one heal issue.
+      HEAL_SYNCED_SECURITY_FINDING_ENABLED: ${{ vars.HEAL_SYNCED_SECURITY_FINDING_ENABLED || 'true' }}
+      HEAL_SYNCED_SECURITY_LINE_BUCKET: ${{ vars.HEAL_SYNCED_SECURITY_LINE_BUCKET || '25' }}
       # Report authentication (issue #6559): 'true' skips repository_dispatch
       # reports that carry no OIDC identity; 'false' (transition default)
       # accepts them after the binding checks. An identity is always verified.
@@ -372,6 +377,10 @@ jobs:
       HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS || '3' }}
       HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
+      # Synced-file security findings (project #7604); kept in step with the
+      # intake job's env (test_heal_scope_recovery_scan_workflow_wiring).
+      HEAL_SYNCED_SECURITY_FINDING_ENABLED: ${{ vars.HEAL_SYNCED_SECURITY_FINDING_ENABLED || 'true' }}
+      HEAL_SYNCED_SECURITY_LINE_BUCKET: ${{ vars.HEAL_SYNCED_SECURITY_LINE_BUCKET || '25' }}
       WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
       WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

@@ -650,6 +650,12 @@ CODEX_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-output.json"
 CODEX_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-error.txt"
 FILTERED_FINDINGS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filtered-findings.json"
 FILTER_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filter-summary.json"
+# Job-scoped copy of the summary's upstream_managed list for the sender step
+# (scripts/security_audit_upstream_report.sh, issue #7623). Lives outside the
+# runtime dir, which the EXIT trap removes. A stale copy from an earlier audit
+# in the same job is removed first, so the sender never re-sends old findings.
+UPSTREAM_MANAGED_EXPORT_FILE="${SECURITY_AUDIT_UPSTREAM_MANAGED_EXPORT:-${RUNNER_TEMP:-${SECURITY_AUDIT_RUNTIME_DIR}}/security-audit-upstream-managed.json}"
+rm -f -- "${UPSTREAM_MANAGED_EXPORT_FILE}" 2>/dev/null || true
 EXISTING_FOLLOWUPS_JSON="${SECURITY_AUDIT_RUNTIME_DIR}/existing-followups.json"
 TRACKER_COMMENT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-comment.md"
 FOLLOWUP_INDEX_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/followup-index.tsv"
@@ -2382,6 +2388,40 @@ summary_path.write_text(
 	+ "\n",
 	encoding="utf-8",
 )
+PY
+
+# Export the upstream-managed findings for the synced-finding sender step
+# (issue #7623). Data only, fail-open: a failure warns and never changes the
+# audit's exit status. Nothing is written when the list is empty.
+python3 -I -B - "${FILTER_SUMMARY_FILE}" "${UPSTREAM_MANAGED_EXPORT_FILE}" <<'PY' || echo "::warning::SECURITY_AUDIT_UPSTREAM_MANAGED outcome=export_failed"
+import json
+import os
+import sys
+import tempfile
+
+summary_path, target = sys.argv[1], sys.argv[2]
+try:
+	with open(summary_path, encoding="utf-8") as handle:
+		summary = json.load(handle)
+	entries = summary.get("upstream_managed") if isinstance(summary, dict) else None
+	if isinstance(entries, list) and entries:
+		parent = os.path.dirname(os.path.abspath(target)) or "."
+		if os.path.islink(target) or os.path.islink(parent) or not os.path.isdir(parent):
+			raise OSError("unsafe export path")
+		fd, tmp = tempfile.mkstemp(prefix=".security-audit-upstream-managed.", dir=parent)
+		try:
+			with os.fdopen(fd, "w", encoding="utf-8") as out:
+				json.dump({"upstream_managed": entries}, out, ensure_ascii=True, sort_keys=True)
+				out.write("\n")
+			os.replace(tmp, target)
+		except BaseException:
+			try:
+				os.unlink(tmp)
+			except OSError:
+				pass
+			raise
+except Exception:
+	print("::warning::SECURITY_AUDIT_UPSTREAM_MANAGED outcome=export_failed")
 PY
 
 # --- Line ownership (plan item 4b, decision D4) -----------------------------
