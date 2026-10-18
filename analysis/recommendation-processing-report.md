@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (121)
+## Processed source docs (122)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -126,6 +126,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-18.md`
 - `analysis/workflow-optimization-2026-09-20.md`
 - `analysis/workflow-optimization-2026-09-20-2.md`
+- `analysis/workflow-optimization-2026-09-21.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1222,3 +1223,31 @@ Processed: 2026-10-16
 - Pipeline flow, "recheck head before editor" — already-implemented: the pre-editor stale-base gate (`id: pre_editor_stale_base_gate`).
 - Pipeline flow, CI step timings and the release-validation row — rejected: no change was asked.
 - Executive summary, per-repo breakdown and metrics appendix — INVALID/non-material: evidence, not recommendations.
+
+### `analysis/workflow-optimization-2026-09-21.md`
+Processed: 2026-10-18
+- BUG-003 (unreadable editor-audit summary returned 1 instead of 3) — applied: editor-audit-unreadable (`changelog.d/wfopt-2026-09-21-editor-audit-unreadable.md`); `validate_editor_audit_arithmetic` in `scripts/validate_editor_audit.sh` now has a `-r` check and returns 3 when its awk fails.
+- BUG-002 (validate dispatch bypassed retry) — applied in part: validate-label-retry (`changelog.d/wfopt-2026-09-21-validate-label-retry.md`); the `ai:orchestrator-validate-required` removal in `review_autofix.yml` now goes through `gh_retry`. The dispatch stays single-attempt because a retried `gh workflow run` can start a duplicate validation run, and the failure path already keeps the label. The force-tick/retry marker is rejected as telemetry with no consumer.
+- MERGE-001 (branch-runs snapshot reuse) — applied: branch-runs-snapshot-reuse (`changelog.d/wfopt-2026-09-21-branch-runs-snapshot-reuse.md`); `autofix_retrigger_has_inflight_peer` keeps a one-shot, success-only, process-local snapshot (`_AUTOFIX_BRANCH_RUNS_SNAPSHOT_*`) in `scripts/gh_helpers.sh`, and `autofix_changes_lost_head_retry_consumed` consumes and clears it.
+- CONSIST-001 (inline label metadata) — applied in part: `test_review_autofix_label_metadata_matches_label_contract` in `tests/test_ai_label_precreation_contract.py` pins `review_autofix.yml`'s inline label metadata to `.github/ai/label_contract.v1.json`. Generating the constants is rejected: it widens the staged-support surface.
+- Speed 1 / Cost 1 / Reliability 1 / per-repo action 1 (`IMPLEMENT_SUPPORT_PREFLIGHT`) — already-implemented: the root cause was the editor's own pytest writing a fixture `scripts/helper.sh` path into the live editor-head ledger. `tests/conftest.py` now strips `STAGED_SUPPORT_RUNTIME_ENV_VARS`, and `implement.yml` launches the editor with `env -u` for the four ledger variables. A pre-model check could not catch a path added during the editor run.
+- Speed 2 / Cost 2 / Reliability 2 / per-repo action 2 / AI Memory Health recommendation (memory batching, auth circuit) — already-implemented in part: ledger-circuit-breaker (2026-09-20-2). Local JSONL with a batch flush, and the extra failure-telemetry fields, are rejected (2026-09-20-2 precedent).
+- Speed 3 / Reliability 4 / per-repo action 3 (Mistral breaker canary) — rejected as obsolete: `mistralai/mistral-small-2603` is no longer on the panel, `vars.REVIEWER_CIRCUIT_BREAKER_ENABLED` exists, and a sole-reviewer context overflow already retries on `openai/gpt-6-luna` (2026-09-18 Cost 2 precedent).
+- Speed 4 / Reliability 5 (stale `300 != 180` CI budget) — already-implemented: `tests/test_test_and_mark_stable_review_blocked_budget.py` reads `E2E_JOB_TIMEOUT_MINUTES` (300), and CI has run as parallel jobs since #4707.
+- Speed 5 (single poll memory flush) — rejected: changes memory push semantics for an unmeasured saving (2026-09-16/18/20 precedent).
+- Speed 6 (`REVIEW_RUN_LINK` dispatch correlation) — already-implemented in part: PR-named review dispatch runs from the default branch with trusted-wrapper matching (#4618, #4701, #6629), plus pending-aware sweep guards. The new log line is rejected as telemetry with no consumer.
+- Cost 3 / Prompt cache 4 / per-repo action 3 (model-aware prompt cap, `PROMPT_COMPONENT_BUDGET`) — rejected: too broad, with medium quality risk; `CONTEXT_BUDGET_WARN` exists (2026-09-16 Cost 4 precedent).
+- Cost 4 (reviewer tiers) — already-implemented: `REVIEW_TIER_RESOLVER_ENABLED` defaults to `true`.
+- Cost 5 / Prompt cache 1–3 and 5–6 (prefix hash, `cache_status`, ordering, Semble `raw_bytes_saved`, memory budget) — rejected: under-specified or telemetry-only; `compute_cache_hit_rate` exists in `scripts/cost_audit.py`.
+- Cost 6 (Semble yield fields) and the Serena `SERENA_PROBE` skipped line — rejected: telemetry with no consumer.
+- Reliability 3 (versioned required-env manifest) — already-implemented for the cited case: `LINKED_ISSUE_METADATA_FILE` is exported on `main`, helpers default new variables (§8), and `REVIEW_EDITOR_PREFLIGHT` checks the editor's guards. The general manifest is rejected as too broad.
+- Reliability 6 (security-audit path validation) — rejected: one run, low confidence; `security_audit.sh` now emits a sanitized codex stderr tail and a provider class on failure.
+- GH API Call Audit (sweep six-to-two, `GH_API_CALL` / `GH_API_SUMMARY`) and the Orchestrator Health indicator list — rejected (2026-09-20 precedent); `GH_API_RETRY` and `GH_PAT_BUDGET` cover part of it.
+- BUG-001 (guard latches without retry) — already-implemented: guard-block-gh-retry (fragment folded into `CHANGELOG.md`); `scripts/implement_handle_guard_block.sh` sources `gh_helpers.sh` and routes its label writes and verification read through `gh_retry`.
+- SEC-001 (PAT in step source and `.git/config`) — already-implemented in part: push-token-env (2026-09-18 SEC-002) removed the inline secret. Persistence in `.git/config` is rejected: the jobs' `actions/checkout` already persists GH_PAT credentials, model agents run in isolated containers without the checkout's `.git`, and rewriting the push and retry sites is high-risk.
+- EXPR-001 / EXPR-002 — already-implemented: step `env:` binding and the 18,000-character guard in `tests/test_workflow_file_size_limit.py` (implement-expr-limit, fragment folded into `CHANGELOG.md`).
+- BATCH-001, BATCH-003, API-001, REUSE-001, REUSE-002, REUSE-003 — rejected: tagged RISKY_SKIP in the source.
+- BATCH-002 — rejected: tagged NEEDS_VERIFICATION in the source.
+- DUP-001, DUP-002 — rejected: refactors with no behaviour change that would add staged support modules (2026-09-16 precedent).
+- DEAD-001, DEAD-002, SHELL-001 — rejected: naming immutability and low value (2026-09-16 / 2026-09-20 precedent).
+- Copilot micro-optimization, executive summary, pipeline-flow table, per-repo breakdown and metrics appendix — INVALID/non-material: evidence, not recommendations.
