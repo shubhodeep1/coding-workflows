@@ -223,7 +223,7 @@ for item in entries:
 		or confidence is None
 		or not isinstance(finding_id, str)
 		or not ID_RE.fullmatch(finding_id)
-		or not CATEGORY_RE.match(category)
+		or not CATEGORY_RE.fullmatch(category)
 	):
 		dropped += 1
 		continue
