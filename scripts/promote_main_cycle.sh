@@ -39,7 +39,7 @@
 #   PROMOTE_CYCLE_SKIPPED reason=smoke_gate_cancelled run=<id>  the gate was cancelled, not
 #                                                           failed: nothing was proven either
 #                                                           way, so the tip is retried next tick
-#   PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=<id>
+#   PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=<id> conclusion=<c> failed_job=<name|unknown> failed_step=<name|unknown>
 #   PROMOTE_CYCLE_FAILED reason=smoke_gate_timeout
 #   PROMOTE_CYCLE_FAILED reason=smoke_head_checkout_failed  main advanced during the gate and
 #                                                           the smoke-tested commit could not
@@ -145,6 +145,48 @@ fail_cycle()
 	echo "PROMOTE_CYCLE_FAILED reason=${reason}${detail:+ ${detail}}"
 	emit_output outcome "failed:${reason}"
 	exit 1
+}
+
+# sanitize_gate_name <name>: whitespace becomes "_", only [A-Za-z0-9._:()/-]
+# is kept, at most 80 characters, and an empty result becomes "unknown". Job
+# and step names come from workflow YAML and must not add log fields.
+sanitize_gate_name()
+{
+	local cleaned
+	cleaned="$(printf '%s' "${1:-}" | tr '[:space:]' '_' | tr -cd 'A-Za-z0-9._:()/-' | cut -c1-80 || true)"
+	printf '%s' "${cleaned:-unknown}"
+}
+
+# gate_failure_location <run_id>: prints "failed_job=<j> failed_step=<s>" for
+# the first failed (or timed-out) job of the gate run and its first failed
+# step, with "unknown" for anything that cannot be read. Never fails.
+gate_failure_location()
+{
+	local run_id="$1"
+	local jobs_json="" located="" job_name="" step_name=""
+	# API-call audit (CLAUDE.md §15 / unattended §14): the calls this run
+	# already makes are the self-runs listing, the in-flight issues listing,
+	# the default-branch ref, the gate idle check, the before-dispatch listing
+	# and the poll loop's actions/workflows/<gate>/runs listing. None of them
+	# returns job or step data (workflow-run objects carry only status and
+	# conclusion), so one jobs read is needed. It is made only on the failure
+	# path; a successful or cancelled gate makes no extra call.
+	if [[ "${run_id}" =~ ^[0-9]+$ ]]; then
+		jobs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null || true)"
+	fi
+	if [ -n "${jobs_json}" ]; then
+		located="$(printf '%s' "${jobs_json}" | jq -r '
+			[.jobs[]? | select(.conclusion == "failure" or .conclusion == "timed_out")]
+			| first // empty
+			| [(.name // ""), ([.steps[]? | select(.conclusion == "failure")] | first | .name // "")]
+			| map(tostring | gsub("\\s"; "_"))
+			| @tsv' 2>/dev/null || true)"
+	fi
+	if [ -n "${located}" ]; then
+		job_name="${located%%$'\t'*}"
+		step_name="${located#*$'\t'}"
+	fi
+	printf 'failed_job=%s failed_step=%s\n' "$(sanitize_gate_name "${job_name}")" "$(sanitize_gate_name "${step_name}")"
 }
 
 is_truthy()
@@ -508,7 +550,8 @@ if [ "${gate_conclusion}" = "cancelled" ]; then
 	skip_cycle smoke_gate_cancelled "run=${gate_run_id}"
 fi
 if [ "${gate_conclusion}" != "success" ]; then
-	fail_cycle smoke_gate_failed "run=${gate_run_id} conclusion=${gate_conclusion}"
+	gate_failure_where="$(gate_failure_location "${gate_run_id}" || echo "failed_job=unknown failed_step=unknown")"
+	fail_cycle smoke_gate_failed "run=${gate_run_id} conclusion=${gate_conclusion} ${gate_failure_where}"
 fi
 # The gate checked out whatever main was when its run started; that commit,
 # not the tip read before dispatch, is what was smoke-tested. Anything that
