@@ -118,6 +118,7 @@ for name, value in os.environ.items():
 		secret_values.extend(part for part in value.splitlines() if part)
 
 lines = []
+diagnostic_seen = False
 for raw_line in content.decode("utf-8", errors="replace").splitlines():
 	line = raw_line.strip()
 	if not line or line in prompt_lines or any(
@@ -126,8 +127,12 @@ for raw_line in content.decode("utf-8", errors="replace").splitlines():
 		continue
 	if re.search(r"config\.toml|model_verbosity|OPENROUTER_API_KEY|=== (?:BEGIN|END) UNTRUSTED|(?:^|\s)(?:model|api_?key|base_url|model_provider)\s*=", line, re.I):
 		continue
-	if diagnostic_lines_only and not diagnostic_line.search(line):
-		continue
+	# Keep every line from the first error-shaped line onward, so detail lines of
+	# a multi-line error (`- unknown_in_template: NAME`) are not dropped.
+	if diagnostic_lines_only and not diagnostic_seen:
+		if not diagnostic_line.search(line):
+			continue
+		diagnostic_seen = True
 	line = re.sub(r"(?i)(?:sk-[a-z0-9_-]{3,}|(?:gh[pousr]_|github_pat_)[a-z0-9_]+)", "[redacted]", line)
 	line = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [redacted]", line)
 	line = re.sub(r"\b[0-9a-fA-F]{32,}\b|\b[A-Za-z0-9_+/=-]{40,}\b", "[redacted]", line)
