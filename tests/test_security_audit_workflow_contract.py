@@ -4211,8 +4211,10 @@ def test_security_audit_removes_a_stale_export_when_nothing_is_upstream_managed(
 		export_path = Path(export_td) / "upstream-managed.json"
 		export_path.write_text('{"upstream_managed": [{"finding_id": "stale"}]}\n', encoding="utf-8")
 		proc, _final_state = _run_consumer_findings_json(
-			{"SECURITY_AUDIT_UPSTREAM_MANAGED_EXPORT": str(export_path)},
-			upstream_source_dir=None,
+			{
+				"SECURITY_AUDIT_UPSTREAM_MANAGED_EXPORT": str(export_path),
+				"SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER": "false",
+			},
 		)
 		assert proc.returncode == 0, proc.stderr
 		assert not export_path.exists()

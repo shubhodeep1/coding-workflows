@@ -80,7 +80,8 @@ case "${switch,,}" in
 		exit 0
 		;;
 esac
-if [ "${WORKFLOW_HEAL_ENABLED:-true}" = "false" ]; then
+heal_switch="${WORKFLOW_HEAL_ENABLED:-true}"
+if [ "${heal_switch,,}" = "false" ]; then
 	log "skip reason=workflow_heal_disabled"
 	exit 0
 fi
@@ -161,9 +162,9 @@ import sys
 
 export_path, payload_path, counts_path, heal_py, repo, wrapper_sha, run_url, run_id = sys.argv[1:9]
 MAX_FINDINGS = 50
-FILE_RE = re.compile(r"^[A-Za-z0-9._/-]{1,300}$")
+FILE_RE = re.compile(r"^[A-Za-z0-9._/+-]{1,300}$")
 ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
-CATEGORY_RE = re.compile(r"^[A-Za-z0-9 :()/._,&'-]{1,120}$")
+CATEGORY_RE = re.compile(r"^[A-Za-z0-9 :()/._,&'+-]{1,200}$")
 SEVERITY_RANK = {"critical": 0, "high": 1}
 
 normalize_category = None
@@ -227,8 +228,9 @@ for item in entries:
 		dropped += 1
 		continue
 	if normalize_category is not None:
+		# Publish only the intake's canonical token, never the model's wording.
 		try:
-			normalize_category(category)
+			category = normalize_category(category)
 		except Exception:
 			dropped += 1
 			continue
