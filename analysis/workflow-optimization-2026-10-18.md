@@ -585,3 +585,145 @@ TODO/FIXME/HACK markers: none in `scripts/*.sh`, `scripts/*.py` or `.github/work
 | Code modularization | 10 workflows carrying the support-ref block, a new composite action under `.github/actions/`, `.github/workflows/orchestrate_poll.yml`, `scripts/label_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`, `scripts/review_merge_train.sh`, `scripts/comprehensive_test_and_release_gh_api.sh`, `tests/test_orchestrate_poll_workflow_contract.py` | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/plan.yml`, new `scripts/` step bodies for EXPR-006 | Medium |
 | Medium/Low fixes | `.github/workflows/orchestrate_poll.yml`, `.github/workflows/implement.yml`, `.github/workflows/plan.yml`, `.github/workflows/validation-refresh.yml`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/update_workflows.yml`, `scripts/memory_helpers.sh`, `scripts/review_collect_pr_metadata.sh`, `scripts/orchestrate_poll_process.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-18)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means a static reading proves every precondition: same endpoint or a strict subset of fields, the same pagination, filters and auth, the same function or step, no mutation in between, unchanged error and retry semantics, and the cache contract kept. The implement stage may act on these without further review. `NEEDS_VERIFICATION` means the change looks sound, but at least one precondition can't be proven from the code alone. The listed checks must pass before anyone implements it. `RISKY_SKIP` means a hard trigger applies: a retry or poll loop, pagination, rate-limit sensitivity, code in `orchestrate_poll_process.sh` or stall recovery, or a change to log keys. These findings are listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** — `RISKY_SKIP`
+- **Files:** `scripts/review_enable_auto_merge.sh:154-170` (PR labels read) and `scripts/review_enable_auto_merge.sh:207-234` (full PR read).
+- **Calls:** 2 now (1 or more paginated label pages, plus 1 PR GET), on every path that gets past the e2e guard. Proposed: 1.
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}/labels?per_page=100` (`--paginate`) and `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** Both reads sit at script level in one step, and no mutation runs between them. The `pulls/{n}` payload already includes a `labels` array, but the script only reads `.head.ref` and `.head.sha` from it:
+  ```bash
+  if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' 2>"${_label_err_file}")"; then
+  ...
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+  ```
+- **Proposed fix:** Move the `_ORCH_PR_META_JSON` fetch (L207-228) above the e2e guard. Then compute the labels as `jq -r '.labels[].name'` on that JSON instead of the paginated labels call.
+- **Safety rationale:** The labels call uses `--paginate`, chosen deliberately after a page-2 label miss (comment at L144-153). Each call also fails closed with its own `::warning::` text (L168 vs L224). Merging changes the page-boundary semantics and the observable warning output, both hard triggers.
+- **Downstream signal:** Don't auto-implement. A maintainer must first confirm against GitHub's REST reference that `pulls/{n}.labels` is never truncated for PRs with more than 100 labels. They must also decide whether one combined fail-closed message is acceptable in place of the two distinct warnings.
+
+**MERGE-002** — `RISKY_SKIP`
+- **Files:** `.github/workflows/test-and-mark-stable.yml:1052-1053` (issue read) and `:1060` (comments read), inside the `while true` poll loop of "Phase 2: Wait for plan to complete".
+- **Calls:** 2 now per `POLL_INTERVAL` iteration. Proposed: 1 GraphQL query (`issue { labels, comments }`).
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}` and `GET /repos/{o}/{r}/issues/{n}/comments?per_page=100&direction=desc`.
+- **Evidence:** Both reads target the same issue, back to back, with no mutation between them, and both feed `CUR_STATE` (L1081).
+- **Net-new detail for whoever merges this:** `scripts/tg_helpers.sh:194-196` records that this endpoint has no `direction` parameter. The current read therefore returns the *oldest* 100 comments, not the newest. A GraphQL `comments(last: N)` version would change `comment_updated=` in `CUR_STATE`, and with it the inactivity-timer behaviour.
+- **Safety rationale:** The calls sit in a poll loop with a rate-limit backoff guard (`RATE_LIMIT_BACKOFF`, L1056-1058), and merging changes the activity state string. Those are hard triggers.
+- **Downstream signal:** Don't auto-implement. This needs a manual decision on whether the activity signal should move to "newest comments". It should be done together with the DUP-006 / DEAD-001 helper extraction, not as a standalone API merge.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** — `RISKY_SKIP`
+- **Files:**
+  - `scripts/orchestrate_poll_process.sh:24950-24994`: reconcile loop over `ISSUE_NUMS`; `_issue_cross_ref_pr_numbers_unique "${inum}"` at L24965.
+  - `scripts/orchestrate_poll_process.sh:28086-28104`: judge diff loop over the same `ISSUE_NUMS`; `_issue_cross_ref_pr_number_last "${inum}"` at L28104.
+  - Both helpers call `_issue_timeline_with_cross_refs_json` (L4420-4436). That calls `gh_issue_timeline_with_cross_refs` (`scripts/gh_helpers.sh:1706-1766`), which falls back to `_gh_issue_timeline_with_cross_refs_rest` (`gh_helpers.sh:1626-1657`).
+- **Calls:** 2 timeline lookups now per wave sub-issue, per tracking iteration in which the judge runs. That is 1 GraphQL call each, or on fallback a paginated REST timeline plus 1 `GET pulls/{n}` per cross-referenced PR. Proposed: 1.
+- **Endpoints:** GraphQL `issue.timelineItems(first: 100, itemTypes: [CROSS_REFERENCED_EVENT, CLOSED_EVENT])`; fallback REST `GET /issues/{n}/timeline` (`--paginate`) plus `GET /pulls/{n}`.
+- **Evidence:** `ISSUE_NUMS` is built once per iteration (L24634, appended at L24689/L24729/L24797/L24892). L28086-28091 sorts that same set for the judge. Both helpers only post-process the same `timeline_json` with different jq filters (L4446-4452 vs L4463-4469). There is no memo, and the loop head only resets `FORCE_MERGE_LABEL_EVENT_JSON_CACHE` (L22763).
+- **Proposed fix:** Memoize the raw output of `_issue_timeline_with_cross_refs_json` per issue in an associative array, using a name verified unique in the file. Reset it at the loop head next to L22763. Cache the raw timeline, not the derived PR number, because the comment at L18388 records that `_issue_cross_ref_pr_number_last` returns the LAST PR on purpose.
+- **Safety rationale:** The code is in `orchestrate_poll_process.sh`, its REST fallback is paginated, and minutes of dispatch and merge work run between L24965 and L28104. A new cross-reference created in that window would be invisible to the judge. Those are hard triggers.
+- **Downstream signal:** Don't auto-implement. A manual review must confirm that nothing between L24994 and L28104 creates or relies on new cross-references, for example PR creation by fix-up or redispatch paths. It must also decide whether to invalidate the memo after any in-iteration mutation.
+
+**REUSE-002** — `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh:28163-28166`. Consumers: L28198 (Semble query text) and L28248 (judge prompt).
+- **Calls:** 2 now (default-branch GET plus check-runs GET) per tracking issue that reaches judge invocation in a tick. Proposed: 1 check-runs GET per tick, plus the default branch from the API-001 memo.
+- **Endpoint:** `GET /repos/{o}/{r}/commits/{default_branch}/check-runs` (not paginated, default page size).
+- **Evidence:** The data covers the whole repo (default-branch CI). It is fetched again inside the per-tracking-issue loop (L22760 onward), so every judge-invoking project in a tick pays for the same response:
+  ```bash
+  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  CI_STATUS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}/check-runs" \
+  ```
+  L28164 is already one of the API-001 sites. The check-runs call at L28165 is net-new.
+- **Proposed fix:** Cache `CI_STATUS` per process in a variable with a verified-unique name, filled on the first judge invocation. Cache only a successful read, so a `|| echo "[]"` failure doesn't stick for the rest of the tick.
+- **Safety rationale:** The code is in `orchestrate_poll_process.sh`, and the value goes into the judge prompt. A tick-long cache could show the judge CI state that is up to a full tick old, where today it is fetched just before each judge. That is a hard trigger.
+- **Downstream signal:** Don't auto-implement. The judge owner must accept tick-scoped staleness of default-branch CI status in judge prompts before this lands.
+
+**REUSE-003** — `RISKY_SKIP`
+- **Files:**
+  - `scripts/tg_helpers.sh:449-499` (`tg_cleanup_msgs`, page loop at L465-L473) and `:380-441` (`tg_cleanup_phase_msgs`).
+  - Poller call sites with `TRACKING_NUM`: `scripts/orchestrate_poll_process.sh:5857, 14617, 14663, 14724, 14822, 14860, 23468, 23567, 28035, 28530, 28605, 28659`.
+  - The tracking-issue comments are already fetched in full at `orchestrate_poll_process.sh:22777-22797` (`COMMENTS`, `COMMENTS_FOR_TRACKING_NUM`).
+- **Calls:** Each cleanup now costs ceil(comments/100) paginated GETs, made via `curl_gh_api`. Proposed: 0 GETs when a fresh cache is valid.
+- **Endpoint:** `GET /repos/{o}/{r}/issues/{n}/comments?per_page=100&page=N`.
+- **Evidence:** Each cleanup re-pages the same tracking-issue comments that the loop head already read in full. The terminal paths (fail, complete, park) run in the same iteration.
+- **Safety rationale:** The reads are paginated and use `curl_gh_api`'s retry loop (API-005). More importantly, `tg_send_tracked` → `tg_store_msg_id` (`tg_helpers.sh:283-288`) can create new `<!-- tg_cleanup: -->` marker comments *during* the tick, after `COMMENTS` was read. Cleaning up from a stale list would leak Telegram messages. Hard triggers apply.
+- **Downstream signal:** Don't auto-implement. A safe version would have to add every marker comment created during the tick to the cache, or invalidate it whenever one is written. That design needs manual review of every `tg_store_msg_id` caller.
+
+**REUSE-004** — `NEEDS_VERIFICATION`
+- **Files:**
+  - `scripts/review_rb_judge.sh:1096-1113` (closing-references GraphQL), plus the per-issue REST fallback at L1169.
+  - `scripts/review_collect_pr_metadata.sh:276-292` (same GraphQL) and `:349-364` (persists the result to `LINKED_ISSUES_RAW_FILE`, with a `.status` file, exported via `GITHUB_ENV`).
+  - Both run in the `codex-agent` job (`.github/workflows/review_autofix.yml:2629` and `:4346`).
+- **Calls:** 1 GraphQL now, plus up to N issue GETs when nodes are incomplete. Proposed: 0 when the persisted snapshot is complete. Otherwise keep the current call.
+- **Endpoint:** GraphQL `pullRequest.closingIssuesReferences(first: 50) { number body labels }`.
+- **Evidence:** rb_judge already reuses one output of the collect step (`LINKED_ISSUE_FALLBACK_NUMBERS_JSON`, L1112), but re-runs the closing-references query. The two queries differ:
+  - rb_judge also asks for `baseRefName`, and for `labels(first: 100)` with `pageInfo.hasNextPage`, which its completeness check at L1148-1165 requires.
+  - The collect step asks for `labels(first: 50)` with no `pageInfo`.
+  - `.status=ok` is also written when the file holds **body-text-fallback** issues (L339-343) rather than closing references, so the file doesn't record which source produced it.
+- **Proposed fix:** In rb_judge, read `LINKED_ISSUES_RAW_FILE` only when all of these hold:
+  - `.status` is `ok`;
+  - every entry has fewer than 50 labels;
+  - a new source marker shows the entries came from closing references.
+
+  Take `PR_BASE_REF` from `PR_META_FILE.baseRefName`. Otherwise fall through to the existing GraphQL call.
+- **Safety rationale:** It isn't provable statically that labels on linked issues and the PR base stay unchanged between L2629 and L4346. rb_judge is also re-invoked on exit 2 (`review_autofix.yml:4348-4351`). So the "no intervening mutation" precondition is unproven.
+- **Downstream signal:** Before implementing, verify:
+  1. No step between `review_autofix.yml:2629` and `:4346` edits labels on linked issues or retargets the PR base.
+  2. Adding a source marker to `LINKED_ISSUES_RAW_FILE` doesn't break `review_conflict_prepare.sh`, which reads it.
+  3. The labels <50 test is accepted as a substitute for `hasNextPage == false`.
+
+**REUSE-005** — `NEEDS_VERIFICATION`
+- **Files:** `scripts/review_rb_judge.sh:1236-1240` (diff fetch) and `scripts/review_collect_pr_metadata.sh:521-524` (`gh pr diff` into `PR_DIFF_FILE`), in the same job.
+- **Calls:** 1 now. Proposed: 0 when the head is unchanged.
+- **Endpoint:** `GET /repos/{o}/{r}/pulls/{n}` with `Accept: application/vnd.github.diff` (rb_judge), against what `gh pr diff` returns (collect).
+- **Evidence:** Both fetch the full PR diff for the same PR in one job. rb_judge caps its copy at `RB_JUDGE_PR_DIFF_MAX_BYTES` (L1250), and the collect copy is uncapped.
+- **Proposed fix:** Copy `PR_DIFF_FILE` when `HAS_PR_DIFF=true` and the current head (`git rev-parse HEAD`, as used at L1212/L1220) equals `.head.sha` in `PR_PAYLOAD_FILE`. Otherwise keep the fetch.
+- **Safety rationale:** Autofix may push commits between the two steps, and the collect call isn't wrapped in `gh_retry` (L522) while rb_judge's is, so freshness and error semantics both differ.
+- **Downstream signal:** Before implementing, verify:
+  1. `gh pr diff` output is byte-identical to the `vnd.github.diff` media type for the same head.
+  2. A head-SHA equality check is enough to rule out a stale diff.
+  3. `PR_DIFF_FILE` isn't rewritten by a later fallback-diff step before rb_judge runs (see `PR_DIFF_ATTEMPTED_PATHS`, L526).
+
+**REUSE-006** — `NEEDS_VERIFICATION`
+- **File:** `.github/workflows/orchestrate.yml:1267`.
+- **Calls:** 1 now per orchestrate run. Proposed: 0 when the event payload carries the value.
+- **Endpoint:** `GET /repos/{o}/{r}`.
+- **Evidence:** It reads only `.default_branch`. The in-repo caller is `internal-orchestrate.yml:3-4` (`workflow_dispatch`), and other workflows here already take `github.event.repository.default_branch` through `env:` (for example `implement.yml:551`, `plan.yml:917`).
+- **Proposed fix:** Add `ORCH_EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}` to the step's `env:`, using a name verified unique. Use it when non-empty and keep the API read as a fallback. Doing this through `env:` also removes one `${{ }}` from the body.
+- **Safety rationale:** `orchestrate.yml` is `workflow_call`, so `github.event` belongs to the caller. Consumer callers on other triggers may lack `repository` in the payload. Today an API failure fails the step under `set -e`; the fallback must keep that.
+- **Downstream signal:** Before implementing, verify the triggers of every consumer template that calls `orchestrate.yml`. Confirm the fallback keeps the current fail-on-error behaviour. Impact is low (one call per project creation).
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+I checked and cleared these candidates, none of which is dead:
+- `implement.yml:2253` is a parse-failure fallback for the snapshot written at L2210.
+- `implement.yml:2204` and `:2620` are deliberate time-of-check rechecks before the phase advance and before edits.
+- `test-and-mark-stable.yml:1117` is a deliberate delayed recheck after `sleep "$POLL_INTERVAL"`.
+- The latch read-backs in `implement_handle_guard_block.sh:112/230/404` verify that a label mutation landed.
+- The PR title/body reads in `review_autofix_step_mark_ready_to_merge.sh:62` and `review_autofix_step_mark_review_blocked_workflow_failure.sh:43` only fire when `PR_META_FILE` is empty.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — The sites are in `orchestrate_poll_process.sh`, inside the per-tracking loop, and the memo changes failure semantics (CONSIST-005). L28164 is also the precursor of REUSE-002, so do the two together.
+- API-002: RISKY_SKIP — Poller code. The `tracking_issues.json` listing is minutes old by iteration N, so this defends against upstream races.
+- API-003: RISKY_SKIP — Poller judge loops. Batching also means fixing the pipeline subshell first (SHELL-003), or batched labels are lost along with `_ENSURED_LABELS_CACHE`.
+- BATCH-001: RISKY_SKIP — Poller label mutations. Folding three edits into one changes which failure gets the missing-label tolerance (L4111-4114).
+- API-004: RISKY_SKIP — Poller standalone sweep, with `--limit 3000` and batched pages. The REST read supplies the race-defending `expected_head_sha` (L29414-29416).
+- API-005: RISKY_SKIP — The change sits inside `curl_gh_api`'s retry loop (`gh_helpers.sh:1365-1398`) and changes retry semantics for every Telegram cleanup path (also see REUSE-003).
+- API-006: NEEDS_VERIFICATION — It adds retries rather than removing calls. First verify that `gh_retry --idempotent` treats a 409 on a completed run as permanent, so it doesn't loop.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | REUSE-004, REUSE-005, REUSE-006, API-006 (cross-ref) |
+| RISKY_SKIP | 11 | MERGE-001, MERGE-002, REUSE-001, REUSE-002, REUSE-003, API-001 (cross-ref), API-002 (cross-ref), API-003 (cross-ref), API-004 (cross-ref), API-005 (cross-ref), BATCH-001 (cross-ref) |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass. The highest-impact candidates sit in `orchestrate_poll_process.sh` (REUSE-001, REUSE-002, API-001), which is excluded from auto-implementation by rule. The review-path reuse findings (REUSE-004, REUSE-005) need the listed checks first.
