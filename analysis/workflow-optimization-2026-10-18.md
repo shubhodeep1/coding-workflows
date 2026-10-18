@@ -341,3 +341,247 @@ Next collection steps: add `step_timings`, `POLL_TICK_SUMMARY`, `CODEX_USAGE` an
 All three are inferences, labelled as such where they appear above.
 
 **Missing context:** the run-logs directory at `/home/runner/work/_temp/workflow-log-output` doesn't exist in this sandbox, so none of the deep-dive log claims could be checked against full logs.
+## Deep Audit — Workflows & Scripts (2026-10-18)
+
+### Section 1: Bug & Correctness Sweep
+
+Scope: I read in depth `orchestrate_poll.yml` (all of it), `cancel_on_pr_close.yml` (all of it), selected steps of `implement.yml`, `plan.yml` and `test-and-mark-stable.yml`, and these scripts: `scripts/orchestrate_poll_process.sh` (main loop, label and default-branch helpers, judge loops, standalone sweep), `scripts/gh_helpers.sh` (the retry family and `curl_gh_api`), `scripts/review_collect_pr_metadata.sh`, `scripts/label_helpers.sh`, `scripts/memory_helpers.sh`, `scripts/review_merge_train.sh` and `scripts/lint_pr_body_auto_close.py`. The other workflows and scripts got targeted searches only.
+
+Already covered by the existing report and not raised again:
+- gating idle-tick installs (Speed #1);
+- the `CODEX_TOKENS_RE` miscount (Cost #2);
+- missing run IDs in the orphan-run warning at `cancel_on_pr_close.yml:240-243` (Reliability #4);
+- the merge-train double scan (GH API Call Audit, recommendation 4).
+
+I checked and cleared two candidates:
+- **`steps.baseline_refctx.outputs.branch` interpolated into shell (`implement.yml:1895-1908`).** The branch is held to `ai/reissue-baseline/pr-(\d+)-([0-9a-f]{12})-\d+-\d+` (`implement.yml:1125`) and then checked against GitHub, so it cannot carry an injection.
+- **`ISSUE_BODY` (`implement.yml:972`).** It is passed through `env:`, not interpolated.
+
+**BUG-001** — `.github/workflows/orchestrate_poll.yml:1598-1599`, `:1762-1777` — Severity: Medium — Category: `bug`
+- Description:
+  - On idle ticks, "Stage workflow support files" (`id: stage_support`, L563-566) is `continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}`. That step is what installs `worktree_gc.sh` and `build_state_snapshot.py` (they are in its L572 list).
+  - Two later steps call those files with no guard:
+    - "Run worktree registry GC" (`run: bash scripts/worktree_gc.sh`) has no `if:` and no `continue-on-error`.
+    - "Build state snapshot" (`always()`) runs `python3 scripts/build_state_snapshot.py`, also without `continue-on-error`.
+  - In a consumer repo, `scripts/` holds only what staging installed. A staging failure that the job deliberately tolerated therefore turns into a hard job failure (exit 127 or 2), and "Notify Telegram on job failure" (L1922-1972) sends an ERROR page.
+  - Two neighbouring steps already guard against exactly this: "Run standalone PR sweeps without active projects" (L1591-1595) and "Replay failed trusted reclarify commands" (L858-861).
+  - In this repository the root checkout (L398-402) provides `scripts/`, so the impact is consumer-only. That is an inference.
+- Recommended fix: Start both bodies with the same guard as L1591-1595, for example `[ -f scripts/worktree_gc.sh ] || { echo "::warning::worktree_gc.sh not staged; skipping registry GC."; exit 0; }`. Use the equivalent check for `scripts/build_state_snapshot.py`. The step names and `if:` conditions stay unchanged (§10).
+
+**BUG-002** — `.github/workflows/implement.yml:5416-5433` — Severity: Medium — Category: `bug`
+- Description:
+  - In "Handle no-op implementation", the fall-through path posts the issue comment (`gh_retry gh api ".../comments" -f body=...`, L5416-5417) under `set -euo pipefail` with no `|| ...`. Only after that does it apply `ai:implementation-failed` (L5430-5433).
+  - `gh_retry` gives a field-bearing POST exactly one attempt (`gh_helpers.sh:1067-1069`; `_gh_api_args_unsafe_post` at L678-742 returns "unsafe" for any non-GraphQL request with fields).
+  - So one transient 5xx on the comment aborts the step before the label lands. The comment text itself says the label is what triggers "orchestrator re-processing" (L5412), so the issue is left without the state transition the orchestrator expects.
+- Recommended fix: Apply the label edits (L5422-5433) before the comment. Make the comment best-effort: `... -f body="${noop_body}" >/dev/null || echo "::warning::no-op comment post failed for #${ISSUE_NUMBER}"`. This matches the `|| true` already used for the comment posts in Guard 0 and Guard 2 (L5253-5254, L5387-5388).
+
+**BUG-003** — `.github/workflows/orchestrate_poll.yml:280-292` — Severity: Low — Category: `bug`
+- Description: "Find active tracking issues" lists tracking issues with `--limit 20` and never checks whether the result hit that cap. A 21st open `ai:orchestrator-tracking` project is silently skipped on every tick, and nothing in the log says so. The Claude-engine listing in the same workflow does detect its cap (L1040-1042, `length >= 1000` → `standalone_listing_capped`).
+- Recommended fix: After L287, add `if [ "${COUNT}" -ge 20 ]; then echo "::warning::TRACKING_LISTING_CAPPED limit=20 ..."; fi`. Alternatively, raise `--limit` and keep the warning. Either way, keep the listing as a single call.
+
+**BUG-004** — `scripts/memory_helpers.sh:151` — Severity: Low — Category: `bug`
+- Description: `git ls-remote --heads origin "${branch}" | grep -q "${branch}"` is a substring match. A remote branch named, say, `feature/ai-memory-x` makes the default `ai-memory` look present, so the orphan-branch bootstrap (L155-188) is skipped and later `--branch ai-memory` clones fail. Those failures are fail-open, so memory silently stays disabled.
+- Recommended fix: Use an exact ref test: `git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1`.
+
+**SEC-001** — `.github/workflows/orchestrate_poll.yml:404-413`, `:1824` — Severity: Low — Category: `security` [NEEDS VERIFICATION]
+- Description:
+  - "Configure git auth for memory helper clones" writes the PAT into the remote URL (`git remote set-url origin "https://x-access-token:${GH_TOKEN}@..."`). The token therefore sits in plain text in `.git/config` for the rest of the job.
+  - "Publish state snapshot branch" then copies it into a second repository (`git remote add origin "$(git remote get-url origin)"`, L1824).
+  - `actions/checkout` already persists an auth header, so the extra exposure is mostly defence-in-depth. The real question is whether any judge or Codex subprocess in this job can read the workspace `.git/config`; I did not verify that.
+- Recommended fix: Leave the URL clean and pass credentials per command, for example `git -c http.extraheader="AUTHORIZATION: basic ..."` or a credential helper scoped to the memory clone commands. Alternatively, confirm and document that the isolated judges (`codex_isolated_exec.sh`) cannot see `GITHUB_WORKSPACE/.git`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+**API-001** — `scripts/orchestrate_poll_process.sh:3829, 5114, 5554, 14743, 22978, 23150, 23441, 23488, 23533, 23939, 24009, 24086, 28164, 28509, 29271` — Severity: Medium — Category: `api-redundancy`
+- Description:
+  - The repository default branch is re-fetched with `gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch'` at 15 separate sites.
+  - The same file already has a per-process memo, `_review_run_default_branch` (L22138-22190, which documents "at most one `GET repos/<repo>` per poller process (§14)").
+  - Lines 22978–28509 sit inside the per-tracking-issue loop that opens at L22760. That is an inference: the loop body appears to run until the standalone sweep header at L29255. If so, these are the per-iteration calls §14 treats as review blockers.
+- Current: up to 15 REST GETs per tick, of which up to about 11 are per tracking issue. Proposed: 1 per poller process.
+- Recommended fix: Route every site through the existing memo while keeping each caller's fallback, for example `DEFAULT_BRANCH_TRACKING="$(_review_run_default_branch || echo main)"`. Pattern to extend: `_review_run_default_branch` (orchestrate_poll_process.sh) or `_autofix_review_default_branch_prime` (gh_helpers.sh:1898-1919).
+  - Caveat: the memo also caches a failure, so after one failed read every site would use its fallback for the rest of the tick instead of retrying. See CONSIST-005.
+
+**API-002** — `scripts/orchestrate_poll_process.sh:22940`; `.github/workflows/orchestrate_poll.yml:280-285` — Severity: Low — Category: `api-redundancy` [NEEDS VERIFICATION]
+- Description: At the top of each tracking-issue iteration the poller fetches `TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"` (REST `issues/N/labels`, L4130-4133). The same tick already listed those labels via `gh issue list --json number,title,labels` into `tracking_issues.json`.
+- Current: 1 REST call per tracking issue per tick, before any mutation. Proposed: 0 for the first read; read `.[tidx].labels[].name` from the cached file. Keep the existing refetches that follow label mutations (L22975, L23336, L23602).
+- Risk: the listing can be minutes old by the time issue N is processed. Only use the cache for issues processed within a bounded window (for example, the first iteration), or accept the staleness explicitly in a comment.
+
+**API-003** — `scripts/orchestrate_poll_process.sh:9234-9264`, `:28754-28782` — Severity: Low — Category: `api-batching`
+- Description: Both judge new-issue loops (`create_judge_fixup_issues_from_verdict` and the `in_progress)` arm) call `get_issue_labels_json "${EXISTING_NUM}"` once per `new_issues[]` entry that already has a mapped issue.
+- Current: N REST calls, where N is the judge entries with an existing mapping. Proposed: ceil(N/25) aliased GraphQL calls.
+- Recommended fix: Collect the `EXISTING_NUM` values first and fetch their labels in one batch. Model a light, labels-only helper on `_fetch_candidate_issue_details_graphql` (L18015 onward, batch_size 25) rather than reusing it, because it also fetches `comments(last: 100)` and timeline items. Fall back to the per-issue REST call on a batch miss (§14 fail-open).
+
+**BATCH-001** — `scripts/orchestrate_poll_process.sh:14647-14650`, `:14683-14685`, `:14708-14711`, `:14847-14848` — Severity: Low — Category: `api-batching`
+- Description: Each validation outcome applies its label transition as two or three separate `gh issue edit` calls: `set_tracking_phase_label` (which builds its own `edit_args` at L4100-4108), then a separate `--remove-label "ai:validate-failed"`, then `--remove-label "ai:harness-broken"`.
+- Current: 3 calls per transition. Proposed: 1.
+- Recommended fix: Add an optional list of extra labels to remove to `set_issue_phase_label` (new parameter, existing callers unchanged), appended to `edit_args`. Keep the existing tolerance for missing labels (L4111-4114).
+
+**API-004** — `scripts/orchestrate_poll_process.sh:29303-29318`, `:29373-29404` — Severity: Medium — Category: `api-redundancy` [NEEDS VERIFICATION]
+- Description:
+  - The standalone conflict sweep already fetches `mergeStateStatus` for every candidate PR in 30-PR GraphQL batches (L29303), but only uses it to skip `CLEAN` PRs (L29373-29375).
+  - Every other PR still gets a full REST `pulls/N` read (L29380) — including the common `BLOCKED`, `BEHIND` and `UNSTABLE` states — even though only `mergeable_state == "dirty"` leads to any action (L29402-29404).
+- Current: ceil(N/30) GraphQL calls plus 1 REST call per non-CLEAN open PR (up to `--limit 3000`, L29265). Proposed: the same GraphQL calls plus REST only for PRs whose batched state is `DIRTY` or `UNKNOWN`, or that are missing from the batch.
+- Recommended fix:
+  - Record the batched state in a new associative array next to `_STANDALONE_CLEAN_PRS` (L29278). Use a name such as `_STANDALONE_BATCH_MERGE_STATE` after checking it is unique.
+  - Skip the REST read when the batch shows the same `headRefOid` and a state that is neither `DIRTY` nor `UNKNOWN`.
+  - Keep the fresh REST read for DIRTY candidates; it supplies the `expected_head_sha` used at L29414-29416.
+
+**API-005** — `scripts/gh_helpers.sh:1365-1398` (`curl_gh_api`); callers at `scripts/tg_helpers.sh:207, 214, 398, 467` — Severity: Medium — Category: `api-redundancy`
+- Description: `curl_gh_api` treats every non-2xx, non-rate-limit response as transient. A 404, 401 or 422 is retried up to `GH_RETRY_MAX_ATTEMPTS` (default 5) times, with 1+2+4+8 seconds of sleep (L1389-1395). `gh_retry` short-circuits these through `_is_gh_permanent_failure` (L192-195, used at L1099). The Telegram cleanup paths use `curl_gh_api` to page through issue comments; a deleted issue or comment costs 5 calls and about 15 seconds each.
+- Current: 5 calls per permanent error. Proposed: 1.
+- Recommended fix: Inside the loop, return 1 immediately when `http_code` is 400, 401, 404 or 422 (mirroring `_is_gh_permanent_failure`). Keep retries for `000`, 5xx and rate-limit responses.
+
+**API-006** — `.github/workflows/cancel_on_pr_close.yml:322-338` — Severity: Low — Category: `api-redundancy`
+- Description: `gh_retry gh api -X POST ".../actions/runs/${run_id}/cancel"` gets a single attempt because `_gh_api_args_unsafe_post` (gh_helpers.sh:721-741) classifies every non-GraphQL POST as non-idempotent. Cancel is idempotent (it is a no-op or 409 once the run has completed), so one transient 5xx leaves the run uncancelled until the next scheduled sweep. There is no batch cancel endpoint, so the per-run loop itself is unavoidable.
+- Current: 1 attempt per run, with no retry. Proposed: up to `GH_RETRY_MAX_ATTEMPTS` attempts using `gh_retry --idempotent gh api -X POST ...` (supported at gh_helpers.sh:1065).
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001** — `.github/workflows/orchestrate_poll.yml:118-185` and `:492-561`; `cancel_on_pr_close.yml:25-94`; `implement.yml:438-494`, `:1280-1350`, `:6723-6757`; `plan.yml:343-410`; plus 9 more copies (16 in total across 10 workflows, matched by `support_ref_workflow_ref="$(jq -r '.workflow_ref`) — Severity: Medium — Category: `duplication`
+- Description:
+  - The block "Resolve workflow support ref → Checkout support source → fallback → Ensure → main snapshot" is copied almost verbatim 16 times.
+  - In `orchestrate_poll.yml` it runs twice in the same job. The second copy appears to exist because "Checkout repository" (L398-402) runs between the two copies and clears the workspace contents. That is an inference [NEEDS VERIFICATION]: I believe `actions/checkout` removes the existing contents when the target directory isn't a matching clone.
+  - Each poll tick therefore does two extra shallow clones and stages `gh_helpers.sh` twice (L187-201, L572).
+- Recommended fix:
+  - Within `orchestrate_poll.yml`: move "Checkout repository" ahead of L118. That is safe because no step after `find_tracking` exits the job early. Then delete the second quartet (L492-561).
+  - Across workflows: add a commit-pinned composite action (for example `shubhodeep1/coding-workflows/.github/actions/resolve-support-ref@<sha>`). The repo already pins its own composite actions this way (`install-codex@91b30f6…`, L431). Inputs: `workflow_file`, `token`. Outputs: `script_ref`. Callers: the 10 workflows above.
+
+**DUP-002** — `.github/workflows/orchestrate_poll.yml:1191-1378` vs `:1398-1512` — Severity: Medium — Category: `duplication`
+- Description: "Process each tracking issue" and "Run standalone stall recovery without active projects" carry the same ~110-key `env:` block. Only `STANDALONE_RECOVERY_SWEEP_ONLY` (L1512) and some comments differ. Equality is enforced by `tests/test_orchestrate_poll_workflow_contract.py` (cited at L1388), but the duplication costs about 9–10 KB of workflow bytes and means every change has to be made twice.
+- Recommended fix: Move the shared `vars.*`-only keys to the job-level `env:` (L80-84). Keep these at step level:
+  - the secrets (`GH_TOKEN`, `OPENROUTER_API_KEY`, `TG_BOT_SECRET`), to limit their exposure;
+  - `CLAUDE_POOL_REASON` (L1204, L1410), because job-level `env` cannot read the `steps` context;
+  - `ALERT_MSG_LEVEL`, because it reads `env.ALERT_MSG_LEVEL`, which is set at runtime via `GITHUB_ENV` (L395).
+  Then update the contract test to assert the reduced step-level sets match.
+
+**DUP-003** — `scripts/label_helpers.sh:161-195`, `scripts/orchestrate_poll_process.sh:3995-4029+`, `scripts/validate_process.sh:1222-1256` — Severity: Medium — Category: `duplication`
+- Description: There are three different `ensure_label_exists` implementations:
+  - `label_helpers.sh` takes `(<name> [repo])`, reads colours from a hard-coded catalog, and has no cache.
+  - The poller takes `(<name>)`, reads `.github/ai/label_contract.v1.json`, has special cases (`ai:closed`, `ai:ready-to-merge`), and caches in `_ENSURED_LABELS_CACHE`.
+  - The validate copy reads the contract, has no cache, and sends a `tg_notify` WARNING on failure.
+
+  So the same label can be created with a different colour or description depending on which path runs first.
+- Recommended fix: Make `label_helpers.sh::ensure_label_exists <name> [repo]` the single owner. It should read `label_contract.v1.json` first, fall back to its catalog, and add the process-local cache. The other two become thin wrappers that preserve their current names and side effects, for example the validate copy's `tg_notify`.
+
+**DUP-004** — `scripts/gh_helpers.sh:1898-1919`, `scripts/orchestrate_poll_process.sh:22138-22190`, `scripts/review_merge_train.sh:1137-1149` — Severity: Low — Category: `duplication`
+- Description: There are three memoized default-branch helpers (`_autofix_review_default_branch_prime`, `_review_run_default_branch`, `_mt_resolve_default_branch`), each with its own validation regex and failure semantics. They sit alongside the 15 uncached sites in API-001.
+- Recommended fix: Add `gh_default_branch <varname>` to `gh_helpers.sh` (shell-local memo plus a run-scoped memo file, matching L22151's subshell-safe pattern; fail-closed return 1). Re-implement the three helpers as wrappers and update the API-001 sites.
+
+**DUP-005** — `scripts/orchestrate_poll_process.sh:9231-9279` vs `:28749-28799` — Severity: Low — Category: `duplication`
+- Description: The judge "fix-up" loop and the `in_progress` "new issue" loop are near-identical: untrusted-entry guard, dedup via `issue_number_map`, label re-check, metadata footer, `ensure_label_exists` ×2, `gh issue create`. Only the type string differs (`judge-fix-up` vs `judge-addition`). L28759-28761 acknowledges it is the "Same guard as create_judge_fixup_issues_from_verdict".
+- Recommended fix: Extract `create_judge_issues_from_verdict <type_label> <log_noun>` and call it from both sites. This also gives API-003 a single place to do its batching.
+
+**DUP-006** — `.github/workflows/test-and-mark-stable.yml:774-914`, `:928-1203`, `:1235-1503`, `:1795-2526`, `:3397-3820` — Severity: Low — Category: `duplication`
+- Description: Five phase wait loops each re-implement the same scaffold: `INACTIVITY_LIMIT`, `LAST_ACTIVITY`, `PREV_STATE`, `RATE_LIMIT_BACKOFF`, the state-change reset, and the `[ $IDLE -ge $INACTIVITY_LIMIT ]` timeout block. That scaffold is a large share of the body sizes in EXPR-001 and EXPR-002.
+- Recommended fix: Add `wait_activity_tick <state_string>` and `wait_check_timeout <phase_label>` to `scripts/comprehensive_test_and_release_gh_api.sh`, which these steps already source (L951, L1270).
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Method: character counts are estimates. I took each block's line count and per-line length distribution from search results and subtracted the 10-column YAML block indentation. No `wc -c` was run. Every row is [NEEDS VERIFICATION] until it is measured. Only `run:` bodies that contain at least one `${{ }}` are counted.
+
+| ID | Block | Est. chars | % of 21,000 | Headroom | `${{ }}` in body | Risk |
+|---|---|---|---|---|---|---|
+| EXPR-001 | `test-and-mark-stable.yml:1243-1503` "Phase 3b: Wait for PR creation" | 17,500–19,500 | 83–93% | ~1,500–3,500 | 1 (L1281) | High |
+| EXPR-002 | `test-and-mark-stable.yml:936-1203` "Phase 2: Wait for plan to complete" | 16,000–17,500 | 76–83% | ~3,500–5,000 | 3 (L954, L966, L984) | Medium |
+| EXPR-003 | `implement.yml:5206-5433` "Handle no-op implementation" | 13,000–14,500 | 62–69% | ~6,500 | 7 (L5211, L5213, L5416, L5424, L5426, L5430, L5432) | Low |
+| EXPR-004 | `orchestrate_poll.yml:566-837` "Stage workflow support files" | 12,800–14,000 | 61–67% | ~7,000 | 3 (L693, L694, L815) | Low |
+| EXPR-005 | `plan.yml:2134-2334` "Guard plans targeting template-owned paths" | 12,500–14,000 | 60–67% | ~7,000 | 3 (L2327, L2329, L2331) | Low |
+
+**EXPR-001** — `.github/workflows/test-and-mark-stable.yml:1243-1503` — Severity: High — Category: `expression-limit` [NEEDS VERIFICATION]
+- Description: The body is about 260 dense lines with many jq filters of 150+ characters (for example L1305-1306, L1409-1412, L1372). It contains exactly one interpolation, `IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"` at L1281, and that one line makes the whole body count toward the 21,000-character limit.
+- Recommended fix: Move it to the step's `env:` as `IMPL_CREATED_AFTER: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}` and delete L1281. The body then contains no `${{ }}`. Phase 4 already uses this pattern ("Promoted to env so the run: script body contains no ${{ }}", L1825).
+
+**EXPR-002** — `.github/workflows/test-and-mark-stable.yml:936-1203` — Severity: Medium — Category: `expression-limit` [NEEDS VERIFICATION]
+- Description: Three inline `${{ steps.create-issue.outputs.created_after }}` references sit in helper functions (L954, L966, L984) of a comment-heavy body of about 267 lines.
+- Recommended fix: Add `PLAN_CREATED_AFTER: ${{ steps.create-issue.outputs.created_after }}` to the step's `env:`. The name is not used anywhere else in this file; only `IMPL_CREATED_AFTER` exists. Replace the three references with `${PLAN_CREATED_AFTER}`.
+
+**EXPR-003 / EXPR-004 / EXPR-005** — files and lines as in the table — Severity: Low — Category: `expression-limit`
+- Description: Each body is pulled under the limit by only a few small references. They are growth risks: EXPR-003 and EXPR-005 carry long inline prose templates (for example the `printf '%s\n'` message bodies at implement.yml:5233-5240 and 5273-5287, and `REJECTION_BODY` at plan.yml:2330).
+- Recommended fix:
+  - Replace `${{ github.repository }}`, `${{ github.server_url }}` and `${{ github.run_id }}` with the runner's default `${GITHUB_REPOSITORY}`, `${GITHUB_SERVER_URL}` and `${GITHUB_RUN_ID}`.
+  - Move `${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}` and `${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}` (orchestrate_poll.yml:693-694) into the step's `env:` and echo the env values.
+  - This removes every interpolation from all three bodies, with no change in behaviour.
+
+**EXPR-006** — `.github/workflows/test-and-mark-stable.yml` (whole file) — Severity: Medium — Category: `expression-limit` [NEEDS VERIFICATION]
+- Description:
+  - From the line-length distribution (7,187 non-empty lines; 3,665 of 60+ characters; 280 of 120+), I estimate the file at about 420,000–435,000 bytes.
+  - That is close to `CI_BUDGET_WORKFLOW_WARN_BYTES` (440,000, agents.md:2351-2356) and within about 45–60 KB of the 480,000-byte guard (`tests/test_workflow_file_size_limit.py`, agents.md:2376-2379). GitHub's hard limit is 512,000 bytes (agents.md:2362).
+  - No workflow is near the 800 KB / 1 MB thresholds in the prompt; the repo's real limit is 512,000 bytes. My other estimates are `implement.yml` about 394K and `review_autofix.yml` about 357K.
+- Recommended fix: Run `wc -c .github/workflows/test-and-mark-stable.yml`. Then, following §24 and the agents.md split rule, move the largest bodies that already have no `${{ }}` into `scripts/`: "Phase 4" (L1795-2526), "Phase 4b" (L2596-3266) and "Phase 6" (L3397-3820). Keep each step's `name:`, `id:`, `if:` and `env:`.
+
+`if:` conditions: the longest one sampled, `implement.yml:5199`, is about 330 characters. None approaches the limit.
+
+### Section 5: Cross-Cutting Concerns
+
+TODO/FIXME/HACK markers: none in `scripts/*.sh`, `scripts/*.py` or `.github/workflows/*.yml`. A comment-scoped `\b(TODO|FIXME|HACK)\b` search returned no matches; the raw-substring hits were `mktemp` `XXXXXX` templates.
+
+**DEAD-001** — `.github/workflows/test-and-mark-stable.yml:789/861`, `:943/1056`, `:1257/1387`, `:1877/2140`, `:3556/3706` — Severity: Low — Category: `dead-code`
+- Description: `RATE_LIMIT_BACKOFF` is only ever set to `0`; the one other match, L2274, is a comment. Every `if [ "$RATE_LIMIT_BACKOFF" -gt 0 ] && ...` guard is unreachable. If it were ever enabled, the L1056-1058 and L861 versions would busy-loop against the API, because they `continue` without a `sleep` (the L1387-1389 version does sleep).
+- Recommended fix: Remove the variable and the five guards, since rate limits already back off inside `gh_api_safe` (comment at L1006-1007). If kept, implement it in the shared helper from DUP-006, with a mandatory sleep.
+
+**CONSIST-001** — `.github/workflows/implement.yml:5302-5316`; also `test-and-mark-stable.yml:7582`, `update_workflows.yml:1754`, `validation-refresh.yml:353` — Severity: Low — Category: `consistency`
+- Description: Seven raw `curl .../bot${TG_BOT_SECRET}/sendMessage` sites exist across six workflows. Some are deliberate fallbacks (`update_workflows.yml:1721-1723`, `issue_pr_status.yml:822-824`, `check_failure_triage.yml:693-697`). The implement pathspec alert only checks that the secret and chat ID are set and never consults `ALERT_MSG_LEVEL`, so it ignores `SILENT` and level filtering. `validation-refresh.yml:345-350` re-implements that filtering by hand.
+- Recommended fix: Use `tg_send_msg "${TG_MSG}" "CRITICAL"` when `tg_helpers.sh` is present. Keep the raw curl only as an `else` fallback that applies the same SILENT check as `validation-refresh.yml:345-350`.
+
+**CONSIST-002** — `scripts/review_collect_pr_metadata.sh:35`, `:69-74` — Severity: Low — Category: `consistency`
+- Description: The script sources `gh_helpers.sh` (L35) and then redefines `gh_retry` with an incompatible signature (`gh_retry <outfile> <gh args…>`). Any `gh_helpers.sh` function that calls `gh_retry gh api …` internally — for example `gh_pr_with_all_comments` (L1440-1447) or `gh_review_pr_state` (L91, L107) — would treat the literal `gh` as its output file if it were called from this script. It isn't called today, so this is latent, but it is the identifier collision §10 forbids.
+- Recommended fix: Rename the local wrapper to a unique name (for example `_rcpm_gh_to_file`) and update its 7 call sites (L138, L194, L231, L235, L240, L247, L280).
+
+**CONSIST-003** — `.github/workflows/implement.yml:2166, 2392, 2411-2412, 2434`; `test-and-mark-stable.yml:1117, 1472`; `plan.yml:667, 1419`; `orchestrate_poll.yml:1955-1958` — Severity: Low — Category: `consistency`
+- Description:
+  - These sites use raw `gh api` or `curl -H "Authorization: token …"` in code paths where the same file uses `gh_retry` / `gh_api_safe_print` for the same endpoints. For example, `test-and-mark-stable.yml:1117` re-reads the issue labels with raw `gh api` one line after the `gh_api_safe_print` read at L1052.
+  - As a result they get no rate-limit handling and no `GH_API_RETRY` telemetry.
+- Recommended fix: Wrap each in the wrapper the step already uses: `gh_retry` (or `gh_retry_to_file` for `--paginate`) in implement and plan, and `gh_api_safe_print` in test-and-mark-stable. For the failure-alert step, use `gh_retry _safe_gh_jq ".../attempts/${GITHUB_RUN_ATTEMPT}/jobs"`.
+
+**CONSIST-004** — `.github/workflows/orchestrate_poll.yml:437-442` vs `:304-307`, `:1004-1012` — Severity: Low — Category: `consistency`
+- Description: The OpenCode install is gated on `vars.ENABLE_STANDALONE_STALL_RECOVERY != 'false' && vars.ENABLE_STALL_JUDGE != 'false'`. The steps that actually consume those flags normalise them case-insensitively (`1|true|yes|on`). A value like `False`, `off` or `0` disables recovery but still installs OpenCode on every idle tick.
+- Recommended fix: Use `steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true'` (as at L416), with the same normalised check for `ENABLE_STALL_JUDGE`.
+
+**CONSIST-005** — `scripts/orchestrate_poll_process.sh:14743, 22978, 23150, 23441, 23488, 23533, 23939, 24009, 28164, 28509, 29271` — Severity: Medium — Category: `consistency` [NEEDS VERIFICATION]
+- Description: On a failed lookup these sites fall back to `|| echo "main"`. `review_merge_train.sh:1133-1134` ("no fallback, so a failed read is never mistaken for 'main'") and `_review_run_default_branch` (L22125-22126) deliberately fail closed for the same value. In a consumer repo whose default branch isn't `main`, a transient failure can steer default-branch logic to the wrong base; L14743 feeds `finalize_integration_merge_if_needed` (L14769). I did not check which downstream calls act on the fallback value.
+- Recommended fix: When doing API-001, have merge/finalize paths (L14743, L23533, L28509) defer the tick on failure rather than use `main`. Keep the fallback only for read-only and display uses.
+
+**SHELL-001** — `.github/workflows/test-and-mark-stable.yml:902, 1194, 1494, 2466, 3806` — Severity: Low — Category: `shellcheck`
+- Description: `if [ $IDLE -ge $INACTIVITY_LIMIT ]` triggers SC2086. Both values are computed integers, so this is harmless today, but it is inconsistent with the quoted tests elsewhere in the same steps (for example L1446).
+- Recommended fix: Quote both operands, or fold this into the DUP-006 helper.
+
+**SHELL-002** — `scripts/orchestrate_poll_process.sh:14349, 14354, 14629` (with `set -euo pipefail` at L21) — Severity: Low — Category: `shellcheck` [NEEDS VERIFICATION]
+- Description: `printf '%s' "${reason}" | grep -q…` under `pipefail`. If `reason` (validation-failure text) exceeds the 64 KiB pipe buffer and `grep -q` exits on an early match, `printf` gets SIGPIPE and the pipeline returns 141, so a matched `harness_error` or `deterministic_*` class reads as "no match". `gh_helpers.sh:753-754` already avoids pipelines for this reason. I did not check how large `reason` can get.
+- Recommended fix: Use `grep -qE '…' <<< "${reason}"`, or `[[ ${reason} =~ … ]]`.
+
+**SHELL-003** — `scripts/orchestrate_poll_process.sh:9234`, `:28754` — Severity: Low — Category: `shellcheck`
+- Description: `echo "${JUDGE_JSON}" | jq -c … | while read -r …` runs the loop in a pipeline subshell. `_ENSURED_LABELS_CACHE` entries added by `ensure_label_exists` (L4001) inside the loop are lost when it ends, so later calls in the tick repeat `gh label create`. `read -r` without `IFS=` also trims surrounding whitespace.
+- Recommended fix: `while IFS= read -r fix_issue; do …; done < <(printf '%s' "${JUDGE_JSON}" | jq -c '…')`. This is the process-substitution form already used at L5774-5819.
+
+**SHELL-004** — `.github/workflows/validation-refresh.yml:353-356` — Severity: Low — Category: `shellcheck`
+- Description: `curl -sS -X POST …` under `set -euo pipefail`, without `-f` and without `|| …`. An HTTP 4xx from Telegram is silently treated as success, and a network error fails the (already-failure) notification step.
+- Recommended fix: `curl -fsS … >/dev/null || echo "::warning::Telegram send failed"`, the same form as `test-and-mark-stable.yml:7582-7585`.
+
+**DEBT-001** — `.github/workflows/plan.yml:2219-2258` — Severity: Medium — Category: `tech-debt`
+- Description: The template-path guard finds implement's fetched-helper manifest by text-parsing `implement.yml`. It looks for the literal step header `"      - name: Stage workflow support files\n"` (L2226) and for `for f in …; do` loops containing `_fetched_scripts+=("${f}")` (L2231-2238). If that step body moves into `scripts/` under the §24 split rule, or the loop form changes, the parse fails and the guard falls back to rejecting every `scripts/` path (L2253-2257). Plans that touch legitimate consumer scripts would then be blocked.
+- Recommended fix: Generate the helper list once into a checked-in manifest (for example a `scripts/` text file listing runtime-fetched helpers). Have both implement's staging loop and this guard read it, and add a contract test that the two stay aligned.
+
+**DEBT-002** — `scripts/orchestrate_poll_process.sh:12-19` — Severity: Low — Category: `tech-debt`
+- Description: The header says the poller is "~27,700-line", but the file has at least 29,271 lines (line 29271 was read) and 304 top-level function definitions. ShellCheck's extended analysis is switched off for it (L12) because it timed out in CI. Its size is the main reason the poll log loses ~822K characters in the middle (see the existing report's "Poll runs are a telemetry blind spot").
+- Recommended fix: Split the self-contained sweeps into sourced modules, starting with the standalone PR conflict and no-op sweeps from L29255 onward. Follow the existing optional-module pattern (`orchestrate_stall_retired_conflict.sh`, staged at orchestrate_poll.yml:606-619) and add each module to the "Stage workflow support files" list.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---|---|
+| Critical | 0 | — |
+| High | 1 | EXPR-001 |
+| Medium | 12 | BUG-001, BUG-002, API-001, API-004, API-005, DUP-001, DUP-002, DUP-003, EXPR-002, EXPR-006, CONSIST-005, DEBT-001 |
+| Low | 23 | BUG-003, BUG-004, SEC-001, API-002, API-003, API-006, BATCH-001, DUP-004, DUP-005, DUP-006, EXPR-003, EXPR-004, EXPR-005, DEAD-001, CONSIST-001, CONSIST-002, CONSIST-003, CONSIST-004, SHELL-001, SHELL-002, SHELL-003, SHELL-004, DEBT-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | `.github/workflows/test-and-mark-stable.yml` (EXPR-001: one `env:` move) | Small |
+| API call optimization | `scripts/orchestrate_poll_process.sh`, `scripts/gh_helpers.sh`, `.github/workflows/cancel_on_pr_close.yml` | Medium |
+| Code modularization | 10 workflows carrying the support-ref block, a new composite action under `.github/actions/`, `.github/workflows/orchestrate_poll.yml`, `scripts/label_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`, `scripts/review_merge_train.sh`, `scripts/comprehensive_test_and_release_gh_api.sh`, `tests/test_orchestrate_poll_workflow_contract.py` | Large |
+| Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/plan.yml`, new `scripts/` step bodies for EXPR-006 | Medium |
+| Medium/Low fixes | `.github/workflows/orchestrate_poll.yml`, `.github/workflows/implement.yml`, `.github/workflows/plan.yml`, `.github/workflows/validation-refresh.yml`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/update_workflows.yml`, `scripts/memory_helpers.sh`, `scripts/review_collect_pr_metadata.sh`, `scripts/orchestrate_poll_process.sh` | Medium |
