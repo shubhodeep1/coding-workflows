@@ -81,7 +81,7 @@ MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 # project validations fail on it.
 SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding")
 
 # A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
 # non-capacity reason and the role failed instead of running codex. The report
@@ -93,6 +93,22 @@ ENGINE_FALLBACK_CAPACITY_REASONS: tuple[str, ...] = ("all_gated", "all_usage_lim
 _ENGINE_ROLE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
 _ENGINE_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
 ENGINE_FALLBACK_MAX_RECORDS = 20
+# One security finding a consumer's audit (scripts/security_audit.sh) kept out
+# of its own queue because the cited file is upstream-managed and
+# byte-identical to the coding-workflows release copy (summary key
+# `upstream_managed`). The intake files it as a heal issue here, the repo that
+# owns the file. Run-less like engine_fallback; the scope's run ref comes from
+# the verified OIDC identity of the reporting security-audit.yml run.
+SYNCED_SECURITY_FINDING_KIND = "synced_security_finding"
+SYNCED_SECURITY_FINDING_FAILURE_REASON = "synced_file_security_finding"
+_SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
+_SECURITY_FINDING_CATEGORY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/()&+-]{0,79}$")
+SECURITY_FINDING_SEVERITIES: tuple[str, ...] = ("critical", "high", "medium", "low")
+SECURITY_FINDING_LINE_MAX = 1_000_000
+# Same cut security_audit.sh applies to exploit_scenario / recommendation.
+SECURITY_FINDING_TEXT_LIMIT = 600
+SYNCED_SECURITY_FINDING_AUDIT_GATE_CONTRACT = "workflow-templates/audit-gate/contract.json"
+SYNCED_SECURITY_FINDING_CONTRACT_MAX_BYTES = 65536
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
 # `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
@@ -269,6 +285,9 @@ REPORT_IDENTITY_WORKFLOW_BY_KIND = {
 	"autofix_failure": ("review_autofix.yml",),
 	# The heal-report job of the clarify / plan / implement reusable workflows.
 	"phase_failure": ("clarify.yml", "plan.yml", "implement.yml"),
+	# The consumer's security audit (Phase 2 sender); a verified identity is
+	# mandatory for this kind (workflow_failure_heal_intake.sh).
+	"synced_security_finding": ("security-audit.yml",),
 }
 # Kinds whose run_refs the intake's provenance gate already binds to the
 # source repository (run repository, workflow path, failure, issue/PR link);
@@ -1206,6 +1225,151 @@ def build_engine_fallback_payload(
 	}
 
 
+def synced_security_finding_category_token(category: Any) -> str:
+	"""Lower-case ``category`` and collapse runs of other characters into ``-``.
+
+	"A01: Broken Access Control" and "a01 broken access control" give the same
+	token, so the fingerprint dedupes them.
+	"""
+	token = re.sub(r"[^a-z0-9]+", "-", str(category or "").lower()).strip("-")
+	return token[:80] or "uncategorized"
+
+
+def _validated_security_finding(finding: Any) -> dict[str, Any]:
+	"""Re-check one ``security_finding`` object; raises ValueError when unusable."""
+	if not isinstance(finding, dict):
+		raise ValueError("security_finding must be an object")
+	finding_id = finding.get("finding_id")
+	if not (isinstance(finding_id, str) and _SECURITY_FINDING_ID_RE.match(finding_id)):
+		raise ValueError("security_finding.finding_id is missing or malformed")
+	category = finding.get("category", finding.get("owasp_or_stride_category"))
+	if not (isinstance(category, str) and _SECURITY_FINDING_CATEGORY_RE.match(category)):
+		raise ValueError("security_finding.category is missing or malformed")
+	severity = finding.get("severity")
+	severity = severity.lower() if isinstance(severity, str) else severity
+	if severity not in SECURITY_FINDING_SEVERITIES:
+		raise ValueError("security_finding.severity must be one of " + ", ".join(SECURITY_FINDING_SEVERITIES))
+	confidence = finding.get("confidence")
+	if isinstance(confidence, bool) or not isinstance(confidence, int) or not 1 <= confidence <= 10:
+		raise ValueError("security_finding.confidence must be an integer from 1 to 10")
+	path = finding.get("file")
+	if not (isinstance(path, str) and path.isascii() and is_valid_repo_path(path)):
+		raise ValueError("security_finding.file must be a repo-relative path")
+	line = finding.get("line")
+	if isinstance(line, bool) or not isinstance(line, int) or not 1 <= line <= SECURITY_FINDING_LINE_MAX:
+		raise ValueError("security_finding.line must be a positive integer")
+	return {"finding_id": finding_id, "category": category, "severity": severity, "confidence": confidence, "file": path, "line": line}
+
+
+def synced_security_finding_source_path(consumer_path: Any, *, audit_gate_contract: Any = None) -> tuple[str | None, str]:
+	"""Map a consumer path the @stable sync writes to the coding-workflows source.
+
+	Mirrors build_sync_manifest.derive_managed_digests, minus the paths a heal
+	editor cannot fix in parity with CI: live hooks, other .claude/ files and
+	CLAUDE.md. Returns ``(source_path, "mapped")`` or ``(None, reason)``.
+	"""
+	if not (isinstance(consumer_path, str) and consumer_path.isascii() and is_valid_repo_path(consumer_path)):
+		return None, "invalid_path"
+	source: str | None = None
+	if consumer_path.startswith(".github/workflows/") and consumer_path.count("/") == 2 and consumer_path.endswith(".yml"):
+		source = "workflow-templates/" + consumer_path.rsplit("/", 1)[1]
+	elif consumer_path.startswith(".claude/hooks/"):
+		return None, "live_safety_hook"
+	elif consumer_path.startswith(".claude/commands/") and consumer_path.count("/") == 2 and consumer_path.endswith(".md"):
+		source = "workflow-templates/" + consumer_path
+	elif consumer_path.startswith(".claude/"):
+		return None, "claude_protected_path"
+	elif consumer_path == "CLAUDE.md":
+		return None, "claude_md_operator_only"
+	elif isinstance(audit_gate_contract, dict):
+		for item in audit_gate_contract.get("managed_files") or []:
+			if not isinstance(item, dict) or item.get("target") != consumer_path:
+				continue
+			gate_source = item.get("source")
+			if isinstance(gate_source, str) and gate_source.isascii() and is_valid_repo_path(gate_source):
+				source = "workflow-templates/audit-gate/" + gate_source
+			break
+	if source is None:
+		return None, "not_upstream_managed"
+	if not _safe_heal_path(source):
+		return None, "unsafe_source_path"
+	return source, "mapped"
+
+
+def synced_security_finding_fingerprint(source_path: str, category: str) -> str:
+	"""One lineage per (mapped source path, finding class), across consumers and runs.
+
+	The intake computes the same hash with ``fingerprint --workflow-name
+	synced-security-finding --failing-step <source> --signature <token>``.
+	"""
+	return fingerprint("synced-security-finding", source_path, synced_security_finding_category_token(category))
+
+
+def _synced_security_finding_text(finding: dict[str, Any]) -> str:
+	"""The model-written finding text, bounded, redacted and neutralised."""
+	parts: list[str] = []
+	for header, key in (("Exploit scenario (UNTRUSTED, model-written):", "exploit_scenario"), ("Recommendation (UNTRUSTED, model-written):", "recommendation")):
+		raw = finding.get(key)
+		text = sanitize_text(raw if isinstance(raw, str) else "")[:SECURITY_FINDING_TEXT_LIMIT]
+		text = strip_heal_scope_markers(redact_secrets(text))
+		text = neutralize_untrusted_routing(text)[0]
+		parts.extend([header, text.strip() or "(none)"])
+	return "\n".join(parts)
+
+
+def build_synced_security_finding_payload(
+	*,
+	repo: str,
+	finding: Any,
+	wrapper_sha: str,
+	workflow_name: str,
+	run_id: str,
+	reporter_run_url: str | None,
+	now: datetime | None = None,
+) -> dict[str, Any]:
+	"""Build the dispatch payload for one synced-file security finding.
+
+	``finding`` is one ``upstream_managed`` item of a consumer security audit.
+	``run_refs`` stays empty: the scope's run ref comes from the reporter's
+	verified OIDC identity at the intake, never from the payload.
+	"""
+	now = now or _utc_now()
+	if not is_valid_repo_slug(repo):
+		raise ValueError("repo must be an owner/name slug")
+	normalized = _validated_security_finding(finding)
+	sha = wrapper_sha.lower() if isinstance(wrapper_sha, str) else ""
+	if not is_valid_sha(sha):
+		raise ValueError("wrapper_sha must be a 40-hex release SHA")
+	run_number = _positive_int(run_id)
+	evidence = _synced_security_finding_text(finding if isinstance(finding, dict) else {})
+	return {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": SYNCED_SECURITY_FINDING_KIND,
+		"issue_number": None,
+		"issue_title": f"Synced-file security finding in {normalized['file']} ({synced_security_finding_category_token(normalized['category'])})",
+		"issue_url": None,
+		"label": None,
+		"labels": [],
+		"run_refs": [],
+		"wrapper_sha": sha,
+		"source_gen": None,
+		"source_root": None,
+		"issue_excerpt": "",
+		"comments_excerpt": "",
+		"workflow_name": single_line(workflow_name, 200),
+		"head_branch": None,
+		"head_sha": None,
+		"conclusion": "success",
+		"failure_reason": SYNCED_SECURITY_FINDING_FAILURE_REASON,
+		"failure_evidence": sanitize_text(evidence, FAILURE_EVIDENCE_LIMIT),
+		"failure_streak": 1,
+		"security_finding": normalized,
+		"reporter_run_url": sanitize_text(reporter_run_url, 300) or (f"https://github.com/{repo}/actions/runs/{run_number}" if run_number else None),
+		"reported_at": _iso(now),
+	}
+
+
 def _normalize_script_ref(value: Any) -> str | None:
 	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
 	ref = str(value or "").strip()
@@ -1426,6 +1590,17 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		failure_reason = ENGINE_FALLBACK_FAILURE_REASON
 		failure_streak = 1
 		failure_fingerprint = None
+	elif kind == SYNCED_SECURITY_FINDING_KIND:
+		security_finding = _validated_security_finding(payload.get("security_finding"))
+		claimed_sha = payload.get("wrapper_sha")
+		if not (isinstance(claimed_sha, str) and is_valid_sha(claimed_sha.lower())):
+			raise ValueError("wrapper_sha (the release SHA) is required for synced_security_finding reports")
+		if payload.get("run_refs"):
+			raise ValueError("synced_security_finding reports carry no run references")
+		issue_number = None
+		failure_reason = SYNCED_SECURITY_FINDING_FAILURE_REASON
+		failure_streak = 1
+		failure_fingerprint = None
 	elif kind == "phase_failure":
 		if issue_number is None:
 			raise ValueError("issue_number is required for phase_failure reports")
@@ -1507,7 +1682,7 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"failure_reason": failure_reason,
 		# Runtime log tails can carry Basic headers or encoded PATs; redact here
 		# so they reach neither disk nor the diagnosis prompt (#6463).
-		"failure_evidence": redact_secrets(sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT)) if kind in ("autofix_failure", "engine_fallback") else "",
+		"failure_evidence": redact_secrets(sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT)) if kind in ("autofix_failure", "engine_fallback", SYNCED_SECURITY_FINDING_KIND) else "",
 		"failure_streak": failure_streak,
 		"failure_fingerprint": failure_fingerprint,
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
@@ -1515,6 +1690,14 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	}
 	if kind == "engine_fallback":
 		normalized.update({"engine_role": payload["engine_role"], "engine_reason": payload["engine_reason"]})
+	if kind == SYNCED_SECURITY_FINDING_KIND:
+		# The sender is never trusted: the evidence is model-written text, so it
+		# loses scope markers and routing keys here too, not only in the builder.
+		normalized["failure_evidence"] = neutralize_untrusted_routing(strip_heal_scope_markers(normalized["failure_evidence"]))[0]
+		normalized["issue_title"] = neutralize_untrusted_routing(normalized["issue_title"])[0]
+		normalized["security_finding"] = security_finding
+		# No issue is involved: free-text issue fields from the sender are dropped.
+		normalized.update({"issue_url": None, "issue_excerpt": "", "comments_excerpt": "", "labels": []})
 	if label == _SCOPE_AUTHOR_LABEL and kind != "workflow_run":
 		normalized["issue_author_login"] = _scope_author_login(payload.get("issue_author_login"))
 		normalized["issue_author_association"] = _scope_author_association(payload.get("issue_author_association"))
@@ -1596,6 +1779,10 @@ def skip_reason(
 	):
 		return HOST_ONLY_CONFLICT_SKIP_REASON
 	repo = payload.get("source_repo")
+	if payload.get("source_kind") == SYNCED_SECURITY_FINDING_KIND and repo == self_repo:
+		# This repo audits its own files directly; only consumers suppress
+		# upstream-managed findings and hand them over.
+		return "synced_security_finding_self_repo"
 	if repo != self_repo and repo not in set(registered_repos):
 		return "unregistered_source_repo"
 	title = payload.get("issue_title") or ""
@@ -4280,7 +4467,7 @@ def parse_classification(markdown: str) -> str:
 	return "inconclusive"
 
 
-DETERMINISTIC_FAILURE_REASONS: tuple[str, ...] = ("identical_failure_cap", ENGINE_FALLBACK_FAILURE_REASON)
+DETERMINISTIC_FAILURE_REASONS: tuple[str, ...] = ("identical_failure_cap", ENGINE_FALLBACK_FAILURE_REASON, SYNCED_SECURITY_FINDING_FAILURE_REASON)
 
 
 def is_deterministic_failure(payload: dict[str, Any], gen: int) -> bool:
@@ -4320,6 +4507,15 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 	if kind == "engine_fallback":
 		lines.append(f"- **Engine role:** `{payload.get('engine_role')}`")
 		lines.append(f"- **Refused fallback reason:** `{payload.get('engine_reason')}` (non-capacity; AI_ENGINE_FALLBACK_POLICY=capacity)")
+	if kind == SYNCED_SECURITY_FINDING_KIND and isinstance(payload.get("security_finding"), dict):
+		finding = payload["security_finding"]
+		source_path, source_reason = synced_security_finding_source_path(finding.get("file"))
+		def _field(value: Any) -> str:
+			return neutralize_untrusted_routing(single_line(value))[0].replace("`", "'")
+		lines.append(f"- **Security finding:** `{_field(finding.get('finding_id'))}` ({_field(finding.get('category'))})")
+		lines.append(f"- **Severity / confidence:** `{_field(finding.get('severity'))}` / {_field(finding.get('confidence'))}")
+		lines.append(f"- **Consumer file:** `{_field(finding.get('file'))}:{_field(finding.get('line'))}` (byte-identical to the release copy)")
+		lines.append(f"- **coding-workflows source:** `{_field(source_path or source_reason)}`")
 	if payload.get("workflow_name"):
 		lines.append(f"- **Failed workflow:** `{neutralize_untrusted_routing(single_line(payload['workflow_name']))[0]}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
 	if payload.get("head_branch"):
@@ -4350,6 +4546,10 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 		return f"Workflow heal: {name or 'review/autofix'} failed {streak}x for {target} ({payload.get('failure_reason')})"
 	if payload.get("source_kind") == "engine_fallback":
 		return f"Workflow heal: AI engine fallback refused for {payload.get('engine_role')} ({payload.get('engine_reason')})"
+	if payload.get("source_kind") == SYNCED_SECURITY_FINDING_KIND and isinstance(payload.get("security_finding"), dict):
+		finding = payload["security_finding"]
+		source_path = synced_security_finding_source_path(finding.get("file"))[0] or single_line(finding.get("file"), 120)
+		return f"Workflow heal: synced-file security finding in {source_path} ({synced_security_finding_category_token(finding.get('category'))})"
 	if payload.get("source_kind") == "phase_failure":
 		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 		streak = payload.get("failure_streak") or 1
@@ -4820,6 +5020,90 @@ def _cmd_engine_fallback_fingerprint(args: argparse.Namespace) -> int:
 		raise ValueError("invalid engine role or reason")
 	print(engine_fallback_fingerprint(args.role, args.reason))
 	return 0
+
+
+def _cmd_build_synced_security_finding_payload(args: argparse.Namespace) -> int:
+	try:
+		finding = _load_json_file(args.finding_json)
+	except (OSError, json.JSONDecodeError) as exc:
+		raise ValueError("finding JSON is unreadable") from exc
+	payload = build_synced_security_finding_payload(
+		repo=args.repo,
+		finding=finding,
+		wrapper_sha=args.wrapper_sha,
+		workflow_name=args.workflow_name,
+		run_id=args.run_id,
+		reporter_run_url=args.reporter_run_url or None,
+	)
+	validate_payload(payload)
+	_write_json(payload)
+	return 0
+
+
+def _cmd_synced_security_finding_fingerprint(args: argparse.Namespace) -> int:
+	if not _safe_heal_path(args.source_path) or not _SECURITY_FINDING_CATEGORY_RE.match(args.category):
+		raise ValueError("invalid source path or category")
+	print(synced_security_finding_fingerprint(args.source_path, args.category))
+	return 0
+
+
+def _read_regular_file_bytes(path: Path, limit: int) -> bytes | None:
+	"""Read a regular file without following a symlink; None when absent or unusable."""
+	try:
+		info = os.lstat(path)
+	except OSError:
+		return None
+	if not stat.S_ISREG(info.st_mode):
+		return None
+	try:
+		fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+	except OSError:
+		return None
+	try:
+		data = os.read(fd, limit + 1)
+	finally:
+		os.close(fd)
+	return data if len(data) <= limit else None
+
+
+def synced_security_finding_scope(payload: dict[str, Any], checkout: str) -> dict[str, Any]:
+	"""Map a validated report to its coding-workflows source in ``checkout``.
+
+	``exists`` is true only for a regular, non-symlink file whose parent
+	directories are not symlinks either. The category token is printed so the
+	intake never re-implements the slug for its fingerprint.
+	"""
+	finding = payload.get("security_finding") if isinstance(payload, dict) else None
+	finding = finding if isinstance(finding, dict) else {}
+	root = Path(checkout)
+	contract = None
+	raw = _read_regular_file_bytes(root / SYNCED_SECURITY_FINDING_AUDIT_GATE_CONTRACT, SYNCED_SECURITY_FINDING_CONTRACT_MAX_BYTES)
+	if raw is not None:
+		try:
+			contract = json.loads(raw.decode("utf-8"))
+		except (UnicodeDecodeError, json.JSONDecodeError):
+			contract = None
+	source_path, reason = synced_security_finding_source_path(finding.get("file"), audit_gate_contract=contract)
+	exists = False
+	if source_path:
+		parts = source_path.split("/")
+		parents_ok = all(not (root.joinpath(*parts[:i])).is_symlink() for i in range(1, len(parts)))
+		target = root / source_path
+		exists = parents_ok and not target.is_symlink() and target.is_file()
+		if not exists:
+			reason = "source_missing"
+	return {
+		"source_path": source_path,
+		"reason": reason,
+		"exists": exists,
+		"category_token": synced_security_finding_category_token(finding.get("category")),
+	}
+
+
+def _cmd_synced_security_finding_scope(args: argparse.Namespace) -> int:
+	result = synced_security_finding_scope(_load_json_file(args.payload_json), args.checkout)
+	_write_json(result)
+	return 0 if result["source_path"] and result["exists"] else 1
 
 
 def _read_path_list(path: str | None) -> list[str]:
@@ -5622,6 +5906,25 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--role", required=True)
 	p.add_argument("--reason", required=True)
 	p.set_defaults(func=_cmd_engine_fallback_fingerprint)
+
+	p = sub.add_parser("build-synced-security-finding-payload", help="Build the payload for one synced-file security finding from a consumer audit")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--finding-json", required=True)
+	p.add_argument("--wrapper-sha", required=True)
+	p.add_argument("--workflow-name", required=True)
+	p.add_argument("--run-id", default="")
+	p.add_argument("--reporter-run-url", default="")
+	p.set_defaults(func=_cmd_build_synced_security_finding_payload)
+
+	p = sub.add_parser("synced-security-finding-fingerprint", help="Print the dedup fingerprint of a synced-file security finding (source path, category)")
+	p.add_argument("--source-path", required=True)
+	p.add_argument("--category", required=True)
+	p.set_defaults(func=_cmd_synced_security_finding_fingerprint)
+
+	p = sub.add_parser("synced-security-finding-scope", help="Map a synced-file security finding to its coding-workflows source path in a checkout")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--checkout", required=True)
+	p.set_defaults(func=_cmd_synced_security_finding_scope)
 
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
 	p.add_argument("--payload-json", required=True)

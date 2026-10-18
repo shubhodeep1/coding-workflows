@@ -314,6 +314,28 @@ PAYLOAD_BASE_BRANCH="$(_pf '.base_branch // ""')"
 PAYLOAD_SCRIPT_REF="$(_pf '.script_ref // ""')"
 PAYLOAD_CRASH_FILE="$(_pf '.crash_file // ""')"
 
+# --- Synced-file security findings (synced_security_finding) ---------------
+#
+# One consumer security-audit finding on an upstream-managed file that is
+# byte-identical to the release copy (security_audit.sh `upstream_managed`).
+# Off unless WORKFLOW_HEAL_SYNCED_SECURITY_FINDING_ENABLED is `true` (any
+# letter case): unset, empty or `false` is off, any other value is off with a
+# warning that never prints the value. Checked before report authentication,
+# so a disabled report of this kind makes no API call and files nothing.
+SYNCED_SECURITY_FINDING_SWITCH="${WORKFLOW_HEAL_SYNCED_SECURITY_FINDING_ENABLED-}"
+case "${SYNCED_SECURITY_FINDING_SWITCH,,}" in
+	true) SYNCED_SECURITY_FINDING_ENABLED=true ;;
+	''|false) SYNCED_SECURITY_FINDING_ENABLED=false ;;
+	*)
+		echo "::warning::WORKFLOW_HEAL synced_security_finding outcome=skip reason=invalid_switch" >&2
+		SYNCED_SECURITY_FINDING_ENABLED=false
+		;;
+esac
+if [ "${SOURCE_KIND}" = "synced_security_finding" ] && [ "${SYNCED_SECURITY_FINDING_ENABLED}" != "true" ]; then
+	log "skip reason=synced_security_finding_disabled source=${SOURCE_REPO} kind=${SOURCE_KIND}"
+	exit 0
+fi
+
 # --- Report authentication (issue #6559) -------------------------------------
 #
 # repository_dispatch: a report carrying an OIDC identity is always verified
@@ -400,6 +422,23 @@ case "${REPORT_ORIGIN}" in
 esac
 rm -f "${REPORT_IDENTITY_FILE}" 2>/dev/null || true
 
+# A synced_security_finding report names no issue, PR or run the binding
+# checks could verify, so its verified OIDC identity (this repo's
+# security-audit.yml, repository == source_repo) is the only proof of origin:
+# it is mandatory even while WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false. The
+# scope's run ref is the verified reporter run, never a payload field.
+SYNCED_SECURITY_FINDING_RUN_REF=""
+if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+	if [ "${REPORT_AUTH}" != "verified" ]; then
+		_report_auth_reject "synced_security_finding_unauthenticated"
+	fi
+	SYNCED_SECURITY_FINDING_RUN_ID="$(jq -r '.claims.run_id // ""' "${VERIFY_FILE}" 2>/dev/null | tr -cd '0-9' | head -c 20 || true)"
+	if ! [[ "${SYNCED_SECURITY_FINDING_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+		_report_auth_reject "synced_security_finding_unauthenticated"
+	fi
+	SYNCED_SECURITY_FINDING_RUN_REF="${SOURCE_REPO}:${SYNCED_SECURITY_FINDING_RUN_ID}"
+fi
+
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" 2>/dev/null || echo "")"
 # A host-only autofix_failure report (#6745) is not skipped here while the
 # non-retryable routing below is on: it must pass binding and provenance first,
@@ -417,6 +456,24 @@ if [ -n "${SKIP_REASON}" ]; then
 		tg_send_msg "Workflow failure heal intake ignored a report from unregistered repository ${SOURCE_REPO} (add it to .github/ai/consumer_repos.json to opt in)."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 	fi
 	exit 0
+fi
+
+# Map the consumer path to the coding-workflows source before any diagnosis
+# (fixed table in synced_security_finding_source_path, audit-gate contract
+# from this checkout). Live hooks, other .claude/ files, CLAUDE.md and paths
+# the sync does not write skip with a named reason; nobody needs to act.
+SYNCED_SECURITY_FINDING_SOURCE_PATH=""
+SYNCED_SECURITY_FINDING_CATEGORY_TOKEN=""
+if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+	SYNCED_SCOPE_FILE="${RUNTIME_DIR}/synced_security_finding_scope.json"
+	if ! python3 "${HEAL_PY}" synced-security-finding-scope --payload-json "${PAYLOAD_FILE}" --checkout . > "${SYNCED_SCOPE_FILE}" 2>/dev/null; then
+		SYNCED_SCOPE_REASON="$(jq -r '.reason // "unmappable"' "${SYNCED_SCOPE_FILE}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+		log "skip reason=synced_security_finding_unmappable detail=${SYNCED_SCOPE_REASON:-unmappable} source=${SOURCE_REPO} kind=${SOURCE_KIND}"
+		exit 0
+	fi
+	SYNCED_SECURITY_FINDING_SOURCE_PATH="$(jq -r '.source_path // ""' "${SYNCED_SCOPE_FILE}" | tr -cd 'A-Za-z0-9_./-' | head -c 120)"
+	SYNCED_SECURITY_FINDING_CATEGORY_TOKEN="$(jq -r '.category_token // ""' "${SYNCED_SCOPE_FILE}" | tr -cd 'a-z0-9-' | head -c 80)"
+	log "synced_security_finding outcome=mapped source_path=${SYNCED_SECURITY_FINDING_SOURCE_PATH} source=${SOURCE_REPO}"
 fi
 
 SOURCE_LABEL="${SOURCE_REPO}#${ISSUE_NUMBER:-run}"
@@ -945,6 +1002,13 @@ if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 	FIRST_WORKFLOW_NAME="ai-engine-fallback"
 	FIRST_FAILING_STEP="${ENGINE_ROLE}"
 	SIGNATURE="${ENGINE_REASON}"
+elif [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+	# One lineage per (mapped source path, finding class), across consumers,
+	# runs, finding ids and lines; the same hash as
+	# `workflow_failure_heal.py synced-security-finding-fingerprint`.
+	FIRST_WORKFLOW_NAME="synced-security-finding"
+	FIRST_FAILING_STEP="${SYNCED_SECURITY_FINDING_SOURCE_PATH}"
+	SIGNATURE="${SYNCED_SECURITY_FINDING_CATEGORY_TOKEN}"
 elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	# The review job's log ends the same way for every failure class
 	# ("Process completed with exit code 1"), so the reporter's own reason and
@@ -1585,6 +1649,14 @@ jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
 	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
 	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
+if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+	# The scope is the mapped source file only, bound to the verified reporting
+	# run; no log, payload path or diagnosis can widen it.
+	rm -f "${SCOPE_INPUTS_FROZEN}"
+	jq -n --arg crash "${SYNCED_SECURITY_FINDING_SOURCE_PATH}" --arg run "${SYNCED_SECURITY_FINDING_RUN_REF}" \
+		'{crash_file: $crash, runs: [$run], self_workflows: [], consumer_workflows: [], changed_files: [], failing_tests: {names: [], files: []}}' > "${SCOPE_INPUTS_FROZEN}" \
+		&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
+fi
 
 # --- Run the diagnosis model -----------------------------------------------
 
@@ -1630,6 +1702,14 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	elif [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 		echo "Refused AI engine fallback: role $(_pf '.engine_role') reason $(_pf '.engine_reason') (Claude unavailable for a non-capacity reason; the role failed instead of running codex)"
 		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
+	elif [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+		echo "Synced-file security finding from the consumer's security audit. The consumer file is upstream-managed and byte-identical to the coding-workflows release copy, so the fix belongs in this repository's source file."
+		echo "Finding id: $(_pf '.security_finding.finding_id')"
+		echo "Category: $(_pf '.security_finding.category')"
+		echo "Severity: $(_pf '.security_finding.severity')  Confidence: $(_pf '.security_finding.confidence')/10"
+		echo "Consumer path: $(_pf '.security_finding.file'):$(_pf '.security_finding.line')"
+		echo "coding-workflows source path: ${SYNCED_SECURITY_FINDING_SOURCE_PATH}"
+		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
 	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
@@ -1656,7 +1736,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		_pf '.comments_excerpt'
 		echo
 	fi
-	if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "engine_fallback" ]; then
+	if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "engine_fallback" ] || [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
 		echo "--- Failure evidence from the reporting run (UNTRUSTED) ---"
 		cat "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || true
 		echo
@@ -1841,6 +1921,19 @@ case "${CLASSIFICATION}" in
 		;;
 esac
 
+# A synced-file security finding is a defect in a file this repository ships,
+# whatever the diagnosis says: only workflow-defect, inconclusive and a
+# verified already-fixed keep their route, so the issue is always filed here.
+if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+	case "${CLASSIFICATION}" in
+		workflow-defect|inconclusive|already-fixed) ;;
+		*)
+			log "classification_remapped from=${CLASSIFICATION} to=workflow-defect reason=synced_security_finding_upstream_owned source=${SOURCE_LABEL} fp=${FP}"
+			CLASSIFICATION="workflow-defect"
+			;;
+	esac
+fi
+
 # --- Route -----------------------------------------------------------------
 
 _branch_exists()
@@ -1895,7 +1988,11 @@ _git_fetch_consumer_scope_ref()
 # "unknown", which is not "0", so the report keeps the refusal (fail closed).
 _heal_report_claimed_no_runs()
 {
-	[ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
+	# A synced_security_finding report carries no run_refs but its scope is
+	# bound to the verified reporter run and mapped before diagnosis, so an
+	# unresolved scope there is a fault and keeps the CRITICAL refusal.
+	[ "${SOURCE_KIND:-}" != "synced_security_finding" ] \
+		&& [ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo unknown)" = "0" ]
 }

@@ -125,6 +125,9 @@ jobs:
       # Non-retryable review/autofix failures (#6756): 'false' skips the PR
       # diagnosis; host-only stops then keep #6745's skip, others are healed.
       WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
+      # Synced-file security findings from consumer audits (kind
+      # synced_security_finding): off unless 'true'; the script defaults off too.
+      WORKFLOW_HEAL_SYNCED_SECURITY_FINDING_ENABLED: ${{ vars.WORKFLOW_HEAL_SYNCED_SECURITY_FINDING_ENABLED || 'false' }}
       # Report authentication (issue #6559): 'true' skips repository_dispatch
       # reports that carry no OIDC identity; 'false' (transition default)
       # accepts them after the binding checks. An identity is always verified.

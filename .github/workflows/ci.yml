@@ -937,7 +937,7 @@ jobs:
             echo "::error::${heal_module} shards failed: ${heal_failed_shards[*]}"
             exit 1
           fi
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py tests/test_workflow_failure_heal_security_finding.py
           # Model-provider outage classifier, tracker and resume (issue #6633).
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_provider_outage.py tests/test_review_autofix_provider_outage_contract.py tests/test_claude_capacity_wait_call_sites.py
 
