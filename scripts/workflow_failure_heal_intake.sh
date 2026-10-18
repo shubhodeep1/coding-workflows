@@ -1576,11 +1576,22 @@ SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"
 # being confined to tests/**. Logs are run metadata, not diagnosis output.
 FAILING_TESTS_JSON="$(python3 "${HEAL_PY}" heal-scope failing-tests --log-files "${LOG_DIR}"/run-*-job-*.txt 2>/dev/null || echo '{"names":[],"files":[]}')"
 jq -e 'type == "object" and (.names | type == "array") and (.files | type == "array")' <<< "${FAILING_TESTS_JSON}" >/dev/null 2>&1 || FAILING_TESTS_JSON='{"names":[],"files":[]}'
+# Slurp the verified run records through one jq filter. A failed jq call
+# yields `[]` in place of its output: with no *.verified file (a report that
+# names no run) jq still prints `[]` for the empty slurp and then exits 2 on
+# the unmatched glob, so appending a fallback would leave two JSON documents
+# for --argjson and the freeze would always fail.
+_heal_slurp_verified_runs()
+{
+	local slurp_filter="$1" slurped_json=""
+	slurped_json="$(jq -s "${slurp_filter}" "${LOG_DIR}"/*.verified 2>/dev/null)" || slurped_json='[]'
+	printf '%s\n' "${slurped_json}"
+}
 jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 	--argjson failing_tests "${FAILING_TESTS_JSON}" \
-	--argjson runs "$(jq -s '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
-	--argjson self_workflows "$(jq -s '[.[] | .referenced_paths[]?] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
-	--argjson consumer_workflows "$(jq -s '[.[] | .path | select(type == "string" and . != "")] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson runs "$(_heal_slurp_verified_runs '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique')" \
+	--argjson self_workflows "$(_heal_slurp_verified_runs '[.[] | .referenced_paths[]?] | unique')" \
+	--argjson consumer_workflows "$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')" \
 	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
 	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
 	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
