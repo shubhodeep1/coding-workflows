@@ -111,6 +111,7 @@ def _failure_lines(telemetry):
 		("value 14030 unrelated\n", "other"),
 		("HTTP 403: Resource not accessible by integration\n", "auth"),
 		("403 Forbidden\n", "auth"),
+		("http 403 forbidden\n", "auth"),
 		("urllib.error.HTTPError: HTTP Error 403: Forbidden\n", "auth"),
 		('Traceback (most recent call last):\n  File "ai_memory.py", line 403, in main\nKeyError: x\n', "other"),
 		("", "none"),

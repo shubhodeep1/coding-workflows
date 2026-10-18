@@ -5705,11 +5705,14 @@ reviewer_pass2_shadow_log() {
     always_full_regex="${REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX:-^(scripts/|\.github/workflows/|\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)}"
     pass1_ok="$(reviewer_count_success_statuses "pass1")"
     high_findings="$(reviewer_pass2_shadow_count_high_findings)"
-    if [ -n "${PASS2_DIFF_LOC+set}" ]; then
-      diff_loc="${PASS2_DIFF_LOC}"
-    else
-      diff_loc="$(reviewer_count_diff_loc "${LAST_RUN_DIFF_FILE}")"
-    fi
+    # The size check measures the whole PR diff, not PASS2_DIFF_LOC (the
+    # previous autofix diff, 0 on a first review). An unknown diff must
+    # never read as a zero-line, eligible diff.
+    pr_diff_file="${RAW_REVIEWER_PR_DIFF_FILE:-}"
+    has_pr_diff="$(printf '%s' "${HAS_PR_DIFF:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    case "${has_pr_diff}" in 0|false|no|off) exit 1 ;; esac
+    [ -n "${pr_diff_file}" ] && [ -s "${pr_diff_file}" ] || exit 1
+    diff_loc="$(reviewer_count_diff_loc "${pr_diff_file}")"
     threshold="${PASS2_DIFF_LARGE_LOC:-200}"
     changed_files="${RAW_REVIEWER_PR_CHANGED_FILES_FILE:-}"
     # An unknown path set must never read as eligible.
@@ -5719,7 +5722,16 @@ reviewer_pass2_shadow_log() {
     reviewer_any_path_matches_regex "${changed_files}" "${always_full_regex}" >/dev/null || match_rc=$?
     case "${match_rc}" in
       0) sensitive=true ;;
-      1) sensitive=false ;;
+      1)
+        # Migrations keep two passes too (analysis doc, Speed item 2).
+        match_rc=0
+        reviewer_any_path_matches_regex "${changed_files}" '(^|/)(migrations|migrate)/' >/dev/null || match_rc=$?
+        case "${match_rc}" in
+          0) sensitive=true ;;
+          1) sensitive=false ;;
+          *) exit 1 ;;
+        esac
+        ;;
       *) exit 1 ;;
     esac
     decision="$(reviewer_pass2_shadow_decide "${pass1_ok}" "${high_findings}" "${diff_loc}" "${threshold}" "${sensitive}")"

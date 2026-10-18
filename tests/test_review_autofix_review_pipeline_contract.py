@@ -8576,6 +8576,7 @@ def main() -> int:
 	test_normalize_openrouter_usage_reports_missing_reason()
 	test_normalize_openrouter_usage_available_line_has_no_reason()
 	test_cost_audit_openrouter_re_matches_line_with_missing_reason()
+	_run_reviewer_pass2_shadow_tests()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 
@@ -10111,7 +10112,7 @@ def _run_pass2_shadow_harness(
 	pass1_failed: int = 0,
 	outputs: dict[str, str] | None = None,
 	changed_files: str | None = "docs/x.md\n",
-	diff_loc: str | None = "10",
+	diff_loc: int | None = 10,
 	threshold: str = "200",
 	env_overrides: dict[str, str | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -10126,6 +10127,9 @@ def _run_pass2_shadow_harness(
 	changed_path = tmp_path / "changed_files.txt"
 	if changed_files is not None:
 		changed_path.write_text(changed_files, encoding="utf-8")
+	pr_diff_path = tmp_path / "pr_diff.patch"
+	if diff_loc is not None:
+		pr_diff_path.write_text(_pass2_shadow_pr_diff(diff_loc), encoding="utf-8")
 
 	script = "\n".join(
 		[
@@ -10134,29 +10138,32 @@ def _run_pass2_shadow_harness(
 			_reviewer_bash_function("reviewer_count_diff_loc"),
 			_reviewer_bash_function("reviewer_any_path_matches_regex"),
 			_reviewer_pass2_shadow_helper_block(),
-			'if [ -n "${HARNESS_DIFF_LOC+set}" ]; then PASS2_DIFF_LOC="${HARNESS_DIFF_LOC}"; fi',
 			"reviewer_pass2_shadow_log || true",
 			"echo HARNESS_DONE",
 		]
 	)
 	env = {key: value for key, value in os.environ.items() if not key.startswith("REVIEWER_")}
 	env.pop("PASS2_DIFF_LOC", None)
+	env.pop("HAS_PR_DIFF", None)
 	env.update(
 		{
 			"PREVIOUS_REVIEWS_DIR": str(reviews),
 			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(changed_path),
+			"RAW_REVIEWER_PR_DIFF_FILE": str(pr_diff_path),
 			"PASS2_DIFF_LARGE_LOC": threshold,
 			"LAST_RUN_DIFF_FILE": str(tmp_path / "missing.diff"),
 		}
 	)
-	if diff_loc is not None:
-		env["HARNESS_DIFF_LOC"] = diff_loc
 	for key, value in (env_overrides or {}).items():
 		if value is None:
 			env.pop(key, None)
 		else:
 			env[key] = value
 	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=False)
+
+
+def _pass2_shadow_pr_diff(lines: int) -> str:
+	return "--- a/x\n+++ b/x\n" + "".join(f"+line {index}\n" for index in range(lines))
 
 
 def _shadow_lines(result: subprocess.CompletedProcess[str]) -> list[str]:
@@ -10194,7 +10201,7 @@ def test_reviewer_pass2_shadow_high_findings(tmp_path: Path, finding: str) -> No
 
 
 def test_reviewer_pass2_shadow_large_diff_at_threshold(tmp_path: Path) -> None:
-	result = _run_pass2_shadow_harness(tmp_path, diff_loc="200", threshold="200")
+	result = _run_pass2_shadow_harness(tmp_path, diff_loc=200, threshold="200")
 	assert _shadow_lines(result) == [
 		"REVIEWER_PASS2_SHADOW would_skip=false reason=large_diff pass1_ok=2 high_findings=0 diff_loc=200 threshold=200 sensitive=false"
 	]
@@ -10213,7 +10220,7 @@ def test_reviewer_pass2_shadow_reason_is_first_failing_condition(tmp_path: Path)
 		tmp_path / "a",
 		pass1_ok=1,
 		outputs={"pass1_model0.txt": "SEVERITY: high\n"},
-		diff_loc="500",
+		diff_loc=500,
 	)
 	assert _shadow_lines(first) == [
 		"REVIEWER_PASS2_SHADOW would_skip=false reason=pass1_insufficient pass1_ok=1 high_findings=1 diff_loc=500 threshold=200 sensitive=false"
@@ -10246,7 +10253,7 @@ def test_reviewer_pass2_shadow_ignores_rejected_status_and_consensus_files(tmp_p
 
 @pytest.mark.parametrize(
 	"case",
-	["invalid_regex", "missing_changed_files", "empty_changed_files", "non_numeric_loc"],
+	["invalid_regex", "missing_changed_files", "empty_changed_files", "missing_pr_diff", "empty_pr_diff", "has_pr_diff_false"],
 )
 def test_reviewer_pass2_shadow_evaluation_failed_fails_open(tmp_path: Path, case: str) -> None:
 	kwargs: dict[str, object] = {}
@@ -10256,18 +10263,39 @@ def test_reviewer_pass2_shadow_evaluation_failed_fails_open(tmp_path: Path, case
 		kwargs["changed_files"] = None
 	elif case == "empty_changed_files":
 		kwargs["changed_files"] = "\n  \n"
+	elif case == "missing_pr_diff":
+		kwargs["diff_loc"] = None
+	elif case == "empty_pr_diff":
+		kwargs["diff_loc"] = None
+		empty = tmp_path / "empty.patch"
+		empty.write_text("", encoding="utf-8")
+		kwargs["env_overrides"] = {"RAW_REVIEWER_PR_DIFF_FILE": str(empty)}
 	else:
-		kwargs["diff_loc"] = "12abc"
+		kwargs["env_overrides"] = {"HAS_PR_DIFF": "false"}
 	result = _run_pass2_shadow_harness(tmp_path, **kwargs)  # type: ignore[arg-type]
 	assert _shadow_lines(result) == [_PASS2_SHADOW_FAILED_LINE]
 
 
-def test_reviewer_pass2_shadow_falls_back_to_diff_loc_when_unset(tmp_path: Path) -> None:
-	diff = tmp_path / "last.diff"
-	diff.write_text("--- a/x\n+++ b/x\n+one\n-two\n+three\n", encoding="utf-8")
-	result = _run_pass2_shadow_harness(tmp_path, diff_loc=None, env_overrides={"LAST_RUN_DIFF_FILE": str(diff)})
+def test_reviewer_pass2_shadow_measures_pr_diff_not_last_run_diff(tmp_path: Path) -> None:
+	# PASS2_DIFF_LOC counts the previous autofix diff (0 on a first review);
+	# the shadow must count the whole PR diff instead.
+	last_run = tmp_path / "last.diff"
+	last_run.write_text("No previous AI autofix run on PR head\n", encoding="utf-8")
+	result = _run_pass2_shadow_harness(
+		tmp_path,
+		diff_loc=300,
+		env_overrides={"PASS2_DIFF_LOC": "0", "LAST_RUN_DIFF_FILE": str(last_run)},
+	)
 	assert _shadow_lines(result) == [
-		"REVIEWER_PASS2_SHADOW would_skip=true reason=eligible pass1_ok=2 high_findings=0 diff_loc=3 threshold=200 sensitive=false"
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=large_diff pass1_ok=2 high_findings=0 diff_loc=300 threshold=200 sensitive=false"
+	]
+
+
+@pytest.mark.parametrize("path", ["db/migrations/0001_init.sql", "app/migrate/step.rb"])
+def test_reviewer_pass2_shadow_migration_paths_are_sensitive(tmp_path: Path, path: str) -> None:
+	result = _run_pass2_shadow_harness(tmp_path, changed_files=f"{path}\n")
+	assert _shadow_lines(result) == [
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=sensitive_paths pass1_ok=2 high_findings=0 diff_loc=10 threshold=200 sensitive=true"
 	]
 
 
@@ -10327,6 +10355,8 @@ def test_reviewer_pass2_still_launches_when_shadow_would_skip(tmp_path: Path) ->
 		(reviews / f"status_pass1_model{index}.txt").write_text("success", encoding="utf-8")
 	changed = tmp_path / "changed.txt"
 	changed.write_text("docs/x.md\n", encoding="utf-8")
+	pr_diff = tmp_path / "pr_diff.patch"
+	pr_diff.write_text(_pass2_shadow_pr_diff(10), encoding="utf-8")
 	marker = tmp_path / "pass2_launched"
 	script = "\n".join(
 		[
@@ -10350,6 +10380,7 @@ def test_reviewer_pass2_still_launches_when_shadow_would_skip(tmp_path: Path) ->
 		{
 			"PREVIOUS_REVIEWS_DIR": str(reviews),
 			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(changed),
+			"RAW_REVIEWER_PR_DIFF_FILE": str(pr_diff),
 			"RUNTIME_DIR": str(tmp_path),
 			"REVIEWER_PROMPT_BODY_FILE": str(tmp_path / "body.txt"),
 			"CROSS_POLLINATION_FILE": str(tmp_path / "xpoll.txt"),
@@ -10357,6 +10388,8 @@ def test_reviewer_pass2_still_launches_when_shadow_would_skip(tmp_path: Path) ->
 			"LAST_RUN_DIFF_FILE": str(tmp_path / "missing.diff"),
 		}
 	)
+	env.pop("HAS_PR_DIFF", None)
+	env.pop("PASS2_DIFF_LOC", None)
 	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=False)
 	assert result.returncode == 0, result.stderr
 	assert (
@@ -10365,6 +10398,39 @@ def test_reviewer_pass2_still_launches_when_shadow_would_skip(tmp_path: Path) ->
 	)
 	assert marker.read_text(encoding="utf-8") == "review xhigh\n"
 	assert "pass2_successful=2" in result.stdout
+
+
+def _run_reviewer_pass2_shadow_tests() -> None:
+	"""Run the pytest-style pass-2 shadow tests from main().
+
+	CI and the release gates run this file with ``python3``, which executes
+	only main(), so each case gets its own temporary directory here.
+	"""
+	cases: list[tuple[object, tuple[object, ...]]] = [
+		(test_reviewer_pass2_shadow_eligible, ()),
+		(test_reviewer_pass2_shadow_pass1_insufficient, ()),
+		(test_reviewer_pass2_shadow_large_diff_at_threshold, ()),
+		(test_reviewer_pass2_shadow_sensitive_paths, ()),
+		(test_reviewer_pass2_shadow_reason_is_first_failing_condition, ()),
+		(test_reviewer_pass2_shadow_ignores_rejected_status_and_consensus_files, ()),
+		(test_reviewer_pass2_shadow_measures_pr_diff_not_last_run_diff, ()),
+		(test_reviewer_pass2_shadow_invalid_switch_warns_once_without_echoing_value, ()),
+		(test_reviewer_pass2_still_launches_when_shadow_would_skip, ()),
+	]
+	for finding in ("SEVERITY: high", "Severity: CRITICAL", "SEVERITY: BLOCKER", "SEVERITY: major", "- **SEVERITY:** MAJOR"):
+		cases.append((test_reviewer_pass2_shadow_high_findings, (finding,)))
+	for case in ("invalid_regex", "missing_changed_files", "empty_changed_files", "missing_pr_diff", "empty_pr_diff", "has_pr_diff_false"):
+		cases.append((test_reviewer_pass2_shadow_evaluation_failed_fails_open, (case,)))
+	for path in ("db/migrations/0001_init.sql", "app/migrate/step.rb"):
+		cases.append((test_reviewer_pass2_shadow_migration_paths_are_sensitive, (path,)))
+	for value in (None, "", "true", "TRUE", "True"):
+		cases.append((test_reviewer_pass2_shadow_switch_on_values_emit_line, (value,)))
+	for value in ("false", "FALSE"):
+		cases.append((test_reviewer_pass2_shadow_switch_off_emits_nothing, (value,)))
+	for func, args in cases:
+		with tempfile.TemporaryDirectory(prefix="pass2-shadow-") as tmp:
+			func(Path(tmp), *args)  # type: ignore[operator]
+	test_reviewer_pass2_shadow_is_never_read_by_pass2_control()
 
 
 if __name__ == "__main__":

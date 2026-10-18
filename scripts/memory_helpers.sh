@@ -80,7 +80,7 @@ _memory_stderr_category()
 		printf 'push_rejected\n'
 	# 403 counts only in an HTTP/error-status context, so a traceback frame
 	# such as `line 403, in main` is not classified as auth.
-	elif LC_ALL=C grep -qE 'Authentication failed|([Ee]rror|HTTP[/0-9.]*|[Ss]tatus|code)[: ]*403([^0-9]|$)|(^|[^0-9])403 Forbidden|could not read Username' "${err_file}" 2>/dev/null; then
+	elif LC_ALL=C grep -qE 'Authentication failed|([Ee]rror|[Hh][Tt][Tt][Pp][/0-9.]*|[Ss]tatus|code)[: ]*403([^0-9]|$)|(^|[^0-9])403 [Ff]orbidden|could not read Username' "${err_file}" 2>/dev/null; then
 		printf 'auth\n'
 	elif LC_ALL=C grep -qE 'Could not resolve host|timed out|Connection reset' "${err_file}" 2>/dev/null; then
 		printf 'network\n'
