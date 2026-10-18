@@ -4072,6 +4072,65 @@ jobs:
           fi
           git checkout -B "${TARGET_BRANCH}"
 
+      - name: Restore tracked symlinks the editor replaced
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED: ${{ vars.IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          # An editor transfer can replace, retarget or delete a tracked symlink (#7624,
+          # heal for #7623). Put each such path back to HEAD before the guards run.
+          switch="$(printf '%s' "${IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED-true}" | tr '[:upper:]' '[:lower:]')"
+          case "${switch}" in
+            ''|true) ;;
+            false) echo "Tracked-symlink restore disabled"; exit 0 ;;
+            *) echo "::warning::IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED has an unrecognized value; tracked-symlink restore is off"; exit 0 ;;
+          esac
+          cd "$(git rev-parse --show-toplevel)"
+          # The commit step owns staged-support and fetched paths; leave them alone.
+          declare -A skip_paths=()
+          for list in "${STAGED_SUPPORT_LEDGER:-}" "${FETCHED_MANIFEST:-}"; do
+            if [ -n "${list}" ] && [ -f "${list}" ]; then
+              while IFS= read -r line || [ -n "${line}" ]; do
+                if [ -n "${line}" ]; then skip_paths["${line}"]=1; fi
+              done < "${list}"
+            fi
+          done
+          entries_file="$(mktemp)"
+          git ls-files -s -z > "${entries_file}"
+          restored=0
+          skipped=0
+          while IFS= read -r -d '' entry; do
+            meta="${entry%%$'\t'*}"
+            p="${entry#*$'\t'}"
+            case "${meta}" in 120000\ *\ 0) ;; *) continue ;; esac
+            expected="$(git cat-file -p "HEAD:${p}" 2>/dev/null)" || continue
+            if [ -L "${p}" ] && [ "$(readlink -- "${p}")" = "${expected}" ]; then continue; fi
+            unsafe=false
+            lower="$(printf '%s' "${p}" | tr '[:upper:]' '[:lower:]')"
+            case "/${lower}/" in //*|*/../*|*/./*|*/.git/*) unsafe=true ;; esac
+            probe="${p}"
+            while [ "${unsafe}" = false ]; do
+              case "${probe}" in */*) probe="${probe%/*}" ;; *) break ;; esac
+              if [ -L "${probe}" ]; then unsafe=true; fi
+            done
+            if [ "${unsafe}" = true ]; then
+              echo "::warning::Skipped tracked symlink ${p} (unsafe path)"; skipped=$((skipped + 1)); continue
+            fi
+            if [ -n "${skip_paths[${p}]+x}" ]; then
+              echo "::notice::Left tracked symlink ${p} to the commit step (staged support or fetched file)"; skipped=$((skipped + 1)); continue
+            fi
+            rm -rf -- "./${p}" || true
+            # Literal pathspec: a tracked name with glob characters or a leading ':' must match only itself.
+            if ! GIT_LITERAL_PATHSPECS=1 git checkout HEAD -- "${p}"; then
+              echo "::error::Could not restore tracked symlink ${p} from HEAD"; rm -f "${entries_file}"; exit 1
+            fi
+            echo "::warning::Restored tracked symlink ${p} (editor replaced or removed it)"
+            restored=$((restored + 1))
+          done < "${entries_file}"
+          rm -f "${entries_file}"
+          echo "Tracked-symlink restore: restored=${restored} skipped=${skipped}"
+
       - name: Preflight destructive-commit guard
         # Fail fast on obviously blocked mass/canonical deletions before we
         # spend time on syntax validation and the rest of the commit tail.
@@ -5025,6 +5084,65 @@ jobs:
 
           rm -f "${CAPTURE_FILE}"
           echo "repaired=true" >> "$GITHUB_OUTPUT"
+
+      - name: Restore tracked symlinks the syntax-repair editor replaced
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED: ${{ vars.IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          # An editor transfer can replace, retarget or delete a tracked symlink (#7624,
+          # heal for #7623). Put each such path back to HEAD before the guards run.
+          switch="$(printf '%s' "${IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED-true}" | tr '[:upper:]' '[:lower:]')"
+          case "${switch}" in
+            ''|true) ;;
+            false) echo "Tracked-symlink restore disabled"; exit 0 ;;
+            *) echo "::warning::IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED has an unrecognized value; tracked-symlink restore is off"; exit 0 ;;
+          esac
+          cd "$(git rev-parse --show-toplevel)"
+          # The commit step owns staged-support and fetched paths; leave them alone.
+          declare -A skip_paths=()
+          for list in "${STAGED_SUPPORT_LEDGER:-}" "${FETCHED_MANIFEST:-}"; do
+            if [ -n "${list}" ] && [ -f "${list}" ]; then
+              while IFS= read -r line || [ -n "${line}" ]; do
+                if [ -n "${line}" ]; then skip_paths["${line}"]=1; fi
+              done < "${list}"
+            fi
+          done
+          entries_file="$(mktemp)"
+          git ls-files -s -z > "${entries_file}"
+          restored=0
+          skipped=0
+          while IFS= read -r -d '' entry; do
+            meta="${entry%%$'\t'*}"
+            p="${entry#*$'\t'}"
+            case "${meta}" in 120000\ *\ 0) ;; *) continue ;; esac
+            expected="$(git cat-file -p "HEAD:${p}" 2>/dev/null)" || continue
+            if [ -L "${p}" ] && [ "$(readlink -- "${p}")" = "${expected}" ]; then continue; fi
+            unsafe=false
+            lower="$(printf '%s' "${p}" | tr '[:upper:]' '[:lower:]')"
+            case "/${lower}/" in //*|*/../*|*/./*|*/.git/*) unsafe=true ;; esac
+            probe="${p}"
+            while [ "${unsafe}" = false ]; do
+              case "${probe}" in */*) probe="${probe%/*}" ;; *) break ;; esac
+              if [ -L "${probe}" ]; then unsafe=true; fi
+            done
+            if [ "${unsafe}" = true ]; then
+              echo "::warning::Skipped tracked symlink ${p} (unsafe path)"; skipped=$((skipped + 1)); continue
+            fi
+            if [ -n "${skip_paths[${p}]+x}" ]; then
+              echo "::notice::Left tracked symlink ${p} to the commit step (staged support or fetched file)"; skipped=$((skipped + 1)); continue
+            fi
+            rm -rf -- "./${p}" || true
+            # Literal pathspec: a tracked name with glob characters or a leading ':' must match only itself.
+            if ! GIT_LITERAL_PATHSPECS=1 git checkout HEAD -- "${p}"; then
+              echo "::error::Could not restore tracked symlink ${p} from HEAD"; rm -f "${entries_file}"; exit 1
+            fi
+            echo "::warning::Restored tracked symlink ${p} (editor replaced or removed it)"
+            restored=$((restored + 1))
+          done < "${entries_file}"
+          rm -f "${entries_file}"
+          echo "Tracked-symlink restore: restored=${restored} skipped=${skipped}"
 
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'

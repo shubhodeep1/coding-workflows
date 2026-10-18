@@ -6002,6 +6002,177 @@ def test_diagnose_codex_command_is_unchanged() -> None:
 	) in diagnose
 
 
+_RESTORE_SYMLINK_STEP_A = "Restore tracked symlinks the editor replaced"
+_RESTORE_SYMLINK_STEP_B = "Restore tracked symlinks the syntax-repair editor replaced"
+_RESTORE_SYMLINK_ENV_LINE = (
+	"IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED: ${{ vars.IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED || 'true' }}"
+)
+
+
+def _workflow_step_index(step_name: str) -> int:
+	names = [line.strip() for line in _workflow_text().splitlines() if line.strip().startswith("- name:")]
+	matches = [i for i, name in enumerate(names) if name == f"- name: {step_name}"]
+	assert len(matches) == 1, f"expected exactly one step named {step_name!r}, got {len(matches)}"
+	return matches[0]
+
+
+def _symlink_restore_repo(root: Path) -> Path:
+	repo = root / "repo"
+	_bootstrap_git_repo(repo)
+	(repo / "CLAUDE.md").write_text("root rules\n", encoding="utf-8")
+	(repo / "workflow-templates").mkdir()
+	os.symlink("../CLAUDE.md", repo / "workflow-templates" / "CLAUDE.md")
+	(repo / "src").mkdir()
+	(repo / "src" / "a.txt").write_text("original\n", encoding="utf-8")
+	_git(["git", "add", "-A"], cwd=repo)
+	_git(["git", "commit", "-m", "fixture"], cwd=repo)
+	return repo
+
+
+def _break_tracked_symlink(repo: Path, case: str) -> None:
+	link = repo / "workflow-templates" / "CLAUDE.md"
+	link.unlink()
+	if case == "regular_file":
+		link.write_text("editor copy\n", encoding="utf-8")
+	elif case == "directory":
+		link.mkdir()
+		(link / "dump.txt").write_text("x\n", encoding="utf-8")
+	elif case == "retarget":
+		os.symlink("../src/a.txt", link)
+	elif case != "deleted":
+		raise AssertionError(case)
+	(repo / "src" / "a.txt").write_text("edited by editor\n", encoding="utf-8")
+
+
+def _changed_paths(repo: Path) -> list[str]:
+	env = _isolated_test_env(cwd=repo)
+	out = subprocess.run(
+		["git", "diff", "--name-only", "HEAD"], cwd=str(repo), env=env, check=True, capture_output=True, text=True
+	)
+	return [line for line in out.stdout.splitlines() if line]
+
+
+def _run_symlink_restore(repo: Path, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+	script = _extract_run_script(_RESTORE_SYMLINK_STEP_A)
+	env = {
+		"IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED": "",
+		"STAGED_SUPPORT_LEDGER": "",
+		"FETCHED_MANIFEST": "",
+	}
+	env.update(extra_env or {})
+	result = _run_shell_script(script, cwd=repo, env=env)
+	(repo / "__workflow_step_under_test.sh").unlink(missing_ok=True)
+	return result
+
+
+def test_restore_tracked_symlink_steps_are_placed_before_the_guards() -> None:
+	a = _workflow_step_index(_RESTORE_SYMLINK_STEP_A)
+	b = _workflow_step_index(_RESTORE_SYMLINK_STEP_B)
+	assert _workflow_step_index("Create implementation branch") < a < _workflow_step_index(
+		"Preflight destructive-commit guard"
+	)
+	assert _workflow_step_index("Attempt post-Codex syntax repair") < b
+	assert b < _workflow_step_index("Protect workflow files from implementation edits")
+	assert b < _workflow_step_index("Commit changes")
+
+
+def test_restore_tracked_symlink_steps_share_one_body() -> None:
+	body_a = _extract_run_script(_RESTORE_SYMLINK_STEP_A)
+	body_b = _extract_run_script(_RESTORE_SYMLINK_STEP_B)
+	assert body_a == body_b
+	assert "${{" not in body_a
+	for name in (_RESTORE_SYMLINK_STEP_A, _RESTORE_SYMLINK_STEP_B):
+		block = "\n".join(_step_block(name))
+		assert "if: env.SKIP_IMPLEMENT != 'true'" in block
+		assert _RESTORE_SYMLINK_ENV_LINE in block
+
+
+def test_restore_tracked_symlink_puts_back_every_broken_link_shape() -> None:
+	for case in ("regular_file", "deleted", "directory", "retarget"):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _symlink_restore_repo(Path(tmp))
+			_break_tracked_symlink(repo, case)
+			result = _run_symlink_restore(repo)
+			assert result.returncode == 0, (case, result.stdout, result.stderr)
+			link = repo / "workflow-templates" / "CLAUDE.md"
+			assert link.is_symlink(), case
+			assert os.readlink(link) == "../CLAUDE.md", case
+			assert (repo / "CLAUDE.md").read_text(encoding="utf-8") == "root rules\n", case
+			assert (repo / "src" / "a.txt").read_text(encoding="utf-8") == "edited by editor\n", case
+			assert "::warning::Restored tracked symlink workflow-templates/CLAUDE.md" in result.stdout, case
+			assert "restored=1 skipped=0" in result.stdout, case
+			assert _changed_paths(repo) == ["src/a.txt"], case
+
+
+def test_restore_tracked_symlink_regression_shape_without_the_step() -> None:
+	# The #7623 failure shape: without the step the replaced alias stays changed.
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _symlink_restore_repo(Path(tmp))
+		_break_tracked_symlink(repo, "regular_file")
+		assert "workflow-templates/CLAUDE.md" in _changed_paths(repo)
+
+
+def test_restore_tracked_symlink_switch() -> None:
+	for value, expect_restore in (("false", False), ("FALSE", False), ("bogus", False), ("", True), ("TRUE", True), (None, True)):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _symlink_restore_repo(Path(tmp))
+			_break_tracked_symlink(repo, "regular_file")
+			extra: dict[str, str] = {}
+			if value is not None:
+				extra["IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED"] = value
+			script = _extract_run_script(_RESTORE_SYMLINK_STEP_A)
+			env = os.environ.copy()
+			env.pop("IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED", None)
+			env.pop("STAGED_SUPPORT_LEDGER", None)
+			env.pop("FETCHED_MANIFEST", None)
+			env.update(extra)
+			result = _run_shell_script(script, cwd=repo, env=env)
+			(repo / "__workflow_step_under_test.sh").unlink(missing_ok=True)
+			assert result.returncode == 0, (value, result.stderr)
+			assert (repo / "workflow-templates" / "CLAUDE.md").is_symlink() is expect_restore, value
+			if value == "bogus":
+				assert "::warning::IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED has an unrecognized value" in result.stdout
+				assert "bogus" not in result.stdout + result.stderr
+
+
+def test_restore_tracked_symlink_leaves_commit_step_paths_alone() -> None:
+	for var in ("STAGED_SUPPORT_LEDGER", "FETCHED_MANIFEST"):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _symlink_restore_repo(Path(tmp))
+			_break_tracked_symlink(repo, "regular_file")
+			listing = Path(tmp) / "list.txt"
+			listing.write_text("other/path\nworkflow-templates/CLAUDE.md\n", encoding="utf-8")
+			result = _run_symlink_restore(repo, {var: str(listing)})
+			assert result.returncode == 0, (var, result.stderr)
+			assert not (repo / "workflow-templates" / "CLAUDE.md").is_symlink(), var
+			assert "::notice::Left tracked symlink workflow-templates/CLAUDE.md" in result.stdout, var
+
+
+def test_restore_tracked_symlink_refuses_a_symlinked_parent() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _symlink_restore_repo(Path(tmp))
+		outside = Path(tmp) / "outside"
+		outside.mkdir()
+		(outside / "CLAUDE.md").write_text("keep me\n", encoding="utf-8")
+		shutil.rmtree(repo / "workflow-templates")
+		os.symlink(str(outside), repo / "workflow-templates")
+		result = _run_symlink_restore(repo)
+		assert result.returncode == 0, result.stderr
+		assert "::warning::Skipped tracked symlink workflow-templates/CLAUDE.md (unsafe path)" in result.stdout
+		assert (outside / "CLAUDE.md").read_text(encoding="utf-8") == "keep me\n"
+		assert "restored=0 skipped=1" in result.stdout
+
+
+def test_restore_tracked_symlink_leaves_unchanged_links_alone() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _symlink_restore_repo(Path(tmp))
+		result = _run_symlink_restore(repo)
+		assert result.returncode == 0, result.stderr
+		assert "Restored tracked symlink" not in result.stdout
+		assert "restored=0 skipped=0" in result.stdout
+		assert _changed_paths(repo) == []
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
