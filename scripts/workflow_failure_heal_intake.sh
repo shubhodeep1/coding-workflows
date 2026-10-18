@@ -708,7 +708,7 @@ _synced_security_finding_intake()
 	local ss_findings=0 ss_opened=0 ss_occurrences=0 ss_skipped=0 ss_failed=0 ss_attention=0
 	local ss_reporter_run="" ss_compare="" ss_digests="" ss_contract="" ss_groups="" ss_issues=""
 	local ss_path_check="" ss_count=0 ss_index=0 ss_links="" ss_action="" ss_reason="" ss_level="DEBUG"
-	local ss_group="" ss_decision="" ss_existing="" ss_prior="" ss_gen="" ss_root=""
+	local ss_group="" ss_decision="" ss_existing="" ss_prior="" ss_gen="" ss_root="" ss_label=""
 	local ss_scope="" ss_scope_input="" ss_scope_status="" ss_title="" ss_body="" ss_url="" ss_number=""
 	mkdir -p "${ss_dir}"
 	HEAL_SCOPE_RECOVERY_ACTIVE="false"
@@ -797,10 +797,12 @@ _synced_security_finding_intake()
 				;;
 			escalate)
 				ss_prior="$(jq -r '.prior_issue // ""' "${ss_decision}")"
+				ss_label="none"
 				if [[ "${ss_prior}" =~ ^[0-9]+$ ]]; then
-					gh_retry gh issue edit "${ss_prior}" --repo "${SELF_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || true
+					ss_label="applied"
+					gh_retry gh issue edit "${ss_prior}" --repo "${SELF_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || ss_label="failed"
 				fi
-				log "escalate reason=lineage_cap fp=${FP} gen=${ss_gen} prior_issue=${ss_prior:-none} source=${SOURCE_REPO}"
+				log "escalate reason=lineage_cap fp=${FP} gen=${ss_gen} prior_issue=${ss_prior:-none} label=${ss_label} source=${SOURCE_REPO}"
 				ss_skipped=$((ss_skipped + 1))
 				ss_attention=1
 				;;
