@@ -74,6 +74,9 @@ security_audit_emit_codex_stderr_tail() {
 	local stderr_path="${1:?stderr path required}"
 	local prompt_path="${2:?prompt path required}"
 	local tail_path="${3:?tail path required}"
+	# Optional label for the log prefix. Any label other than the default
+	# `codex` also keeps only error-shaped lines (prompt renderer output).
+	local stderr_label="${4:-codex}"
 	local masked_path="${tail_path}.masked"
 	local rendered_path="${tail_path}.rendered"
 	local stderr_line rendered_line
@@ -81,7 +84,7 @@ security_audit_emit_codex_stderr_tail() {
 	# Read only the final 64 KiB plus one byte; discard a cut first line rather
 	# than publishing a fragment of a prompt or credential. Filter prompt/config
 	# echoes and mask secrets before calling the shared log sanitizer.
-	if ! python3 - "${stderr_path}" "${prompt_path}" > "${masked_path}" 2>/dev/null <<'PY'
+	if ! python3 - "${stderr_path}" "${prompt_path}" "${stderr_label}" > "${masked_path}" 2>/dev/null <<'PY'
 import os
 import re
 import sys
@@ -89,6 +92,12 @@ from pathlib import Path
 
 stderr_path = Path(sys.argv[1])
 prompt_path = Path(sys.argv[2])
+diagnostic_lines_only = sys.argv[3] != "codex"
+diagnostic_line = re.compile(
+	r"^ERROR:|^File \".*\", line \d+|Traceback|[A-Za-z]+(?:Error|Exception)\b|not found|unbound variable"
+	r"|no such file|permission denied|cannot|unable|invalid|unsupported|unresolved|failed|missing",
+	re.I,
+)
 with stderr_path.open("rb") as stderr_file:
 	stderr_file.seek(0, 2)
 	length = stderr_file.tell()
@@ -117,6 +126,8 @@ for raw_line in content.decode("utf-8", errors="replace").splitlines():
 		continue
 	if re.search(r"config\.toml|model_verbosity|OPENROUTER_API_KEY|=== (?:BEGIN|END) UNTRUSTED|(?:^|\s)(?:model|api_?key|base_url|model_provider)\s*=", line, re.I):
 		continue
+	if diagnostic_lines_only and not diagnostic_line.search(line):
+		continue
 	line = re.sub(r"(?i)(?:sk-[a-z0-9_-]{3,}|(?:gh[pousr]_|github_pat_)[a-z0-9_]+)", "[redacted]", line)
 	line = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [redacted]", line)
 	line = re.sub(r"\b[0-9a-fA-F]{32,}\b|\b[A-Za-z0-9_+/=-]{40,}\b", "[redacted]", line)
@@ -138,7 +149,7 @@ PY
 	while IFS= read -r stderr_line; do
 		rendered_line="$(security_audit_sanitize_log_value "${stderr_line}")"
 		# Prefix untrusted text so it cannot become an Actions workflow command.
-		printf 'security-audit: codex-stderr: %s\n' "${rendered_line}" >> "${rendered_path}"
+		printf 'security-audit: %s-stderr: %s\n' "${stderr_label}" "${rendered_line}" >> "${rendered_path}"
 	done < "${masked_path}"
 	# Cap *rendered* bytes without cutting a line through a redacted token.
 	local provider_class="unknown"
@@ -174,11 +185,11 @@ for line in kept:
 print(provider)
 PY
 	)" || provider_class="unknown"
-	printf 'security-audit: codex-stderr-tail begin\n' >&2
+	printf 'security-audit: %s-stderr-tail begin\n' "${stderr_label}" >&2
 	if [ -s "${tail_path}" ]; then
 		cat "${tail_path}" >&2
 	fi
-	printf 'security-audit: codex-stderr-tail end\n' >&2
+	printf 'security-audit: %s-stderr-tail end\n' "${stderr_label}" >&2
 	printf '%s' "${provider_class}"
 }
 
@@ -628,6 +639,7 @@ TRACKER_CANDIDATES_JSON="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-candidates.json"
 TRACKER_SELECTION_ENV="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-selection.env"
 RENDERED_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt.txt"
 RENDER_PROMPT_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt-render-error.txt"
+RENDER_PROMPT_TAIL_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt-render-tail.txt"
 CODEX_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-output.json"
 CODEX_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-error.txt"
 FILTERED_FINDINGS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filtered-findings.json"
@@ -1463,6 +1475,9 @@ if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_PROMPT_PATH}" \
 else
 	RENDER_PROMPT_STATUS=$?
 	security_audit_emit_path_diagnostic "${RENDER_PROMPT_ERROR_FILE}"
+	# Publish the renderer's own error lines (masked) so a failure that is not
+	# a missing path can be diagnosed from the run log.
+	security_audit_emit_codex_stderr_tail "${RENDER_PROMPT_ERROR_FILE}" "${SECURITY_AUDIT_PROMPT_PATH}" "${RENDER_PROMPT_TAIL_FILE}" "prompt-render" >/dev/null || true
 	security_audit_emit_failure "prompt-render" "${SECURITY_AUDIT_PROMPT_PATH}" "prompt renderer exited nonzero"
 	exit "${RENDER_PROMPT_STATUS}"
 fi
@@ -1475,6 +1490,7 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	else
 		MONEY_LENS_RENDER_STATUS=$?
 		security_audit_emit_path_diagnostic "${RENDER_PROMPT_ERROR_FILE}"
+		security_audit_emit_codex_stderr_tail "${RENDER_PROMPT_ERROR_FILE}" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" "${RENDER_PROMPT_TAIL_FILE}" "prompt-render" >/dev/null || true
 		security_audit_emit_failure "prompt-render" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" "security money lens renderer exited nonzero"
 		exit "${MONEY_LENS_RENDER_STATUS}"
 	fi
