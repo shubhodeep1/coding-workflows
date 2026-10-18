@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for the E2E smoke canary (`canary-a`)\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names exactly one file and exactly two lines, so the change stays at that size. This is an edit to a small data file, so there is no helper or pattern to reuse. The scope shown in the planning context names only this file, and the implementation stays inside it.\n\nPlanning ref: `orchestrator/project-7584` at `ba67650e65c03a52faba46b56f248b1e64085e43`. The integration-branch mismatch line reads `false`.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n\nNone. The change is a data edit to one file.\n\nCurrent contents of the file on this ref (3 lines, LF line endings):\n```\nstatus: ok\nrun_id: 26151428977\nupdated-by: ai-pipeline\n```\n\nThe steps:\n1. Set line 1 to exactly `status: ok`. It already is; rewrite it anyway as the issue asks.\n2. Replace line 2 (`run_id: 26151428977`) with exactly `decompose-run: 39083485345`.\n3. Leave line 3 (`updated-by: ai-pipeline`) unchanged.\n4. End the file with a single trailing newline.\n\nExpected result:\n```\nstatus: ok\ndecompose-run: 39083485345\nupdated-by: ai-pipeline\n```\n\n## Data structures affected\n\nNone.\n\n## API or interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Keep the third line\n- Chosen: leave `updated-by: ai-pipeline` exactly as it is.\n- Alternatives considered: delete everything after line 2, or rewrite the whole file.\n- Why: the issue says to leave any lines after the second line unchanged.\n\n## Security considerations\n\n- No trust boundary, endpoint, credential or money-handling surface is touched.\n- The new values come from the issue text. Both are fixed ASCII literals, so there is nothing to validate.\n- Abuse cases: none. The file is a test fixture that only the smoke run reads.\n\n## Risks and edge cases\n\n- The sibling issue owns `tests/e2e_smoke_canary_b.txt`. Do not touch that file.\n- Do not add a trailing space or a CRLF line ending.\n- Do not add a changelog fragment; the issue says none is needed.\n\n## Testing considerations\n\n- `head -n 1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 39083485345`.\n- `sed -n 3p tests/e2e_smoke_canary.txt` still prints `updated-by: ai-pipeline`.\n- `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\n\nThe plan meets every acceptance criterion, keeps the change to the one file in scope, and leaves the third line unchanged as the issue requires.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "54e74bb34475459dd440dee1adde6d396f1a28b37a19cb44f9f53c732a4f9da6",
+  "lineage": {
+    "issue_number": 7585,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39084002471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39084002471",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7585"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261018005413_f4b5ee18c0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7585,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39084002471"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7585",
+  "timestamps": {
+    "created_at": "2026-10-18T00:54:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
