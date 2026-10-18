@@ -23592,12 +23592,25 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
                 '.final_merge_pr = null
                  | .final_merge_status = "pending"
                  | .final_merge_error = ("final PR #" + $pr + " merged head " + $a + ", but integration branch " + $ib + " advanced to " + $t + " after the merge; reopening a final PR for " + $a + ".." + $t)
-                 | .external_finalize_delivery_alert_sig = ""' \
+                 | .external_finalize_delivery_alert_sig = ""
+                 | if (.security_pass_status // "") == "passed" then
+                     .security_pass_last_audited_sha = (
+                       if (.security_pass_last_audited_sha // "") != "" then .security_pass_last_audited_sha
+                       else (.security_pass_head_sha // "") end)
+                     | .security_pass_status = "pending"
+                     | .security_pass_head_sha = ""
+                   else . end' \
                 "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
                 rm -f "${STATE_FILE}.tmp" || true
                 echo "::warning::[external-finalize] failed to persist the post-merge drift hold for PR #${_orch_extfin_pr}; retrying next tick without completing."
                 continue
               fi
+              # The tracking body's security-pass block must not read
+              # "passed" for a tip that never reached the default branch
+              # (issue #7611). The audited SHA stays in
+              # security_pass_last_audited_sha, so the gate for the fresh
+              # final PR re-runs as a delta audit of that same tip.
+              reconcile_tracking_body_after_security_pass_transition
               post_state_comment || true
               _orch_extfin_drift_body="## ⚠️ Integration branch advanced after PR #${_orch_extfin_pr} merged — project not complete
 

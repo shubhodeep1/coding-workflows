@@ -8912,7 +8912,13 @@ def test_external_finalize_holds_completion_when_integration_branch_advanced_aft
 		assert not any(b.startswith("## ✅ Project complete") for b in bodies)
 		assert not any(n.get("level") == "CRITICAL" and "completed" in n.get("message", "") for n in result["telegram_notifications"])
 		if enable_security_pass == "true":
-			assert latest["security_pass_head_sha"] == tip
+			# The tip was audited but not delivered: the tracking body's
+			# security-pass block must not read "passed" for it, and the
+			# audited SHA is kept as the delta pointer for the re-check.
+			assert latest["security_pass_status"] == "pending"
+			assert latest["security_pass_head_sha"] == ""
+			assert latest["security_pass_last_audited_sha"] == tip
+			assert "- Status: `passed`" not in result["issues"]["192"]["body"]
 			assert f"The security pass audited `{tip}`." in drift_bodies[0]
 
 
