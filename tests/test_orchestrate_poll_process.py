@@ -1068,6 +1068,20 @@ esac
 			env=_git_test_env(),
 		).stdout.strip()
 
+		# `__squashed_default_head__` models the default branch right after the
+		# integration branch was squash-merged into it: a child of the default
+		# head whose tree is the integration head's tree (issue #7611).
+		sandbox_sha_aliases["__squashed_default_head__"] = subprocess.run(
+			[
+				"git", "-C", str(sandbox), "commit-tree", integration_tree_sha,
+				"-p", sandbox_sha_aliases["__default_head__"], "-m", "squash-merge integration",
+			],
+			check=True,
+			capture_output=True,
+			text=True,
+			env=_git_test_env(),
+		).stdout.strip()
+
 		# `__advanced_integration_head_with_fix__` is an integration-head child
 		# whose tree differs: one new file and one modified file, the shape of
 		# a merged security-fix PR, so fix-cycle diff tests see real hunks.
@@ -3786,6 +3800,7 @@ sys.exit(proc.returncode)
 		result["mock_operator_bypass_audit_append_calls"] = int(result.get("mock_operator_bypass_audit_append_calls", 0))
 		result["stdout"] = proc.stdout
 		result["stderr"] = proc.stderr
+		result["sandbox_sha_aliases"] = dict(sandbox_sha_aliases)
 		judge_prompt_path = runtime_dir / "judge_prompt.txt"
 		result["judge_prompt"] = judge_prompt_path.read_text(encoding="utf-8") if judge_prompt_path.exists() else ""
 		result["rb_judge_prompts"] = {
@@ -8731,6 +8746,7 @@ def test_security_pass_external_finalize_route_blocks_then_clean_pass_completes(
 		"merged": True,
 		"baseRefName": "main",
 		"headRefName": "orchestrator/project-192",
+		"headSha": "__integration_head__",
 		"mergeable": None,
 		"mergeable_state": "unknown",
 	}
@@ -8759,6 +8775,16 @@ def test_security_pass_external_finalize_route_blocks_then_clean_pass_completes(
 		else:
 			assert result["latest_state"]["security_pass_status"] == "passed"
 			assert result["latest_state"]["final_merge_status"] == "merged"
+			head_sha = result["sandbox_sha_aliases"]["__integration_head__"]
+			output = result["stdout"] + result["stderr"]
+			assert f"EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=delivered reason=tip_is_merged_head merged_head={head_sha} tip={head_sha}" in output
+			complete_bodies = [
+				c.get("body", "") for c in result["issues"]["192"]["comments"]
+				if c.get("body", "").startswith("## ✅ Project complete")
+			]
+			assert len(complete_bodies) == 1
+			assert f"Delivery check: `delivered` — merged final-PR head `{head_sha}`, integration tip `{head_sha}`." in complete_bodies[0]
+			assert f"Security pass audited `{head_sha}`." in complete_bodies[0]
 
 
 def test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted() -> None:
@@ -8798,6 +8824,142 @@ def test_security_pass_external_finalize_uses_verified_pr_head_when_integration_
 	assert result["latest_state"]["security_pass_head_sha"] == result["security_audit_capture"]["diff_head"]
 	assert result["pr_get_calls"]["395"] == 1
 	assert result["git_fetch_calls"]["refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head"] == 2
+	assert "EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=branch_deleted reason=branch_absent" in result["stdout"] + result["stderr"]
+
+
+def _external_finalize_delivery_run(
+	*,
+	head_sha: str = "__integration_head__",
+	integration_tip: str | None = None,
+	default_tip: str | None = None,
+	enable_security_pass: str = "false",
+	state_extra: dict | None = None,
+	pull_ref_sha: str | None = "__integration_head__",
+) -> dict:
+	"""Issue #7611: run one tick that reaches external-finalize for final PR
+	395 with the integration branch still present."""
+	integration_branch = "orchestrator/project-192"
+	final_pr = {
+		"number": 395,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": integration_branch,
+		"headSha": head_sha,
+		"mergeable": None,
+		"mergeable_state": "unknown",
+	}
+	state = _base_state()
+	state.update(
+		{
+			"integration_branch": integration_branch,
+			"final_merge_pr": 395,
+			"final_merge_status": "pending",
+		}
+	)
+	state.update(state_extra or {})
+	branch_ref_shas: dict[str, str] = {}
+	if integration_tip is not None:
+		branch_ref_shas[integration_branch] = integration_tip
+	if default_tip is not None:
+		branch_ref_shas["main"] = default_tip
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass=enable_security_pass,
+		security_audit_payload=_security_audit_findings_payload(),
+		issue_labels={10: ["ai:merged"]},
+		prs=[final_pr],
+		existing_branches=["main", integration_branch],
+		branch_ref_shas=branch_ref_shas,
+		pull_ref_shas={395: pull_ref_sha} if pull_ref_sha else {},
+		# After a squash merge every integration commit stays "ahead".
+		compare_ahead_by=1,
+		capture_telegram_calls=True,
+	)
+
+
+def test_external_finalize_holds_completion_when_integration_branch_advanced_after_merge() -> None:
+	# Incident tele-funtoken-msg-scoring#4281: the final PR was squash-merged
+	# at head A, then the security pass merged fix PRs onto the integration
+	# branch (tip B, a descendant of A). The tick must not complete the
+	# project; it clears the recorded final PR so a fresh one carries A..B.
+	for enable_security_pass in ("true", "false"):
+		result = _external_finalize_delivery_run(
+			integration_tip="__advanced_integration_head_with_fix__",
+			enable_security_pass=enable_security_pass,
+		)
+		aliases = result["sandbox_sha_aliases"]
+		merged_head = aliases["__integration_head__"]
+		tip = aliases["__advanced_integration_head_with_fix__"]
+		latest = result["latest_state"]
+		output = result["stdout"] + result["stderr"]
+		assert latest["status"] != "complete", enable_security_pass
+		assert latest["final_merge_status"] == "pending"
+		assert latest["final_merge_pr"] != 395
+		if latest["final_merge_pr"] is None:
+			assert merged_head in latest["final_merge_error"]
+			assert tip in latest["final_merge_error"]
+		assert "ai:merged" not in result["tracking_labels"]
+		assert (
+			f"EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=drift reason=content_not_on_default merged_head={merged_head} tip={tip}"
+			in output
+		)
+		bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+		drift_bodies = [b for b in bodies if b.startswith("## ⚠️ Integration branch advanced after PR #395 merged")]
+		assert len(drift_bodies) == 1
+		assert merged_head in drift_bodies[0] and tip in drift_bodies[0]
+		assert not any(b.startswith("## ✅ Project complete") for b in bodies)
+		assert not any(n.get("level") == "CRITICAL" and "completed" in n.get("message", "") for n in result["telegram_notifications"])
+		if enable_security_pass == "true":
+			assert latest["security_pass_head_sha"] == tip
+			assert f"The security pass audited `{tip}`." in drift_bodies[0]
+
+
+def test_external_finalize_completes_when_squash_merged_content_is_on_default() -> None:
+	# A squash merge leaves every integration commit "ahead" of the default
+	# branch; a post-merge commit that adds no content (a sync merge) must
+	# not hold the project.
+	result = _external_finalize_delivery_run(
+		integration_tip="__advanced_integration_head__",
+		default_tip="__squashed_default_head__",
+	)
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert result["latest_state"]["final_merge_pr"] == 395
+	assert "outcome=delivered_by_content reason=tip_content_on_default" in result["stdout"] + result["stderr"]
+
+
+def test_external_finalize_fails_closed_when_integration_tip_does_not_descend_from_merged_head() -> None:
+	result = _external_finalize_delivery_run(integration_tip="__default_head__")
+	latest = result["latest_state"]
+	assert latest["status"] != "complete"
+	assert latest["final_merge_pr"] == 395
+	assert latest["final_merge_status"] == "pending"
+	assert "does not descend" in latest["final_merge_error"]
+	sig = latest["external_finalize_delivery_alert_sig"]
+	assert re.fullmatch(r"[0-9a-f]{64}", sig)
+	assert "outcome=diverged reason=tip_not_descendant_of_merged_head" in result["stdout"] + result["stderr"]
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert len([b for b in bodies if b.startswith("## 🛑 Integration branch history changed")]) == 1
+	assert [n["level"] for n in result["telegram_notifications"] if "does not descend" in n.get("message", "")] == ["ERROR"]
+
+	# Same tip on the next tick: no second alert or comment.
+	repeat = _external_finalize_delivery_run(integration_tip="__default_head__", state_extra={"external_finalize_delivery_alert_sig": sig})
+	assert repeat["latest_state"]["status"] != "complete"
+	repeat_bodies = [c.get("body", "") for c in repeat["issues"]["192"]["comments"]]
+	assert not any(b.startswith("## 🛑 Integration branch history changed") for b in repeat_bodies)
+	assert not any("does not descend" in n.get("message", "") for n in repeat["telegram_notifications"])
+
+
+def test_external_finalize_holds_when_merged_head_cannot_be_verified() -> None:
+	result = _external_finalize_delivery_run(head_sha="ab" * 20, pull_ref_sha=None)
+	latest = result["latest_state"]
+	assert latest["status"] != "complete"
+	assert latest["final_merge_pr"] == 395
+	assert "outcome=unverified reason=merged_head_unavailable" in result["stdout"] + result["stderr"]
+	assert [n["level"] for n in result["telegram_notifications"] if "could not be verified" in n.get("message", "")] == ["WARNING"]
 
 
 def test_security_pass_external_finalize_fails_closed_on_transient_integration_fetch_error() -> None:
@@ -9307,6 +9469,13 @@ def test_security_pass_gate_is_present_on_every_completion_route() -> None:
 	)
 	assert re.search(
 		r'\[external-finalize\].*?ensure_security_pass_before_completion.*?\.status = "complete"',
+		poller,
+		re.S,
+	)
+	# Issue #7611: the delivery check runs after the security gate and before
+	# the completion write, so a post-merge fix cycle cannot be reported done.
+	assert re.search(
+		r'\[external-finalize\].*?ensure_security_pass_before_completion.*?external_finalize_delivery_check .*?\.status = "complete"',
 		poller,
 		re.S,
 	)
@@ -13368,6 +13537,7 @@ def test_external_finalize_detect_skips_terminal_fallthrough():
 			"merged": True,
 			"baseRefName": "main",
 			"headRefName": "orchestrator/project-192",
+			"headSha": "__integration_head__",
 			"mergeable": None,
 			"mergeable_state": "unknown",
 		},
@@ -13399,6 +13569,7 @@ def test_external_finalize_detect_preempts_sync_branch_missing_failure():
 			"merged": True,
 			"baseRefName": "main",
 			"headRefName": "orchestrator/project-192",
+			"headSha": "__integration_head__",
 			"mergeable": None,
 			"mergeable_state": "unknown",
 		},
