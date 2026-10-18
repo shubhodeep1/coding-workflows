@@ -5,13 +5,25 @@
   "entry_id": "processed_command_7625_6248337441_approved",
   "issue_number": 7625,
   "metadata": {
+    "branch": "ai/issue-7625",
+    "changed_files": [
+      "agents.d/7625-reviewer-pass2-shadow.md",
+      "changelog.d/7625-reviewer-pass2-shadow.md",
+      "scripts/review_run_reviewers.sh",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 7625,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7625",
+    "pr_number": 7627,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7627",
+    "run_attempt": "1",
+    "run_id": "39116188254",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39116188254"
   },
   "run_attempt": 1,
   "run_id": "39116188254",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-18T09:41:54Z",
+  "status": "completed",
+  "timestamp": "2026-10-18T10:06:14Z",
   "workflow": "implement"
 }
