@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) A specific workflow or pipeline phase (clarify, plan, implement, review/autofix, orchestrate, validate, heal); name it in the answer (RECOMMENDED)\nB) Documentation (README.md, docs/, agents.d/ fragments)\nC) A specific script or helper under scripts/; name the file in the answer\nD) Something else; describe it in the answer\nQ2: What does \"better\" mean for that target?\nChoices:\nA) Fix a specific bug or failure; link the failing run, issue or PR in the answer (RECOMMENDED)\nB) Add a specific new behaviour or feature; describe the expected behaviour in the answer\nC) Improve performance or cost (runtime, API calls, tokens); state the metric and target in the answer\nD) Improve clarity or maintainability with no change in behaviour; describe the scope in the answer\nQ3: How will we know the change is done?\nChoices:\nA) A concrete acceptance check, such as a test, a log line or an observable outcome, stated in the answer (RECOMMENDED)\nB) Reviewer judgement only (note: this usually leads to another round of clarification at planning)",
+  "fingerprint": "3f466626d7a28aa2c078f9c3021bc74e4ffcfbd238c4d801b753a6b96e88116c",
+  "lineage": {
+    "issue_number": 7582,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39083625959",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39083625959",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261018004610_22ae4f8129",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7582,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39083625959"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7582 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-18T00:46:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
