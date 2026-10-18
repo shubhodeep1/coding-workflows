@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:4846-4880 | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A cross-pollination claim from an earlier pass said four string literals at lines 4846-4847 and 4879-4880 have no `f` prefix, so the `{_synced_security_run_url(payload)}` and `{intake_run_url}` placeholders would print literally. The reviewer marks this claim as a false positive.\n  WHY: Reading HEAD directly shows all four lines start with `f\"`, so the placeholders are filled in. The reviewer says the pass-1 consensus finding should be downgraded. The source states no severity. anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus and google_gemini-3_1-flash-lite also rejected this claim, or called it already satisfied, outside the standard finding format.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Report synced-file security findings upstream\" (issue #7623, project #7604 Phase 2)\n  expected_change_site: scripts/security_audit_upstream_report.sh and .github/workflows/security-audit.yml\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR includes these files, but they must be validated for robustness against the environment in consumer repositories, specifically for OIDC token availability and GitHub API dispatch permissions (reviewer SEVERITY: MAJOR).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- HARDENING (not a finding): scripts/security_audit_upstream_report.sh, embedded Python selection block, line 226 `or not CATEGORY_RE.match(category)`\n  PROBLEM: FILE_RE and ID_RE use fullmatch, but CATEGORY_RE still uses match, so its `$` anchor accepts a trailing newline.\n  WHY: The reviewer says this is masked in practice: category is .strip()-ed first, and normalize_synced_security_category maps it to a fixed token. The check matters only as a fallback when the module lacks that function. Suggested fix: `CATEGORY_RE.fullmatch(category)` (1 line). HARDENING_RISK_SCORE: 1.\n- REJECTED cross-pollination: scripts/workflow_failure_heal.py lines 4846-4847 and 4879-4880 missing the f prefix. The reviewer says this is false because all four lines are f-strings, and does not report it.\n- Every other category: NONE. TASK COMPLETENESS: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Report synced-file security findings upstream\" (issue #7623, project #7604 Phase 2)\n  Expected change site: scripts/security_audit_upstream_report.sh and .github/workflows/security-audit.yml\n  Evidence of absence: The PR includes these files, but they must be validated for robustness against the environment in consumer repositories, specifically for OIDC token availability and GitHub API dispatch permissions.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Consensus finding about missing `f` prefixes in `compose_synced_security_issue` and `compose_synced_security_occurrence`: classified as \"Already satisfied\", because the prefixes are present.\n- Every other category: NONE. No new runtime issues identified.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:lines 4846-4847, 4879-4880 | confidence=1\n  PROBLEM: This is a cross-pollination claim, and the reviewer says it is not real. The minimax pass-1 finding said four string literals lack the `f` prefix, which would print literal `{_synced_security_run_url(payload)}` / `{intake_run_url}` placeholders.\n  WHY: This is a false positive. HEAD lines 4846, 4847, 4879 and 4880 all start with `f\"`, so the placeholders are filled in. The reviewer says the pass-1 consensus finding should be downgraded.\n- Verified the change from `.match` to `.fullmatch` at `scripts/workflow_failure_heal.py:4649` and `:4686`. It is correct hardening and matches the sender. The tests at `tests/test_workflow_failure_heal_synced_security.py:92-93` cover it.\n- Every other category: NONE. TASK COMPLETENESS: NONE, because Phase 1 and Phase 2 are both present in this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- HARDENING (not a finding): scripts/security_audit_upstream_report.sh, Line 226 (embedded Python block)\n  PROBLEM: CATEGORY_RE validation uses `.match()` instead of `.fullmatch()`. This is inconsistent with FILE_RE and ID_RE, which use `.fullmatch()` at lines 188 and 225.\n  WHY: The reviewer says this is not a bug, because the regex at line 167 has both `^` and `$` anchors. Using `.fullmatch()` everywhere would still improve clarity and defense-in-depth. Suggested fix: `or not CATEGORY_RE.fullmatch(category)` (1 line). HARDENING_RISK_SCORE: 1.\n- REJECTED cross-pollination: missing `f` prefix at lines 4846-4847 and 4879-4880 in scripts/workflow_failure_heal.py. The reviewer calls this INCORRECT because all four lines have the `f` prefix.\n- Every other category: NONE. TASK COMPLETENESS: NONE.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "45b3fee11316b46e7005eababc7a058e2f09f5a6a58418539ed2b2f5c1089829",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7606,
+    "run_id": "39126604204",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39126604204",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018123838_1307adac96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7606,
+    "run_id": "39126604204"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-18T12:38:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
