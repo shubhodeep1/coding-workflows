@@ -276,6 +276,27 @@ if [ ! -f "${HEAL_PY}" ]; then
 	exit 1
 fi
 
+# Synced-file security findings (HEAL_SYNCED_SECURITY_FINDING_ENABLED): on when
+# unset, empty or "true" (any letter case); "false" turns the kind off, and any
+# other value also turns it off with a warning.
+RAW_SOURCE_KIND="$(jq -r 'if type == "object" then (.source_kind // "") else "" end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo "")"
+if [ "${RAW_SOURCE_KIND}" = "synced_security_finding" ]; then
+	SYNCED_SECURITY_SWITCH="${HEAL_SYNCED_SECURITY_FINDING_ENABLED:-true}"
+	case "${SYNCED_SECURITY_SWITCH,,}" in
+		true) ;;
+		false)
+			log "skip reason=synced_security_finding_disabled"
+			exit 0
+			;;
+		*)
+			log "warn invalid_switch name=HEAL_SYNCED_SECURITY_FINDING_ENABLED"
+			log "skip reason=synced_security_finding_disabled"
+			exit 0
+			;;
+	esac
+	unset SYNCED_SECURITY_SWITCH
+fi
+
 PAYLOAD_FILE="${RUNTIME_DIR}/payload.json"
 if ! python3 "${HEAL_PY}" validate-payload --payload-json "${PAYLOAD_RAW_FILE}" > "${PAYLOAD_FILE}" 2> "${RUNTIME_DIR}/payload_error.txt"; then
 	PAYLOAD_ERROR="$(head -c 300 "${RUNTIME_DIR}/payload_error.txt" 2>/dev/null | tr '\n' ' ' || true)"
@@ -398,6 +419,18 @@ case "${REPORT_ORIGIN}" in
 		esac
 		;;
 esac
+# A synced_security_finding report needs a verified identity whatever
+# WORKFLOW_HEAL_REQUIRE_REPORT_AUTH says, and its release SHA must be the ref
+# the consumer's security-audit.yml ran at.
+if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+	if [ "${REPORT_AUTH}" != "verified" ]; then
+		_report_auth_reject "identity_required"
+	fi
+	SYNCED_SECURITY_WORKFLOW_REF="$(jq -r '.claims.job_workflow_ref // ""' "${VERIFY_FILE}" 2>/dev/null || echo "")"
+	if [ -z "${WRAPPER_SHA}" ] || [ "${SYNCED_SECURITY_WORKFLOW_REF##*@}" != "${WRAPPER_SHA}" ]; then
+		_report_auth_reject "release_mismatch"
+	fi
+fi
 rm -f "${REPORT_IDENTITY_FILE}" 2>/dev/null || true
 
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" 2>/dev/null || echo "")"
@@ -416,6 +449,12 @@ if [ -n "${SKIP_REASON}" ]; then
 	if [ "${SKIP_REASON}" = "unregistered_source_repo" ]; then
 		tg_send_msg "Workflow failure heal intake ignored a report from unregistered repository ${SOURCE_REPO} (add it to .github/ai/consumer_repos.json to opt in)."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 	fi
+	exit 0
+fi
+
+# coding-workflows files its own audit findings in-repo.
+if [ "${SOURCE_KIND}" = "synced_security_finding" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+	log "skip reason=synced_security_self_repo source=${SOURCE_REPO}"
 	exit 0
 fi
 
@@ -527,6 +566,328 @@ else
 fi
 
 log "received source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} label=${LABEL:-none} workflow=${PAYLOAD_WORKFLOW_NAME:-none}"
+
+# --- Shared intake helpers ---------------------------------------------------
+# Defined here, ahead of their first caller: the synced_security_finding branch
+# below runs them before the linear path that also uses them.
+
+# The ai:workflow-heal issues of one repository (any state), one record per
+# issue tagged with its repository, for the dedup / lineage / budget decision.
+_heal_fetch_issue_list()
+{
+	local list_repo="$1" list_out="$2"
+	gh_retry gh api --method GET --paginate "repos/${list_repo}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
+		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+		| jq -s --arg repository "${list_repo}" 'map(. + {repository: $repository})' > "${list_out}" 2>/dev/null
+}
+
+# HEAL_INTAKE_SCOPE_GUARD_ENABLED (#6871): on when unset, empty or "true"
+# (any letter case); any other value is off.
+_heal_intake_scope_guard_is_on()
+{
+	[ "${SCOPE_GUARD_ENABLED,,}" = "true" ]
+}
+
+_git_fetch_diagnosis_ref()
+{
+	local diagnosis_ref="$1"
+	local diagnosis_auth_header=""
+	if [ -n "${GH_TOKEN:-}" ]; then
+		diagnosis_auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+		GIT_CONFIG_COUNT=1 \
+			GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+			GIT_CONFIG_VALUE_0="${diagnosis_auth_header}" \
+			git fetch --quiet --depth 1 origin "${diagnosis_ref}" >/dev/null 2>&1
+	else
+		git fetch --quiet --depth 1 origin "${diagnosis_ref}" >/dev/null 2>&1
+	fi
+}
+
+
+# A report that claimed no run (a label-only report, engine_fallback) has no
+# verified run to bound a heal scope with, so its scope can never resolve.
+# Refusing it is expected, not an intake defect: skip with a log line and
+# exit 0 instead of a CRITICAL alert and a failed run. A report that claimed
+# runs keeps the CRITICAL refusal, because there an unresolved scope is a fault.
+# The raw report is checked too: validate-payload drops malformed or foreign
+# refs, and a report whose claimed runs were all dropped is a fault, not a
+# run-less report. A heal-scope recovery replacement keeps its documented
+# CRITICAL refusal (#7323). A missing jq or unreadable payload prints
+# "unknown", which is not "0", so the report keeps the refusal (fail closed).
+_heal_report_claimed_no_runs()
+{
+	[ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
+		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
+		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo unknown)" = "0" ]
+}
+
+_heal_skip_scope_unavailable()
+{
+	log "skip reason=scope_unavailable_no_runs stage=$1 fp=${FP} classification=${CLASSIFICATION} source=${SOURCE_LABEL}"
+	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+		echo "Workflow failure heal filed no issue for ${SOURCE_LABEL}: the report names no failed run, so no heal scope can be set." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+	fi
+	exit 0
+}
+
+# Gate in front of the only heal issue-create call (#6871). With
+# HEAL_INTAKE_SCOPE_GUARD_ENABLED off it ends the intake with
+# exit 0 before the issue-create writes, so no heal issue, target-repo label,
+# outcome comment or "created" alert happens (the ai:workflow-heal /
+# ai:workflow-heal-escalated labels in SELF_REPO are still ensured earlier,
+# as for every report). With it on it re-verifies the composed body's
+# ai:workflow-heal-scope:v1 marker through the same `heal-scope verify` the
+# implement preflight uses (author / label / edit checks are satisfied
+# synthetically: the issue does not exist yet, so only the marker shape is
+# checked) and refuses creation, fail closed, on anything but `verified`.
+# Heal-scope recovery (#7323): while a recovery replacement is being created
+# (HEAL_SCOPE_RECOVERY_ACTIVE=true, set only by _heal_scope_recovery_evaluate)
+# the guard-off branch does not exit; it runs the same verify check, so the
+# replacement is filed only with a verified scope marker. Every other intake
+# path with the guard off still ends with exit 0.
+_heal_intake_scope_guard_permits_create()
+{
+	local scope_guard_repo="$1" scope_guard_body_file="$2" scope_guard_labels="$3" scope_guard_target_branch="${4:-}"
+	local scope_guard_input="${RUNTIME_DIR}/scope_guard_input.json" scope_guard_status=""
+	if ! _heal_intake_scope_guard_is_on && [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ]; then
+		log "scope_guard outcome=recovery_only repo=${scope_guard_repo} issue=${HEAL_SCOPE_RECOVERY_ISSUE} fp=${FP} source=${SOURCE_LABEL}"
+	elif ! _heal_intake_scope_guard_is_on; then
+		log "skip reason=scope_guard_disabled repo=${scope_guard_repo} labels=${scope_guard_labels} target_branch=${scope_guard_target_branch:-default} target_branch_source=${TARGET_BRANCH_SOURCE:-none} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
+		if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+			echo "Workflow failure heal composed a heal issue for ${SOURCE_LABEL} but did not create it: HEAL_INTAKE_SCOPE_GUARD_ENABLED is off." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+		fi
+		exit 0
+	fi
+	if [ ! -s "${scope_guard_body_file}" ]; then
+		# Name the cause: a missing/empty composed body is not a marker problem.
+		scope_guard_status="body_missing"
+	elif jq -n --rawfile body "${scope_guard_body_file}" --arg label "${HEAL_LABEL}" \
+		'{body: $body, author_login: "heal-intake-precreate", pipeline_login: "heal-intake-precreate", labels: [$label], last_edited_at: null}' \
+		> "${scope_guard_input}" 2>/dev/null; then
+		scope_guard_status="$(PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_PY}" heal-scope verify --input-json "${scope_guard_input}" 2>/dev/null \
+			| jq -r '.status // empty' 2>/dev/null || true)"
+	fi
+	rm -f "${scope_guard_input}"
+	if [ "${scope_guard_status}" = "verified" ]; then
+		log "scope_guard outcome=verified repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
+		return 0
+	fi
+	if _heal_report_claimed_no_runs; then
+		_heal_skip_scope_unavailable scope_guard
+	fi
+	scope_guard_status="$(printf '%s' "${scope_guard_status:-unavailable}" | tr -cd 'a-z_' | head -c 40)"
+	[ -n "${scope_guard_status}" ] || scope_guard_status="unavailable"
+	echo "::error::WORKFLOW_HEAL error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}" >&2
+	log "error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
+	tg_send_msg "Workflow failure heal refused to open an issue in ${scope_guard_repo} for ${SOURCE_LABEL}: the scope marker could not be verified (${scope_guard_status})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+	return 1
+}
+
+# --- Synced-file security findings (synced_security_finding) ----------------
+#
+# A consumer security audit reports high / critical findings on files the
+# @stable sync manages (docs/plans/synced-file-security-findings-heal-intake-plan.md,
+# Phase 1). The report names no run, so no log is read and no diagnosis model
+# runs (as for engine_fallback). The release SHA was bound to the verified
+# identity above; here it must be on `stable`, and every finding's file must be
+# a managed path of that release (build_sync_manifest.py managed-digests, run
+# from this trusted checkout on the fetched release tree). Findings are grouped
+# by fingerprint (path | category | line bucket) and each group takes the
+# existing dedupe / occurrence / budget / open path. Only validated fields
+# (file, line, category, severity, confidence, finding id, consumer) are
+# published (Q245). Counts in the summary line: findings are findings,
+# opened / occurrences / skipped are fingerprint groups.
+_synced_security_finding_intake()
+{
+	local ss_dir="${RUNTIME_DIR}/synced_security"
+	local ss_bucket="${HEAL_SYNCED_SECURITY_LINE_BUCKET:-25}"
+	local ss_findings=0 ss_opened=0 ss_occurrences=0 ss_skipped=0 ss_failed=0 ss_attention=0
+	local ss_reporter_run="" ss_compare="" ss_digests="" ss_contract="" ss_groups="" ss_issues=""
+	local ss_path_check="" ss_count=0 ss_index=0 ss_links="" ss_action="" ss_reason="" ss_level="DEBUG"
+	local ss_group="" ss_decision="" ss_existing="" ss_prior="" ss_gen="" ss_root=""
+	local ss_scope="" ss_scope_input="" ss_scope_status="" ss_title="" ss_body="" ss_url="" ss_number=""
+	mkdir -p "${ss_dir}"
+	HEAL_SCOPE_RECOVERY_ACTIVE="false"
+	CLASSIFICATION="workflow-defect"
+	FP="none"
+	ss_findings="$(jq -r '.findings | length' "${PAYLOAD_FILE}" 2>/dev/null || echo 0)"
+	ss_reporter_run="$(jq -r '.claims.run_id // ""' "${VERIFY_FILE}" 2>/dev/null || echo "")"
+	[[ "${ss_reporter_run}" =~ ^[1-9][0-9]*$ ]] || _report_auth_reject "reporter_run_unbound"
+
+	# The release tree the consumer synced from.
+	if ! git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null; then
+		_git_fetch_diagnosis_ref "${WRAPPER_SHA}" || true
+	fi
+	git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null || _report_auth_reject "release_unavailable"
+	# CLAUDE.md §14 audit: no other intake call proves that the release SHA is
+	# on `stable` (a fetch by SHA can return a fork-network commit whose tree
+	# would forge the managed-paths list). One call per report, not per finding.
+	ss_compare="${ss_dir}/release_compare.json"
+	if ! gh_api_json_to_file "${ss_compare}" gh api --method GET "repos/${SELF_REPO}/compare/${WRAPPER_SHA}...stable" 2>/dev/null; then
+		_report_auth_reject "release_unavailable"
+	fi
+	jq -e '.status == "ahead" or .status == "identical"' "${ss_compare}" >/dev/null 2>&1 || _report_auth_reject "release_not_on_stable"
+	ss_digests="${ss_dir}/managed_digests.json"
+	if ! timeout 120 env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B "$(dirname "${HEAL_PY}")/build_sync_manifest.py" managed-digests --repo-root . --commit "${WRAPPER_SHA}" > "${ss_digests}" 2>/dev/null \
+		|| ! jq -e 'type == "object" and length > 0' "${ss_digests}" >/dev/null 2>&1; then
+		_report_auth_reject "release_unavailable"
+	fi
+	ss_contract="${ss_dir}/audit_gate_contract.json"
+	if ! git show "${WRAPPER_SHA}:workflow-templates/audit-gate/contract.json" > "${ss_contract}" 2>/dev/null \
+		|| ! jq -e 'type == "object"' "${ss_contract}" >/dev/null 2>&1; then
+		printf '{}' > "${ss_contract}"
+	fi
+	if ! ss_path_check="$(python3 "${HEAL_PY}" synced-security-check-paths --payload-json "${PAYLOAD_FILE}" --managed-digests-json "${ss_digests}" 2>/dev/null)"; then
+		ss_reason="$(jq -r '.reason // "unmanaged_path"' <<< "${ss_path_check}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+		_report_auth_reject "${ss_reason:-unmanaged_path}"
+	fi
+
+	ss_groups="${ss_dir}/groups.json"
+	if ! HEAL_SYNCED_SECURITY_LINE_BUCKET="${ss_bucket}" python3 "${HEAL_PY}" synced-security-groups --payload-json "${PAYLOAD_FILE}" \
+		--audit-gate-contract-json "${ss_contract}" > "${ss_groups}"; then
+		log "error synced_security_groups_failed source=${SOURCE_REPO}"
+		exit 1
+	fi
+
+	# The issue lives in this repository, so only its heal list is read.
+	ss_issues="${ss_dir}/heal_issues.json"
+	if ! _heal_fetch_issue_list "${SELF_REPO}" "${ss_issues}"; then
+		log "error heal_issue_list_failed"
+		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; synced-file security report from ${SOURCE_REPO} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+		exit 1
+	fi
+	jq -e 'type == "array"' "${ss_issues}" >/dev/null 2>&1 || printf '[]' > "${ss_issues}"
+
+	ss_count="$(jq -r 'length' "${ss_groups}")"
+	ss_index=0
+	while [ "${ss_index}" -lt "${ss_count}" ]; do
+		ss_group="${ss_dir}/group_${ss_index}.json"
+		jq ".[${ss_index}]" "${ss_groups}" > "${ss_group}"
+		ss_index=$((ss_index + 1))
+		FP="$(jq -r '.fingerprint' "${ss_group}")"
+		ss_decision="${ss_dir}/decision_${ss_index}.json"
+		python3 "${HEAL_PY}" budget --issues-json "${ss_issues}" --fingerprint "${FP}" --preferred-repo "${SELF_REPO}" \
+			--max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}" > "${ss_decision}"
+		ss_action="$(jq -r '.action' "${ss_decision}")"
+		ss_gen="$(jq -r '.gen // 1' "${ss_decision}")"
+		ss_root="$(jq -r '.root // ""' "${ss_decision}")"
+		case "${ss_action}" in
+			duplicate)
+				ss_existing="$(jq -r '.existing_issue // ""' "${ss_decision}")"
+				python3 "${HEAL_PY}" compose-synced-security-occurrence --payload-json "${PAYLOAD_FILE}" --group-json "${ss_group}" \
+					--intake-run-url "${RUN_URL}" > "${ss_dir}/occurrence_${ss_index}.md"
+				if [[ "${ss_existing}" =~ ^[0-9]+$ ]] && gh_retry gh api "repos/${SELF_REPO}/issues/${ss_existing}/comments" \
+					-F body=@"${ss_dir}/occurrence_${ss_index}.md" >/dev/null 2>&1; then
+					log "duplicate fp=${FP} existing_issue=${ss_existing} occurrence=recorded source=${SOURCE_REPO}"
+					ss_occurrences=$((ss_occurrences + 1))
+					ss_links="${ss_links}"$'\n'"- occurrence on #${ss_existing}"
+				else
+					log "warn occurrence_comment_failed fp=${FP} existing_issue=${ss_existing:-none} source=${SOURCE_REPO}"
+					ss_skipped=$((ss_skipped + 1))
+				fi
+				;;
+			escalate)
+				ss_prior="$(jq -r '.prior_issue // ""' "${ss_decision}")"
+				if [[ "${ss_prior}" =~ ^[0-9]+$ ]]; then
+					gh_retry gh issue edit "${ss_prior}" --repo "${SELF_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || true
+				fi
+				log "escalate reason=lineage_cap fp=${FP} gen=${ss_gen} prior_issue=${ss_prior:-none} source=${SOURCE_REPO}"
+				ss_skipped=$((ss_skipped + 1))
+				ss_attention=1
+				;;
+			budget_exhausted)
+				log "skip reason=budget_exhausted detail=$(jq -r '.reason // "unknown"' "${ss_decision}" | tr -cd 'a-z_') fp=${FP} source=${SOURCE_REPO}"
+				ss_skipped=$((ss_skipped + 1))
+				ss_attention=1
+				;;
+			open)
+				ss_scope="${ss_dir}/scope_marker_${ss_index}.txt"
+				ss_scope_input="${ss_dir}/scope_input_${ss_index}.json"
+				: > "${ss_scope}"
+				jq --arg run "${SOURCE_REPO}:${ss_reporter_run}" \
+					'{crash_file: null, workflow_paths: .source_paths, changed_files: [], runs: [$run], failing_tests: {names: [], files: [], pairs: []}}' \
+					"${ss_group}" > "${ss_scope_input}"
+				python3 "${HEAL_PY}" heal-scope render --input-json "${ss_scope_input}" --checkout . --ref HEAD > "${ss_scope}" 2>/dev/null || : > "${ss_scope}"
+				ss_scope_status="$(python3 "${HEAL_PY}" heal-scope check-marker --marker-file "${ss_scope}" 2>/dev/null | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)"
+				if [ "${ss_scope_status}" != "valid" ]; then
+					log "skip reason=scope_unresolved fp=${FP} status=$(printf '%s' "${ss_scope_status}" | tr -cd 'a-z_' | head -c 20) source=${SOURCE_REPO}"
+					ss_skipped=$((ss_skipped + 1))
+					ss_attention=1
+					continue
+				fi
+				if ! _heal_intake_scope_guard_is_on; then
+					log "skip reason=scope_guard_disabled fp=${FP} source=${SOURCE_REPO}"
+					ss_skipped=$((ss_skipped + 1))
+					ss_attention=1
+					continue
+				fi
+				ss_title="${ss_dir}/issue_title_${ss_index}.txt"
+				ss_body="${ss_dir}/issue_body_${ss_index}.md"
+				if ! python3 "${HEAL_PY}" compose-synced-security-issue --payload-json "${PAYLOAD_FILE}" --group-json "${ss_group}" \
+					--scope-marker-file "${ss_scope}" --gen "${ss_gen}" --root "${ss_root}" --max-depth "${MAX_DEPTH}" \
+					--intake-run-url "${RUN_URL}" --title-out "${ss_title}" --body-out "${ss_body}"; then
+					log "error issue_compose_failed fp=${FP} source=${SOURCE_REPO}"
+					ss_skipped=$((ss_skipped + 1))
+					ss_failed=1
+					continue
+				fi
+				if ! _heal_intake_scope_guard_permits_create "${SELF_REPO}" "${ss_body}" "${HEAL_LABEL}" ""; then
+					ss_skipped=$((ss_skipped + 1))
+					ss_failed=1
+					continue
+				fi
+				ss_url="$(gh_retry gh issue create --repo "${SELF_REPO}" --title "$(head -1 "${ss_title}")" --body-file "${ss_body}" --label "${HEAL_LABEL}" 2>/dev/null || echo '')"
+				ss_url="${ss_url%%[[:space:]]*}"
+				if [ -z "${ss_url}" ]; then
+					log "error issue_create_failed fp=${FP} source=${SOURCE_REPO}"
+					ss_skipped=$((ss_skipped + 1))
+					ss_failed=1
+					continue
+				fi
+				ss_number=""
+				if [[ "${ss_url}" =~ /issues/([1-9][0-9]*)$ ]]; then
+					ss_number="${BASH_REMATCH[1]}"
+				fi
+				log "opened issue=${ss_url} fp=${FP} gen=${ss_gen} source=${SOURCE_REPO}"
+				ss_opened=$((ss_opened + 1))
+				ss_links="${ss_links}"$'\n'"- opened ${ss_url}"
+				# Later groups' dedupe and budgets see the new issue.
+				if [ -n "${ss_number}" ]; then
+					jq --argjson number "${ss_number}" --rawfile body "${ss_body}" --arg url "${ss_url}" --arg repository "${SELF_REPO}" \
+						--arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg title "$(head -1 "${ss_title}")" \
+						'. + [{number: $number, state: "open", state_reason: null, title: $title, body: $body, author: "", created_at: $created, closed_at: null, html_url: $url, pull_request: false, repository: $repository}]' \
+						"${ss_issues}" > "${ss_issues}.tmp" && mv "${ss_issues}.tmp" "${ss_issues}"
+				fi
+				;;
+			*)
+				log "error unknown_decision action=$(printf '%s' "${ss_action}" | tr -cd 'a-z_') fp=${FP}"
+				ss_skipped=$((ss_skipped + 1))
+				ss_failed=1
+				;;
+		esac
+	done
+
+	log "received kind=synced_security_finding findings=${ss_findings} opened=${ss_opened} occurrences=${ss_occurrences} skipped=${ss_skipped}"
+	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+		{
+			echo "Workflow failure heal: synced-file security report from \`${SOURCE_REPO}\`: findings=${ss_findings} opened=${ss_opened} occurrences=${ss_occurrences} skipped=${ss_skipped}."
+			if [ -n "${ss_links}" ]; then printf '%s\n' "${ss_links}"; fi
+		} >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+	fi
+	if [ "${ss_attention}" -ne 0 ] || [ "${ss_failed}" -ne 0 ]; then
+		ss_level="WARNING"
+	fi
+	tg_send_msg "Workflow failure heal: synced-file security report from ${SOURCE_REPO}: findings=${ss_findings} opened=${ss_opened} occurrences=${ss_occurrences} skipped=${ss_skipped}.${ss_links}"$'\n'"Run: ${RUN_URL}" "${ss_level}" >/dev/null 2>&1 || true
+	[ "${ss_failed}" -eq 0 ]
+}
+
+if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+	# A plain call keeps `set -e` active inside the function; a failed group
+	# makes it return 1, which ends the run red.
+	_synced_security_finding_intake
+	exit 0
+fi
 
 # --- Provenance (before any log read) --------------------------------------
 
@@ -1009,9 +1370,7 @@ _heal_issue_list_failed_deferred_exit()
 SELF_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_self.json"
 SOURCE_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_source.json"
 ISSUES_FILE="${RUNTIME_DIR}/heal_issues.json"
-if ! gh_retry gh api --method GET --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
-	| jq -s --arg repository "${SELF_REPO}" 'map(. + {repository: $repository})' > "${SELF_ISSUES_FILE}" 2>/dev/null; then
+if ! _heal_fetch_issue_list "${SELF_REPO}" "${SELF_ISSUES_FILE}"; then
 	_heal_issue_list_failed_deferred_exit
 	log "error heal_issue_list_failed"
 	tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -1021,9 +1380,7 @@ fi
 # repository once so deduplication, lineage, and volume budgets cover both
 # repositories that can own the issue produced by this intake.
 if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
-	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
-		| jq -s --arg repository "${SOURCE_REPO}" 'map(. + {repository: $repository})' > "${SOURCE_ISSUES_FILE}" 2>/dev/null; then
+	if ! _heal_fetch_issue_list "${SOURCE_REPO}" "${SOURCE_ISSUES_FILE}"; then
 		_heal_issue_list_failed_deferred_exit
 		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
 		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues in ${SOURCE_REPO}; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -1373,21 +1730,6 @@ case "${ACTION}" in
 esac
 
 # --- Source checkout at the release SHA the failing run used ---------------
-
-_git_fetch_diagnosis_ref()
-{
-	local diagnosis_ref="$1"
-	local diagnosis_auth_header=""
-	if [ -n "${GH_TOKEN:-}" ]; then
-		diagnosis_auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
-		GIT_CONFIG_COUNT=1 \
-			GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
-			GIT_CONFIG_VALUE_0="${diagnosis_auth_header}" \
-			git fetch --quiet --depth 1 origin "${diagnosis_ref}" >/dev/null 2>&1
-	else
-		git fetch --quiet --depth 1 origin "${diagnosis_ref}" >/dev/null 2>&1
-	fi
-}
 
 DIAG_SHA="${WRAPPER_SHA}"
 if [ "${SOURCE_KIND}" = "workflow_run" ]; then
@@ -1881,85 +2223,6 @@ _git_fetch_consumer_scope_ref()
 	GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
 		GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="${consumer_auth_header}" \
 		timeout 120 git --git-dir "${scope_dir}" fetch --quiet --depth 1 "https://github.com/${consumer_repo}.git" "${consumer_ref}" >/dev/null 2>&1
-}
-
-# A report that claimed no run (a label-only report, engine_fallback) has no
-# verified run to bound a heal scope with, so its scope can never resolve.
-# Refusing it is expected, not an intake defect: skip with a log line and
-# exit 0 instead of a CRITICAL alert and a failed run. A report that claimed
-# runs keeps the CRITICAL refusal, because there an unresolved scope is a fault.
-# The raw report is checked too: validate-payload drops malformed or foreign
-# refs, and a report whose claimed runs were all dropped is a fault, not a
-# run-less report. A heal-scope recovery replacement keeps its documented
-# CRITICAL refusal (#7323). A missing jq or unreadable payload prints
-# "unknown", which is not "0", so the report keeps the refusal (fail closed).
-_heal_report_claimed_no_runs()
-{
-	[ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
-		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
-		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo unknown)" = "0" ]
-}
-
-_heal_skip_scope_unavailable()
-{
-	log "skip reason=scope_unavailable_no_runs stage=$1 fp=${FP} classification=${CLASSIFICATION} source=${SOURCE_LABEL}"
-	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-		echo "Workflow failure heal filed no issue for ${SOURCE_LABEL}: the report names no failed run, so no heal scope can be set." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
-	fi
-	exit 0
-}
-
-# Gate in front of the only heal issue-create call (#6871). With
-# HEAL_INTAKE_SCOPE_GUARD_ENABLED off it ends the intake with
-# exit 0 before the issue-create writes, so no heal issue, target-repo label,
-# outcome comment or "created" alert happens (the ai:workflow-heal /
-# ai:workflow-heal-escalated labels in SELF_REPO are still ensured earlier,
-# as for every report). With it on it re-verifies the composed body's
-# ai:workflow-heal-scope:v1 marker through the same `heal-scope verify` the
-# implement preflight uses (author / label / edit checks are satisfied
-# synthetically: the issue does not exist yet, so only the marker shape is
-# checked) and refuses creation, fail closed, on anything but `verified`.
-# Heal-scope recovery (#7323): while a recovery replacement is being created
-# (HEAL_SCOPE_RECOVERY_ACTIVE=true, set only by _heal_scope_recovery_evaluate)
-# the guard-off branch does not exit; it runs the same verify check, so the
-# replacement is filed only with a verified scope marker. Every other intake
-# path with the guard off still ends with exit 0.
-_heal_intake_scope_guard_permits_create()
-{
-	local scope_guard_repo="$1" scope_guard_body_file="$2" scope_guard_labels="$3" scope_guard_target_branch="${4:-}"
-	local scope_guard_input="${RUNTIME_DIR}/scope_guard_input.json" scope_guard_status=""
-	if [ "${SCOPE_GUARD_ENABLED,,}" != "true" ] && [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ]; then
-		log "scope_guard outcome=recovery_only repo=${scope_guard_repo} issue=${HEAL_SCOPE_RECOVERY_ISSUE} fp=${FP} source=${SOURCE_LABEL}"
-	elif [ "${SCOPE_GUARD_ENABLED,,}" != "true" ]; then
-		log "skip reason=scope_guard_disabled repo=${scope_guard_repo} labels=${scope_guard_labels} target_branch=${scope_guard_target_branch:-default} target_branch_source=${TARGET_BRANCH_SOURCE:-none} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
-		if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-			echo "Workflow failure heal composed a heal issue for ${SOURCE_LABEL} but did not create it: HEAL_INTAKE_SCOPE_GUARD_ENABLED is off." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
-		fi
-		exit 0
-	fi
-	if [ ! -s "${scope_guard_body_file}" ]; then
-		# Name the cause: a missing/empty composed body is not a marker problem.
-		scope_guard_status="body_missing"
-	elif jq -n --rawfile body "${scope_guard_body_file}" --arg label "${HEAL_LABEL}" \
-		'{body: $body, author_login: "heal-intake-precreate", pipeline_login: "heal-intake-precreate", labels: [$label], last_edited_at: null}' \
-		> "${scope_guard_input}" 2>/dev/null; then
-		scope_guard_status="$(PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_PY}" heal-scope verify --input-json "${scope_guard_input}" 2>/dev/null \
-			| jq -r '.status // empty' 2>/dev/null || true)"
-	fi
-	rm -f "${scope_guard_input}"
-	if [ "${scope_guard_status}" = "verified" ]; then
-		log "scope_guard outcome=verified repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
-		return 0
-	fi
-	if _heal_report_claimed_no_runs; then
-		_heal_skip_scope_unavailable scope_guard
-	fi
-	scope_guard_status="$(printf '%s' "${scope_guard_status:-unavailable}" | tr -cd 'a-z_' | head -c 40)"
-	[ -n "${scope_guard_status}" ] || scope_guard_status="unavailable"
-	echo "::error::WORKFLOW_HEAL error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}" >&2
-	log "error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
-	tg_send_msg "Workflow failure heal refused to open an issue in ${scope_guard_repo} for ${SOURCE_LABEL}: the scope marker could not be verified (${scope_guard_status})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
-	return 1
 }
 
 # Runs only after the replacement issue exists (#7191). Points the original at
