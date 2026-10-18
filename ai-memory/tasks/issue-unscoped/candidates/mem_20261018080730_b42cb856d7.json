@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/memory_helpers.sh:83 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The revised auth matcher in `_memory_stderr_category` does not classify a bare `403` as `auth`; it requires an HTTP/error/status/code prefix or the text `403 Forbidden`.\n  WHY: A failed memory call that writes a bare `403` to stderr is reported as `stderr_category=other`, contrary to the requested `403` classification. The reviewer labelled this SEVERITY: NIT, which is mapped here to low.\n- scripts/memory_helpers.sh:83 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The auth regex in `_memory_stderr_category` needs lowercase `error`, so Python urllib's `HTTP Error 403: Forbidden` matches none of the 403 alternatives and is reported as `other`.\n  WHY: This is a low-likelihood miss because `ai_memory.py` mostly shells out to git and gh, whose messages the regex covers. It was given as a hardening suggestion with HARDENING_RISK_SCORE 1, and the reviewer gave no severity or confidence. Both values are inferred here and not stated by the source.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/memory_helpers.sh:83 (hardening suggestion, `_memory_stderr_category` auth regex)\n  PROBLEM: The status-code alternative needs lowercase `error`, so `HTTP Error 403: Forbidden` is reported as `other`.\n  WHY: Low-likelihood miss, since git and gh messages are covered. The suggested fix is to change `(error|` to `([Ee]rror|` and allow an optional word before the code, for example `HTTP( Error)?`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/memory_helpers.sh:83 | severity=NIT | confidence=4\n  PROBLEM: The revised auth matcher in `_memory_stderr_category` does not classify a bare `403` as `auth`; it requires an HTTP/error/status/code prefix or the text `403 Forbidden`.\n  WHY: A failed memory call that writes a bare `403` to stderr is reported as `stderr_category=other`, contrary to the requested `403` classification.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3e28bbed8292ae229441697e33f851353d8466f00aeadf50f3c691e2709164fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7619,
+    "run_id": "39108996139",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39108996139",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018080730_b42cb856d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7619,
+    "run_id": "39108996139"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-18T08:07:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
