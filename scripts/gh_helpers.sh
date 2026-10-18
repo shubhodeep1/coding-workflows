@@ -2309,9 +2309,15 @@ autofix_retrigger_has_inflight_peer()
 #   entry whether or not it matches, so a second call or a call for
 #   another branch never reads it.
 #   Race reasoning: this probe counts *completed* runs.  The snapshot is
-#   milliseconds old (only `git rev-parse` / `git log` separate the two
-#   probes), and a live call has the same window, so a run that
-#   completes in between is missed either way.  A missing or mismatched
+#   taken before the peer helper's in-flight filter, its PR-named
+#   `?event=workflow_dispatch` lookup (one or more API calls on the
+#   no-peer path) and its `emit_event`, and then the caller's
+#   `git rev-parse` / `git log` run, so it is typically seconds old, not
+#   milliseconds.  A run that starts and completes inside that window
+#   is not counted, so this probe can allow one more retry than a fresh
+#   call would.  A run in flight at snapshot time already made the peer
+#   probe report a peer, and a live call has its own window too, so the
+#   reuse only widens an existing race by those seconds.  A missing or mismatched
 #   snapshot, or a failed or malformed peer response (never stored),
 #   falls back to the live call; the empty and shape checks run on
 #   whichever response is used, and every fail-closed return is kept.
