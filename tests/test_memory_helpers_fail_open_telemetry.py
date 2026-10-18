@@ -45,7 +45,7 @@ def stub_dir(tmp_path):
 	return directory
 
 
-def _run(tmp_path, stub_dir, fn, *, stderr="", stdout="", exit_code=0, enabled="true", path_prefix=None):
+def _run(tmp_path, stub_dir, fn, *, stderr="", stdout="", exit_code=0, enabled="true", path_prefix=None, prelude=""):
 	tmpdir = tmp_path / "tmp"
 	tmpdir.mkdir(exist_ok=True)
 	env = dict(os.environ)
@@ -63,6 +63,7 @@ def _run(tmp_path, stub_dir, fn, *, stderr="", stdout="", exit_code=0, enabled="
 		env["PATH"] = f"{path_prefix}{os.pathsep}{env.get('PATH', '')}"
 	script = (
 		"set -euo pipefail\n"
+		f"{prelude}"
 		f'source "{HELPERS}"\n'
 		f'MEMORY_SCRIPTS_DIR="{stub_dir}"\n'
 		f"{fn} --x y\n"
@@ -164,14 +165,10 @@ def test_success_path_forwards_output_without_failure_telemetry(tmp_path, stub_d
 
 @pytest.mark.parametrize("fn", sorted(FUNCTIONS))
 def test_mktemp_failure_reports_unavailable(tmp_path, stub_dir, fn):
-	fake_bin = tmp_path / "fakebin"
-	fake_bin.mkdir()
-	mktemp = fake_bin / "mktemp"
-	mktemp.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
-	mktemp.chmod(0o755)
-
+	# A shell function shadows mktemp. A stub executable on PATH would be
+	# skipped when the temp directory is mounted noexec.
 	proc, telemetry, _ = _run(
-		tmp_path, stub_dir, fn, stderr="fatal: Could not resolve host\n", exit_code=2, path_prefix=str(fake_bin)
+		tmp_path, stub_dir, fn, stderr="fatal: Could not resolve host\n", exit_code=2, prelude="mktemp() { return 1; }\n"
 	)
 
 	assert proc.returncode == 0

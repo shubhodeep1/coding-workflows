@@ -107,21 +107,25 @@ _memory_record_with_failure_telemetry()
 	local rc=0
 	local category="unavailable"
 
-	start_ms="$(_memory_epoch_ms)"
 	err_file="$(mktemp 2>/dev/null)" || err_file=""
 
+	# duration_ms covers only the Python call, not temp-file handling or
+	# stderr forwarding and classification.
 	if [[ -n "${err_file}" ]] && [[ -f "${err_file}" ]]; then
+		start_ms="$(_memory_epoch_ms)"
 		python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" "${subcommand}" "$@" 2>"${err_file}" && rc=0 || rc=$?
+		end_ms="$(_memory_epoch_ms)"
 		cat "${err_file}" >&2 || true
 		category="$(_memory_stderr_category "${err_file}")" || category="other"
 		rm -f "${err_file}" || true
 	else
+		start_ms="$(_memory_epoch_ms)"
 		python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" "${subcommand}" "$@" && rc=0 || rc=$?
+		end_ms="$(_memory_epoch_ms)"
 		category="unavailable"
 	fi
 
 	if [[ "${rc}" -ne 0 ]]; then
-		end_ms="$(_memory_epoch_ms)"
 		if [[ "${start_ms}" =~ ^[0-9]+$ ]] && [[ "${end_ms}" =~ ^[0-9]+$ ]]; then
 			duration_ms=$(( end_ms - start_ms ))
 		fi
