@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:2157-2159, 2349-2351 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The retry-budget check reuses the branch-runs snapshot taken by the peer check, so a review run that starts and completes after the snapshot is not counted and one extra automated retry can slip through.\n  WHY: The snapshot can be seconds old when the budget probe reads it, whereas a fresh call would count the completed run and stop; all reviewers rated it NIT (severity mapped to low), and the window is rare and small.\n- changelog.d/wfopt-2026-09-21-branch-runs-snapshot-reuse.md:4 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The changelog sentence \"The result of both checks is unchanged.\" is inaccurate given the snapshot race window.\n  WHY: The budget probe can occasionally return a different result than a fresh call would; this is a documentation accuracy issue rated NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/gh_helpers.sh:2157-2159, 2336-2351 (call site scripts/review_autofix_step_changes_lost_redispatch.sh lines 24-25 and 51-52) | severity=NIT | confidence=3\n  PROBLEM: The budget probe counts completed runs from a response taken before the peer helper's PR-named lookup and the caller's git commands, so it can be several seconds old.\n  WHY: A review run on the same head that starts and completes inside that window is not counted, so the probe can report \"budget available\" and allow at most one extra automated retry. The reviewer called this the same race a live call has, with a wider window.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/gh_helpers.sh:2090-2096, 2299-2326, 2157-2159, 2349-2351 | severity=NIT | confidence=4\n  PROBLEM: The snapshot is taken before the peer probe's in-flight filter, its PR-named lookup and its `emit_event`, and then the caller's git commands run. By the time the budget probe consumes it, it is typically seconds old.\n  WHY: A review run that starts and completes inside the window is not counted. The budget probe returns rc=1 (available) where a fresh call would return rc=0, so a second automated retry is dispatched. The effect is an occasional extra retry.\n- changelog.d/wfopt-2026-09-21-branch-runs-snapshot-reuse.md:4 | severity=NIT | confidence=3\n  PROBLEM: The sentence \"The result of both checks is unchanged.\" claims the results are unchanged, but the race window means the budget probe can occasionally differ from a fresh call.\n  WHY: This is a documentation accuracy issue, not a runtime defect. A wording change such as \"typically unchanged\" is suggested.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/gh_helpers.sh:2157-2159, 2349-2351 (budget counts completed runs at 2390-2395) | severity=NIT | confidence=4\n  PROBLEM: The retry-budget check reuses the branch-run snapshot taken by the peer check, so a review run that starts and completes after that snapshot is absent from the budget count.\n  WHY: If another review starts and completes between the peer check and the budget check, a fresh budget query would count it and suppress dispatch. The reused snapshot does not, allowing another retry despite the per-head limit. The changelog statement that the results are unchanged is therefore inaccurate.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/gh_helpers.sh:2157-2159, 2349-2351\n  PROBLEM: Reusing the branch-runs snapshot can let an additional editor-changes-lost retry through. A review run that starts and completes after the snapshot is taken (line 2157) but before the budget check consumes it (line 2349) is not counted by either check.\n  WHY: The retry-budget check can report \"available\" and dispatch another review run where a fresh API call would count the completed run and stop. The output was truncated mid-sentence, and no severity or confidence was stated.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "86e24cebc17918255fbbee8f67fa36439bc5456ab99ca6c4ac2909e72cfced93",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7595,
+    "run_id": "39099357855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39099357855",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018052205_bf013d4267",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7595,
+    "run_id": "39099357855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T05:22:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
