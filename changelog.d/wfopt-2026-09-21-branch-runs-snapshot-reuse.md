@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **The editor-changes-lost re-dispatch step reads the branch's workflow runs once instead of twice.** The step first checks for a review run already in flight on the PR branch, then checks whether the current head has used its one automated retry. Both checks read the same `actions/runs` page for the branch, one right after the other. The retry check now reuses the first check's response once, when it is for the same repository and branch, so the step makes one GitHub API call there instead of two.
+
+The result of both checks is unchanged. A failed, empty or malformed first response is never reused, and the retry check then makes its own call and still blocks the re-dispatch when that call fails. The reused response is cleared after one read, so a later check never sees it.
