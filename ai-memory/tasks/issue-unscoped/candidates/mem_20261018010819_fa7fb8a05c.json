@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.77,
+  "details": "The repository contains hook copies under both .claude/hooks and workflow-templates/.claude/hooks. When modifying a shared hook, check whether both copies are intended to stay aligned and cover that relationship in tests.",
+  "fingerprint": "23f6b81a4063a0a79a363308e9e67afede6f3ce30fb81c2a0522e2769a5a9bd4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39084836667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39084836667",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7567",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7568",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7575",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7576",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7579",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7572",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7573",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7577",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7578",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7580"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261018010819_fa7fb8a05c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Changes to shared Claude hooks may need to be kept in sync with workflow-templates.",
+  "timestamps": {
+    "created_at": "2026-10-18T01:08:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
