@@ -8932,6 +8932,20 @@ def test_external_finalize_completes_when_squash_merged_content_is_on_default() 
 
 
 def test_external_finalize_fails_closed_when_integration_tip_does_not_descend_from_merged_head() -> None:
+	# The alert signature hashes sandbox commit SHAs, and each run builds a
+	# fresh sandbox. Pin the git dates so both runs produce the same SHAs and
+	# the repeat run can exercise the dedupe.
+	from unittest import mock
+
+	pinned_dates = {
+		"GIT_AUTHOR_DATE": "2026-01-01T00:00:00+00:00",
+		"GIT_COMMITTER_DATE": "2026-01-01T00:00:00+00:00",
+	}
+	with mock.patch.dict(os.environ, pinned_dates):
+		_external_finalize_diverged_dedupe_checks()
+
+
+def _external_finalize_diverged_dedupe_checks() -> None:
 	result = _external_finalize_delivery_run(integration_tip="__default_head__")
 	latest = result["latest_state"]
 	assert latest["status"] != "complete"
@@ -8947,6 +8961,8 @@ def test_external_finalize_fails_closed_when_integration_tip_does_not_descend_fr
 
 	# Same tip on the next tick: no second alert or comment.
 	repeat = _external_finalize_delivery_run(integration_tip="__default_head__", state_extra={"external_finalize_delivery_alert_sig": sig})
+	assert repeat["sandbox_sha_aliases"]["__default_head__"] == result["sandbox_sha_aliases"]["__default_head__"]
+	assert repeat["sandbox_sha_aliases"]["__integration_head__"] == result["sandbox_sha_aliases"]["__integration_head__"]
 	assert repeat["latest_state"]["status"] != "complete"
 	repeat_bodies = [c.get("body", "") for c in repeat["issues"]["192"]["comments"]]
 	assert not any(b.startswith("## 🛑 Integration branch history changed") for b in repeat_bodies)

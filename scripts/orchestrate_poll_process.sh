@@ -23606,6 +23606,11 @@ The security pass audited \`${_orch_extfin_audited}\`."
               _orch_extfin_drift_body+="
 Those commits have not reached \`${DEFAULT_BRANCH_TRACKING:-the default branch}\`. The orchestrator cleared the recorded final PR and will open a fresh final PR for \`${EXTFIN_MERGED_HEAD_SHA}..${EXTFIN_TIP_SHA}\`; the project completes once that PR is merged."
               post_tracking_comment "${_orch_extfin_drift_body}"
+              # End this project's tick: the hold is persisted, and later
+              # same-tick completion paths must not act on the rewritten
+              # state. The next tick opens the fresh final PR through the
+              # normal final-merge flow (final_merge_pr is now null).
+              continue
               ;;
             diverged|unverified)
               if [ "${EXTFIN_DELIVERY_OUTCOME}" = "diverged" ]; then
