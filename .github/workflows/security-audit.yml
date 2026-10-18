@@ -451,6 +451,27 @@ jobs:
             exit 0
           fi
           bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" report
+      # Synced-file security findings (issue #7623, project #7604 Phase 2): in a
+      # consumer repository, send the audit's high/critical findings on synced
+      # files that are byte-identical to the release to coding-workflows' heal
+      # intake, as one OIDC-bound report with six fields per finding. Runs only
+      # the copy in the trusted support checkout; never fails the audit.
+      - name: Report synced-file security findings upstream
+        if: always() && github.repository != 'shubhodeep1/coding-workflows' && env.CLAUDE_CAPACITY_WAIT != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED: ${{ vars.SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED || 'true' }}
+          REPORT_WRAPPER_SHA: ${{ steps.resolve_support.outputs.support_sha }}
+          WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+        run: |
+          upstream_report="${GITHUB_WORKSPACE}/scripts/security_audit_upstream_report.sh"
+          if [ -f "${upstream_report}" ] && [ ! -L "${upstream_report}" ]; then
+            bash "${upstream_report}" || true
+          else
+            echo "::warning::SECURITY_AUDIT_UPSTREAM_REPORT skip reason=support_missing"
+          fi
       # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
       # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
       # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only

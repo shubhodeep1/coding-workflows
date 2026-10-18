@@ -4146,5 +4146,79 @@ def test_security_audit_line_ownership_skips_issues_mode() -> None:
 	assert '-n "${SECURITY_AUDIT_DIFF_BASE}"' in gate
 
 
+# ---------------------------------------------------------------------------
+# Synced-file security findings sender (issue #7623, project #7604 Phase 2)
+# ---------------------------------------------------------------------------
+
+_UPSTREAM_REPORT_STEP = "Report synced-file security findings upstream"
+
+
+def _workflow_step_block(name: str) -> str:
+	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	start = content.index(f"      - name: {name}\n")
+	end = content.find("\n      - name: ", start + 1)
+	return content[start:] if end < 0 else content[start:end]
+
+
+def test_upstream_report_step_runs_after_the_audit_and_before_the_fallback_report() -> None:
+	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	audit = content.index("      - name: Run security audit\n")
+	single = content.index("      - name: Report single-issue security pass\n")
+	upstream = content.index(f"      - name: {_UPSTREAM_REPORT_STEP}\n")
+	fallback = content.index("      - name: Report refused AI engine fallbacks\n")
+	assert audit < single < upstream < fallback
+	assert content[upstream:fallback].count("      - name: ") == 1
+
+
+def test_upstream_report_step_gates_env_and_trusted_support_path() -> None:
+	block = _workflow_step_block(_UPSTREAM_REPORT_STEP)
+	assert (
+		"if: always() && github.repository != 'shubhodeep1/coding-workflows' && env.CLAUDE_CAPACITY_WAIT != 'true'"
+	) in block
+	assert "continue-on-error: true" in block
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in block
+	assert "WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}" in block
+	assert (
+		"SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED: ${{ vars.SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED || 'true' }}"
+	) in block
+	assert "REPORT_WRAPPER_SHA: ${{ steps.resolve_support.outputs.support_sha }}" in block
+	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in block
+	assert 'upstream_report="${GITHUB_WORKSPACE}/scripts/security_audit_upstream_report.sh"' in block
+	assert '[ -f "${upstream_report}" ] && [ ! -L "${upstream_report}" ]' in block
+	assert "skip reason=support_missing" in block
+	assert "audit-data" not in block
+	assert "working-directory" not in block
+	assert (REPO_ROOT / "scripts" / "security_audit_upstream_report.sh").is_file()
+
+
+def test_security_audit_exports_upstream_managed_findings_for_the_sender() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-upstream-export-") as export_td:
+		export_path = Path(export_td) / "upstream-managed.json"
+		export_path.write_text('{"upstream_managed": [{"finding_id": "stale"}]}\n', encoding="utf-8")
+		proc, _final_state = _run_consumer_findings_json({"SECURITY_AUDIT_UPSTREAM_MANAGED_EXPORT": str(export_path)})
+		assert proc.returncode == 0, proc.stderr
+		exported = json.loads(export_path.read_text(encoding="utf-8"))
+	assert sorted(item["finding_id"] for item in exported["upstream_managed"]) == [
+		"hook-guard-bypass",
+		"rules-doc-gap",
+		"wrapper-ref-unpinned",
+	]
+	assert "outcome=export_failed" not in proc.stdout + proc.stderr
+
+
+def test_security_audit_removes_a_stale_export_when_nothing_is_upstream_managed() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-upstream-export-") as export_td:
+		export_path = Path(export_td) / "upstream-managed.json"
+		export_path.write_text('{"upstream_managed": [{"finding_id": "stale"}]}\n', encoding="utf-8")
+		proc, _final_state = _run_consumer_findings_json(
+			{
+				"SECURITY_AUDIT_UPSTREAM_MANAGED_EXPORT": str(export_path),
+				"SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER": "false",
+			},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert not export_path.exists()
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

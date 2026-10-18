@@ -471,6 +471,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_integration_ref_ci_triage.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_audit_upstream_report.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
