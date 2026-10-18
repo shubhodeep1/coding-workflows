@@ -8897,10 +8897,9 @@ def test_external_finalize_holds_completion_when_integration_branch_advanced_aft
 		output = result["stdout"] + result["stderr"]
 		assert latest["status"] != "complete", enable_security_pass
 		assert latest["final_merge_status"] == "pending"
-		assert latest["final_merge_pr"] != 395
-		if latest["final_merge_pr"] is None:
-			assert merged_head in latest["final_merge_error"]
-			assert tip in latest["final_merge_error"]
+		assert latest["final_merge_pr"] is None
+		assert merged_head in latest["final_merge_error"]
+		assert tip in latest["final_merge_error"]
 		assert "ai:merged" not in result["tracking_labels"]
 		assert (
 			f"EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=drift reason=content_not_on_default merged_head={merged_head} tip={tip}"

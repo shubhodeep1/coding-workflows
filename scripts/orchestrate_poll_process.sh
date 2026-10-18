@@ -6297,7 +6297,9 @@ external_finalize_delivery_check() {
             # Commits landed after the merge. They are delivered only when a
             # three-way merge of the tip into the default branch adds nothing
             # (for example the only new commit is a `chore: sync` merge).
-            EXTFIN_DELIVERY_OUTCOME="drift"
+            # Stay `unverified` unless the content check concludes: a failed
+            # lookup, fetch or merge-tree must not read as confirmed drift.
+            EXTFIN_DELIVERY_OUTCOME="unverified"
             EXTFIN_DELIVERY_REASON="content_check_unavailable"
             if [ -z "${default_branch}" ]; then
               default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
@@ -6312,7 +6314,8 @@ external_finalize_delivery_check() {
               if [ "${merge_rc}" -eq 0 ] && [ -n "${default_tree}" ] && [ "${merged_tree}" = "${default_tree}" ]; then
                 EXTFIN_DELIVERY_OUTCOME="delivered_by_content"
                 EXTFIN_DELIVERY_REASON="tip_content_on_default"
-              elif [ "${merge_rc}" -eq 0 ] || [ "${merge_rc}" -eq 1 ]; then
+              elif [ -n "${default_tree}" ] && { [ "${merge_rc}" -eq 0 ] || [ "${merge_rc}" -eq 1 ]; }; then
+                EXTFIN_DELIVERY_OUTCOME="drift"
                 EXTFIN_DELIVERY_REASON="content_not_on_default"
               fi
             fi
