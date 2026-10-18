@@ -6206,6 +6206,129 @@ prepare_security_pass_final_pr_head() {
   return 0
 }
 
+# external_finalize_delivery_check <integration_branch> <default_branch> <final_pr_number> <final_pr_json>
+#
+# Issue #7611: before the external-finalize path marks a project complete,
+# prove that what the integration branch holds now was delivered to the
+# default branch. The security pass audits the integration branch tip, so a
+# fix cycle that lands on the branch after the final PR was (squash-)merged
+# would otherwise read as "passed" and never ship (consumer project
+# tele-funtoken-msg-scoring#4281: 10 security fix cycles stranded).
+#
+# Compares SHAs and content, never compare-API ahead_by: after a squash merge
+# every integration commit stays "ahead" of the default branch.
+#
+# Always returns 0. Sets:
+#   EXTFIN_DELIVERY_OUTCOME  delivered | delivered_by_content | branch_deleted
+#                            | drift | diverged | unverified
+#   EXTFIN_DELIVERY_REASON   short token
+#   EXTFIN_MERGED_HEAD_SHA   merged final-PR head (40-hex) or ""
+#   EXTFIN_TIP_SHA           integration tip (40-hex), "deleted" or ""
+#   EXTFIN_DEFAULT_BRANCH    default branch used for the content check
+#
+# API calls (§15): none on the fast path (tip == merged head); the PR JSON is
+# the one the caller already fetched. integration_branch_exists (one REST GET)
+# runs only after a failed branch fetch, and the default branch is read once
+# only when the caller did not already resolve it and the content check runs.
+external_finalize_delivery_check() {
+  local integration_branch="$1"
+  local default_branch="$2"
+  local final_pr_number="$3"
+  local final_pr_json="$4"
+  local merged_head tip pr_ref fetched_sha ancestry_rc merge_out merge_rc merged_tree default_tree
+
+  EXTFIN_DELIVERY_OUTCOME="unverified"
+  EXTFIN_DELIVERY_REASON="unknown"
+  EXTFIN_MERGED_HEAD_SHA=""
+  EXTFIN_TIP_SHA=""
+  EXTFIN_DEFAULT_BRANCH="${default_branch}"
+
+  merged_head="$(_jq_field "${final_pr_json}" '.head.sha' '[0-9a-fA-F]{40}')"
+  merged_head="$(printf '%s' "${merged_head}" | tr 'A-F' 'a-f')"
+  EXTFIN_MERGED_HEAD_SHA="${merged_head}"
+
+  if [ -z "${integration_branch}" ]; then
+    EXTFIN_DELIVERY_OUTCOME="branch_deleted"
+    EXTFIN_DELIVERY_REASON="no_integration_branch"
+    EXTFIN_TIP_SHA="deleted"
+  elif [ -z "${merged_head}" ]; then
+    EXTFIN_DELIVERY_REASON="merged_head_missing"
+  elif ! git fetch --no-tags origin "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+    # Never fall back to a stale remote-tracking ref: a deleted branch leaves
+    # one behind, and a stale tip could read as either drift or delivery.
+    if integration_branch_exists "${integration_branch}"; then
+      EXTFIN_DELIVERY_REASON="branch_fetch_failed"
+    else
+      EXTFIN_DELIVERY_OUTCOME="branch_deleted"
+      EXTFIN_DELIVERY_REASON="branch_absent"
+      EXTFIN_TIP_SHA="deleted"
+    fi
+  else
+    tip="$(git rev-parse --verify "refs/remotes/origin/${integration_branch}^{commit}" 2>/dev/null || true)"
+    if ! [[ "${tip}" =~ ^[0-9a-f]{40}$ ]]; then
+      EXTFIN_DELIVERY_REASON="tip_unresolved"
+    else
+      EXTFIN_TIP_SHA="${tip}"
+      if [ "${tip}" = "${merged_head}" ]; then
+        EXTFIN_DELIVERY_OUTCOME="delivered"
+        EXTFIN_DELIVERY_REASON="tip_is_merged_head"
+      else
+        if ! git cat-file -e "${merged_head}^{commit}" 2>/dev/null; then
+          pr_ref="refs/orchestrator/external-finalize/pr-${final_pr_number}-head"
+          fetched_sha=""
+          if [[ "${final_pr_number}" =~ ^[0-9]+$ ]] \
+            && git fetch --no-tags origin "+refs/pull/${final_pr_number}/head:${pr_ref}" >/dev/null 2>&1; then
+            fetched_sha="$(git rev-parse --verify "${pr_ref}^{commit}" 2>/dev/null || true)"
+          fi
+          if [ "${fetched_sha}" != "${merged_head}" ]; then
+            EXTFIN_DELIVERY_REASON="merged_head_unavailable"
+            merged_head=""
+          fi
+        fi
+        if [ -n "${merged_head}" ]; then
+          ancestry_rc=0
+          git merge-base --is-ancestor "${merged_head}" "${tip}" >/dev/null 2>&1 || ancestry_rc=$?
+          if [ "${ancestry_rc}" -eq 1 ]; then
+            EXTFIN_DELIVERY_OUTCOME="diverged"
+            EXTFIN_DELIVERY_REASON="tip_not_descendant_of_merged_head"
+          elif [ "${ancestry_rc}" -ne 0 ]; then
+            EXTFIN_DELIVERY_REASON="ancestry_check_failed"
+          else
+            # Commits landed after the merge. They are delivered only when a
+            # three-way merge of the tip into the default branch adds nothing
+            # (for example the only new commit is a `chore: sync` merge).
+            # Stay `unverified` unless the content check concludes: a failed
+            # lookup, fetch or merge-tree must not read as confirmed drift.
+            EXTFIN_DELIVERY_OUTCOME="unverified"
+            EXTFIN_DELIVERY_REASON="content_check_unavailable"
+            if [ -z "${default_branch}" ]; then
+              default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+              EXTFIN_DEFAULT_BRANCH="${default_branch}"
+            fi
+            if [ -n "${default_branch}" ] \
+              && git fetch --no-tags origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1; then
+              default_tree="$(git rev-parse --verify "refs/remotes/origin/${default_branch}^{tree}" 2>/dev/null || true)"
+              merge_rc=0
+              merge_out="$(git merge-tree --write-tree "refs/remotes/origin/${default_branch}" "${tip}" 2>/dev/null)" || merge_rc=$?
+              merged_tree="$(printf '%s\n' "${merge_out}" | head -n 1)"
+              if [ "${merge_rc}" -eq 0 ] && [ -n "${default_tree}" ] && [ "${merged_tree}" = "${default_tree}" ]; then
+                EXTFIN_DELIVERY_OUTCOME="delivered_by_content"
+                EXTFIN_DELIVERY_REASON="tip_content_on_default"
+              elif [ -n "${default_tree}" ] && { [ "${merge_rc}" -eq 0 ] || [ "${merge_rc}" -eq 1 ]; }; then
+                EXTFIN_DELIVERY_OUTCOME="drift"
+                EXTFIN_DELIVERY_REASON="content_not_on_default"
+              fi
+            fi
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  echo "EXTERNAL_FINALIZE_DELIVERY tracking_issue=${TRACKING_NUM:-} pr=${final_pr_number} outcome=${EXTFIN_DELIVERY_OUTCOME} reason=${EXTFIN_DELIVERY_REASON} merged_head=${EXTFIN_MERGED_HEAD_SHA:-none} tip=${EXTFIN_TIP_SHA:-none}"
+  return 0
+}
+
 ensure_security_pass_repair_branch() {
   local integration_branch="$1"
   local expected_head_sha="$2"
@@ -8927,6 +9050,10 @@ ensure_security_pass_before_completion() {
   local final_pr_number=""
   local current_integration_ref current_head_sha
 
+  # Issue #7611: the head this gate accepted (audited or already passed),
+  # so the external-finalize completion comment can name what was audited
+  # next to what was delivered. Empty when the pass is disabled or fails.
+  SECURITY_PASS_VALIDATED_HEAD_SHA=""
   if [ "${ENABLE_SECURITY_PASS}" != "true" ]; then
     echo "SECURITY_PASS_SKIPPED_DISABLED tracking_issue=${TRACKING_NUM}"
     return 0
@@ -8968,6 +9095,7 @@ ensure_security_pass_before_completion() {
     return 1
   fi
   if security_pass_current_head_is_valid "${current_head_sha}"; then
+    SECURITY_PASS_VALIDATED_HEAD_SHA="${current_head_sha}"
     return 0
   fi
   # Every caller runs this function in a conditional context, so capturing
@@ -8980,6 +9108,9 @@ ensure_security_pass_before_completion() {
     "${SECURITY_PASS_VERIFIED_PR_SHA:-}" \
     "${SECURITY_PASS_VERIFIED_PR_RECHECK_REFSPEC:-}" || security_pass_inline_rc=$?
   security_pass_remove_audit_worktree
+  if [ "${security_pass_inline_rc}" -eq 0 ]; then
+    SECURITY_PASS_VALIDATED_HEAD_SHA="${current_head_sha}"
+  fi
   return "${security_pass_inline_rc}"
 }
 
@@ -23443,39 +23574,143 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
           if ! ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "${_orch_extfin_pr_json}"; then
             continue
           fi
-          echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
-          if ! jq --argjson final_pr "${_orch_extfin_pr}" \
-            '.final_merge_pr = $final_pr
-             | .final_merge_status = "merged"
-             | .final_merge_error = ""
-             | .status = "complete"
-             | .judge_cycle = ((.judge_cycle // 0) + 1)' \
-            "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
-            rm -f "${STATE_FILE}.tmp" || true
-            echo "::warning::[external-finalize] failed to persist merged state for PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+          # Delivery check (issue #7611): the security pass audits the
+          # integration tip, and the merged final PR only shipped its own
+          # head. Complete only when the tip was delivered.
+          external_finalize_delivery_check "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "${_orch_extfin_pr}" "${_orch_extfin_pr_json}"
+          if [ -z "${DEFAULT_BRANCH_TRACKING}" ] && [ -n "${EXTFIN_DEFAULT_BRANCH}" ]; then
+            DEFAULT_BRANCH_TRACKING="${EXTFIN_DEFAULT_BRANCH}"
+          fi
+          _orch_extfin_audited="${SECURITY_PASS_VALIDATED_HEAD_SHA:-}"
+          case "${EXTFIN_DELIVERY_OUTCOME}" in
+            delivered|delivered_by_content|branch_deleted)
+              ;;
+            drift)
+              _orch_extfin_commit_count="$(git rev-list --count "${EXTFIN_MERGED_HEAD_SHA}..${EXTFIN_TIP_SHA}" 2>/dev/null || echo "unknown")"
+              echo "::warning::[external-finalize] PR #${_orch_extfin_pr} merged head ${EXTFIN_MERGED_HEAD_SHA}, but integration branch '${INTEGRATION_BRANCH_TRACKING}' advanced to ${EXTFIN_TIP_SHA} after the merge; not completing, reopening a final PR for the new commits."
+              if ! jq --arg pr "${_orch_extfin_pr}" --arg a "${EXTFIN_MERGED_HEAD_SHA}" --arg t "${EXTFIN_TIP_SHA}" --arg ib "${INTEGRATION_BRANCH_TRACKING}" \
+                '.final_merge_pr = null
+                 | .final_merge_status = "pending"
+                 | .final_merge_error = ("final PR #" + $pr + " merged head " + $a + ", but integration branch " + $ib + " advanced to " + $t + " after the merge; reopening a final PR for " + $a + ".." + $t)
+                 | .external_finalize_delivery_alert_sig = ""
+                 | if (.security_pass_status // "") == "passed" then
+                     .security_pass_last_audited_sha = (
+                       if (.security_pass_last_audited_sha // "") != "" then .security_pass_last_audited_sha
+                       else (.security_pass_head_sha // "") end)
+                     | .security_pass_status = "pending"
+                     | .security_pass_head_sha = ""
+                   else . end' \
+                "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+                rm -f "${STATE_FILE}.tmp" || true
+                echo "::warning::[external-finalize] failed to persist the post-merge drift hold for PR #${_orch_extfin_pr}; retrying next tick without completing."
+                continue
+              fi
+              # The tracking body's security-pass block must not read
+              # "passed" for a tip that never reached the default branch
+              # (issue #7611). The audited SHA stays in
+              # security_pass_last_audited_sha, so the gate for the fresh
+              # final PR re-runs as a delta audit of that same tip.
+              reconcile_tracking_body_after_security_pass_transition
+              post_state_comment || true
+              _orch_extfin_drift_body="## ⚠️ Integration branch advanced after PR #${_orch_extfin_pr} merged — project not complete
+
+Final PR #${_orch_extfin_pr} merged head \`${EXTFIN_MERGED_HEAD_SHA}\` into \`${DEFAULT_BRANCH_TRACKING:-the default branch}\`, but integration branch \`${INTEGRATION_BRANCH_TRACKING}\` is now at \`${EXTFIN_TIP_SHA}\` (${_orch_extfin_commit_count} commit(s) after the merged head)."
+              if [ -n "${_orch_extfin_audited}" ]; then
+                _orch_extfin_drift_body+="
+The security pass audited \`${_orch_extfin_audited}\`."
+              fi
+              _orch_extfin_drift_body+="
+Those commits have not reached \`${DEFAULT_BRANCH_TRACKING:-the default branch}\`. The orchestrator cleared the recorded final PR and will open a fresh final PR for \`${EXTFIN_MERGED_HEAD_SHA}..${EXTFIN_TIP_SHA}\`; the project completes once that PR is merged."
+              post_tracking_comment "${_orch_extfin_drift_body}"
+              # End this project's tick: the hold is persisted, and later
+              # same-tick completion paths must not act on the rewritten
+              # state. The next tick opens the fresh final PR through the
+              # normal final-merge flow (final_merge_pr is now null).
+              continue
+              ;;
+            diverged|unverified)
+              if [ "${EXTFIN_DELIVERY_OUTCOME}" = "diverged" ]; then
+                echo "::warning::[external-finalize] integration branch '${INTEGRATION_BRANCH_TRACKING}' tip ${EXTFIN_TIP_SHA} does not descend from merged final-PR head ${EXTFIN_MERGED_HEAD_SHA}; failing closed without completing."
+              else
+                echo "::warning::[external-finalize] could not verify that PR #${_orch_extfin_pr} delivered the integration branch (reason=${EXTFIN_DELIVERY_REASON}); not completing this tick."
+              fi
+              _orch_extfin_delivery_sig="$(printf '%s|%s|%s|%s' "${EXTFIN_DELIVERY_OUTCOME}" "${EXTFIN_DELIVERY_REASON}" "${EXTFIN_MERGED_HEAD_SHA}" "${EXTFIN_TIP_SHA}" | sha256sum | awk '{print $1}')"
+              _orch_extfin_delivery_prev_sig="$(jq -r '.external_finalize_delivery_alert_sig // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+              if [ "${_orch_extfin_delivery_sig}" != "${_orch_extfin_delivery_prev_sig}" ]; then
+                if [ "${EXTFIN_DELIVERY_OUTCOME}" = "diverged" ]; then
+                  _orch_extfin_jq_filter='.external_finalize_delivery_alert_sig = $sig | .final_merge_status = "pending" | .final_merge_error = ("integration branch " + $ib + " tip " + $t + " does not descend from merged final PR #" + $pr + " head " + $a + "; external finalize held (history rewritten after the merge)")'
+                else
+                  _orch_extfin_jq_filter='.external_finalize_delivery_alert_sig = $sig'
+                fi
+                if jq --arg sig "${_orch_extfin_delivery_sig}" --arg pr "${_orch_extfin_pr}" --arg a "${EXTFIN_MERGED_HEAD_SHA:-none}" --arg t "${EXTFIN_TIP_SHA:-none}" --arg ib "${INTEGRATION_BRANCH_TRACKING}" \
+                  "${_orch_extfin_jq_filter}" \
+                  "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+                  post_state_comment || true
+                else
+                  rm -f "${STATE_FILE}.tmp" || true
+                  echo "::warning::[external-finalize] failed to persist the delivery alert signature; may re-alert on next tick."
+                fi
+                if [ "${EXTFIN_DELIVERY_OUTCOME}" = "diverged" ]; then
+                  post_tracking_comment "## 🛑 Integration branch history changed after PR #${_orch_extfin_pr} merged — project not complete
+
+Final PR #${_orch_extfin_pr} merged head \`${EXTFIN_MERGED_HEAD_SHA}\`, but integration branch \`${INTEGRATION_BRANCH_TRACKING}\` is now at \`${EXTFIN_TIP_SHA}\`, which does not descend from it. The orchestrator cannot tell which commits were delivered, so it will not mark the project complete.
+
+To resume, either re-point \`${INTEGRATION_BRANCH_TRACKING}\` at a commit that descends from \`${EXTFIN_MERGED_HEAD_SHA}\`, or deliver the remaining changes to \`${DEFAULT_BRANCH_TRACKING:-the default branch}\` by hand and close this project."
+                  tg_notify "🛑 Project #${TRACKING_NUM}: integration branch ${INTEGRATION_BRANCH_TRACKING} (tip ${EXTFIN_TIP_SHA}) does not descend from merged final PR #${_orch_extfin_pr} head ${EXTFIN_MERGED_HEAD_SHA}. Completion is held; re-point the branch or deliver the changes by hand." "ERROR" || true
+                else
+                  tg_notify "⚠️ Project #${TRACKING_NUM}: final PR #${_orch_extfin_pr} merged externally, but delivery of integration branch ${INTEGRATION_BRANCH_TRACKING} could not be verified (reason=${EXTFIN_DELIVERY_REASON}). Completion is held and retried every tick." "WARNING" || true
+                fi
+              fi
+              continue
+              ;;
+            *)
+              echo "::warning::[external-finalize] unexpected delivery outcome '${EXTFIN_DELIVERY_OUTCOME}'; not completing this tick."
+              continue
+              ;;
+          esac
+          if [ "${EXTFIN_DELIVERY_OUTCOME}" != "drift" ]; then
+            echo "  [external-finalize] PR #${_orch_extfin_pr} merged outside the wave-by-wave flow; transitioning project to complete."
+            if ! jq --argjson final_pr "${_orch_extfin_pr}" \
+              '.final_merge_pr = $final_pr
+               | .final_merge_status = "merged"
+               | .final_merge_error = ""
+               | .status = "complete"
+               | .external_finalize_delivery_alert_sig = ""
+               | .judge_cycle = ((.judge_cycle // 0) + 1)' \
+              "${STATE_FILE}" > "${STATE_FILE}.tmp" || ! mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+              rm -f "${STATE_FILE}.tmp" || true
+              echo "::warning::[external-finalize] failed to persist merged state for PR #${_orch_extfin_pr}; leaving final_merge_status pending."
+              continue
+            fi
+            security_pass_unblock_filed_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
+            security_pass_file_deferred_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
+            post_state_comment || true
+            emit_orchestrator_completion_lessons
+            run_project_activation_verify
+            handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+            set_tracking_phase_label "ai:merged"
+            _orch_extfin_complete_body="## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
+
+The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored.
+
+Delivery check: \`${EXTFIN_DELIVERY_OUTCOME}\` — merged final-PR head \`${EXTFIN_MERGED_HEAD_SHA:-unknown}\`, integration tip \`${EXTFIN_TIP_SHA:-unknown}\`."
+            if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [ -n "${_orch_extfin_audited}" ]; then
+              _orch_extfin_complete_body+="
+Security pass audited \`${_orch_extfin_audited}\`."
+            fi
+            post_tracking_comment "${_orch_extfin_complete_body}"
+            tg_cleanup_msgs "${TRACKING_NUM}"
+            MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
+            MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
+            if [ -n "${GITHUB_RUN_ID:-}" ]; then
+              MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+            fi
+            if ! _smoke_fixture_alert_silenced "CRITICAL"; then
+              tg_send_msg "${MSG}" "CRITICAL" >/dev/null
+            fi
+            PROJECT_STATUS="complete"
             continue
           fi
-          security_pass_unblock_filed_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
-          security_pass_file_deferred_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
-          post_state_comment || true
-          emit_orchestrator_completion_lessons
-          run_project_activation_verify
-          handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
-          set_tracking_phase_label "ai:merged"
-          post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
-
-The orchestrator detected that the integration PR was squash-merged outside the wave-by-wave dispatch flow (the typical pattern when an operator finalizes a project ahead of the planner). Transitioning status to \`complete\`; future poll ticks will skip this project and any open wave-dispatch alerts can be ignored."
-          tg_cleanup_msgs "${TRACKING_NUM}"
-          MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
-          MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
-          if [ -n "${GITHUB_RUN_ID:-}" ]; then
-            MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
-          fi
-          if ! _smoke_fixture_alert_silenced "CRITICAL"; then
-            tg_send_msg "${MSG}" "CRITICAL" >/dev/null
-          fi
-          PROJECT_STATUS="complete"
-          continue
         fi
       fi
     fi
