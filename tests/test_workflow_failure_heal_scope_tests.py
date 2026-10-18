@@ -205,6 +205,58 @@ def test_intake_freezes_failing_tests_before_the_diagnosis() -> None:
 	assert "failing_tests: (.failing_tests // {names: [], files: []})" in text
 
 
+def _run_scope_freeze(log_dir: Path, runtime_dir: Path) -> subprocess.CompletedProcess:
+	"""Run the intake's real freeze block (helper through the chmod) in bash."""
+	text = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
+	start = text.index('SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"')
+	end_marker = 'log "warn scope_inputs_freeze_failed"; }'
+	block = text[start:text.index(end_marker, start) + len(end_marker)]
+	script = 'set -euo pipefail\nlog() { echo "WORKFLOW_HEAL $*" >&2; }\n' + block + "\n"
+	env = {
+		"PATH": "/usr/bin:/bin:/usr/local/bin",
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"RUNTIME_DIR": str(runtime_dir),
+		"LOG_DIR": str(log_dir),
+		"HEAL_PY": str(HEAL_PY),
+		"PAYLOAD_CRASH_FILE": "",
+		"CRASH_OWNERSHIP": "none",
+		"SOURCE_REPO": SELF_REPO,
+	}
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=True)
+
+
+def test_scope_freeze_writes_empty_runs_when_the_report_names_no_run() -> None:
+	# A report with no run (e.g. a label-only ai:destructive-blocked escalation)
+	# leaves no *.verified file. jq printed `[]` and then exited 2 on the
+	# unmatched glob, the `|| echo '[]'` fallback appended a second `[]`, and
+	# --argjson rejected it, so the freeze always logged scope_inputs_freeze_failed.
+	with tempfile.TemporaryDirectory() as tmpdir:
+		log_dir, runtime_dir = Path(tmpdir, "logs"), Path(tmpdir, "runtime")
+		log_dir.mkdir()
+		runtime_dir.mkdir()
+		result = _run_scope_freeze(log_dir, runtime_dir)
+		assert "scope_inputs_freeze_failed" not in result.stderr
+		assert "invalid JSON text" not in result.stderr
+		frozen = json.loads((runtime_dir / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+		assert frozen["runs"] == [] and frozen["self_workflows"] == [] and frozen["consumer_workflows"] == []
+		assert frozen["changed_files"] == [] and frozen["crash_file"] == ""
+
+
+def test_scope_freeze_collects_runs_and_paths_from_verified_records() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		log_dir, runtime_dir = Path(tmpdir, "logs"), Path(tmpdir, "runtime")
+		log_dir.mkdir()
+		runtime_dir.mkdir()
+		(log_dir / "run-12.json.verified").write_text(json.dumps({"run_id": 12, "path": ".github/workflows/ci.yml", "referenced_paths": ["scripts/a.sh"]}))
+		(log_dir / "run-7.json.verified").write_text(json.dumps({"run_id": 7, "path": "", "referenced_paths": ["scripts/a.sh", "scripts/b.sh"]}))
+		result = _run_scope_freeze(log_dir, runtime_dir)
+		assert "scope_inputs_freeze_failed" not in result.stderr
+		frozen = json.loads((runtime_dir / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+		assert frozen["runs"] == [f"{SELF_REPO}:12", f"{SELF_REPO}:7"]
+		assert frozen["self_workflows"] == ["scripts/a.sh", "scripts/b.sh"]
+		assert frozen["consumer_workflows"] == [".github/workflows/ci.yml"]
+
+
 def test_prompt_tells_the_healer_how_to_pick_a_side() -> None:
 	for path in ("prompts/mode-workflow-failure-heal.txt", "prompts/_templates/mode-workflow-failure-heal.txt"):
 		text = (REPO_ROOT / path).read_text(encoding="utf-8")
