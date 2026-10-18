@@ -11,10 +11,13 @@ test file and the subject it covers. The diagnosis still cannot add a path.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -207,6 +210,8 @@ def test_intake_freezes_failing_tests_before_the_diagnosis() -> None:
 
 def _run_scope_freeze(log_dir: Path, runtime_dir: Path) -> subprocess.CompletedProcess:
 	"""Run the intake's real freeze block (helper through the chmod) in bash."""
+	if shutil.which("jq") is None:
+		pytest.skip("jq is required to run the intake's scope-freeze block")
 	text = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
 	start = text.index('SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"')
 	end_marker = 'log "warn scope_inputs_freeze_failed"; }'
