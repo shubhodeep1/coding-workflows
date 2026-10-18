@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for the E2E smoke canary B (smoke run 39083485345)\n\nScope-mode: Hold Scope\nReuse-audit: extends `tests/e2e_smoke_canary_b.txt`\nScope-mode justification: The issue names one file and two exact lines. The file is already on the planning ref `orchestrator/project-7584` (HEAD `ba67650e65c03a52faba46b56f248b1e64085e43`). Line 1 already reads `status: ok`. Line 2 reads `decompose-run: 25567947079`, left by an earlier run, and must be replaced. No helper, pattern or new code applies, and widening or narrowing the scope has no benefit.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt`\n\n## Functions or modules to implement\nNone. This is a data-file edit:\n- Line 1: keep it as `status: ok`.\n- Line 2: replace `decompose-run: 25567947079` with `decompose-run: 39083485345`.\n- Keep the single trailing newline. The file has no line 3 or later, so nothing else needs preserving.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Edit the existing file in place\n- Chosen: Replace only line 2 of the existing file and keep line 1 and the trailing newline as they are.\n- Alternatives considered: Delete and recreate the file; rewrite every line.\n- Why: This makes the smallest diff that meets the issue's rule to replace any existing second line, and it leaves no room for whitespace drift.\n\n## Security considerations\n- Trust boundaries: none. The change is a plain test fixture that no code runs.\n- Authorization: there are no new endpoints or other surfaces.\n- External input: the run ID `39083485345` comes from the orchestrator-generated issue body and is written as a literal string.\n- Abuse cases: none. The file holds no secrets and touches no money state.\n\n## Risks and edge cases\n- The sibling issue owns `tests/e2e_smoke_canary.txt`, which must not be touched.\n- The file must not get CRLF line endings, trailing spaces or a missing final newline.\n- No changelog fragment or `agents.d/` fragment is needed; the issue says so explicitly.\n- Conflict note: the issue says \"create it if it does not exist\", but the file already exists with a stale run ID. That is expected and is not a blocker.\n\n## Testing considerations\n- `head -n 1 tests/e2e_smoke_canary_b.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` prints `decompose-run: 39083485345`.\n- `cat -A` shows two lines, each ending in `$`, with no `^M` (no carriage returns).\n- `git diff --stat` lists only this one file.\n\n## Pre-execution self-check\n- The plan covers both acceptance lines, keeps to the single file, and uses no external inputs.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "4d3fe9429a218ed41b265d4dd9d6f18075b1191d4f1a82fbdeb377dce31797c3",
+  "lineage": {
+    "issue_number": 7586,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39084003982",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39084003982",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7586"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261018005243_01bdb73a8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7586,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39084003982"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7586",
+  "timestamps": {
+    "created_at": "2026-10-18T00:52:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
