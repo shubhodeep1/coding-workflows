@@ -1048,7 +1048,12 @@ def test_security_audit_render_failure_preserves_status_and_reports_context() ->
 			"MOCK_RENDER_STDERR": (
 				"test-token Chief Security Officer\n"
 				"bash: /safe/missing-template: No such file or directory\n"
-			)
+				"ERROR: Unsupported reference placeholder 'REFERENCE_MISSING_LENS'\n"
+				"ERROR: renderer failed with personal-access-secret\n"
+				"ContractViolationError: Prompt contract violations for mode 'security-audit':\n"
+				"- unknown_in_template: CONTRACT_DETAIL_PLACEHOLDER\n"
+			),
+			"GH_PAT": "personal-access-secret",
 		},
 	)
 	_assert_security_audit_failure_context(
@@ -1059,6 +1064,15 @@ def test_security_audit_render_failure_preserves_status_and_reports_context() ->
 	assert proc.returncode == 23
 	assert "captured_path_error=" in proc.stderr
 	assert "missing-template" in proc.stderr
+	# The renderer's own error lines reach the log (issue tele-funtoken#3928:
+	# a non-path render failure previously left no diagnostic at all).
+	assert "prompt-render-stderr-tail begin" in proc.stderr
+	assert "prompt-render-stderr-tail end" in proc.stderr
+	assert "REFERENCE_MISSING_LENS" in proc.stderr
+	# Detail lines of a multi-line renderer error are kept too.
+	assert "CONTRACT_DETAIL_PLACEHOLDER" in proc.stderr
+	assert "personal-access-secret" not in proc.stderr
+	assert "codex-stderr" not in proc.stderr
 	assert final_state.get("codex_calls", []) == []
 
 
