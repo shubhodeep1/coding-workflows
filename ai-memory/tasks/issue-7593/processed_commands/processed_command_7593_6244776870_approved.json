@@ -5,13 +5,24 @@
   "entry_id": "processed_command_7593_6244776870_approved",
   "issue_number": 7593,
   "metadata": {
+    "branch": "ai/issue-7593",
+    "changed_files": [
+      "changelog.d/wfopt-2026-09-21-branch-runs-snapshot-reuse.md",
+      "scripts/gh_helpers.sh",
+      "tests/test_gh_helpers_list_runs_method.py"
+    ],
+    "issue_number": 7593,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7593",
+    "pr_number": 7599,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7599",
+    "run_attempt": "1",
+    "run_id": "39090588736",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39090588736"
   },
   "run_attempt": 1,
   "run_id": "39090588736",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-18T02:37:25Z",
+  "status": "completed",
+  "timestamp": "2026-10-18T03:02:18Z",
   "workflow": "implement"
 }
