@@ -309,6 +309,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.
 - `scripts/semantic_cache.py` — Semantic cache helper for clarify-phase workflows.
 - `scripts/security_audit.sh` — security_audit.sh — Run the default-branch OWASP Top 10 + STRIDE security audit.
+- `scripts/security_audit_upstream_report.sh` — Send a consumer audit's high/critical findings on unmodified synced files to coding-workflows' heal intake as one OIDC-bound `synced_security_finding` report (issue #7623).
 - `scripts/security_audit_fp_exclusions.json` — JSON asset for editable security-audit false-positive exclusions.
 - `scripts/security_dependency.py` — Hold a generated security follow-up until the issue it depends on has merged (issue #4934).
 - `scripts/pr_dependency.py` — Hold a trusted standalone issue that declares `- Depends on PR: #N` until that PR merged into the default branch and a declared string is on it (issue #7228).
