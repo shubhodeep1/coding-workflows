@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:120-127 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The prompt-echo filter (`any(len(prompt_line) >= 24 and prompt_line in line ...)`) now also runs on renderer errors, so errors that quote the offending template line (render_prompt.py lines 1107 and 1111) are dropped and the file, line number and offending text are lost.\n  WHY: A render failure from those violation kinds logs only the header, which defeats the diagnostic the PR restores. Reviewers rated it NIT. The reviewers' line ranges were 124-127 and 120-123.\n- scripts/security_audit.sh:77-78 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The comment above `local stderr_label` says non-`codex` labels keep \"only error-shaped lines\", but the code (lines 130-135, `diagnostic_seen`) keeps every line from the first error-shaped line onward.\n  WHY: The comment misleads maintainers about which detail lines are kept. Reviewers rated it NIT. The changelog has the same inaccuracy.\n- changelog.d/7608-security-audit-render-stderr.md:7 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The changelog says \"Only error-shaped lines are kept\", but the code keeps lines from the first error-shaped line onward, including detail lines such as `- unknown_in_template: NAME`.\n  WHY: The release note is inaccurate. Reviewers rated it NIT. The agents.d fragment was already updated.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/security_audit.sh:124-127 | severity=NIT | confidence=3\n  PROBLEM: The prompt-echo filter now also runs on renderer errors. `scripts/render_prompt.py` lines 1107 and 1111 quote the stripped template line, so those errors are dropped and only the `Unsupported template syntax:` header survives.\n  WHY: A render failure from those two violation kinds logs only the header, not where the problem is. It does not fail the audit.\n- scripts/security_audit.sh:77-78 (and changelog.d/7608-security-audit-render-stderr.md, \"Only error-shaped lines are kept\") | severity=NIT | confidence=3\n  PROBLEM: The comment and the changelog say non-`codex` labels keep only error-shaped lines, but the code keeps every line from the first error-shaped line onward (`diagnostic_seen`, lines 130-135).\n  WHY: Nothing fails at runtime. A reader would expect detail lines to be dropped, but they are kept on purpose.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/security_audit.sh:120-123 | severity=NIT | confidence=3\n  PROBLEM: The prompt-echo filter suppresses any line containing a prompt template line of 24+ characters. It now applies to renderer errors, so error messages that quote the offending template code will be dropped.\n  WHY: If a template syntax error quotes the problematic line, that diagnostic information is lost.\n- scripts/security_audit.sh:78 | severity=NIT | confidence=4\n  PROBLEM: The comment says non-codex labels \"keep only error-shaped lines\", but the implementation (lines 130-135) keeps all lines from the first error-shaped line onward.\n  WHY: The documentation misleads future maintainers about the diagnostic output.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:77-78 | severity=NIT | confidence=4\n  PROBLEM: The comment says \"keeps only error-shaped lines\", but the code (lines 130-135) keeps every line from the first error-shaped line onward via the `diagnostic_seen` flag.\n  WHY: No runtime failure. The comment misleads readers, and the agents.d fragment was updated but the inline comment and changelog were not.\n- changelog.d/7608-security-audit-render-stderr.md:7 | severity=NIT | confidence=4\n  PROBLEM: The changelog says \"Only error-shaped lines are kept\", but the code keeps lines from the first error-shaped line onward, including detail lines like `- unknown_in_template: NAME`.\n  WHY: No runtime failure. The changelog entry is inaccurate and would mislead readers of the release notes.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e4932d9d8675bfcd99108b9fa23ff2709cc2edd6909007b2a1c6ee24595e0b96",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7608,
+    "run_id": "39100152841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39100152841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261018053804_ea57593502",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7608,
+    "run_id": "39100152841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-18T05:38:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
