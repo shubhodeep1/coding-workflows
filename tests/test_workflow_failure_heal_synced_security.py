@@ -128,6 +128,12 @@ def test_invalid_report_shapes_are_rejected() -> None:
 		heal.validate_payload(_payload(wrapper_sha=None))
 	with pytest.raises(ValueError):
 		heal.validate_payload(_payload(wrapper_sha="stable"))
+	# reporter_run_id (plan step 5) is accepted only as a positive integer and never published.
+	assert "reporter_run_id" not in heal.validate_payload(_payload(reporter_run_id="12345"))
+	heal.validate_payload(_payload(reporter_run_id=12345))
+	for bad in (FREE_TEXT, "0", True, "12 34"):
+		with pytest.raises(ValueError):
+			heal.validate_payload(_payload(reporter_run_id=bad))
 	# Free text at the top level of the report is refused too.
 	for key in ("exploit_scenario", "recommendation", "failure_evidence", "issue_excerpt", "issue_title"):
 		with pytest.raises(ValueError):

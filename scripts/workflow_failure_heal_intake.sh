@@ -614,9 +614,13 @@ _git_fetch_diagnosis_ref()
 # run-less report. A heal-scope recovery replacement keeps its documented
 # CRITICAL refusal (#7323). A missing jq or unreadable payload prints
 # "unknown", which is not "0", so the report keeps the refusal (fail closed).
+# A synced_security_finding report carries no run_refs by design but has a
+# verified reporter run, so an unverified scope there is a fault: it must not
+# exit the whole intake in the middle of its fingerprint-group loop.
 _heal_report_claimed_no_runs()
 {
-	[ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
+	[ "${SOURCE_KIND:-}" != "synced_security_finding" ] \
+		&& [ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo unknown)" = "0" ]
 }

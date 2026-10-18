@@ -6,7 +6,8 @@ Synced-file security findings in the heal intake (project #7604, Phase 1 of
 `findings` (1-50 entries of exactly `file`, `line` 1..10^6, `category`,
 `severity` `high`/`critical`, `confidence` 1..10, `finding_id`
 `^[A-Za-z0-9._:-]{1,80}$`), `wrapper_sha` (the consumer's release SHA),
-`reporter_run_url` and an empty `run_refs`; any other top-level or finding key
+`reporter_run_url`, an optional digits-only `reporter_run_id` (never
+published) and an empty `run_refs`; any other top-level or finding key
 rejects the report, because coding-workflows is public (Q245). The category is
 mapped onto a fixed OWASP 2021 (`A0x:2021-<name>`) / STRIDE token, and anything
 else is rejected. `validate_payload` forces the title, workflow name and

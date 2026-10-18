@@ -110,7 +110,8 @@ SYNCED_SECURITY_DEFAULT_LINE_BUCKET = 25
 SYNCED_SECURITY_FINDING_KEYS = frozenset({"file", "line", "category", "severity", "confidence", "finding_id"})
 # Top-level keys a synced_security_finding report may carry; any other key
 # (free text such as an exploit scenario or failure evidence) rejects it.
-SYNCED_SECURITY_PAYLOAD_KEYS = frozenset({"schema_version", "source_repo", "source_kind", "findings", "wrapper_sha", "reporter_run_url", "reported_at", "run_refs"})
+# reporter_run_id (plan step 5) is accepted only as digits and never published.
+SYNCED_SECURITY_PAYLOAD_KEYS = frozenset({"schema_version", "source_repo", "source_kind", "findings", "wrapper_sha", "reporter_run_url", "reporter_run_id", "reported_at", "run_refs"})
 SYNCED_SECURITY_FAILURE_REASON = "synced_security_finding"
 SYNCED_SECURITY_ISSUE_TITLE = "Synced-file security findings"
 SYNCED_SECURITY_WORKFLOW_NAME = "AI Security Audit"
@@ -1480,6 +1481,9 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			raise ValueError("synced_security_finding reports carry no other fields: " + ", ".join(safe_token(key, 40) or "?" for key in extra_keys[:5]))
 		if payload.get("run_refs"):
 			raise ValueError("synced_security_finding reports carry no run references")
+		raw_reporter_run_id = payload.get("reporter_run_id")
+		if raw_reporter_run_id is not None and not re.fullmatch(r"[1-9][0-9]{0,19}", str(raw_reporter_run_id) if not isinstance(raw_reporter_run_id, bool) else ""):
+			raise ValueError("reporter_run_id must be a positive integer")
 		raw_release = payload.get("wrapper_sha")
 		if not (isinstance(raw_release, str) and is_valid_sha(raw_release.lower())):
 			raise ValueError("wrapper_sha (the consumer's release SHA) is required for synced_security_finding reports")
