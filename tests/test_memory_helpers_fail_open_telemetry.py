@@ -98,6 +98,12 @@ def _failure_lines(telemetry):
 		("fatal: Authentication failed for repo\n", "auth"),
 		("fatal: Could not resolve host: github.com\n", "network"),
 		("MemoryValidationError: bad\n", "validation"),
+		# Real CLI output: ai_memory.py main() prints only the message.
+		("AI_MEMORY_ERROR: run_id is required\n", "validation"),
+		("AI_MEMORY_ERROR: metadata JSON must be an object\n", "validation"),
+		("AI_MEMORY_ERROR: Unsupported memory category: x\n", "validation"),
+		("AI_MEMORY_ERROR: Schema validation failed for candidate.v1.json:\n- bad\n", "validation"),
+		("AI_MEMORY_ERROR: Unable to read memory branch ai-memory: fatal: oops\n", "other"),
 		("boom\n", "other"),
 		("value 14030 unrelated\n", "other"),
 		("HTTP 403: Resource not accessible by integration\n", "auth"),

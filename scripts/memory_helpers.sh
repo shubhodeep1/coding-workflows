@@ -84,7 +84,10 @@ _memory_stderr_category()
 		printf 'auth\n'
 	elif LC_ALL=C grep -qE 'Could not resolve host|timed out|Connection reset' "${err_file}" 2>/dev/null; then
 		printf 'network\n'
-	elif LC_ALL=C grep -qE 'MemoryValidationError' "${err_file}" 2>/dev/null; then
+	# ai_memory.py main() prints `AI_MEMORY_ERROR: <message>` without the
+	# exception class, and MemoryGitError uses the same prefix, so match the
+	# MemoryValidationError message shapes rather than the bare prefix.
+	elif LC_ALL=C grep -qE 'MemoryValidationError|^AI_MEMORY_ERROR: ([^:]*( is required| must (be|include|contain|define)| cannot be empty| requires )|Unsupported |Unknown |Schema validation failed|Missing schema file|Refusing to overwrite)' "${err_file}" 2>/dev/null; then
 		printf 'validation\n'
 	else
 		printf 'other\n'
