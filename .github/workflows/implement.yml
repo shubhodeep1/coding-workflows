@@ -4121,7 +4121,8 @@ jobs:
               echo "::notice::Left tracked symlink ${p} to the commit step (staged support or fetched file)"; skipped=$((skipped + 1)); continue
             fi
             rm -rf -- "./${p}" || true
-            if ! git checkout HEAD -- "${p}"; then
+            # Literal pathspec: a tracked name with glob characters or a leading ':' must match only itself.
+            if ! GIT_LITERAL_PATHSPECS=1 git checkout HEAD -- "${p}"; then
               echo "::error::Could not restore tracked symlink ${p} from HEAD"; rm -f "${entries_file}"; exit 1
             fi
             echo "::warning::Restored tracked symlink ${p} (editor replaced or removed it)"
@@ -5133,7 +5134,8 @@ jobs:
               echo "::notice::Left tracked symlink ${p} to the commit step (staged support or fetched file)"; skipped=$((skipped + 1)); continue
             fi
             rm -rf -- "./${p}" || true
-            if ! git checkout HEAD -- "${p}"; then
+            # Literal pathspec: a tracked name with glob characters or a leading ':' must match only itself.
+            if ! GIT_LITERAL_PATHSPECS=1 git checkout HEAD -- "${p}"; then
               echo "::error::Could not restore tracked symlink ${p} from HEAD"; rm -f "${entries_file}"; exit 1
             fi
             echo "::warning::Restored tracked symlink ${p} (editor replaced or removed it)"
