@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When changing GitHub Actions workflows, look for existing tests that assert workflow behavior or structure and update or add focused coverage. Merged workflow changes in this sample also consistently include an issue-prefixed changelog.d entry.",
+  "fingerprint": "a03d537c894498caf32d994e701d195b54db8739ca1b94911a9cd0178cadfc80",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39084836667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39084836667",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7567",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7568",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7575",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7576",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7579",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7572",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7573",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7577",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7578",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7580"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261018010420_05fac7817e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes are commonly paired with contract-focused tests and a changelog.d entry.",
+  "timestamps": {
+    "created_at": "2026-10-18T01:04:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
