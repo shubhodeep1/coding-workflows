@@ -1131,6 +1131,7 @@ jobs:
             tests/test_cost_audit_serena_metrics.py \
             tests/test_gh_helpers_list_runs_method.py \
             tests/test_implement_prompt_pinned_sha_contract.py \
+            tests/test_memory_helpers_fail_open_telemetry.py \
             tests/test_plan_reuse_audit_contract.py \
             tests/test_plan_template_owned_path_guard.py \
             tests/test_plan_superseded_merged_pr.py \
