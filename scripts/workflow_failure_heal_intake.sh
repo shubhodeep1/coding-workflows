@@ -781,7 +781,8 @@ _synced_security_finding_intake()
 			duplicate)
 				ss_existing="$(jq -r '.existing_issue // ""' "${ss_decision}")"
 				python3 "${HEAL_PY}" compose-synced-security-occurrence --payload-json "${PAYLOAD_FILE}" --group-json "${ss_group}" \
-					--intake-run-url "${RUN_URL}" > "${ss_dir}/occurrence_${ss_index}.md"
+					--intake-run-url "${RUN_URL}" > "${ss_dir}/occurrence_${ss_index}.md" \
+					|| { log "error occurrence_compose_failed fp=${FP} source=${SOURCE_REPO}"; ss_skipped=$((ss_skipped + 1)); ss_failed=1; continue; }
 				if [[ "${ss_existing}" =~ ^[0-9]+$ ]] && gh_retry gh api "repos/${SELF_REPO}/issues/${ss_existing}/comments" \
 					-F body=@"${ss_dir}/occurrence_${ss_index}.md" >/dev/null 2>&1; then
 					log "duplicate fp=${FP} existing_issue=${ss_existing} occurrence=recorded source=${SOURCE_REPO}"
