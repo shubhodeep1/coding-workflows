@@ -73,6 +73,11 @@ if args[:1] == ["api"]:
         seq = state.get("gate_runs_sequence") or []
         runs = seq[min(tick, len(seq) - 1)] if seq else []
         respond({"workflow_runs": runs})
+    if "/actions/runs/" in path and "/jobs" in path:
+        state.setdefault("jobs_reads", []).append(path)
+        if state.get("gate_jobs_error"):
+            save(); sys.stderr.write("HTTP 404: Not Found\n"); sys.exit(1)
+        respond(state.get("gate_jobs", {"jobs": []}))
     save(); sys.stderr.write("unexpected api path " + path + "\n"); sys.exit(1)
 if args[:2] == ["workflow", "run"]:
     state.setdefault("dispatches", []).append(args[2:])
@@ -621,3 +626,68 @@ def test_operator_steps_are_not_ticked_without_a_tag_or_when_disabled() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		_, final, _ = _run(Path(tmp), {}, env={"PROMOTE_CYCLE_ENABLED": "false"})
 	assert final["tick_calls"] == []
+
+
+# --- failed job / step on the smoke-gate failure line (#7614) -----------------
+
+GATE_FAILURE = [[], [{"id": 501, "status": "completed", "conclusion": "failure", "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}]]
+
+
+def _job(name: str, conclusion: str, steps: list[tuple[str, str]]) -> dict:
+	return {"name": name, "conclusion": conclusion, "steps": [{"name": n, "conclusion": c} for n, c in steps]}
+
+
+def test_smoke_gate_failure_logs_failed_job_and_step() -> None:
+	jobs = {"jobs": [
+		_job("validate", "success", [("Checkout", "success")]),
+		_job("e2e-smoke-test", "failure", [("Checkout", "success"), ("Phase 7: Close PR", "failure"), ("Later step", "failure")]),
+		_job("release", "failure", [("Tag", "failure")]),
+	]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_FAILURE, "gate_jobs": jobs})
+		assert not env_out.exists()
+	assert proc.returncode == 1
+	assert "PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=501 conclusion=failure failed_job=e2e-smoke-test failed_step=Phase_7:_Close_PR\n" in proc.stdout
+	assert final["jobs_reads"] == ["repos/owner/repo/actions/runs/501/jobs?per_page=100"]
+	assert "outcome=failed:smoke_gate_failed" in final["github_output"]
+
+
+def test_smoke_gate_failure_names_are_sanitised_and_timed_out_job_is_picked() -> None:
+	long_step = "bad=step`name " + "x" * 100
+	jobs = {"jobs": [
+		_job("lint", "success", []),
+		_job("smoke job\nnext", "timed_out", [("ok", "success"), (long_step, "failure")]),
+	]}
+	expected_step = ("badstepname_" + "x" * 100)[:80]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_FAILURE, "gate_jobs": jobs})
+	assert proc.returncode == 1
+	assert f"PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=501 conclusion=failure failed_job=smoke_job_next failed_step={expected_step}\n" in proc.stdout
+
+
+def test_smoke_gate_failure_job_without_failed_step_logs_unknown_step() -> None:
+	jobs = {"jobs": [_job("e2e-smoke-test", "timed_out", [("Wait", "cancelled")])]}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_FAILURE, "gate_jobs": jobs})
+	assert proc.returncode == 1
+	assert "conclusion=failure failed_job=e2e-smoke-test failed_step=unknown\n" in proc.stdout
+
+
+def test_smoke_gate_failure_jobs_read_failure_logs_unknown() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_FAILURE, "gate_jobs_error": True}, env={"GH_RETRY_MAX_ATTEMPTS": "1"})
+		assert not env_out.exists()
+	assert proc.returncode == 1
+	assert "PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=501 conclusion=failure failed_job=unknown failed_step=unknown\n" in proc.stdout
+	assert final["jobs_reads"]
+	assert len(final["dispatches"]) == 1
+
+
+def test_successful_or_cancelled_gate_makes_no_jobs_read() -> None:
+	cancelled = [[], [{"id": 500, "status": "completed", "conclusion": "cancelled", "head_branch": "main", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}]]
+	for seq in (GATE_SUCCESS, cancelled):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": seq})
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert not final.get("jobs_reads")
+		assert not any("/jobs" in a for call in final["calls"] for a in call)

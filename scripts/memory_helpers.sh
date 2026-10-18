@@ -30,6 +30,127 @@ _memory_telemetry()
 	echo "AI_MEMORY_TELEMETRY: $1"
 }
 
+_memory_epoch_ms()
+{
+	# Print the current epoch in integer milliseconds. Never fails.
+	local rt="${EPOCHREALTIME:-}"
+	local secs=""
+	local frac=""
+	local out=""
+
+	if [[ -n "${rt}" ]]; then
+		secs="${rt%%[!0-9]*}"
+		frac="${rt#"${secs}"}"
+		frac="${frac#?}"
+		frac="${frac}000"
+		frac="${frac:0:3}"
+		if [[ "${secs}" =~ ^[0-9]+$ ]] && [[ "${frac}" =~ ^[0-9]{3}$ ]]; then
+			printf '%s\n' "$(( 10#${secs} * 1000 + 10#${frac} ))"
+			return 0
+		fi
+	fi
+
+	out="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${out}" =~ ^[0-9]+$ ]]; then
+		printf '%s\n' "${out}"
+		return 0
+	fi
+
+	out="$(date +%s 2>/dev/null || true)"
+	if [[ "${out}" =~ ^[0-9]+$ ]]; then
+		printf '%s\n' "$(( out * 1000 ))"
+		return 0
+	fi
+
+	printf '0\n'
+	return 0
+}
+
+_memory_stderr_category()
+{
+	# Classify captured stderr into a fixed token. Never prints the file's
+	# content: stderr can carry remote URLs or tokens.
+	local err_file="${1:-}"
+
+	if [[ -z "${err_file}" ]] || [[ ! -s "${err_file}" ]]; then
+		printf 'none\n'
+		return 0
+	fi
+	if LC_ALL=C grep -qE 'non-fast-forward|\[rejected\]|failed to push' "${err_file}" 2>/dev/null; then
+		printf 'push_rejected\n'
+	# 403 counts only in an HTTP/error-status context, so a traceback frame
+	# such as `line 403, in main` is not classified as auth.
+	elif LC_ALL=C grep -qE 'Authentication failed|([Ee]rror|[Hh][Tt][Tt][Pp][/0-9.]*|[Ss]tatus|code)[: ]*403([^0-9]|$)|(^|[^0-9])403 [Ff]orbidden|could not read Username' "${err_file}" 2>/dev/null; then
+		printf 'auth\n'
+	elif LC_ALL=C grep -qE 'Could not resolve host|timed out|Connection reset' "${err_file}" 2>/dev/null; then
+		printf 'network\n'
+	# ai_memory.py main() prints `AI_MEMORY_ERROR: <message>` without the
+	# exception class, and MemoryGitError uses the same prefix, so match the
+	# MemoryValidationError message shapes rather than the bare prefix.
+	elif LC_ALL=C grep -qE 'MemoryValidationError|^AI_MEMORY_ERROR: ([^:]*( is required| must (be|include|contain|define|match)| cannot be empty| requires | escapes repository root)|Unsupported |Unknown |Schema validation failed|Missing schema file|Refusing to overwrite|Retrieval profiles not found)' "${err_file}" 2>/dev/null; then
+		printf 'validation\n'
+	else
+		printf 'other\n'
+	fi
+	return 0
+}
+
+_memory_record_with_failure_telemetry()
+{
+	# Shared fail-open body for memory_record_run_event and
+	# memory_record_candidate. On failure the telemetry line keeps the
+	# original keys byte-identical and appends exit_code, duration_ms and a
+	# fixed stderr_category token. Always returns 0.
+	local op="${1:?op required}"
+	local subcommand="${2:?subcommand required}"
+	shift 2
+
+	local start_ms=""
+	local end_ms=""
+	local duration_ms=0
+	local err_file=""
+	local rc=0
+	local category="unavailable"
+
+	err_file="$(mktemp 2>/dev/null)" || err_file=""
+
+	# duration_ms covers only the Python call, not temp-file handling or
+	# stderr forwarding and classification.
+	if [[ -n "${err_file}" ]] && [[ -f "${err_file}" ]]; then
+		start_ms="$(_memory_epoch_ms)"
+		python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" "${subcommand}" "$@" 2>"${err_file}" && rc=0 || rc=$?
+		end_ms="$(_memory_epoch_ms)"
+		cat "${err_file}" >&2 || true
+		category="$(_memory_stderr_category "${err_file}")" || category="other"
+		rm -f "${err_file}" || true
+	else
+		start_ms="$(_memory_epoch_ms)"
+		python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" "${subcommand}" "$@" && rc=0 || rc=$?
+		end_ms="$(_memory_epoch_ms)"
+		category="unavailable"
+	fi
+
+	if [[ "${rc}" -ne 0 ]]; then
+		if [[ "${start_ms}" =~ ^[0-9]+$ ]] && [[ "${end_ms}" =~ ^[0-9]+$ ]]; then
+			duration_ms=$(( end_ms - start_ms ))
+		fi
+		if [[ "${duration_ms}" -lt 0 ]]; then
+			duration_ms=0
+		fi
+		case "${category}" in
+			push_rejected|auth|network|validation|other|none|unavailable)
+				;;
+			*)
+				category="other"
+				;;
+		esac
+		_memory_warn "${op} failed (fail-open) exit_code=${rc}"
+		_memory_telemetry "$(printf '{"op":"%s","ok":false,"fail_open":true,"source":"shell","exit_code":%d,"duration_ms":%d,"stderr_category":"%s"}' "${op}" "${rc}" "${duration_ms}" "${category}")" >&2
+	fi
+
+	return 0
+}
+
 _memory_retrieve_fallback()
 {
 	local output_file="${1:-}"
@@ -195,11 +316,8 @@ memory_record_run_event()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-run-event "$@" || {
-		_memory_warn "record-run-event failed (fail-open)"
-		_memory_telemetry '{"op":"record-run-event","ok":false,"fail_open":true,"source":"shell"}' >&2
-		return 0
-	}
+	_memory_record_with_failure_telemetry record-run-event record-run-event "$@"
+	return 0
 }
 
 memory_record_candidate()
@@ -209,11 +327,8 @@ memory_record_candidate()
 		return 0
 	fi
 
-	python3 "${MEMORY_SCRIPTS_DIR}/ai_memory.py" record-candidate "$@" || {
-		_memory_warn "record-candidate failed (fail-open)"
-		_memory_telemetry '{"op":"record-candidate","ok":false,"fail_open":true,"source":"shell"}' >&2
-		return 0
-	}
+	_memory_record_with_failure_telemetry record-candidate record-candidate "$@"
+	return 0
 }
 
 memory_retrieve()

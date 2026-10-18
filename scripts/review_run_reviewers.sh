@@ -564,9 +564,17 @@ def aggregate_step_finish_usage(payloads):
 	return aggregated if found_event else None
 
 
+# usage_missing_reason (additive, last field, printed only when
+# usage_available=false): log_missing, no_json_events, no_usage_event,
+# incomplete_step_finish or incomplete_fields. Values are fixed literals,
+# never copied from the log.
 usage = normalize_usage(None)
+usage_missing_reason = None
+step_finish_seen = False
 payloads = []
-if log_path.exists():
+if not log_path.exists():
+	usage_missing_reason = "log_missing"
+else:
 	text = log_path.read_text(encoding="utf-8", errors="replace")
 	decoder = json.JSONDecoder()
 	index = 0
@@ -583,17 +591,28 @@ if log_path.exists():
 		payloads.append(payload)
 		index = max(end, next_object_start + 1)
 
+	step_finish_seen = any(isinstance(p, dict) and p.get("type") == "step_finish" for p in payloads)
 	structured_usage = aggregate_step_finish_usage(payloads)
 	if isinstance(structured_usage, dict):
 		usage = normalize_usage(structured_usage)
 	else:
+		found_any_usage = False
 		for payload in payloads:
 			found_usage = find_usage_dict(payload)
 			if isinstance(found_usage, dict):
+				found_any_usage = True
 				usage = normalize_usage(found_usage)
 				if isinstance(payload, dict) and isinstance(payload.get("model"), str) and payload.get("model"):
 					model_name = payload["model"]
 				break
+		if not payloads:
+			usage_missing_reason = "no_json_events"
+		elif found_any_usage:
+			usage_missing_reason = "incomplete_fields"
+		elif step_finish_seen:
+			usage_missing_reason = "incomplete_step_finish"
+		else:
+			usage_missing_reason = "no_usage_event"
 
 usage_available = all(usage.get(field) is not None for field in (
 	"prompt_tokens",
@@ -614,6 +633,12 @@ print(
 	f"cache_creation_input_tokens={format_usage_value(usage.get('cache_creation_input_tokens'))} "
 	f"cache_read_input_tokens={format_usage_value(usage.get('cache_read_input_tokens'))} "
 	f"usage_available={str(usage_available).lower()}"
+	+ (
+		# A false line always names a reason; incomplete_fields is the defensive default.
+		f" usage_missing_reason={usage_missing_reason or 'incomplete_fields'}"
+		if not usage_available
+		else ""
+	)
 )
 PY
 }
@@ -5583,6 +5608,149 @@ build_cross_pollination_summary() {
   echo "${summary_file}"
 }
 
+# ── Reviewer pass-2 shadow helpers ──────────────────────────────────────
+# Shadow step for an adaptive second review pass (analysis doc
+# workflow-optimization-2026-09-21-2, Speed item 2). After pass 1 and
+# before pass 2, two-pass mode logs one REVIEWER_PASS2_SHADOW line saying
+# whether pass 2 would have been skipped. Nothing reads the decision:
+# pass 2 always runs. The reviewer contract writes SEVERITY:
+# BLOCKER|MAJOR|NIT, so BLOCKER and MAJOR count as high severity next to
+# high and critical. REVIEWER_PASS2_SHADOW_ENABLED is defaulted here
+# (unset, empty or true is on; false is off; any other value is off with
+# one warning). No GitHub API calls; every evaluation error logs
+# would_skip=unknown and the run continues.
+reviewer_pass2_shadow_switch_state() {
+  local raw="${REVIEWER_PASS2_SHADOW_ENABLED-}"
+
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    ""|true) printf 'on\n' ;;
+    false) printf 'off\n' ;;
+    *)
+      echo "::warning::REVIEWER_PASS2_SHADOW_ENABLED has an unrecognised value; shadow decision logging is off." >&2
+      printf 'off\n'
+      ;;
+  esac
+}
+
+# Prints "<would_skip> <reason>". The first failing condition, in this
+# order, is the reason: pass1_insufficient, high_findings, large_diff,
+# sensitive_paths. Returns non-zero on malformed input.
+reviewer_pass2_shadow_decide() {
+  local pass1_ok="$1"
+  local high_findings="$2"
+  local diff_loc="$3"
+  local threshold="$4"
+  local sensitive="$5"
+  local value=""
+
+  for value in "${pass1_ok}" "${high_findings}" "${diff_loc}" "${threshold}"; do
+    [[ "${value}" =~ ^[0-9]{1,18}$ ]] || return 1
+  done
+  case "${sensitive}" in
+    true|false) ;;
+    *) return 1 ;;
+  esac
+
+  if [ "$((10#${pass1_ok}))" -lt 2 ]; then
+    printf 'false pass1_insufficient\n'
+  elif [ "$((10#${high_findings}))" -gt 0 ]; then
+    printf 'false high_findings\n'
+  elif [ "$((10#${diff_loc}))" -ge "$((10#${threshold}))" ]; then
+    printf 'false large_diff\n'
+  elif [ "${sensitive}" = "true" ]; then
+    printf 'false sensitive_paths\n'
+  else
+    printf 'true eligible\n'
+  fi
+}
+
+# Counts high-severity findings in the pass-1 reviewer outputs
+# (pass1_<slot>.txt). Rejected pool outputs, status files and the
+# consensus ledger are not counted. Returns non-zero on a read error.
+reviewer_pass2_shadow_count_high_findings() {
+  local pattern='^[[:space:]]*[-*_[:space:]]*SEVERITY[*_]*:[*_[:space:]]*(high|critical|blocker|major)([^[:alnum:]_]|$)'
+  local output_file=""
+  local base=""
+  local count=""
+  local total=0
+  local rc=0
+
+  for output_file in "${PREVIOUS_REVIEWS_DIR}"/pass1_*.txt; do
+    [ -f "${output_file}" ] || continue
+    base="${output_file##*/}"
+    case "${base}" in
+      rejected_*|status_*|consensus_*) continue ;;
+    esac
+    rc=0
+    count="$(grep -Eic -- "${pattern}" "${output_file}")" || rc=$?
+    [ "${rc}" -lt 2 ] || return 1
+    [[ "${count}" =~ ^[0-9]{1,18}$ ]] || return 1
+    total=$((total + 10#${count}))
+  done
+
+  printf '%s\n' "${total}"
+}
+
+reviewer_pass2_shadow_log() {
+  local switch_state=""
+  local line=""
+
+  switch_state="$(reviewer_pass2_shadow_switch_state)"
+  [ "${switch_state}" = "on" ] || return 0
+
+  line="$(
+    {
+    set -euo pipefail
+    always_full_regex="${REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX:-^(scripts/|\.github/workflows/|\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)}"
+    pass1_ok="$(reviewer_count_success_statuses "pass1")"
+    high_findings="$(reviewer_pass2_shadow_count_high_findings)"
+    # The size check measures the whole PR diff, not PASS2_DIFF_LOC (the
+    # previous autofix diff, 0 on a first review). An unknown diff must
+    # never read as a zero-line, eligible diff.
+    pr_diff_file="${RAW_REVIEWER_PR_DIFF_FILE:-}"
+    has_pr_diff="$(printf '%s' "${HAS_PR_DIFF:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    case "${has_pr_diff}" in 0|false|no|off) exit 1 ;; esac
+    [ -n "${pr_diff_file}" ] && [ -s "${pr_diff_file}" ] || exit 1
+    diff_loc="$(reviewer_count_diff_loc "${pr_diff_file}")"
+    threshold="${PASS2_DIFF_LARGE_LOC:-200}"
+    changed_files="${RAW_REVIEWER_PR_CHANGED_FILES_FILE:-}"
+    # An unknown path set must never read as eligible.
+    [ -n "${changed_files}" ] && [ -f "${changed_files}" ] || exit 1
+    grep -q '[^[:space:]]' "${changed_files}" || exit 1
+    match_rc=0
+    reviewer_any_path_matches_regex "${changed_files}" "${always_full_regex}" >/dev/null || match_rc=$?
+    case "${match_rc}" in
+      0) sensitive=true ;;
+      1)
+        # Migrations keep two passes too (analysis doc, Speed item 2).
+        match_rc=0
+        reviewer_any_path_matches_regex "${changed_files}" '(^|/)(migrations|migrate)/' >/dev/null || match_rc=$?
+        case "${match_rc}" in
+          0) sensitive=true ;;
+          1) sensitive=false ;;
+          *) exit 1 ;;
+        esac
+        ;;
+      *) exit 1 ;;
+    esac
+    decision="$(reviewer_pass2_shadow_decide "${pass1_ok}" "${high_findings}" "${diff_loc}" "${threshold}" "${sensitive}")"
+    read -r would_skip reason <<<"${decision}"
+    case "${would_skip}" in true|false) ;; *) exit 1 ;; esac
+    printf 'REVIEWER_PASS2_SHADOW would_skip=%s reason=%s pass1_ok=%s high_findings=%s diff_loc=%s threshold=%s sensitive=%s\n' \
+      "${would_skip}" "${reason}" "$((10#${pass1_ok}))" "$((10#${high_findings}))" "$((10#${diff_loc}))" "$((10#${threshold}))" "${sensitive}"
+    } 2>/dev/null
+  )" || line=""
+
+  case "${line}" in
+    "REVIEWER_PASS2_SHADOW would_skip=true "*|"REVIEWER_PASS2_SHADOW would_skip=false "*) ;;
+    *) line="REVIEWER_PASS2_SHADOW would_skip=unknown reason=evaluation_failed" ;;
+  esac
+  printf '%s\n' "${line}"
+  return 0
+}
+# ── End reviewer pass-2 shadow helpers ──────────────────────────────────
+
 rm -f "${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}" 2>/dev/null || true
 reviewers_successful=0
 
@@ -5695,6 +5863,10 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
     PASS2_DIFF_LOC=0
   fi
   : "${PASS2_DIFF_LOC:=0}"
+
+  # Shadow-log the adaptive pass-2 skip decision. Nothing reads it; pass 2
+  # always runs below.
+  reviewer_pass2_shadow_log || true
 
   # Operator override always wins: if vars.THINKING_LEVEL_REVIEWER (which
   # populates REVIEWER_REASONING_EFFORT) is set in repo vars, honour it.
