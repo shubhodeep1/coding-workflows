@@ -78,7 +78,9 @@ _memory_stderr_category()
 	fi
 	if LC_ALL=C grep -qE 'non-fast-forward|\[rejected\]|failed to push' "${err_file}" 2>/dev/null; then
 		printf 'push_rejected\n'
-	elif LC_ALL=C grep -qE 'Authentication failed|(^|[^0-9])403([^0-9]|$)|could not read Username' "${err_file}" 2>/dev/null; then
+	# 403 counts only in an HTTP/error-status context, so a traceback frame
+	# such as `line 403, in main` is not classified as auth.
+	elif LC_ALL=C grep -qE 'Authentication failed|(error|HTTP[/0-9.]*|[Ss]tatus|code)[: ]*403([^0-9]|$)|(^|[^0-9])403 Forbidden|could not read Username' "${err_file}" 2>/dev/null; then
 		printf 'auth\n'
 	elif LC_ALL=C grep -qE 'Could not resolve host|timed out|Connection reset' "${err_file}" 2>/dev/null; then
 		printf 'network\n'
