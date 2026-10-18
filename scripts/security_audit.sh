@@ -75,7 +75,8 @@ security_audit_emit_codex_stderr_tail() {
 	local prompt_path="${2:?prompt path required}"
 	local tail_path="${3:?tail path required}"
 	# Optional label for the log prefix. Any label other than the default
-	# `codex` also keeps only error-shaped lines (prompt renderer output).
+	# `codex` also drops lines before the first error-shaped line and keeps
+	# every line from it onward (prompt renderer output).
 	local stderr_label="${4:-codex}"
 	local masked_path="${tail_path}.masked"
 	local rendered_path="${tail_path}.rendered"
