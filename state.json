@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-18T04:49:59Z",
+  "tick_at": "2026-10-18T05:07:28Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -55,14 +55,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 2,
-      "integration_ahead_by": "7",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -70,19 +69,19 @@
       },
       "number": 7590,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Apply workflow-optimization-2026-09-21 recommendations (verified subset)",
-      "total_waves": 2,
-      "wave_complete": true
+      "total_waves": 0,
+      "wave_complete": false
     },
     {
       "current_wave": 1,
       "integration_ahead_by": "1",
       "issue_counts": {
-        "closed": 0,
+        "closed": 1,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 1,
+        "in_progress": 0,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -91,10 +90,10 @@
       },
       "number": 7604,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "failed",
       "title": "[Orchestrator] Report synced-file security findings to coding-workflows through heal intake",
       "total_waves": 2,
-      "wave_complete": false
+      "wave_complete": true
     }
   ]
 }
