@@ -618,6 +618,32 @@ def test_pr_closed_by_human_skips_without_pushing(fx: Fixture) -> None:
 
 
 @needs_jq
+def test_merged_release_pr_with_branch_left_skips_without_pushing(fx: Fixture) -> None:
+	# The release PR merged and the branch was not deleted (consumer rulesets
+	# block deletion and non-fast-forward pushes). A later run, for example a
+	# changelog fragment fold, must not rewrite the merged branch.
+	_git(fx.origin, "update-ref", f"refs/heads/{BRANCH}", fx.base_sha)
+	fx.pr_list.write_text(json.dumps([{"number": 4, "url": "u", "state": "MERGED", "isCrossRepository": False, "headRefName": BRANCH, "mergedAt": "2026-10-17T03:35:57Z"}]), encoding="utf-8")
+	result = fx.run()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outcome=skipped reason=release_pr_merged" in result.stdout
+	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == fx.base_sha
+	assert _remote_sha(fx.origin, "refs/heads/main") == fx.base_sha
+	assert fx.outputs()["pr_action"] == "skipped"
+	assert not any(call.startswith(("pr create", "pr edit", "pr merge")) for call in fx.gh_calls())
+	assert not any("/compare/" in call or "/activity" in call for call in fx.gh_calls())
+
+
+@needs_jq
+def test_merged_release_pr_with_branch_deleted_opens_a_new_pr(fx: Fixture) -> None:
+	fx.pr_list.write_text(json.dumps([{"number": 4, "url": "u", "state": "MERGED", "isCrossRepository": False, "headRefName": BRANCH, "mergedAt": "2026-10-17T03:35:57Z"}]), encoding="utf-8")
+	result = fx.run()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") != ""
+	assert fx.outputs()["pr_action"] == "created"
+
+
+@needs_jq
 def test_only_matching_pat_authored_stale_prs_are_closed(fx: Fixture) -> None:
 	fx.stale_list.write_text(json.dumps([
 		{"number": 11, "url": "u11", "headRefName": "auto/update-workflows-aaaaaaaaaaaa", "isCrossRepository": False, "author": {"login": PAT_LOGIN}},

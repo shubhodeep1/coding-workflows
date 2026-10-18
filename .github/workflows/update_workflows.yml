@@ -1449,6 +1449,8 @@ jobs:
           OPEN_PR="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "OPEN")] | .[0] | if . == null then "" else "\(.number) \(.url)" end')" || pr_fail pr_lookup_failed
           CLOSED_UNMERGED="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "CLOSED" and .mergedAt == null)] | length')" || pr_fail pr_lookup_failed
           [[ "${CLOSED_UNMERGED}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
+          RELEASE_PR_MERGED="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .mergedAt != null)] | length')" || pr_fail pr_lookup_failed
+          [[ "${RELEASE_PR_MERGED}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
           if [ -n "${OPEN_PR}" ]; then
             PR_NUMBER="${OPEN_PR%% *}"
             PR_URL="${OPEN_PR#* }"
@@ -1481,6 +1483,22 @@ jobs:
           REMOTE_LINE="$(git ls-remote origin "refs/heads/${BRANCH}")" || pr_fail remote_lookup_failed
           REMOTE_SHA="$(printf '%s\n' "${REMOTE_LINE}" | awk -v ref="refs/heads/${BRANCH}" '$2 == ref {print $1; exit}')"
           PUSH_REASON="pushed"
+          if [ -n "${REMOTE_SHA}" ] && [ -z "${OPEN_PR}" ] && [ "${RELEASE_PR_MERGED}" -gt 0 ]; then
+            # This release's pull request already merged and its branch is
+            # still there. A new commit is built on the current default branch,
+            # so updating the branch would rewrite the merged history: consumer
+            # rulesets reject that (non_fast_forward, deletion), and it would
+            # reopen a delivered release. What is left is usually a changelog or
+            # agents.md fragment fold; the next release's pull request carries it.
+            echo "::notice::$(pr_log skipped release_pr_merged) changed_files=$(git diff --name-only "${BASE_SHA}" HEAD | wc -l | tr -d ' ')"
+            {
+              echo "delivery=pr"
+              echo "branch=${BRANCH}"
+              echo "pr_action=skipped"
+              echo "auto_merge=none"
+            } >> "${PR_OUT}"
+            exit 0
+          fi
           if [ -z "${REMOTE_SHA}" ]; then
             # Empty lease value: the push succeeds only if the branch still does not exist.
             git push --force-with-lease="refs/heads/${BRANCH}:" origin "HEAD:refs/heads/${BRANCH}" || pr_fail lease_mismatch_or_push_rejected
