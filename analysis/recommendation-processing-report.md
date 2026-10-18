@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (122)
+## Processed source docs (123)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -127,6 +127,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-20.md`
 - `analysis/workflow-optimization-2026-09-20-2.md`
 - `analysis/workflow-optimization-2026-09-21.md`
+- `analysis/workflow-optimization-2026-09-21-2.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1251,3 +1252,28 @@ Processed: 2026-10-18
 - DUP-001, DUP-002 — rejected: refactors with no behaviour change that would add staged support modules (2026-09-16 precedent).
 - DEAD-001, DEAD-002, SHELL-001 — rejected: naming immutability and low value (2026-09-16 / 2026-09-20 precedent).
 - Copilot micro-optimization, executive summary, pipeline-flow table, per-repo breakdown and metrics appendix — INVALID/non-material: evidence, not recommendations.
+
+### `analysis/workflow-optimization-2026-09-21-2.md`
+Processed: 2026-10-18
+- Speed 1 / Reliability 2 first half (early CI budget-contract fail-fast) — already-implemented: CI has run as parallel jobs since #4707, and the `tests/test_ci_poll_test_sharding.py` contract runs at the start of each orchestrate-poll group. The `300 != 180` mismatch is fixed on main.
+- Speed 2 (adaptive second review pass) — applied as shadow-only: reviewer-pass2-shadow (`changelog.d/7625-reviewer-pass2-shadow.md`); `REVIEWER_PASS2_SHADOW` logs `would_skip` after pass 1 and pass 2 always runs, following the doc's own rollout advice.
+- Speed 3 (reject superseded heads before model startup) — already-implemented, and its unsafe part rejected: the gate checks out the authenticated current PR head (`review_checkout_sha`), and `AUTOFIX_STALE_BASE_SKIP` covers heads that advance during fetch. Skipping a run whose event head moved would leave the newest head unreviewed when that head is a self-triggered `[ai-autofix]` push whose own synchronize run is skipped.
+- Speed 4 (short-circuit idle polls) — already-implemented: ticks with no project run only the sweep-only modes (`has_work=false`); ticks with active projects cannot be short-circuited safely.
+- Cost 1 (adaptive model fan-out) — already-implemented by the lite/standard/full review tiers and the risk-tier resolver.
+- Cost 2 (enable uninteresting-file filtering) — rejected: the doc requires a shadow comparison first and no shadow mode exists; operators can opt in with `REVIEWER_FILTER_UNINTERESTING_ENABLED`.
+- Cost 3 (instrument Semble usefulness) — already-implemented: `SEMBLE_QUERY` logs bytes, ms, sources and static_dup_bytes.
+- Cost 4 (usage completeness) — applied: reviewer-usage-missing-reason (`changelog.d/7614-reviewer-usage-missing-reason.md`); `usage_missing_reason` is added to the reviewer usage line.
+- Reliability 1 (required review env manifest) — already-implemented: `LINKED_ISSUE_METADATA_FILE` is set, and `REVIEW_EDITOR_PREFLIGHT` checks the editor guards before the reviewers run.
+- Reliability 2 second half (release child-run linkage) — applied: promote-gate-failure-linkage (`changelog.d/7614-promote-gate-failure-linkage.md`); `PROMOTE_CYCLE_FAILED` now names the failed job and step.
+- Reliability 3 (cancellation diagnostics) — rejected: runs cancelled before their first step cannot log, and those cancellations are the concurrency group's normal replacement of a pending run.
+- Reliability 4 (opaque AI-memory fail-open events) — applied: memory-fail-open-telemetry (`changelog.d/7615-memory-fail-open-telemetry.md`); adds `exit_code`, `duration_ms` and `stderr_category`.
+- Reliability 5 (MCP fallback alert threshold) — rejected: there is no fallback-rate alert to retune.
+- GH API audit (reuse the linked-issue snapshot after merge) — already-implemented: `POST_MERGE_LINKED_ISSUES_JSON` is reused and refreshed only when empty, and `post_merge_validate_context_definitely_empty` skips the job.
+- GH API audit (per-request `GH_API_CALL` logging) — rejected as broad scope: `GH_API_RETRY` and `GH_PAT_BUDGET` already cover failures and quota.
+- Prompt cache 1 (stable prefix) — already-implemented.
+- Prompt cache 2 (prefix_hash telemetry) — rejected as broad scope.
+- Prompt cache 3 (filtering/dedup) — see Cost 2 and Cost 3.
+- Prompt cache 4 (automatic context reduction at 70%) — rejected: it changes behaviour with a quality risk; `CONTEXT_BUDGET_WARN` remains.
+- AI memory budget target of 80–90% — rejected as speculative tuning.
+- `ORCHESTRATOR_CYCLE_SUMMARY` and the merge-train blocker-age metric — rejected for now: they would add instrumentation to the hot poller script, and `POLL_PROGRESS`, `GH_PAT_BUDGET` and `STANDALONE_STALL_PROBE` already provide part of this.
+- Clarify/plan structured skip reasons — already-implemented (`AI_PHASE_GATE_V1`).
