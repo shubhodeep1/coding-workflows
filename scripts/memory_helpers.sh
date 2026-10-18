@@ -87,7 +87,7 @@ _memory_stderr_category()
 	# ai_memory.py main() prints `AI_MEMORY_ERROR: <message>` without the
 	# exception class, and MemoryGitError uses the same prefix, so match the
 	# MemoryValidationError message shapes rather than the bare prefix.
-	elif LC_ALL=C grep -qE 'MemoryValidationError|^AI_MEMORY_ERROR: ([^:]*( is required| must (be|include|contain|define)| cannot be empty| requires )|Unsupported |Unknown |Schema validation failed|Missing schema file|Refusing to overwrite)' "${err_file}" 2>/dev/null; then
+	elif LC_ALL=C grep -qE 'MemoryValidationError|^AI_MEMORY_ERROR: ([^:]*( is required| must (be|include|contain|define|match)| cannot be empty| requires | escapes repository root)|Unsupported |Unknown |Schema validation failed|Missing schema file|Refusing to overwrite|Retrieval profiles not found)' "${err_file}" 2>/dev/null; then
 		printf 'validation\n'
 	else
 		printf 'other\n'
