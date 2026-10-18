@@ -4646,7 +4646,7 @@ def normalize_synced_security_category(raw: Any) -> str:
 
 
 def _synced_security_file_ok(value: Any) -> bool:
-	if not isinstance(value, str) or not _SYNCED_SECURITY_FILE_RE.match(value):
+	if not isinstance(value, str) or not _SYNCED_SECURITY_FILE_RE.fullmatch(value):
 		return False
 	if value.startswith("/") or value.endswith("/") or "//" in value:
 		return False
@@ -4683,7 +4683,7 @@ def validate_synced_security_findings(raw: Any) -> list[dict[str, Any]]:
 		if missing:
 			raise ValueError(f"{where} is missing: " + ", ".join(missing))
 		finding_id = item.get("finding_id")
-		if not isinstance(finding_id, str) or not _SYNCED_SECURITY_FINDING_ID_RE.match(finding_id):
+		if not isinstance(finding_id, str) or not _SYNCED_SECURITY_FINDING_ID_RE.fullmatch(finding_id):
 			raise ValueError(f"{where}.finding_id is malformed")
 		if finding_id in seen_ids:
 			raise ValueError(f"{where}.finding_id is repeated")

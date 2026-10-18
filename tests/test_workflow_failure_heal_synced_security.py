@@ -89,6 +89,8 @@ def test_valid_payload_keeps_only_the_allowed_fields() -> None:
 		_finding(finding_id="bad id"),
 		_finding(finding_id="x" * 81),
 		_finding(finding_id="<!--x"),
+		_finding(finding_id="guard-bypass\n"),
+		_finding(file=HOOK + "\n"),
 		_finding(line=0),
 		_finding(line=1_000_001),
 		_finding(line=True),

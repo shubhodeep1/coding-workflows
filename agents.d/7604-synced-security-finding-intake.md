@@ -21,4 +21,4 @@ excerpts. In `scripts/workflow_failure_heal_intake.sh`:
 - The run logs `received kind=synced_security_finding findings=N opened=X occurrences=Y skipped=Z`: N counts findings, the other three count fingerprint groups. It writes the same to the step summary and sends one Telegram message (WARNING when a group was skipped for budget, lineage or scope, else DEBUG); a compose or create failure ends the run red.
 - `_heal_fetch_issue_list` and `_heal_intake_scope_guard_is_on` are shared helpers, and `_git_fetch_diagnosis_ref` and the scope-guard functions are now defined ahead of this branch.
 
-Nothing sends these reports until Phase 2 (`security_audit_upstream_report.sh`).
+Consumer security audits send these reports through Phase 2 (`security_audit_upstream_report.sh`), which ships with this change.
