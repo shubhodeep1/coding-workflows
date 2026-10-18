@@ -564,9 +564,17 @@ def aggregate_step_finish_usage(payloads):
 	return aggregated if found_event else None
 
 
+# usage_missing_reason (additive, last field, printed only when
+# usage_available=false): log_missing, no_json_events, no_usage_event,
+# incomplete_step_finish or incomplete_fields. Values are fixed literals,
+# never copied from the log.
 usage = normalize_usage(None)
+usage_missing_reason = None
+step_finish_seen = False
 payloads = []
-if log_path.exists():
+if not log_path.exists():
+	usage_missing_reason = "log_missing"
+else:
 	text = log_path.read_text(encoding="utf-8", errors="replace")
 	decoder = json.JSONDecoder()
 	index = 0
@@ -583,17 +591,28 @@ if log_path.exists():
 		payloads.append(payload)
 		index = max(end, next_object_start + 1)
 
+	step_finish_seen = any(isinstance(p, dict) and p.get("type") == "step_finish" for p in payloads)
 	structured_usage = aggregate_step_finish_usage(payloads)
 	if isinstance(structured_usage, dict):
 		usage = normalize_usage(structured_usage)
 	else:
+		found_any_usage = False
 		for payload in payloads:
 			found_usage = find_usage_dict(payload)
 			if isinstance(found_usage, dict):
+				found_any_usage = True
 				usage = normalize_usage(found_usage)
 				if isinstance(payload, dict) and isinstance(payload.get("model"), str) and payload.get("model"):
 					model_name = payload["model"]
 				break
+		if not payloads:
+			usage_missing_reason = "no_json_events"
+		elif found_any_usage:
+			usage_missing_reason = "incomplete_fields"
+		elif step_finish_seen:
+			usage_missing_reason = "incomplete_step_finish"
+		else:
+			usage_missing_reason = "no_usage_event"
 
 usage_available = all(usage.get(field) is not None for field in (
 	"prompt_tokens",
@@ -614,6 +633,12 @@ print(
 	f"cache_creation_input_tokens={format_usage_value(usage.get('cache_creation_input_tokens'))} "
 	f"cache_read_input_tokens={format_usage_value(usage.get('cache_read_input_tokens'))} "
 	f"usage_available={str(usage_available).lower()}"
+	+ (
+		# A false line always names a reason; incomplete_fields is the defensive default.
+		f" usage_missing_reason={usage_missing_reason or 'incomplete_fields'}"
+		if not usage_available
+		else ""
+	)
 )
 PY
 }

@@ -8573,8 +8573,99 @@ def main() -> int:
 	test_review_sandbox_cleanup_reports_path_free_reason()
 	test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge()
 	test_post_merge_validate_dispatch_retries_label_removal_but_not_dispatch()
+	test_normalize_openrouter_usage_reports_missing_reason()
+	test_normalize_openrouter_usage_available_line_has_no_reason()
+	test_cost_audit_openrouter_re_matches_line_with_missing_reason()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
+
+
+def _run_normalize_openrouter_usage(log_text: str | None) -> str:
+	"""Run the reviewer usage helper against log text (None: no log file)."""
+	reviewers = REVIEWERS.read_text(encoding="utf-8")
+	start = reviewers.index("normalize_openrouter_usage() {")
+	end = reviewers.index("emit_reviewer_substate()", start)
+	block = reviewers[start:end]
+	with tempfile.TemporaryDirectory(prefix="usage-missing-reason-") as tmp:
+		log_file = Path(tmp) / "reviewer.stderr"
+		if log_text is not None:
+			log_file.write_text(log_text, encoding="utf-8")
+		env = os.environ.copy()
+		env["SUPPORT_SCRIPTS_DIR"] = str(REPO_ROOT / "scripts")
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{block}\n"
+				'normalize_openrouter_usage "$1" "$2" "$3" "$4"\n',
+				"bash",
+				str(log_file),
+				"review",
+				"pass1",
+				"test-model",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+	lines = [line for line in result.stdout.splitlines() if line.startswith("INFO: openrouter usage ")]
+	assert len(lines) == 1, result.stdout
+	return lines[0]
+
+
+_USAGE_MISSING_REASON_FIXTURES = {
+	"log_missing": None,
+	"no_json_events": "plain text, no json\n",
+	"no_usage_event": '{"type":"text","part":{"text":"NONE"}}\n',
+	"incomplete_step_finish": '{"type":"step_finish","part":{"tokens":{"input":5,"output":2,"cache":{"write":0}}}}\n',
+	"incomplete_fields": '{"usage":{"prompt_tokens":5,"completion_tokens":2}}\n',
+}
+
+
+def test_normalize_openrouter_usage_reports_missing_reason() -> None:
+	for reason, fixture in _USAGE_MISSING_REASON_FIXTURES.items():
+		line = _run_normalize_openrouter_usage(fixture)
+		assert line.endswith(f"usage_available=false usage_missing_reason={reason}"), (reason, line)
+		assert line.count("usage_missing_reason=") == 1, line
+
+
+def test_normalize_openrouter_usage_available_line_has_no_reason() -> None:
+	step_finish_log = (
+		'{"type":"step_finish","part":{"tokens":{"input":5,"output":2,'
+		'"reasoning":1,"cache":{"write":3,"read":4}}}}\n'
+	)
+	usage_dict_log = (
+		'{"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18,'
+		'"cache_creation_input_tokens":5,"cache_read_input_tokens":3}}\n'
+	)
+	for fixture in (step_finish_log, usage_dict_log):
+		line = _run_normalize_openrouter_usage(fixture)
+		assert "usage_available=true" in line, line
+		assert "usage_missing_reason" not in line, line
+		assert line.endswith("usage_available=true"), line
+
+
+def test_cost_audit_openrouter_re_matches_line_with_missing_reason() -> None:
+	scripts_dir = str(REPO_ROOT / "scripts")
+	if scripts_dir not in sys.path:
+		sys.path.insert(0, scripts_dir)
+	import cost_audit  # noqa: PLC0415
+
+	line = _run_normalize_openrouter_usage(_USAGE_MISSING_REASON_FIXTURES["no_usage_event"])
+	match = cost_audit.OPENROUTER_RE.search(line)
+	assert match is not None, line
+	assert match.group("available") == "false"
+	for group_name in ("pt", "ct", "tt", "cw", "cr"):
+		assert match.group(group_name) == "na", (group_name, line)
+	# Iteration-summary style key=value parsing keeps both fields.
+	fields = dict(token.split("=", 1) for token in line.split() if "=" in token)
+	assert fields.get("usage_available") == "false"
+	assert fields.get("usage_missing_reason") == "no_usage_event"
 
 
 def _run_model_catalog_backfill(tmp: Path, staged_catalog: dict | str, main_catalog: dict | str | None) -> tuple[subprocess.CompletedProcess[str], Path]:
