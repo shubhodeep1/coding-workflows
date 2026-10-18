@@ -8417,6 +8417,18 @@ def test_review_support_ref_rejects_untrusted_workflow_identity() -> None:
 			assert (f"SCRIPT_REF={sha}" in github_env.read_text(encoding="utf-8")) == allowed
 
 
+def test_post_merge_validate_dispatch_retries_label_removal_but_not_dispatch() -> None:
+	job = _job_block("post-merge-validate-dispatch")
+	assert "gh_retry gh issue edit \"${issue_number}\" --repo \"${REPOSITORY}\" --remove-label 'ai:orchestrator-validate-required'" in job
+	for line in job.splitlines():
+		if "--remove-label 'ai:orchestrator-validate-required'" in line:
+			assert "gh_retry gh issue edit" in line, line
+	assert 'gh workflow run "${validate_workflow}"' in job
+	assert 'gh workflow run "internal-validate.yml"' in job
+	assert "gh_retry gh workflow run" not in job
+	assert "but failed to remove ai:orchestrator-validate-required." in job
+
+
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
@@ -8560,6 +8572,7 @@ def main() -> int:
 	test_review_sandbox_cleanup_failure_cannot_skip_commit_or_fake_changes_lost()
 	test_review_sandbox_cleanup_reports_path_free_reason()
 	test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge()
+	test_post_merge_validate_dispatch_retries_label_removal_but_not_dispatch()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 

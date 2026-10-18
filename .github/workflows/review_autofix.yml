@@ -907,6 +907,8 @@ jobs:
 
             if [ "${validation_dispatched}" = "false" ]; then
               echo "Dispatching standalone validation for linked issue #${issue_number} (tracking_issue=0)."
+              # Single attempt on purpose: a dispatch whose response was lost may already
+              # have started a run, and a retry would start a duplicate validation run.
               if gh workflow run "${validate_workflow}" --repo "${REPOSITORY}" -f tracking_issue="0" -f pr_number="${PR_NUMBER}" || { [ "${validate_workflow}" != "internal-validate.yml" ] && gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0" -f pr_number="${PR_NUMBER}"; }; then
                 validation_dispatched="true"
               else
@@ -915,7 +917,7 @@ jobs:
               fi
             fi
 
-            if ! gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:orchestrator-validate-required'; then
+            if ! gh_retry gh issue edit "${issue_number}" --repo "${REPOSITORY}" --remove-label 'ai:orchestrator-validate-required'; then
               echo "::warning::Standalone validation dispatched for issue #${issue_number}, but failed to remove ai:orchestrator-validate-required."
             fi
           done < <(printf '%s' "${issue_nodes_json}" | jq -r '.[] | [.number, (if (.labels | type) == "array" then ((.labels | index("ai:orchestrator-validate-required")) != null) else false end), ((.labels | type) == "array")] | @tsv')

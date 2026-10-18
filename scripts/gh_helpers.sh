@@ -2028,6 +2028,16 @@ _autofix_pr_named_review_runs()
 	' 2>/dev/null
 }
 
+# One-shot snapshot of the branch `actions/runs` page (MERGE-001).
+# Process-local: the assignments below reset any inherited value when this
+# file is sourced, so the environment can never supply a snapshot. Written
+# only by autofix_retrigger_has_inflight_peer after its response passed the
+# empty and shape checks; read at most once, and then cleared, by the next
+# autofix_changes_lost_head_retry_consumed call in the same shell. The key
+# is "<owner/repo>:<branch>"; neither part can contain ':'.
+_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY=""
+_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON=""
+
 # ---------------------------------------------------------------
 # autofix_retrigger_has_inflight_peer — detect an already-queued or
 # already-running peer review/autofix run on the same PR head branch,
@@ -2080,9 +2090,17 @@ _autofix_pr_named_review_runs()
 #   1 `gh api GET /repos/{repo}/actions/runs` call per invocation,
 #   wrapped in gh_retry (rate-limit aware), plus 1 PR-named
 #   `?event=workflow_dispatch` call only when the branch lookup found no
-#   peer.  Results are not cached — the two retrigger blocks fire at
-#   most twice per run and the set of in-flight runs is mutable between
-#   those calls.
+#   peer.  The helper itself always makes its live branch call and
+#   clears any earlier snapshot first, because the set of in-flight runs
+#   is mutable between calls.  Once the branch response passes the empty
+#   and shape checks it is kept as a process-local one-shot snapshot
+#   keyed by repository and branch (_AUTOFIX_BRANCH_RUNS_SNAPSHOT_*).
+#   Its only reader is the next autofix_changes_lost_head_retry_consumed
+#   call in the same shell, so the editor-changes-lost step's no-peer
+#   path makes 1 branch `actions/runs` call instead of 2.  A caller that
+#   runs this helper inside `$(...)` loses the snapshot, and the budget
+#   probe then makes its own live call.  The PR-named lookup is never
+#   cached.
 #
 # CLAUDE.md §15 audit:
 #   The prior retrigger path dispatched unconditionally, so there is
@@ -2098,6 +2116,11 @@ autofix_retrigger_has_inflight_peer()
 	local pr_number="${1:-}"
 	local head_branch="${2:-}"
 	local current_run_id="${3:-}"
+
+	# Clear first: a failed or early-returning call must never leave an
+	# older snapshot for the budget probe.
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY=""
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON=""
 
 	if [ -z "${head_branch}" ] || [ -z "${current_run_id}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
 		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch:-?} reason=missing_inputs" >&2
@@ -2131,6 +2154,9 @@ autofix_retrigger_has_inflight_peer()
 		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=jq_error" >&2
 		return 1
 	fi
+	# Validated: keep it for one read by autofix_changes_lost_head_retry_consumed.
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY="${GITHUB_REPOSITORY}:${head_branch}"
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON="${response}"
 
 	# Filter: in-flight (queued or in_progress), not ourselves, and
 	# running one of the review/autofix workflow files. Match by
@@ -2273,11 +2299,28 @@ autofix_retrigger_has_inflight_peer()
 #   1 — budget available; caller may dispatch one automated retry.
 #
 # API calls:
-#   1 `gh api GET /repos/{repo}/actions/runs` call per invocation,
-#   wrapped in gh_retry (§15: same single branch-scoped list the peer
-#   helper issues; the two probes run back-to-back in one step at most
-#   once per review run), plus 1 PR-named `?event=workflow_dispatch`
-#   call only when the branch lookup counted nothing.
+#   0 branch `gh api GET /repos/{repo}/actions/runs` calls when the
+#   peer helper left a snapshot for the same repository and branch in
+#   this shell (it is consumed and cleared), else 1 live call wrapped in
+#   gh_retry (§15: same single branch-scoped list the peer helper
+#   issues; the two probes run back-to-back in one step at most once per
+#   review run), plus 1 PR-named `?event=workflow_dispatch` call only
+#   when the branch lookup counted nothing.  The snapshot is cleared on
+#   entry whether or not it matches, so a second call or a call for
+#   another branch never reads it.
+#   Race reasoning: this probe counts *completed* runs.  The snapshot is
+#   taken before the peer helper's in-flight filter, its PR-named
+#   `?event=workflow_dispatch` lookup (one or more API calls on the
+#   no-peer path) and its `emit_event`, and then the caller's
+#   `git rev-parse` / `git log` run, so it is typically seconds old, not
+#   milliseconds.  A run that starts and completes inside that window
+#   is not counted, so this probe can allow one more retry than a fresh
+#   call would.  A run in flight at snapshot time already made the peer
+#   probe report a peer, and a live call has its own window too, so the
+#   reuse only widens an existing race by those seconds.  A missing or mismatched
+#   snapshot, or a failed or malformed peer response (never stored),
+#   falls back to the live call; the empty and shape checks run on
+#   whichever response is used, and every fail-closed return is kept.
 #   The branch-filtered call cannot return default-branch runs, so no
 #   existing call could carry the PR-named match.
 # ---------------------------------------------------------------
@@ -2290,6 +2333,12 @@ autofix_changes_lost_head_retry_consumed()
 	# Accepted for caller compatibility and not used (issue #5523).
 	local head_commit_epoch="${5:-}"
 	local run_event_name="${6:-}"
+	# One-shot: take the peer helper's snapshot and clear it whether or
+	# not it matches, so no later call can read it.
+	local branch_runs_snapshot_key="${_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY:-}"
+	local branch_runs_snapshot_json="${_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON:-}"
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY=""
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON=""
 
 	if [ -z "${head_branch}" ] || [ -z "${current_run_id}" ] || [ -z "${head_sha}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
 		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch:-?} reason=missing_inputs" >&2
@@ -2297,22 +2346,27 @@ autofix_changes_lost_head_retry_consumed()
 	fi
 
 	local response
-	# -X GET is REQUIRED, not decorative: `gh api` infers POST whenever
-	# any -f/-F parameter is supplied and no method is given, and
-	# POST /repos/{repo}/actions/runs is not a route — it 404s, which
-	# _is_gh_permanent_failure classifies as non-retryable, so the
-	# probe dies instantly with reason=api_error.  Dropping this flag
-	# silently breaks the probe (tele-funtoken-msg-scoring#3763,
-	# review run 32732281452).
-	if ! response=$(gh_retry gh api \
-		-X GET \
-		-H "Accept: application/vnd.github+json" \
-		"/repos/${GITHUB_REPOSITORY}/actions/runs" \
-		-f "branch=${head_branch}" \
-		-f "per_page=30" \
-		2>/dev/null); then
-		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=api_error" >&2
-		return 0
+	if [ -n "${branch_runs_snapshot_json}" ] \
+		&& [ "${branch_runs_snapshot_key}" = "${GITHUB_REPOSITORY}:${head_branch}" ]; then
+		response="${branch_runs_snapshot_json}"
+	else
+		# -X GET is REQUIRED, not decorative: `gh api` infers POST whenever
+		# any -f/-F parameter is supplied and no method is given, and
+		# POST /repos/{repo}/actions/runs is not a route — it 404s, which
+		# _is_gh_permanent_failure classifies as non-retryable, so the
+		# probe dies instantly with reason=api_error.  Dropping this flag
+		# silently breaks the probe (tele-funtoken-msg-scoring#3763,
+		# review run 32732281452).
+		if ! response=$(gh_retry gh api \
+			-X GET \
+			-H "Accept: application/vnd.github+json" \
+			"/repos/${GITHUB_REPOSITORY}/actions/runs" \
+			-f "branch=${head_branch}" \
+			-f "per_page=30" \
+			2>/dev/null); then
+			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=api_error" >&2
+			return 0
+		fi
 	fi
 
 	if [ -z "${response}" ]; then
