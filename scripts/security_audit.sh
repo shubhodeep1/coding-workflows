@@ -1481,7 +1481,23 @@ security_audit_require_directory "prompt-preflight" "${SECURITY_AUDIT_RUNTIME_DI
 security_audit_require_writable_destination "prompt-preflight" "${RENDERED_PROMPT_FILE}"
 security_audit_require_writable_destination "prompt-preflight" "${RENDER_PROMPT_ERROR_FILE}"
 
-if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_PROMPT_PATH}" \
+# Render from the trusted support root, not from ${REPO_ROOT}.  The project
+# security pass runs this script inside a clean audit worktree under the
+# poller's runtime dir, and render_prompt.sh / render_prompt.py fall back to
+# $PWD-relative paths (for example $PWD/.codex-workflow-src/prompts/references/
+# output-contract.txt, which the poller does not stage beside the prompt).
+# From the worktree those fallbacks miss, so every render failed with
+# "prompt renderer exited nonzero" (consumer tracking #3928), and they would
+# read the audited branch's files instead of the trusted support copies.
+security_audit_render_prompt_template() {
+	local render_template="${1:?render template required}"
+	local render_helper="${SECURITY_AUDIT_RENDER_HELPER}"
+	[[ "${render_helper}" = /* ]] || render_helper="${PWD}/${render_helper}"
+	[[ "${render_template}" = /* ]] || render_template="${PWD}/${render_template}"
+	( cd -- "${SECURITY_AUDIT_SUPPORT_DIR}" && bash "${render_helper}" "${render_template}" )
+}
+
+if security_audit_render_prompt_template "${SECURITY_AUDIT_PROMPT_PATH}" \
 		> "${RENDERED_PROMPT_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
 	:
 else
@@ -1496,7 +1512,7 @@ fi
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	printf '%s\n' '{{REFERENCE_SECURITY_MONEY_LENS}}' > "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}"
-	if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
+	if security_audit_render_prompt_template "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
 			> "${SECURITY_AUDIT_MONEY_LENS_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
 		:
 	else
