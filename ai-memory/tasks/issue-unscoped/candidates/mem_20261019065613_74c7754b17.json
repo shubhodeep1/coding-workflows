@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/deploy-activate.md:53 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The lookup does not check that the log's reference names the requested PR number, so a `pr-41.md` whose reference names this repository's PR #40 passes the check in \"For a PR in this repo, resume `pr-<N>.md` only when its `- Reference:` line does not name a PR in another repository\".\n  WHY: Running `/deploy-activate` for PR #41 can resume PR #40's log, skip its completed steps, or report the wrong status instead of creating or finding a log for PR #41 (the source severity MAJOR is mapped to high; the other reviewers reported no findings).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/deploy-activate.md:53 | severity=MAJOR | confidence=4\n  PROBLEM: The lookup does not verify that the log's reference identifies the requested PR number. A `pr-41.md` whose reference names this repository's PR #40 passes the check in \"For a PR in this repo, resume `pr-<N>.md` only when its `- Reference:` line does not name a PR in another repository\".\n  WHY: Running `/deploy-activate` for PR #41 can resume PR #40's log, skip its completed steps, or report the wrong status instead of creating or finding a log for PR #41.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3561c90e27b3f9e50702dda6e4a2eda00901f41447aa5ca41ede7f6c26864a33",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7661,
+    "run_id": "39209707460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39209707460",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019065613_74c7754b17",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7661,
+    "run_id": "39209707460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-19T06:56:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
