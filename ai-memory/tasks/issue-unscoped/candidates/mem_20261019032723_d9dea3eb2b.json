@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/wfopt-2026-09-21-3-telemetry-anchoring.md:4-11 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The changelog says only a BOM and a timestamp may precede the marker, but scripts/cost_audit.py:163-165 also accepts an optional `<job>\\t<step>\\t` prefix, and the residual-case note leaves that prefix out too.\n  WHY: This is documentation drift only, and counting behavior is correct. All three reviewers rated it NIT, which maps to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/wfopt-2026-09-21-3-telemetry-anchoring.md:second paragraph and final residual-case sentence | severity=NIT | confidence=5\n  PROBLEM: Commit 389af9a extended `_TELEMETRY_LINE_PREFIX_RE_SRC` in scripts/cost_audit.py (lines 163-165) to accept an optional `<job>\\t<step>\\t` prefix. The changelog lists only the BOM and the timestamp, and its residual note omits the prefix.\n  WHY: This is documentation drift only, and counting behavior is correct. The release notes misstate the accepted prefix grammar.\n- HARDENING_SUGGESTIONS: add the `<job>\\t<step>\\t` fields to the sentence about what may precede the marker, and mention the same prefix in the residual note (about 2 lines). HARDENING_RISK_SCORE: 1\n- TASK COMPLETENESS / INTENT GAPS: NONE\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/wfopt-2026-09-21-3-telemetry-anchoring.md:Lines 4 and 11 | severity=NIT | confidence=5\n  PROBLEM: The changelog says only a BOM and a timestamp may precede the marker, but `scripts/cost_audit.py:163-165` also accepts a `<job>\\t<step>\\t` prefix. The residual-case note omits that prefix too.\n  WHY: There is no runtime failure. The release note does not fully describe the parser's accepted input, including the `gh run view --log` format.\n- TASK COMPLETENESS / INTENT GAPS: NONE\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/wfopt-2026-09-21-3-telemetry-anchoring.md:Line 4 | severity=NIT | confidence=5\n  PROBLEM: The changelog says only a BOM and a timestamp may precede the marker, but the regex in scripts/cost_audit.py:163-165 also accepts an optional `<job>\\t<step>\\t` prefix. The code comment at lines 151-162 documents this correctly, but the changelog was not updated.\n  WHY: This is documentation drift only, and counting behavior is correct.\n- All other checklist sections, including TASK COMPLETENESS / INTENT GAPS: NONE\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c0f1aecd7f70ea5d598660a1987543b908ec842efb3cb69e52bda9ea2f54c6ed",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7648,
+    "run_id": "39193323330",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39193323330",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019032723_d9dea3eb2b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7648,
+    "run_id": "39193323330"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T03:27:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
