@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint: both classifiers read (`orchestrate_poll_process.sh:13725`, `promote_main_cycle.sh:216`). They hold the same case lists. Code patterns are matched before the catch-all `*.md` non-code branch, so new code entries go in the first branch.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The issue's rule is \"every root-level `*.md` the pipeline reads into model context\", and `README.md` is read into model context: every trimmed prompt includes it, and prompts tell the model to read its Variables section from the repository. Picking A is also the fail-closed direction and keeps today's behaviour. A human commit that touches only `README.md` already defers promotion, so A takes nothing away. The worst a misclassification can do is delay promotion by one day.\nQ2: Pending `agents.d/*.md` fragments are rendered into the agents text before it reaches model context (`build_static_context.sh`, the judge context builder at `orchestrate_poll_process.sh:1455`), and they fold into `agents.md` at release time. They steer the pipeline exactly as `agents.md` does. `AGENTS.md` is read as an alternative to `agents.md` (`orchestrate_poll_process.sh:1448-1451`), so it must be classified the same way. Leaving either out would let a pipeline-steering change skip the smoke test, which goes against the issue's intent.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both answers are lettered choices. Notes for the planner:\n- In both copies of the classifier, add these names to the first, code branch, before the non-code catch-all: `README.md`, `unattended_system_instructions.md`, `ai_pipeline.md`, `agents.md`, `AGENTS.md`, `codex.md`, `probably_unnecessary_but_read_if_stuck.md`, and `agents.d/*.md`. The copies are `comprehensive_cycle_is_code_path` (`scripts/orchestrate_poll_process.sh:13725-13730`) and the matching case in `scripts/promote_main_cycle.sh:216-219`, with its header comment at lines 50-52.\n  - Keep the two case lists byte-identical.\n  - Root-level names are matched exactly, except `CLAUDE.md`, which keeps its existing `*/CLAUDE.md` form.\n  - `docs/*` (including `docs/plans/*.md`), `changelog.d/*.md`, `CHANGELOG.md` and other `*.md` files stay non-code. That way the motivating commit, `34ad13f`, which touched only `docs/plans/...`, is exempt.\n- A commit that changes only `agents.md` or `CHANGELOG.md` and was written by `github-actions[bot]` (for example a release fold) used to be exempt. If such a commit reaches `main` other than through a verified `auto/forward-merge-stable-*` merge, it will now defer promotion when its paths are code (`agents.md`). That is the safe direction; do not add a new exemption for it in this issue. The planner should note this, and test that a bot commit touching only `CHANGELOG.md` is still exempt.\n- Tests:\n  - a human commit touching only `docs/plans/x.md`: no deferral;\n  - a human commit touching `docs/x.md` plus `scripts/x.sh`: deferral;\n  - commits touching each of `unattended_system_instructions.md`, `README.md`, `agents.md` and `agents.d/123-x.md`: deferral;\n  - the cycle-start classifier in `promote_main_cycle.sh` updated to match.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "e61e7bc9c33d468de3b1e00de84ff593ad4ccff3e4c8064606ddcb26c42b04d6",
+  "lineage": {
+    "issue_number": 7662,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39201914859",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39201914859",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7662"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261019050307_2b1a437aac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7662,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39201914859"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7662",
+  "timestamps": {
+    "created_at": "2026-10-19T05:03:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
