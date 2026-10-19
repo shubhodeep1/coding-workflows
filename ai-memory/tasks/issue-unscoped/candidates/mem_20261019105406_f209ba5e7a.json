@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` and their destination groups\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The workflow comment at lines 2294-2297 (qwen cites 2289-2297) says step timings were not readable and the steps were chosen by estimated cost, not measured, so the diff does not establish that these are the job's slowest steps. Severity MAJOR from all three reviewers; qwen_qwen3_7-plus confidence 4.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The workflow comment at lines 2294-2297 explicitly states: \"Step timings were not readable when this was planned; chosen by estimated cost (test count, weighted for subprocess use), not measured.\" The implementation relies on estimation rather than the requested run timings to identify the slowest steps.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` and their destination groups.\n  Evidence of absence: The workflow comment at lines 2294-2297 says step timings were not readable and the steps were chosen by estimated cost, not measured timings. The diff therefore does not establish that these are the job's slowest steps, as the issue requires.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` and their destination groups\n  Evidence of absence: The workflow comment at the moved steps (lines 2289-2297 in the new file) says step timings were not readable and the steps were chosen by estimated cost, not measured. The implementation does not establish that these are actually the slowest steps, as the issue requires.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "15789bdee6fd006a2cfa591eba992a7aa5363cad520ef6fefd8e48565e034b07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7692,
+    "run_id": "39238453993",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39238453993",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019105406_f209ba5e7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7692,
+    "run_id": "39238453993"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T10:54:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
