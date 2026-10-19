@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml (selection of steps moved from `orchestrate-poll (2)` and their destination CI jobs)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: .github/workflows/ci.yml lines 1348-1349 and 1629-1630 state the moved steps were chosen from earlier recorded or estimated durations, not the run's measured step timings, and the changelog says the timings could not be read, so the diff does not show these were the slowest steps or that the destination jobs had the most headroom\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: .github/workflows/ci.yml\nEvidence of absence: The moved steps were selected using prior or estimated durations, not the run's step timings as explicitly required by the issue. Comments within .github/workflows/ci.yml at lines 1348-1349 and 1629-1630 confirm that timings were not readable and the move was based on estimated cost, not measured data.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: `.github/workflows/ci.yml`, selection of steps from `orchestrate-poll (2)` and their destination CI jobs.\nEvidence of absence: The diff moves two steps, but `.github/workflows/ci.yml` lines 1348-1349 and 1629-1630 state the choices were not based on measurements; the changelog also says the run's step timings could not be read. The diff does not establish that these were the slowest steps or that their destination jobs had the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, the steps moved from `orchestrate-poll (2)` and their destination jobs\nEvidence of absence: The moved steps were selected using \"earlier recorded durations, not measurements\" (comments at `.github/workflows/ci.yml:1348` and `1629`), not the actual step timings from run 39245970945 as the issue instructed. The solution addresses the immediate timeout problem, but it may not have moved THE slowest steps or placed them in the jobs with THE most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6b9b89032c4b97089cd542dcdc84833800b2612b46d3d2494e213de165a31f63",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7698,
+    "run_id": "39252644881",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39252644881",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019124715_8b36f8d28a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7698,
+    "run_id": "39252644881"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T12:47:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
