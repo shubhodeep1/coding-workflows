@@ -1665,8 +1665,11 @@ _gh_issue_timeline_with_cross_refs_rest()
 		done <<< "${pr_urls}"
 	fi
 
-	printf '%s' "${timeline_json}" | jq -c --argjson pr_lookup "${pr_lookup_json}" --arg pr_api_prefix "${pr_api_prefix}" '
-		map(
+	# pr_lookup_json grows by one entry per cross-referenced PR with no cap,
+	# so jq reads it with --slurpfile, never from argv (issue #7658).
+	printf '%s' "${timeline_json}" | jq -c --slurpfile pr_lookup <(printf '%s' "${pr_lookup_json}") --arg pr_api_prefix "${pr_api_prefix}" '
+		($pr_lookup[0] // {}) as $pr_lookup
+		| map(
 			if (.event == "cross-referenced") and (.source.issue.pull_request.url? | type == "string") then
 				.source.issue.pull_request.url as $url
 				| if ($url | startswith($pr_api_prefix) | not) then

@@ -318,6 +318,8 @@ def test_other_unbounded_github_json_is_not_passed_through_argjson() -> None:
 	helpers = GH_HELPERS.read_text(encoding="utf-8")
 	assert '--argjson pr "${pr_json}"' not in helpers
 	assert '--slurpfile pr <(printf \'%s\' "${pr_json}")' in helpers
+	assert '--argjson pr_lookup "${pr_lookup_json}"' not in helpers
+	assert '--slurpfile pr_lookup <(printf \'%s\' "${pr_lookup_json}")' in helpers
 
 
 def test_both_judges_log_the_empty_context_prefix() -> None:
