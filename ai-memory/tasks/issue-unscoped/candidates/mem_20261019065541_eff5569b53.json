@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/comprehensive_test_and_release_gh_api.sh:20-44 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: gh_api_safe_call_is_read treats every HTTP method other than GET, including HEAD, as a write, so HEAD requests are not retried on transient errors.\n  WHY: A `gh_api_safe -X HEAD` call that hits a transient failure fails at once instead of being retried like a GET. Severity disagreement: MAJOR (gemini, minimax) vs NIT (luna); the highest is used, mapped to high. anthropic_claude-sonnet-5_5 and qwen_qwen3_7-plus examined the same behavior and declined to report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/comprehensive_test_and_release_gh_api.sh:20-30 (gh_api_safe_call_is_read) | severity=MAJOR | confidence=4\n  PROBLEM: The method classification logic incorrectly classifies HTTP HEAD requests as write operations instead of read operations.\n  WHY: HEAD requests are not retried on transient network failures, which violates the retry policy for reads and can fail pipeline steps unnecessarily.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/comprehensive_test_and_release_gh_api.sh:26,42 (gh_api_safe_call_is_read; docstring lines 3-11) | severity=MAJOR | confidence=4\n  PROBLEM: The function classifies any non-GET method as a write, so HEAD, an RFC 7231 safe and idempotent method, is misclassified as a write.\n  WHY: `gh_api_safe -X HEAD` (or `--method HEAD`, `--method=HEAD`, `-XHEAD`) sets is_read=0 and skips the transient-retry branch at line 134. This diverges from the shared classifiers in scripts/gh_api_retry.py and scripts/gh_helpers.sh, and no test pins HEAD.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/comprehensive_test_and_release_gh_api.sh:25-28,41-44; retry gate at 108,137 | severity=NIT | confidence=4\n  PROBLEM: The method classifier treats every method other than GET as a write, including HEAD.\n  WHY: A `gh_api_safe -X HEAD ...` request that receives a transient error skips the transient retry branch and returns failure immediately.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f1b806dd6ac9760c4c1faaf436803d51477d048d14cccad6779f25ad4dc194e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7647,
+    "run_id": "39209140377",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39209140377",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019065541_eff5569b53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7647,
+    "run_id": "39209140377"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T06:55:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
