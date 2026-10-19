@@ -1072,5 +1072,46 @@ class MergeTrainStepContractTest(unittest.TestCase):
 		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+# Steps moved into single orchestrate-poll groups from tests-heal-plan-and-validation
+# (#7690). Without its guard such a step would run in all four groups.
+GROUP_PINNED_STEPS = {
+	"Regression tests wired by the CI wiring guard (part 2)": 2,
+	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 3,
+}
+POLL_JOB_UNGUARDED_STEPS = {
+	"Checkout repository",
+	"Setup Python",
+	"Install Python CI dependencies",
+	"Derive orchestrate poll test subsets",
+	"Orchestrate poll process unit tests",
+}
+
+
+class PollGroupPinnedStepsTest(unittest.TestCase):
+	"""Steps added to the orchestrate-poll matrix must run in one group only (#7690)."""
+
+	def test_moved_steps_run_once_in_their_group(self) -> None:
+		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+		for step_name, group in GROUP_PINNED_STEPS.items():
+			with self.subTest(step=step_name):
+				owners = [
+					job_id
+					for job_id, job in jobs.items()
+					for step in job.get("steps", [])
+					if step.get("name") == step_name
+				]
+				self.assertEqual(owners, [POLL_JOB_ID])
+				self.assertEqual(poll_job_step(step_name).get("if"), f"strategy.job-index == {group}")
+
+	def test_every_other_poll_job_step_is_group_guarded(self) -> None:
+		guard_re = re.compile(r"strategy\.job-index == [0-9]+")
+		for step in load_poll_job()["steps"]:
+			step_name = step.get("name")
+			if step_name in POLL_JOB_UNGUARDED_STEPS:
+				continue
+			with self.subTest(step=step_name):
+				self.assertRegex(str(step.get("if", "")), guard_re)
+
+
 if __name__ == "__main__":
 	unittest.main()
