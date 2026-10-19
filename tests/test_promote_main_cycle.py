@@ -232,7 +232,7 @@ def test_skips_when_cycle_in_flight() -> None:
 
 
 def test_non_code_changes_do_not_start_a_cycle() -> None:
-	files = ["analysis/workflow-optimization-2026-09-19.md", "ai-memory/x.json", "docs/plans/p.md", "README.md", "CHANGELOG.md", "tests/e2e_smoke_canary.txt"]
+	files = ["analysis/workflow-optimization-2026-09-19.md", "ai-memory/x.json", "docs/plans/p.md", "docs/README.md", "changelog.d/x.md", "CHANGELOG.md", "tests/e2e_smoke_canary.txt"]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(files)}})
 	assert proc.returncode == 0, proc.stderr
@@ -247,6 +247,35 @@ def test_claude_md_and_dot_claude_count_as_code() -> None:
 			proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare([path, "docs/x.md"])}, "gate_runs_sequence": GATE_SUCCESS})
 		assert "reason=no_code_changes" not in proc.stdout, path
 		assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout, (path, proc.stdout, proc.stderr)
+
+
+def test_pipeline_instruction_files_count_as_code() -> None:
+	# Markdown the pipeline reads into model context steers it, so it is code (#7662).
+	for path in ("README.md", "unattended_system_instructions.md", "ai_pipeline.md", "agents.md", "AGENTS.md", "codex.md", "probably_unnecessary_but_read_if_stuck.md", "agents.d/123-x.md"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare([path, "docs/x.md"])}, "gate_runs_sequence": GATE_SUCCESS})
+		assert "reason=no_code_changes" not in proc.stdout, path
+		assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout, (path, proc.stdout, proc.stderr)
+
+
+def _case_pattern_lines(path: Path, function: str) -> list[str]:
+	lines = path.read_text(encoding="utf-8").splitlines()
+	start = next(i for i, line in enumerate(lines) if line.strip().startswith(f"{function}()"))
+	patterns: list[str] = []
+	for line in lines[start + 1:]:
+		stripped = line.strip()
+		if stripped == "}":
+			break
+		if stripped.endswith(";;"):
+			patterns.append(stripped)
+	return patterns
+
+
+def test_code_path_case_lists_match_poller() -> None:
+	cycle = _case_pattern_lines(SCRIPT, "is_code_path")
+	poller = _case_pattern_lines(REPO_ROOT / "scripts" / "orchestrate_poll_process.sh", "comprehensive_cycle_is_code_path")
+	assert len(cycle) == 2
+	assert cycle == poller
 
 
 def test_identical_tip_and_tag_skips() -> None:
