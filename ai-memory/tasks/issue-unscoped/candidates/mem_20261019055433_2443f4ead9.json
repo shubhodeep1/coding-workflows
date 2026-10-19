@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:951-966 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_shell_builtin_view` skips `NAME=value` assignments only before the `time`/`builtin`/`command` prefix words, not after them. `time X=1 cd <worktree>` therefore returns `[\"X=1\",\"cd\",...]`, so `_cd_command_words` and `segment_builtin_word` miss the `cd`.\n  WHY: The directory change is never tracked, so a following `git push` is judged against the session checkout and passes without a block or an ask. The live `.claude/hooks/pr_merge_status_guard.py` is byte-identical and has the same bug. Reviewers rated it MAJOR; the mapped severity is high. Reviewers also named `pushd`, `eval`, `source`, `builtin X=1 cd` and `command X=1 cd` as affected.\n- changelog.d/6038-guard-prefixed-cd-builtins.md:row \"Command shapes that passed silently and now block or ask | 18 tested\" | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The changelog says 18 command shapes were added, but the diff adds 6 block cases and 13 ask cases, which is 19.\n  WHY: This is an editorial off-by-one in a table that consumers may rely on, not a runtime bug. The reviewer rated it NIT; the mapped severity is low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:949-966 | severity=MAJOR | confidence=4\n  PROBLEM: `_shell_builtin_view` skips assignments only before the prefix words. `time X=1 cd <worktree>` is not recognised as a directory change, so `_cd_command_words` returns None and `segment_builtin_word` is `\"X=1\"`.\n  WHY: A `git push` after it is judged against the clean session checkout and passes. This is the same bypass class the PR fixes for `time -p cd`. The new tests cover only `X=1` placed before the prefix.\n- HARDENING_SUGGESTIONS: skip assignment-shaped words after `time`'s options and set `cdpath_assigned`. Apply the same edit in both hook copies and add test cases. Estimated change is about 6 lines per copy, plus 2 test cases. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:951-966 | severity=MAJOR | confidence=5\n  PROBLEM: `_shell_builtin_view` processes variable assignments only before the prefix keywords, so `time X=1 cd /path` makes `_cd_command_words` fail its `[:1] == [\"cd\"]` check.\n  WHY: The directory change is not tracked, and the `git push` check runs against the session checkout instead of the worktree.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:939-966 | severity=MAJOR | confidence=5\n  PROBLEM: The assignment-skip loop at lines 951-953 runs only before the prefix-skip loop at lines 954-965. `VAR=value` words after `time`, `builtin` or `command` stay in the returned list, so `time X=1 cd dir` fails the `cd` check. `segment_builtin_word` (lines 1072-1073) returns `\"X=1\"`.\n  WHY: The cd tracking never fires, so the push is judged against the clean session checkout and slips through. The same gap applies to `time X=1 pushd`, `eval`, `source`, `command X=1 pushd` and `builtin X=1 cd`, and none of these are in the new tests. The same hook copy exists at workflow-templates/.claude/hooks/pr_merge_status_guard.py.\n- changelog.d/6038-guard-prefixed-cd-builtins.md:row \"Command shapes that passed silently and now block or ask | 18 tested\" | severity=NIT | confidence=3\n  PROBLEM: The changelog count of 18 does not match the 6 block cases (lines 3394-3399) plus 13 ask cases (lines 3426-3438) in the diff, which total 19.\n  WHY: This is an editorial off-by-one, not a runtime bug.\n- HARDENING_SUGGESTIONS: add a post-prefix assignment-skip loop after the inner option loop at lines 959-965, reusing the assignment regex and `_CDPATH_ASSIGNMENT_RE`. Keep both hook copies byte-identical and add unit and end-to-end cases. Estimated change is about 6 lines per copy. HARDENING_RISK_SCORE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/.claude/hooks/pr_merge_status_guard.py:951-966, 976-978, 1066-1074 | severity=MAJOR | confidence=5\n  PROBLEM: `_shell_builtin_view` strips assignments only before processing prefixes. `time X=1 cd <worktree>` returns `[\"X=1\",\"cd\",...]`, so `_cd_command_words` does not recognise the `cd`. The live copy `.claude/hooks/pr_merge_status_guard.py` is identical.\n  WHY: The tracked working directory stays at the session checkout when the following `git push` is evaluated, so a push run from the worktree can pass without the merged-PR check.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py:939-966 (consumed at line 977 and line 1072) | severity=MAJOR | confidence=5\n  PROBLEM: Assignments after a prefix word are not stripped. `time X=1 cd <worktree>`, `builtin X=1 cd` and `command X=1 cd` are not recognised as directory changes, and `time CDPATH=/x cd` is not tracked either. The byte-identical copy is workflow-templates/.claude/hooks/pr_merge_status_guard.py.\n  WHY: `working_directory` is never updated, so the following `git push` is judged against the session checkout and the merged-PR guard passes silently. Bash runs these forms in the current shell, so the directory change persists.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7f9b8d3ca6330a304e847efdd75ee9f38b66e7511a634913c5fb8175a5bc7e1b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7665,
+    "run_id": "39202251305",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39202251305",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019055433_2443f4ead9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7665,
+    "run_id": "39202251305"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T05:54:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
