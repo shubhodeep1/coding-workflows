@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update `tests/e2e_smoke_canary.txt` for orchestrate smoke run 39181565859\n\nPlanning ref: `orchestrator/project-7634` at `b0f26b591a86ead215c8d1e4120a628f9552c943`. The integration branch mismatch line reads `false`.\n\n**Automation surface:** this change edits one existing file. It adds no script and no supervisor, needs no scheduler wiring and does no database work. It has no entry in `docs/scripts-pending-removal.md`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: the issue asks for one fixture file to end up with exactly two lines, and nothing else. No helper or code path is involved, so the plan keeps the scope at that one file.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. Replace the whole file with exactly this content:\n```\nstatus: ok\ndecompose-run: 39181565859\n```\nThe file ends with one trailing newline (`\\n`) and has no extra blank line.\n\n## Data structures affected\nThe file on the current ref has three lines: `status: ok`, `run_id: 26151428977` and `updated-by: ai-pipeline`. Per the issue, line 2 becomes `decompose-run: 39181565859`. The issue also requires exactly two lines, so line 3 (`updated-by: ai-pipeline`) is removed.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Drop the existing third line\n- Chosen: rewrite the file as exactly the two required lines and remove `updated-by: ai-pipeline`.\n- Alternatives considered: change only line 2 and keep the third line.\n- Why: the issue says the file \"must end up with exactly these two lines\". Keeping line 3 would leave three lines and break that rule.\n\n## Security considerations\nThis is a text fixture with no trust boundary, endpoint, secret or money state. The only risk is touching other files: `tests/e2e_smoke_canary_b.txt` belongs to a sibling issue and must stay unchanged.\n\n## Risks and edge cases\n- **Conflict with the issue text:** the current file has a third line that the issue does not mention. The plan removes it, as D1 explains.\n- **Line endings:** the file must have no CRLF and no missing or doubled final newline.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 39181565859`.\n- `wc -l tests/e2e_smoke_canary.txt` prints `2`.\n- `git diff --name-only` lists only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\nThe plan covers every acceptance criterion, keeps the diff to one file, and the one conflict with the issue text is resolved in D1.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "17d3f622167e5be0d7adf3020541ff69cb6fcab92c9c4673fbb899fa07d052f1",
+  "lineage": {
+    "issue_number": 7635,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39182150646",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39182150646",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7635"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261019005319_f3dafa2753",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7635,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39182150646"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7635",
+  "timestamps": {
+    "created_at": "2026-10-19T00:53:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
