@@ -67,6 +67,16 @@ def test_malformed_sections_fail_safe() -> None:
 		assert result["status"] == "malformed", (reason, result)
 		assert result["reason"] == reason, (reason, result)
 	assert pd.parse_plan("## Deferred scope\n" + "".join(f"- item {i}\n" for i in range(20)))["status"] == "partial"
+	# The limit applies to the sanitized text, so an item that fits at plan
+	# time also fits when parse_pr_body() reads it back at merge.
+	grown = "x" * 495 + " a://"
+	assert len(grown) == 500 and len(pd.sanitize_item(grown)) == 501
+	assert pd.parse_plan("## Deferred scope\n- " + grown + "\n")["reason"] == "item_too_long"
+	fits = "x" * 490 + " see #12"
+	result = pd.parse_plan("## Deferred scope\n- " + fits + "\n")
+	assert result["status"] == "partial"
+	body = pd.pr_section(result["items"], 7)
+	assert pd.parse_pr_body(body, 7)["items"] == result["items"]
 
 
 def test_continuation_lines_join_the_item() -> None:

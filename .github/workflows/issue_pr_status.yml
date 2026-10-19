@@ -281,7 +281,10 @@ jobs:
             elif ! resolve_unmerged_close_login; then
               # The binding cannot be checked: keep the issue open rather than
               # lose the deferred items (the close sweep defers the same way).
-              echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but the pipeline login could not be read; the issue stays open without the remaining-items comment."
+              # Move it off its pre-merge phase label (ai:ready-to-merge) so it
+              # visibly re-enters clarification instead of looking merge-ready.
+              set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
+              echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but the pipeline login could not be read; the issue stays open in ai:clarification without the remaining-items comment. Post /reclarify on it to restart clarification for the deferred items."
               echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=identity_unavailable"
               return 0
             elif [ -z "${PR_AUTHOR_LOGIN:-}" ] || [ "${PR_AUTHOR_LOGIN,,}" != "${UNMERGED_CLOSE_LOGIN,,}" ]; then
@@ -296,7 +299,8 @@ jobs:
             body_file="${work}/pr_body.md"
             printf '%s\n' "${PR_BODY:-}" > "${body_file}"
             if [ ! -f scripts/partial_delivery.py ] || [ -L scripts/partial_delivery.py ]; then
-              echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but scripts/partial_delivery.py is unavailable; the issue stays open."
+              set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
+              echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but scripts/partial_delivery.py is unavailable; the issue stays open in ai:clarification. Post /reclarify on it to restart clarification for the deferred items."
               echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=helper_missing"
               rm -rf "${work}"
               return 0

@@ -102,10 +102,12 @@ def _collect_bullets(lines: list[str]) -> tuple[list[str] | None, str]:
 		return None, "too_many_items"
 	cleaned = []
 	for item in items:
-		joined = " ".join(item.split())
-		if len(joined) > MAX_ITEM_CHARS:
+		# Check the sanitized text: it is what the PR body carries, and
+		# parse_pr_body() checks it again at merge (sanitize_item is idempotent).
+		sanitized = sanitize_item(" ".join(item.split()))
+		if len(sanitized) > MAX_ITEM_CHARS:
 			return None, "item_too_long"
-		cleaned.append(sanitize_item(joined))
+		cleaned.append(sanitized)
 	if any(not item for item in cleaned):
 		return None, "empty_item"
 	return cleaned, ""

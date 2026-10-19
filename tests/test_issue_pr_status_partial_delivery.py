@@ -158,6 +158,13 @@ def _posted_bodies(run: dict) -> list[str]:
 	return [call["body"] for call in run["calls"] if "body" in call and "/comments" in " ".join(call["args"])]
 
 
+def _set_clarification(run: dict) -> bool:
+	return any(
+		"labels" in " ".join(c["args"]) and "ai:clarification" in (" ".join(c["args"]) + c.get("stdin", ""))
+		for c in run["calls"]
+	)
+
+
 def _lineage(run: dict) -> str:
 	text = run["github_env"]
 	start = text.index("LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF\n") + len("LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF\n")
@@ -187,6 +194,9 @@ def test_full_delivery_still_closes_the_issue() -> None:
 	assert _closed(run)
 	assert _lineage(run) == str(ISSUE)
 	assert not any("partial-delivery" in b for b in _posted_bodies(run))
+	# A full delivery never restarts clarification.
+	assert not any(b.startswith("/reclarify") for b in _posted_bodies(run))
+	assert not _set_clarification(run)
 
 
 def test_unbound_or_disabled_partial_marker_still_closes() -> None:
@@ -211,6 +221,8 @@ def test_unavailable_identity_keeps_the_issue_open() -> None:
 	assert not _closed(run), run["stdout"]
 	assert _lineage(run) == ""
 	assert _posted_bodies(run) == []
+	assert _set_clarification(run)
+	assert not any("ai:merged" in " ".join(c["args"]) for c in run["calls"])
 	assert f"PARTIAL_DELIVERY mode=merge pr={PR} issue={ISSUE} outcome=kept_open reason=identity_unavailable" in run["stdout"]
 
 
