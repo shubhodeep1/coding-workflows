@@ -3,7 +3,7 @@
 
 `gh_api_safe` now also retries transient errors, within its existing budget of 4 attempts:
 
-- it counts as transient a stderr that names an HTTP 5xx (502, 503 or 504 only as whole numbers), a connection reset, an `i/o timeout`, a `timeout awaiting` response, a TLS handshake timeout or an EOF;
+- it counts as transient a stderr that names an HTTP 5xx (502, 503 or 504 only as whole words, with no letter, digit or underscore next to them), a connection reset, an `i/o timeout`, a `timeout awaiting` response, a TLS handshake timeout or an EOF;
 - it waits 5, 10, then 20 seconds between attempts, and `RATE_LIMIT_BACKOFF` is unchanged by these retries;
 - it retries only reads. A call with `-X`/`--method` other than GET, or any of `-f`, `-F`, `--field`, `--raw-field` or `--input`, still makes one attempt, so a dispatch or comment is never sent twice;
 - each retry writes `GH_API_SAFE_RETRY attempt=<n>/<max> class=transient` to stderr, also in quiet mode. The line carries no arguments or token.
