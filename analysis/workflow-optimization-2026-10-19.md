@@ -598,3 +598,205 @@ The character counts below are estimates from line counts and the line lengths o
 | Code modularization | `scripts/stage_workflow_support.sh`, `scripts/label_helpers.sh`, new `scripts/wla_phase_failure.sh` and `scripts/wla_push_report_section.sh`, new `.github/actions/log-analysis-agent-setup`, `.github/workflows/workflow-log-analysis.yml`, `orchestrate_poll.yml`, `cancel_on_pr_close.yml`, plus a resolver-parity test (DUP-001 to DUP-006) | Large |
 | Expression size reduction | `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate_poll.yml`; possibly `test-and-mark-stable.yml` (EXPR-001 to EXPR-004) | Small |
 | Medium/Low fixes | `.github/workflows/orchestrate_poll.yml`, `cancel_on_pr_close.yml`, `sync_ai_labels.yml`, `implement.yml`, `review_autofix.yml`, `scripts/label_helpers.sh`, `scripts/tg_helpers.sh`, `scripts/gh_helpers.sh` (BUG-001 to BUG-007, SEC-001 to SEC-003, DEAD, CONSIST, SHELL, DEBT) | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-19)
+
+**Scope and method.** I read the existing Deep Audit `### Section 2` (API-001 to API-009) first. I then checked specific call sites in these files against CLAUDE.md §15:
+- `.github/workflows/orchestrate_poll.yml`, `implement.yml` and `clarify.yml`
+- `scripts/orchestrate_poll_process.sh`, `scripts/review_merge_train.sh`, `scripts/tg_helpers.sh`, `scripts/gh_helpers.sh` and `scripts/review_single_issue_security_pass.sh`
+
+I did not audit any `scripts/*.py` caller in depth. The only Python file I read was `scripts/security_dependency.py`, and only to check how it parses the issue snapshot.
+
+Several sites I checked already reuse their data correctly, so they are not findings:
+- `implement.yml:926-940` and `:1989-1991` read the cached issue snapshot first and only fetch on a miss.
+- `implement.yml:2248-2254` and `:6522-6528` take labels from `ISSUE_META_FILE`.
+- `clarify.yml:778-780` reuses `_rel_login`.
+- `gh_review_pr_state` (`gh_helpers.sh:83-118`) has a 120-second per-run cache.
+- `tracking_issues.json` (`orchestrate_poll.yml:290`) is reused by the poller at `orchestrate_poll_process.sh:5759`, `:20356` and `:22871`.
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: every precondition is proven by reading the code. That means the same endpoint (or a strict subset of its fields), the same pagination, filters and auth, the same function or step with no mutation in between, unchanged error and retry behaviour, no concurrency boundary crossed, and any cache contract kept. The implement stage may act on these without further review.
+- **`NEEDS_VERIFICATION`**: the change looks right, but at least one precondition can't be proven from the code alone. Run the listed verification steps before implementing.
+- **`RISKY_SKIP`**: at least one hard trigger applies: a retry or backoff loop, an auth or identity flow, pagination, a rate-limit path, code inside `orchestrate_poll_process.sh` or a race-defending path, or a change to log output that other code greps for. These are listed for visibility only. They must not be auto-implemented and need a human design review.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001**: `NEEDS_VERIFICATION`
+  - **Files / lines:** `.github/workflows/orchestrate_poll.yml:266-277` (provider-outage tracker listing) and `.github/workflows/orchestrate_poll.yml:279-292` (orchestrator tracking listing). Both are in the same `find_tracking` step body.
+  - **Current call count:** 2 per poll tick: 1 REST call plus 1 `gh issue list`, which the gh CLI serves over GraphQL (inference, not checked in this pass). **Proposed:** 1 aliased GraphQL call per tick.
+  - **Endpoints:**
+    - `GET /repos/{owner}/{repo}/issues?labels=ai:provider-outage&state=open&per_page=100`
+    - `gh issue list --label ai:orchestrator-tracking --state open --json number,title,labels --limit 20`
+  - **Evidence:** both are open-issue listings, filtered by one label, on the same repo, in the same step, with no mutation between them:
+    ```
+    if outage_trackers="$(gh_retry gh api "repos/${{ github.repository }}/issues?labels=ai:provider-outage&state=open&per_page=100" 2>/dev/null)" \
+    ...
+    TRACKING_ISSUES="$(gh_retry gh issue list \
+      --repo "${{ github.repository }}" \
+      --label "ai:orchestrator-tracking" \
+      --state open \
+      --json number,title,labels \
+      --limit 20)"
+    ```
+    The comment at `:257-265` audits this call against other *poll* calls that read the same label. It does not consider merging it with the tracking listing next to it.
+
+    The fields each output needs are different:
+    - `provider_outage_trackers.json` needs `pull_request`, `author_association` and `body`. It is consumed at `:270` and `:1078-1086`.
+    - `tracking_issues.json` needs `number`, `title` and `labels[].name`. It is consumed at `:392`, `:982`, `:985`, `:1772`, `:1887-1888` and by the poller.
+
+    So this is not a strict field subset. It is two labels on the same resource type.
+  - **Proposed fix:** replace both calls with one `gh_retry gh api graphql` query using two aliases on `repository`:
+    - `outage: issues(states: OPEN, labels: ["ai:provider-outage"], first: 100) { nodes { number body authorAssociation } pageInfo { hasNextPage } }`
+    - `tracking: issues(states: OPEN, labels: ["ai:orchestrator-tracking"], first: 20) { nodes { number title labels(first: 100) { nodes { name } } } }`
+
+    Use the alias pattern of `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`. Then reshape the response back into the two existing file shapes with jq:
+    - map `authorAssociation` to `author_association`;
+    - flatten labels to `[{name}]`.
+
+    GraphQL `repository.issues` already excludes pull requests, which matches the `.pull_request | not` filter at `:270`. Keep `first: 20` so BUG-006 stays a separate change. If the merged call fails or returns a malformed response, run the two current calls unchanged.
+  - **Safety rationale:** the error-handling precondition isn't met as-is. The outage listing fails open with a `::warning::` and `capacity_wait=false` (`:273-275`). The tracking listing has no `||` guard (`:280-285`). A merged call needs that per-alias fallback to keep both behaviours. The `capacity_wait` decision is also a trust check on `author_association`.
+  - **Downstream signal:** before implementing, a human must verify:
+    1. GraphQL `authorAssociation` returns the same `OWNER`/`MEMBER`/`COLLABORATOR` values as REST `author_association` for the PAT-authored tracker.
+    2. Every consumer of `tracking_issues.json` (`orchestrate_poll.yml:392`, `:982`, `:985`, `:1772`, `:1887`; `orchestrate_poll_process.sh:5759-5769`, `:20356-20359`, `:22871`) works with the reshaped JSON, checked by diffing old and new files on a live tick.
+    3. Moving one REST call per tick into the GraphQL point budget is acceptable. GraphQL is a separate bucket.
+    4. The `STANDALONE_STALL_PROBE` / `CLAUDE_CAPACITY_WAIT_TRACKER` log lines stay byte-identical.
+
+- **MERGE-002**: `RISKY_SKIP`
+  - **Files / lines:**
+    - `scripts/orchestrate_poll_process.sh:44-47` (`replay_failed_reclarify_commands`: `rate_limit` read, then the `ai:reclarify-requeue` listing)
+    - `scripts/orchestrate_poll_process.sh:157-166` (`detect_unrouted_blocked_comments`: `rate_limit` read, then the `ai:blocked` listing)
+    - Both are called back to back at `:209-212`.
+  - **Current call count:** 2 `rate_limit` reads plus 2 label listings (`--limit 1000` each, which gh pages internally) per `RECLARIFY_REQUEUE_SWEEP_ONLY` run. **Proposed:** 1 `rate_limit` read plus 1 aliased GraphQL listing.
+  - **Endpoints:** `GET /rate_limit` (×2); `gh issue list --label ai:reclarify-requeue` and `--label ai:blocked` (×2).
+  - **Evidence:**
+    ```
+    if [ "${RECLARIFY_REQUEUE_SWEEP_ONLY:-false}" = "true" ]; then
+      replay_failed_reclarify_commands
+      detect_unrouted_blocked_comments || true
+      exit 0
+    fi
+    ```
+    The second listing drops issues that carry `ai:reclarify-requeue` (`:167`). That label is exactly what the first listing selects on.
+  - **Proposed fix (manual only):** pass the first `budget` value into `detect_unrouted_blocked_comments`. Fetch both labels with one GraphQL query that has two aliases and handles `hasNextPage`.
+  - **Safety rationale:** several hard triggers apply:
+    - The code is in `orchestrate_poll_process.sh`.
+    - Both `rate_limit` reads are budget gates (`-ge 500` / `-lt 500`). The second runs *after* the replay loop has spent budget (`:55`, `:58` per queued issue), so reusing the first value would gate on a stale number.
+    - Both listings page up to 1,000 results. Two `--label` flags on one `gh issue list` mean AND, not OR, so a naive merge changes semantics.
+    - The `RECLARIFY_UNROUTED outcome=skip reason=budget_low` log key would change meaning.
+  - **Downstream signal:** do not auto-implement. Any change needs a human to confirm that the post-replay budget re-read is not deliberate. It also needs a GraphQL design whose pagination matches `--limit 1000`. The saving is about 1-2 calls per sweep-only run, so this is low priority. I believe `GET /rate_limit` does not count against the core quota, which would make that half a latency-only saving, but I did not verify this here.
+
+- **MERGE-003**: `RISKY_SKIP` (listed so nobody merges these calls naively)
+  - **Files / lines:** `scripts/orchestrate_poll_process.sh:15244` (`status=in_progress&per_page=50`, conditional with `If-None-Match`), `:15298` (`status=queued&per_page=50`) and `:15303` (`status=completed&per_page=20`), all in `_load_actions_runs_cached`.
+  - **Current call count:** 3 per cache miss. A 304 on the first call returns early (`:15269-15291`). **Proposed:** 3, meaning no change. A single unfiltered `actions/runs?per_page=100` call is **not** equivalent.
+  - **Endpoint:** `GET /repos/{owner}/{repo}/actions/runs?status=…`
+  - **Evidence:** the three listings are concatenated at `:15305` (`($in_progress + $queued + $completed)`). Each status has its own page cap. One mixed-status page would let a burst of completed runs push active runs out. The ETag also covers only the `in_progress` listing.
+  - **Proposed fix:** none. Keep the three calls.
+  - **Safety rationale:** the code is in the poller, each call has its own per-status page boundary, and it feeds the `rate_limit_audit_fallback helper=_load_actions_runs_cached` diagnostics (`:15338`).
+  - **Downstream signal:** do not merge. This cache must also **not** replace the API-002 lookups. It never fetches `status=pending`, the exact status `_has_active_autofix_run` must see (`:22182-22187`, PR #3895 incident).
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001**: `RISKY_SKIP`
+  - **Files / lines:** `scripts/orchestrate_poll_process.sh:30068-30076` (`NOOP_CAP_TRUSTED_LOGIN` read) re-reads the identity already held in `UNBLOCK_TRUSTED_LOGIN`. That cache is filled by `unblock_trusted_login` (`:3880-3895`), which runs at `:29971-29976` in the same noop-suspicious loop iteration.
+  - **Current call count:** 1 extra `GET /user` per poll cycle when a cap marker is seen. **Proposed:** 0.
+  - **Endpoint:** `GET /user`.
+  - **Evidence:** the loop guarantees the cached login is set before the second read:
+    ```
+    unblock_trusted_login >/dev/null
+    N_TRUSTED_LOGIN="${UNBLOCK_TRUSTED_LOGIN:-}"
+    if [ -z "${N_TRUSTED_LOGIN}" ]; then
+      ...
+      continue
+    fi
+    ...
+    NOOP_CAP_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+    ```
+    The `continue` at `:29975` means `UNBLOCK_TRUSTED_LOGIN` is always non-empty and validated by the time `:30069` runs.
+
+    The third identity cache in the file, `trusted_login` at `:51`, runs only on the `RECLARIFY_REQUEUE_SWEEP_ONLY` path, which exits at `:212`. It never overlaps the other two, so it is not a finding.
+  - **Proposed fix (manual only):** at `:30069`, set `NOOP_CAP_TRUSTED_LOGIN="${UNBLOCK_TRUSTED_LOGIN,,}"` and `NOOP_CAP_TRUSTED_LOGIN_STATE="ok"` instead of making the API call. Keep both variable names (§10). The consumers at `:7094`, `:17354` and `:21568` still see the value at the same time as before.
+  - **Safety rationale:** the code is in `orchestrate_poll_process.sh` and is part of an identity (trust-anchor) flow. Observable log output also changes: the `::warning::Noop-suspicious sweep could not resolve the token identity` line at `:30074` could never fire again. The two caches also validate differently: `unblock_trusted_login` accepts a `[bot]` suffix (`:3883`), while the noop path lowercases and accepts any non-empty value.
+  - **Downstream signal:** do not auto-implement. A human must:
+    - confirm that marker-author matching at `:30077-30084` is still correct with the lowercased `UNBLOCK_TRUSTED_LOGIN` value, including `[bot]` logins;
+    - confirm that no dashboard greps for the `:30074` warning.
+
+    If both hold, this is the cleanest saving in this pass: one fewer `/user` call per cycle with a cap marker.
+
+- **REUSE-002**: `RISKY_SKIP`
+  - **Files / lines:** `.github/workflows/implement.yml:2023` (step "Fetch issue metadata", `pipeline_login`) and `.github/workflows/implement.yml:2355` (step "Unblock judge bulk-delete override", `pipeline_login`). Both are in job `implement`.
+  - **Current call count:** 2 `GET /user` when a `override=bulk_delete -->` marker exists (`:2352`), otherwise 1. **Proposed:** 1.
+  - **Endpoint:** `GET /user`.
+  - **Evidence:** the comment at `:2020-2022` covers only one direction of reuse ("The later bulk-delete override identity read … cannot supply this grant's pipeline identity before the editor"). The reverse direction, letting the later step reuse the earlier read, was never evaluated:
+    ```
+    pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"     # :2023
+    pipeline_login="$(gh api user --jq '.login' 2>/dev/null || true)"  # :2355
+    ```
+  - **Proposed fix (manual only):** in "Fetch issue metadata", export the login under a new, collision-checked `GITHUB_ENV` name. In "Unblock judge bulk-delete override", read that value first and call `gh api user` only when it is empty.
+  - **Safety rationale:** this is an identity flow that guards a destructive-guard override (`:2338-2346`). Error behaviour also changes: today a transient failure at `:2023` (`|| true`) gets a second chance at `:2355`. With reuse, that one failure would also turn off the override. The saving only applies on the rare override path.
+  - **Downstream signal:** do not auto-implement. It needs security review of the bulk-delete override trust chain and a decision on whether a cached login is acceptable as the comment-author anchor at `:2360-2368`. The expected saving is under one call per override, so the default recommendation is to leave it.
+
+- **REUSE-003**: `RISKY_SKIP`
+  - **Files / lines:** `.github/workflows/clarify.yml:726-735` and `:778-780` (step "Decide clarify route", `_rel_login`) and `.github/workflows/clarify.yml:1047` (step "Set clarification phase label", `hold_release_login`). Both are in job `clarify`.
+  - **Current call count:** 2 `GET /user` on `issue_comment` runs whose comment is a PR-dependency release, a poller replay or a capacity-wait replay. Other comment runs make 1. **Proposed:** 1.
+  - **Endpoint:** `GET /user`.
+  - **Evidence:** `_rel_login` is a step-local variable and is not exported. The later step reads the identity again with raw `gh api` and no retry wrapper:
+    ```
+    if _rel_login="$(source scripts/gh_helpers.sh && gh_retry gh api user --jq .login)" \     # :728
+    hold_release_login="$(gh api user --jq .login 2>/dev/null || true)"                       # :1047
+    ```
+  - **Proposed fix (manual only):** when `_rel_login` passes the regex at `:729`/`:781`, export it under a new `GITHUB_ENV` name, checking for collisions first. At `:1047`, use that value before falling back to the live read.
+  - **Safety rationale:** this is an identity flow. The login decides which hold markers count as authored by the pipeline (`:1052-1054`). The retry behaviour also differs: `gh_retry` at `:728` versus a raw call at `:1047`. A merge would change failure semantics.
+  - **Downstream signal:** do not auto-implement. It needs review of the #7516 hold-release trust model. The saving is small and conditional, so the default recommendation is to leave it.
+
+- **REUSE-004**: `RISKY_SKIP`
+  - **Files / lines:**
+    - `scripts/review_merge_train.sh:800-806` (`_mt_find_marker_comment`, paginated comments listing)
+    - `scripts/review_merge_train.sh:871-887` (`_mt_upsert_comment`, a GET of the same comment at `:879`)
+    - Callers at `:993-999` (passes the id from the `:958` listing) and `:1413-1414` (three-argument form, which lists again)
+  - **Current call count:** comment-listing pages plus 1 `GET /repos/{o}/{r}/issues/comments/{id}` per upsert when the marker exists. **Proposed:** the comment-listing pages only.
+  - **Endpoints:** `GET /repos/{owner}/{repo}/issues/{pr}/comments?per_page=100` (paginated); `GET /repos/{owner}/{repo}/issues/comments/{id}`.
+  - **Evidence:** the listing receives every comment body but projects it down to `"\(.id) \(.created_at)"`. The upsert then fetches the matched body again, only to compare it:
+    ```
+    existing_body="$(gh_retry gh api "repos/${MT_REPO}/issues/comments/${existing_id}" --jq '.body' 2>/dev/null || true)"
+    if [ "${existing_body}" = "${body}" ]; then
+    ```
+  - **Proposed fix (manual only):** add a new sibling helper, for example `_mt_find_marker_comment_record`, checking the name for collisions first. It would sort with jq `sort_by` and emit one `@json` object `{id, created_at, body}`. A line-based `sort` breaks on multi-line bodies, so jq sorting is required. Leave `_mt_find_marker_comment` and `_mt_find_marker_comment_id` unchanged (§10). Use the new helper in the three-argument `_mt_upsert_comment` path, and add an optional fifth "existing body" argument for the `:993` caller.
+  - **Safety rationale:** the listing it would merge into is paginated (`--paginate`, a hard trigger). The path also mutates PR state in the merge train. The `MERGE_TRAIN_*` log lines are the observable contract, and the report shows `examined=0` this week, so the saving is close to zero.
+  - **Downstream signal:** do not auto-implement. It needs a human to confirm that body equality from a listing is as fresh as the GET at `:879`, which happens later. That matters most for `:993`, where the listing at `:958` comes before the label POST at `:986`. Defer until merge-train volume is above zero.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+I checked the downstream use of every call site read in this pass. Each one is consumed, including:
+- `orchestrate_poll.yml:1955-1962` (jobs API → `failing_step`);
+- `implement.yml:2392-2412` (artifacts, run and zip → `unblock_ledger.py`);
+- `orchestrate_poll_process.sh:51` (`trusted_login` → `:76`).
+
+`implement.yml:2253` is a cache-miss fallback that a valid REST payload cannot reach. `security_dependency.py:41` accepts `labels: null`, and jq `[.labels[].name]` would then fail. That makes the call unreachable, not dead. Removing it would turn the `ai:destructive-blocked` circuit breaker at `:2263` fail-open, so it must not be removed.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION. The `label_helpers.sh:175-191` and `implement.yml:5544`, `:6304`, `:6356` parts change retry semantics and still need the exact `gh label create` "already exists" stderr captured. The poller copy at `orchestrate_poll_process.sh:4029-4046` is RISKY_SKIP and must go in a separate, manually reviewed change.
+- API-002: RISKY_SKIP. The code is in the poller. There is also an alternative that keeps the same semantics: replace each `gh run list --workflow` with `gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_candidate}/runs?branch=<@uri-encoded head_ref>&per_page=5"`. A missing workflow then answers `HTTP 404`, which `_is_gh_permanent_failure` (`gh_helpers.sh:194`) already treats as permanent, the same thing `_pr_named_review_dispatch_runs` relies on at `:22500-22503`. That keeps the per-workflow limit of 5, keeps the `pending` status filter at `:22213`, and keeps the `|| echo "0"` fail-open. `_load_actions_runs_cached` must not be used as a substitute, because it has no `pending` status (see MERGE-003).
+- API-003: RISKY_SKIP. The code is in the poller and pages up to `--limit 1000`. The `orchestrate_poll.yml:331-343` probe returns only `totalCount` (`first: 1`), so it can't supply issue numbers. The new aliases need `first: 100` plus the `hasNextPage` REST fallback the Deep Audit already describes.
+- API-004: RISKY_SKIP. The code is in the poller. The re-read at `:27843-27851` comes after a re-issue mutation, so any batch must be issued after the mutation, not taken from the earlier `:25161-25177` batch.
+- API-005: RISKY_SKIP. The code is in the poller, and blocker state gates dispatch.
+- API-006: RISKY_SKIP. The code is in the poller. Reusing `_candidate_details_json` needs proof that the cache is fresher than any mutation of the row issue earlier in the same tick.
+- API-007: RISKY_SKIP. The code is in the poller. Keep the "read failure → return 0" fail-open exactly as it is.
+- API-008: NEEDS_VERIFICATION. The GraphQL `comments(last: 100)` fix also changes behaviour. Today `last_page = ceil(total/100)` (`tg_helpers.sh:213`), so 101 comments returns a final page of just 1 comment, and a marker in the previous 99 is missed. With GraphQL that marker would be found. The fix also replaces `curl_gh_api` with `gh api graphql`, which has different retry semantics, and moves cost into the GraphQL budget. Check whether the hardcoded `https://api.github.com` at `:206` needs a GHES-aware GraphQL endpoint.
+- API-009: RISKY_SKIP. It edits the retry and backoff loop itself (`curl_gh_api`, `gh_api_json_to_file`) and its rate-limit sleep path.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | MERGE-001, API-001, API-008 |
+| RISKY_SKIP | 13 | MERGE-002, MERGE-003, REUSE-001, REUSE-002, REUSE-003, REUSE-004, API-002, API-003, API-004, API-005, API-006, API-007, API-009 |
+
+The counts include the new findings from this pass and the Deep Audit IDs re-tagged above.
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
+- For human-gated follow-up, in order of value:
+  1. API-002, using the per-workflow REST alternative above.
+  2. REUSE-001, which saves one `/user` call per cycle with no new call.
+  3. MERGE-001, once its four verification steps pass.
