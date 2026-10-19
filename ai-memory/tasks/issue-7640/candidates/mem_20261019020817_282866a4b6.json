@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Apply workflow-optimization-2026-09-21-3 recommendations (verified subset)\",\"issues\":[{\"id\":\"shell-pipefail-truncation\",\"title\":\"Fix producer|head truncation pipelines that can abort strict-mode steps under pipefail (SHELL-001)\",\"priority\":2},{\"id\":\"gh-api-safe-transient-retry\",\"title\":\"Retry transient 5xx/network failures in the release-gate gh_api_safe helper (CONSIST-001)\",\"priority\":2},{\"id\":\"telemetry-line-anchoring\",\"title\":\"Anchor CONTEXT_BUDGET_WARN / BREAK_GLASS telemetry to the start of the log line so quoted copies are not counted (Reliability 4)\",\"priority\":3},{\"id\":\"ledger-dead-vars\",\"title\":\"Remove unused line_end / CURRENT_FLOOR assignments in review_issue_ledger.sh (DEAD-001)\",\"priority\":4},{\"id\":\"report-and-delete-source-doc\",\"title\":\"Record verdicts for workflow-optimization-2026-09-21-3 in the processing report and delete the source doc\",\"priority\":5}],\"dependency_edges\":[{\"from\":\"shell-pipefail-truncation\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"gh-api-safe-transient-retry\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"telemetry-line-anchoring\",\"to\":\"report-and-delete-source-doc\"},{\"from\":\"ledger-dead-vars\",\"to\":\"report-and-delete-source-doc\"}]}",
+  "fingerprint": "6220a7ab7e1a203047458f939dcb1035405b49075b765b84b87e8b3e1c00fb48",
+  "lineage": {
+    "issue_number": 7640,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39187693877",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39187693877",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261019020817_282866a4b6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7640,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39187693877"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Decomposed project 'Apply workflow-optimization-2026-09-21-3 recommendations (verified subset)' into 5 issues (tracking #7640)",
+  "timestamps": {
+    "created_at": "2026-10-19T02:08:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
