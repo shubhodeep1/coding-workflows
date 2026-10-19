@@ -308,6 +308,18 @@ def test_no_comment_json_is_passed_through_argjson() -> None:
 	assert '--slurpfile comments <(printf \'%s\' "${RB_ISOLATION_COMMENTS}")' in poller
 
 
+def test_other_unbounded_github_json_is_not_passed_through_argjson() -> None:
+	poller = POLLER.read_text(encoding="utf-8")
+	assert '--argjson details "${candidate_details_json}"' not in poller
+	assert '--argjson candidate_details_json "${candidate_details_json}"' not in poller
+	assert '--argjson state "${state_json}"' not in poller
+	assert '--slurpfile details <(printf \'%s\' "${candidate_details_json}")' in poller
+	assert '--slurpfile candidate_details_json <(printf \'%s\' "${candidate_details_json}")' in poller
+	helpers = GH_HELPERS.read_text(encoding="utf-8")
+	assert '--argjson pr "${pr_json}"' not in helpers
+	assert '--slurpfile pr <(printf \'%s\' "${pr_json}")' in helpers
+
+
 def test_both_judges_log_the_empty_context_prefix() -> None:
 	assert "RB_JUDGE_CONTEXT_EMPTY" in RB_JUDGE.read_text(encoding="utf-8")
 	assert "RB_JUDGE_CONTEXT_EMPTY" in POLLER.read_text(encoding="utf-8")

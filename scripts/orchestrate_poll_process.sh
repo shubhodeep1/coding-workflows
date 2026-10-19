@@ -1391,18 +1391,23 @@ write_state_snapshot_tracker_export() {
 	fi
 
 	mkdir -p "${trackers_dir}" 2>/dev/null || return 0
+	# State and candidate details (full issue bodies and up to 100 comment
+	# bodies per issue) can pass the 131,072-byte per-argument limit
+	# (MAX_ARG_STRLEN), so they reach jq through --slurpfile (issue #7658).
 	jq -cn \
 		--argjson number "${tracking_num}" \
 		--arg title "${tracking_title}" \
-		--argjson state "${state_json}" \
+		--slurpfile state <(printf '%s' "${state_json}") \
 		--argjson wave_status "${wave_status_json}" \
 		--argjson labels_json "${labels_json}" \
 		--argjson issue_states_json "${issue_states_json}" \
 		--argjson pr_states_json "${pr_states_json}" \
-		--argjson candidate_details_json "${candidate_details_json}" \
+		--slurpfile candidate_details_json <(printf '%s' "${candidate_details_json}") \
 		--argjson runtime_blocker_check_enabled "${runtime_blocker_enabled}" \
 		--argjson ledger_substates_enabled "${ledger_substates_enabled}" \
-		'{
+		'($state[0] // {}) as $state
+		| ($candidate_details_json[0] // {}) as $candidate_details_json
+		| {
 			number: $number,
 			title: $title,
 			state: $state,
@@ -11964,8 +11969,11 @@ _derive_branch_rebuild_replay_commits() {
   fi
 
   local replay_plan_json
-  replay_plan_json="$(jq -cn --argjson issues "${merged_issue_nums_json}" --argjson details "${candidate_details_json}" '
-    def missing($issue; $reason; $pr_number):
+  # candidate_details_json carries full issue and comment bodies, so it reaches
+  # jq through --slurpfile, never argv (MAX_ARG_STRLEN; issue #7658).
+  replay_plan_json="$(jq -cn --argjson issues "${merged_issue_nums_json}" --slurpfile details <(printf '%s' "${candidate_details_json}") '
+    ($details[0] // {}) as $details
+    | def missing($issue; $reason; $pr_number):
       {issue_number: $issue, error: $reason}
       + (if $pr_number == null then {} else {pr_number: $pr_number} end);
     def entry($issue):

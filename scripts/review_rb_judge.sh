@@ -1320,6 +1320,7 @@ if [ -n "${RB_JUDGE_CONTEXT_EMPTY_REASON}" ]; then
   PR_CONTEXT_JSON='{}'
   printf '%s\n' "::warning::RB_JUDGE_CONTEXT_EMPTY pr=${PR_NUMBER} reason=${RB_JUDGE_CONTEXT_EMPTY_REASON}" >&2
 fi
+unset RB_JUDGE_CONTEXT_RC RB_JUDGE_CONTEXT_EMPTY_REASON
 # END rb judge context assembly (#7658)
 PR_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.comments // []' 2>/dev/null || echo "[]")"
 PR_REVIEW_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.review_comments // []' 2>/dev/null || echo "[]")"
