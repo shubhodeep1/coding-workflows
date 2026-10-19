@@ -1655,8 +1655,8 @@ _gh_issue_timeline_with_cross_refs_rest()
 				continue
 			fi
 			# The full PR object (body up to 65,536 characters, escaped) can pass
-			# the 131,072-byte per-argument limit, so it reaches jq through
-			# --slurpfile, never argv (issue #7658).
+			# the 131,072-byte per-argument limit, so jq reads it with
+			# --slurpfile, never from argv (issue #7658).
 			if pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)" && printf '%s' "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
 				pr_lookup_json="$(jq -c --arg url "${pr_url}" --slurpfile pr <(printf '%s' "${pr_json}") '($pr[0] // {}) as $pr | . + {($url): {ok: true, number: ($pr.number // null), state: ($pr.state // null), merged_at: ($pr.merged_at // null), merged: (($pr.merged_at != null) or ($pr.merged == true))}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
 			else
