@@ -343,7 +343,13 @@ def test_gh_api_safe_transient_patterns() -> None:
 		result, gh_calls, sleeps = _safe_invoke([("err", message), ("ok", "{}")], "gh_api_safe repos/o/r/actions/runs\necho rc=$?\n")
 		assert "rc=0" in result.stdout, (message, result.stdout, result.stderr)
 		assert len(gh_calls) == 2 and sleeps == ["5"], (message, gh_calls, sleeps)
-	for message in ("geoffrey failed", "boom failure", "run 15020 not found (HTTP 404)"):
+	for message in (
+		"geoffrey failed",
+		"boom failure",
+		"run 15020 not found (HTTP 404)",
+		"No commit found for SHA: abc502def0123456789 (HTTP 404)",
+		"gh: Not Found (HTTP 404) sha=ab503_x",
+	):
 		result, gh_calls, sleeps = _safe_invoke([("err", message), ("ok", "{}")], "gh_api_safe repos/o/r/actions/runs\necho rc=$?\n")
 		assert "rc=1" in result.stdout, (message, result.stdout)
 		assert len(gh_calls) == 1 and sleeps == [], (message, gh_calls, sleeps)

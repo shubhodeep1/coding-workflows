@@ -61,8 +61,8 @@ gh_api_safe_call_is_read()
 # gh_api_safe_stderr_is_transient ERR_FILE
 #
 # Returns 0 when the captured `gh api` stderr names a transient failure: an
-# HTTP 5xx (502/503/504 count only as whole numbers, so a run ID or URL that
-# contains "502" does not), a connection reset, an i/o or header timeout, a
+# HTTP 5xx (502/503/504 count only as whole words, so a run ID, URL or commit
+# SHA that contains "502" does not), a connection reset, an i/o or header timeout, a
 # TLS handshake timeout, or an EOF (matched as a whole word).
 gh_api_safe_stderr_is_transient()
 {
@@ -70,7 +70,7 @@ gh_api_safe_stderr_is_transient()
 	if [ ! -s "${err_file}" ]; then
 		return 1
 	fi
-	if grep -Eqi 'HTTP 5[0-9][0-9]|(^|[^0-9])(502|503|504)([^0-9]|$)|connection reset|i/o timeout|timeout awaiting|TLS handshake timeout|unexpected EOF|(^|[^[:alnum:]_])EOF([^[:alnum:]_]|$)' "${err_file}" 2>/dev/null; then
+	if grep -Eqi 'HTTP 5[0-9][0-9]|(^|[^[:alnum:]_])(502|503|504)([^[:alnum:]_]|$)|connection reset|i/o timeout|timeout awaiting|TLS handshake timeout|unexpected EOF|(^|[^[:alnum:]_])EOF([^[:alnum:]_]|$)' "${err_file}" 2>/dev/null; then
 		return 0
 	fi
 	return 1
