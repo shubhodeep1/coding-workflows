@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "When modifying orchestration scripts or workflow YAML, look for the corresponding focused test module and extend it to cover the behavior or workflow contract. Recent changes repeatedly paired script updates with component-specific tests, and workflow-file changes with workflow-contract tests.",
+  "fingerprint": "dc017983694631a58e89e580106a79ebd25e128ad129315158b4dd11b7818248",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39184496235",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39184496235",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7615",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7623",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7624",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7625",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7629",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7619",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7626",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7627",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7628",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7630"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261019011921_fcfd85d0bd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and script behavior changes are commonly guarded by focused tests in tests/, often contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-19T01:19:21Z",
+    "promoted_at": "2026-10-19T01:21:12Z",
+    "superseded_at": null
+  }
+}
