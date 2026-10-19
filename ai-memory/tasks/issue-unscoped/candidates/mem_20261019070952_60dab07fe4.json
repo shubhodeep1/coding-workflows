@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_workflow_contract.py:lines 143-146 (loop_end bound) | HARDENING_SUGGESTION (not a defect) | HARDENING_RISK_SCORE: 1\n  PROBLEM: `loop_end = poller.index(\"; do\", loop_start)` is positional, so a future asset path containing the literal substring `; do` would end the slice early, and the assertions could pass silently even after a required entry was removed.\n  WHY: Today's paths contain no `; do`, so this is a fragility, not a current defect. Suggested fix: bind `loop_end` to the next line whose first non-whitespace token is `do`, or to the closing `\\n  done` of the same loop (~6 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "05e90aa5b1ef42016ebdea1d6030628965121baee1f642d76d87a76d8a429ad2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7663,
+    "run_id": "39211479242",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39211479242",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019070952_60dab07fe4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7663,
+    "run_id": "39211479242"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-19T07:09:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
