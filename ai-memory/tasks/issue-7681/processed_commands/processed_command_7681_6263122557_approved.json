@@ -5,13 +5,24 @@
   "entry_id": "processed_command_7681_6263122557_approved",
   "issue_number": 7681,
   "metadata": {
+    "branch": "ai/issue-7681",
+    "changed_files": [
+      "changelog.d/wfopt-2026-09-21-4-drift-audit-wrappers.md",
+      "scripts/audit_consumer_drift.py",
+      "tests/test_audit_consumer_drift.py"
+    ],
+    "issue_number": 7681,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7681",
+    "pr_number": 7688,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7688",
+    "run_attempt": "1",
+    "run_id": "39223875506",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39223875506"
   },
   "run_attempt": 1,
   "run_id": "39223875506",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-19T08:38:36Z",
+  "status": "completed",
+  "timestamp": "2026-10-19T09:00:08Z",
   "workflow": "implement"
 }
