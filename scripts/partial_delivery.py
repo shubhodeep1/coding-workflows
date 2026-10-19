@@ -71,6 +71,8 @@ def sanitize_item(text: str) -> str:
 	value = ISSUE_REF_RE.sub("#" + WORD_JOINER + "\\1", value)
 	value = MENTION_RE.sub("@" + WORD_JOINER, value)
 	value = value.replace("`", "'")
+	# Keep Markdown links and bare URLs from rendering as clickable links.
+	value = value.replace("](", "]" + WORD_JOINER + "(").replace("://", ":" + WORD_JOINER + "//")
 	if value.startswith("/"):
 		value = WORD_JOINER + value
 	return value

@@ -275,10 +275,15 @@ jobs:
             local reason=""
             if [ -z "${PR_HEAD_REPO:-}" ] || [ "${PR_HEAD_REPO}" != "${REPOSITORY}" ]; then
               reason="foreign_head"
-            elif [ -z "${BRANCH_ISSUE_NUMBER}" ] || [ "${BRANCH_ISSUE_NUMBER}" != "${issue}" ]; then
+            elif [ -z "${BRANCH_ISSUE_NUMBER}" ] || [ "${BRANCH_ISSUE_NUMBER}" != "${issue}" ] || [ "${PR_HEAD_REF:-}" != "ai/issue-${issue}" ]; then
+              # Exact head ref, as the poller's close sweep requires.
               reason="unbound_issue"
             elif ! resolve_unmerged_close_login; then
-              reason="identity_unavailable"
+              # The binding cannot be checked: keep the issue open rather than
+              # lose the deferred items (the close sweep defers the same way).
+              echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but the pipeline login could not be read; the issue stays open without the remaining-items comment."
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=identity_unavailable"
+              return 0
             elif [ -z "${PR_AUTHOR_LOGIN:-}" ] || [ "${PR_AUTHOR_LOGIN,,}" != "${UNMERGED_CLOSE_LOGIN,,}" ]; then
               reason="author_mismatch"
             fi

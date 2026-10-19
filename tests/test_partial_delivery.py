@@ -85,6 +85,9 @@ def test_sanitize_neutralises_references_markers_and_controls() -> None:
 	auto_decisions = (REPO_ROOT / "scripts" / "auto_decisions.py").read_text(encoding="utf-8")
 	assert 'ISSUE_REF_RE = re.compile(r"#(\\d)")' in auto_decisions
 	assert pd.ISSUE_REF_RE.pattern == r"#(\d)"
+	linked = pd.sanitize_item("see [docs](https://example.invalid/x)")
+	assert "](" not in linked and "://" not in linked
+	assert pd.sanitize_item(linked) == linked
 	# Sanitizing twice changes nothing.
 	assert pd.sanitize_item(value) == value
 

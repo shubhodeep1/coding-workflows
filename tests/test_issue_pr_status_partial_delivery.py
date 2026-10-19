@@ -193,7 +193,7 @@ def test_unbound_or_disabled_partial_marker_still_closes() -> None:
 	for overrides in (
 		{"PR_HEAD_REPO": "fork/r"},
 		{"PR_AUTHOR_LOGIN": "maintainer"},
-		{"FAKE_USER_FAIL": "1"},
+		{"PR_HEAD_REF": f"ai/issue-{ISSUE}-x"},
 		{"PR_HEAD_REF": "feature/x", "PR_BODY": _partial_body() + f"\nCloses https://github.com/o/r/issues/{ISSUE}\n"},
 		{"PARTIAL_DELIVERY_TRACKING_ENABLED": "false"},
 	):
@@ -202,6 +202,16 @@ def test_unbound_or_disabled_partial_marker_still_closes() -> None:
 		assert not any(b.startswith("/reclarify") for b in _posted_bodies(run)), overrides
 	managed = _run(body=_partial_body(), managed=True)
 	assert _closed(managed)
+
+
+def test_unavailable_identity_keeps_the_issue_open() -> None:
+	# A failed /user read cannot verify the binding; the issue stays open
+	# (like reason=helper_missing and the close sweep's defer) and nothing is posted.
+	run = _run(body=_partial_body(), env_overrides={"FAKE_USER_FAIL": "1"})
+	assert not _closed(run), run["stdout"]
+	assert _lineage(run) == ""
+	assert _posted_bodies(run) == []
+	assert f"PARTIAL_DELIVERY mode=merge pr={PR} issue={ISSUE} outcome=kept_open reason=identity_unavailable" in run["stdout"]
 
 
 def test_rerun_with_markers_present_posts_nothing_new() -> None:
