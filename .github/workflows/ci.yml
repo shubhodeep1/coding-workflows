@@ -2219,7 +2219,8 @@ jobs:
         # PR per release tick), plus _parse_reset_header's Retry-After
         # precedence, gh_retry's per-attempt stdout buffering (#5495) and
         # the non-retryable HTTP 400/401 classification in
-        # scripts/gh_helpers.sh.
+        # scripts/gh_helpers.sh, and PR comment JSON kept out of jq argv
+        # (#7658).
         if: strategy.job-index == 1
         run: |
           set -euo pipefail
@@ -2261,7 +2262,8 @@ jobs:
               tests/test_gh_retry_stdout_isolation.py \
               tests/test_gh_retry_permanent_auth_failures.py \
               tests/test_gh_api_retry.py \
-              tests/test_gh_api_retry_py.py > /tmp/merge_train_rest.log 2>&1
+              tests/test_gh_api_retry_py.py \
+              tests/test_gh_pr_comments_argv_limit.py > /tmp/merge_train_rest.log 2>&1
             echo "$?" > /tmp/merge_train_rest.rc
           ) &
           mt_pids+=("$!")

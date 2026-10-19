@@ -1448,11 +1448,17 @@ _gh_pr_with_all_comments_rest()
 		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null \
 		|| echo '[]')"
 
+	# Pass the JSON through process substitution, never through argv: Linux
+	# caps a single argument at 131,072 bytes (MAX_ARG_STRLEN), and a PR's
+	# issue comments can serialize past that, so `--argjson` made jq exit 126
+	# ("Argument list too long") with no output (issue #7658;
+	# tele-funtoken-msg-scoring PR #3933, run 39131897079). An empty input
+	# degrades to {} / [].
 	jq -cn \
-		--argjson meta "${meta_json}" \
-		--argjson comments "${comments_json}" \
-		--argjson review_comments "${review_comments_json}" \
-		'{meta: $meta, comments: $comments, review_comments: $review_comments}'
+		--slurpfile meta <(printf '%s' "${meta_json}") \
+		--slurpfile comments <(printf '%s' "${comments_json}") \
+		--slurpfile review_comments <(printf '%s' "${review_comments_json}") \
+		'{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}'
 }
 
 # ---------------------------------------------------------------

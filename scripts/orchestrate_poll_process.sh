@@ -26001,8 +26001,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
               --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_OLD_HEAD} " \
               '[.[][] | select((.body | type == "string") and (.body | startswith("## Review-blocked judge isolation unavailable")) and (.body | contains("<!-- ai:rb-judge-isolation-escalated head=")))] | last | .id == $id and .user.id == $actor and (.body | contains($marker))' >/dev/null 2>&1 && \
               printf '%s' "${RB_ISOLATION_EVENTS}" | jq -e --argjson actor "${RB_ISOLATION_ACTOR}" \
-                --argjson id "${RB_ISOLATION_COMMENT_ID}" --argjson comments "${RB_ISOLATION_COMMENTS}" \
-                '($comments | [.[][] | select(.id == $id)] | last | .created_at) as $marker_at | $marker_at != null and ([.[][] | select(.event == "labeled" and .label.name == "ai:needs-human")] | last | .actor.id == $actor and .created_at <= $marker_at)' >/dev/null 2>&1; then
+                --argjson id "${RB_ISOLATION_COMMENT_ID}" --slurpfile comments <(printf '%s' "${RB_ISOLATION_COMMENTS}") \
+                '(($comments[0] // []) | [.[][] | select(.id == $id)] | last | .created_at) as $marker_at | $marker_at != null and ([.[][] | select(.event == "labeled" and .label.name == "ai:needs-human")] | last | .actor.id == $actor and .created_at <= $marker_at)' >/dev/null 2>&1; then
               gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" --remove-label 'ai:needs-human' >/dev/null || {
                 echo '::warning::Could not clear review-blocked isolation latch; deferring.' >&2
                 continue
@@ -26051,16 +26051,32 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
       rm -f "${_rb_pr_diff_tmp}" "${_rb_pr_diff_capped_tmp}"
       unset _rb_pr_diff_tmp _rb_pr_diff_capped_tmp _rb_pr_diff_bytes
       RB_PRELOADED_META="$(echo "${_rb_pr_json}" | jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo '{}')"
+      # Comment JSON reaches jq through --slurpfile, never argv (MAX_ARG_STRLEN,
+      # 131,072 bytes per argument; issue #7658). A context that still fails to
+      # assemble is logged once as RB_JUDGE_CONTEXT_EMPTY.
+      _rb_ctx_rc=0
+      _rb_ctx_empty_reason=""
+      RB_PR_CONTEXT_JSON=""
       if type gh_pr_with_all_comments >/dev/null 2>&1; then
-        RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
+        RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}")" || _rb_ctx_rc=$?
       elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
-        RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
+        RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}")" || _rb_ctx_rc=$?
       else
         printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${GITHUB_REPOSITORY%%/*} repo=${GITHUB_REPOSITORY##*/} pr=${RB_PR}" >&2
         RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
         RB_PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
-        RB_PR_CONTEXT_JSON="$(jq -cn --argjson meta "${RB_PRELOADED_META}" --argjson comments "${RB_PR_ISSUE_COMMENTS}" --argjson review_comments "${RB_PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
+        RB_PR_CONTEXT_JSON="$(jq -cn --slurpfile meta <(printf '%s' "${RB_PRELOADED_META}") --slurpfile comments <(printf '%s' "${RB_PR_ISSUE_COMMENTS}") --slurpfile review_comments <(printf '%s' "${RB_PR_REVIEW_COMMENTS}") '{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}' 2>/dev/null)" || _rb_ctx_rc=$?
       fi
+      if [ "${_rb_ctx_rc}" -ne 0 ] || [ -z "${RB_PR_CONTEXT_JSON}" ]; then
+        _rb_ctx_empty_reason="assembly_failed"
+      elif ! printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -e 'type == "object" and (.comments | type == "array") and (.review_comments | type == "array")' >/dev/null 2>&1; then
+        _rb_ctx_empty_reason="invalid_shape"
+      fi
+      if [ -n "${_rb_ctx_empty_reason}" ]; then
+        RB_PR_CONTEXT_JSON='{}'
+        printf '%s\n' "::warning::RB_JUDGE_CONTEXT_EMPTY pr=${RB_PR} reason=${_rb_ctx_empty_reason}" >&2
+      fi
+      unset _rb_ctx_rc _rb_ctx_empty_reason
       PR_COMMENTS="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.comments // []' 2>/dev/null || echo "[]")"
       PR_REVIEW_COMMENTS="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.review_comments // []' 2>/dev/null || echo "[]")"
       PR_META="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/null || echo "{}")"
