@@ -232,7 +232,7 @@ def test_skips_when_cycle_in_flight() -> None:
 
 
 def test_non_code_changes_do_not_start_a_cycle() -> None:
-	files = ["analysis/workflow-optimization-2026-09-19.md", "ai-memory/x.json", "docs/plans/p.md", "README.md", "CHANGELOG.md", "tests/e2e_smoke_canary.txt"]
+	files = ["analysis/workflow-optimization-2026-09-19.md", "ai-memory/x.json", "docs/plans/p.md", "docs/README.md", "changelog.d/x.md", "CHANGELOG.md", "tests/e2e_smoke_canary.txt"]
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(files)}})
 	assert proc.returncode == 0, proc.stderr
@@ -247,6 +247,35 @@ def test_claude_md_and_dot_claude_count_as_code() -> None:
 			proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare([path, "docs/x.md"])}, "gate_runs_sequence": GATE_SUCCESS})
 		assert "reason=no_code_changes" not in proc.stdout, path
 		assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout, (path, proc.stdout, proc.stderr)
+
+
+def test_pipeline_instruction_files_count_as_code() -> None:
+	# Markdown the pipeline reads into model context steers it, so it is code (#7662).
+	for path in ("README.md", "unattended_system_instructions.md", "ai_pipeline.md", "agents.md", "AGENTS.md", "codex.md", "probably_unnecessary_but_read_if_stuck.md", "agents.d/123-x.md"):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, _, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare([path, "docs/x.md"])}, "gate_runs_sequence": GATE_SUCCESS})
+		assert "reason=no_code_changes" not in proc.stdout, path
+		assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout, (path, proc.stdout, proc.stderr)
+
+
+def _case_pattern_lines(path: Path, function: str) -> list[str]:
+	lines = path.read_text(encoding="utf-8").splitlines()
+	start = next(i for i, line in enumerate(lines) if line.strip().startswith(f"{function}()"))
+	patterns: list[str] = []
+	for line in lines[start + 1:]:
+		stripped = line.strip()
+		if stripped == "}":
+			break
+		if stripped.endswith(";;"):
+			patterns.append(stripped)
+	return patterns
+
+
+def test_code_path_case_lists_match_poller() -> None:
+	cycle = _case_pattern_lines(SCRIPT, "is_code_path")
+	poller = _case_pattern_lines(REPO_ROOT / "scripts" / "orchestrate_poll_process.sh", "comprehensive_cycle_is_code_path")
+	assert len(cycle) == 2
+	assert cycle == poller
 
 
 def test_identical_tip_and_tag_skips() -> None:
@@ -326,7 +355,7 @@ def test_no_code_change_since_failed_run_skips() -> None:
 	# Budget of one: a single failed cycle holds the tip, as before the retry budget.
 	failed_head = "4" * 40
 	runs = [{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": failed_head, "created_at": "2026-09-18T00:00:00Z"}]
-	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), failed_head: _compare(["README.md"])}}
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), failed_head: _compare(["docs/README.md"])}}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_MAX_ATTEMPTS": "1"})
 	assert f"PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run base={failed_head} head={TIP} attempts=1 max=1" in proc.stdout
@@ -341,7 +370,7 @@ def test_failed_run_on_same_tip_is_retried_within_the_default_budget() -> None:
 		{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": docs_only_head, "created_at": "2026-09-17T00:00:00Z"},
 		{"id": 3, "status": "completed", "event": "schedule", "conclusion": "timed_out", "head_sha": TIP, "created_at": "2026-09-18T00:00:00Z"},
 	]
-	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), docs_only_head: _compare(["README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), docs_only_head: _compare(["docs/README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), state)
 	assert proc.returncode == 0, proc.stderr + proc.stdout
@@ -379,7 +408,7 @@ def test_failed_runs_before_a_code_change_do_not_spend_the_budget() -> None:
 		{"id": 3, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": old_head, "created_at": "2026-09-16T00:00:00Z"},
 		{"id": 4, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": recent_head, "created_at": "2026-09-18T00:00:00Z"},
 	]
-	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), recent_head: _compare(["README.md"]), old_head: _compare(["scripts/y.sh"]), oldest_head: _compare(["README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), recent_head: _compare(["docs/README.md"]), old_head: _compare(["scripts/y.sh"]), oldest_head: _compare(["docs/README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_MAX_ATTEMPTS": "2"})
 	assert proc.returncode == 0, proc.stderr + proc.stdout
