@@ -1,0 +1,6 @@
+<!-- changelog: changed -->
+- **When the review-blocked judge cannot merge a pull request, the log now says why.** Before this, the judge's merge commands threw away GitHub's error, so a failed merge only logged `Review-blocked judge merge failed for evaluated head <sha>` and someone had to work out the cause (a draft pull request, branch protection, a merge queue, permissions, a 422 or a moved head) from other evidence.
+
+`scripts/review_rb_judge.sh` now keeps the error output of each merge attempt in a private temporary directory at its three merge points: the `merge` action, a final-round `fix` treated as a merge, and the synchronous merge of `merge_with_followup`. When the merge fails it prints one line, `RB_JUDGE_MERGE_ERROR pr=<n> head=<sha> path=merge|terminal|sync error=<text>`, and adds ` gh error: <text>` to the existing warning. The text is one line of at most 500 characters, labelled per attempt (`auto:` for the auto-merge request, `direct:` for the direct merge), and anything shaped like a GitHub token is replaced with `[redacted]`. The temporary directory is removed on every path.
+
+Which merges run, in what order, their binding to the judged head, and the `RB_MERGE_STATUS` and `judge_skip_reason` values are unchanged. If the temporary directory cannot be created, the judge behaves exactly as before and prints no extra line.
