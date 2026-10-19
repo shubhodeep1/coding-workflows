@@ -4,9 +4,9 @@
 #
 # Returns 0 when the `gh api` arguments describe a read and 1 when they
 # describe a write. A call is a write when it sets a method other than GET
-# (`-X <m>`, `-X<m>`, `--method <m>`, `--method=<m>`) or carries any request
+# or HEAD (`-X <m>`, `-X<m>`, `--method <m>`, `--method=<m>`) or carries any request
 # body flag (`-f`, `-F`, `--field`, `--raw-field`, `--input`), even next to
-# `-X GET`. gh_api_safe retries transient errors only for reads: a retried
+# `-X GET` or `-X HEAD`. gh_api_safe retries transient errors only for reads: a retried
 # POST/PATCH whose first attempt reached GitHub could repeat a workflow
 # dispatch or a comment.
 gh_api_safe_call_is_read()
@@ -23,7 +23,7 @@ gh_api_safe_call_is_read()
 		if [ "${expect_method}" = "1" ]; then
 			expect_method=0
 			method="$(printf '%s' "${arg}" | tr '[:lower:]' '[:upper:]')"
-			if [ "${method}" != "GET" ]; then
+			if [ "${method}" != "GET" ] && [ "${method}" != "HEAD" ]; then
 				return 1
 			fi
 			continue
@@ -39,7 +39,7 @@ gh_api_safe_call_is_read()
 					method="${arg#-X}"
 				fi
 				method="$(printf '%s' "${method}" | tr '[:lower:]' '[:upper:]')"
-				if [ "${method}" != "GET" ]; then
+				if [ "${method}" != "GET" ] && [ "${method}" != "HEAD" ]; then
 					return 1
 				fi
 				;;

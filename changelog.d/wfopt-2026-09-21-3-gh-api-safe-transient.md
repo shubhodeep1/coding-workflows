@@ -5,7 +5,7 @@
 
 - it counts as transient a stderr that names any `HTTP 5xx` status (500 to 599, as the shared retry helpers do) or a bare 502, 503 or 504 (only as a whole word, with no letter, digit or underscore next to it), a connection reset, an `i/o timeout`, a `timeout awaiting` response, a TLS handshake timeout or an EOF;
 - it waits 5, 10, then 20 seconds between attempts, and `RATE_LIMIT_BACKOFF` is unchanged by these retries;
-- it retries only reads. A call with `-X`/`--method` other than GET, or any of `-f`, `-F`, `--field`, `--raw-field` or `--input`, still makes one attempt, so a dispatch or comment is never sent twice;
+- it retries only reads. A call with `-X`/`--method` other than GET or HEAD, or any of `-f`, `-F`, `--field`, `--raw-field` or `--input`, still makes one attempt, so a dispatch or comment is never sent twice;
 - each retry writes `GH_API_SAFE_RETRY attempt=<n>/<max> class=transient` to stderr, also in quiet mode. The line carries no arguments or token.
 
 Rate-limit retries, return codes, `GH_API_SAFE_OUTPUT`, quiet-mode reporting and the `gh_api_safe_print`, `gh_api_safe_quiet` and `gh_api_safe_quiet_print` wrappers are unchanged. The helper still does not source `scripts/gh_helpers.sh`, because the release jobs that source it may not have that file staged.

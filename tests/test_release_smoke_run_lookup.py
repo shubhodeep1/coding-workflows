@@ -292,6 +292,9 @@ def test_gh_api_safe_get_method_and_value_flags_still_count_as_reads() -> None:
 	for args in (
 		"-X GET repos/o/r/actions/runs",
 		"--method=get repos/o/r/actions/runs",
+		"-X HEAD repos/o/r/actions/runs",
+		"--method=head repos/o/r/actions/runs",
+		"-XHEAD repos/o/r/actions/runs",
 		"repos/o/r/actions/runs --jq .total_count",
 		"-H Accept:application/json -q '.[] | .id' repos/o/r/pulls",
 		"--paginate repos/o/r/issues",
