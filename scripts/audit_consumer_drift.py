@@ -199,6 +199,38 @@ def normalize_workflow_text(text: str) -> str:
 	return "\n".join(normalized_lines) + "\n"
 
 
+PROFILE_MANIFEST_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.yml$")
+
+
+def _load_profile_manifest_names(templates_dir: Path) -> set[str]:
+	"""Return the wrapper basenames listed in ``profiles/full.txt``.
+
+	The manifest is the full-profile install list ``update_workflows.yml``
+	uses. It also names wrappers outside the ``ai-*.yml`` glob (for example
+	``review_rb_judge_dispatch.yml``). Only plain ``*.yml`` basenames are
+	accepted; the caller checks that each one exists under ``templates_dir``.
+	A missing or unreadable manifest yields an empty set (fail open), so the
+	audit keeps its glob-only behaviour.
+	"""
+	manifest_path = templates_dir / "profiles" / "full.txt"
+	try:
+		manifest_text = manifest_path.read_text(encoding="utf-8")
+	except (OSError, UnicodeDecodeError):
+		return set()
+
+	names: set[str] = set()
+	for raw_line in manifest_text.splitlines():
+		name = raw_line.strip()
+		if not name or name.startswith("#"):
+			continue
+		if "/" in name or "\\" in name or name in {".", ".."}:
+			continue
+		if not PROFILE_MANIFEST_NAME_RE.match(name):
+			continue
+		names.add(name)
+	return names
+
+
 def load_expected_templates(
 	templates_dir: Path,
 	stable_sha: str | None = None,
@@ -206,10 +238,16 @@ def load_expected_templates(
 	if not templates_dir.is_dir():
 		raise ValueError(f"templates directory not found: {templates_dir}")
 
+	candidate_names: set[str] = {
+		path.name for path in templates_dir.glob("ai-*.yml") if path.is_file()
+	}
+	for name in _load_profile_manifest_names(templates_dir):
+		if (templates_dir / name).is_file():
+			candidate_names.add(name)
+
 	templates: dict[str, str] = {}
-	for path in sorted(templates_dir.glob("ai-*.yml")):
-		if not path.is_file():
-			continue
+	for name in sorted(candidate_names):
+		path = templates_dir / name
 		template_text = path.read_text(encoding="utf-8")
 		if stable_sha is not None:
 			template_text = pin_reusable_workflow_refs(template_text, stable_sha)
