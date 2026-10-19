@@ -1807,6 +1807,60 @@ def test_security_audit_upstream_managed_filter_fails_open_without_an_upstream_t
 	assert "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=upstream_tree_missing" in proc.stdout
 
 
+def _install_poller_staged_support_tree(base_dir: Path) -> Path:
+	"""Build a support tree shaped like the orchestrate poller's workspace.
+
+	The "Stage workflow support files" step of orchestrate_poll.yml copies
+	render_prompt.sh / render_prompt.py (real files, not symlinks) and only
+	some prompt assets: prompts/references/security-money-lens.txt is staged,
+	prompts/references/output-contract.txt is not.  The full support checkout
+	stays at <workspace>/.codex-workflow-src.
+	"""
+	support_dir = base_dir / "poller-workspace"
+	scripts_dir = support_dir / "scripts"
+	prompts_dir = support_dir / "prompts"
+	(prompts_dir / "references").mkdir(parents=True)
+	scripts_dir.mkdir(parents=True)
+	for script_name in ("label_helpers.sh", "gh_helpers.sh"):
+		(scripts_dir / script_name).symlink_to(REPO_ROOT / "scripts" / script_name)
+	# Copied, so render_prompt.py's own script root is the workspace, as in CI.
+	for script_name in ("render_prompt.sh", "render_prompt.py", "assemble_prompt.sh"):
+		(scripts_dir / script_name).write_bytes((REPO_ROOT / "scripts" / script_name).read_bytes())
+	(prompts_dir / "mode-security-audit.txt").write_bytes((REPO_ROOT / "prompts" / "mode-security-audit.txt").read_bytes())
+	(prompts_dir / "references" / "security-money-lens.txt").write_bytes(
+		(REPO_ROOT / "prompts" / "references" / "security-money-lens.txt").read_bytes()
+	)
+	support_checkout_references = support_dir / ".codex-workflow-src" / "prompts" / "references"
+	support_checkout_references.mkdir(parents=True)
+	(support_checkout_references / "output-contract.txt").write_bytes(
+		(REPO_ROOT / "prompts" / "references" / "output-contract.txt").read_bytes()
+	)
+	return support_dir
+
+
+def test_security_audit_renders_the_prompt_from_the_support_root_when_run_in_an_audit_worktree() -> None:
+	# Regression (consumer tele-funtoken-msg-scoring tracking #3928): the
+	# project security pass runs security_audit.sh inside a clean audit
+	# worktree under ${RUNTIME_DIR}.  The renderer resolved
+	# {{REFERENCE_OUTPUT_CONTRACT}} only through $PWD/.codex-workflow-src, so
+	# from the worktree every render failed with "prompt renderer exited
+	# nonzero" and the pass reported engine_unavailable on every poll.
+	with tempfile.TemporaryDirectory(prefix="security-audit-poller-tree-") as support_td:
+		support_dir = _install_poller_staged_support_tree(Path(support_td))
+		proc, final_state = _run_consumer_findings_json(
+			{
+				"SECURITY_AUDIT_SUPPORT_DIR": str(support_dir),
+				"SECURITY_AUDIT_FP_EXCLUSIONS": str(REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"),
+			},
+			upstream_source_dir=None,
+		)
+
+	assert "phase=prompt-render" not in proc.stderr, proc.stderr
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert len(payload["findings"]) == 4
+
+
 def test_security_audit_upstream_source_dir_override_supplies_the_managed_list() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-override-") as support_td:
 		support_dir = _install_security_audit_support_tree(Path(support_td), failure_mode="none")

@@ -3390,6 +3390,13 @@ def test_stranded_checkout_is_judged_behind_prefixes_and_redefined_cd(merged_bra
 	"X=1 cd {worktree} && git push origin HEAD:feature/x",
 	"builtin cd {worktree} && git push origin HEAD:feature/x",
 	"command cd {worktree} && git push origin HEAD:feature/x",
+	# Bash's `time` reserved word and `command -p` run cd in the current shell.
+	"time cd {worktree} && git push origin HEAD:feature/x",
+	"time -p cd {worktree} && git push origin HEAD:feature/x",
+	"time -p -- cd {worktree}; git push origin HEAD:feature/x",
+	"time cd -- {worktree} && git push origin HEAD:feature/x",
+	"command -p cd {worktree} && git push origin HEAD:feature/x",
+	"X=1 command -p cd {worktree} && git push origin HEAD:feature/x",
 ])
 def test_worktree_push_is_judged_behind_prefixes(merged_branch_repo, command: str) -> None:
 	"""Scenario B: the session checkout is clean on `main`; the worktree sits
@@ -3414,6 +3421,21 @@ def test_worktree_push_is_judged_behind_prefixes(merged_branch_repo, command: st
 	"stdbuf -oL git push origin HEAD:feature/x",
 	"sudo sh -c 'git push origin HEAD:feature/x'",
 	"time --bogus git push origin HEAD:feature/x",
+	# A prefixed pushd/popd/eval/source changes the directory like the bare
+	# form, which already asks; before this they passed silently (#6038).
+	"time pushd {worktree} && git push origin HEAD:feature/x",
+	"builtin pushd {worktree} && git push origin HEAD:feature/x",
+	"command pushd {worktree} && git push origin HEAD:feature/x",
+	"X=1 pushd {worktree} && git push origin HEAD:feature/x",
+	"time eval 'cd {worktree}'; git push origin HEAD:feature/x",
+	"builtin eval 'cd {worktree}'; git push origin HEAD:feature/x",
+	"command eval 'cd {worktree}'; git push origin HEAD:feature/x",
+	"X=1 eval 'cd {worktree}'; git push origin HEAD:feature/x",
+	"time source /dev/null; git push origin HEAD:feature/x",
+	"builtin source /dev/null; git push origin HEAD:feature/x",
+	"command . /dev/null; git push origin HEAD:feature/x",
+	"builtin enable -n cd; cd {worktree}; git push origin HEAD:feature/x",
+	"command export CDPATH={parent}; cd {name} && git push origin HEAD:feature/x",
 ])
 def test_unknown_directory_or_prefix_asks_instead_of_passing(merged_branch_repo, command: str) -> None:
 	"""Scenario B again: where the cd lands, or where a prefix runs Git, is
@@ -3428,6 +3450,42 @@ def test_unknown_directory_or_prefix_asks_instead_of_passing(merged_branch_repo,
 	proc = _run_hook(repo, stub_bin, formatted)
 	assert proc.returncode == 0, formatted + "\n" + proc.stdout + proc.stderr
 	assert _ask_decision(proc) is not None, formatted + "\n" + proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"time cd {worktree} && git push origin HEAD:feature/open",
+	"command -p cd {worktree} && git push origin HEAD:feature/open",
+	"command -v cd; git push origin HEAD:feature/open",
+	"time eval 'git push origin HEAD:feature/open'",
+	"time pushd {worktree} | cat; git push origin HEAD:feature/open",
+])
+def test_prefixed_builtins_keep_open_branch_pushes_allowed(merged_branch_repo, command: str) -> None:
+	"""Scenario B: recognising prefixed cd/pushd/eval must not prompt for a
+	push whose judged checkout and destination are both fine."""
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "feature/x")
+	_git(repo, "checkout", "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	formatted = command.format(worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 0, formatted + "\n" + proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None, formatted + "\n" + proc.stdout
+
+
+@pytest.mark.parametrize(("tokens", "expected"), [
+	(["cd", "dir"], (["cd", "dir"], False)),
+	(["time", "-p", "cd", "dir"], (["cd", "dir"], False)),
+	(["time", "-p", "--", "cd", "dir"], (["cd", "dir"], False)),
+	(["command", "-p", "pushd", "dir"], (["pushd", "dir"], False)),
+	(["builtin", "command", "eval", "x"], (["eval", "x"], False)),
+	(["CDPATH=/srv", "time", "cd", "dir"], (["cd", "dir"], True)),
+	(["command", "-v", "cd"], None),
+	(["time", "-x", "cd", "dir"], None),
+])
+def test_shell_builtin_view(tokens: list[str], expected) -> None:
+	assert guard._shell_builtin_view(tokens) == expected
 
 
 def test_cdpath_set_before_a_shell_wrapper_reaches_its_cd(monkeypatch) -> None:
