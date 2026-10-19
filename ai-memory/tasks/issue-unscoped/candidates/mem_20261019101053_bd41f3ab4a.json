@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:1409-1411 and .github/workflows/test-and-mark-stable.yml:7085-7087 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: `GH_RETRY_IDEMPOTENT=true gh_retry gh api \"repos/${REPO}/dispatches\"` may resend a dispatch that was accepted, which starts duplicate updater runs that race to create the same PR, and the loser's `gh pr create` fails.\n  WHY: Both reviewers rated it NIT. Sonnet gave confidence 2 and did not verify the consumer updater's concurrency guards. Luna gave confidence 4 and cited `update_workflows.yml:1448-1451` and line 1551, with no concurrency group on the consumer wrapper. The issue explicitly permits `GH_RETRY_IDEMPOTENT=true`. Sonnet cited lines 1411 and 7087, and Luna cited ranges ending at the same lines.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/mark-stable.yml:1411 and .github/workflows/test-and-mark-stable.yml:7087 | severity=NIT | confidence=2\n  PROBLEM: A retried dispatch could start two updater runs in a consumer that race to open the same PR, and the loser's `gh pr create` would fail. This repeats a pass-1 finding.\n  WHY: The retry fires only on a 5xx or network error. The first run's PR stays in place, and the daily schedule would also pick up the update. The issue permits `GH_RETRY_IDEMPOTENT=true`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/mark-stable.yml:1409-1411; .github/workflows/test-and-mark-stable.yml:7085-7087 | severity=NIT | confidence=4\n  PROBLEM: The retry is treated as harmless, but duplicate updater runs can race while creating the release PR.\n  WHY: The consumer wrapper starts an updater run for each `coding-workflows-stable-released` event and has no concurrency group. If a dispatch is accepted but its response is lost, `gh_retry` resends it. Both runs then see the update branch pushed with no open PR, pass the lookup at `update_workflows.yml:1448-1451`, and call `gh pr create` at line 1551. One create fails, which leaves a failed consumer updater run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f450e5210a1329918e52294a7fa2fc8f58866dfca0f7041b89085f6bf5c1986f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7686,
+    "run_id": "39231293120",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39231293120",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019101053_bd41f3ab4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7686,
+    "run_id": "39231293120"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T10:10:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
