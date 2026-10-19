@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/comprehensive_test_and_release_gh_api.sh:60-75 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The `HTTP 5[0-9][0-9]` alternative in `gh_api_safe_stderr_is_transient` retries every 5xx status (500, 501, 505 and so on). The docstring and changelog describe only 502/503/504 as whole-word matches.\n  WHY: A permanent 5xx failure burns the 4-attempt budget (about 35 s of backoff) before the gate reports failure. Severity disagreement: sonnet, minimax and qwen rated it NIT, and gemini rated it MAJOR; the highest is used. Sonnet noted the docstring and changelog already say \"HTTP 5xx\". Gemini cited line 75, while minimax and qwen cited line 60.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement recommendation \"SHELL-001\" (pipefail-truncation pipelines)\n  expected_change_site: All files with producer-to-head pipelines\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR addresses `cat | head` and `printf | head` in the designated files. The reviewer did not verify whether other pipeline sites exist elsewhere in the repository.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/comprehensive_test_and_release_gh_api.sh: `gh_api_safe_stderr_is_transient` grep pattern | severity=NIT | confidence=3\n  PROBLEM: `HTTP 5[0-9][0-9]` retries every 5xx, including 500, 501 and 505. The bare whole-word `(502|503|504)` and `EOF` alternatives match anywhere in stderr. No current caller shows such text.\n  WHY: A read that fails permanently with HTTP 500 or 501 gets about 35 s of delay before the same failure. This is bounded, and the docstring and changelog both say \"HTTP 5xx\". Tests cover 503, 504 and SHA-embedded numbers, but not HTTP 500.\n- HARDENING_SUGGESTIONS: Narrow the pattern to `HTTP (500|502|503|504)`, drop the bare `(502|503|504)` alternative, and add a test that HTTP 501 is not retried (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/comprehensive_test_and_release_gh_api.sh:75 | severity=MAJOR | confidence=4\n  PROBLEM: The grep pattern for transient errors matches all HTTP 5xx responses, not just the intended 502/503/504.\n  WHY: A permanent server error such as HTTP 500 triggers up to 35 seconds of unnecessary retries, despite the documentation and changelog.\n- TASK_GAP: Requirement: Implement recommendation \"SHELL-001\" (pipefail-truncation pipelines).\n  Expected change site: All files with producer-to-head pipelines.\n  Evidence of absence: The PR addresses `cat | head` and `printf | head` in the designated files. The reviewer did not verify whether other pipeline sites exist across the repository.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 2\n- HARDENING_SUGGESTIONS: Tighten the regex to `HTTP 50[234]` (line 75, 1 line). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/comprehensive_test_and_release_gh_api.sh:60 | severity=NIT | confidence=4\n  PROBLEM: The first alternative `HTTP 5[0-9][0-9]` in `gh_api_safe_stderr_is_transient` matches every 5xx code. The docstring and changelog say only 502/503/504 are retried as whole words.\n  WHY: A non-transient 5xx such as \"HTTP 500 Internal Server Error\" consumes the full 4-attempt budget (about 35 s). `test_gh_api_safe_transient_patterns` only checks 503/504 and never asserts that HTTP 500 is not retried.\n- HARDENING_SUGGESTIONS: Replace the first alternative with `HTTP (502|503|504)` and add a `gh: HTTP 500 Internal Server Error` non-retry case to `test_gh_api_safe_transient_patterns` (about 4 lines). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/comprehensive_test_and_release_gh_api.sh:60 (also docstring lines 49-50 and `changelog.d/wfopt-2026-09-21-3-gh-api-safe-transient.md` lines 6-7) | severity=NIT | confidence=4\n  PROBLEM: `HTTP 5[0-9][0-9]` matches every 5xx status, but the docstring and changelog say only 502/503/504 as whole words. No test asserts whether HTTP 500 is retried.\n  WHY: The code matches the shared classifier in `scripts/gh_api_retry.py`, so the runtime behaviour is defensible. A real HTTP 500 or 501 would still burn about 35 s of backoff against the documentation. Either tighten the regex or update the docstring, changelog and tests.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f8b454904850b67193a9ccbd8522dbeb18d1ff940b8b64634b88d596e35622e2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7647,
+    "run_id": "39206054486",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39206054486",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019061641_532826d9f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7647,
+    "run_id": "39206054486"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T06:16:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
