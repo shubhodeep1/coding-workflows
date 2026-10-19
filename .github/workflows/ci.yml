@@ -1289,6 +1289,17 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_head_binding.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_draft_skip.py
 
+      # Moved from orchestrate-poll (2), which took 19m28s of its 20 minutes on
+      # main (run 39245970945, budget-watch issue #7697). It left this job in
+      # #7677 together with the promote cycle step, which now goes to
+      # tests-release-and-log-analysis instead. The module needs no git
+      # history (this job checks out at depth 1). The choice rests on earlier
+      # recorded durations, not measurements. Name and body unchanged.
+      - name: Review-blocked judge label propagation contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
+
       - name: Review consolidator reject-verifier contract test
         run: |
           set -euo pipefail
@@ -1558,6 +1569,22 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+
+      # Moved from orchestrate-poll (2), which took 19m28s of its 20 minutes on
+      # main (run 39245970945, budget-watch issue #7697). This step ran in this
+      # job together with the review-blocked label propagation step before
+      # #7689; it comes back alone, and that step goes to
+      # tests-promote-stall-and-review. The choice rests on earlier recorded
+      # durations, not measurements. Name and body unchanged.
+      - name: Promote cycle and blocked-verdict unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+            tests/test_promote_main_cycle.py \
+            tests/test_apply_analysis_on_main.py \
+            tests/test_auto_release_stable.py \
+            tests/test_orchestrate_poll_promote_cycle.py \
+            tests/test_implement_blocked_verdict_terminalizes.py
 
       - name: Release notification superseded-run tests (stubbed gh and curl)
         run: |
@@ -2330,29 +2357,16 @@ jobs:
       # review-blocked label steps). Step timings were not readable when this
       # was planned; these are that job's most subprocess-heavy steps (full
       # poller runs, bash scripts, temp git repos), chosen by estimated cost,
-      # not measured. Groups 0 and 1 already carry extra steps, so two run in
-      # group 2 and two in group 3, each once per CI run. None needs git
-      # history beyond HEAD (this job checks out at depth 1; every git use in
-      # these modules is a temp repo or a text assertion), Node or the
-      # prepared .claude/ live copies, and this job has the same pip set and
-      # Python 3.12. Names and bodies unchanged.
-      - name: Promote cycle and blocked-verdict unit tests
-        if: strategy.job-index == 2
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
-            tests/test_promote_main_cycle.py \
-            tests/test_apply_analysis_on_main.py \
-            tests/test_auto_release_stable.py \
-            tests/test_orchestrate_poll_promote_cycle.py \
-            tests/test_implement_blocked_verdict_terminalizes.py
-
-      - name: Review-blocked judge label propagation contract test
-        if: strategy.job-index == 2
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
-
+      # not measured. Groups 0 and 1 already carry extra steps, so two ran in
+      # group 2 and two run in group 3, each once per CI run. Group 2 then took
+      # 19m28s of its 20 minutes (run 39245970945, budget-watch issue #7697),
+      # so its two steps (promote cycle, review-blocked label propagation)
+      # moved again in #7697: the promote step to tests-release-and-log-analysis
+      # and the label step to tests-promote-stall-and-review. The group-3 steps
+      # below need no git history beyond HEAD (this job checks out at depth 1;
+      # every git use in these modules is a temp repo or a text assertion),
+      # Node or the prepared .claude/ live copies, and this job has the same
+      # pip set and Python 3.12. Names and bodies unchanged.
       - name: Orchestrator judges on the Claude engine tests (Phase 5c)
         if: strategy.job-index == 3
         run: |
