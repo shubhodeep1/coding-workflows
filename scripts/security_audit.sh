@@ -1405,7 +1405,15 @@ else
 	OVERSIZED_EXPORT_SCOPE_MODE="all"
 fi
 cat "${PRIOR_FINDINGS_SCOPE_FILE}" "${FIX_CYCLE_DIFFS_SCOPE_FILE}" >> "${OVERSIZED_SCOPE_FILE}"
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_isolated_workspace.py" export-oversized \
+# The isolated launch hides CLAUDE.md when hide_claude_md is on; the
+# oversized chunks it mounts must honour the same filter (read as
+# ai_engine.sh reads it, default false), so a hidden file is reported as
+# not inspected instead of exported.
+OVERSIZED_EXPORT_HIDE=""
+if [ "$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/claude_engine.py" config --key hide_claude_md 2>/dev/null || echo false)" = "true" ]; then
+	OVERSIZED_EXPORT_HIDE="CLAUDE.md"
+fi
+if ! CODEX_ISOLATED_HIDE="${OVERSIZED_EXPORT_HIDE}" PYTHONDONTWRITEBYTECODE=1 python3 "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_isolated_workspace.py" export-oversized \
 	"${REPO_ROOT}" "${OVERSIZED_SCOPE_FILE}" "${OVERSIZED_EXPORT_DIR}" \
 	"${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" "${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES}" \
 	"${OVERSIZED_EXPORT_SCOPE_MODE}" 2> "${OVERSIZED_ERROR_FILE}"; then
