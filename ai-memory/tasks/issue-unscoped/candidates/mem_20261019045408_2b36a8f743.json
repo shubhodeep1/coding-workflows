@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1408-1411 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The oversized-file export runs without CODEX_ISOLATED_HIDE, so it bypasses the configured hide_claude_md filter and exports a scoped oversized CLAUDE.md.\n  WHY: The exported chunks are passed to the Claude auditor as an include, so it receives content the hide option is meant to withhold. Both reviewers rated this MAJOR, which is mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh:1408-1411 | severity=MAJOR | confidence=5\n  PROBLEM: The oversized-file export bypasses the configured `hide_claude_md` filter, because the exporter runs without `CODEX_ISOLATED_HIDE`.\n  WHY: When a scoped top-level `CLAUDE.md` exceeds the snapshot size limit, the export runs before `claude_run` applies the hide option. The exporter then includes the file's contents in the chunks, and `security_audit.sh` passes that export directory as an include at lines 1591-1597.\n- scripts/security_audit.sh:1408-1411 | severity=MAJOR | confidence=5 (listed under IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS)\n  PROBLEM: The oversized export does not inherit the hidden-file filter used by the later isolated Claude launch.\n  WHY: For a scoped oversized `CLAUDE.md` with `hide_claude_md` enabled, the contents are written to the included chunk directory before the launch applies the hide setting. This expands the auditor's access beyond the configured hidden-file policy.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1408-1411 (export-oversized invocation) | severity=MAJOR | confidence=4\n  PROBLEM: The security audit path does not set CODEX_ISOLATED_HIDE before calling export-oversized, so HIDDEN_NAMES is empty and the hide_claude_md protection is bypassed.\n  WHY: codex_isolated_exec.sh:182-183 sets CODEX_ISOLATED_HIDE=\"CLAUDE.md\" on the container path. orchestrate_poll_process.sh:8815-8835 calls security_audit.sh directly, which calls export-oversized at 1408-1411 without that variable. A CLAUDE.md over 2 MiB in the audit diff range then passes the readonly_allowed check (codex_isolated_workspace.py:178-179) and is exported as chunks included in the auditor's prompt.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "48a98ce0f42178efe2fc40fda728a4585711062d40207dc73868564015a44e59",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7655,
+    "run_id": "39199431395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39199431395",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019045408_2b36a8f743",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7655,
+    "run_id": "39199431395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T04:54:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
