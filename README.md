@@ -1186,9 +1186,12 @@ as `.github/workflows/ai-sync-labels.yml`. It supports manual
 [`.github/workflows/audit_consumer_drift.yml`](.github/workflows/audit_consumer_drift.yml)
 on a weekly cron plus manual `workflow_dispatch`. The audit reads the live
 [`.github/ai/consumer_repos.json`](.github/ai/consumer_repos.json) registry,
-fetches each consumer's installed `.github/workflows/ai-*.yml` wrappers via
-the GitHub contents API, diffs them against this repo's checked-in
-[`workflow-templates/ai-*.yml`](workflow-templates/) rendered with the current
+fetches each consumer's installed `.github/workflows/ai-*.yml` wrappers, plus
+the other wrappers listed in
+[`workflow-templates/profiles/full.txt`](workflow-templates/profiles/full.txt)
+(`review_rb_judge_dispatch.yml`, `unblock_judge_dispatch.yml`), via the GitHub
+contents API, diffs them against this repo's checked-in
+[`workflow-templates/`](workflow-templates/) copies rendered with the current
 stable release SHA, and reports drift (including stale pins)
 read-only — it never writes to consumer repositories. Transient GitHub API
 failures (intermittent 5xx "Unicorn" pages, rate limits, and network hiccups)

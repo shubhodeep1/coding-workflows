@@ -199,6 +199,91 @@ def test_expected_templates_render_current_stable_sha_and_detect_stale_pin() -> 
 		executor.assert_consumed()
 
 
+def _parse_full_profile_manifest(manifest_path: Path) -> set[str]:
+	names: set[str] = set()
+	for raw_line in manifest_path.read_text(encoding="utf-8").splitlines():
+		name = raw_line.strip()
+		if name and not name.startswith("#"):
+			names.add(name)
+	return names
+
+
+def test_expected_templates_include_every_full_profile_wrapper() -> None:
+	templates_dir = REPO_ROOT / "workflow-templates"
+	manifest_names = _parse_full_profile_manifest(templates_dir / "profiles" / "full.txt")
+	expected_templates = drift_audit.load_expected_templates(templates_dir, CURRENT_STABLE_SHA)
+
+	assert set(expected_templates) == manifest_names
+	for dispatch_name in ("review_rb_judge_dispatch.yml", "unblock_judge_dispatch.yml"):
+		assert dispatch_name in expected_templates
+		rendered = expected_templates[dispatch_name]
+		assert f"@{CURRENT_STABLE_SHA} # stable" in rendered
+		assert ".yml@stable" not in rendered
+
+
+def test_expected_templates_without_profile_manifest_load_only_ai_glob() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-no-manifest-") as td:
+		templates_dir = Path(td) / "workflow-templates"
+		_write_templates(
+			templates_dir,
+			{
+				"ai-clarify.yml": "name: AI Clarify\n",
+				"review_rb_judge_dispatch.yml": "name: Review-blocked judge dispatch\n",
+			},
+		)
+
+		expected_templates = drift_audit.load_expected_templates(templates_dir)
+		assert set(expected_templates) == {"ai-clarify.yml"}
+
+
+def test_profile_manifest_ignores_missing_and_path_entries() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-manifest-") as td:
+		templates_dir = Path(td) / "workflow-templates"
+		_write_templates(
+			templates_dir,
+			{
+				"ai-clarify.yml": "name: AI Clarify\n",
+				"unblock_judge_dispatch.yml": "name: Unblock judge dispatch\n",
+				"notes.txt": "not a workflow\n",
+			},
+		)
+		(templates_dir / "sub").mkdir()
+		(templates_dir / "sub" / "nested.yml").write_text("name: Nested\n", encoding="utf-8")
+		(Path(td) / "escape.yml").write_text("name: Escape\n", encoding="utf-8")
+		(templates_dir / "profiles").mkdir()
+		(templates_dir / "profiles" / "full.txt").write_text(
+			"# full profile\n"
+			"\n"
+			"ai-clarify.yml\n"
+			"unblock_judge_dispatch.yml\n"
+			"ghost.yml\n"
+			"sub/nested.yml\n"
+			"../escape.yml\n"
+			"notes.txt\n",
+			encoding="utf-8",
+		)
+
+		expected_templates = drift_audit.load_expected_templates(templates_dir)
+		assert set(expected_templates) == {"ai-clarify.yml", "unblock_judge_dispatch.yml"}
+
+
+def test_unreadable_profile_manifest_falls_back_to_ai_glob() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-bad-manifest-") as td:
+		templates_dir = Path(td) / "workflow-templates"
+		_write_templates(
+			templates_dir,
+			{
+				"ai-clarify.yml": "name: AI Clarify\n",
+				"unblock_judge_dispatch.yml": "name: Unblock judge dispatch\n",
+			},
+		)
+		# A directory where the manifest file should be cannot be read as text.
+		(templates_dir / "profiles" / "full.txt").mkdir(parents=True)
+
+		expected_templates = drift_audit.load_expected_templates(templates_dir)
+		assert set(expected_templates) == {"ai-clarify.yml"}
+
+
 def test_workflow_resolves_and_passes_current_stable_sha() -> None:
 	workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
 	assert "git fetch --no-tags --depth=1 origin refs/tags/stable" in workflow_text
@@ -667,6 +752,10 @@ def test_command_failure_is_recorded_without_aborting_other_repos() -> None:
 def main() -> int:
 	test_load_target_repositories_deduplicates_and_validates()
 	test_expected_templates_render_current_stable_sha_and_detect_stale_pin()
+	test_expected_templates_include_every_full_profile_wrapper()
+	test_expected_templates_without_profile_manifest_load_only_ai_glob()
+	test_profile_manifest_ignores_missing_and_path_entries()
+	test_unreadable_profile_manifest_falls_back_to_ai_glob()
 	test_workflow_resolves_and_passes_current_stable_sha()
 	test_clean_match_normalizes_managed_header_and_trailing_whitespace()
 	test_missing_wrapper_is_reported_as_drift_without_extra_fetch()
