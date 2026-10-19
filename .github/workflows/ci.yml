@@ -1036,11 +1036,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
 
-      - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py
-
       - name: Tracking issue comment cap tests
         run: |
           set -euo pipefail
@@ -1126,55 +1121,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
-
-      - name: Regression tests wired by the CI wiring guard (part 2)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_ai_memory_sync_reference_files.py \
-            tests/test_ai_memory_workflow_log_analysis_cache.py \
-            tests/test_assemble_changelog.py \
-            tests/test_branch_rebuild_threshold_decision_log.py \
-            tests/test_check_workflow_script_refs.py \
-            tests/test_ci_actionlint_install_retry.py \
-            tests/test_changelog_fragment_contract.py \
-            tests/test_codex_heartbeat.py \
-            tests/test_codex_isolated_exec_claude_contract.py \
-            tests/test_cost_audit_serena_metrics.py \
-            tests/test_gh_helpers_list_runs_method.py \
-            tests/test_implement_prompt_pinned_sha_contract.py \
-            tests/test_memory_helpers_fail_open_telemetry.py \
-            tests/test_plan_reuse_audit_contract.py \
-            tests/test_plan_template_owned_path_guard.py \
-            tests/test_plan_superseded_merged_pr.py \
-            tests/test_plan_superseded_merged_pr_workflow.py \
-            tests/test_pytest_git_env_isolation.py \
-            tests/test_render_validation_templates.py \
-            tests/test_render_validation_templates_repo_checks.py \
-            tests/test_render_validation_templates_shell_quoting.py \
-            tests/test_retrigger_default_branch_dispatch.py \
-            tests/test_review_autofix_reasoning_schedule.py \
-            tests/test_review_autofix_sweep_merge_queued_skip.py \
-            tests/test_review_commit_changelog_fragment_preserved.py \
-            tests/test_review_conflict_prepare_state_author.py \
-            tests/test_review_floor_rules.py \
-            tests/test_review_host_python_safe_path.py \
-            tests/test_review_issue_ledger.py \
-            tests/test_review_ledger_cache_path_stability.py \
-            tests/test_review_rb_judge_reference_staging.py \
-            tests/test_review_resolve_review_threads.py \
-            tests/test_review_reviewer_attempt_prompt_isolation.py \
-            tests/test_static_context_symlink_guard.py \
-            tests/test_summarize_unselected_runs.py \
-            tests/test_test_and_mark_stable_phase7_unconflict.py \
-            tests/test_validate_lint_bounded_tail_capture.py \
-            tests/test_validate_lint_external_tool_dependencies.py \
-            tests/test_validate_lint_import_audit_safety.py \
-            tests/test_validate_lint_service_tool_scope.py \
-            tests/test_validate_lint_shell_parity.py \
-            tests/test_validate_process_fixup_labels.py \
-            tests/test_verify_integration_fingerprints_baseline.py \
-            tests/test_workflow_untrusted_input_contract.py
 
       # Moved from tests-promote-stall-and-review, which took 16m06s of its
       # 20 minutes on main (run 39216253741, budget-watch issue #7677). Step
@@ -2296,6 +2242,92 @@ jobs:
             echo "::error::merge-train step shards failed: ${mt_failed[*]}"
             exit 1
           fi
+
+      # Moved from tests-heal-plan-and-validation, which took 15m26s of its 20
+      # minutes on main (run 39230958248, budget-watch issue #7690). That run's
+      # step timings were not readable, so the steps were chosen by timing each
+      # step body of that job in the implement sandbox (relative weights only;
+      # PyYAML was missing there, so yaml-dependent modules errored and the
+      # sharded heal step stopped early):
+      # this step (CI wiring guard part 2) 37.2s, the unblock step 28.2s,
+      # CI wiring guard part 1 25.2s, clarify loop guard 20.0s,
+      # every other step 3s or less. Each test job has recorded about 15
+      # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
+      # #7677), while poll groups record about 5 minutes (#4707). Group 0
+      # carries the fast-fail subset and the single-file modules and group 1
+      # the merge-train step, so this step runs in group 2 only, once per CI
+      # run. It needs only checkout, Python 3.12 and the shared pip install,
+      # which this job already has. Name and body unchanged.
+      - name: Regression tests wired by the CI wiring guard (part 2)
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_sync_reference_files.py \
+            tests/test_ai_memory_workflow_log_analysis_cache.py \
+            tests/test_assemble_changelog.py \
+            tests/test_branch_rebuild_threshold_decision_log.py \
+            tests/test_check_workflow_script_refs.py \
+            tests/test_ci_actionlint_install_retry.py \
+            tests/test_changelog_fragment_contract.py \
+            tests/test_codex_heartbeat.py \
+            tests/test_codex_isolated_exec_claude_contract.py \
+            tests/test_cost_audit_serena_metrics.py \
+            tests/test_gh_helpers_list_runs_method.py \
+            tests/test_implement_prompt_pinned_sha_contract.py \
+            tests/test_memory_helpers_fail_open_telemetry.py \
+            tests/test_plan_reuse_audit_contract.py \
+            tests/test_plan_template_owned_path_guard.py \
+            tests/test_plan_superseded_merged_pr.py \
+            tests/test_plan_superseded_merged_pr_workflow.py \
+            tests/test_pytest_git_env_isolation.py \
+            tests/test_render_validation_templates.py \
+            tests/test_render_validation_templates_repo_checks.py \
+            tests/test_render_validation_templates_shell_quoting.py \
+            tests/test_retrigger_default_branch_dispatch.py \
+            tests/test_review_autofix_reasoning_schedule.py \
+            tests/test_review_autofix_sweep_merge_queued_skip.py \
+            tests/test_review_commit_changelog_fragment_preserved.py \
+            tests/test_review_conflict_prepare_state_author.py \
+            tests/test_review_floor_rules.py \
+            tests/test_review_host_python_safe_path.py \
+            tests/test_review_issue_ledger.py \
+            tests/test_review_ledger_cache_path_stability.py \
+            tests/test_review_rb_judge_reference_staging.py \
+            tests/test_review_resolve_review_threads.py \
+            tests/test_review_reviewer_attempt_prompt_isolation.py \
+            tests/test_static_context_symlink_guard.py \
+            tests/test_summarize_unselected_runs.py \
+            tests/test_test_and_mark_stable_phase7_unconflict.py \
+            tests/test_validate_lint_bounded_tail_capture.py \
+            tests/test_validate_lint_external_tool_dependencies.py \
+            tests/test_validate_lint_import_audit_safety.py \
+            tests/test_validate_lint_service_tool_scope.py \
+            tests/test_validate_lint_shell_parity.py \
+            tests/test_validate_process_fixup_labels.py \
+            tests/test_verify_integration_fingerprints_baseline.py \
+            tests/test_workflow_untrusted_input_contract.py
+
+      # Moved from tests-heal-plan-and-validation, which took 15m26s of its 20
+      # minutes on main (run 39230958248, budget-watch issue #7690). That run's
+      # step timings were not readable, so the steps were chosen by timing each
+      # step body of that job in the implement sandbox (relative weights only;
+      # PyYAML was missing there, so yaml-dependent modules errored and the
+      # sharded heal step stopped early):
+      # CI wiring guard part 2 37.2s, this step (unblock) 28.2s,
+      # CI wiring guard part 1 25.2s, clarify loop guard 20.0s,
+      # every other step 3s or less. Each test job has recorded about 15
+      # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
+      # #7677), while poll groups record about 5 minutes (#4707). Group 0
+      # carries the fast-fail subset and the single-file modules and group 1
+      # the merge-train step, so this step runs in group 3 only, once per CI
+      # run. It needs only checkout, Python 3.12 and the shared pip install,
+      # which this job already has. Name and body unchanged.
+      - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py
 
       # Moved from tests-release-and-log-analysis, which took 17m51s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7689). Earlier
