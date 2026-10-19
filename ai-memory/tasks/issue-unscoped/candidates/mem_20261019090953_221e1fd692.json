@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/mark-stable.yml:1382,1395-1397 (also .github/workflows/test-and-mark-stable.yml:7058,7071-7073) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: Bash command substitution drops NUL bytes from the `jq -r` registry output before the owner/repo regex runs, so a malformed entry such as \"owner/\\u0000repo\" becomes \"owner/repo\" and is dispatched instead of skipped.\n  WHY: The `gsub(\"[\\r\\n]\"; \" \")` only covers CR and LF, so the sanitized value passes validation. Both reviewers rated it NIT, which I mapped to low. Only a corrupted or hostile registry entry can trigger it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/mark-stable.yml (also .github/workflows/test-and-mark-stable.yml): `REPOS=$(jq -r '.[] | tostring | gsub(\"[\\r\\n]\"; \" \")' ...)` | severity=NIT | confidence=4\n  PROBLEM: Bash command substitution drops NUL bytes before the owner/repo regex runs, so \"owner/\\u0000repo\" becomes \"owner/repo\" and is dispatched in sanitized form instead of being rejected.\n  WHY: The `gsub` only covers CR and LF. The surviving value still matches the regex, so it cannot reach another URL path or split into extra targets. The registry is maintainer-controlled.\n- HARDENING_SUGGESTIONS: extend the `gsub` character class to include NUL (for example `gsub(\"[\\u0000\\r\\n]\"; \" \")`) in both workflows, about 1 line each. HARDENING_RISK_SCORE: 1\n- All other checklist sections reported NONE. The reviewer rejected a pass-1 finding that `gsub` collapses the list into one line.\n- Not verified: the byte size of `test-and-mark-stable.yml` against the 480,000-byte guard, because shell access was unavailable.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/mark-stable.yml:1382, 1395-1397; .github/workflows/test-and-mark-stable.yml:7058, 7071-7073 | severity=NIT | confidence=5\n  PROBLEM: Bash command substitution removes NUL bytes from jq output before the owner/repo regex validates the entry. For example, `shubhodeep1/\\u0000tele-funtoken-msg-scoring` becomes `shubhodeep1/tele-funtoken-msg-scoring`, which passes validation.\n  WHY: A malformed registry entry containing a NUL byte is dispatched to the transformed repository instead of being skipped.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d79f702899ad88d5f4e9163b4d316d7e9b887aa6cdbe94340773247928fd8050",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7686,
+    "run_id": "39225497484",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39225497484",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019090953_221e1fd692",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7686,
+    "run_id": "39225497484"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T09:09:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
