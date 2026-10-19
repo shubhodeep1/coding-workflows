@@ -1,5 +1,97 @@
 #!/usr/bin/env bash
 
+# gh_api_safe_call_is_read ARGS...
+#
+# Returns 0 when the `gh api` arguments describe a read and 1 when they
+# describe a write. A call is a write when it sets a method other than GET
+# (`-X <m>`, `-X<m>`, `--method <m>`, `--method=<m>`) or carries any request
+# body flag (`-f`, `-F`, `--field`, `--raw-field`, `--input`), even next to
+# `-X GET`. gh_api_safe retries transient errors only for reads: a retried
+# POST/PATCH whose first attempt reached GitHub could repeat a workflow
+# dispatch or a comment.
+gh_api_safe_call_is_read()
+{
+	local expect_method=0
+	local skip_value=0
+	local arg=""
+	local method=""
+	for arg in "$@"; do
+		if [ "${skip_value}" = "1" ]; then
+			skip_value=0
+			continue
+		fi
+		if [ "${expect_method}" = "1" ]; then
+			expect_method=0
+			method="$(printf '%s' "${arg}" | tr '[:lower:]' '[:upper:]')"
+			if [ "${method}" != "GET" ]; then
+				return 1
+			fi
+			continue
+		fi
+		case "${arg}" in
+			-X|--method)
+				expect_method=1
+				;;
+			--method=*|-X?*)
+				if [ "${arg#--method=}" != "${arg}" ]; then
+					method="${arg#--method=}"
+				else
+					method="${arg#-X}"
+				fi
+				method="$(printf '%s' "${method}" | tr '[:lower:]' '[:upper:]')"
+				if [ "${method}" != "GET" ]; then
+					return 1
+				fi
+				;;
+			-f|-F|--field|--raw-field|--input|-f?*|-F?*|--field=*|--raw-field=*|--input=*)
+				return 1
+				;;
+			-q|--jq|-t|--template|-H|--header|-p|--preview|--hostname|--cache)
+				skip_value=1
+				;;
+		esac
+	done
+	# A trailing `-X` / `--method` with no value is treated as a write.
+	if [ "${expect_method}" = "1" ]; then
+		return 1
+	fi
+	return 0
+}
+
+# gh_api_safe_stderr_is_transient ERR_FILE
+#
+# Returns 0 when the captured `gh api` stderr names a transient failure: an
+# HTTP 5xx (502/503/504 count only as whole words, so a run ID, URL or commit
+# SHA that contains "502" does not), a connection reset, an i/o or header timeout, a
+# TLS handshake timeout, or an EOF (matched as a whole word).
+gh_api_safe_stderr_is_transient()
+{
+	local err_file="$1"
+	if [ ! -s "${err_file}" ]; then
+		return 1
+	fi
+	if grep -Eqi 'HTTP 5[0-9][0-9]|(^|[^[:alnum:]_])(502|503|504)([^[:alnum:]_]|$)|connection reset|i/o timeout|timeout awaiting|TLS handshake timeout|unexpected EOF|(^|[^[:alnum:]_])EOF([^[:alnum:]_]|$)' "${err_file}" 2>/dev/null; then
+		return 0
+	fi
+	return 1
+}
+
+# gh_api_safe ARGS...
+#
+# Runs `gh api ARGS...` and stores its stdout in GH_API_SAFE_OUTPUT.
+# Retries share one budget of 4 attempts:
+# - a rate-limit error is retried for every call, waiting RATE_LIMIT_BACKOFF
+#   (30 s, doubling up to 120 s), as before;
+# - a transient error (see gh_api_safe_stderr_is_transient) is retried only
+#   for reads (see gh_api_safe_call_is_read), waiting 5, 10, then 20 s, and
+#   logs `GH_API_SAFE_RETRY attempt=<n>/<max> class=transient` to stderr,
+#   also in quiet mode (the line carries no arguments, endpoint or token).
+# Any other failure, and a transient failure on a write, fails at once.
+#
+# This helper stays self-contained on purpose and does not source
+# scripts/gh_helpers.sh (gh_retry_to_file / gh_api_retry): it is sourced by
+# release jobs and scripts/dispatch_and_watch_workflow_run.sh, where
+# gh_helpers.sh may not be staged.
 gh_api_safe()
 {
 	local output=""
@@ -7,7 +99,11 @@ gh_api_safe()
 	local quiet_stderr="${GH_API_SAFE_QUIET_STDERR:-0}"
 	local attempt=1
 	local max_attempts=4
+	local is_read=1
+	local transient_retries=0
+	local transient_backoff=5
 	GH_API_SAFE_OUTPUT=""
+	gh_api_safe_call_is_read "$@" || is_read=0
 	if [ -z "${RATE_LIMIT_BACKOFF+x}" ] || [[ ! "${RATE_LIMIT_BACKOFF}" =~ ^[0-9]+$ ]]; then
 		RATE_LIMIT_BACKOFF=0
 	fi
@@ -32,6 +128,20 @@ gh_api_safe()
 			fi
 			: > "${err_file}"
 			sleep "${RATE_LIMIT_BACKOFF}"
+			attempt=$((attempt + 1))
+			continue
+		fi
+
+		if [ "${is_read}" = "1" ] && [ "${attempt}" -lt "${max_attempts}" ] && gh_api_safe_stderr_is_transient "${err_file}"; then
+			transient_retries=$((transient_retries + 1))
+			case "${transient_retries}" in
+				1) transient_backoff=5 ;;
+				2) transient_backoff=10 ;;
+				*) transient_backoff=20 ;;
+			esac
+			echo "GH_API_SAFE_RETRY attempt=${attempt}/${max_attempts} class=transient" >&2
+			: > "${err_file}"
+			sleep "${transient_backoff}"
 			attempt=$((attempt + 1))
 			continue
 		fi

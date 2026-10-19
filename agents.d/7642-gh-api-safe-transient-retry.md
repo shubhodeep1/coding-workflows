@@ -1,0 +1,3 @@
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `GH_API_SAFE_RETRY` (`gh_api_safe` in `scripts/comprehensive_test_and_release_gh_api.sh`, sourced by the release gates and `scripts/dispatch_and_watch_workflow_run.sh`: `attempt=<n>/<max> class=transient` on stderr, one line per retry of a read call after an HTTP 5xx, connection reset, timeout or EOF, waiting 5, 10, then 20 s within the 4-attempt budget; printed in quiet mode too; writes (`-X`/`--method` other than GET, or `-f`, `-F`, `--field`, `--raw-field`, `--input`) are never retried on transient errors)
+LOG_PREFIX.name=GH_API_SAFE_RETRY
