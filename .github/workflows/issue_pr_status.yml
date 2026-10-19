@@ -285,7 +285,7 @@ jobs:
               # visibly re-enters clarification instead of looking merge-ready.
               set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
               echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but the pipeline login could not be read; the issue stays open in ai:clarification without the remaining-items comment. Post /reclarify on it to restart clarification for the deferred items."
-              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=identity_unavailable"
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=identity_unavailable label=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-unknown}"
               return 0
             elif [ -z "${PR_AUTHOR_LOGIN:-}" ] || [ "${PR_AUTHOR_LOGIN,,}" != "${UNMERGED_CLOSE_LOGIN,,}" ]; then
               reason="author_mismatch"
@@ -301,7 +301,7 @@ jobs:
             if [ ! -f scripts/partial_delivery.py ] || [ -L scripts/partial_delivery.py ]; then
               set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
               echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but scripts/partial_delivery.py is unavailable; the issue stays open in ai:clarification. Post /reclarify on it to restart clarification for the deferred items."
-              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=helper_missing"
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=helper_missing label=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-unknown}"
               rm -rf "${work}"
               return 0
             fi
@@ -363,7 +363,7 @@ jobs:
             if [ "${comment_state}" = "failed" ] || [ "${restart_state}" = "failed" ]; then
               echo "::warning::Issue #${issue} stays open after partial-delivery PR #${PR_NUMBER}, but the remaining-items or restart comment could not be posted (comment=${comment_state} restart=${restart_state}); stall recovery or a person must restart clarify."
             fi
-            echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=deferred_scope comment=${comment_state} restart=${restart_state} branch=${branch_state}"
+            echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=deferred_scope comment=${comment_state} restart=${restart_state} branch=${branch_state} label=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-unknown}"
             rm -rf "${work}"
             return 0
           }
