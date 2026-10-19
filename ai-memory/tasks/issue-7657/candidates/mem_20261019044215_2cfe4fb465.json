@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which mechanism should keep the leftover gaps tracked?\nChoices:\nA. Option A: for a partial delivery, the PR body uses `Refs <issue>` instead of `Closes`. After the merge, the pipeline posts a comment on the issue listing the remaining items and sends the issue back into clarify for the rest. The `activation_fix_merge` skip stays as it is. (RECOMMENDED)\nB. Option B: keep `Closes`. Before the PR is opened or merged, file a new issue for the remaining items, reusing the original `<!-- ai:activation-fix:v1 source=<key> -->` so de-duplication still works.\nC. Both: keep the issue open (A), and also file a follow-up issue when the original is an activation-fix issue.\nQ2: Which issues does the partial-delivery handling cover?\nChoices:\nA. Every pipeline-implemented standalone issue whose delivery is deliberately partial. The #4639 case is the regression test. (RECOMMENDED)\nB. Only activation-fix issues (first body line `<!-- ai:activation-fix:v1 source=... -->`).\n**Note:** Q1:B reuses the activation-fix source marker, so it only fits Q2:B. Choosing Q1:B with Q2:A would need a separate follow-up format for ordinary issues.\nQ3: What counts as proof that a delivery is deliberately partial? Closing must stay the default when this signal is missing.\nChoices:\nA. A new structured block in the plan, such as `Deferred scope:` with one bullet per remaining item. The plan prompt requires it whenever an answer or auto-decision limits scope, and implement reads it from the approved plan comment. (RECOMMENDED)\nB. Treat the delivery as partial whenever the approved plan's `Scope-mode:` is `Reduction`, and take the remaining items from the `Scope-mode justification:` text.\nC. Parse the clarify answers and auto-decision (`AD-<n>`) entries for scope-limiting picks, such as \"Phase 1 only\".\nQ4: Should the related gap (a sweep that finds open, unlabelled, never-clarified issues from trusted authors and posts `/reclarify` once) be built here?\nChoices:\nA. Split it into a separate issue, and keep this issue to partial-delivery tracking only. (RECOMMENDED)\nB. Include it in this issue, in the poller's standalone stall-recovery sweep, behind a default-on kill switch.",
+  "fingerprint": "f55e1cdbb589b7672ab8540b0e6d7ea1f949440b46abbd277b8bbe6cbf3218e3",
+  "lineage": {
+    "issue_number": 7657,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39200271317",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39200271317",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261019044215_2cfe4fb465",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7657,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39200271317"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7657 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-19T04:42:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
