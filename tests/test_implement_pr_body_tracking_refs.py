@@ -198,9 +198,10 @@ ISSUE_URL = "https://github.com/owner/repo/issues/123"
 
 def test_partial_plan_uses_refs_and_embeds_the_deferred_items() -> None:
 	body = _run_preflight(issue_meta=PLAIN_ISSUE, issue_url=ISSUE_URL, plan_text=PARTIAL_PLAN)
-	assert body.startswith("Automated implementation. Refs #123\n")
+	# The issue URL without a closing keyword keeps the issue open while the
+	# review pipeline's repo-scoped matcher still finds the linked issue.
+	assert body.startswith(f"Automated implementation. Refs {ISSUE_URL}\n")
 	assert "Closes" not in body
-	assert ISSUE_URL not in body
 	assert "<!-- ai:partial-delivery:v1 issue=123 -->" in body
 	assert "- Implement the member homepage (Phase 2)." in body
 

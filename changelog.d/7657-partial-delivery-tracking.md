@@ -6,7 +6,7 @@ Before this, when a clarification answer or auto-decision limited an issue to pa
 Now:
 
 - the plan lists the remaining items under a `## Deferred scope` section (one bullet each, at most 20) whenever an answer, an auto-decision or the plan's chosen `Scope-mode` limits the scope;
-- implement opens such a PR with `Refs #<n>` instead of `Closes <url>`, and repeats the items under `<!-- ai:partial-delivery:v1 issue=<n> -->`;
+- implement opens such a PR with `Refs <issue url>` (no closing keyword, so the review steps still find the issue) instead of `Closes <url>`, and repeats the items under `<!-- ai:partial-delivery:v1 issue=<n> -->`;
 - when the PR merges into the default branch or the issue's declared integration branch, and the PR comes from this repository, its head branch is `ai/issue-<n>` and its author is the `GH_PAT` account, `issue_pr_status.yml` leaves the issue open, posts the remaining items once as quoted untrusted text, sets `ai:clarification`, deletes the merged `ai/issue-<n>` branch when it still points at the merged head, and posts `/reclarify` with `<!-- ai:partial-delivery-restart:<n> -->`;
 - clarify treats that restart as automated (like the PR-dependency release), so clarify-respond answers the follow-up questions without a person;
 - the poller's merged-issue close sweep does not close such an issue either.

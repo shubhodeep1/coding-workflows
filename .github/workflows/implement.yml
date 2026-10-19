@@ -5823,7 +5823,7 @@ jobs:
           PY
           )"
           # Issue #7657: when the approved plan defers part of a standalone
-          # issue (`## Deferred scope`), the PR uses a non-closing `Refs #<n>`
+          # issue (`## Deferred scope`), the PR uses a non-closing `Refs <url>`
           # and carries the deferred items under the partial-delivery marker;
           # issue_pr_status.yml then keeps the issue open on merge. Missing,
           # empty or malformed sections, managed children, a missing helper
@@ -5879,7 +5879,11 @@ jobs:
             esac
           fi
           if [ "${PARTIAL_DELIVERY_OUTCOME}" = "partial" ]; then
-            printf 'Automated implementation. Refs #%s\n' "${ISSUE_NUMBER}" > "${PR_BODY_FILE}"
+            # The full issue URL (no closing keyword, so GitHub does not
+            # auto-close) lets the review pipeline's repo-scoped linked-issue
+            # matcher (extract_repo_scoped_issue_refs_from_text) find the
+            # issue; a bare `Refs #<n>` is rejected there on purpose.
+            printf 'Automated implementation. Refs %s\n' "${ISSUE_URL}" > "${PR_BODY_FILE}"
             cat "${PARTIAL_DELIVERY_SECTION_FILE}" >> "${PR_BODY_FILE}"
             echo "PARTIAL_DELIVERY mode=implement issue=${ISSUE_NUMBER} outcome=partial items=${PARTIAL_DELIVERY_ITEMS}"
           else

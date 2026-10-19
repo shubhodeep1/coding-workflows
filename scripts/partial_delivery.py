@@ -4,7 +4,7 @@
 A plan that delivers only part of an issue (a clarification answer or an
 AD-<n> auto-decision limited the scope) carries a ``## Deferred scope``
 section with one bullet per remaining item. Implement then opens the PR with
-``Refs #<n>`` instead of ``Closes <url>`` and embeds the items under the
+``Refs <issue url>`` instead of ``Closes <url>`` and embeds the items under the
 ``<!-- ai:partial-delivery:v1 issue=<n> -->`` marker. When that PR merges,
 ``issue_pr_status.yml`` keeps the issue open, posts the remaining items and
 restarts clarify.
