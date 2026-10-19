@@ -355,7 +355,7 @@ def test_no_code_change_since_failed_run_skips() -> None:
 	# Budget of one: a single failed cycle holds the tip, as before the retry budget.
 	failed_head = "4" * 40
 	runs = [{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": failed_head, "created_at": "2026-09-18T00:00:00Z"}]
-	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), failed_head: _compare(["README.md"])}}
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), failed_head: _compare(["docs/README.md"])}}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_MAX_ATTEMPTS": "1"})
 	assert f"PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run base={failed_head} head={TIP} attempts=1 max=1" in proc.stdout
@@ -370,7 +370,7 @@ def test_failed_run_on_same_tip_is_retried_within_the_default_budget() -> None:
 		{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": docs_only_head, "created_at": "2026-09-17T00:00:00Z"},
 		{"id": 3, "status": "completed", "event": "schedule", "conclusion": "timed_out", "head_sha": TIP, "created_at": "2026-09-18T00:00:00Z"},
 	]
-	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), docs_only_head: _compare(["README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), docs_only_head: _compare(["docs/README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), state)
 	assert proc.returncode == 0, proc.stderr + proc.stdout
@@ -408,7 +408,7 @@ def test_failed_runs_before_a_code_change_do_not_spend_the_budget() -> None:
 		{"id": 3, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": old_head, "created_at": "2026-09-16T00:00:00Z"},
 		{"id": 4, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": recent_head, "created_at": "2026-09-18T00:00:00Z"},
 	]
-	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), recent_head: _compare(["README.md"]), old_head: _compare(["scripts/y.sh"]), oldest_head: _compare(["README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
+	state = {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), recent_head: _compare(["docs/README.md"]), old_head: _compare(["scripts/y.sh"]), oldest_head: _compare(["docs/README.md"])}, "gate_runs_sequence": GATE_SUCCESS}
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), state, env={"PROMOTE_CYCLE_MAX_ATTEMPTS": "2"})
 	assert proc.returncode == 0, proc.stderr + proc.stdout
