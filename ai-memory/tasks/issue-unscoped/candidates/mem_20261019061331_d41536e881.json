@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/7652-security-pass-output-contract-staging.md:9 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The changelog fragment names only `prompts/references/output-contract.txt` as a newly required asset. It leaves out `prompts/contracts/mode-security-audit.yml`, which the last run added to the poller's required-asset loop (scripts/orchestrate_poll_process.sh:8577).\n  WHY: Nothing fails at runtime; this is a documentation gap. An operator who sees \"Required security-pass asset prompts/contracts/mode-security-audit.yml is unavailable.\" will not find that requirement in the release note. Both reviewers rated it SEVERITY: NIT, mapped here to low. minimax_minimax-m3 raised the same gap as a hardening suggestion, not as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/7652-security-pass-output-contract-staging.md:line 9, \"The poller now requires `prompts/references/output-contract.txt` before the audit starts. A missing file fails closed with `Required security-pass asset prompts/references/output-contract.txt is unavailable.` ...\" | severity=NIT | confidence=4\n  PROBLEM: The last run added prompts/contracts/mode-security-audit.yml to the poller's required-asset loop (scripts/orchestrate_poll_process.sh:8577), but the fragment still names only output-contract.txt as a newly required asset.\n  WHY: Nothing fails at runtime; this is a documentation gap. An operator who sees \"Required security-pass asset prompts/contracts/mode-security-audit.yml is unavailable.\" will not find that new fail-closed requirement in the release note. The reviewer says this confirms the pass-1 finding.\n- HARDENING_SUGGESTION: changelog.d/7652-security-pass-output-contract-staging.md line 9. The release note omits the second newly required asset. Suggested minimal fix: change the sentence to \"The poller now requires `prompts/references/output-contract.txt` and `prompts/contracts/mode-security-audit.yml` before the audit starts; a missing file fails closed with `Required security-pass asset <path> is unavailable.`\" Estimated lines changed: 1. HARDENING_RISK_SCORE: 1.\n- Correctness verified, nothing to report:\n  - scripts/orchestrate_poll_process.sh:8568-8582: the required-asset loop now also lists prompts/contracts/mode-security-audit.yml, and that file exists.\n  - The tests/test_orchestrate_poll_process.py sandbox copies prompts/ (_SANDBOX_DIRS at line 102).\n  - The assertion at tests/test_orchestrate_poll_workflow_contract.py:139-145 still matches the edited loop.\n- Trust boundary: nothing to report. The change adds no new execution path, no new environment variable and no new trust input.\n- Task completeness: nothing to report. All acceptance criteria for issue #7652 are in the PR diff.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/7652-security-pass-output-contract-staging.md:Line 9 | severity=NIT | confidence=4\n  PROBLEM: The changelog fragment omits prompts/contracts/mode-security-audit.yml as a newly required asset.\n  WHY: This is a documentation gap, not a runtime failure. An operator who hits the error \"Required security-pass asset prompts/contracts/mode-security-audit.yml is unavailable.\" will not find that requirement in the release notes.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- No standard findings; every category was NONE, including TASK COMPLETENESS / INTENT GAPS.\n- HARDENING_SUGGESTION: changelog.d/7652-security-pass-output-contract-staging.md line 9 (the \"The poller now requires\" bullet).\n  - Issue: the bullet names only `prompts/references/output-contract.txt`. The required-asset loop in `scripts/orchestrate_poll_process.sh:8568-8577` also requires `prompts/contracts/mode-security-audit.yml` (line 8577), and the bullet's example failure message names only `output-contract.txt`.\n  - Suggested minimal fix: add a second bullet, or extend the existing one, saying the poller now also requires `prompts/contracts/mode-security-audit.yml`, with the matching \"Required security-pass asset \u2026 is unavailable.\" wording. Estimated lines changed: 2-3. HARDENING_RISK_SCORE: 1.\n- Editor summary: the last run's only runtime change is the addition at `scripts/orchestrate_poll_process.sh:8577`. It matches the workflow staging that file at `.github/workflows/orchestrate_poll.yml:720`. No new runtime defects.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- No review was produced. The reviewer said it had received partial system instructions (the `{{REFERENCE_SEVERITY_CLASSIFICATION}}` variable was unresolved) and no task, and it asked for the task payload.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e61cf78a170ce2f4357e686fa9e2881cb1aafb0ff111af0853c14afb17ea1fd3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7663,
+    "run_id": "39204004477",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39204004477",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019061331_d41536e881",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7663,
+    "run_id": "39204004477"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T06:13:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
