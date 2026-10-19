@@ -1456,6 +1456,25 @@ def test_context_budget_and_break_glass_ignore_quoted_copies():
 	assert _anchor_counts(quoted + [f"{_ANCHOR_TS} {_ANCHOR_WARN}", _ANCHOR_BREAK]) == (1, 1)
 
 
+def test_context_budget_and_break_glass_accept_gh_run_view_log_prefix():
+	# `gh run view --log` prefixes every line with `<job>\t<step>\t`; cost_audit's
+	# CLI feeds that output to parse_log, so real emissions there must count.
+	counted = [
+		f"review\tRun reviewer models\t{_ANCHOR_TS} {_ANCHOR_WARN}",
+		f"review\tRun judge\t{_ANCHOR_TS} {_ANCHOR_BREAK}",
+		f"review\tRun judge\t{_ANCHOR_BREAK}",
+	]
+	assert collector.CONTEXT_BUDGET_WARN_RE.search(counted[0]) is not None
+	assert collector.BREAK_GLASS_RE.search(counted[1]) is not None
+	assert collector.BREAK_GLASS_RE.search(counted[2]) is not None
+	quoted = [
+		f"review\tRun reviewer models\t{_ANCHOR_TS} - quoted: {_ANCHOR_WARN}",
+		f"review\tRun judge\t{_ANCHOR_TS} - `{_ANCHOR_BREAK}`",
+	]
+	assert collector.CONTEXT_BUDGET_WARN_RE.search(quoted[0]) is None
+	assert collector.BREAK_GLASS_RE.search(quoted[1]) is None
+
+
 def test_collector_reuses_cost_audit_anchored_regexes():
 	import sys
 
