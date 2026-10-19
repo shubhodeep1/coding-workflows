@@ -1281,14 +1281,15 @@ append_semble_query_section() {
   fi
   if [ -n "${FP_VIOLATED_FILES_LIST:-}" ]; then
     printf '%s\n' 'Fingerprint-violating files in working set:'
-    printf '%s\n' "${FP_VIOLATED_FILES_LIST}" | head -n 100
+    head -n 100 <<<"${FP_VIOLATED_FILES_LIST}"
   fi
   if [ -n "${INTEGRATION_TRACKING_TITLE:-}" ]; then
     printf '%s\n%s\n' 'Tracking issue title:' "${INTEGRATION_TRACKING_TITLE}"
   fi
   if [ -n "${INTEGRATION_TRACKING_BODY:-}" ]; then
     printf '%s\n' 'Tracking issue body:'
-    printf '%s' "${INTEGRATION_TRACKING_BODY}" | head -c 4000
+    # Process substitution, not a here-string: a here-string adds a newline and a pipe can abort under pipefail (SIGPIPE).
+    head -c 4000 < <(printf '%s' "${INTEGRATION_TRACKING_BODY}")
     printf '\n'
   fi
   if [ -n "${INTEGRATION_JUDGE_GUIDANCE:-}" ]; then

@@ -644,3 +644,51 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+def test_pipefail_truncation_sites_use_non_pipe_forms() -> None:
+	"""Capped output must not pipe into head (SIGPIPE aborts under pipefail)."""
+	plan = (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
+	assert 'cat "${PLAN_COMMENT_FILE}" | head -c 10000' not in plan
+	assert plan.count('DETAILS="$(head -c 10000 "${PLAN_COMMENT_FILE}")"') == 2
+	prepare = CONFLICT_PREPARE.read_text(encoding="utf-8")
+	assert '"${FP_VIOLATED_FILES_LIST}" | head -n 100' not in prepare
+	assert 'head -n 100 <<<"${FP_VIOLATED_FILES_LIST}"' in prepare
+	assert '"${INTEGRATION_TRACKING_BODY}" | head -c 4000' not in prepare
+	assert "head -c 4000 < <(printf '%s' \"${INTEGRATION_TRACKING_BODY}\")" in prepare
+	apply_fixes = APPLY_FIXES.read_text(encoding="utf-8")
+	assert '"${_claimed_changes}" | head -10' not in apply_fixes
+	assert 'head -n 10 <<<"${_claimed_changes}"' in apply_fixes
+	intake = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
+	assert '"${PIPELINE_OWNERSHIP_OUTPUT}" | head -n 1' not in intake
+	assert 'PIPELINE_OWNERSHIP="$(head -n 1 <<<"${PIPELINE_OWNERSHIP_OUTPUT}")"' in intake
+
+	def run(script: str, value: str) -> subprocess.CompletedProcess:
+		# The value goes in on stdin: one argv string is capped at 128 KiB.
+		prelude = "set -euo pipefail\nIFS= read -r -d '' v || true\nset -- \"$v\"\n"
+		return subprocess.run(
+			["bash", "-c", prelude + script],
+			input=value.encode(),
+			capture_output=True,
+			check=False,
+		)
+
+	old_lines = "printf '%s\\n' \"$1\" | head -n 100"
+	new_lines = 'head -n 100 <<<"$1"'
+	old_bytes = "printf '%s' \"$1\" | head -c 4000"
+	new_bytes = "head -c 4000 < <(printf '%s' \"$1\")"
+	short_inputs = ["", "a", "x" * 3999, "y" * 4000, "z" * 4001, "a\nb\nc", "l\n" * 99]
+	for value in short_inputs:
+		assert run(new_lines, value).stdout == run(old_lines, value).stdout
+		assert run(new_bytes, value).stdout == run(old_bytes, value).stdout
+	big_lines = "".join(f"line-{i}\n" for i in range(40000))
+	result = run(new_lines, big_lines)
+	assert result.returncode == 0
+	assert result.stdout.decode() == "".join(f"line-{i}\n" for i in range(100))
+	big_bytes = "q" * (256 * 1024)
+	result = run(new_bytes, big_bytes)
+	assert result.returncode == 0
+	assert result.stdout == b"q" * 4000
+	result = run('head -n 1 <<<"$1"', big_lines)
+	assert result.returncode == 0
+	assert result.stdout == b"line-0\n"
