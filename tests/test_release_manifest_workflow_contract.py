@@ -345,3 +345,91 @@ def test_unknown_command_is_usage_error(tmp_path: Path) -> None:
 	result = _run(["publish"], _env(tmp_path))
 	assert result.returncode != 0
 	assert "reason=usage" in result.stderr
+
+
+# ── Consumer repository_dispatch loop (SHELL-001 / CONSIST-001) ───────────
+
+DISPATCH_STEP = "Notify consumer repos via repository_dispatch"
+DISPATCH_PAYLOAD_LINES = (
+	'-f event_type="coding-workflows-stable-released" \\',
+	'-f "client_payload[version]=${VERSION}" \\',
+	'-f "client_payload[sha]=${RELEASE_SHA}" \\',
+)
+
+
+def _dispatch_run(workflow_path: Path) -> str:
+	return _release_steps(_load(workflow_path))[DISPATCH_STEP]["run"]
+
+
+@pytest.mark.parametrize("workflow_path", WORKFLOWS, ids=lambda p: p.name)
+def test_dispatch_step_validates_each_registry_entry(workflow_path: Path) -> None:
+	step = _release_steps(_load(workflow_path))[DISPATCH_STEP]
+	run = step["run"]
+	assert "for REPO in $REPOS" not in run
+	assert "while IFS= read -r REPO" in run
+	assert 'done <<< "${REPOS}"' in run
+	assert "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" in run
+	assert "Skipping malformed consumer registry entry" in run
+	assert 'GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${REPO}/dispatches"' in run
+	assert "source scripts/gh_helpers.sh 2>/dev/null || true" in run
+	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in run
+	for line in DISPATCH_PAYLOAD_LINES:
+		assert line in run, line
+	assert step.get("if") == DRY_RUN_GUARD
+	assert step["env"] == {"GH_TOKEN": "${{ secrets.GH_PAT || github.token }}"}
+
+
+def _strip_comments(run: str) -> list[str]:
+	return [line for line in run.splitlines() if line.strip() and not line.strip().startswith("#")]
+
+
+def test_dispatch_step_bodies_match_across_workflows() -> None:
+	first, second = (_strip_comments(_dispatch_run(path)) for path in WORKFLOWS)
+	assert first == second
+
+
+def _fake_dispatch_gh(tmp_path: Path) -> Path:
+	bin_dir = tmp_path / "dispatch-bin"
+	bin_dir.mkdir(exist_ok=True)
+	gh = bin_dir / "gh"
+	gh.write_text(
+		"#!/usr/bin/env bash\n"
+		"printf '%s\\n' \"$*\" >> \"${FAKE_GH_LOG}\"\n"
+		"exit 0\n",
+		encoding="utf-8",
+	)
+	gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+	return bin_dir
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
+@pytest.mark.parametrize("workflow_path", WORKFLOWS, ids=lambda p: p.name)
+def test_dispatch_loop_skips_malformed_entries(tmp_path: Path, workflow_path: Path) -> None:
+	run = _dispatch_run(workflow_path).replace("${{ needs.resolve-version.outputs.version }}", TAG)
+	assert "${{" not in run
+	root = tmp_path / "consumer-repo"
+	root.mkdir()
+	entries = ["good/one", "bad repo", "glob/*", "../..", "a/b\nc/d", {"x": 1}, "", "good.two/repo-2"]
+	_write(root, ".github/ai/consumer_repos.json", json.dumps(entries))
+	# Files a glob-expanded `glob/*` would otherwise match.
+	_write(root, "glob/leak-a", "x\n")
+	_write(root, "glob/leak-b", "x\n")
+	_git(root, "init", "-q")
+	_git(root, "add", "-A")
+	_git(root, "commit", "-q", "-m", "release")
+	_git(root, "tag", "-a", TAG, "-m", f"Release {TAG}")
+	log = tmp_path / "dispatch-gh.log"
+	bin_dir = _fake_dispatch_gh(tmp_path)
+	env = _env(tmp_path, PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}", FAKE_GH_LOG=str(log))
+	result = subprocess.run(["bash", "-c", run], capture_output=True, text=True, env=env, cwd=root)
+	assert result.returncode == 0, result.stderr
+	calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+	targets = [call.split()[1] for call in calls]
+	assert targets == ["repos/good/one/dispatches", "repos/good.two/repo-2/dispatches"]
+	for call in calls:
+		assert "-f event_type=coding-workflows-stable-released" in call
+		assert f"-f client_payload[version]={TAG}" in call
+	output = result.stdout + result.stderr
+	assert output.count("Skipping malformed consumer registry entry") == 5
+	for raw in ("bad repo", "glob/*", "../..", "c/d", "leak-a"):
+		assert raw not in output, raw

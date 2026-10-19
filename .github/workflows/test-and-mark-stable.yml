@@ -7035,6 +7035,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           VERSION="${{ needs.resolve-version.outputs.version }}"
           RELEASE_SHA="$(git rev-parse "${VERSION}^{commit}")"
           if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -7043,26 +7045,43 @@ jobs:
           fi
           RELEASE_SHA="${RELEASE_SHA,,}"
 
+          # Read consumer repos from .github/ai/consumer_repos.json (a JSON
+          # array of repo strings, e.g. ["owner/repo"]). If the file is
+          # absent the step is a no-op — consumers still pick up changes via
+          # their daily schedule.
           CONSUMER_FILE=".github/ai/consumer_repos.json"
           if [ ! -f "$CONSUMER_FILE" ]; then
             echo "No consumer_repos.json found — skipping repository_dispatch."
             exit 0
           fi
 
-          REPOS=$(jq -r '.[]' "$CONSUMER_FILE" 2>/dev/null || true)
+          REPOS=$(jq -r '.[] | tostring | gsub("[\r\n]"; " ")' "$CONSUMER_FILE" 2>/dev/null || true)
           if [ -z "$REPOS" ]; then
             echo "consumer_repos.json is empty — skipping."
             exit 0
           fi
 
-          for REPO in $REPOS; do
+          # One entry per line; each must be a plain owner/repo before it reaches a
+          # URL path, so a malformed entry can never split or glob into extra targets.
+          # The rejected value is never printed, only its position in the list.
+          REPO_INDEX=0
+          while IFS= read -r REPO; do
+            REPO_INDEX=$((REPO_INDEX + 1))
+            [ -z "${REPO}" ] && continue
+            if [[ ! "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+              || [[ "${REPO}" =~ (^|/)\.{1,2}(/|$) ]]; then
+              echo "::warning::Skipping malformed consumer registry entry #${REPO_INDEX} in ${CONSUMER_FILE} (expected owner/repo)."
+              continue
+            fi
             echo "Dispatching coding-workflows-stable-released to ${REPO} ..."
-            gh api "repos/${REPO}/dispatches" \
+            # A duplicate event is harmless: the consumer updater renders current
+            # stable regardless of the payload, so a retried POST is safe.
+            GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${REPO}/dispatches" \
               -f event_type="coding-workflows-stable-released" \
               -f "client_payload[version]=${VERSION}" \
               -f "client_payload[sha]=${RELEASE_SHA}" \
               || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
-          done
+          done <<< "${REPOS}"
 
       - name: Release disabled summary
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled != 'true' }}
