@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The run's step timings are not in the issue and cannot be fetched during planning. How should the steps to move be chosen?\nChoices:\nA) Estimate the cost of each step from the repository: the number and kind of test files it runs, and whether they start subprocesses, Docker or sandboxes (for example the conflict-resolve sandbox, Codex/watchdog shell, OpenCode plumbing and review-blocked judge steps). Move the heaviest steps, about 40% of the job's estimated cost, so the job gets back under 75% of its timeout with margin. (RECOMMENDED)\nB) Wait until a person posts the per-step timings from run 39216253741 as a comment, then move exactly the slowest steps.\nC) Move a fixed contiguous block (the second half of the job's steps: the review conflict-resolve, judge, smoke and pr_checks_lib steps) without estimating cost.\nQ2: Which job should receive the moved steps? Their current durations are unknown (none crossed the 15-minute warning threshold in this run).\nChoices:\nA) Split the moved steps between `tests-release-and-log-analysis` and `tests-heal-plan-and-validation`, based on how much each already runs, so no single job takes all the load. Do not use `static-checks` (15-minute budget) or `tests-hooks-and-orchestrator` (it carries the template live-copy preparation and Claude/sandbox steps). (RECOMMENDED)\nB) Move them all into `tests-release-and-log-analysis` only, as the issue's \"the CI job with the most headroom\" wording suggests.\nC) Move them all into `tests-heal-plan-and-validation` only.",
+  "fingerprint": "b94bb49e59405fa4544c3a85ae4063836c05da8211fc1bd5ceea86700c3e15f2",
+  "lineage": {
+    "issue_number": 7677,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39219644661",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39219644661",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261019080903_4b984ecfaf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7677,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39219644661"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7677 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-19T08:09:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
