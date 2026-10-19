@@ -6,7 +6,7 @@ Since #6667 the audit runs in a fresh worktree of the integration head (`securit
 The fix:
 
 - `orchestrate_poll.yml` now stages `prompts/references/output-contract.txt` and `prompts/contracts/mode-security-audit.yml` from the verified support checkout, with the same `.codex-workflow-src-main` fallback as the other prompt assets. Before #6667 the renderer found the contract through `.codex-workflow-src`; staging it keeps the audit's output contract applied.
-- The poller now requires `prompts/references/output-contract.txt` before the audit starts. A missing file fails closed with `Required security-pass asset prompts/references/output-contract.txt is unavailable.` instead of a generic render failure.
+- The poller now requires `prompts/references/output-contract.txt` and `prompts/contracts/mode-security-audit.yml` before the audit starts. A missing file fails closed with `Required security-pass asset <path> is unavailable.` instead of a generic render failure.
 - `scripts/security_audit.sh` now also logs the renderer's `... not found: <path>` errors as `security-audit: captured_path_error=`.
 
 What this means for operators: nothing to do. Consumers stage support files from `stable`, so stuck projects resume on their own once this change reaches a `stable` release; `engine_unavailable` is retried every tick.
