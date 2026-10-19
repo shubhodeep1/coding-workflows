@@ -1102,6 +1102,8 @@ class PollGroupPinnedStepsTest(unittest.TestCase):
 				]
 				self.assertEqual(owners, [POLL_JOB_ID])
 				self.assertEqual(poll_job_step(step_name).get("if"), f"strategy.job-index == {group}")
+				# A guard naming a group the matrix no longer runs would skip the step silently.
+				self.assertLess(group, poll_group_count(), "guard names a group the matrix does not run")
 
 	def test_every_other_poll_job_step_is_group_guarded(self) -> None:
 		guard_re = re.compile(r"strategy\.job-index == [0-9]+")
