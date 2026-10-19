@@ -2777,6 +2777,70 @@ def test_security_audit_chunks_scoped_oversized_file_and_reports_coverage() -> N
 		assert payload["coverage"]["unscoped_text_capped_count"] == 0
 
 
+def _env_template_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
+	"""A diff that adds a committed `.env.example` beside ordinary code."""
+	repo_dir, _first_sha, base_sha = _git_fixture_repo(base_dir)
+	(repo_dir / ".env.example").write_text("DEPLOYER_PK=\nRPC_URL=\n", encoding="utf-8")
+	(repo_dir / "file_c.py").write_text("VALUE_C = 3\n", encoding="utf-8")
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update({
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+	})
+	subprocess.run(["git", "add", ".env.example", "file_c.py"], cwd=repo_dir, env=git_env, check=True)
+	subprocess.run(["git", "commit", "-qm", "env template"], cwd=repo_dir, env=git_env, check=True)
+	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=git_env, text=True).strip()
+	return repo_dir, base_sha, head_sha
+
+
+def test_security_audit_reports_credential_filtered_scoped_file_instead_of_failing() -> None:
+	# fun-token-multi-chain#579: a project diff that touched `.env.example`
+	# failed every security pass with `scoped file excluded by read-only
+	# filter`. The file is still withheld from the model, the audit runs, and
+	# the gap is reported in the prompt and in the findings coverage.
+	with tempfile.TemporaryDirectory(prefix="security-audit-filtered-scope-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _env_template_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		proc, state = _run_security_audit({}, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "phase=oversized-scope" not in proc.stderr
+		assert "filtered_scoped=1" in proc.stdout
+		assert "withheld by the credential filter" in proc.stdout
+		prompt = state["codex_stdin"][0]
+		assert "1 scoped files are withheld from you by the credential filter and were not inspected: .env.example." in prompt
+		assert "DEPLOYER_PK" not in prompt
+		payload = json.loads(state["security_audit_findings_output"])
+		assert payload["coverage"]["scoped_filtered_skipped"] == [".env.example"]
+		assert payload["coverage"]["scoped_filtered_skipped_count"] == 1
+
+
+def test_security_audit_tracker_comment_lists_credential_filtered_scoped_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-filtered-tracker-") as td:
+		tmp_path = Path(td)
+		repo_dir, last_audited_sha, head_sha = _env_template_fixture_repo(tmp_path)
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] += f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->\n"
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "scope=incremental" in proc.stdout
+		comment = result["issue_comment_bodies"][0]
+		assert "- Coverage note: 1 scoped files are withheld by the credential filter and were not inspected: `.env.example`" in comment
+		# The filter never lets these files through, so they do not mark the
+		# run partial; the last-audited marker still advances.
+		assert "Coverage: partial" not in comment
+		assert any(f"ai:security-audit-last-sha:{head_sha}" in body for body in result["issue_edit_bodies"])
+
+
 def test_security_audit_oversized_cap_fails_before_codex() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-cap-") as td:
 		tmp_path = Path(td)
