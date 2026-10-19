@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Should `README.md` count as code? Every phase reads it into model context, trimmed and wrapped in `UNTRUSTED_DATA:` lines, but it is also the most often edited human doc.\nChoices:\n- A: Yes. A README-only commit defers the promotion, following the issue's \"read into model context\" rule literally. (RECOMMENDED)\n- B: No. Keep `README.md` non-code because it reaches the model only as fenced untrusted data. Reclassify only the instruction files the pipeline treats as trusted (`unattended_system_instructions.md`, `ai_pipeline.md`, `agents.md`/`AGENTS.md`, `codex.md`, `probably_unnecessary_but_read_if_stuck.md`).\nQ2: Should `agents.d/*.md` fragments count as code? They are not at the root, but `build_static_context.sh` and the other readers render them into `agents.md` before it reaches model context.\nChoices:\n- A: Yes. Treat `agents.d/*.md` (and `AGENTS.md`) the same as `agents.md`, in both the poller and `promote_main_cycle.sh`. (RECOMMENDED)\n- B: No. Limit the change strictly to root-level files, as the issue literally says.",
+  "fingerprint": "16c52dc603d6eac15a4d983c9eea72c8f59096cf6ec64221e1fcb99b32ba0741",
+  "lineage": {
+    "issue_number": 7662,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39201469193",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39201469193",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261019045718_a854a35e09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7662,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39201469193"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7662 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-19T04:57:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
