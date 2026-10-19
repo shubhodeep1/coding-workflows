@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "Runtime workflow changes commonly include a changelog.d fragment.",
   "timestamps": {
     "created_at": "2026-10-19T01:23:01Z",
-    "promoted_at": null,
+    "promoted_at": "2026-10-19T01:24:50Z",
     "superseded_at": null
   }
 }
