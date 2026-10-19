@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (123)
+## Processed source docs (124)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -128,6 +128,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-20-2.md`
 - `analysis/workflow-optimization-2026-09-21.md`
 - `analysis/workflow-optimization-2026-09-21-2.md`
+- `analysis/workflow-optimization-2026-09-21-3.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1277,3 +1278,30 @@ Processed: 2026-10-18
 - AI memory budget target of 80–90% — rejected as speculative tuning.
 - `ORCHESTRATOR_CYCLE_SUMMARY` and the merge-train blocker-age metric — rejected for now: they would add instrumentation to the hot poller script, and `POLL_PROGRESS`, `GH_PAT_BUDGET` and `STANDALONE_STALL_PROBE` already provide part of this.
 - Clarify/plan structured skip reasons — already-implemented (`AI_PHASE_GATE_V1`).
+
+### `analysis/workflow-optimization-2026-09-21-3.md`
+Processed: 2026-10-19
+- SHELL-001 (producer-to-`head` truncation pipelines under `pipefail`) — applied: pipefail-truncation (`changelog.d/wfopt-2026-09-21-3-pipefail-truncation.md`).
+- CONSIST-001 (`gh_api_safe` retry policy) — applied: `gh_api_safe` retries transient errors on read calls only (`changelog.d/wfopt-2026-09-21-3-gh-api-safe-transient.md`).
+- Reliability 4 (recursive telemetry ingestion) — applied: telemetry markers are counted only at line start (`changelog.d/wfopt-2026-09-21-3-telemetry-anchoring.md`).
+- DEAD-001 (unused review-ledger variables) — applied: unused ledger variables removed (`changelog.d/wfopt-2026-09-21-3-ledger-dead-vars.md`).
+- Speed 1 / Cost 1 / Reliability 2 (linked-issue metadata preflight and commit-guard classification) — rejected (obsolete): the "Refusing to commit: linked-issue metadata is unavailable" guard no longer exists in `scripts/review_commit_changes.sh`, `scripts/review_autofix_step_init_runtime_workspace.sh` exports `LINKED_ISSUE_METADATA_FILE`, and `REVIEW_EDITOR_PREFLIGHT` checks the editor's preconditions before the reviewers run.
+- Speed 2 (move the CI budget contract earlier) — rejected (obsolete): CI has run as parallel jobs since #4707 (about 9 minutes end to end), so the 18 to 20 minute sequential tail no longer exists.
+- Speed 3 (release permission preflight) — rejected: `git push --dry-run` does not exercise the server-side workflow-permission check, so no reliable non-mutating probe exists, and a mutating probe is unsafe.
+- Speed 4 (quarantine repeated deterministic failures) — already-implemented: the `review-autofix-failure:v1` identical-failure fingerprint cap (`REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL`) and `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`.
+- Speed 5 (Semble query parallelism) — rejected: saves about 3 to 4 seconds, not worth the concurrency complexity.
+- Cost 2 (adaptive quorum and circuit breaker) — adaptive quorum already-implemented (`REVIEW_TIER_RESOLVER_ENABLED`, lite/standard/full tiers, on by default); the circuit-breaker default flip rejected, consistent with the 2026-09-20 verdict.
+- Cost 3 (compact at 70%) — rejected: automatic prompt reduction risks dropping review evidence; `CONTEXT_BUDGET_WARN` stays advisory, and `REVIEWER_FILTER_UNINTERESTING_ENABLED` is an operator opt-in.
+- Cost 4 / Cost 5, Prompt Cache items 3 to 5, AI Memory Health retry fields, Reliability 5 / 6 (new Semble usefulness, usage-missing, prefix-hash, memory-retry and cancellation-provenance telemetry) — rejected: new telemetry or features with no reader, and the cited incidents do not reproduce on current code; `SEMBLE_QUERY` already logs bytes, sources and `static_dup_bytes`, and `RELEASE_NOTIFY_V1` already reports SUPERSEDED runs.
+- Prompt Cache items 1 and 2 (stable prefix, dynamic data appended) — already-implemented through the pre-assembled static context ordering.
+- Reliability 1 (preserve the root failure) — already-implemented: failure comments name the failed step and the first `::error::` line (`AUTOFIX_FAILURE_HEADLINE`), and the `reviewers_failed` / `sandbox_prepare_failed` reasons replace the `editor_empty_noop` masking.
+- Reliability 3 (release push diagnostics) — already-implemented: `HEAD:refs/heads/${SOURCE_BRANCH}` is used in both `mark-stable.yml` and `test-and-mark-stable.yml`; the extra classifier rejected as low value.
+- GH API audit (E2E polling interval, per-call `GH_API_CALL` logging, failure-handler consolidation) — rejected: the release gate already polls with `POLL_INTERVAL: 10` and the cited 5-second loop could not be identified; per-call logging duplicates `GH_API_RETRY` and adds log volume; no call-count evidence exists for the failure handlers.
+- `ORCHESTRATOR_CYCLE_SUMMARY` / `HEAL_SKIP` — rejected: new telemetry with no reader; `WORKFLOW_HEAL skip reason=` already exists.
+- API-001, API-002, API-003, BATCH-001 — rejected: the source doc's own cross-references tag them RISKY_SKIP (race-defensive poller paths, pagination and fallback semantics).
+- MERGE-001, MERGE-004, MERGE-005, MERGE-006 — rejected: RISKY_SKIP in the source doc.
+- MERGE-002, MERGE-003 — rejected: NEEDS_VERIFICATION, typical reference counts per PR body save only a few calls, and both scripts are fail-closed lint gates whose per-item error behaviour is pinned by tests.
+- DUP-001 (shared Semble query-section helper) — rejected: `semble_helpers.sh` is an `OPTIONAL_BOOTSTRAP_SCRIPTS` entry that `review_apply_fixes.sh` and `review_conflict_prepare.sh` do not source, so every caller would still need a fallback copy.
+- DUP-002 (shared workflow-analysis utilities) — rejected: a new shared module would have to be staged into every support copy these analysis scripts run from, and the existing `_parse_iso8601` variants differ in signature.
+- EXPR-001 (implement support-staging block size) — already-implemented: the implement.yml "Stage workflow support files" `run:` body contains no `${{ }}`; both interpolations sit in `env:`, so the expression-length limit does not apply.
+- DEAD-002 (branch-rebuild diagnostic state) — already-implemented: `BRANCH_REBUILD_THRESHOLD_DECISION` logs `skip_reason` and `last_rebuild_at`.
