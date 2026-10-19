@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -189,7 +190,7 @@ def test_telegram_step_suppresses_draft_skip_before_case() -> None:
 def _telegram_sends(env: dict[str, str]) -> list[str]:
 	step = _telegram_step()
 	body = step[step.index("        run: |\n") + len("        run: |\n"):]
-	body = "\n".join(line[10:] for line in body.splitlines())
+	body = textwrap.dedent(body)
 	body = re.sub(r"\$\{\{[^}]*\}\}", "x", body)
 	with tempfile.TemporaryDirectory() as tmp:
 		log = Path(tmp) / "tg.log"
