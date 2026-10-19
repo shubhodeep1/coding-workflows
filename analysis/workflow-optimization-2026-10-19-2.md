@@ -561,3 +561,261 @@ No 429 or rate-limit events in any summarised run.
 | Code modularization | `.github/workflows/implement.yml`, new `scripts/implement_handle_noop.sh`, new `scripts/gh_helpers_fallback.sh`, `scripts/workflow_failure_heal_report.sh`, `scripts/workflow_failure_heal_intake.sh`, `scripts/check_failure_triage.sh`, `tests/test_workflow_support_ref_follows_pin.py`, the 6 workflows with inline Telegram curl | Medium |
 | Expression size reduction | `.github/workflows/implement.yml`, `.github/workflows/test-and-mark-stable.yml` (+ `scripts/` extraction if EXPR-004 confirms headroom under 50 KB) | Medium |
 | Medium/Low fixes | `scripts/comprehensive_test_and_release_gh_api.sh`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/comprehensive-test-and-release.yml`, `.github/workflows/implement.yml`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/clarify.yml`, `.github/workflows/internal-clarify.yml`, `workflow-templates/ai-clarify.yml`, `tests/test_workflow_file_size_limit.py`, `agents.d/` fragment | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-19)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: the change meets every precondition: same endpoint or a strict subset of fields; identical pagination, filters and auth scope; same function or step with no mutation in between; unchanged error and retry semantics; no concurrency boundary crossed; cache contracts kept. The implement stage may apply it directly.
+- **`NEEDS_VERIFICATION`**: the consolidation looks correct, but at least one precondition cannot be proven by reading the code alone. The listed checks must pass before anyone implements it.
+- **`RISKY_SKIP`**: the call sits on a retry or backoff loop, an auth or binding flow, a paginated read, a race-defence path, or crosses job or token boundaries. It is reported for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: `ensure_label_exists` in `scripts/label_helpers.sh` has no per-process cache, so callers re-create the same label several times per run**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - Helper: `scripts/label_helpers.sh:161-195`.
+  - Repeat callers in `scripts/review_rb_judge.sh`:
+    - lines 1108-1109 run unconditionally at top level;
+    - later calls for the same label: `ai:ready-to-merge` at 2300, 2381, 2652, 2675 and 3056, and `ai:closed` at 3146.
+  - Repeat callers in `scripts/workflow_failure_heal_intake.sh`:
+    - lines 1508-1509 (`HEAL_LABEL` and `ESCALATED_LABEL` on `SELF_REPO`);
+    - then `ESCALATED_LABEL` at 1701, 1715 and 1721, and `HEAL_LABEL` at 2386.
+  - Existing pattern to copy: `scripts/orchestrate_poll_process.sh:657` (`declare -gA _ENSURED_LABELS_CACHE=()`) and `:4001-4006`, `:4037`, `:4047`.
+- **Call count:**
+  - Today: each review-blocked judge run that reaches a labelling branch makes 3 `POST repos/{repo}/labels` calls (two at 1108-1109 plus one branch call), and the branch call returns 422 "already exists".
+  - The heal intake makes 1–4 such repeats per run.
+  - After the fix: 2 per judge run (only 1108-1109), and the intake makes one call per distinct `repo|label` pair.
+- **Endpoint:** `POST /repos/{owner}/{repo}/labels` (through `gh label create`).
+- **Evidence:** the shared helper always calls the API:
+  ```bash
+  if gh_retry gh label create "${label_name}" \
+  	--repo "${repo}" \
+  	--color "${color}" \
+  	--description "${description}" \
+  ```
+  The poller's own copy already short-circuits:
+  ```bash
+  # Fast path: already verified (or created) earlier in this process.
+  if [ -n "${_ENSURED_LABELS_CACHE[${label_name}]+set}" ]; then
+    return 0
+  fi
+  ```
+  In the judge, line 1108 always runs before any action branch. Line 2300 (`ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"`) then repeats it right before `_resilient_phase_swap`. A search of `scripts/` for `gh label delete` or label-deleting DELETE calls found none, so nothing removes a label in the middle of a process.
+- **Proposed fix:**
+  - In `scripts/label_helpers.sh`, add a process-local associative array keyed on `"${repo}|${label_name}"`.
+  - Use a new name, `_LABEL_HELPERS_ENSURED_CACHE`. A search of `scripts/label_helpers.sh`, `scripts/orchestrate_poll_process.sh` and `scripts/workflow_failure_heal_intake.sh` found no existing use of it. Do not reuse `_ENSURED_LABELS_CACHE`: the poller keys that array by label only.
+  - Declare it without resetting an existing value, so sourcing the helper twice keeps the cache.
+  - Return 0 early when the key is set. Set the key on create success and on "already exists".
+  - Leave the failure path (`return 1`, line 194) uncached.
+  - No caller changes are needed.
+- **Safety rationale:**
+  - The merged calls hit the same endpoint with the same auth.
+  - The error semantics change, though. Under `set -euo pipefail` (`review_rb_judge.sh:19`), a transient failure at a later call such as line 2300 currently aborts the judge. With the cache it becomes a no-op. That breaks the "same failure, same callers" precondition.
+- **Downstream signal:** before implementing, a reviewer must:
+  1. Confirm that no judge branch relies on a later `ensure_label_exists` failure to abort the run.
+  2. Check that writes to the cache from the subshell at `review_rb_judge.sh:1438` are not required; a lost write only costs an extra call.
+  3. Confirm that `scripts/label_helpers.sh` is never sourced by a shell older than bash 4.2. The file already uses associative arrays at line 164.
+  4. Run the existing label-helper tests and add one that stubs `gh` and asserts a single `label create` across two `ensure_label_exists` calls for the same repo and label.
+
+**MERGE-002: extends API-002. Heal reconcile pull lookups: GraphQL alias alternative and a head-owner safety detail**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:** `scripts/workflow_failure_heal_pr_reconcile.sh:239-247`, the per-issue REST lookup at line 243. The budget comment is at 29-31.
+- **Call count:** today 1 paginated issue list plus N pull lookups. After the fix: 1 plus ceil(N/50).
+- **Endpoints:**
+  - Today: `GET /repos/{o}/{r}/pulls?state=open&head={owner}:ai/issue-{n}&per_page=10`, once per heal issue.
+  - Proposed: one `POST /graphql` with one alias per heal issue.
+- **Evidence:**
+  ```bash
+  if ! gh_retry gh api --method GET "repos/${REPO}/pulls" -f state=open -f head="${REPO%%/*}:${heal_branch}" -f per_page=10 > "${PULLS_FILE}" 2>/dev/null \
+  ```
+- **Net-new detail beyond API-002:**
+  1. API-002's first option is one `--paginate` read of every open PR. Its cost grows with the total number of open PRs rather than with N, and N is usually 1. It also brings in pagination, which is a `RISKY_SKIP` trigger in this audit. Prefer the GraphQL batch, following `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh`.
+  2. Build one alias per issue: `iN: pullRequests(headRefName:"ai/issue-N", states:OPEN, first:10){nodes{number headRefName headRefOid baseRefName headRepositoryOwner{login}}}`. `first:10` keeps today's `per_page=10` cap, so page boundaries do not change.
+  3. Unlike the REST `head=owner:branch` filter, `headRefName` does **not** restrict the head owner. The jq projection must filter on `headRepositoryOwner.login == "${REPO%%/*}"`. Otherwise a fork PR with branch `ai/issue-N` could be closed or re-pointed by `_close_heal` or `_retarget_heal`.
+  4. Map the fields to the existing TSV: `headRefOid`→`.head.sha`, `baseRefName`→`.base.ref`, `headRefName`→`.head.ref`. Line 251 already lower-cases the SHA.
+  5. When a batch fails, fall back to the current per-issue REST call. Today's per-issue `continue` already fails open.
+- **Safety rationale:** the per-iteration calls are in a loop that only reads, with no mutation between lookups. But the merged call changes the endpoint (REST to GraphQL) and the filter (owner check moves into jq), so the identical-filters precondition cannot be proven statically.
+- **Downstream signal:** before implementing, a reviewer must:
+  1. Confirm that `headRepositoryOwner.login` filtering reproduces the REST `head=owner:branch` result for the same-repo heal PRs.
+  2. Add a stub test with two heal issues (one alias response with a fork-owned match) and assert that the fork PR is skipped.
+  3. Update the budget comment at lines 29-31.
+
+**MERGE-003: extends API-003. The no-op ancestor walk's comment read is paginated, so a single-query merge changes page boundaries**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:** `.github/workflows/implement.yml:5467-5480` (body read at 5468, comments read at 5472-5473)
+- **Call count:** today 2 or more per hop, because comments can span several pages. API-003 proposes 1 per hop, which only holds when an ancestor has 100 or fewer comments.
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}` and `GET /repos/{o}/{r}/issues/{n}/comments` (paginated). API-003 proposes `POST /graphql`.
+- **Evidence:**
+  ```bash
+  parent_has_noop="$(gh_retry gh api "repos/${REPO}/issues/${parent_num}/comments" --paginate \
+    --jq "[.[] | select((.body // \"\") | test(\"${noop_marker}\"; \"i\"))] | length" 2>/dev/null | awk 'BEGIN{s=0} /^[0-9]+$/ {s+=$1} END{print s}' || echo "")"
+  ```
+- **Net-new detail:**
+  - The current read sums matches across **every** page (the `awk` accumulator). API-003's `comments(last:100)` silently drops older comments.
+  - A false 0 `break`s the walk (5475-5477). That suppresses the ancestor-chain cap, which exists to stop the duplicate re-issue loops recorded at 5452-5457 (tracking issue #1292).
+  - A merged version must keep the case-insensitive `test(...; "i")` match.
+  - It must also page through comments with GraphQL cursors whenever `pageInfo.hasPreviousPage` is true.
+  - See REUSE-001 for a smaller, pagination-neutral saving on the same loop.
+- **Safety rationale:** the call uses `--paginate`, and it guards a loop-breaker that defends against a known runaway re-issue race. Both are explicit `RISKY_SKIP` triggers.
+- **Downstream signal:** do not auto-implement. A human must decide whether a cursor-paginated GraphQL walk is worth the complexity, given the cost is at most 2 × `IMPL_NOOP_ANCESTRY_THRESHOLD` (default 2) calls per no-op. Any change needs a regression test where the marker comment sits beyond the 100 most recent comments.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: the first hop of the no-op ancestor walk re-reads the current issue body, which the job already holds in `ISSUE_META_FILE`**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - Re-fetch: `.github/workflows/implement.yml:5466-5468` (`current="${ISSUE_NUMBER}"` on hop 1).
+  - Existing data:
+    - `implement.yml:294` exports `ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json` to `GITHUB_ENV`.
+    - `implement.yml:2620` writes it last, from a fresh `GET repos/.../issues/${ISSUE_NUMBER}` in the "Recheck security dependency before edits" step.
+  - Both steps are in the single `implement` job (`implement.yml:92`; the next job, `heal-report`, starts at 6812).
+- **Call count:** with the default threshold of 2, today's walk makes up to 4 calls. After the fix it makes up to 3, saving one call per no-op invocation.
+- **Endpoint:** `GET /repos/{o}/{r}/issues/{ISSUE_NUMBER}`
+- **Evidence:**
+  ```bash
+  current="${ISSUE_NUMBER}"
+  for hop in $(seq 1 "${threshold}"); do
+    parent_body="$(gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+  ```
+  - A search for writes to `ISSUE_META_FILE` finds the last write at line 2620. Lines 5784 and 5894 read the file after the no-op step.
+  - Line 2620 sets `SKIP_IMPLEMENT=true` if its read fails (2621-2623), and the no-op step is gated on `env.SKIP_IMPLEMENT != 'true'` (5317). So when the no-op step runs, the file should hold the fresh issue payload.
+- **Proposed fix:**
+  - On hop 1 only, read `.body` from `"${ISSUE_META_FILE}"`, guarded by `jq -e --argjson n "${ISSUE_NUMBER}" '.number == $n'`.
+  - On a missing file, a parse error or a number mismatch, fall back to the current `gh_retry gh api` line.
+  - Hops 2 and later are unchanged.
+  - Also update the cost comment at 5458.
+- **Safety rationale:**
+  - The data comes from a different step: the source is the same endpoint and fields, but the caller is not in the same function. The body could also have been edited between line 2620 and the no-op step.
+  - Error semantics are kept by the fallback, but the same-function and no-mutation preconditions are unproven.
+- **Downstream signal:** before implementing, a reviewer must:
+  1. Confirm that `SKIP_IMPLEMENT` never goes from `true` back to `false` between line 2613 and line 5316. If it did, the 2620 step could be skipped while the no-op step still runs.
+  2. Confirm that the `Re-issued from #N` line is written into the body when the issue is created and that no automation edits it afterwards.
+  3. Add a step-level test that stubs `gh` and asserts that hop 1 makes no `issues/{ISSUE_NUMBER}` call when the snapshot matches.
+
+**REUSE-002: the check-triage base gate fetches the failing run only to learn its `workflow_id`, which the caller's `workflow_run` event already carries**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - Re-fetch: `scripts/check_failure_triage.sh:747-751`.
+  - Caller: `.github/workflows/internal-check-failure-triage.yml:46-61`. The `triage-workflow-run` job passes `details_url: ${{ github.event.workflow_run.html_url }}` and `check_run_id: ""`. The consumer template `workflow-templates/ai-check-failure-triage.yml:65-72` does the same.
+  - Env plumbing: the step "Collect check-failure context" at `.github/workflows/check_failure_triage.yml:567-581`.
+- **Call count:** today 2 per CI-failure triage that reaches the base gate (run read plus the workflow's latest base-branch run). After the fix, 1 when the event matches; otherwise unchanged.
+- **Endpoint:** `GET /repos/{o}/{r}/actions/runs/{run_id}` (`.workflow_id` only)
+- **Evidence:**
+  ```bash
+  base_gate_run_id="$(printf '%s' "${CHECK_DETAILS_URL}" | sed -n 's#^https://[^/]*/[^/]*/[^/]*/actions/runs/\([0-9][0-9]*\).*#\1#p' | head -n 1)"
+  ...
+  base_gate_workflow_id="$(gh_retry gh api "repos/${REPO}/actions/runs/${base_gate_run_id}" --jq '.workflow_id // ""' 2>/dev/null || true)"
+  ```
+  The run ID is parsed back out of `workflow_run.html_url`, so the event's `workflow_run.workflow_id` refers to the same run. In a reusable workflow, the `github` context, including `github.event`, belongs to the caller.
+- **Proposed fix:**
+  - Add two env vars to the collect step (`check_failure_triage.yml:569-581`), both defaulting to empty (§8):
+    - `CHECK_TRIAGE_EVENT_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id || '' }}`
+    - `CHECK_TRIAGE_EVENT_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id || '' }}`
+  - A search of both files found no existing `CHECK_TRIAGE_EVENT_WORKFLOW*` names.
+  - At `check_failure_triage.sh:749-751`, use the event value only when both are numeric and `CHECK_TRIAGE_EVENT_WORKFLOW_RUN_ID == base_gate_run_id`. Otherwise keep the existing `gh_retry` call.
+  - Check-run and historical paths are unaffected: `CHECK_RUN_ID` is non-empty (line 763), and historical mode bypasses the gate (line 721).
+- **Safety rationale:**
+  - The data source moves from a fresh API read to the event payload, across the reusable-workflow boundary, so the same-endpoint precondition does not hold.
+  - The run-ID equality guard and the API fallback keep the fail-open behaviour (`|| true`).
+- **Downstream signal:** before implementing, a reviewer must:
+  1. Confirm on one real `triage-workflow-run` invocation (internal `@main` and a consumer on `@stable`) that `github.event.workflow_run.workflow_id` is populated inside `check_failure_triage.yml`.
+  2. Check that adding the env lines keeps `check_failure_triage.yml` far below the §24 guard.
+  3. Add a stub test asserting that no `actions/runs/{id}` call is made when the env IDs match, and that exactly one is made when they do not.
+
+**REUSE-003: the historical-triage guard job and `check_failure_triage.sh` historical mode read the same PR, run, job log and triage-issue list twice**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+
+  | Data | Guard job (`check-failure-triage-historical.yml`) | Script (`check_failure_triage.sh`) |
+  |---|---|---|
+  | Dedup list (paginated, `state=all`, `ai:check-triage`) | lines 75-78 | lines 669-677 |
+  | PR (`pulls/${HIST_PR}`) | line 97 | line 462 |
+  | Run (`actions/runs/${HIST_RUN_ID}`) | line 107 | line 896 |
+  | Job log (`actions/jobs/${HIST_JOB_ID}/logs`) | line 123: the guard downloads the full log to `/dev/null` as a probe | line 921 |
+
+- **Call count:** today about 4 or more duplicated reads per historical triage that proceeds. Proposed: no change in this pass.
+- **Endpoints:**
+  - `GET /repos/{o}/{r}/issues`
+  - `GET /repos/{o}/{r}/pulls/{n}`
+  - `GET /repos/{o}/{r}/actions/runs/{id}`
+  - `GET /repos/{o}/{r}/actions/jobs/{id}/logs`
+- **Evidence:**
+  - The guard runs as its own job with `GH_TOKEN: ${{ github.token }}` (line 60).
+  - The script runs in the reusable call (line 340) under `GH_TOKEN: ${{ secrets.GH_PAT }}` (`check_failure_triage.yml:570`).
+  - The script re-binds the run and job and fails closed on any mismatch ("Bind the run and job to this repository, PR head and CI workflow before reading any log", lines 894-919).
+- **Net-new clarification for the report's GH API Call Audit row:**
+  - On the steady-state path logged as `HISTORICAL_TRIAGE skip reason=already_filed`, the guard exits at lines 79-81, right after the paginated list.
+  - The PR, run and log reads (97-130) never run on that path. So the per-push cost of the no-op workflow is ceil(triage issues / 100) list pages, not "about 4–5 calls per push".
+  - This is inferred from the code order; the run logs were not available.
+- **Safety rationale:** the duplicated reads cross a job boundary and two different token scopes. One of them is part of a fail-closed provenance-binding flow, and the dedup list is paginated. Each of these is a `RISKY_SKIP` trigger.
+- **Downstream signal:** do not merge. This is superseded by deleting the workflow (report Reliability item 4, run under the `docs/scripts-pending-removal.md` preflight). If the workflow is kept, a human must review whether passing guard outputs into the binding weakens the script's independent provenance check.
+
+**REUSE-004: `_resilient_phase_swap` reads the same labels endpoint twice, on purpose (do not merge)**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:** `scripts/review_rb_judge.sh:959-960` and `:997-998`. The POST and DELETE writes come between them, at 986-996.
+- **Call count:** today 2 paginated label GETs on the non-terminal path. Proposed: unchanged.
+- **Endpoint:** `GET /repos/{o}/{r}/issues/{n}/labels` (`--paginate`)
+- **Evidence:**
+  ```bash
+  if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+  	--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
+  	echo "::warning::_resilient_phase_swap: terminal reconciliation GET failed for #${_rps_issue}; target was added without deleting any terminal label." >&2
+  ```
+  - The second read detects an `ai:merged` or `ai:closed` label that `issue_pr_status.yml` added during the swap.
+  - The race is documented at 968-976 (tele-funtoken-msg-scoring#4379, project #3928).
+- **Safety rationale:** writes happen between the two reads, both reads paginate, and the second read exists to defend against an upstream race. These are three `RISKY_SKIP` triggers.
+- **Downstream signal:** do not auto-implement. This is listed so a later pass does not "deduplicate" the reconciliation GET. Any change needs a human review of the terminal-label race and coordination with BUG-002 (Deep Audit Section 1).
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+I checked these cases:
+- The `heal-pr-reconcile` writes (`workflow_failure_heal_pr_reconcile.sh:111`, `124`, `128`, `133`, `225`). These are writes with logged outcomes.
+- The guard's log probe (`check-failure-triage-historical.yml:123`). Its body is discarded, but its exit status sets `log_available`, which is used. It is covered by REUSE-003 and the planned deletion.
+- The nearly unreachable fallback read at `implement.yml:2252-2254`. It is already raised as DEAD-002 in the Deep Audit's Section 5, which recommends keeping it, and I agree.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — the fix changes the retry/backoff loop of `gh_api_json_to_file` (`scripts/gh_helpers.sh:1287-1326`). `_is_gh_permanent_failure` covers 401 and scope errors, so the fix also changes behaviour on the heal intake's fail-closed claim-binding path (`workflow_failure_heal_intake.sh:479`, `:498`, `:505`, which reject through `_report_auth_reject`). The direction is sound but needs manual review.
+- API-002: NEEDS_VERIFICATION — I agree it is redundant. MERGE-002 adds a GraphQL alternative that avoids pagination and the head-owner filter needed to keep fork PRs out.
+- API-003: RISKY_SKIP — the comment read uses `--paginate` (`implement.yml:5472`) and feeds the anti-loop cap. See MERGE-003. REUSE-001 is a smaller saving on the same loop that does not touch pagination.
+- Already satisfied (fresh issue reads at `implement.yml:2204` and `:2620`): RISKY_SKIP — these are deliberate security-dependency rechecks against a time-of-check/time-of-use gap and must stay. REUSE-001 reuses the 2620 snapshot; it does not remove that read.
+- Already satisfied (`cancel_on_pr_close.yml` per-run cancel POSTs and the batched PR-state GraphQL): RISKY_SKIP — GitHub has no batch-cancel endpoint, and the lookups are already batched, so there is nothing to merge.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | MERGE-001, MERGE-002, REUSE-001, REUSE-002 |
+| RISKY_SKIP | 3 | MERGE-003, REUSE-003, REUSE-004 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
+
+The two candidates most worth verifying first are MERGE-001 (one shared helper, saves calls in every judge and heal-intake run) and REUSE-002 (one call saved per CI-failure triage). Each needs the checks listed in its entry before it can be implemented.
+
+---
+
+**What I did:** I read, without modifying anything:
+- CLAUDE.md §15
+- `scripts/gh_helpers.sh`
+- `scripts/label_helpers.sh`
+- `scripts/review_rb_judge.sh`
+- `scripts/workflow_failure_heal_pr_reconcile.sh`
+- `scripts/workflow_failure_heal_intake.sh`
+- `scripts/check_failure_triage.sh`
+- parts of `scripts/orchestrate_poll_process.sh`
+- `.github/workflows/implement.yml`
+- `.github/workflows/check_failure_triage.yml`
+- `.github/workflows/internal-check-failure-triage.yml`
+- `.github/workflows/check-failure-triage-historical.yml`
+
+I ran no git commands and wrote no files.
+
+**Assumptions:**
+- In a reusable workflow, `github.event` is the caller's event payload; REUSE-002 asks for this to be checked on a real run.
+- The historical guard's steady-state cost comes from reading the code order, not from logs.
+
+**Missing context:**
+- The run logs (no per-call counts could be checked).
+- The full text of `README.md`, `agents.md` and every file in `.github/ai/`. I listed that directory but did not read every file in it.
