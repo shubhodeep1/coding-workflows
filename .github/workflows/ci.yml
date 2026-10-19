@@ -2267,9 +2267,9 @@ jobs:
             tests/test_ai_memory_workflow_log_analysis_cache.py \
             tests/test_assemble_changelog.py \
             tests/test_branch_rebuild_threshold_decision_log.py \
+            tests/test_changelog_fragment_contract.py \
             tests/test_check_workflow_script_refs.py \
             tests/test_ci_actionlint_install_retry.py \
-            tests/test_changelog_fragment_contract.py \
             tests/test_codex_heartbeat.py \
             tests/test_codex_isolated_exec_claude_contract.py \
             tests/test_cost_audit_serena_metrics.py \
