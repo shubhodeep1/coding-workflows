@@ -1379,6 +1379,12 @@ jobs:
             exit 0
           fi
 
+          # The registry must be a JSON array; `.[]` on an object would dispatch to its values.
+          if ! jq -e 'type == "array"' "$CONSUMER_FILE" >/dev/null 2>&1; then
+            echo "::warning::${CONSUMER_FILE} is not a JSON array of owner/repo strings — skipping repository_dispatch."
+            exit 0
+          fi
+
           REPOS=$(jq -r '.[] | tostring | explode | map(if . < 32 or . == 127 then 32 else . end) | implode' "$CONSUMER_FILE" 2>/dev/null || true)
           if [ -z "$REPOS" ]; then
             echo "consumer_repos.json is empty — skipping."
@@ -1406,6 +1412,7 @@ jobs:
               -f event_type="coding-workflows-stable-released" \
               -f "client_payload[version]=${VERSION}" \
               -f "client_payload[sha]=${RELEASE_SHA}" \
+              </dev/null \
               || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
           done <<< "${REPOS}"
 

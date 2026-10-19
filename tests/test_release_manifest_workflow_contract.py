@@ -371,6 +371,8 @@ def test_dispatch_step_validates_each_registry_entry(workflow_path: Path) -> Non
 	assert "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" in run
 	assert "explode | map(if . < 32 or . == 127 then 32 else . end) | implode" in run
 	assert "Skipping malformed consumer registry entry" in run
+	assert "jq -e 'type == \"array\"' \"$CONSUMER_FILE\"" in run
+	assert "</dev/null \\" in run
 	assert 'GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${REPO}/dispatches"' in run
 	assert "source scripts/gh_helpers.sh 2>/dev/null || true" in run
 	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in run
@@ -434,3 +436,23 @@ def test_dispatch_loop_skips_malformed_entries(tmp_path: Path, workflow_path: Pa
 	assert output.count("Skipping malformed consumer registry entry") == 6
 	for raw in ("bad repo", "glob/*", "../..", "c/d", "leak-a"):
 		assert raw not in output, raw
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
+@pytest.mark.parametrize("workflow_path", WORKFLOWS, ids=lambda p: p.name)
+def test_dispatch_loop_refuses_non_array_registry(tmp_path: Path, workflow_path: Path) -> None:
+	run = _dispatch_run(workflow_path).replace("${{ needs.resolve-version.outputs.version }}", TAG)
+	root = tmp_path / "consumer-repo"
+	root.mkdir()
+	_write(root, ".github/ai/consumer_repos.json", json.dumps({"entry": "owner/repo"}))
+	_git(root, "init", "-q")
+	_git(root, "add", "-A")
+	_git(root, "commit", "-q", "-m", "release")
+	_git(root, "tag", "-a", TAG, "-m", f"Release {TAG}")
+	log = tmp_path / "dispatch-gh.log"
+	bin_dir = _fake_dispatch_gh(tmp_path)
+	env = _env(tmp_path, PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}", FAKE_GH_LOG=str(log))
+	result = subprocess.run(["bash", "-c", run], capture_output=True, text=True, env=env, cwd=root)
+	assert result.returncode == 0, result.stderr
+	assert not log.exists()
+	assert "is not a JSON array of owner/repo strings" in result.stdout + result.stderr
