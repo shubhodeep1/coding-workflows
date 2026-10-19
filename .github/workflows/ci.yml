@@ -1896,45 +1896,6 @@ jobs:
           python3 -m coverage run tests/test_semantic_cache.py
           python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
 
-      # Moved from tests-heal-plan-and-validation, which took 15m19s of its
-      # 20 minutes on main (run 38564033998, budget-watch issue #7383). Step
-      # timings were not readable when this was planned; these are that job's
-      # most subprocess-heavy steps (bash or git per test case). This job
-      # measured 535-604s on 2026-10-12, the only job with measured headroom.
-      # None of the three needs Node or the prepared .claude/ live copies, and
-      # this job already has full git history and the same pip set.
-      # The check-failure triage step moved on to tests-promote-stall-and-review (#7560).
-      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
-
-      - name: Validation harness sandbox tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
-
-      # Moved from tests-promote-stall-and-review, which took 16m06s of its
-      # 20 minutes on main (run 39216253741, budget-watch issue #7677). Step
-      # timings were not readable when this was planned; chosen by estimated
-      # cost (test count, weighted for subprocess use), not measured. None
-      # needs git history, Node or the prepared .claude/ live copies. Names
-      # and bodies unchanged.
-      - name: Promote cycle and blocked-verdict unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
-            tests/test_promote_main_cycle.py \
-            tests/test_apply_analysis_on_main.py \
-            tests/test_auto_release_stable.py \
-            tests/test_orchestrate_poll_promote_cycle.py \
-            tests/test_implement_blocked_verdict_terminalizes.py
-
-      - name: Review-blocked judge label propagation contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
-
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
     # (about 20 minutes on 4 local shards). Each matrix group runs one
@@ -2335,6 +2296,49 @@ jobs:
             echo "::error::merge-train step shards failed: ${mt_failed[*]}"
             exit 1
           fi
+
+      # Moved from tests-release-and-log-analysis, which took 17m51s of its 20
+      # minutes on main (run 39230958248, budget-watch issue #7689). Earlier
+      # they moved there from tests-heal-plan-and-validation (#7383: the Claude
+      # engine judges and harness sandbox steps) and from
+      # tests-promote-stall-and-review (#7677: the promote cycle and
+      # review-blocked label steps). Step timings were not readable when this
+      # was planned; these are that job's most subprocess-heavy steps (full
+      # poller runs, bash scripts, temp git repos), chosen by estimated cost,
+      # not measured. Groups 0 and 1 already carry extra steps, so two run in
+      # group 2 and two in group 3, each once per CI run. None needs git
+      # history beyond HEAD (this job checks out at depth 1; every git use in
+      # these modules is a temp repo or a text assertion), Node or the
+      # prepared .claude/ live copies, and this job has the same pip set and
+      # Python 3.12. Names and bodies unchanged.
+      - name: Promote cycle and blocked-verdict unit tests
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
+            tests/test_promote_main_cycle.py \
+            tests/test_apply_analysis_on_main.py \
+            tests/test_auto_release_stable.py \
+            tests/test_orchestrate_poll_promote_cycle.py \
+            tests/test_implement_blocked_verdict_terminalizes.py
+
+      - name: Review-blocked judge label propagation contract test
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
+
+      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
+
+      - name: Validation harness sandbox tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
 
   budget-watch:
     # Early warning for the two budgets CI has hit without notice (workflow
