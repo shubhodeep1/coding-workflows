@@ -369,6 +369,7 @@ def test_dispatch_step_validates_each_registry_entry(workflow_path: Path) -> Non
 	assert "while IFS= read -r REPO" in run
 	assert 'done <<< "${REPOS}"' in run
 	assert "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" in run
+	assert "explode | map(if . < 32 or . == 127 then 32 else . end) | implode" in run
 	assert "Skipping malformed consumer registry entry" in run
 	assert 'GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${REPO}/dispatches"' in run
 	assert "source scripts/gh_helpers.sh 2>/dev/null || true" in run
@@ -409,7 +410,7 @@ def test_dispatch_loop_skips_malformed_entries(tmp_path: Path, workflow_path: Pa
 	assert "${{" not in run
 	root = tmp_path / "consumer-repo"
 	root.mkdir()
-	entries = ["good/one", "bad repo", "glob/*", "../..", "a/b\nc/d", {"x": 1}, "", "good.two/repo-2"]
+	entries = ["good/one", "bad repo", "glob/*", "../..", "a/b\nc/d", "nul/\x00repo", {"x": 1}, "", "good.two/repo-2"]
 	_write(root, ".github/ai/consumer_repos.json", json.dumps(entries))
 	# Files a glob-expanded `glob/*` would otherwise match.
 	_write(root, "glob/leak-a", "x\n")
@@ -430,6 +431,6 @@ def test_dispatch_loop_skips_malformed_entries(tmp_path: Path, workflow_path: Pa
 		assert "-f event_type=coding-workflows-stable-released" in call
 		assert f"-f client_payload[version]={TAG}" in call
 	output = result.stdout + result.stderr
-	assert output.count("Skipping malformed consumer registry entry") == 5
+	assert output.count("Skipping malformed consumer registry entry") == 6
 	for raw in ("bad repo", "glob/*", "../..", "c/d", "leak-a"):
 		assert raw not in output, raw

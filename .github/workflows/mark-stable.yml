@@ -1379,12 +1379,14 @@ jobs:
             exit 0
           fi
 
-          REPOS=$(jq -r '.[] | tostring | gsub("[\r\n]"; " ")' "$CONSUMER_FILE" 2>/dev/null || true)
+          REPOS=$(jq -r '.[] | tostring | explode | map(if . < 32 or . == 127 then 32 else . end) | implode' "$CONSUMER_FILE" 2>/dev/null || true)
           if [ -z "$REPOS" ]; then
             echo "consumer_repos.json is empty — skipping."
             exit 0
           fi
 
+          # Control characters (CR, LF, NUL, ...) become spaces inside jq, before bash
+          # command substitution could silently drop a NUL and let the entry pass.
           # One entry per line; each must be a plain owner/repo before it reaches a
           # URL path, so a malformed entry can never split or glob into extra targets.
           # The rejected value is never printed, only its position in the list.
