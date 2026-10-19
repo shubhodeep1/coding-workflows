@@ -163,6 +163,11 @@ def _run_latest_scoped_run_field(pages: list, fail_page: int | None = None) -> t
 		gh = bin_dir / "gh"
 		gh.write_text(STUB_GH, encoding="utf-8")
 		gh.chmod(0o755)
+		# gh_api_safe retries a transient 502 with a 5/10/20 s backoff; keep
+		# that instant here as the step-level harnesses below do.
+		sleep = bin_dir / "sleep"
+		sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+		sleep.chmod(0o755)
 		pages_file = tmp_path / "pages.json"
 		pages_file.write_text(json.dumps(pages), encoding="utf-8")
 		log_file = tmp_path / "gh.log"

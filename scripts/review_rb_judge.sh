@@ -1085,7 +1085,25 @@ if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ] && [ "${_pr_merged}" !=
   fi
   exit 0
 fi
-unset _pr_state _pr_merged
+# A draft PR is not judged: the judge runs only once the PR is ready for
+# review (issue #7653). Dispatched review runs cannot see draft state (the
+# wrappers send pr_is_draft=false on workflow_dispatch), and the
+# orchestrator's conflict heal dispatches them on its draft integration PRs
+# during the security pass. Their review / conflict work still runs; only
+# the judge waits. Marking the PR ready fires pull_request.ready_for_review,
+# which always starts a fresh review and brings the judge back. Reuses the
+# read above (no extra API call); only a JSON boolean true counts as a
+# draft, and an unreadable payload is treated as not a draft.
+_pr_draft="$(printf '%s\n' "${_pr_meta}" | jq -r '.draft == true' 2>/dev/null || echo "false")"
+if [ "${_pr_state}" = "open" ] && [ "${_pr_draft}" = "true" ]; then
+  echo "RB_JUDGE_DRAFT_SKIP pr=${PR_NUMBER} outcome=skip reason=draft_pr"
+  echo "PR #${PR_NUMBER} is a draft — skipping review-blocked judge until it is ready for review."
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=draft_pr" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+unset _pr_state _pr_merged _pr_draft
 
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"
@@ -1367,7 +1385,10 @@ RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
 RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
 RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
+# #7659: the merge-error temp dir (set by rb_judge_merge_err_open) is also
+# removed here, so an abnormal exit between open and close leaves nothing.
+RB_MERGE_ERR_DIR=""
+trap 'case "${RB_MERGE_ERR_DIR:-}" in */rb-merge-err.*) rm -rf -- "${RB_MERGE_ERR_DIR}" 2>/dev/null || true ;; esac; _cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -2087,6 +2108,86 @@ The judge chose **${RB_ACTION}**. ${RB_SECURITY_FINAL_FIX_NOTE}This PR's single-
   exit 0
 fi
 
+# BEGIN rb-judge merge error capture (#7659)
+# The judge's merge commands used to send stderr to /dev/null, so a failed
+# merge logged no reason (draft PR, branch protection, merge queue,
+# permissions, 422, moved head). These helpers keep each attempt's stderr in
+# a private temp directory, print one bounded single-line
+# RB_JUDGE_MERGE_ERROR line on failure and remove the directory again. The
+# merge commands themselves, their order and head binding are unchanged.
+# When mktemp fails both files stay /dev/null (the previous behaviour) and
+# nothing extra is printed. Every function returns 0 (set -euo pipefail).
+rb_judge_merge_err_open() {
+  RB_MERGE_ERR_DIR=""
+  RB_MERGE_ERR_AUTO_FILE="/dev/null"
+  RB_MERGE_ERR_DIRECT_FILE="/dev/null"
+  RB_MERGE_ERROR_TEXT=""
+  local _rb_merge_err_tmp=""
+  _rb_merge_err_tmp="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/rb-merge-err.XXXXXX" 2>/dev/null)" || _rb_merge_err_tmp=""
+  if [ -n "${_rb_merge_err_tmp}" ] && [ -d "${_rb_merge_err_tmp}" ] && [ ! -L "${_rb_merge_err_tmp}" ]; then
+    chmod 700 "${_rb_merge_err_tmp}" 2>/dev/null || true
+    if : > "${_rb_merge_err_tmp}/auto" 2>/dev/null && : > "${_rb_merge_err_tmp}/direct" 2>/dev/null; then
+      RB_MERGE_ERR_DIR="${_rb_merge_err_tmp}"
+      RB_MERGE_ERR_AUTO_FILE="${_rb_merge_err_tmp}/auto"
+      RB_MERGE_ERR_DIRECT_FILE="${_rb_merge_err_tmp}/direct"
+    else
+      rm -rf -- "${_rb_merge_err_tmp}" 2>/dev/null || true
+    fi
+  fi
+  return 0
+}
+
+# Prints at most 240 printable characters of one attempt's stderr on one
+# line: non-printable bytes (CR/LF included) become spaces, token-shaped
+# strings are redacted before the cut.
+rb_judge_merge_err_sanitize() {
+  head -c 65536 -- "$1" 2>/dev/null \
+    | LC_ALL=C tr -c '[:print:]' ' ' \
+    | LC_ALL=C sed -E 's/gh[pousr]_[A-Za-z0-9]{16,}/[redacted]/g; s/github_pat_[A-Za-z0-9_]{16,}/[redacted]/g; s/ +/ /g; s/^ //; s/ $//' \
+    | LC_ALL=C cut -c1-240
+  return 0
+}
+
+rb_judge_merge_err_report() {
+  local _rb_merge_err_path="${1:-unknown}" _rb_merge_err_label="" _rb_merge_err_file="" _rb_merge_err_part="" _rb_merge_err_text=""
+  RB_MERGE_ERROR_TEXT=""
+  if [ -z "${RB_MERGE_ERR_DIR:-}" ]; then
+    return 0
+  fi
+  for _rb_merge_err_label in auto direct; do
+    _rb_merge_err_file="${RB_MERGE_ERR_DIR}/${_rb_merge_err_label}"
+    if [ ! -f "${_rb_merge_err_file}" ] || [ -L "${_rb_merge_err_file}" ]; then
+      continue
+    fi
+    _rb_merge_err_part="$(rb_judge_merge_err_sanitize "${_rb_merge_err_file}")" || _rb_merge_err_part=""
+    if [ -z "${_rb_merge_err_part}" ]; then
+      continue
+    fi
+    if [ -n "${_rb_merge_err_text}" ]; then
+      _rb_merge_err_text="${_rb_merge_err_text}; "
+    fi
+    _rb_merge_err_text="${_rb_merge_err_text}${_rb_merge_err_label}: ${_rb_merge_err_part}"
+  done
+  if [ -z "${_rb_merge_err_text}" ]; then
+    _rb_merge_err_text="none"
+  fi
+  RB_MERGE_ERROR_TEXT="${_rb_merge_err_text:0:500}"
+  echo "RB_JUDGE_MERGE_ERROR pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_merge_err_path} error=${RB_MERGE_ERROR_TEXT}"
+  return 0
+}
+
+rb_judge_merge_err_close() {
+  case "${RB_MERGE_ERR_DIR:-}" in
+    */rb-merge-err.*) rm -rf -- "${RB_MERGE_ERR_DIR}" 2>/dev/null || true ;;
+  esac
+  RB_MERGE_ERR_DIR=""
+  RB_MERGE_ERR_AUTO_FILE="/dev/null"
+  RB_MERGE_ERR_DIRECT_FILE="/dev/null"
+  RB_MERGE_ERROR_TEXT=""
+  return 0
+}
+# END rb-judge merge error capture (#7659)
+
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
@@ -2178,13 +2279,17 @@ case "${RB_ACTION}" in
             RB_MERGE_STATUS="mergeability_pending"
           fi
         else
+          rb_judge_merge_err_open
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
-            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+            rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
           else
-            echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+            rb_judge_merge_err_report merge
+            echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
+            rb_judge_merge_err_close
             RB_MERGE_STATUS="merge_failed"
           fi
         fi
@@ -2266,13 +2371,17 @@ case "${RB_ACTION}" in
             RB_MERGE_STATUS="mergeability_pending"
           fi
         else
+          rb_judge_merge_err_open
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
-            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+            rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
           else
-            echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+            rb_judge_merge_err_report terminal
+            echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
+            rb_judge_merge_err_close
             RB_MERGE_STATUS="merge_failed"
           fi
         fi
@@ -2796,13 +2905,17 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # check above guarantees we never
             # fall back to an unbound merge: the check-runs gate
             # requires RB_JUDGED_HEAD_SHA, so reaching here means it's set.
+            rb_judge_merge_err_open
             _match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")
             review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>/dev/null; then
+            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+              rb_judge_merge_err_close
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"
             else
-              echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
+              rb_judge_merge_err_report sync
+              echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
+              rb_judge_merge_err_close
               echo "judge_skip_reason=sync_merge_failed" >> "$GITHUB_OUTPUT"
             fi
           else

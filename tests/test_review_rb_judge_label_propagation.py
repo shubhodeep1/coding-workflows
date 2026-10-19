@@ -2134,6 +2134,12 @@ def _build_merge_with_followup_harness(
 	# helper in scripts/pr_checks_lib.sh; source it so the branch can call it
 	# (gh_retry/_safe_gh_jq are defined above, used by the helper at call time).
 	pr_checks_lib_path = (REPO_ROOT / "scripts" / "pr_checks_lib.sh").as_posix()
+	# The sync merge calls the #7659 merge-error helpers, which live outside
+	# the case arm; copy their definitions in from the real script.
+	script_text = _rb_judge_text()
+	helpers_begin = script_text.index("# BEGIN rb-judge merge error capture (#7659)")
+	helpers_end = script_text.index("# END rb-judge merge error capture (#7659)", helpers_begin)
+	merge_err_helpers = script_text[helpers_begin:helpers_end]
 	return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -2144,7 +2150,7 @@ _safe_gh_jq() {{ gh api "$@"; }}
 sleep() {{ :; }}
 review_head_gate_post_status() {{ :; }}
 source "{pr_checks_lib_path}"
-
+{merge_err_helpers}
 GITHUB_OUTPUT="{github_output}"
 
 case "${{RB_ACTION}}" in

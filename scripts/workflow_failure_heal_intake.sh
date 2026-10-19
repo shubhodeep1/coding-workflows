@@ -1896,7 +1896,7 @@ elif [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
 	# and the PR changes pipeline files. Only `pr` is derived here; base
 	# ownership still needs a crash file. Fail open: helper error -> none.
 	PIPELINE_OWNERSHIP_OUTPUT="$(python3 "${HEAL_PY}" classify-pipeline-ownership --payload-json "${PAYLOAD_FILE}" 2>/dev/null || echo none)"
-	PIPELINE_OWNERSHIP="$(printf '%s\n' "${PIPELINE_OWNERSHIP_OUTPUT}" | head -n 1)"
+	PIPELINE_OWNERSHIP="$(head -n 1 <<<"${PIPELINE_OWNERSHIP_OUTPUT}")"
 	if [ "${PIPELINE_OWNERSHIP}" = "pr" ]; then
 		CRASH_OWNERSHIP="pr"
 		PIPELINE_OWNERSHIP_FILES="$(printf '%s\n' "${PIPELINE_OWNERSHIP_OUTPUT}" | tail -n +2)"

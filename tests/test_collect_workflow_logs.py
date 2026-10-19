@@ -1398,6 +1398,101 @@ def test_structured_cost_telemetry_line_key_strips_trailing_whitespace():
 	)
 
 
+_ANCHOR_TS = "2026-09-21T10:00:00.0000000Z"
+_ANCHOR_WARN = (
+	"CONTEXT_BUDGET_WARN: phase=review prompt_tokens=200000 "
+	"model_context_window=272000 ratio=0.7353 threshold=190400"
+)
+_ANCHOR_BREAK = "BREAK_GLASS: pr=12 commenter=alice"
+
+
+def _anchor_counts(lines: list[str]) -> tuple[int, int]:
+	run = {"repository": "owner/repo", "run_id": 7643, "duration_seconds": 1}
+	collector._apply_cost_telemetry_from_full_logs(
+		run, [{"step_name": "review", "content": "\n".join(lines)}]
+	)
+	telemetry = run["cost_telemetry"]
+	return telemetry["context_budget_warn_count"], telemetry["break_glass_count"]
+
+
+def test_context_budget_and_break_glass_count_direct_line_start_emissions():
+	counted = [
+		f"{_ANCHOR_TS} {_ANCHOR_WARN}",
+		f"\ufeff{_ANCHOR_TS} {_ANCHOR_WARN}",
+		f"\ufeff{_ANCHOR_WARN}",
+		_ANCHOR_WARN,
+		f"{_ANCHOR_TS} {_ANCHOR_BREAK}",
+		_ANCHOR_BREAK,
+	]
+	for line in counted:
+		assert collector._structured_cost_telemetry_line_key(line) is not None, line
+	assert _anchor_counts(counted) == (4, 2)
+
+	match = collector.CONTEXT_BUDGET_WARN_RE.search(f"{_ANCHOR_TS} {_ANCHOR_WARN}")
+	assert match is not None
+	assert match.group("phase") == "review"
+	assert match.group("prompt_tokens") == "200000"
+	assert match.group("model_context_window") == "272000"
+	assert match.group("ratio") == "0.7353"
+	assert match.group("threshold") == "190400"
+
+
+def test_context_budget_and_break_glass_ignore_quoted_copies():
+	quoted = [
+		f"{_ANCHOR_TS} - quoted: {_ANCHOR_WARN}",
+		f"- `{_ANCHOR_WARN}`",
+		f"{_ANCHOR_TS} - `{_ANCHOR_WARN}`",
+		f"  | {_ANCHOR_WARN}",
+		f"{_ANCHOR_TS} - quoted: {_ANCHOR_BREAK}",
+		f"- `{_ANCHOR_BREAK}`",
+		f"  | {_ANCHOR_BREAK}",
+		f"{_ANCHOR_TS}   | {_ANCHOR_BREAK}",
+	]
+	for line in quoted:
+		assert collector._structured_cost_telemetry_line_key(line) is None, line
+		assert collector.CONTEXT_BUDGET_WARN_RE.search(line) is None, line
+		assert collector.BREAK_GLASS_RE.search(line) is None, line
+	assert _anchor_counts(quoted) == (0, 0)
+	assert _anchor_counts(quoted + [f"{_ANCHOR_TS} {_ANCHOR_WARN}", _ANCHOR_BREAK]) == (1, 1)
+
+
+def test_context_budget_and_break_glass_accept_gh_run_view_log_prefix():
+	# `gh run view --log` prefixes every line with `<job>\t<step>\t`; cost_audit's
+	# CLI feeds that output to parse_log, so real emissions there must count.
+	counted = [
+		f"review\tRun reviewer models\t{_ANCHOR_TS} {_ANCHOR_WARN}",
+		f"review\tRun judge\t{_ANCHOR_TS} {_ANCHOR_BREAK}",
+		f"review\tRun judge\t{_ANCHOR_BREAK}",
+	]
+	assert collector.CONTEXT_BUDGET_WARN_RE.search(counted[0]) is not None
+	assert collector.BREAK_GLASS_RE.search(counted[1]) is not None
+	assert collector.BREAK_GLASS_RE.search(counted[2]) is not None
+	quoted = [
+		f"review\tRun reviewer models\t{_ANCHOR_TS} - quoted: {_ANCHOR_WARN}",
+		f"review\tRun judge\t{_ANCHOR_TS} - `{_ANCHOR_BREAK}`",
+	]
+	assert collector.CONTEXT_BUDGET_WARN_RE.search(quoted[0]) is None
+	assert collector.BREAK_GLASS_RE.search(quoted[1]) is None
+
+
+def test_collector_reuses_cost_audit_anchored_regexes():
+	import sys
+
+	# Both module names can be loaded in one pytest session; match the one the
+	# collector actually imported its pattern objects from.
+	loaded = [sys.modules.get(n) for n in ("cost_audit", "scripts.cost_audit")]
+	assert any(
+		m is not None
+		and collector.CONTEXT_BUDGET_WARN_RE is m.CONTEXT_BUDGET_WARN_RE
+		and collector.BREAK_GLASS_RE is m.BREAK_GLASS_RE
+		for m in loaded
+	)
+	assert collector.CONTEXT_BUDGET_WARN_RE in collector.STRUCTURED_COST_TELEMETRY_PATTERNS
+	assert collector.BREAK_GLASS_RE in collector.STRUCTURED_COST_TELEMETRY_PATTERNS
+	assert collector.CONTEXT_BUDGET_WARN_RE.pattern.startswith("^")
+	assert collector.BREAK_GLASS_RE.pattern.startswith("^")
+
+
 def test_structured_cost_telemetry_line_key_ignores_malformed_mcp_text():
 	invalid_lines = (
 		"SERENA_QUERY 0",

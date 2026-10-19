@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -394,3 +395,198 @@ def test_spot_fix_baseline_uses_live_head_when_judged_head_is_unpushed_local_com
 	assert f"ai/reissue-baseline/pr-42-{live[:12]}-" in state["_stdout"]
 	assert OTHER[:12] not in state["_stdout"]
 	assert not state.get("pr_view_args"), state.get("pr_view_args")
+
+
+# --- #7659: merge failures report gh's stderr ------------------------------
+
+
+MERGE_ERR_BEGIN = "# BEGIN rb-judge merge error capture (#7659)"
+MERGE_ERR_END = "# END rb-judge merge error capture (#7659)"
+MERGE_SITE_ENDS = {
+	"merge": '            RB_MERGE_STATUS="merge_failed"\n          fi\n',
+	"terminal": '            RB_MERGE_STATUS="merge_failed"\n          fi\n',
+	"sync": '              echo "judge_skip_reason=sync_merge_failed" >> "$GITHUB_OUTPUT"\n            fi\n',
+}
+MERGE_SITE_ORDER = ("merge", "terminal", "sync")
+DRAFT_MESSAGE = "Pull request #42 is still a draft"
+OLD_WARNINGS = {
+	"merge": f"::warning::Review-blocked judge merge failed for evaluated head {JUDGED}; withholding ai:ready-to-merge from linked issues.",
+	"terminal": f"::warning::Review-blocked judge terminal merge failed for evaluated head {JUDGED}; withholding ai:ready-to-merge from linked issues.",
+	"sync": "::warning::PR #42 sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge.",
+}
+
+
+def _merge_err_helpers() -> str:
+	text = _script_text()
+	start = text.index(MERGE_ERR_BEGIN)
+	end = text.index(MERGE_ERR_END, start)
+	return text[start:end]
+
+
+def _merge_site_snippet(path: str) -> str:
+	text = _script_text()
+	calls = [m.start() for m in re.finditer(r"^[ \t]+rb_judge_merge_err_open$", text, re.MULTILINE)]
+	assert len(calls) == 3, calls
+	start = calls[MERGE_SITE_ORDER.index(path)]
+	end_marker = MERGE_SITE_ENDS[path]
+	end = text.index(end_marker, start) + len(end_marker)
+	return text[start:end]
+
+
+def _run_merge_site(
+	path: str,
+	exit_codes: list[int],
+	stderr_text: str = DRAFT_MESSAGE,
+	*,
+	tmpdir_exists: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]], Path, str]:
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_merge_err_") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		gh_log = tmp / "gh_calls.jsonl"
+		stderr_file = tmp / "gh_stderr.txt"
+		stderr_file.write_text(stderr_text, encoding="utf-8")
+		gh_shim = bin_dir / "gh"
+		gh_shim.write_text(
+			"#!/usr/bin/env python3\n"
+			"import json, os, sys\n"
+			"log = os.environ['GH_CALL_LOG']\n"
+			"n = sum(1 for _ in open(log, encoding='utf-8')) if os.path.exists(log) else 0\n"
+			"with open(log, 'a', encoding='utf-8') as fh:\n"
+			"\tfh.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+			"codes = [int(c) for c in os.environ['GH_STUB_CODES'].split(',')]\n"
+			"code = codes[n] if n < len(codes) else codes[-1]\n"
+			"if code != 0:\n"
+			"\tsys.stderr.write(open(os.environ['GH_STUB_STDERR'], encoding='utf-8').read())\n"
+			"sys.exit(code)\n",
+			encoding="utf-8",
+		)
+		gh_shim.chmod(0o755)
+		scratch = tmp / "scratch"
+		if tmpdir_exists:
+			scratch.mkdir()
+		github_output = tmp / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		harness = tmp / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"review_head_gate_post_status() { :; }\n"
+			+ _merge_err_helpers()
+			+ "\n"
+			+ _merge_site_snippet(path)
+			+ '\necho "RB_MERGE_STATUS=${RB_MERGE_STATUS:-}"\n'
+			+ 'echo "MERGE_CONFIRMED=${MERGE_CONFIRMED:-}"\n',
+			encoding="utf-8",
+		)
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"GH_CALL_LOG": str(gh_log),
+			"GH_STUB_CODES": ",".join(str(c) for c in exit_codes),
+			"GH_STUB_STDERR": str(stderr_file),
+			"GITHUB_OUTPUT": str(github_output),
+			"TMPDIR": str(scratch),
+			"PR_NUMBER": "42",
+			"REPOSITORY": "o/r",
+			"RB_JUDGED_HEAD_SHA": JUDGED,
+		}
+		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
+		calls: list[list[str]] = []
+		if gh_log.exists():
+			calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+		leftovers = sorted(p.name for p in scratch.iterdir()) if scratch.exists() else []
+		assert leftovers == [], f"temp files left behind: {leftovers}"
+		return proc, github_output.read_text(encoding="utf-8"), calls, scratch, proc.stdout
+
+
+def _expected_calls(path: str) -> list[list[str]]:
+	base = ["pr", "merge", "42", "--repo", "o/r", "--squash"]
+	if path == "sync":
+		return [base + ["--match-head-commit", JUDGED]]
+	return [base + ["--auto", "--match-head-commit", JUDGED], base + ["--match-head-commit", JUDGED]]
+
+
+def _error_lines(stdout: str) -> list[str]:
+	return [line for line in stdout.splitlines() if line.startswith("RB_JUDGE_MERGE_ERROR ")]
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_failed_merge_reports_gh_error_once(path: str) -> None:
+	proc, output, calls, _scratch, stdout = _run_merge_site(path, [1, 1])
+	assert proc.returncode == 0, proc.stderr
+	assert calls == _expected_calls(path)
+	lines = _error_lines(stdout)
+	assert len(lines) == 1, stdout
+	assert lines[0].startswith(f"RB_JUDGE_MERGE_ERROR pr=42 head={JUDGED} path={path} error=")
+	assert DRAFT_MESSAGE in lines[0]
+	warnings = [line for line in stdout.splitlines() if line.startswith("::warning::")]
+	assert len(warnings) == 1
+	assert warnings[0].startswith(OLD_WARNINGS[path])
+	assert "gh error: " in warnings[0] and DRAFT_MESSAGE in warnings[0]
+	if path == "sync":
+		assert "judge_skip_reason=sync_merge_failed" in output.splitlines()
+		assert "MERGE_CONFIRMED=" in stdout.splitlines()
+	else:
+		assert "RB_MERGE_STATUS=merge_failed" in stdout.splitlines()
+		assert "auto: " in lines[0] and "direct: " in lines[0]
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_successful_merge_prints_no_error_line(path: str) -> None:
+	proc, output, calls, _scratch, stdout = _run_merge_site(path, [0])
+	assert proc.returncode == 0, proc.stderr
+	assert calls == _expected_calls(path)[:1]
+	assert _error_lines(stdout) == []
+	assert not any(line.startswith("::warning::") for line in stdout.splitlines())
+	if path == "sync":
+		assert "PR #42 merged synchronously." in stdout
+		assert "MERGE_CONFIRMED=true" in stdout.splitlines()
+	else:
+		assert "RB_MERGE_STATUS=merge_requested" in stdout.splitlines()
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_direct_attempt_success_after_auto_failure_prints_no_error_line(path: str) -> None:
+	proc, _output, calls, _scratch, stdout = _run_merge_site(path, [1, 0])
+	assert proc.returncode == 0, proc.stderr
+	assert calls == _expected_calls(path)
+	assert _error_lines(stdout) == []
+	assert "RB_MERGE_STATUS=merge_requested" in stdout.splitlines()
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_error_text_is_single_line_bounded_and_redacted(path: str) -> None:
+	token = "ghp_" + "A1b2C3d4E5" * 3 + "XYZ123"
+	noisy = f"line one\r\n{token}\n" + ("x" * 50 + "\n") * 60 + "::error::forged\n"
+	proc, _output, _calls, _scratch, stdout = _run_merge_site(path, [1, 1], noisy)
+	assert proc.returncode == 0, proc.stderr
+	lines = _error_lines(stdout)
+	assert len(lines) == 1, stdout
+	error_value = lines[0].split(" error=", 1)[1]
+	assert 0 < len(error_value) <= 500
+	assert token not in stdout
+	assert "[redacted]" in error_value
+	assert not any(line.startswith("::error::") for line in stdout.splitlines())
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_mktemp_failure_keeps_previous_behaviour(path: str) -> None:
+	proc, output, calls, _scratch, stdout = _run_merge_site(path, [1, 1], tmpdir_exists=False)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == _expected_calls(path)
+	assert _error_lines(stdout) == []
+	warnings = [line for line in stdout.splitlines() if line.startswith("::warning::")]
+	assert warnings == [OLD_WARNINGS[path]]
+	if path == "sync":
+		assert "judge_skip_reason=sync_merge_failed" in output.splitlines()
+	else:
+		assert "RB_MERGE_STATUS=merge_failed" in stdout.splitlines()
+
+
+def test_no_merge_command_discards_stderr() -> None:
+	text = _script_text()
+	for line in text.splitlines():
+		if "gh pr merge" in line and not line.lstrip().startswith("#"):
+			assert "2>/dev/null" not in line, line
+	reports = re.findall(r"^\s+rb_judge_merge_err_report (\S+)$", text, re.MULTILINE)
+	assert reports == ["merge", "terminal", "sync"]

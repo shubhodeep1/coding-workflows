@@ -148,9 +148,25 @@ MCP_PROBE_GENERIC_RE = re.compile(
 )
 
 KNOWN_MCP_SERVERS = frozenset({"SEMBLE", "SERENA"})
-BREAK_GLASS_RE = re.compile(r"(?:^|\s)BREAK_GLASS:(?:\s|$)")
+# Line-start anchor for the BREAK_GLASS / CONTEXT_BUDGET_WARN markers: the
+# marker must be the first token of the line, after only an optional UTF-8 BOM,
+# an optional `<job>\t<step>\t` prefix (the two tab-separated fields
+# `gh run view --log` puts on every line, which main() feeds to parse_log) and
+# an optional GitHub Actions log timestamp. Every emitter prints the bare
+# marker at column 0 with a plain printf (the four
+# emit_context_budget_warn_for_prompt functions in review_apply_fixes.sh,
+# review_rb_judge.sh, review_consolidate.sh and review_run_reviewers.sh, via
+# format_context_budget_warn_line; BREAK_GLASS from review_rb_judge.sh), so no
+# other prefix is accepted. Quoted copies inside reports, summaries or stderr
+# tails therefore no longer count as fresh events. Callers match single lines,
+# so no re.MULTILINE is needed.
+_TELEMETRY_LINE_PREFIX_RE_SRC = (
+    r"^\ufeff?(?:[^\t\n]*\t[^\t\n]*\t)?(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+)?"
+)
+BREAK_GLASS_RE = re.compile(_TELEMETRY_LINE_PREFIX_RE_SRC + r"BREAK_GLASS:(?:\s|$)")
 CONTEXT_BUDGET_WARN_RE = re.compile(
-    r"(?:^|\s)CONTEXT_BUDGET_WARN:\s+"
+    _TELEMETRY_LINE_PREFIX_RE_SRC
+    + r"CONTEXT_BUDGET_WARN:\s+"
     r"phase=(?P<phase>\S+)\s+"
     r"prompt_tokens=(?P<prompt_tokens>\d+)\s+"
     r"model_context_window=(?P<model_context_window>\d+)\s+"

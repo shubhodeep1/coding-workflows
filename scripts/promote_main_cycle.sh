@@ -49,8 +49,12 @@
 # Non-code paths (do not count as a change): analysis/**, ai-memory/**,
 # docs/**, tests/e2e_smoke_canary.txt, CHANGELOG.md and every *.md — except
 # any CLAUDE.md and anything under a .claude/ directory (the root tree and the
-# workflow-templates/.claude/ twin the @stable sync ships to consumers), which
-# therefore count as code.
+# workflow-templates/.claude/ twin the @stable sync ships to consumers), and
+# the markdown the pipeline reads into model context (#7662): README.md,
+# unattended_system_instructions.md, ai_pipeline.md, agents.md, AGENTS.md,
+# codex.md, probably_unnecessary_but_read_if_stuck.md and agents.d/**, which
+# therefore count as code. The case pattern lines of is_code_path must stay
+# identical to comprehensive_cycle_is_code_path in orchestrate_poll_process.sh.
 #
 # Environment (all optional unless stated):
 #   GITHUB_REPOSITORY (required), GH_TOKEN (required)
@@ -213,7 +217,7 @@ is_code_path()
 {
 	local p="$1"
 	case "${p}" in
-		CLAUDE.md|*/CLAUDE.md|.claude/*|*/.claude/*) return 0 ;;
+		CLAUDE.md|*/CLAUDE.md|.claude/*|*/.claude/*|README.md|unattended_system_instructions.md|ai_pipeline.md|agents.md|AGENTS.md|codex.md|probably_unnecessary_but_read_if_stuck.md|agents.d/*) return 0 ;;
 	esac
 	case "${p}" in
 		analysis/*|ai-memory/*|docs/*|tests/e2e_smoke_canary.txt|CHANGELOG.md|*.md) return 1 ;;
