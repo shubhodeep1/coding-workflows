@@ -137,6 +137,8 @@ def test_activation_log_slug_handles_prs_in_other_repositories(command: Path) ->
 		"`- Reference:` line names that PR",
 		"Resume a `pr-<repo>-<N>.md` log only when its `- Reference:` line names that PR",
 		"resume `pr-<N>.md` only when its `- Reference:` line does not name a PR in another repository",
+		"A bare `#N`, or a URL for",
+		"is not ambiguous",
 		"owner/repo#N for a PR in another repository",
 		"Never rename or move an existing log",
 		"`issue-<N>`",
