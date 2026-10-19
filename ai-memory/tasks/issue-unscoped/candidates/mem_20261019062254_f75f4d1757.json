@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): file: `.claude/commands/deploy-activate.md` (line 53) and `workflow-templates/.claude/commands/deploy-activate.md` (the same \"Look up before creating\" bullet)\n  location: the new \"For a PR in this repo / in `THIS_REPO`, resume `pr-<N>.md` only when ... or is ambiguous, stop and ask\" sentence\n  PROBLEM: Logs written under the old template record a PR in this repository as a bare `#N`. A model that reads a bare `#N` as \"ambiguous\" would stop and ask every time it resumes an existing log for a PR in this repository.\n  suggested minimal fix: In both copies, add one clause saying that a bare `#N`, or a URL for this repository, names a PR of this repository and is not ambiguous.\n  estimated lines changed: 2 (one per copy)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): File: .claude/commands/deploy-activate.md and workflow-templates/.claude/commands/deploy-activate.md\n  Location: \"Look up before creating\" bullet, sentence about resuming pr-<N>.md for same-repo PRs\n  PROBLEM: Logs written before this change record same-repo PRs as a bare #N in the Reference line. The rule says \"resume pr-<N>.md only when its - Reference: line does not name a PR in another repository: ... if the line names an external PR, or is ambiguous, stop and ask\". A model might read a bare #N as ambiguous instead of as a same-repo reference.\n  WHY: Every attempt to resume an existing same-repo PR log written under the old template would stop and ask instead of resuming, which defeats the lookup-first behaviour for old logs.\n  Suggested minimal fix: In both copies, add one clause saying that a bare #N or a URL for this repository counts as a PR of this repo, not as ambiguous.\n  Estimated lines changed: 2 (one sentence per copy)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "bbcff2dcb7af3930e0ffcb666f97c6e8aacd2ad679f327445729f6b4bd1c403c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7661,
+    "run_id": "39207801948",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39207801948",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019062254_f75f4d1757",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7661,
+    "run_id": "39207801948"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-19T06:22:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
