@@ -1807,6 +1807,60 @@ def test_security_audit_upstream_managed_filter_fails_open_without_an_upstream_t
 	assert "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=upstream_tree_missing" in proc.stdout
 
 
+def _install_poller_staged_support_tree(base_dir: Path) -> Path:
+	"""Build a support tree shaped like the orchestrate poller's workspace.
+
+	The "Stage workflow support files" step of orchestrate_poll.yml copies
+	render_prompt.sh / render_prompt.py (real files, not symlinks) and only
+	some prompt assets: prompts/references/security-money-lens.txt is staged,
+	prompts/references/output-contract.txt is not.  The full support checkout
+	stays at <workspace>/.codex-workflow-src.
+	"""
+	support_dir = base_dir / "poller-workspace"
+	scripts_dir = support_dir / "scripts"
+	prompts_dir = support_dir / "prompts"
+	(prompts_dir / "references").mkdir(parents=True)
+	scripts_dir.mkdir(parents=True)
+	for script_name in ("label_helpers.sh", "gh_helpers.sh"):
+		(scripts_dir / script_name).symlink_to(REPO_ROOT / "scripts" / script_name)
+	# Copied, so render_prompt.py's own script root is the workspace, as in CI.
+	for script_name in ("render_prompt.sh", "render_prompt.py", "assemble_prompt.sh"):
+		(scripts_dir / script_name).write_bytes((REPO_ROOT / "scripts" / script_name).read_bytes())
+	(prompts_dir / "mode-security-audit.txt").write_bytes((REPO_ROOT / "prompts" / "mode-security-audit.txt").read_bytes())
+	(prompts_dir / "references" / "security-money-lens.txt").write_bytes(
+		(REPO_ROOT / "prompts" / "references" / "security-money-lens.txt").read_bytes()
+	)
+	support_checkout_references = support_dir / ".codex-workflow-src" / "prompts" / "references"
+	support_checkout_references.mkdir(parents=True)
+	(support_checkout_references / "output-contract.txt").write_bytes(
+		(REPO_ROOT / "prompts" / "references" / "output-contract.txt").read_bytes()
+	)
+	return support_dir
+
+
+def test_security_audit_renders_the_prompt_from_the_support_root_when_run_in_an_audit_worktree() -> None:
+	# Regression (consumer tele-funtoken-msg-scoring tracking #3928): the
+	# project security pass runs security_audit.sh inside a clean audit
+	# worktree under ${RUNTIME_DIR}.  The renderer resolved
+	# {{REFERENCE_OUTPUT_CONTRACT}} only through $PWD/.codex-workflow-src, so
+	# from the worktree every render failed with "prompt renderer exited
+	# nonzero" and the pass reported engine_unavailable on every poll.
+	with tempfile.TemporaryDirectory(prefix="security-audit-poller-tree-") as support_td:
+		support_dir = _install_poller_staged_support_tree(Path(support_td))
+		proc, final_state = _run_consumer_findings_json(
+			{
+				"SECURITY_AUDIT_SUPPORT_DIR": str(support_dir),
+				"SECURITY_AUDIT_FP_EXCLUSIONS": str(REPO_ROOT / "scripts" / "security_audit_fp_exclusions.json"),
+			},
+			upstream_source_dir=None,
+		)
+
+	assert "phase=prompt-render" not in proc.stderr, proc.stderr
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(final_state["security_audit_findings_output"])
+	assert len(payload["findings"]) == 4
+
+
 def test_security_audit_upstream_source_dir_override_supplies_the_managed_list() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-override-") as support_td:
 		support_dir = _install_security_audit_support_tree(Path(support_td), failure_mode="none")
@@ -2775,6 +2829,70 @@ def test_security_audit_chunks_scoped_oversized_file_and_reports_coverage() -> N
 		assert payload["findings"] == [] and payload["counts"]["kept"] == 0
 		assert payload["coverage"]["scoped_oversized_chunked"] == ["large.py"]
 		assert payload["coverage"]["unscoped_text_capped_count"] == 0
+
+
+def _env_template_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
+	"""A diff that adds a committed `.env.example` beside ordinary code."""
+	repo_dir, _first_sha, base_sha = _git_fixture_repo(base_dir)
+	(repo_dir / ".env.example").write_text("DEPLOYER_PK=\nRPC_URL=\n", encoding="utf-8")
+	(repo_dir / "file_c.py").write_text("VALUE_C = 3\n", encoding="utf-8")
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update({
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+	})
+	subprocess.run(["git", "add", ".env.example", "file_c.py"], cwd=repo_dir, env=git_env, check=True)
+	subprocess.run(["git", "commit", "-qm", "env template"], cwd=repo_dir, env=git_env, check=True)
+	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=git_env, text=True).strip()
+	return repo_dir, base_sha, head_sha
+
+
+def test_security_audit_reports_credential_filtered_scoped_file_instead_of_failing() -> None:
+	# fun-token-multi-chain#579: a project diff that touched `.env.example`
+	# failed every security pass with `scoped file excluded by read-only
+	# filter`. The file is still withheld from the model, the audit runs, and
+	# the gap is reported in the prompt and in the findings coverage.
+	with tempfile.TemporaryDirectory(prefix="security-audit-filtered-scope-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _env_template_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		proc, state = _run_security_audit({}, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "phase=oversized-scope" not in proc.stderr
+		assert "filtered_scoped=1" in proc.stdout
+		assert "withheld by the credential filter" in proc.stdout
+		prompt = state["codex_stdin"][0]
+		assert "1 scoped files are withheld from you by the credential filter and were not inspected: .env.example." in prompt
+		assert "DEPLOYER_PK" not in prompt
+		payload = json.loads(state["security_audit_findings_output"])
+		assert payload["coverage"]["scoped_filtered_skipped"] == [".env.example"]
+		assert payload["coverage"]["scoped_filtered_skipped_count"] == 1
+
+
+def test_security_audit_tracker_comment_lists_credential_filtered_scoped_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-filtered-tracker-") as td:
+		tmp_path = Path(td)
+		repo_dir, last_audited_sha, head_sha = _env_template_fixture_repo(tmp_path)
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] += f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->\n"
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "scope=incremental" in proc.stdout
+		comment = result["issue_comment_bodies"][0]
+		assert "- Coverage note: 1 scoped files are withheld by the credential filter and were not inspected: `.env.example`" in comment
+		# The filter never lets these files through, so they do not mark the
+		# run partial; the last-audited marker still advances.
+		assert "Coverage: partial" not in comment
+		assert any(f"ai:security-audit-last-sha:{head_sha}" in body for body in result["issue_edit_bodies"])
 
 
 def test_security_audit_oversized_cap_fails_before_codex() -> None:

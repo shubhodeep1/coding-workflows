@@ -19,9 +19,11 @@ Subcommands:
   export-oversized HOST SCOPE_FILE DEST MAX_FILE_BYTES MAX_TOTAL_BYTES [SCOPE_MODE]
       Export scoped files omitted by snapshot-readonly as bounded chunks,
       using its same credential and hidden-path filters. Filtered files are
-      never exported; scoped filtered files reject the audit. The default
-      explicit mode lists unscoped oversized files for coverage; all mode
-      exports every eligible oversized tracked file.
+      never exported; scoped filtered files are listed in the manifest's
+      `filtered_scoped` (reason `credential_filter` or `hidden`) so the audit
+      reports them as not inspected. The default explicit mode lists unscoped
+      oversized files for coverage; all mode exports every eligible oversized
+      tracked file.
 
   snapshot-workspace HOST DEST MANIFEST
       Copy HOST except credential-looking paths and `.git` into DEST, keeping
@@ -329,6 +331,12 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 	scoped = []
 	unscoped = []
 	unscoped_text_capped = []
+	# Scoped files the credential / hidden-path filter keeps out of every
+	# isolated view. They can never be inspected, so rejecting them would
+	# block every audit whose diff touches one (a committed `.env.example`
+	# stalled fun-token-multi-chain#579's security pass on every poll).
+	# They are recorded instead and reported as not inspected.
+	filtered_scoped = []
 	explicit_candidates = []
 	extra_candidates = []
 	total = 0
@@ -341,7 +349,8 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 				except (FileNotFoundError, NotADirectoryError):
 					pass  # A deleted file has no contents to audit.
 				else:
-					raise Rejected(f"scoped file excluded by read-only filter (path={name})")
+					filtered_reason = "hidden" if name in HIDDEN_NAMES else "credential_filter"
+					filtered_scoped.append({"path": name, "reason": filtered_reason})
 			continue
 		try:
 			node = walk_no_follow(host, name)
@@ -440,8 +449,10 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 		"unscoped_oversized_count": len(unscoped),
 		"unscoped_text_capped": unscoped_text_capped[:50],
 		"unscoped_text_capped_count": len(unscoped_text_capped),
+		"filtered_scoped": filtered_scoped[:50],
+		"filtered_scoped_count": len(filtered_scoped),
 	}), encoding="utf-8")
-	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)} text_capped={len(unscoped_text_capped)} mode={scope_mode}")
+	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)} text_capped={len(unscoped_text_capped)} filtered_scoped={len(filtered_scoped)} mode={scope_mode}")
 
 
 def load_manifest(manifest):
