@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "When changing workflow behavior or scripts such as the review, security-audit, or orchestration tools, look for the corresponding contract test and add or update a changelog fragment. Existing test names often identify the behavior that must remain stable.",
+  "fingerprint": "478ad169bdb1568ad52bbd94cbbe24436c8edd6aa2291f298016a97e51b93d81",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39219697303",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39219697303",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7650",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7652",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7653",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7659",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7662",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7661",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7663",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7664",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7666",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7668"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261019080523_efd61f0a28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and shell-script changes in this repository are commonly guarded by focused contract tests and documented with a `changelog.d` entry.",
+  "timestamps": {
+    "created_at": "2026-10-19T08:05:23Z",
+    "promoted_at": "2026-10-19T08:06:44Z",
+    "superseded_at": null
+  }
+}

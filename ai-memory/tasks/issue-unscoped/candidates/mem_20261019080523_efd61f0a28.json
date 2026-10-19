@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "Workflow and shell-script changes in this repository are commonly guarded by focused contract tests and documented with a `changelog.d` entry.",
   "timestamps": {
     "created_at": "2026-10-19T08:05:23Z",
-    "promoted_at": null,
+    "promoted_at": "2026-10-19T08:06:44Z",
     "superseded_at": null
   }
 }
