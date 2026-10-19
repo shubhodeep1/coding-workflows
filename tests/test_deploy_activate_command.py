@@ -122,3 +122,25 @@ def test_identifiers_are_verified_and_persisted(cloudflare_steps: str) -> None:
 	assert "verify it resolves with one read call" in cloudflare_steps
 	assert "**add it to that table**" in cloudflare_steps
 	assert "commit/push it together with the activation-log bookkeeping" in cloudflare_steps
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))
+def test_activation_log_slug_handles_prs_in_other_repositories(command: Path) -> None:
+	text = command.read_text(encoding="utf-8")
+	section = text.split("\n## Activation Log\n", 1)[1].split("\n## ", 1)[0]
+	section = " ".join(section.split())
+	for required in (
+		"`pr-<repo>-<N>`",
+		"pr-mongo-explorer-37",
+		"`pr-<N>`",
+		"Look up before creating",
+		"`- Reference:` line names that PR",
+		"Never rename or move an existing log",
+		"`issue-<N>`",
+		"`plan-<basename-without-extension>`",
+		"`feature-<kebab-case>`",
+	):
+		assert required in section, (command, required)
+	assert "PR → `pr-<N>` ·" not in section
+	step_one = " ".join(text.split("1. **Parse `$ARGUMENTS`", 1)[1].split("\n2. ", 1)[0].split())
+	assert "including the lookup in [Activation Log](#activation-log)" in step_one
