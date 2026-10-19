@@ -1074,21 +1074,9 @@ class MergeTrainStepContractTest(unittest.TestCase):
 
 # Steps moved from tests-release-and-log-analysis (budget-watch issue #7689):
 # step name -> (matrix group that runs it, module paths its body names).
+# The two group-2 steps moved out of the matrix again in #7697; see
+# MOVED_POLL_GROUP_TWO_STEPS below.
 MOVED_RELEASE_STEPS = {
-	"Promote cycle and blocked-verdict unit tests": (
-		2,
-		(
-			"tests/test_promote_main_cycle.py",
-			"tests/test_apply_analysis_on_main.py",
-			"tests/test_auto_release_stable.py",
-			"tests/test_orchestrate_poll_promote_cycle.py",
-			"tests/test_implement_blocked_verdict_terminalizes.py",
-		),
-	),
-	"Review-blocked judge label propagation contract test": (
-		2,
-		("tests/test_review_rb_judge_label_propagation.py",),
-	),
 	"Orchestrator judges on the Claude engine tests (Phase 5c)": (
 		3,
 		("tests/test_orchestrator_judges_claude_engine.py",),
@@ -1137,6 +1125,65 @@ class MovedReleaseStepsContractTest(unittest.TestCase):
 			for module in modules:
 				with self.subTest(step=name, module=module):
 					self.assertIn(module, poll_job_step(name)["run"])
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+
+
+# Steps moved out of orchestrate-poll (2), which took 19m28s of its 20 minutes
+# (run 39245970945, budget-watch issue #7697): step name -> (owning job id,
+# module paths its body names).
+MOVED_POLL_GROUP_TWO_STEPS = {
+	"Promote cycle and blocked-verdict unit tests": (
+		"tests-release-and-log-analysis",
+		(
+			"tests/test_promote_main_cycle.py",
+			"tests/test_apply_analysis_on_main.py",
+			"tests/test_auto_release_stable.py",
+			"tests/test_orchestrate_poll_promote_cycle.py",
+			"tests/test_implement_blocked_verdict_terminalizes.py",
+		),
+	),
+	"Review-blocked judge label propagation contract test": (
+		"tests-promote-stall-and-review",
+		("tests/test_review_rb_judge_label_propagation.py",),
+	),
+}
+
+
+class MovedPollGroupTwoStepsContractTest(unittest.TestCase):
+	"""The steps moved out of orchestrate-poll (2) run once, in one job (#7697).
+
+	A step that kept its `if: strategy.job-index == 2` guard would never run
+	in a job without a matrix, so the guard must be gone.
+	"""
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+		return [
+			(job_id, step)
+			for job_id, job in jobs.items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_POLL_GROUP_TWO_STEPS.items():
+			with self.subTest(step=name):
+				owners = [owner for owner, _step in self.owning_steps(name)]
+				self.assertEqual(owners, [job_id])
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_POLL_GROUP_TWO_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_POLL_GROUP_TWO_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertIn(module, steps[0][1]["run"])
 					self.assertTrue((REPO_ROOT / module).is_file(), module)
 
 
