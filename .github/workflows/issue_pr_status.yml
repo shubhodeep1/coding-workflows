@@ -155,6 +155,14 @@ jobs:
             echo "::warning::scripts/orchestrate_lib.py unavailable; declared integration branches will be treated as empty."
           fi
           _fetched_scripts+=("orchestrate_lib.py")
+          # Issue #7657: partial_delivery.py reads the deferred-scope section of
+          # a merged PR body. Fetched outside the memory-helper loop; when it is
+          # missing, a PR carrying the partial-delivery marker leaves its issue
+          # open with a warning (reason=helper_missing) instead of closing it.
+          if ! fetch_from_ref_or_local "scripts/partial_delivery.py" "scripts/partial_delivery.py" "false"; then
+            echo "::warning::scripts/partial_delivery.py unavailable; partial-delivery PRs will leave their issues open without the remaining-items comment."
+          fi
+          _fetched_scripts+=("partial_delivery.py")
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -206,6 +214,9 @@ jobs:
           # Issue #7160: binding facts for an unmerged close (event payload, no API call).
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
           PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login || '' }}
+          # Issue #7657: the merged head, for the bound ai/issue-<n> ref delete.
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -230,6 +241,133 @@ jobs:
             fi
             [ "${UNMERGED_CLOSE_LOGIN_STATE}" = "ok" ]
           }
+
+          # BEGIN partial-delivery merge handling (#7657)
+          # A merged PR whose body carries `<!-- ai:partial-delivery:v1
+          # issue=<n> -->` (written by implement.yml from the approved plan's
+          # `## Deferred scope` section) delivered only part of issue <n>. When
+          # the PR is bound to that issue by the #7160 rules (same-repository
+          # head, head branch ai/issue-<n>, PR author equal to the GH_PAT
+          # login), the issue stays open: the remaining items are posted once,
+          # the phase label returns to ai:clarification and clarify restarts
+          # with the automated `<!-- ai:partial-delivery-restart:<n> -->`
+          # marker. Returns 0 when the issue was kept open, 1 to close it.
+          # GitHub API audit (CLAUDE.md §14): only for a merged, bound partial
+          # PR: the memoized GET /user, one paginated comments read, at most
+          # two comment POSTs, the existing label call, one ref GET and at most
+          # one ref DELETE. Every other PR adds no call.
+          handle_partial_delivery_merge() {
+            local issue="$1"
+            local marker="<!-- ai:partial-delivery:v1 issue=${issue} -->"
+            local switch
+            switch="$(printf '%s' "${PARTIAL_DELIVERY_TRACKING_ENABLED:-}" | tr '[:upper:]' '[:lower:]')"
+            case "${switch}" in
+              ""|true) ;;
+              false) return 1 ;;
+              *)
+                echo "::warning::PARTIAL_DELIVERY_TRACKING_ENABLED has an unrecognized value; partial-delivery tracking is off."
+                return 1
+                ;;
+            esac
+            if ! printf '%s\n' "${PR_BODY:-}" | tr -d '\r' | sed 's/[[:space:]]*$//' | grep -Fqx -- "${marker}"; then
+              return 1
+            fi
+            local reason=""
+            if [ -z "${PR_HEAD_REPO:-}" ] || [ "${PR_HEAD_REPO}" != "${REPOSITORY}" ]; then
+              reason="foreign_head"
+            elif [ -z "${BRANCH_ISSUE_NUMBER}" ] || [ "${BRANCH_ISSUE_NUMBER}" != "${issue}" ] || [ "${PR_HEAD_REF:-}" != "ai/issue-${issue}" ]; then
+              # Exact head ref, as the poller's close sweep requires.
+              reason="unbound_issue"
+            elif ! resolve_unmerged_close_login; then
+              # The binding cannot be checked: keep the issue open rather than
+              # lose the deferred items (the close sweep defers the same way).
+              # Move it off its pre-merge phase label (ai:ready-to-merge) so it
+              # visibly re-enters clarification instead of looking merge-ready.
+              set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
+              echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but the pipeline login could not be read; the issue stays open in ai:clarification without the remaining-items comment. Post /reclarify on it to restart clarification for the deferred items."
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=identity_unavailable label=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-unknown}"
+              return 0
+            elif [ -z "${PR_AUTHOR_LOGIN:-}" ] || [ "${PR_AUTHOR_LOGIN,,}" != "${UNMERGED_CLOSE_LOGIN,,}" ]; then
+              reason="author_mismatch"
+            fi
+            if [ -n "${reason}" ]; then
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=skip reason=${reason}"
+              return 1
+            fi
+            local work body_file status_json pd_status
+            work="$(mktemp -d)"
+            body_file="${work}/pr_body.md"
+            printf '%s\n' "${PR_BODY:-}" > "${body_file}"
+            if [ ! -f scripts/partial_delivery.py ] || [ -L scripts/partial_delivery.py ]; then
+              set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
+              echo "::warning::PR #${PR_NUMBER} marks issue #${issue} as partially delivered but scripts/partial_delivery.py is unavailable; the issue stays open in ai:clarification. Post /reclarify on it to restart clarification for the deferred items."
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=helper_missing label=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-unknown}"
+              rm -rf "${work}"
+              return 0
+            fi
+            status_json="$(python3 -I -B scripts/partial_delivery.py pr-body-status --body-file "${body_file}" --issue "${issue}" 2>/dev/null || echo '{}')"
+            pd_status="$(printf '%s' "${status_json}" | python3 -I -B -c 'import json, sys; print(json.load(sys.stdin).get("status") or "")' 2>/dev/null || echo '')"
+            if [ "${pd_status}" != "partial" ]; then
+              echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=skip reason=not_partial"
+              rm -rf "${work}"
+              return 1
+            fi
+            local login_lc="${UNMERGED_CLOSE_LOGIN,,}"
+            local remaining_marker="<!-- ai:partial-delivery-remaining:v1 issue=${issue} pr=${PR_NUMBER} -->"
+            local restart_text="/reclarify"$'\n'"<!-- ai:partial-delivery-restart:${issue} -->"
+            local comments_file="${work}/comments.jsonl"
+            local comment_state="failed" restart_state="failed" branch_state="failed"
+            local remaining_id=""
+            if gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${issue}/comments?per_page=100" \
+              --jq '.[] | {id: .id, login: ((.user.login // "") | ascii_downcase), body: ((.body // "") | gsub("\r"; "") | sub("\\s+$"; ""))}' \
+              > "${comments_file}" 2>/dev/null; then
+              remaining_id="$(jq -rs --arg login "${login_lc}" --arg m "${remaining_marker}" \
+                '[.[] | select(.login == $login and (.body | contains($m))) | .id] | max // empty' "${comments_file}" 2>/dev/null || true)"
+              if [ -n "${remaining_id}" ]; then
+                comment_state="present"
+              else
+                local comment_file="${work}/remaining.md"
+                if python3 -I -B scripts/partial_delivery.py remaining-comment --body-file "${body_file}" --issue "${issue}" --pr "${PR_NUMBER}" \
+                  > "${comment_file}" 2>/dev/null && [ -s "${comment_file}" ] \
+                  && remaining_id="$(gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue}/comments" -F "body=@${comment_file}" --jq '.id' 2>/dev/null)" \
+                  && [[ "${remaining_id}" =~ ^[0-9]+$ ]]; then
+                  comment_state="posted"
+                else
+                  remaining_id=""
+                fi
+              fi
+            fi
+            set_issue_phase_label_resilient "${issue}" "ai:clarification" "${REPOSITORY}" || true
+            if [ -n "${remaining_id}" ]; then
+              if [ "${comment_state}" = "present" ] && jq -es --arg login "${login_lc}" --arg body "${restart_text}" --argjson after "${remaining_id}" \
+                'any(.[]; .login == $login and .body == $body and .id > $after)' "${comments_file}" >/dev/null 2>&1; then
+                restart_state="present"
+              elif gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${issue}/comments" -f "body=${restart_text}" >/dev/null 2>&1; then
+                restart_state="posted"
+              fi
+            fi
+            local ref_sha=""
+            if [[ ! "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+              branch_state="kept"
+            elif ref_sha="$(gh api "repos/${REPOSITORY}/git/ref/heads/ai/issue-${issue}" --jq '.object.sha' 2>"${work}/ref.err")"; then
+              if [ "${ref_sha}" = "${PR_HEAD_SHA}" ]; then
+                if gh api -X DELETE "repos/${REPOSITORY}/git/refs/heads/ai/issue-${issue}" >/dev/null 2>&1; then
+                  branch_state="deleted"
+                fi
+              else
+                branch_state="kept"
+              fi
+            elif grep -qiE 'HTTP 404|Not Found' "${work}/ref.err" 2>/dev/null; then
+              branch_state="absent"
+            fi
+            if [ "${comment_state}" = "failed" ] || [ "${restart_state}" = "failed" ]; then
+              echo "::warning::Issue #${issue} stays open after partial-delivery PR #${PR_NUMBER}, but the remaining-items or restart comment could not be posted (comment=${comment_state} restart=${restart_state}); stall recovery or a person must restart clarify."
+            fi
+            echo "PARTIAL_DELIVERY mode=merge pr=${PR_NUMBER} issue=${issue} outcome=kept_open reason=deferred_scope comment=${comment_state} restart=${restart_state} branch=${branch_state} label=${SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME:-unknown}"
+            rm -rf "${work}"
+            return 0
+          }
+          # END partial-delivery merge handling (#7657)
 
           # The default branch comes from the event payload (consumer repos
           # do not all use `main`); fall back to `main` only when the payload
@@ -614,6 +752,13 @@ jobs:
 
             if [ -z "${target_merge_reason}" ]; then
               echo "PR #${PR_NUMBER} merged into $(sanitize_ref_for_log "${PR_BASE_REF}") (default branch: $(sanitize_ref_for_log "${REPO_DEFAULT_BRANCH}")); issue #${issue_number} labels, state and lineage left unchanged (not a target merge; declared=$(sanitize_ref_for_log "${declared_branch}"))."
+              continue
+            fi
+            # Issue #7657: a merged PR that delivered only part of a standalone
+            # issue keeps it open and restarts clarify for the deferred items.
+            if [ "${PR_MERGED}" = "true" ] && [ "${is_managed_child}" != "true" ] \
+              && { [ "${target_merge_reason}" = "default_branch" ] || [ "${target_merge_reason}" = "declared_integration_branch" ]; } \
+              && handle_partial_delivery_merge "${issue_number}"; then
               continue
             fi
             LINEAGE_FINALIZE_ISSUE_NUMBERS="$(merge_issue_number_list "${LINEAGE_FINALIZE_ISSUE_NUMBERS}" "${issue_number}")"
