@@ -560,6 +560,8 @@ def test_clarify_route_restarts_a_verified_release_as_automated() -> None:
 				"ISSUE_NUMBER": "42",
 				"CHECK_TRIAGE_RESOLVED_GATE_ENABLED": "true",
 				"DEFAULT_BRANCH": "main",
+				# The runner exports GITHUB_REPOSITORY; the route step reads it.
+				"GITHUB_REPOSITORY": "o/r",
 			}
 			script = step["run"].replace("${{ github.repository }}", "o/r")
 			result = subprocess.run(["bash", "-c", script], env=env, cwd=workdir, capture_output=True, text=True, check=True)

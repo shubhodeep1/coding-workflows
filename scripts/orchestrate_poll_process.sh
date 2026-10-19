@@ -5214,15 +5214,18 @@ close_merged_issues_sweep() {
             if [ "${_sweep_pd_rc}" = "0" ]; then
               sweep_partial_delivery_reason="partial_delivery"
               echo "PARTIAL_DELIVERY mode=sweep issue=${issue_num} pr=${_sweep_candidate_pr} outcome=skip reason=partial_delivery"
-              break
+              # Keep looking: a later full-delivery PR still closes the issue.
+              continue
             elif [ "${_sweep_pd_rc}" = "2" ]; then
               sweep_partial_delivery_reason="identity_unavailable"
               echo "PARTIAL_DELIVERY mode=sweep issue=${issue_num} pr=${_sweep_candidate_pr} outcome=skip reason=identity_unavailable"
-              break
+              continue
             fi
           fi
           echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} accepted reason=${_TARGET_MERGE_REASON}"
           merged_pr_num="${_sweep_candidate_pr}"
+          # A full delivery supersedes an earlier partial one for this issue.
+          sweep_partial_delivery_reason=""
           break
         fi
         _sweep_base_log="$(_close_sweep_log_ref "$(printf '%s' "${_sweep_candidate_pr_json}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")" "unknown")"
@@ -18606,7 +18609,15 @@ _pr_json_is_partial_delivery() {
         and (.head.ref // "") == ("ai/issue-" + $issue)
       then ((.user.login // "") | ascii_downcase) else "" end
   ' 2>/dev/null || echo "")"
-  [ -n "${_pd_bound}" ] || return 1
+  if [ -z "${_pd_bound}" ]; then
+    # A marked PR whose binding cannot be checked (no repository) defers
+    # instead of being closed as a full delivery (fail closed).
+    if [ -z "${GITHUB_REPOSITORY:-}" ] && printf '%s' "${pr_json}" \
+      | jq -e '(.body // "") | contains("ai:partial-delivery:v1")' >/dev/null 2>&1; then
+      return 2
+    fi
+    return 1
+  fi
   local _pd_login
   _pd_login="$(unblock_trusted_login)"
   if [ -z "${_pd_login}" ]; then

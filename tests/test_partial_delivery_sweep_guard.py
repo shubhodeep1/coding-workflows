@@ -35,7 +35,7 @@ MARKER = "<!-- ai:partial-delivery:v1 issue=7 -->"
 BODY = f"Automated implementation. Refs #7\n\n{MARKER}\n### Deferred scope (not delivered by this PR)\n\n- rest\n"
 
 
-def _rc(pr_json: str, *, login: str = "pipeline-bot", switch: str | None = None) -> int:
+def _rc(pr_json: str, *, login: str = "pipeline-bot", switch: str | None = None, repo: str = "o/r") -> int:
 	assert shutil.which("jq") is not None, "jq is required for the sweep guard test"
 	script = (
 		"set -euo pipefail\n"
@@ -43,7 +43,7 @@ def _rc(pr_json: str, *, login: str = "pipeline-bot", switch: str | None = None)
 		+ _function("_pr_json_is_partial_delivery")
 		+ '\nrc=0; _pr_json_is_partial_delivery 7 "${PR_JSON}" || rc=$?; echo "rc=${rc}"\n'
 	)
-	env = {"PATH": os.environ["PATH"], "PR_JSON": pr_json, "GITHUB_REPOSITORY": "o/r"}
+	env = {"PATH": os.environ["PATH"], "PR_JSON": pr_json, "GITHUB_REPOSITORY": repo}
 	if switch is not None:
 		env["PARTIAL_DELIVERY_TRACKING_ENABLED"] = switch
 	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
@@ -69,6 +69,11 @@ def test_unavailable_login_defers() -> None:
 	assert _rc(_pr(BODY), login="") == 2
 
 
+def test_missing_repository_defers_only_a_marked_pr() -> None:
+	assert _rc(_pr(BODY), repo="") == 2
+	assert _rc(_pr("Automated implementation. Closes https://x/issues/7\n"), repo="") == 1
+
+
 def test_sweep_skips_close_and_backfill_for_a_partial_delivery() -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	sweep = text[text.index("\nclose_merged_issues_sweep() {"):]
@@ -78,6 +83,12 @@ def test_sweep_skips_close_and_backfill_for_a_partial_delivery() -> None:
 	skip = sweep.index('if [ -n "${sweep_partial_delivery_reason}" ]; then')
 	assert skip < sweep.index('--add-label "ai:merged"')
 	assert "outcome=skip reason=partial_delivery" in sweep
+	# A partial candidate does not stop the loop: a later full-delivery PR
+	# for the same issue still closes it and clears the partial reason.
+	partial_log = sweep.index("outcome=skip reason=partial_delivery")
+	assert sweep[partial_log:].split("\n", 3)[2].strip() == "continue"
+	accepted = sweep.index('merged_pr_num="${_sweep_candidate_pr}"')
+	assert 'sweep_partial_delivery_reason=""' in sweep[accepted:accepted + 200]
 	assert 'if [ "${_sweep_is_managed}" != "true" ]; then' in sweep[: guard]
 	poll = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}" in poll

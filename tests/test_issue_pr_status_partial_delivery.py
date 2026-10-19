@@ -42,6 +42,9 @@ with open(os.environ["GH_LOG"], "a", encoding="utf-8") as log:
             if value.startswith("@"):
                 value = open(value[1:], encoding="utf-8").read()
             entry["body"] = value
+        # set_issue_phase_label_resilient sends the label set on stdin.
+        if arg == "--input" and i + 1 < len(args) and args[i + 1] == "-":
+            entry["stdin"] = sys.stdin.read()
     log.write(json.dumps(entry) + "\n")
 
 joined = " ".join(args)
@@ -170,7 +173,10 @@ def test_partial_activation_fix_delivery_keeps_the_issue_open() -> None:
 	bodies = _posted_bodies(run)
 	assert any("> - Implement the member homepage (Phase 2)." in b and b.rstrip().endswith(f"issue={ISSUE} pr={PR} -->") for b in bodies)
 	assert f"/reclarify\n<!-- ai:partial-delivery-restart:{ISSUE} -->" in bodies
-	assert any("labels" in " ".join(c["args"]) and "ai:clarification" in " ".join(c["args"]) for c in run["calls"])
+	assert any(
+		"labels" in " ".join(c["args"]) and "ai:clarification" in (" ".join(c["args"]) + c.get("stdin", ""))
+		for c in run["calls"]
+	)
 	assert not any("ai:merged" in " ".join(c["args"]) for c in run["calls"])
 	assert any("DELETE" in c["args"] and f"git/refs/heads/ai/issue-{ISSUE}" in " ".join(c["args"]) for c in run["calls"])
 	assert "PARTIAL_DELIVERY mode=merge pr=4646 issue=4639 outcome=kept_open reason=deferred_scope comment=posted restart=posted branch=deleted" in run["stdout"]

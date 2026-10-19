@@ -111,9 +111,9 @@ Create a structured implementation plan that includes:
    `State machines:` field is required, not optional. When the current render is
    `false`, do not emit `Data flow:`, `State machines:`, or `Failure modes:`.
 
-12. `## Deferred scope` (issue #7657): when a clarification answer or an `AD-<n>`
-   auto-decision limits this issue to part of its stated scope (for example
-   "this issue delivers Phase 1 only"), emit a `## Deferred scope` section as
+12. `## Deferred scope` (issue #7657): when a clarification answer, an `AD-<n>`
+   auto-decision or the chosen `Scope-mode` limits this issue to part of its
+   stated scope (for example "this issue delivers Phase 1 only"), emit a `## Deferred scope` section as
    its own `##` heading right after `## Files likely to change`, with one `- `
    bullet per remaining item (at most 20). Each bullet is one plain sentence
    with no links, issue references or mentions. Never emit an empty section,
