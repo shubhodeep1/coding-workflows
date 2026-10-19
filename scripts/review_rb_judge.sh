@@ -1312,16 +1312,34 @@ PRELOADED_PR_META="$(jq -c '{
   base_ref: (.base_ref // .base.ref // .baseRefName // ""),
   head_sha: (.head_sha // .head.sha // .headSha // "")
 }' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
+# BEGIN rb judge context assembly (#7658)
+# Comment JSON reaches jq through --slurpfile, never argv (MAX_ARG_STRLEN,
+# 131,072 bytes per argument). A context that still fails to assemble is
+# logged once as RB_JUDGE_CONTEXT_EMPTY so an empty-context verdict is visible.
+RB_JUDGE_CONTEXT_RC=0
+RB_JUDGE_CONTEXT_EMPTY_REASON=""
+PR_CONTEXT_JSON=""
 if type gh_pr_with_all_comments >/dev/null 2>&1; then
-  PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
+  PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}")" || RB_JUDGE_CONTEXT_RC=$?
 elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
-  PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
+  PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}")" || RB_JUDGE_CONTEXT_RC=$?
 else
   printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${REPOSITORY%%/*} repo=${REPOSITORY##*/} pr=${PR_NUMBER}" >&2
   PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
   PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
-  PR_CONTEXT_JSON="$(jq -cn --argjson meta "${PRELOADED_PR_META}" --argjson comments "${PR_ISSUE_COMMENTS}" --argjson review_comments "${PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
+  PR_CONTEXT_JSON="$(jq -cn --slurpfile meta <(printf '%s' "${PRELOADED_PR_META}") --slurpfile comments <(printf '%s' "${PR_ISSUE_COMMENTS}") --slurpfile review_comments <(printf '%s' "${PR_REVIEW_COMMENTS}") '{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}' 2>/dev/null)" || RB_JUDGE_CONTEXT_RC=$?
 fi
+if [ "${RB_JUDGE_CONTEXT_RC}" -ne 0 ] || [ -z "${PR_CONTEXT_JSON}" ]; then
+  RB_JUDGE_CONTEXT_EMPTY_REASON="assembly_failed"
+elif ! printf '%s' "${PR_CONTEXT_JSON}" | jq -e 'type == "object" and (.comments | type == "array") and (.review_comments | type == "array")' >/dev/null 2>&1; then
+  RB_JUDGE_CONTEXT_EMPTY_REASON="invalid_shape"
+fi
+if [ -n "${RB_JUDGE_CONTEXT_EMPTY_REASON}" ]; then
+  PR_CONTEXT_JSON='{}'
+  printf '%s\n' "::warning::RB_JUDGE_CONTEXT_EMPTY pr=${PR_NUMBER} reason=${RB_JUDGE_CONTEXT_EMPTY_REASON}" >&2
+fi
+unset RB_JUDGE_CONTEXT_RC RB_JUDGE_CONTEXT_EMPTY_REASON
+# END rb judge context assembly (#7658)
 PR_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.comments // []' 2>/dev/null || echo "[]")"
 PR_REVIEW_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.review_comments // []' 2>/dev/null || echo "[]")"
 PR_META_JSON="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/null || echo "{}")"
