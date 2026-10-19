@@ -132,8 +132,17 @@ def test_security_pass_dark_launch_env_and_assets_are_wired() -> None:
 		"mode-security-audit.txt",
 		"_templates/mode-security-audit.txt",
 		"references/security-money-lens.txt",
+		"references/output-contract.txt",
+		"contracts/mode-security-audit.yml",
 	):
 		assert asset in wf
+	# Issue #7652: the audit renders from a worktree with no
+	# .codex-workflow-src/, so the output-contract reference must be staged
+	# and required before the audit runs.
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	loop_start = poller.index("  for required_security_asset in \\\n")
+	loop_end = poller.index("; do", loop_start)
+	assert "prompts/references/output-contract.txt" in poller[loop_start:loop_end]
 
 
 def test_security_pass_recovery_log_prefixes_are_registered() -> None:

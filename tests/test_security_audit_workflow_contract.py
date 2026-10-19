@@ -3680,6 +3680,93 @@ def _parametrize_cases(func) -> list[dict]:
 	return cases
 
 
+def _staged_prompt_assembly_assets() -> list[str]:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	match = re.search(r"for prompt_assembly_asset in ([^;\n]+); do", workflow)
+	assert match, "orchestrate_poll.yml prompt_assembly_asset staging loop not found"
+	return match.group(1).split()
+
+
+def _render_security_audit_from_bare_cwd(support: Path, cwd: Path) -> subprocess.CompletedProcess[str]:
+	env = os.environ.copy()
+	for key in (*_SANITIZED_GIT_ENV_KEYS, "PROMPT_PRELUDE_REFACTOR_ENABLED", "WORKFLOW_OVERLAY_ENABLED", "MODEL_FAMILY_OVERLAY"):
+		env.pop(key, None)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return subprocess.run(
+		["bash", str(support / "scripts" / "render_prompt.sh"), str(support / "prompts" / "mode-security-audit.txt")],
+		cwd=cwd,
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=120,
+		check=False,
+	)
+
+
+def test_security_audit_prompt_renders_from_staged_support_without_cwd_prompts() -> None:
+	"""Issue #7652: the project security pass renders from an audit worktree.
+
+	That cwd has no prompts/ and no .codex-workflow-src/, so every reference the
+	prompt needs must come from the support root the poller staged.
+	"""
+	assets = _staged_prompt_assembly_assets()
+	assert "references/output-contract.txt" in assets
+	with tempfile.TemporaryDirectory(prefix="security-audit-render-") as tmp:
+		support = Path(tmp) / "support"
+		cwd = Path(tmp) / "audit-worktree"
+		cwd.mkdir()
+		(support / "scripts").mkdir(parents=True)
+		for name in ("render_prompt.sh", "render_prompt.py", "assemble_prompt.sh"):
+			source = REPO_ROOT / "scripts" / name
+			if source.is_file():
+				target = support / "scripts" / name
+				target.write_bytes(source.read_bytes())
+				target.chmod(0o755)
+		for relative in ("mode-security-audit.txt", *assets):
+			target = support / "prompts" / relative
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_bytes((REPO_ROOT / "prompts" / relative).read_bytes())
+
+		proc = _render_security_audit_from_bare_cwd(support, cwd)
+		assert proc.returncode == 0, proc.stderr
+		assert "{{REFERENCE_OUTPUT_CONTRACT}}" not in proc.stdout
+		contract_line = next(
+			line.strip()
+			for line in (REPO_ROOT / "prompts" / "references" / "output-contract.txt").read_text(encoding="utf-8").splitlines()
+			if line.strip()
+		)
+		assert contract_line in proc.stdout
+
+		(support / "prompts" / "references" / "output-contract.txt").unlink()
+		proc = _render_security_audit_from_bare_cwd(support, cwd)
+		assert proc.returncode == 1
+		assert "not found" in proc.stderr
+
+
+def test_security_audit_path_diagnostic_names_renderer_not_found_errors(tmp_path: Path) -> None:
+	"""Issue #7652: the renderer's missing-reference error is a path error too."""
+	diagnostic = tmp_path / "render.err"
+	diagnostic.write_text(
+		"ERROR: Reference file for placeholder 'REFERENCE_OUTPUT_CONTRACT' not found: "
+		"/x/prompts/references/output-contract.txt\n",
+		encoding="utf-8",
+	)
+	script = SCRIPT_PATH.read_text(encoding="utf-8")
+	start = script.index("security_audit_sanitize_log_value() {")
+	end = script.index("\n}\n", script.index("security_audit_emit_path_diagnostic() {")) + 3
+	functions = script[start:end]
+	for mode, expected in (("", True), ("sanitized-tail", False)):
+		proc = subprocess.run(
+			["bash", "-c", functions + '\nsecurity_audit_emit_path_diagnostic "$1" "$2"', "bash", str(diagnostic), mode],
+			capture_output=True,
+			text=True,
+			timeout=30,
+			check=False,
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert ("captured_path_error=" in proc.stderr) is expected, (mode, proc.stderr)
+
+
 def main() -> int:
 	for name in sorted(globals()):
 		if name.startswith("test_") and callable(globals()[name]):
