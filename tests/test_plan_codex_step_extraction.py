@@ -19,11 +19,13 @@ PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
+# Issue #7657 added the 11-line item-12 `## Deferred scope` rule to the
+# inline prompt (230 -> 241 lines); the pins below include it.
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"380fe43ccea4c52ba2f0e57d8ba60ded94e0ae0ee92305c871741710dbee3351"
+	"81834338788b2f8c441a689ce72ebd866d7e5463cc76b785a3f6a3bc66d8ddba"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 14_819
-PRE_EXTRACTION_PROMPT_LINES = 230
+PRE_EXTRACTION_PROMPT_BYTES = 15_577
+PRE_EXTRACTION_PROMPT_LINES = 241
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:

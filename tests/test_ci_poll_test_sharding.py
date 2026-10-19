@@ -1113,5 +1113,73 @@ class PollGroupPinnedStepsTest(unittest.TestCase):
 				self.assertRegex(str(step.get("if", "")), guard_re)
 
 
+# Steps moved from tests-release-and-log-analysis (budget-watch issue #7689):
+# step name -> (matrix group that runs it, module paths its body names).
+MOVED_RELEASE_STEPS = {
+	"Promote cycle and blocked-verdict unit tests": (
+		2,
+		(
+			"tests/test_promote_main_cycle.py",
+			"tests/test_apply_analysis_on_main.py",
+			"tests/test_auto_release_stable.py",
+			"tests/test_orchestrate_poll_promote_cycle.py",
+			"tests/test_implement_blocked_verdict_terminalizes.py",
+		),
+	),
+	"Review-blocked judge label propagation contract test": (
+		2,
+		("tests/test_review_rb_judge_label_propagation.py",),
+	),
+	"Orchestrator judges on the Claude engine tests (Phase 5c)": (
+		3,
+		("tests/test_orchestrator_judges_claude_engine.py",),
+	),
+	"Validation harness sandbox tests": (
+		3,
+		("tests/test_validation_harness_sandbox.py",),
+	),
+}
+
+
+class MovedReleaseStepsContractTest(unittest.TestCase):
+	"""Steps moved into the idle poll groups run once per CI run (#7689).
+
+	`orchestrate-poll` is a 4-way matrix, so each moved step needs a
+	single-group guard: without it the step runs four times, and a guard
+	naming a group the matrix no longer has would silently never run it.
+	"""
+
+	def test_each_step_is_guarded_to_its_group(self) -> None:
+		for name, (group, _modules) in MOVED_RELEASE_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual(poll_job_step(name)["if"], f"strategy.job-index == {group}")
+
+	def test_guards_avoid_the_loaded_groups_and_stay_in_the_matrix(self) -> None:
+		group_count = poll_group_count()
+		for name, (group, _modules) in MOVED_RELEASE_STEPS.items():
+			with self.subTest(step=name):
+				self.assertNotIn(group, (0, 1), "groups 0 and 1 already carry extra steps")
+				self.assertLess(group, group_count, "guard names a group the matrix does not run")
+
+	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
+		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+		for name in MOVED_RELEASE_STEPS:
+			with self.subTest(step=name):
+				owners = [
+					job_id
+					for job_id, job in jobs.items()
+					for step in job.get("steps", [])
+					if step.get("name") == name
+				]
+				self.assertEqual(owners, [POLL_JOB_ID])
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_group, modules) in MOVED_RELEASE_STEPS.items():
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertIn(module, poll_job_step(name)["run"])
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+
+
 if __name__ == "__main__":
 	unittest.main()
