@@ -587,17 +587,6 @@ def test_sync_labels_rejects_invalid_repo_before_api_calls() -> None:
 	assert "repo must be in 'owner/name' format" in stderr_buffer.getvalue()
 
 
-def main() -> int:
-	for name in sorted(globals()):
-		if name.startswith("test_") and callable(globals()[name]):
-			globals()[name]()
-	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 def test_repair_labels_keeps_needs_human_parked_on_blocked():
 	payload = _repair("ai:needs-human,ai:orchestrator-managed,ai:blocked")
 	assert payload["add"] == []
@@ -625,3 +614,14 @@ def test_repair_labels_terminal_phase_drops_needs_human():
 	payload = _repair("ai:needs-human,ai:blocked,ai:merged")
 	assert payload["add"] == []
 	assert payload["remove"] == ["ai:blocked", "ai:needs-human"]
+
+
+def main() -> int:
+	for name in sorted(globals()):
+		if name.startswith("test_") and callable(globals()[name]):
+			globals()[name]()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
