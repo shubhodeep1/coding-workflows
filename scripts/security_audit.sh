@@ -63,7 +63,8 @@ security_audit_emit_path_diagnostic() {
 		fi
 		return 0
 	fi
-	path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
+	# ` not found: ` names the renderer's missing reference/template errors.
+	path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT| not found: )' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
 	if [ -n "${path_diagnostic}" ]; then
 		printf 'security-audit: captured_path_error=%s\n' \
 			"$(security_audit_sanitize_log_value "${path_diagnostic}")" >&2

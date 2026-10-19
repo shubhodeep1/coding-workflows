@@ -8575,7 +8575,9 @@ run_security_pass_inline() {
     scripts/write_codex_config.sh \
     prompts/mode-security-audit.txt \
     prompts/_templates/mode-security-audit.txt \
-    prompts/references/security-money-lens.txt; do
+    prompts/references/security-money-lens.txt \
+    prompts/references/output-contract.txt \
+    prompts/contracts/mode-security-audit.yml; do
     if [ ! -f "${required_security_asset}" ]; then
       security_pass_fail_closed "engine_unavailable" "Required security-pass asset ${required_security_asset} is unavailable." "${prior_security_status}"
       return 1
