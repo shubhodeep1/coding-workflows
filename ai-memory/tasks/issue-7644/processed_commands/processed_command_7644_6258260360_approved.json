@@ -5,13 +5,24 @@
   "entry_id": "processed_command_7644_6258260360_approved",
   "issue_number": 7644,
   "metadata": {
+    "branch": "ai/issue-7644",
+    "changed_files": [
+      "changelog.d/wfopt-2026-09-21-3-ledger-dead-vars.md",
+      "scripts/review_issue_ledger.sh",
+      "tests/test_review_issue_ledger.py"
+    ],
+    "issue_number": 7644,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7644",
+    "pr_number": 7646,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7646",
+    "run_attempt": "1",
+    "run_id": "39189379187",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39189379187"
   },
   "run_attempt": 1,
   "run_id": "39189379187",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-19T02:21:41Z",
+  "status": "completed",
+  "timestamp": "2026-10-19T02:43:08Z",
   "workflow": "implement"
 }
