@@ -4118,6 +4118,8 @@ contradiction-evidence helpers in `scripts/orchestrate_lib.py`
 `resolve_label_repair_evidence`) are contract/reserved and not yet wired
 into poller reconciliation.
 
+`scripts/ai_labels.py repair-labels` keeps the last `issue_phase` member present and, unless that member is terminal (`ai:merged` / `ai:closed`), also keeps `ai:needs-human` (`REPAIR_OVERLAY_PHASE_LABELS`). The unblock judge parks an item by adding `ai:needs-human` on top of its stop label, and the contract lists `ai:blocked`, `ai:review-blocked` and `ai:implementation-failed` after it, so keep-last alone stripped the latch, the needs-human digest pruned the item, and the judge parked it again every round (fun-token-multi-chain#639, PR #7651). Where `ai:needs-human` is already the last member, repair still drops the earlier phase labels.
+
 ---
 
 ## DigitalOcean resources
