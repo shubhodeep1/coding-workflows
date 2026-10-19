@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (non-blocking, HARDENING_RISK_SCORE: 1) | file: scripts/orchestrate_poll_process.sh | location: run_security_pass_inline, the required_security_asset loop (around lines 8568-8576)\n  PROBLEM: The fail-closed list now includes prompts/references/output-contract.txt but not prompts/contracts/mode-security-audit.yml. If a support tree is staged some other way, discover_contract_path returns None and the audit prompt renders without its contract, with no named error logged.\n  WHY: Suggested minimal fix: add \"prompts/contracts/mode-security-audit.yml \\\" to the loop list, next to output-contract.txt (estimated lines changed: 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING_SUGGESTION (non-blocking, HARDENING_RISK_SCORE: 1) | File: scripts/orchestrate_poll_process.sh | Location: required-asset loop (lines 8572-8576)\n  PROBLEM: The list of required assets does not include prompts/contracts/mode-security-audit.yml, even though orchestrate_poll.yml now stages it.\n  WHY: If that file is missing when the audit runs, the renderer may fail later without a clear error message. Suggested minimal fix: add `prompts/contracts/mode-security-audit.yml \\` to the required-asset loop list (estimated lines changed: 1).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (non-blocking, HARDENING_RISK_SCORE: 1) | File: scripts/orchestrate_poll_process.sh | Location: run_security_pass_inline required-asset loop (lines 8568-8576)\n  PROBLEM: The staging loop in .github/workflows/orchestrate_poll.yml:720 stages both `references/output-contract.txt` and `contracts/mode-security-audit.yml`, but the poller's required-asset list at scripts/orchestrate_poll_process.sh:8576 only requires the reference.\n  WHY: If a staging failure or partial checkout drops the contract, the renderer would carry on without the contract's output-shape rules and the audit could emit malformed findings. Suggested minimal fix: append `prompts/contracts/mode-security-audit.yml \\` to the loop (1 line). The reviewer calls this optional hardening that does not block this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE (not a code-review finding): The reviewer did not review the code. It said its input had no task, only a header, a scope disclaimer and an unexpanded `{{REFERENCE_SEVERITY_CLASSIFICATION}}` placeholder, which `scripts/stage_workflow_support.sh:265` normally fills from `prompts/references/severity-classification.txt`. It asked for the classification content and the actual task to be supplied.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "056e7d7df80bede11e19872907eeb1f0da6a6c3312c9c9cc82abb82be1e529d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7663,
+    "run_id": "39201978053",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39201978053",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019051839_7b26a254e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7663,
+    "run_id": "39201978053"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-19T05:18:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
