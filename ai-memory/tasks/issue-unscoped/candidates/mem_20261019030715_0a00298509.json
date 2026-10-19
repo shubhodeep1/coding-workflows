@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/cost_audit.py:161-173 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The anchored `_TELEMETRY_LINE_PREFIX_RE_SRC`, `BREAK_GLASS_RE` and `CONTEXT_BUDGET_WARN_RE` allow only an optional BOM and timestamp before the marker, so they miss the job/step prefix that `gh run view --log` puts on each line (the CLI path at lines 966-973 feeds `parse_log` at lines 765-769).\n  WHY: Real `BREAK_GLASS` and `CONTEXT_BUDGET_WARN` emissions in `cost_audit.py` CLI runs are not counted, so `break_glass_count` and `context_budget_warn_count` come out as 0. The reviewers labelled this MAJOR, which is mapped to high here. Confidence ranged from 3 (sonnet-5_5, who recalled the `gh` line format from memory) to 5; the maximum is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/cost_audit.py:161-173 (`_TELEMETRY_LINE_PREFIX_RE_SRC`, `BREAK_GLASS_RE`, `CONTEXT_BUDGET_WARN_RE`; consumed at 765-769, fed by `main()` at 966) | severity=MAJOR | confidence=3\n  PROBLEM: The new prefix allows only an optional BOM and timestamp before the marker. `gh run view --log` lines are `<job>\\t<step>\\t<timestamp> <message>`, and `parse_log` runs `.search(line)` with no prefix stripping, so the `^`-anchored regex does not match them.\n  WHY: `cost_audit.py` reports `break_glass_count` and `context_budget_warn_count` as 0 for genuine emissions. The tests feed bare lines only, so they would not catch this. The reviewer suggests adding an optional `(?:[^\\t\\n]*\\t[^\\t\\n]*\\t)?` group and a `gh`-style prefixed test case.\n- HARDENING_SUGGESTIONS: scripts/cost_audit.py, `_TELEMETRY_LINE_PREFIX_RE_SRC`: add the optional tab-delimited job/step group before the timestamp group, plus one prefixed test line each for the counted and quoted cases (about 3-6 lines changed). HARDENING_RISK_SCORE: 3\n- TASK COMPLETENESS / INTENT GAPS: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/cost_audit.py:161-173, 966-973 | severity=MAJOR | confidence=5\n  PROBLEM: The anchored regexes accept only a BOM and timestamp before the marker, but the CLI passes `gh run view --log` output directly to `parse_log`, and that output prefixes each line with job and step fields.\n  WHY: Real `CONTEXT_BUDGET_WARN` and `BREAK_GLASS` emissions in this CLI path no longer match, so both telemetry counts are underreported.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/cost_audit.py:161-163 (`_TELEMETRY_LINE_PREFIX_RE_SRC`), consumed at 765-769 | severity=MAJOR | confidence=5\n  PROBLEM: The new `^`-anchored regex does not account for the `gh run view --log` line format. `parse_log` at line 738 iterates over `log.splitlines()`, where `log` is the raw `gh run view --log` output (line 966), and each line starts with `<job_name>\\t<step_name>\\t`, so the marker is not the first token. The existing MCP regexes use `(?:^|\\s)` for this reason.\n  WHY: `python3 scripts/cost_audit.py --repo owner/repo` reports `break_glass_count=0` and `context_budget_warn_count=0` for every real run. The `collect_workflow_logs.py` path is unaffected, and the new tests do not cover the `gh run view --log` prefix.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "abbbce4cccc2ae72ffcdd41c096f39296d9261e134d5ee8d850ecf557753eb41",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7648,
+    "run_id": "39191046693",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39191046693",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019030715_0a00298509",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7648,
+    "run_id": "39191046693"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-19T03:07:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
