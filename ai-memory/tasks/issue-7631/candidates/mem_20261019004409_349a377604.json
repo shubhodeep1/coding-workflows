@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA. The review/autofix pipeline (`review_autofix.yml` and its `scripts/review_*` helpers)\nB. The orchestrator poller and judges (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nC. Clarify, plan or implement phase workflows and prompts\nD. Documentation only (README, `docs/`, an `agents.d/` fragment)\nE. Something else: name the file, workflow or feature in your answer (RECOMMENDED)\nQ2: What problem should be fixed, and what result counts as \"better\"?\nChoices:\nA. A specific bug or failure: give the run, issue or PR link and the behaviour you expected (RECOMMENDED)\nB. Performance or cost (runtime, API calls, model tokens): give the metric and the target\nC. Reliability (fewer stalls, retries or `ai:needs-human` escalations): name the failure mode\nD. Clearer docs or log output: name the section or log prefix\nE. No concrete problem in mind yet: close this issue and file a specific one later",
+  "fingerprint": "42cf42241635f4254b1f5ccd2253d936af0a46dbeca70afb16bf31f85f4fe4e5",
+  "lineage": {
+    "issue_number": 7631,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39181681717",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39181681717",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261019004409_349a377604",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7631,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39181681717"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7631 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-19T00:44:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
