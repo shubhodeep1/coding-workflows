@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for the smoke-canary update: overwrite `tests/e2e_smoke_canary.txt` with three fixed lines.\n\nPlanning ref: `HEAD` is `b0f26b591a86ead215c8d1e4120a628f9552c943` on `main`. The integration-branch mismatch line reads `unknown`, not `true`, so this plan is not blocked on a branch mismatch.\n\n**Answers read:** none needed. The clarify phase found the task clear and auto-answered (`/answer [auto-answered-by-clarify]`).\n\n**Automation surface (\u00a720.E):** this change only edits existing data. It adds no script and no supervisor, does no database work, wires nothing into the scheduler and adds nothing to `docs/scripts-pending-removal.md`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the change and limits it to one existing file. No helper or pattern applies, and anything more would break the issue's \"only modify\" constraint. The complete fix and the shortcut are the same change, so the Boil the Lake check changes nothing.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. The file's whole content becomes exactly:\n```\nstatus: ok\nrun_id: 39181565859\nupdated-by: ai-pipeline\n```\nThe last line ends with a single `\\n`. Equivalent command: `printf 'status: ok\\nrun_id: 39181565859\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file instead of editing it in place\n- Chosen: replace the entire file with the three exact lines and one trailing newline.\n- Alternatives considered: editing only the `run_id` line in place.\n- Why: the issue asks for the content to be exactly these lines. A full overwrite guarantees no old content survives, whatever the file holds now.\n\n## Security considerations\n- No trust boundaries, endpoints, credentials or money state are involved.\n- The content is fixed text from the issue, so there is no external input to validate.\n- Abuse case: the implementer touching other files. The issue's \"only modify\" constraint and the `files_touched` scope guard cover this.\n\n## Risks and edge cases\n- A wrong ending would fail the e2e check: a missing trailing newline, CRLF line endings, a doubled final newline, or trailing spaces. Write the bytes exactly and check with `od -c` or `cmp`.\n- `tests/` is not an automation path, so the automation-path guard does not apply.\n- Do not add a changelog fragment, because the issue forbids touching any other file.\n\n## Testing considerations\n- After writing, confirm the bytes match exactly: `printf 'status: ok\\nrun_id: 39181565859\\nupdated-by: ai-pipeline\\n' | cmp - tests/e2e_smoke_canary.txt`.\n- `git diff --stat` should show only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\nThe plan covers every requirement in the issue, stays inside the one allowed file, and needs no external facts.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "21e1b5181b41c199606d689381ccf457507ceb67a9fdb1838ce07104bfe6be01",
+  "lineage": {
+    "issue_number": 7633,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39182017604",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39182017604",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7633"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261019005129_1bed0853f8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7633,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39182017604"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7633",
+  "timestamps": {
+    "created_at": "2026-10-19T00:51:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
