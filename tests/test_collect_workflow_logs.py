@@ -1478,10 +1478,15 @@ def test_context_budget_and_break_glass_accept_gh_run_view_log_prefix():
 def test_collector_reuses_cost_audit_anchored_regexes():
 	import sys
 
-	cost_audit_module = sys.modules.get("cost_audit") or sys.modules.get("scripts.cost_audit")
-	assert cost_audit_module is not None
-	assert collector.CONTEXT_BUDGET_WARN_RE is cost_audit_module.CONTEXT_BUDGET_WARN_RE
-	assert collector.BREAK_GLASS_RE is cost_audit_module.BREAK_GLASS_RE
+	# Both module names can be loaded in one pytest session; match the one the
+	# collector actually imported its pattern objects from.
+	loaded = [sys.modules.get(n) for n in ("cost_audit", "scripts.cost_audit")]
+	assert any(
+		m is not None
+		and collector.CONTEXT_BUDGET_WARN_RE is m.CONTEXT_BUDGET_WARN_RE
+		and collector.BREAK_GLASS_RE is m.BREAK_GLASS_RE
+		for m in loaded
+	)
 	assert collector.CONTEXT_BUDGET_WARN_RE in collector.STRUCTURED_COST_TELEMETRY_PATTERNS
 	assert collector.BREAK_GLASS_RE in collector.STRUCTURED_COST_TELEMETRY_PATTERNS
 	assert collector.CONTEXT_BUDGET_WARN_RE.pattern.startswith("^")
