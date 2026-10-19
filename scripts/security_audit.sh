@@ -1405,7 +1405,15 @@ else
 	OVERSIZED_EXPORT_SCOPE_MODE="all"
 fi
 cat "${PRIOR_FINDINGS_SCOPE_FILE}" "${FIX_CYCLE_DIFFS_SCOPE_FILE}" >> "${OVERSIZED_SCOPE_FILE}"
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_isolated_workspace.py" export-oversized \
+# The isolated launch hides CLAUDE.md when hide_claude_md is on; the
+# oversized chunks it mounts must honour the same filter (read as
+# ai_engine.sh reads it, default false), so a hidden file is reported as
+# not inspected instead of exported.
+OVERSIZED_EXPORT_HIDE=""
+if [ "$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/claude_engine.py" config --key hide_claude_md 2>/dev/null || echo false)" = "true" ]; then
+	OVERSIZED_EXPORT_HIDE="CLAUDE.md"
+fi
+if ! CODEX_ISOLATED_HIDE="${OVERSIZED_EXPORT_HIDE}" PYTHONDONTWRITEBYTECODE=1 python3 "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_isolated_workspace.py" export-oversized \
 	"${REPO_ROOT}" "${OVERSIZED_SCOPE_FILE}" "${OVERSIZED_EXPORT_DIR}" \
 	"${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" "${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES}" \
 	"${OVERSIZED_EXPORT_SCOPE_MODE}" 2> "${OVERSIZED_ERROR_FILE}"; then
@@ -1442,16 +1450,31 @@ if scoped:
 	])
 if unscoped:
 	lines.append(f"Coverage note: {unscoped} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps).")
+filtered_scoped = manifest.get("filtered_scoped", [])
+filtered_scoped_count = manifest.get("filtered_scoped_count", len(filtered_scoped))
+if not isinstance(filtered_scoped, list) or type(filtered_scoped_count) is not int or filtered_scoped_count < len(filtered_scoped):
+	raise ValueError("invalid oversized filtered-scope record")
+if filtered_scoped_count:
+	filtered_names = ", ".join(item["path"] for item in filtered_scoped)
+	if filtered_scoped_count > len(filtered_scoped):
+		filtered_names += f" (+{filtered_scoped_count - len(filtered_scoped)} more)"
+	lines.append(
+		f"Coverage note: {filtered_scoped_count} scoped files are withheld from you by the credential filter and were not inspected: {filtered_names}. "
+		"They are absent from the workspace copy and git show; do not report on their contents or describe them as reviewed."
+	)
 Path(sys.argv[3]).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-print(len(scoped), unscoped, text_capped)
+print(len(scoped), unscoped, text_capped, filtered_scoped_count)
 PY
-)" || ! [[ "${OVERSIZED_COUNTS}" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]]; then
+)" || ! [[ "${OVERSIZED_COUNTS}" =~ ^[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]]; then
 	security_audit_emit_path_diagnostic "${OVERSIZED_ERROR_FILE}"
 	security_audit_emit_failure "oversized-scope" "${REPO_ROOT}" "oversized manifest could not be processed"
 	exit 1
 fi
-read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT OVERSIZED_TEXT_CAPPED_COUNT <<< "${OVERSIZED_COUNTS}"
-echo "security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT} text_capped=${OVERSIZED_TEXT_CAPPED_COUNT}"
+read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT OVERSIZED_TEXT_CAPPED_COUNT OVERSIZED_FILTERED_SCOPED_COUNT <<< "${OVERSIZED_COUNTS}"
+echo "security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT} text_capped=${OVERSIZED_TEXT_CAPPED_COUNT} filtered_scoped=${OVERSIZED_FILTERED_SCOPED_COUNT}"
+if [ "${OVERSIZED_FILTERED_SCOPED_COUNT}" -gt 0 ]; then
+	echo "::warning::security-audit: ${OVERSIZED_FILTERED_SCOPED_COUNT} scoped files are withheld by the credential filter and were not inspected; see the coverage note."
+fi
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] \
 		&& [ -z "${SECURITY_AUDIT_TARGET_REF}" ] \
@@ -1481,7 +1504,23 @@ security_audit_require_directory "prompt-preflight" "${SECURITY_AUDIT_RUNTIME_DI
 security_audit_require_writable_destination "prompt-preflight" "${RENDERED_PROMPT_FILE}"
 security_audit_require_writable_destination "prompt-preflight" "${RENDER_PROMPT_ERROR_FILE}"
 
-if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_PROMPT_PATH}" \
+# Render from the trusted support root, not from ${REPO_ROOT}.  The project
+# security pass runs this script inside a clean audit worktree under the
+# poller's runtime dir, and render_prompt.sh / render_prompt.py fall back to
+# $PWD-relative paths (for example $PWD/.codex-workflow-src/prompts/references/
+# output-contract.txt, which the poller does not stage beside the prompt).
+# From the worktree those fallbacks miss, so every render failed with
+# "prompt renderer exited nonzero" (consumer tracking #3928), and they would
+# read the audited branch's files instead of the trusted support copies.
+security_audit_render_prompt_template() {
+	local render_template="${1:?render template required}"
+	local render_helper="${SECURITY_AUDIT_RENDER_HELPER}"
+	[[ "${render_helper}" = /* ]] || render_helper="${PWD}/${render_helper}"
+	[[ "${render_template}" = /* ]] || render_template="${PWD}/${render_template}"
+	( cd -- "${SECURITY_AUDIT_SUPPORT_DIR}" && bash "${render_helper}" "${render_template}" )
+}
+
+if security_audit_render_prompt_template "${SECURITY_AUDIT_PROMPT_PATH}" \
 		> "${RENDERED_PROMPT_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
 	:
 else
@@ -1496,7 +1535,7 @@ fi
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	printf '%s\n' '{{REFERENCE_SECURITY_MONEY_LENS}}' > "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}"
-	if bash "${SECURITY_AUDIT_RENDER_HELPER}" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
+	if security_audit_render_prompt_template "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
 			> "${SECURITY_AUDIT_MONEY_LENS_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
 		:
 	else
@@ -1820,6 +1859,12 @@ else
 	audit_isolated_args=()
 	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
 		audit_isolated_args=(--include "${OVERSIZED_EXPORT_DIR}")
+	fi
+	# The oversized export hid CLAUDE.md when hide_claude_md is on and the
+	# prompt reports it as not inspected; hide it from the codex snapshot
+	# too, so both engines see the same view and the coverage note holds.
+	if [ "${OVERSIZED_EXPORT_HIDE}" = "CLAUDE.md" ]; then
+		audit_isolated_args+=(--hide-claude-md)
 	fi
 	if bash "${SECURITY_AUDIT_SUPPORT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/codex_isolated_exec.sh" run --mode read-only ${audit_isolated_args[@]+"${audit_isolated_args[@]}"} -- \
 			--ask-for-approval never \
@@ -3067,6 +3112,8 @@ payload["coverage"] = {
 	"unscoped_oversized_skipped": [item["path"] for item in oversized_manifest["unscoped_oversized"]],
 	"unscoped_oversized_skipped_count": oversized_manifest["unscoped_oversized_count"],
 	"unscoped_text_capped_count": oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"]),
+	"scoped_filtered_skipped": [item["path"] for item in oversized_manifest.get("filtered_scoped", [])],
+	"scoped_filtered_skipped_count": oversized_manifest.get("filtered_scoped_count", len(oversized_manifest.get("filtered_scoped", []))),
 }
 # Additive: present only when findings on upstream-managed paths were kept out
 # of the result (a consumer cannot fix them; see the filter above).
@@ -3250,6 +3297,8 @@ else:
 
 text_capped_count = oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"])
 text_capped_files = oversized_manifest.get("unscoped_text_capped", [])
+filtered_scoped_files = oversized_manifest.get("filtered_scoped", [])
+filtered_scoped_count = oversized_manifest.get("filtered_scoped_count", len(filtered_scoped_files))
 partial_coverage_line = ""
 if text_capped_count:
 	partial_coverage_line = f"- Coverage: partial — {text_capped_count} tracked text files over the export caps were not inspected"
@@ -3269,6 +3318,7 @@ comment_lines = [
 	f"- Audited commit: `{head_sha or 'n/a'}`",
 	*([f"- Oversized scoped files read in chunks: {len(oversized_manifest['scoped'])}"] if oversized_manifest["scoped"] else []),
 	*([partial_coverage_line] if partial_coverage_line else []),
+	*([f"- Coverage note: {filtered_scoped_count} scoped files are withheld by the credential filter and were not inspected: " + ", ".join(f"`{item['path']}`" for item in filtered_scoped_files) + (f" (+{filtered_scoped_count - len(filtered_scoped_files)} more)" if filtered_scoped_count > len(filtered_scoped_files) else "")] if filtered_scoped_count else []),
 	*([f"- Coverage note: {oversized_manifest['unscoped_oversized_count']} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps): " + ", ".join(f"`{item['path']}`" for item in oversized_manifest["unscoped_oversized"]) + (f" (+{oversized_manifest['unscoped_oversized_count'] - len(oversized_manifest['unscoped_oversized'])} more)" if oversized_manifest['unscoped_oversized_count'] > len(oversized_manifest['unscoped_oversized']) else "")] if oversized_manifest["unscoped_oversized_count"] else []),
 	f"- Confidence gate: `>= {confidence_gate}`",
 	f"- Exclusion catalog: `{exclusions_path}`",

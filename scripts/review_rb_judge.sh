@@ -1085,7 +1085,25 @@ if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ] && [ "${_pr_merged}" !=
   fi
   exit 0
 fi
-unset _pr_state _pr_merged
+# A draft PR is not judged: the judge runs only once the PR is ready for
+# review (issue #7653). Dispatched review runs cannot see draft state (the
+# wrappers send pr_is_draft=false on workflow_dispatch), and the
+# orchestrator's conflict heal dispatches them on its draft integration PRs
+# during the security pass. Their review / conflict work still runs; only
+# the judge waits. Marking the PR ready fires pull_request.ready_for_review,
+# which always starts a fresh review and brings the judge back. Reuses the
+# read above (no extra API call); only a JSON boolean true counts as a
+# draft, and an unreadable payload is treated as not a draft.
+_pr_draft="$(printf '%s\n' "${_pr_meta}" | jq -r '.draft == true' 2>/dev/null || echo "false")"
+if [ "${_pr_state}" = "open" ] && [ "${_pr_draft}" = "true" ]; then
+  echo "RB_JUDGE_DRAFT_SKIP pr=${PR_NUMBER} outcome=skip reason=draft_pr"
+  echo "PR #${PR_NUMBER} is a draft — skipping review-blocked judge until it is ready for review."
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=draft_pr" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+unset _pr_state _pr_merged _pr_draft
 
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"

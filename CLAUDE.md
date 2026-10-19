@@ -886,13 +886,18 @@ run them in the same repository, and judges them like a bare command:
   `timeout` prefixes, with their options;
 - control words, `( ... )` subshells and `bash -c` / `eval` scripts.
 
+It follows a `cd` written behind `VAR=value`, `builtin`, `command [-p]` or
+`time [-p]`, all of which still run the builtin in the current shell.
+
 When it cannot tell where the Git write runs, it asks for confirmation
 instead of passing silently. That covers:
 - another command that runs its words as a command, such as `sudo git push`
   or `xargs git push`;
 - a prefix option it does not understand;
 - a `cd` whose destination depends on a `CDPATH` set in the same command;
-- a `cd` after `cd` is redefined (a function, an alias or `enable -n cd`).
+- a `cd` after `cd` is redefined (a function, an alias or `enable -n cd`);
+- a Git write after a `pushd`, `popd`, `eval`, `source` or `.`, bare or
+  behind the prefixes above.
 
 `command -v git`, `time git status` and `echo "git push"` are not Git writes
 and pass without a prompt.
