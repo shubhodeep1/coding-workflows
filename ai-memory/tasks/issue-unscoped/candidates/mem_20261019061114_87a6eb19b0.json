@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_rb_judge_draft_skip.py:193 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `textwrap.dedent(body)` in `_telegram_sends()` replaced the fixed `line[10:]` strip, so if one line in the run block is indented less than the others, only that smaller amount is removed and the rest of the block stays over-indented.\n  WHY: Over-indented lines would make bash fail to parse the script and break the Telegram notification path; the source rated this NIT, mapped here to low. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 checked it and did not report it: they say a YAML block scalar cannot contain a less-indented line and that `dedent` is more robust than `line[10:]`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The fix also needs to reach stable.\"\n  expected_change_site: The stable-release promotion or delivery of this fix to the stable branch.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff adds the judge skip, alert suppression, tests, and changelog/agents fragments, but contains no change or verified delivery that puts this fix on stable. Consumer workflows therefore continue using the prior behavior until the fix is promoted.\n- requirement: \"The fix also needs to reach stable.\"\n  expected_change_site: N/A\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: This is a release-process requirement, not an implementation requirement for this PR. The PR implementation covers all requested logic and test requirements.\n- requirement: \"A changelog.d/ fragment, fixed section.\"\n  expected_change_site: changelog.d/\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff includes a changelog fragment (changelog.d/7653-rb-judge-draft-skip.md) that is correctly implemented, and it is listed as changed in the PR.\n- requirement: \"New test tests/test_review_rb_judge_draft_skip.py.\"\n  expected_change_site: tests/test_review_rb_judge_draft_skip.py\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The new test file exists and is present in the PR diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_rb_judge_draft_skip.py:193, inside _telegram_sends() | severity=NIT | confidence=2\n  PROBLEM: textwrap.dedent(body) could be unsafe if the indentation is inconsistent.\n  WHY: The old code stripped a fixed `line[10:]`. If a future edit to `review_autofix.yml` leaves one line in the run block indented less than the others, `textwrap.dedent` strips only that smaller amount, so bash fails to parse the over-indented script and the Telegram notification breaks.\n- TASK_GAP\n  Requirement: \"A changelog.d/ fragment, fixed section.\"\n  Expected change site: changelog.d/\n  Evidence of absence: The PR diff includes a changelog fragment (changelog.d/7653-rb-judge-draft-skip.md) that is correctly implemented, and it is listed as changed in the PR.\n- TASK_GAP\n  Requirement: \"New test tests/test_review_rb_judge_draft_skip.py.\"\n  Expected change site: tests/test_review_rb_judge_draft_skip.py\n  Evidence of absence: The new test file exists and is present in the PR diff.\n- TASK_GAP\n  Requirement: \"The fix also needs to reach stable.\"\n  Expected change site: N/A\n  Evidence of absence: This is a release-process requirement, not an implementation requirement for this PR. The PR implementation covers all requested logic and test requirements.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"The fix also needs to reach stable.\"\n  Expected change site: The stable-release promotion or delivery of this fix to the stable branch.\n  Evidence of absence: The PR diff adds the judge skip, alert suppression, tests, and changelog/agents fragments, but contains no change or verified delivery that puts this fix on stable. Consumer workflows therefore continue using the prior behavior until the fix is promoted.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b9c8f00dbcf4f326e9b1f4829cc8c95acecdf3689f7de4eba654ad64f15606e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7664,
+    "run_id": "39203941972",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39203941972",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019061114_87a6eb19b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7664,
+    "run_id": "39203941972"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 5 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-19T06:11:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
