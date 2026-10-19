@@ -1576,15 +1576,92 @@ jobs:
       # #7689; it comes back alone, and that step goes to
       # tests-promote-stall-and-review. The choice rests on earlier recorded
       # durations, not measurements. Name and body unchanged.
+      # Budget-watch issue #7699: this job then took 17m04s of its 20 minutes
+      # (run 39257527801). The step had moved three times (#7677, #7689,
+      # #7697) and every other job was estimated at or above the 15-minute
+      # warning line with it added, so it stays here and is split in place,
+      # the way the merge-train step was (#7579): one collection over the five
+      # modules, then 4 local shards split by test function (parametrized
+      # cases together). Every test seeds its own temp dirs and subprocesses,
+      # and each shard is a separate pytest process. The savings are an
+      # estimate; the step timings of run 39257527801 were not readable.
       - name: Promote cycle and blocked-verdict unit tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
-            tests/test_promote_main_cycle.py \
-            tests/test_apply_analysis_on_main.py \
-            tests/test_auto_release_stable.py \
-            tests/test_orchestrate_poll_promote_cycle.py \
+          pc_shards=4
+          pc_modules=(
+            tests/test_promote_main_cycle.py
+            tests/test_apply_analysis_on_main.py
+            tests/test_auto_release_stable.py
+            tests/test_orchestrate_poll_promote_cycle.py
             tests/test_implement_blocked_verdict_terminalizes.py
+          )
+          rm -f /tmp/promote_cycle_collect.log /tmp/promote_cycle_tests.txt \
+            /tmp/promote_cycle_shard_*.txt /tmp/promote_cycle_shard_*.log /tmp/promote_cycle_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${pc_modules[@]}" \
+            > /tmp/promote_cycle_collect.log 2>&1 \
+            || { cat /tmp/promote_cycle_collect.log; echo "::error::Test collection failed for the promote-cycle modules."; exit 1; }
+          : > /tmp/promote_cycle_tests.txt
+          for pc_module in "${pc_modules[@]}"; do
+            pc_module_count="$({ grep -F "${pc_module}::" /tmp/promote_cycle_collect.log || true; } \
+              | sed 's/\[.*$//' | awk '!seen[$0]++' | tee -a /tmp/promote_cycle_tests.txt | wc -l | tr -d '[:space:]')"
+            # A module that drops out of collection must not pass silently.
+            if ! [ "${pc_module_count}" -ge 1 ] 2>/dev/null; then
+              echo "::error::No tests collected from ${pc_module}."
+              exit 1
+            fi
+          done
+          pc_test_count="$(wc -l < /tmp/promote_cycle_tests.txt | tr -d '[:space:]')"
+          if ! [ "${pc_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from the promote-cycle modules."
+            exit 1
+          fi
+          echo "promote-cycle modules: ${pc_test_count} test functions across ${pc_shards} shards"
+          pc_pids=()
+          for pc_shard in $(seq 0 "$((pc_shards - 1))"); do
+            awk -v n="${pc_shard}" -v total="${pc_shards}" 'NR % total == n' \
+              /tmp/promote_cycle_tests.txt > "/tmp/promote_cycle_shard_${pc_shard}.txt"
+            [ -s "/tmp/promote_cycle_shard_${pc_shard}.txt" ] || continue
+            (
+              mapfile -t pc_shard_tests < "/tmp/promote_cycle_shard_${pc_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${pc_shard_tests[@]}" > "/tmp/promote_cycle_shard_${pc_shard}.log" 2>&1
+              echo "$?" > "/tmp/promote_cycle_shard_${pc_shard}.rc"
+            ) &
+            pc_pids+=("$!")
+          done
+          # Reap every process before judging any, so none is left orphaned.
+          for pc_pid in "${pc_pids[@]}"; do
+            wait "${pc_pid}" || true
+          done
+          pc_failed=()
+          for pc_shard in $(seq 0 "$((pc_shards - 1))"); do
+            [ -s "/tmp/promote_cycle_shard_${pc_shard}.txt" ] || continue
+            pc_stem="/tmp/promote_cycle_shard_${pc_shard}"
+            echo "::group::promote-cycle step shard ${pc_shard}"
+            cat "${pc_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            pc_rc="$(cat "${pc_stem}.rc" 2>/dev/null || echo 1)"
+            case "${pc_rc}" in
+              ''|*[!0-9]*) pc_rc=1 ;;
+            esac
+            if [ "${pc_rc}" != "0" ]; then
+              pc_failed+=("${pc_shard}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for pc_shard in "${pc_failed[@]}"; do
+            echo "--- promote-cycle step shard ${pc_shard} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/promote_cycle_shard_${pc_shard}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#pc_failed[@]}" -gt 0 ]; then
+            echo "::error::promote-cycle step shards failed: ${pc_failed[*]}"
+            exit 1
+          fi
 
       - name: Release notification superseded-run tests (stubbed gh and curl)
         run: |
