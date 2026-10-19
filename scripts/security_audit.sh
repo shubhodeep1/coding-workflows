@@ -1844,6 +1844,12 @@ else
 	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
 		audit_isolated_args=(--include "${OVERSIZED_EXPORT_DIR}")
 	fi
+	# The oversized export hid CLAUDE.md when hide_claude_md is on and the
+	# prompt reports it as not inspected; hide it from the codex snapshot
+	# too, so both engines see the same view and the coverage note holds.
+	if [ "${OVERSIZED_EXPORT_HIDE}" = "CLAUDE.md" ]; then
+		audit_isolated_args+=(--hide-claude-md)
+	fi
 	if bash "${SECURITY_AUDIT_SUPPORT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/codex_isolated_exec.sh" run --mode read-only ${audit_isolated_args[@]+"${audit_isolated_args[@]}"} -- \
 			--ask-for-approval never \
 			-c model_verbosity=low \
