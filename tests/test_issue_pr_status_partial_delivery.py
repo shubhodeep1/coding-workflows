@@ -100,7 +100,8 @@ def _issues_json(managed: bool = False) -> str:
 def _partial_body() -> str:
 	import partial_delivery
 
-	return "Automated implementation. Refs #4639\n" + partial_delivery.pr_section(["Implement the member homepage (Phase 2)."], ISSUE)
+	# Same first line implement.yml writes: the issue URL with no closing keyword.
+	return f"Automated implementation. Refs https://github.com/o/r/issues/{ISSUE}\n" + partial_delivery.pr_section(["Implement the member homepage (Phase 2)."], ISSUE)
 
 
 def _run(*, body: str, env_overrides: dict | None = None, managed: bool = False) -> dict:
