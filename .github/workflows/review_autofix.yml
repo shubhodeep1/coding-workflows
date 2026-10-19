@@ -5181,6 +5181,13 @@ jobs:
           # on its own (judge merged/fixed/re-issued, stall recovery retries,
           # conflict resolver re-dispatch) are DEBUG.
           JUDGE_ALERT_LEVEL="CRITICAL"
+          # A draft PR is judged once it is ready for review
+          # (scripts/review_rb_judge.sh, judge_skip_reason=draft_pr); the
+          # ready_for_review event brings the judge back. Nothing for a human.
+          if [ "${JUDGE_HANDLED}" = "true" ] && [ "${JUDGE_ACTION}" = "skip" ] && [ "${JUDGE_SKIP_REASON}" = "draft_pr" ]; then
+            echo "Review-blocked judge skipped draft PR #${PR_NUMBER}; it runs once the PR is ready for review. Suppressing alert."
+            exit 0
+          fi
           if [ "${JUDGE_HANDLED}" = "true" ]; then
             case "${JUDGE_ACTION}" in
               approval_pending)

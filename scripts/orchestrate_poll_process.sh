@@ -2380,7 +2380,10 @@ if ! [[ "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" =~ ^[0-9]+$ ]] || [ "${COMPRE
   COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS="21600"
 fi
 # Bot logins whose non-code commits may land on main during a cycle without
-# deferring the promotion (comma-separated).
+# deferring the promotion (comma-separated). Since #7662 this no longer affects
+# the decision: comprehensive_untested_commits_json exempts every single-parent
+# commit whose listed files are all non-code, whoever wrote it. The variable is
+# kept for compatibility (CLAUDE.md §6).
 COMPREHENSIVE_CYCLE_BOT_LOGINS="${COMPREHENSIVE_CYCLE_BOT_LOGINS:-github-actions[bot]}"
 # Marker comments are trusted only from these author associations (the
 # orchestrator posts them with GH_PAT, i.e. as the repository owner) or from
@@ -13722,9 +13725,14 @@ comprehensive_forward_merge_pr_verified() {
 
 # comprehensive_cycle_is_code_path <path>
 # Mirrors scripts/promote_main_cycle.sh: 0 when the path counts as code.
+# The markdown files the pipeline reads into model context (README.md, the
+# instruction files, agents.md / AGENTS.md and the agents.d/ fragments folded
+# into it) steer pipeline behaviour, so they count as code (#7662). The case
+# pattern lines must stay identical to is_code_path in promote_main_cycle.sh
+# (tests/test_promote_main_cycle.py checks this).
 comprehensive_cycle_is_code_path() {
   case "$1" in
-    CLAUDE.md|*/CLAUDE.md|.claude/*|*/.claude/*) return 0 ;;
+    CLAUDE.md|*/CLAUDE.md|.claude/*|*/.claude/*|README.md|unattended_system_instructions.md|ai_pipeline.md|agents.md|AGENTS.md|codex.md|probably_unnecessary_but_read_if_stuck.md|agents.d/*) return 0 ;;
   esac
   case "$1" in
     analysis/*|ai-memory/*|docs/*|tests/e2e_smoke_canary.txt|CHANGELOG.md|*.md) return 1 ;;
@@ -13737,15 +13745,19 @@ comprehensive_cycle_is_code_path() {
 # Prints a JSON array of the commits between the smoke-tested commit and the
 # commit about to be promoted that the cycle did NOT prove: everything except
 # the proving run's own merge, forward-merge PR merges (content already on
-# stable), and commits by COMPREHENSIVE_CYCLE_BOT_LOGINS that touch only
-# non-code paths. Exit 2 when the compare or a commit lookup failed.
-# API calls: 1 compare + 1 per bot commit (§15).
+# stable), and single-parent commits that touch only non-code paths, whoever
+# wrote them (#7662). A merge commit (anything but one parent), a commit whose
+# file list is empty or 300+ entries long, or one touching any code path counts
+# as untested. Exit 2 when the compare or a commit lookup failed.
+# API calls: 1 compare + 1 commit read per single-parent commit that is neither
+# the proving merge nor a verified forward merge (§15). The compare payload
+# carries only the aggregate diff, so per-commit files need their own read.
 comprehensive_untested_commits_json() {
   local smoke_sha="$1"
   local promote_sha="$2"
   local proving_merge_sha="${3:-}"
   local compare_json
-  if ! compare_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${smoke_sha}...${promote_sha}" --jq '{status: (.status // ""), total_commits: (.total_commits // 0), commits: [(.commits // [])[] | {sha: .sha, message: ((.commit.message // "") | split("\n")[0]), author: (.author.login // ""), committer: (.committer.login // "")}]}')"; then
+  if ! compare_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${smoke_sha}...${promote_sha}" --jq '{status: (.status // ""), total_commits: (.total_commits // 0), commits: [(.commits // [])[] | {sha: .sha, message: ((.commit.message // "") | split("\n")[0]), author: (.author.login // ""), committer: (.committer.login // ""), parents: ((.parents // []) | length)}]}')"; then
     return 2
   fi
   local listed total compare_status
@@ -13767,28 +13779,36 @@ comprehensive_untested_commits_json() {
     printf '[{"sha":"","message":"compare listed %s of %s commits; treating the range as untested","author":""}]\n' "${listed}" "${total}"
     return 0
   fi
-  local untested='[]' row sha message author committer allowed files_json path
+  local untested='[]' row sha message allowed files_json path parent_count file_count
   while IFS= read -r row; do
     [ -n "${row}" ] || continue
     sha="$(printf '%s' "${row}" | jq -r '.sha')"
     message="$(printf '%s' "${row}" | jq -r '.message')"
-    author="$(printf '%s' "${row}" | jq -r '.author')"
-    committer="$(printf '%s' "${row}" | jq -r '.committer')"
+    parent_count="$(printf '%s' "${row}" | jq -r '.parents // 0')"
     allowed="false"
     if [ -n "${proving_merge_sha}" ] && [ "${sha}" = "${proving_merge_sha}" ]; then
       allowed="true"
     elif printf '%s' "${message}" | grep -qE '^Merge pull request #[0-9]+ from [^/]+/auto/forward-merge-stable-' \
       && comprehensive_forward_merge_pr_verified "${sha}" "${message}"; then
       allowed="true"
-    elif printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${author}," \
-      || printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${committer},"; then
+    elif [ "${parent_count}" != "1" ]; then
+      # A merge commit's file list is its combined diff, which can hide code
+      # the merge brought in; it cannot be proven non-code, so fail closed.
+      allowed="false"
+    elif [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+      # Any author (#7662): COMPREHENSIVE_CYCLE_BOT_LOGINS no longer gates this.
       if ! files_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '{count: ((.files // []) | length), paths: [(.files // [])[] | .filename, (.previous_filename // empty)]}')"; then
         return 2
       fi
-      # The commit endpoint returns at most 300 files per page; a bot commit
-      # that large cannot be proven non-code from one page, so fail closed.
-      if [ "$(printf '%s' "${files_json}" | jq -r '.count')" -ge 300 ]; then
+      file_count="$(printf '%s' "${files_json}" | jq -r '.count // 0' 2>/dev/null || echo 0)"
+      [[ "${file_count}" =~ ^[0-9]+$ ]] || file_count=0
+      # The commit endpoint returns at most 300 files per page; a commit that
+      # large cannot be proven non-code from one page, and an empty list proves
+      # nothing either, so both fail closed.
+      if [ "${file_count}" -ge 300 ]; then
         echo "::warning::Commit ${sha:0:7} lists 300+ files; treating it as untested rather than trusting a truncated file list." >&2
+        allowed="false"
+      elif [ "${file_count}" -eq 0 ]; then
         allowed="false"
       else
         allowed="true"
