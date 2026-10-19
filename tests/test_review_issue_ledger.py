@@ -44,11 +44,15 @@ def _run_ledger(
 	ledger_path: str = ".ai/review_issue_ledger.txt",
 	floor_tags_fixture: str | None = None,
 	review_ledger_enabled: str = "1",
+	review_issues_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
 	runtime_dir = workspace_dir / "runtime"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
 
-	shutil.copy2(FIXTURES / review_issues_fixture, runtime_dir / "review_issues.txt")
+	if review_issues_text is None:
+		shutil.copy2(FIXTURES / review_issues_fixture, runtime_dir / "review_issues.txt")
+	else:
+		(runtime_dir / "review_issues.txt").write_text(review_issues_text, encoding="utf-8")
 	if floor_tags_fixture is not None:
 		shutil.copy2(FIXTURES / floor_tags_fixture, runtime_dir / "floor_tags.txt")
 
@@ -243,6 +247,43 @@ def test_hash_stable_on_whitespace_comment_churn_and_diverges_on_lens() -> None:
 		other = [x for x in ids if x != base_id][0]
 		assert entries[other]["LENS"] == "CORRECTNESS & LOGIC"
 		assert entries[base_id]["STATUS"] == "FIXED"
+
+
+
+def test_hash_ignores_line_range_end() -> None:
+	"""Only the range start feeds the anchor fingerprint, so `LINES: 2` and
+	`LINES: 2-3` must keep the same issue id."""
+	with tempfile.TemporaryDirectory() as td:
+		workspace = Path(td)
+		_seed_repo(
+			workspace,
+			[
+				"def sample(a, b):",
+				"    total = a + b",
+				"    return total",
+			],
+		)
+
+		fixture_text = (FIXTURES / "review_issues_single_security.txt").read_text(encoding="utf-8")
+		assert "LINES: 2\n" in fixture_text
+		first = _run_ledger(workspace, "review_issues_single_security.txt", 1, persist_limit=5)
+		assert first.returncode == 0, first.stderr
+		entries = _parse_ledger_entries(workspace / ".ai" / "review_issue_ledger.txt")
+		base_id = _first_issue_id(entries)
+
+		ranged_text = fixture_text.replace("LINES: 2\n", "LINES: 2-3\n", 1)
+		second = _run_ledger(
+			workspace,
+			"review_issues_single_security.txt",
+			2,
+			persist_limit=5,
+			review_issues_text=ranged_text,
+		)
+		assert second.returncode == 0, second.stderr
+		entries = _parse_ledger_entries(workspace / ".ai" / "review_issue_ledger.txt")
+		assert sorted(entries) == [base_id]
+		assert entries[base_id]["STATUS"] == "PERSISTING"
+		assert entries[base_id]["LINES"] == "2-3"
 
 
 
