@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:1093-1104 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `PollGroupPinnedStepsTest.test_moved_steps_run_once_in_their_group` checks each moved step's configured group number but does not check that the group exists in the `orchestrate-poll` matrix.\n  WHY: If the matrix is later reduced or its indices change, a step guarded to a removed index never runs, and the test still passes because it compares only against the hard-coded expected number. Source severity was NIT, mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_ci_poll_test_sharding.py:1093-1104 | severity=low (source: NIT) | confidence=4\n  PROBLEM: `PollGroupPinnedStepsTest.test_moved_steps_run_once_in_their_group` checks each moved step's configured group number but does not check that the group exists in the `orchestrate-poll` matrix.\n  WHY: If the matrix is later reduced or its indices change, a step guarded to a removed index never runs, and the test still passes because it compares only against the hard-coded expected number.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9dba21c4d2991daae41ef86ad5c4862367e8685e412e7497f2ace90005e63a49",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7693,
+    "run_id": "39246974815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39246974815",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261019120518_b4228a6e20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7693,
+    "run_id": "39246974815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-19T12:05:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
