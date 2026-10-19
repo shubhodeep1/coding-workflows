@@ -1305,3 +1305,36 @@ Processed: 2026-10-19
 - DUP-002 (shared workflow-analysis utilities) — rejected: a new shared module would have to be staged into every support copy these analysis scripts run from, and the existing `_parse_iso8601` variants differ in signature.
 - EXPR-001 (implement support-staging block size) — already-implemented: the implement.yml "Stage workflow support files" `run:` body contains no `${{ }}`; both interpolations sit in `env:`, so the expression-length limit does not apply.
 - DEAD-002 (branch-rebuild diagnostic state) — already-implemented: `BRANCH_REBUILD_THRESHOLD_DECISION` logs `skip_reason` and `last_rebuild_at`.
+
+### `analysis/workflow-optimization-2026-09-21-4.md`
+Processed: 2026-10-19
+- BUG-001 (stale `render_prompt.py` exemption in the script-reference guard) — applied: script-ref-guard (`changelog.d/wfopt-2026-09-21-4-script-ref-guard.md`); `OPTIONAL_REFS` in `scripts/check_workflow_script_refs.py` is now empty.
+- BUG-002 (consumer drift audit skipped the dispatch wrappers) — applied: drift-audit-wrappers (`changelog.d/wfopt-2026-09-21-4-drift-audit-wrappers.md`); `scripts/audit_consumer_drift.py` also reads the wrappers listed in `workflow-templates/profiles/full.txt`.
+- SHELL-001 / CONSIST-001 (word-split consumer registry loop, different dispatch retry policies) — applied: release-dispatch-loop (`changelog.d/wfopt-2026-09-21-4-release-dispatch-loop.md`); both release jobs validate each `owner/repo` entry and dispatch through `GH_RETRY_IDEMPOTENT=true gh_retry`.
+- Speed 5 / Reliability 4 first half (actionlint download retry) — applied: actionlint-retry (`changelog.d/wfopt-2026-09-21-4-actionlint-retry.md`); the `Install actionlint` step in `ci.yml` uses `--retry 3 --retry-all-errors`, and the checksum check is unchanged.
+- Reliability 4 second half (failing-test annotation) — rejected as non-material: the shard runner already prints per-test results.
+- Speed 1 (same-PR/head review dispatch suppression) — already-implemented: review dispatches run from the default branch as PR-named runs (#4618, #4701), and the poller and sweep check them through `_pr_named_review_dispatch_runs` (#4927), with pending-aware guards and `SWEEP_STALE_QUEUED_MINUTES`. The extra 5-second recheck is rejected as unmeasured.
+- Speed 2 (split CI's `lint` job) — already-implemented: #4707 split CI into parallel jobs plus the `orchestrate-poll` matrix.
+- Speed 3 / Cost 1 / Cost 2 / Reliability 1 / Reliability 2 / per-repo actions 1–2 (deterministic preflights, linked-issue metadata, staged-support manifest preflight) — already-implemented / obsolete: `main` exports `LINKED_ISSUE_METADATA_FILE` (PR #4174 incident). The `scripts/helper.sh` / `IMPLEMENT_STAGED_SUPPORT_BASE_MISSING` failures came from the editor's own pytest writing fixture paths into the live ledger; the `tests/conftest.py` strip and `env -u` at both editor launches in `implement.yml` fix that. `REVIEW_EDITOR_PREFLIGHT` exists, and review support is staged from the verified workflow commit. The `commit_guard_metadata` classification and the rebuild path are rejected as obsolete.
+- Speed 4 (idle poll exit, `ORCH_POLL_TIMING`) — rejected (2026-09-16 Speed 5 precedent): the sweeps and the merge-train release run every tick, and the timing fields are telemetry with no consumer.
+- Cost 3 (risk-tier selection) — already-implemented: the lite/standard/full tier resolver is on by default (`REVIEW_TIER_RESOLVER_ENABLED=true`).
+- Cost 4 (resume from commit-guard failures) — rejected: the root cause is fixed, and persisting editor patches by head SHA would be a broad new resume path.
+- Cost 5 (Semble byte telemetry) and Reliability 5 (`SERENA_PROBE result=skipped`) — rejected: telemetry with no consumer (2026-09-20-2 Cost 6 precedent).
+- Reliability 3 (release creation PAT fallback) — already-implemented: `Create GitHub Release` in both release workflows uses `secrets.GH_PAT || github.token` and looks up the exact tag before and after the create.
+- AI memory (90–95% budget target, fail-open reason fields) — rejected as experimental / under-specified (2026-09-16 Reliability 4 precedent).
+- GH API audit (sweep per-status queries, 7 to 3 requests) — rejected (2026-09-20 precedent): it changes the paginated active-run snapshot behind the pending-aware guards.
+- GH API audit (`GH_API_CALL` marker) — rejected: `GH_API_RETRY` and `GH_PAT_BUDGET` cover part of it.
+- Prompt cache (aggregate `cache_hit_rate`) — already-implemented: `compute_cache_hit_rate` in `scripts/cost_audit.py`.
+- Prompt cache (prefix reordering, test_and_mark_stable prefix reuse, per-component token counts) — rejected as under-specified.
+- Orchestrator Health tracking list — rejected: observability with no consumer.
+- Pipeline flow (merge-propagation conflicts on generated and changelog files) — already-implemented: the manifest union merge (`CONFLICT_MANIFEST_UNION_ENABLED`), folded-fragment keep (`CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED`) and `changelog.d/` fragments.
+- BATCH-001 — rejected: tagged NEEDS_VERIFICATION in the source.
+- BATCH-002, BATCH-003, BATCH-004, MERGE-002, REUSE-001 — rejected: tagged RISKY_SKIP in the source.
+- MERGE-001 (one comments snapshot for clarify) — already-implemented: clarify reads its comments once, paginated. The source tagged it RISKY_SKIP.
+- DUP-001, DUP-002, DUP-003 — rejected: refactors with no behaviour change (2026-09-16 precedent). CONSIST-001 was fixed without the shared release helper DUP-003 proposed.
+- EXPR-001 (implement support-staging block size) — already-implemented: the staging step binds its values through `env:` (2026-09-18 verdict).
+- DEAD-001 (`RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE`) — rejected: `tests/test_review_autofix_review_pipeline_contract.py` pins it, and removing it conflicts with naming immutability.
+- DEAD-002 (unused floor map) — already-implemented: `CURRENT_FLOOR` no longer exists in the repository.
+- DEAD-003 (`PR_HEAD_SHA` in `scripts/review_rb_judge.sh`) — rejected for naming immutability: `RB_JUDGED_HEAD_SHA` already binds `--match-head-commit`.
+- DEAD-API — no findings in the source.
+- Executive summary, per-repo breakdown, metrics appendix, Reliability 6 (policy pressure) and the AI Memory Health table — INVALID/non-material: evidence, not recommendations.
