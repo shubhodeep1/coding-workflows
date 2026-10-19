@@ -1388,7 +1388,7 @@ jobs:
           mkdir -p scripts
           mkdir -p -- "${RUNTIME_DIR}/host_python"
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -5767,6 +5767,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # Issue #7657: a plan with a `## Deferred scope` section delivers
+          # only part of the issue; `false` keeps every PR on `Closes <url>`.
+          PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           mkdir -p "${RUNTIME_DIR}/pr-body-lint"
@@ -5819,7 +5822,70 @@ jobs:
           print(match.group(1))
           PY
           )"
-          printf 'Automated implementation. Closes %s\n' "${ISSUE_URL}" > "${PR_BODY_FILE}"
+          # Issue #7657: when the approved plan defers part of a standalone
+          # issue (`## Deferred scope`), the PR uses a non-closing `Refs #<n>`
+          # and carries the deferred items under the partial-delivery marker;
+          # issue_pr_status.yml then keeps the issue open on merge. Missing,
+          # empty or malformed sections, managed children, a missing helper
+          # or the switch turned off keep `Closes <url>` (fail safe).
+          PARTIAL_DELIVERY_SWITCH="$(printf '%s' "${PARTIAL_DELIVERY_TRACKING_ENABLED:-}" | tr '[:upper:]' '[:lower:]')"
+          case "${PARTIAL_DELIVERY_SWITCH}" in
+            ""|true) PARTIAL_DELIVERY_SWITCH="true" ;;
+            false) PARTIAL_DELIVERY_SWITCH="false" ;;
+            *)
+              echo "::warning::PARTIAL_DELIVERY_TRACKING_ENABLED has an unrecognized value; partial-delivery tracking is off for this run."
+              PARTIAL_DELIVERY_SWITCH="false"
+              ;;
+          esac
+          PARTIAL_DELIVERY_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/partial_delivery.py"
+          PARTIAL_DELIVERY_SECTION_FILE="${RUNTIME_DIR}/pr-body-lint/partial-delivery.md"
+          PARTIAL_DELIVERY_OUTCOME="full"
+          PARTIAL_DELIVERY_REASON="no_block"
+          PARTIAL_DELIVERY_ITEMS=0
+          if [ "${PARTIAL_DELIVERY_SWITCH}" != "true" ]; then
+            PARTIAL_DELIVERY_REASON="disabled"
+          elif [ -n "${TRACKING_ISSUE_NUMBER}" ] || python3 -I -B -c '
+          import json, sys
+          try:
+              meta = json.load(open(sys.argv[1], encoding="utf-8"))
+          except (OSError, ValueError):
+              sys.exit(1)
+          labels = [l.get("name") if isinstance(l, dict) else l for l in (meta.get("labels") or [])]
+          body = meta.get("body") if isinstance(meta.get("body"), str) else ""
+          sys.exit(0 if ("ai:orchestrator-managed" in labels or "Managed by: AI Orchestrator" in body) else 1)
+          ' "${ISSUE_META_FILE}" 2>/dev/null; then
+            PARTIAL_DELIVERY_REASON="managed"
+          elif [ ! -f "${PARTIAL_DELIVERY_HELPER}" ] || [ -L "${PARTIAL_DELIVERY_HELPER}" ]; then
+            PARTIAL_DELIVERY_REASON="helper_missing"
+          elif [ -s "${PLAN_FILE:-}" ]; then
+            PARTIAL_DELIVERY_STATUS_JSON="$(python3 -I -B "${PARTIAL_DELIVERY_HELPER}" plan-status --plan-file "${PLAN_FILE}" 2>/dev/null || echo '{}')"
+            PARTIAL_DELIVERY_STATUS="$(printf '%s' "${PARTIAL_DELIVERY_STATUS_JSON}" | python3 -I -B -c 'import json, sys; print(json.load(sys.stdin).get("status") or "malformed")' 2>/dev/null || echo malformed)"
+            case "${PARTIAL_DELIVERY_STATUS}" in
+              partial)
+                if python3 -I -B "${PARTIAL_DELIVERY_HELPER}" pr-section --plan-file "${PLAN_FILE}" --issue "${ISSUE_NUMBER}" \
+                  > "${PARTIAL_DELIVERY_SECTION_FILE}" 2>/dev/null && [ -s "${PARTIAL_DELIVERY_SECTION_FILE}" ]; then
+                  PARTIAL_DELIVERY_OUTCOME="partial"
+                  PARTIAL_DELIVERY_REASON="deferred_scope"
+                  PARTIAL_DELIVERY_ITEMS="$(printf '%s' "${PARTIAL_DELIVERY_STATUS_JSON}" | python3 -I -B -c 'import json, sys; print(len(json.load(sys.stdin).get("items") or []))' 2>/dev/null || echo 0)"
+                else
+                  PARTIAL_DELIVERY_REASON="malformed"
+                fi
+                ;;
+              full) PARTIAL_DELIVERY_REASON="no_block" ;;
+              *)
+                PARTIAL_DELIVERY_REASON="malformed"
+                echo "::warning::The approved plan's Deferred scope section for issue #${ISSUE_NUMBER} is malformed; the PR closes the issue as usual."
+                ;;
+            esac
+          fi
+          if [ "${PARTIAL_DELIVERY_OUTCOME}" = "partial" ]; then
+            printf 'Automated implementation. Refs #%s\n' "${ISSUE_NUMBER}" > "${PR_BODY_FILE}"
+            cat "${PARTIAL_DELIVERY_SECTION_FILE}" >> "${PR_BODY_FILE}"
+            echo "PARTIAL_DELIVERY mode=implement issue=${ISSUE_NUMBER} outcome=partial items=${PARTIAL_DELIVERY_ITEMS}"
+          else
+            printf 'Automated implementation. Closes %s\n' "${ISSUE_URL}" > "${PR_BODY_FILE}"
+            echo "PARTIAL_DELIVERY mode=implement issue=${ISSUE_NUMBER} outcome=full reason=${PARTIAL_DELIVERY_REASON}"
+          fi
           # Child PRs must keep auto-closing the child issue while linking
           # back to the tracking issue with a non-closing reference for
           # archival / audit tooling.

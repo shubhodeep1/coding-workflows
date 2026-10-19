@@ -99,7 +99,7 @@ raise SystemExit(1)
 	gh_path.chmod(0o755)
 
 
-def _run_preflight(*, issue_meta: dict, issue_url: str) -> str:
+def _run_preflight(*, issue_meta: dict, issue_url: str, plan_text: str | None = None, extra_env: dict | None = None) -> str:
 	script = _extract_run_script(STEP_NAME)
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
@@ -111,6 +111,10 @@ def _run_preflight(*, issue_meta: dict, issue_url: str) -> str:
 		runtime_dir.mkdir()
 		issue_meta_file = runtime_dir / "issue_meta.json"
 		issue_meta_file.write_text(json.dumps(issue_meta), encoding="utf-8")
+
+		plan_file = runtime_dir / "implementation_plan.txt"
+		if plan_text is not None:
+			plan_file.write_text(plan_text, encoding="utf-8")
 
 		workflow_script = tmp / "step.sh"
 		workflow_script.write_text(script, encoding="utf-8")
@@ -128,8 +132,12 @@ def _run_preflight(*, issue_meta: dict, issue_url: str) -> str:
 				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
 				"PYTHONDONTWRITEBYTECODE": "1",
 				"RUNTIME_DIR": str(runtime_dir),
+				"PLAN_FILE": str(plan_file),
 			}
 		)
+		env.pop("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", None)
+		env.pop("PARTIAL_DELIVERY_TRACKING_ENABLED", None)
+		env.update(extra_env or {})
 
 		result = subprocess.run(
 			["bash", str(workflow_script)],
@@ -177,10 +185,63 @@ def test_create_pr_step_uses_the_linted_body_artifact() -> None:
 	assert '--body-file "${PR_BODY_FILE}"' in step
 
 
+# Issue #7657: a plan that defers part of the issue gives a non-closing PR.
+PARTIAL_PLAN = (
+	"Implementation Plan\n\n## Files likely to change\n- `a.py`\n\n"
+	"## Deferred scope\n- Implement the member homepage (Phase 2).\n\n"
+	"## Functions/modules to implement\n1. thing\n"
+)
+FULL_PLAN = "Implementation Plan\n\n## Files likely to change\n- `a.py`\n"
+PLAIN_ISSUE = {"body": "Implement both homepages.\n", "labels": [{"name": "bug"}]}
+ISSUE_URL = "https://github.com/owner/repo/issues/123"
+
+
+def test_partial_plan_uses_refs_and_embeds_the_deferred_items() -> None:
+	body = _run_preflight(issue_meta=PLAIN_ISSUE, issue_url=ISSUE_URL, plan_text=PARTIAL_PLAN)
+	assert body.startswith("Automated implementation. Refs #123\n")
+	assert "Closes" not in body
+	assert ISSUE_URL not in body
+	assert "<!-- ai:partial-delivery:v1 issue=123 -->" in body
+	assert "- Implement the member homepage (Phase 2)." in body
+
+
+def test_plan_without_deferred_scope_still_closes_the_issue() -> None:
+	body = _run_preflight(issue_meta=PLAIN_ISSUE, issue_url=ISSUE_URL, plan_text=FULL_PLAN)
+	assert body == f"Automated implementation. Closes {ISSUE_URL}\n"
+	malformed = FULL_PLAN + "\n## Deferred scope\n\n## Next\n"
+	body = _run_preflight(issue_meta=PLAIN_ISSUE, issue_url=ISSUE_URL, plan_text=malformed)
+	assert body == f"Automated implementation. Closes {ISSUE_URL}\n"
+
+
+def test_managed_issue_and_disabled_switch_ignore_the_deferred_scope() -> None:
+	managed = {"body": "x\n- Tracking issue: #829\n", "labels": [{"name": "ai:orchestrator-managed"}]}
+	body = _run_preflight(issue_meta=managed, issue_url=ISSUE_URL, plan_text=PARTIAL_PLAN)
+	assert body == f"Automated implementation. Closes {ISSUE_URL}\nRefs #829\n"
+	marker_only = {"body": "Managed by: AI Orchestrator\n", "labels": []}
+	body = _run_preflight(issue_meta=marker_only, issue_url=ISSUE_URL, plan_text=PARTIAL_PLAN)
+	assert body == f"Automated implementation. Closes {ISSUE_URL}\n"
+	for value in ("false", "maybe"):
+		body = _run_preflight(
+			issue_meta=PLAIN_ISSUE, issue_url=ISSUE_URL, plan_text=PARTIAL_PLAN,
+			extra_env={"PARTIAL_DELIVERY_TRACKING_ENABLED": value},
+		)
+		assert body == f"Automated implementation. Closes {ISSUE_URL}\n", value
+
+
+def test_preflight_reads_the_switch_from_a_repository_variable() -> None:
+	step = _step_text(STEP_NAME)
+	assert "PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}" in step
+	assert " partial_delivery.py " in _workflow_text()
+
+
 def main() -> int:
 	test_orchestrator_managed_issue_appends_non_closing_tracking_ref()
 	test_non_orchestrator_issue_keeps_close_only_body_even_with_tracking_footer()
 	test_create_pr_step_uses_the_linted_body_artifact()
+	test_partial_plan_uses_refs_and_embeds_the_deferred_items()
+	test_plan_without_deferred_scope_still_closes_the_issue()
+	test_managed_issue_and_disabled_switch_ignore_the_deferred_scope()
+	test_preflight_reads_the_switch_from_a_repository_variable()
 	print("OK: implement PR body tracking refs contract holds")
 	return 0
 

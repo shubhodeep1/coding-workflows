@@ -1072,6 +1072,10 @@ jobs:
             tests/test_heal_plan_grant_body_edit_fix.py \
             tests/test_implement_heal_preflight.py \
             tests/test_implement_pr_body_tracking_refs.py \
+            tests/test_partial_delivery.py \
+            tests/test_issue_pr_status_partial_delivery.py \
+            tests/test_clarify_partial_delivery_restart.py \
+            tests/test_partial_delivery_sweep_guard.py \
             tests/test_orchestrate_final_merge_required_checks_gate.py \
             tests/test_prompt_compaction.py \
             tests/test_render_validation_templates_node_hardhat_regressions.py \

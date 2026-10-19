@@ -5121,7 +5121,7 @@ close_merged_issues_sweep() {
 
   local idx issue_num origin has_tracking_label timeline_json merged_pr_num
   local merged_pr_candidates _sweep_candidate_pr _sweep_candidate_pr_json
-  local sweep_pr_fetch_failed sweep_non_target_seen
+  local sweep_pr_fetch_failed sweep_non_target_seen sweep_partial_delivery_reason _sweep_pd_rc
   local _sweep_issue_body _sweep_is_managed _sweep_declared_branch _sweep_declared_parsed
   local _sweep_base_log _sweep_declared_log _sweep_non_target_note
   local closed_count=0
@@ -5191,6 +5191,7 @@ close_merged_issues_sweep() {
     merged_pr_num=""
     sweep_pr_fetch_failed=false
     sweep_non_target_seen=false
+    sweep_partial_delivery_reason=""
     for _sweep_candidate_pr in ${merged_pr_candidates}; do
       [[ "${_sweep_candidate_pr}" =~ ^[0-9]+$ ]] || continue
       _sweep_candidate_pr_json="$(_fetch_pr_json "${_sweep_candidate_pr}")"
@@ -5205,6 +5206,21 @@ close_merged_issues_sweep() {
           _sweep_declared_parsed=true
         fi
         if _pr_json_base_is_target_merge "${issue_num}" "${_sweep_candidate_pr_json}" "${_sweep_default_branch}" "${_sweep_declared_branch}" "${_sweep_is_managed}"; then
+          # Issue #7657: a bound partial-delivery PR keeps its issue open;
+          # issue_pr_status.yml restarts clarify for the deferred items.
+          if [ "${_sweep_is_managed}" != "true" ]; then
+            _sweep_pd_rc=0
+            _pr_json_is_partial_delivery "${issue_num}" "${_sweep_candidate_pr_json}" || _sweep_pd_rc=$?
+            if [ "${_sweep_pd_rc}" = "0" ]; then
+              sweep_partial_delivery_reason="partial_delivery"
+              echo "PARTIAL_DELIVERY mode=sweep issue=${issue_num} pr=${_sweep_candidate_pr} outcome=skip reason=partial_delivery"
+              break
+            elif [ "${_sweep_pd_rc}" = "2" ]; then
+              sweep_partial_delivery_reason="identity_unavailable"
+              echo "PARTIAL_DELIVERY mode=sweep issue=${issue_num} pr=${_sweep_candidate_pr} outcome=skip reason=identity_unavailable"
+              break
+            fi
+          fi
           echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} accepted reason=${_TARGET_MERGE_REASON}"
           merged_pr_num="${_sweep_candidate_pr}"
           break
@@ -5218,6 +5234,11 @@ close_merged_issues_sweep() {
       echo "CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} candidate_pr=${_sweep_candidate_pr} rejected=not_implementation_pr"
     done
 
+    if [ -n "${sweep_partial_delivery_reason}" ]; then
+      # Issue #7657: no close and no ai:merged backfill for a partial delivery.
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
     if [ -z "${merged_pr_num}" ]; then
       if [ "${sweep_pr_fetch_failed}" = "true" ]; then
         echo "::warning::CLOSE_MERGED_SWEEP issue=${issue_num} origin=${origin} pr_fetch_failed — skipping this cycle."
@@ -18547,6 +18568,51 @@ _pr_json_is_issue_implementation_pr() {
     return 0
   fi
   if _pr_json_closes_issue "${issue_num}" "${pr_json}"; then
+    return 0
+  fi
+  return 1
+}
+
+# _pr_json_is_partial_delivery — issue #7657. Decide whether a merged
+# implementation PR (full REST `pulls/N` JSON) delivered only part of a
+# standalone issue: its body carries exactly one
+# `<!-- ai:partial-delivery:v1 issue=<n> -->` line for this issue and the PR
+# is bound to the issue by the #7160 rules (same-repository head, head ref
+# ai/issue-<n>, author equal to the GH_PAT login). issue_pr_status.yml keeps
+# such an issue open and restarts clarify, so the close sweep must not close
+# it. Returns 0 (partial), 1 (not partial, or the switch is off) or 2 (the
+# pipeline login is unavailable; retry next tick). No API call besides the
+# memoized unblock_trusted_login.
+_pr_json_is_partial_delivery() {
+  local issue_num="$1"
+  local pr_json="$2"
+  local switch
+  switch="$(printf '%s' "${PARTIAL_DELIVERY_TRACKING_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+  case "${switch}" in
+    ""|true) ;;
+    *) return 1 ;;
+  esac
+  [[ "${issue_num}" =~ ^[0-9]+$ ]] || return 1
+  if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+    return 1
+  fi
+  local _pd_bound
+  _pd_bound="$(printf '%s' "${pr_json}" | jq -r --arg issue "${issue_num}" --arg repo "${GITHUB_REPOSITORY:-}" '
+    ("<!-- ai:partial-delivery:v1 issue=" + $issue + " -->") as $marker
+    | ([(.body // "") | gsub("\r"; "") | split("\n")[] | sub("^\\s+"; "") | sub("\\s+$"; "")
+        | select(test("^<!--\\s*ai:partial-delivery:v1\\s"))]) as $markers
+    | if ($markers | length) == 1 and $markers[0] == $marker
+        and (.head.repo.full_name // "") == $repo and $repo != ""
+        and (.head.ref // "") == ("ai/issue-" + $issue)
+      then ((.user.login // "") | ascii_downcase) else "" end
+  ' 2>/dev/null || echo "")"
+  [ -n "${_pd_bound}" ] || return 1
+  local _pd_login
+  _pd_login="$(unblock_trusted_login)"
+  if [ -z "${_pd_login}" ]; then
+    return 2
+  fi
+  if [ "${_pd_bound}" = "${_pd_login,,}" ]; then
     return 0
   fi
   return 1

@@ -295,6 +295,16 @@ RELEASE_MARKER_CLAUSE = (
 	"startsWith(github.event.comment.body, fromJson('\"/reclarify\\n<!-- ai:pr-dependency-released:\"')))"
 )
 
+# Issue #7657: issue_pr_status.yml restarts clarify after a merged PR that
+# delivered only part of the issue, with the same shape and a different
+# marker; the route step verifies it exactly like the release.
+PARTIAL_DELIVERY_RESTART_CLAUSE = (
+	"(github.event_name == 'issue_comment' && github.event.action == 'created' && "
+	"github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && "
+	"!contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association) && "
+	"startsWith(github.event.comment.body, fromJson('\"/reclarify\\n<!-- ai:partial-delivery-restart:\"')))"
+)
+
 RELEASE_CONCURRENCY_GROUP = (
 	"ai-clarify-${{ github.event.issue.number }}${{ (github.event_name == 'issue_comment' && "
 	"!contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)) "
@@ -370,9 +380,11 @@ def test_clarify_release_marker_clause_is_pinned_in_every_wrapper() -> None:
 	for relative_path in PHASE_WORKFLOWS["clarify"]:
 		predicate = _normalized_job_predicate(relative_path, "clarify")
 		assert RELEASE_MARKER_CLAUSE in predicate, f"{relative_path} lost the PR-dependency release clause"
-		# The release clause is the only path for an author without a trusted
-		# association; ordinary /reclarify comments still require one.
-		assert predicate.count("!contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)") == 1, relative_path
+		assert PARTIAL_DELIVERY_RESTART_CLAUSE in predicate, f"{relative_path} lost the partial-delivery restart clause"
+		# The release and partial-delivery restart clauses are the only paths
+		# for an author without a trusted association; ordinary /reclarify
+		# comments still require one.
+		assert predicate.count("!contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)") == 2, relative_path
 		_assert_clauses(
 			predicate,
 			(

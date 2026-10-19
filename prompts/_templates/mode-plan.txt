@@ -60,6 +60,17 @@ Output contract — produce a plan covering, in order:
    `State machines:` field is required, not optional. When the current render is
    `false`, do not emit `Data flow:`, `State machines:`, or `Failure modes:`.
 
+12. `## Deferred scope` (issue #7657): when a clarification answer or an `AD-<n>`
+   auto-decision limits this issue to part of its stated scope (for example
+   "this issue delivers Phase 1 only"), emit a `## Deferred scope` section as
+   its own `##` heading right after `## Files likely to change`, with one `- `
+   bullet per remaining item (at most 20). Each bullet is one plain sentence
+   with no links, issue references or mentions. Never emit an empty section,
+   omit the section when the plan covers the whole issue, and never emit it
+   for an orchestrator-managed child issue. Implement opens the PR with a
+   non-closing reference, so the issue stays open and clarification restarts
+   for these items after the merge.
+
 Use the following shared security and money-handling lens when planning any
 affected surface:
 
