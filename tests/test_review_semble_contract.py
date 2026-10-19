@@ -626,26 +626,6 @@ def test_targeted_semble_overflow_is_opt_in_in_all_reusable_workflows() -> None:
 		assert "TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false" in _read(script_path)
 
 
-def main() -> int:
-	test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena()
-	test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps()
-	test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena()
-	test_reviewer_checklist_prompt_contract_and_gate()
-	test_normalize_openrouter_usage_keeps_first_valid_usage_payload()
-	test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage()
-	test_opencode_reviewer_jsonl_marks_missing_usage_unavailable_and_rejects_malformed_events()
-	test_editor_targeted_file_context_and_prompt_render_path_passes_flags()
-	test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging()
-	test_commit_changes_withheld_partial_finalize_discards_local_edits_and_exits_cleanly()
-	test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append()
-	print("OK: review_autofix Semble contract assertions hold")
-	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 def test_pipefail_truncation_sites_use_non_pipe_forms() -> None:
 	"""Capped output must not pipe into head (SIGPIPE aborts under pipefail)."""
 	plan = (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
@@ -692,3 +672,24 @@ def test_pipefail_truncation_sites_use_non_pipe_forms() -> None:
 	result = run('head -n 1 <<<"$1"', big_lines)
 	assert result.returncode == 0
 	assert result.stdout == b"line-0\n"
+
+
+def main() -> int:
+	test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena()
+	test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps()
+	test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena()
+	test_reviewer_checklist_prompt_contract_and_gate()
+	test_normalize_openrouter_usage_keeps_first_valid_usage_payload()
+	test_opencode_reviewer_jsonl_materializes_text_and_numeric_usage()
+	test_opencode_reviewer_jsonl_marks_missing_usage_unavailable_and_rejects_malformed_events()
+	test_editor_targeted_file_context_and_prompt_render_path_passes_flags()
+	test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging()
+	test_commit_changes_withheld_partial_finalize_discards_local_edits_and_exits_cleanly()
+	test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append()
+	test_pipefail_truncation_sites_use_non_pipe_forms()
+	print("OK: review_autofix Semble contract assertions hold")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
