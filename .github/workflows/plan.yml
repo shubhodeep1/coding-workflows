@@ -2422,7 +2422,7 @@ jobs:
           set -euo pipefail
           source scripts/memory_helpers.sh
 
-          DETAILS="$(cat "${PLAN_COMMENT_FILE}" | head -c 10000)"
+          DETAILS="$(head -c 10000 "${PLAN_COMMENT_FILE}")"
           memory_record_candidate \
             --category "task_summaries" \
             --summary "Plan requested re-clarification for issue #${ISSUE_NUMBER}" \
@@ -2549,7 +2549,7 @@ jobs:
           set -euo pipefail
           source scripts/memory_helpers.sh
 
-          DETAILS="$(cat "${PLAN_COMMENT_FILE}" | head -c 10000)"
+          DETAILS="$(head -c 10000 "${PLAN_COMMENT_FILE}")"
           memory_record_candidate \
             --category "task_summaries" \
             --summary "Implementation plan posted for issue #${ISSUE_NUMBER}" \

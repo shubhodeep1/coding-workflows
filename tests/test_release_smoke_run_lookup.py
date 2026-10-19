@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import textwrap
@@ -186,10 +187,15 @@ def test_scan_is_capped_at_five_pages() -> None:
 
 
 def test_read_failure_returns_one_and_prints_nothing() -> None:
+	# The FAIL page answers HTTP 502, a transient error, so gh_api_safe uses
+	# its whole 4-attempt budget on this read (the fake sleep is instant)
+	# before the lookup reports the failure.
 	result, calls = _invoke({"page-1.json": "FAIL"}, LOOKUP.format(title="Smoke"))
 	assert result.returncode == 1
 	assert result.stdout == ""
-	assert len(calls) == 1
+	assert len(calls) == 4
+	assert all(_page(c) == 1 for c in calls)
+	assert result.stderr.count("GH_API_SAFE_RETRY attempt=") == 3
 
 
 def test_explicit_page_cap_returns_two_when_every_page_is_full() -> None:
@@ -205,6 +211,164 @@ def test_page_that_is_not_a_runs_listing_returns_one() -> None:
 	assert result.returncode == 1
 	assert result.stdout == ""
 	assert [_page(c) for c in calls] == [1, 2]
+
+
+def _gh_stub(responses: list[tuple[str, str]]) -> str:
+	# Shell-function `gh` (and `sleep`) defined after the helper is sourced.
+	# Call N answers responses[N-1] (the last one repeats): ("err", msg)
+	# writes msg to stderr and fails, ("ok", body) prints body.
+	lines = [
+		"gh() {",
+		'\techo "gh $*" >> "${TEST_GH_CALLS}"',
+		'\tlocal n',
+		'\tn=$(grep -c "^gh " "${TEST_GH_CALLS}")',
+		'\tcase "${n}" in',
+	]
+	for index, (kind, text) in enumerate(responses, start=1):
+		label = "*" if index == len(responses) else str(index)
+		if kind == "err":
+			action = f"printf '%s\\n' {shlex.quote(text)} >&2; return 1"
+		else:
+			action = f"printf '%s' {shlex.quote(text)}; return 0"
+		lines.append(f"\t\t{label}) {action} ;;")
+	lines += [
+		"\tesac",
+		"}",
+		'sleep() { echo "sleep $1" >> "${TEST_GH_CALLS}"; }',
+	]
+	return "\n".join(lines) + "\n"
+
+
+def _safe_invoke(responses: list[tuple[str, str]], call: str) -> tuple[subprocess.CompletedProcess[str], list[str], list[str]]:
+	result, calls = _invoke({}, _gh_stub(responses) + call)
+	gh_calls = [c for c in calls if c.startswith("gh ")]
+	sleeps = [c.split(" ", 1)[1] for c in calls if c.startswith("sleep ")]
+	return result, gh_calls, sleeps
+
+
+HTTP_502 = ("err", "gh: Server Error (HTTP 502)")
+
+
+def test_gh_api_safe_retries_transient_502_on_get_and_returns_output() -> None:
+	call = 'set -u\nRATE_LIMIT_BACKOFF=0\nif gh_api_safe repos/o/r/actions/runs/1; then printf "%s" "${GH_API_SAFE_OUTPUT}"; fi\necho " backoff=${RATE_LIMIT_BACKOFF}"\n'
+	result, gh_calls, sleeps = _safe_invoke([HTTP_502, ("ok", '{"ok":1}')], call)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == '{"ok":1} backoff=0\n', result.stdout
+	assert len(gh_calls) == 2
+	assert sleeps == ["5"]
+	assert result.stderr.count("GH_API_SAFE_RETRY attempt=1/4 class=transient") == 1
+	assert result.stderr.count("GH_API_SAFE_RETRY") == 1
+
+
+def test_gh_api_safe_print_returns_output_after_transient_retry() -> None:
+	result, gh_calls, sleeps = _safe_invoke([HTTP_502, ("ok", '{"ok":1}')], "gh_api_safe_print repos/o/r/actions/runs/1\n")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == '{"ok":1}'
+	assert len(gh_calls) == 2 and sleeps == ["5"]
+
+
+def test_gh_api_safe_does_not_retry_transient_on_mutating_calls() -> None:
+	for args in (
+		"-X POST repos/o/r/dispatches",
+		"--method=PATCH repos/o/r/issues/1",
+		"--method patch repos/o/r/issues/1",
+		"-XPOST repos/o/r/dispatches",
+		"repos/o/r/issues/1/comments -f body=x",
+		"-F a=1 repos/o/r/dispatches",
+		"-fbody=x repos/o/r/issues/1/comments",
+		"--raw-field body=x repos/o/r/issues/1/comments",
+		"--field=a=1 repos/o/r/dispatches",
+		"--input file.json repos/o/r/dispatches",
+		"-X GET -f per_page=1 repos/o/r/actions/runs",
+	):
+		result, gh_calls, sleeps = _safe_invoke([HTTP_502, ("ok", "{}")], f"gh_api_safe {args}\necho rc=$?\n")
+		assert "rc=1" in result.stdout, (args, result.stdout, result.stderr)
+		assert len(gh_calls) == 1, (args, gh_calls)
+		assert sleeps == [], (args, sleeps)
+		assert "GH_API_SAFE_RETRY" not in result.stderr, args
+
+
+def test_gh_api_safe_get_method_and_value_flags_still_count_as_reads() -> None:
+	for args in (
+		"-X GET repos/o/r/actions/runs",
+		"--method=get repos/o/r/actions/runs",
+		"-X HEAD repos/o/r/actions/runs",
+		"--method=head repos/o/r/actions/runs",
+		"-XHEAD repos/o/r/actions/runs",
+		"repos/o/r/actions/runs --jq .total_count",
+		"-H Accept:application/json -q '.[] | .id' repos/o/r/pulls",
+		"--paginate repos/o/r/issues",
+	):
+		result, gh_calls, sleeps = _safe_invoke([HTTP_502, ("ok", "{}")], f"gh_api_safe {args}\necho rc=$?\n")
+		assert "rc=0" in result.stdout, (args, result.stdout, result.stderr)
+		assert len(gh_calls) == 2 and sleeps == ["5"], (args, gh_calls, sleeps)
+
+
+def test_gh_api_safe_does_not_retry_404() -> None:
+	result, gh_calls, sleeps = _safe_invoke([("err", "gh: Not Found (HTTP 404)"), ("ok", "{}")], "gh_api_safe repos/o/r/issues/1\necho rc=$?\n")
+	assert "rc=1" in result.stdout, result.stdout
+	assert len(gh_calls) == 1 and sleeps == []
+	assert "::error::gh api call failed: repos/o/r/issues/1" in result.stdout
+	assert "Not Found (HTTP 404)" in result.stderr
+	assert "GH_API_SAFE_RETRY" not in result.stderr
+
+
+def test_gh_api_safe_rate_limit_path_unchanged() -> None:
+	for args in ("repos/o/r/actions/runs", "-X POST repos/o/r/dispatches"):
+		result, gh_calls, sleeps = _safe_invoke([("err", "API rate limit exceeded for user"), ("ok", "{}")], f"gh_api_safe {args}\necho rc=$?\n")
+		assert "rc=0" in result.stdout, (args, result.stdout, result.stderr)
+		assert len(gh_calls) == 2 and sleeps == ["30"], (args, gh_calls, sleeps)
+		assert "GH_API_SAFE_RETRY" not in result.stderr, args
+
+
+def test_gh_api_safe_transient_exhaustion_uses_backoff_and_reports() -> None:
+	result, gh_calls, sleeps = _safe_invoke([HTTP_502], "gh_api_safe repos/o/r/actions/runs\necho rc=$?\n")
+	assert "rc=1" in result.stdout, result.stdout
+	assert len(gh_calls) == 4
+	assert sleeps == ["5", "10", "20"]
+	for attempt in (1, 2, 3):
+		assert f"GH_API_SAFE_RETRY attempt={attempt}/4 class=transient" in result.stderr
+	assert "attempt=4/4" not in result.stderr
+	assert result.stdout.count("::error::gh api call failed") == 1
+
+
+def test_gh_api_safe_transient_patterns() -> None:
+	for message in (
+		"read tcp 1.2.3.4:443: connection reset by peer",
+		"read tcp 1.2.3.4:443: i/o timeout",
+		"net/http: TLS handshake timeout",
+		"unexpected EOF",
+		"Post https://api.github.com/graphql: EOF",
+		"gh: HTTP 503",
+		"HTTP 504: Gateway Timeout",
+		"gh: Server Error (HTTP 500)",
+		"net/http: timeout awaiting response headers",
+	):
+		result, gh_calls, sleeps = _safe_invoke([("err", message), ("ok", "{}")], "gh_api_safe repos/o/r/actions/runs\necho rc=$?\n")
+		assert "rc=0" in result.stdout, (message, result.stdout, result.stderr)
+		assert len(gh_calls) == 2 and sleeps == ["5"], (message, gh_calls, sleeps)
+	for message in (
+		"geoffrey failed",
+		"boom failure",
+		"run 15020 not found (HTTP 404)",
+		"No commit found for SHA: abc502def0123456789 (HTTP 404)",
+		"gh: Not Found (HTTP 404) sha=ab503_x",
+	):
+		result, gh_calls, sleeps = _safe_invoke([("err", message), ("ok", "{}")], "gh_api_safe repos/o/r/actions/runs\necho rc=$?\n")
+		assert "rc=1" in result.stdout, (message, result.stdout)
+		assert len(gh_calls) == 1 and sleeps == [], (message, gh_calls, sleeps)
+
+
+def test_gh_api_safe_quiet_transient_exhaustion() -> None:
+	result, gh_calls, sleeps = _safe_invoke([HTTP_502], "gh_api_safe_quiet repos/o/r/actions/runs\necho rc=$? >&2\n")
+	assert result.stdout == ""
+	assert len(gh_calls) == 4 and sleeps == ["5", "10", "20"]
+	assert result.stderr.splitlines() == [
+		"GH_API_SAFE_RETRY attempt=1/4 class=transient",
+		"GH_API_SAFE_RETRY attempt=2/4 class=transient",
+		"GH_API_SAFE_RETRY attempt=3/4 class=transient",
+		"rc=1",
+	], result.stderr
 
 
 def _workflow() -> str:
