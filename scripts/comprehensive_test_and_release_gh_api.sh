@@ -60,10 +60,12 @@ gh_api_safe_call_is_read()
 
 # gh_api_safe_stderr_is_transient ERR_FILE
 #
-# Returns 0 when the captured `gh api` stderr names a transient failure: an
-# HTTP 5xx (502/503/504 count only as whole words, so a run ID, URL or commit
-# SHA that contains "502" does not), a connection reset, an i/o or header timeout, a
-# TLS handshake timeout, or an EOF (matched as a whole word).
+# Returns 0 when the captured stderr names a transient failure: any
+# `HTTP 5xx` status (500-599, as in the shared classifiers in
+# scripts/gh_api_retry.py and scripts/gh_helpers.sh), a bare 502/503/504 (only
+# as whole words, so a run ID, URL or commit SHA that contains "502" does not
+# count), a connection reset, an i/o or header timeout, a TLS handshake
+# timeout, or an EOF (matched as a whole word).
 gh_api_safe_stderr_is_transient()
 {
 	local err_file="$1"

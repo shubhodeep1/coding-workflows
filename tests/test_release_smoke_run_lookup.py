@@ -338,6 +338,7 @@ def test_gh_api_safe_transient_patterns() -> None:
 		"Post https://api.github.com/graphql: EOF",
 		"gh: HTTP 503",
 		"HTTP 504: Gateway Timeout",
+		"gh: Server Error (HTTP 500)",
 		"net/http: timeout awaiting response headers",
 	):
 		result, gh_calls, sleeps = _safe_invoke([("err", message), ("ok", "{}")], "gh_api_safe repos/o/r/actions/runs\necho rc=$?\n")
