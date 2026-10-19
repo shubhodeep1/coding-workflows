@@ -2609,7 +2609,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
           if [ "${_git_has_diff}" = false ]; then
             echo "::warning::Editor claimed changes but git shows no substantive diff from HEAD on attempt ${attempt}. Editor tool calls likely failed to persist or wrote only whitespace-only edits."
             echo "Claimed changes (attempt ${attempt}):"
-            printf '%s\n' "${_claimed_changes}" | head -10
+            head -n 10 <<<"${_claimed_changes}"
             cp "${tmp_output}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}_changes_lost.txt" || true
             # Fall through to retry instead of exiting
             reviewer_validation_ok=false

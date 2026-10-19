@@ -427,3 +427,74 @@ def test_transient_verifying_dispatch_outcome_is_retried_then_bounded() -> None:
 		assert callback["verification"].startswith("SKIPPED reason=orchestrate_run_in_flight")
 		assert "retries_exhausted=1" in callback["verification"]
 		assert LABEL not in second["tracking_labels"]
+
+
+# --- docs-only commits by any author (#7662) ---------------------------------
+
+PIPELINE_CONTEXT_FILES = [
+	"unattended_system_instructions.md",
+	"README.md",
+	"agents.md",
+	"AGENTS.md",
+	"ai_pipeline.md",
+	"codex.md",
+	"probably_unnecessary_but_read_if_stuck.md",
+	"agents.d/123-x.md",
+]
+
+
+def _status_with(commit: dict, files: list[str] | None, env_overrides: dict | None = None) -> dict:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1"), commit]
+	commit_files = {commit["sha"]: files} if files is not None else None
+	return _verifying_run(_project_state(), compare_commits=commits, commit_files=commit_files, env_overrides=env_overrides)
+
+
+def test_human_docs_only_commit_does_not_defer() -> None:
+	result = _status_with(
+		_commit(HUMAN_SHA, "docs: plan for synced-file security findings heal intake (#7603)", "shubhodeep1"),
+		["docs/plans/synced-file-security-findings-heal-intake-plan.md"],
+	)
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert len(result["release_dispatches"]) == 1
+
+
+def test_human_commit_mixing_docs_and_code_defers() -> None:
+	result = _status_with(_commit(HUMAN_SHA, "feat: x (#1)", "shubhodeep1"), ["docs/x.md", "scripts/x.sh"])
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "deferred"
+	assert result["release_dispatches"] == []
+
+
+def test_pipeline_instruction_files_count_as_code() -> None:
+	for path in PIPELINE_CONTEXT_FILES:
+		result = _status_with(_commit(HUMAN_SHA, "docs: tweak (#1)", "shubhodeep1"), ["docs/x.md", path])
+		assert result["latest_state"]["comprehensive_promotion"]["status"] == "deferred", path
+		assert result["release_dispatches"] == [], path
+	result = _status_with(_commit(BOT_SHA, "chore: fold agents", "github-actions[bot]", "github-actions[bot]"), ["agents.md"])
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "deferred"
+
+
+def test_bot_changelog_only_commit_still_exempt() -> None:
+	result = _status_with(_commit(BOT_SHA, "chore: fold changelog", "github-actions[bot]", "github-actions[bot]"), ["CHANGELOG.md", "changelog.d/7662-x.md"])
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+
+
+def test_human_commit_with_no_listed_files_is_untested() -> None:
+	result = _status_with(_commit(HUMAN_SHA, "docs: empty (#1)", "shubhodeep1"), None)
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "deferred"
+
+
+def test_merge_commit_with_docs_only_files_is_untested() -> None:
+	merge = _commit(HUMAN_SHA, "Merge branch 'feature'", "shubhodeep1")
+	merge["parents"] = [{"sha": "p1"}, {"sha": "p2"}]
+	result = _status_with(merge, ["docs/x.md"])
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "deferred"
+	assert result["release_dispatches"] == []
+
+
+def test_bot_logins_var_no_longer_gates_docs_only() -> None:
+	result = _status_with(
+		_commit(BOT_SHA, "chore: update notes", "github-actions[bot]", "github-actions[bot]"),
+		["docs/notes.md"],
+		env_overrides={"COMPREHENSIVE_CYCLE_BOT_LOGINS": ""},
+	)
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"

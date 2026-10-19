@@ -269,13 +269,24 @@ def test_export_oversized_all_still_rejects_explicit_cap_breach(repo, tmp_path, 
 	assert not dest.exists()
 
 
-def test_export_oversized_all_still_refuses_explicit_filtered_file(repo, tmp_path):
+def test_export_oversized_all_records_explicit_filtered_file_as_not_inspected(repo, tmp_path):
+	# fun-token-multi-chain#579: a project diff that touches a committed
+	# `.env.example` must not stall the audit; the file stays out of the
+	# export and is reported as not inspected.
 	scope = tmp_path / "scope.txt"
-	scope.write_text(".env\n")
+	scope.write_text(".env\ndeploy.pem\n")
 	dest = tmp_path / "export"
-	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, "all", check=False)
-	assert proc.returncode == 1 and "scoped file excluded by read-only filter" in proc.stderr
-	assert not dest.exists()
+	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, "all")
+	assert "filtered_scoped=2" in proc.stderr
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert manifest["filtered_scoped"] == [
+		{"path": ".env", "reason": "credential_filter"},
+		{"path": "deploy.pem", "reason": "credential_filter"},
+	]
+	assert manifest["filtered_scoped_count"] == 2
+	assert [item["path"] for item in manifest["scoped"]] == ["big.bin"]
+	exported = "".join(part.read_text(errors="replace") for part in dest.rglob("part-*.txt"))
+	assert "SECRET=1" not in exported and "BEGIN" not in exported
 
 
 def test_export_oversized_rejects_invalid_scope_mode(repo, tmp_path):
@@ -287,16 +298,29 @@ def test_export_oversized_rejects_invalid_scope_mode(repo, tmp_path):
 	assert not dest.exists()
 
 
-@pytest.mark.parametrize("filtered_name,hide", [("secret.json", None), ("CLAUDE.md", "CLAUDE.md")])
-def test_export_oversized_refuses_filtered_scoped_file(repo, tmp_path, filtered_name, hide):
+@pytest.mark.parametrize("filtered_name,hide,reason", [("secret.json", None, "credential_filter"), ("CLAUDE.md", "CLAUDE.md", "hidden"), (".env.example", None, "credential_filter")])
+def test_export_oversized_skips_and_records_filtered_scoped_file(repo, tmp_path, filtered_name, hide, reason):
 	(repo / filtered_name).write_bytes(b"x" * (2 * 1024 * 1024 + 1))
 	git(repo, "add", filtered_name)
 	scope = tmp_path / "scope.txt"
 	scope.write_text(f"{filtered_name}\n")
 	dest = tmp_path / "export"
-	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, check=False, hide=hide)
-	assert proc.returncode == 1 and "scoped file excluded by read-only filter" in proc.stderr
-	assert not dest.exists()
+	run("export-oversized", repo, scope, dest, 16777216, 67108864, hide=hide)
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert manifest["filtered_scoped"] == [{"path": filtered_name, "reason": reason}]
+	assert manifest["filtered_scoped_count"] == 1
+	assert manifest["scoped"] == []
+	assert not list(dest.rglob("part-*.txt"))
+
+
+def test_export_oversized_ignores_deleted_filtered_scoped_file(repo, tmp_path):
+	(repo / ".env").unlink()  # Still in the index, gone from the work tree.
+	scope = tmp_path / "scope.txt"
+	scope.write_text(".env\n")
+	dest = tmp_path / "export"
+	run("export-oversized", repo, scope, dest, 16777216, 67108864)
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert manifest["filtered_scoped"] == [] and manifest["filtered_scoped_count"] == 0
 
 
 @pytest.mark.parametrize("excluded_name", ["large-link.txt", "setuid.txt"])

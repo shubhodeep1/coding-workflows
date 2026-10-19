@@ -1448,11 +1448,17 @@ _gh_pr_with_all_comments_rest()
 		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null \
 		|| echo '[]')"
 
+	# Pass the JSON through process substitution, never through argv: Linux
+	# caps a single argument at 131,072 bytes (MAX_ARG_STRLEN), and a PR's
+	# issue comments can serialize past that, so `--argjson` made jq exit 126
+	# ("Argument list too long") with no output (issue #7658;
+	# tele-funtoken-msg-scoring PR #3933, run 39131897079). An empty input
+	# degrades to {} / [].
 	jq -cn \
-		--argjson meta "${meta_json}" \
-		--argjson comments "${comments_json}" \
-		--argjson review_comments "${review_comments_json}" \
-		'{meta: $meta, comments: $comments, review_comments: $review_comments}'
+		--slurpfile meta <(printf '%s' "${meta_json}") \
+		--slurpfile comments <(printf '%s' "${comments_json}") \
+		--slurpfile review_comments <(printf '%s' "${review_comments_json}") \
+		'{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}'
 }
 
 # ---------------------------------------------------------------
@@ -1648,16 +1654,22 @@ _gh_issue_timeline_with_cross_refs_rest()
 			if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
 				continue
 			fi
+			# The full PR object (body up to 65,536 characters, escaped) can pass
+			# the 131,072-byte per-argument limit, so jq reads it with
+			# --slurpfile, never from argv (issue #7658).
 			if pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)" && printf '%s' "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
-				pr_lookup_json="$(jq -c --arg url "${pr_url}" --argjson pr "${pr_json}" '. + {($url): {ok: true, number: ($pr.number // null), state: ($pr.state // null), merged_at: ($pr.merged_at // null), merged: (($pr.merged_at != null) or ($pr.merged == true))}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
+				pr_lookup_json="$(jq -c --arg url "${pr_url}" --slurpfile pr <(printf '%s' "${pr_json}") '($pr[0] // {}) as $pr | . + {($url): {ok: true, number: ($pr.number // null), state: ($pr.state // null), merged_at: ($pr.merged_at // null), merged: (($pr.merged_at != null) or ($pr.merged == true))}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
 			else
 				pr_lookup_json="$(jq -c --arg url "${pr_url}" '. + {($url): {ok: false}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
 			fi
 		done <<< "${pr_urls}"
 	fi
 
-	printf '%s' "${timeline_json}" | jq -c --argjson pr_lookup "${pr_lookup_json}" --arg pr_api_prefix "${pr_api_prefix}" '
-		map(
+	# pr_lookup_json grows by one entry per cross-referenced PR with no cap,
+	# so jq reads it with --slurpfile, never from argv (issue #7658).
+	printf '%s' "${timeline_json}" | jq -c --slurpfile pr_lookup <(printf '%s' "${pr_lookup_json}") --arg pr_api_prefix "${pr_api_prefix}" '
+		($pr_lookup[0] // {}) as $pr_lookup
+		| map(
 			if (.event == "cross-referenced") and (.source.issue.pull_request.url? | type == "string") then
 				.source.issue.pull_request.url as $url
 				| if ($url | startswith($pr_api_prefix) | not) then

@@ -1391,18 +1391,23 @@ write_state_snapshot_tracker_export() {
 	fi
 
 	mkdir -p "${trackers_dir}" 2>/dev/null || return 0
+	# State and candidate details (full issue bodies and up to 100 comment
+	# bodies per issue) can pass the 131,072-byte per-argument limit
+	# (MAX_ARG_STRLEN), so jq reads them with --slurpfile (issue #7658).
 	jq -cn \
 		--argjson number "${tracking_num}" \
 		--arg title "${tracking_title}" \
-		--argjson state "${state_json}" \
+		--slurpfile state <(printf '%s' "${state_json}") \
 		--argjson wave_status "${wave_status_json}" \
 		--argjson labels_json "${labels_json}" \
 		--argjson issue_states_json "${issue_states_json}" \
 		--argjson pr_states_json "${pr_states_json}" \
-		--argjson candidate_details_json "${candidate_details_json}" \
+		--slurpfile candidate_details_json <(printf '%s' "${candidate_details_json}") \
 		--argjson runtime_blocker_check_enabled "${runtime_blocker_enabled}" \
 		--argjson ledger_substates_enabled "${ledger_substates_enabled}" \
-		'{
+		'($state[0] // {}) as $state
+		| ($candidate_details_json[0] // {}) as $candidate_details_json
+		| {
 			number: $number,
 			title: $title,
 			state: $state,
@@ -2380,7 +2385,10 @@ if ! [[ "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" =~ ^[0-9]+$ ]] || [ "${COMPRE
   COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS="21600"
 fi
 # Bot logins whose non-code commits may land on main during a cycle without
-# deferring the promotion (comma-separated).
+# deferring the promotion (comma-separated). Since #7662 this no longer affects
+# the decision: comprehensive_untested_commits_json exempts every single-parent
+# commit whose listed files are all non-code, whoever wrote it. The variable is
+# kept for compatibility (CLAUDE.md §6).
 COMPREHENSIVE_CYCLE_BOT_LOGINS="${COMPREHENSIVE_CYCLE_BOT_LOGINS:-github-actions[bot]}"
 # Marker comments are trusted only from these author associations (the
 # orchestrator posts them with GH_PAT, i.e. as the repository owner) or from
@@ -8596,7 +8604,9 @@ run_security_pass_inline() {
     scripts/write_codex_config.sh \
     prompts/mode-security-audit.txt \
     prompts/_templates/mode-security-audit.txt \
-    prompts/references/security-money-lens.txt; do
+    prompts/references/security-money-lens.txt \
+    prompts/references/output-contract.txt \
+    prompts/contracts/mode-security-audit.yml; do
     if [ ! -f "${required_security_asset}" ]; then
       security_pass_fail_closed "engine_unavailable" "Required security-pass asset ${required_security_asset} is unavailable." "${prior_security_status}"
       return 1
@@ -11988,8 +11998,11 @@ _derive_branch_rebuild_replay_commits() {
   fi
 
   local replay_plan_json
-  replay_plan_json="$(jq -cn --argjson issues "${merged_issue_nums_json}" --argjson details "${candidate_details_json}" '
-    def missing($issue; $reason; $pr_number):
+  # candidate_details_json carries full issue and comment bodies, so jq reads
+  # it with --slurpfile, never from argv (MAX_ARG_STRLEN; issue #7658).
+  replay_plan_json="$(jq -cn --argjson issues "${merged_issue_nums_json}" --slurpfile details <(printf '%s' "${candidate_details_json}") '
+    ($details[0] // {}) as $details
+    | def missing($issue; $reason; $pr_number):
       {issue_number: $issue, error: $reason}
       + (if $pr_number == null then {} else {pr_number: $pr_number} end);
     def entry($issue):
@@ -13746,9 +13759,14 @@ comprehensive_forward_merge_pr_verified() {
 
 # comprehensive_cycle_is_code_path <path>
 # Mirrors scripts/promote_main_cycle.sh: 0 when the path counts as code.
+# The markdown files the pipeline reads into model context (README.md, the
+# instruction files, agents.md / AGENTS.md and the agents.d/ fragments folded
+# into it) steer pipeline behaviour, so they count as code (#7662). The case
+# pattern lines must stay identical to is_code_path in promote_main_cycle.sh
+# (tests/test_promote_main_cycle.py checks this).
 comprehensive_cycle_is_code_path() {
   case "$1" in
-    CLAUDE.md|*/CLAUDE.md|.claude/*|*/.claude/*) return 0 ;;
+    CLAUDE.md|*/CLAUDE.md|.claude/*|*/.claude/*|README.md|unattended_system_instructions.md|ai_pipeline.md|agents.md|AGENTS.md|codex.md|probably_unnecessary_but_read_if_stuck.md|agents.d/*) return 0 ;;
   esac
   case "$1" in
     analysis/*|ai-memory/*|docs/*|tests/e2e_smoke_canary.txt|CHANGELOG.md|*.md) return 1 ;;
@@ -13761,15 +13779,19 @@ comprehensive_cycle_is_code_path() {
 # Prints a JSON array of the commits between the smoke-tested commit and the
 # commit about to be promoted that the cycle did NOT prove: everything except
 # the proving run's own merge, forward-merge PR merges (content already on
-# stable), and commits by COMPREHENSIVE_CYCLE_BOT_LOGINS that touch only
-# non-code paths. Exit 2 when the compare or a commit lookup failed.
-# API calls: 1 compare + 1 per bot commit (§15).
+# stable), and single-parent commits that touch only non-code paths, whoever
+# wrote them (#7662). A merge commit (anything but one parent), a commit whose
+# file list is empty or 300+ entries long, or one touching any code path counts
+# as untested. Exit 2 when the compare or a commit lookup failed.
+# API calls: 1 compare + 1 commit read per single-parent commit that is neither
+# the proving merge nor a verified forward merge (§15). The compare payload
+# carries only the aggregate diff, so per-commit files need their own read.
 comprehensive_untested_commits_json() {
   local smoke_sha="$1"
   local promote_sha="$2"
   local proving_merge_sha="${3:-}"
   local compare_json
-  if ! compare_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${smoke_sha}...${promote_sha}" --jq '{status: (.status // ""), total_commits: (.total_commits // 0), commits: [(.commits // [])[] | {sha: .sha, message: ((.commit.message // "") | split("\n")[0]), author: (.author.login // ""), committer: (.committer.login // "")}]}')"; then
+  if ! compare_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${smoke_sha}...${promote_sha}" --jq '{status: (.status // ""), total_commits: (.total_commits // 0), commits: [(.commits // [])[] | {sha: .sha, message: ((.commit.message // "") | split("\n")[0]), author: (.author.login // ""), committer: (.committer.login // ""), parents: ((.parents // []) | length)}]}')"; then
     return 2
   fi
   local listed total compare_status
@@ -13791,28 +13813,36 @@ comprehensive_untested_commits_json() {
     printf '[{"sha":"","message":"compare listed %s of %s commits; treating the range as untested","author":""}]\n' "${listed}" "${total}"
     return 0
   fi
-  local untested='[]' row sha message author committer allowed files_json path
+  local untested='[]' row sha message allowed files_json path parent_count file_count
   while IFS= read -r row; do
     [ -n "${row}" ] || continue
     sha="$(printf '%s' "${row}" | jq -r '.sha')"
     message="$(printf '%s' "${row}" | jq -r '.message')"
-    author="$(printf '%s' "${row}" | jq -r '.author')"
-    committer="$(printf '%s' "${row}" | jq -r '.committer')"
+    parent_count="$(printf '%s' "${row}" | jq -r '.parents // 0')"
     allowed="false"
     if [ -n "${proving_merge_sha}" ] && [ "${sha}" = "${proving_merge_sha}" ]; then
       allowed="true"
     elif printf '%s' "${message}" | grep -qE '^Merge pull request #[0-9]+ from [^/]+/auto/forward-merge-stable-' \
       && comprehensive_forward_merge_pr_verified "${sha}" "${message}"; then
       allowed="true"
-    elif printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${author}," \
-      || printf ',%s,' "${COMPREHENSIVE_CYCLE_BOT_LOGINS}" | grep -qF ",${committer},"; then
+    elif [ "${parent_count}" != "1" ]; then
+      # A merge commit's file list is its combined diff, which can hide code
+      # the merge brought in; it cannot be proven non-code, so fail closed.
+      allowed="false"
+    elif [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+      # Any author (#7662): COMPREHENSIVE_CYCLE_BOT_LOGINS no longer gates this.
       if ! files_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '{count: ((.files // []) | length), paths: [(.files // [])[] | .filename, (.previous_filename // empty)]}')"; then
         return 2
       fi
-      # The commit endpoint returns at most 300 files per page; a bot commit
-      # that large cannot be proven non-code from one page, so fail closed.
-      if [ "$(printf '%s' "${files_json}" | jq -r '.count')" -ge 300 ]; then
+      file_count="$(printf '%s' "${files_json}" | jq -r '.count // 0' 2>/dev/null || echo 0)"
+      [[ "${file_count}" =~ ^[0-9]+$ ]] || file_count=0
+      # The commit endpoint returns at most 300 files per page; a commit that
+      # large cannot be proven non-code from one page, and an empty list proves
+      # nothing either, so both fail closed.
+      if [ "${file_count}" -ge 300 ]; then
         echo "::warning::Commit ${sha:0:7} lists 300+ files; treating it as untested rather than trusting a truncated file list." >&2
+        allowed="false"
+      elif [ "${file_count}" -eq 0 ]; then
         allowed="false"
       else
         allowed="true"
@@ -26078,8 +26108,8 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
               --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_OLD_HEAD} " \
               '[.[][] | select((.body | type == "string") and (.body | startswith("## Review-blocked judge isolation unavailable")) and (.body | contains("<!-- ai:rb-judge-isolation-escalated head=")))] | last | .id == $id and .user.id == $actor and (.body | contains($marker))' >/dev/null 2>&1 && \
               printf '%s' "${RB_ISOLATION_EVENTS}" | jq -e --argjson actor "${RB_ISOLATION_ACTOR}" \
-                --argjson id "${RB_ISOLATION_COMMENT_ID}" --argjson comments "${RB_ISOLATION_COMMENTS}" \
-                '($comments | [.[][] | select(.id == $id)] | last | .created_at) as $marker_at | $marker_at != null and ([.[][] | select(.event == "labeled" and .label.name == "ai:needs-human")] | last | .actor.id == $actor and .created_at <= $marker_at)' >/dev/null 2>&1; then
+                --argjson id "${RB_ISOLATION_COMMENT_ID}" --slurpfile comments <(printf '%s' "${RB_ISOLATION_COMMENTS}") \
+                '(($comments[0] // []) | [.[][] | select(.id == $id)] | last | .created_at) as $marker_at | $marker_at != null and ([.[][] | select(.event == "labeled" and .label.name == "ai:needs-human")] | last | .actor.id == $actor and .created_at <= $marker_at)' >/dev/null 2>&1; then
               gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" --remove-label 'ai:needs-human' >/dev/null || {
                 echo '::warning::Could not clear review-blocked isolation latch; deferring.' >&2
                 continue
@@ -26128,16 +26158,32 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
       rm -f "${_rb_pr_diff_tmp}" "${_rb_pr_diff_capped_tmp}"
       unset _rb_pr_diff_tmp _rb_pr_diff_capped_tmp _rb_pr_diff_bytes
       RB_PRELOADED_META="$(echo "${_rb_pr_json}" | jq -c '{title: .title, body: .body, head_ref: .head.ref, base_ref: .base.ref, head_sha: .head.sha}' 2>/dev/null || echo '{}')"
+      # Comment JSON reaches jq through --slurpfile, never argv (MAX_ARG_STRLEN,
+      # 131,072 bytes per argument; issue #7658). A context that still fails to
+      # assemble is logged once as RB_JUDGE_CONTEXT_EMPTY.
+      _rb_ctx_rc=0
+      _rb_ctx_empty_reason=""
+      RB_PR_CONTEXT_JSON=""
       if type gh_pr_with_all_comments >/dev/null 2>&1; then
-        RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
+        RB_PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}")" || _rb_ctx_rc=$?
       elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
-        RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}" || echo '{}')"
+        RB_PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${GITHUB_REPOSITORY%%/*}" "${GITHUB_REPOSITORY##*/}" "${RB_PR}" "${RB_PRELOADED_META}")" || _rb_ctx_rc=$?
       else
         printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${GITHUB_REPOSITORY%%/*} repo=${GITHUB_REPOSITORY##*/} pr=${RB_PR}" >&2
         RB_PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
         RB_PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
-        RB_PR_CONTEXT_JSON="$(jq -cn --argjson meta "${RB_PRELOADED_META}" --argjson comments "${RB_PR_ISSUE_COMMENTS}" --argjson review_comments "${RB_PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
+        RB_PR_CONTEXT_JSON="$(jq -cn --slurpfile meta <(printf '%s' "${RB_PRELOADED_META}") --slurpfile comments <(printf '%s' "${RB_PR_ISSUE_COMMENTS}") --slurpfile review_comments <(printf '%s' "${RB_PR_REVIEW_COMMENTS}") '{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}' 2>/dev/null)" || _rb_ctx_rc=$?
       fi
+      if [ "${_rb_ctx_rc}" -ne 0 ] || [ -z "${RB_PR_CONTEXT_JSON}" ]; then
+        _rb_ctx_empty_reason="assembly_failed"
+      elif ! printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -e 'type == "object" and (.comments | type == "array") and (.review_comments | type == "array")' >/dev/null 2>&1; then
+        _rb_ctx_empty_reason="invalid_shape"
+      fi
+      if [ -n "${_rb_ctx_empty_reason}" ]; then
+        RB_PR_CONTEXT_JSON='{}'
+        printf '%s\n' "::warning::RB_JUDGE_CONTEXT_EMPTY pr=${RB_PR} reason=${_rb_ctx_empty_reason}" >&2
+      fi
+      unset _rb_ctx_rc _rb_ctx_empty_reason
       PR_COMMENTS="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.comments // []' 2>/dev/null || echo "[]")"
       PR_REVIEW_COMMENTS="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.review_comments // []' 2>/dev/null || echo "[]")"
       PR_META="$(printf '%s' "${RB_PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/null || echo "{}")"

@@ -936,22 +936,46 @@ def _hidden_git_write(tokens: list[str], index: int) -> bool:
 	return command_name in _COMMAND_RUNNERS and _mentions_git_write(" ".join(words))
 
 
-def _cd_command_words(tokens: list[str]) -> tuple[list[str], bool] | None:
-	"""Return (cd words, whether CDPATH is set for it) for a `cd` segment.
+def _shell_builtin_view(tokens: list[str]) -> tuple[list[str], bool] | None:
+	"""Return (words from the builtin name on, whether CDPATH is assigned).
 
-	Leading assignments (`X=1 cd dir`, `CDPATH=.. cd dir`) and `builtin` /
-	`command` prefixes still run the cd builtin (#6038). None when the
-	segment is not a cd.
+	Skips the prefixes after which Bash still runs a builtin in the current
+	shell (#6038): leading assignments, `builtin`, `command` (with `-p`),
+	and the `time` reserved word (with `-p`). `time -p cd dir` and
+	`command -p pushd dir` change the directory like a bare `cd` / `pushd`.
+	None when `command -v` / `-V` runs nothing, or a prefix option is not
+	understood.
 	"""
 	position = 0
 	cdpath_assigned = False
 	while position < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[position]):
 		cdpath_assigned = cdpath_assigned or bool(_CDPATH_ASSIGNMENT_RE.match(tokens[position]))
 		position += 1
-	while position < len(tokens) and tokens[position] in ("builtin", "command"):
+	while position < len(tokens) and tokens[position] in ("builtin", "command", "time"):
+		prefix_word = tokens[position]
 		position += 1
-	if position < len(tokens) and tokens[position] == "cd":
-		return tokens[position:], cdpath_assigned
+		if prefix_word == "builtin":
+			continue
+		while position < len(tokens) and tokens[position].startswith("-"):
+			if tokens[position] == "--":
+				position += 1
+				break
+			if tokens[position] != "-p":
+				return None
+			position += 1
+	return tokens[position:], cdpath_assigned
+
+
+def _cd_command_words(tokens: list[str]) -> tuple[list[str], bool] | None:
+	"""Return (cd words, whether CDPATH is set for it) for a `cd` segment.
+
+	Leading assignments (`X=1 cd dir`, `CDPATH=.. cd dir`) and `builtin` /
+	`command [-p]` / `time [-p]` prefixes still run the cd builtin (#6038).
+	None when the segment is not a cd.
+	"""
+	builtin_view = _shell_builtin_view(tokens)
+	if builtin_view is not None and builtin_view[0][:1] == ["cd"]:
+		return builtin_view
 	return None
 
 
@@ -964,6 +988,12 @@ def _changes_cd_resolution(tokens: list[str]) -> tuple[bool, bool]:
 	"""
 	if not tokens:
 		return False, False
+	# `builtin enable -n cd`, `command export CDPATH=..` act like the bare form.
+	builtin_view = _shell_builtin_view(tokens)
+	if builtin_view is not None and builtin_view[0] and builtin_view[0] != tokens:
+		view_sets_cdpath, view_redefines_cd = _changes_cd_resolution(builtin_view[0])
+		if view_sets_cdpath or view_redefines_cd:
+			return view_sets_cdpath, view_redefines_cd
 	first = tokens[0]
 	sets_cdpath = (
 		(first in _SHELL_DECLARATION_BUILTINS and any(
@@ -1012,7 +1042,14 @@ def _guarded_git_invocations(
 	# A CDPATH set, or a cd redefined, earlier in this command line (#6038).
 	shell_cdpath_set = _inherited_cdpath_set
 	cd_redefined = False
+	# A prefixed pushd/popd/eval/source (`time pushd dir`, `builtin eval ..`)
+	# leaves the directory unknown from the next segment on (#6038).
+	prefixed_directory_change = False
 	for segment_position, (operator, tokens, redirect_may_fail) in enumerate(segments):
+		if prefixed_directory_change:
+			working_directory = None
+			unresolved_directory_change = True
+			prefixed_directory_change = False
 		raw_sets_cdpath, raw_redefines_cd = _changes_cd_resolution(tokens)
 		tokens, control_prefix = _command_after_control_prefix(tokens)
 		stripped_sets_cdpath, stripped_redefines_cd = _changes_cd_resolution(tokens)
@@ -1030,6 +1067,11 @@ def _guarded_git_invocations(
 		cd_cdpath_assigned = False
 		if cd_view is not None:
 			tokens, cd_cdpath_assigned = cd_view
+		# The builtin a `time` / `builtin` / `command` / `VAR=` prefix runs.
+		segment_builtin_view = _shell_builtin_view(tokens)
+		segment_builtin_word = (
+			segment_builtin_view[0][0] if segment_builtin_view and segment_builtin_view[0] else tokens[0]
+		)
 		next_operator = segments[segment_position + 1][0] if segment_position + 1 < len(segments) else ""
 		# Each pipeline element runs in its own subshell: a directory change
 		# inside one ends with it, and every element starts where the list is.
@@ -1048,9 +1090,9 @@ def _guarded_git_invocations(
 		# after a directory change in its own list, or when it is itself a cd.
 		if operator == "&" or (operator == "||" and (list_changed_directory or (tokens[0] == "cd" and not in_pipeline))):
 			working_directory = None
-		if in_pipeline and tokens[0] in ("cd", "pushd", "popd"):
+		if in_pipeline and segment_builtin_word in ("cd", "pushd", "popd"):
 			continue
-		if tokens[0] in ("cd", "pushd", "popd"):
+		if segment_builtin_word in ("cd", "pushd", "popd"):
 			list_changed_directory = True
 		# A cd after a condition may not have happened when a later list starts.
 		# A wrapped script (`bash -c`, `eval`) starts where this segment starts.
@@ -1079,6 +1121,11 @@ def _guarded_git_invocations(
 		if tokens[0] in ("pushd", "popd", "eval", "source", ".", "(", "{"):
 			working_directory = None
 			unresolved_directory_change = True
+			directory_change_seen = True
+		elif segment_builtin_word in ("pushd", "popd", "eval", "source", "."):
+			# Git later in this segment (`time eval 'git push'`) is still
+			# judged where the segment starts, as for the bare form.
+			prefixed_directory_change = True
 			directory_change_seen = True
 		index = 0
 		environment: dict[str, str] = {}
