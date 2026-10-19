@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "When updating a command intended for both repository use and generated workflow templates, check both locations and keep their behavior aligned. The deploy-activate command change touched both copies and included a focused test.",
+  "fingerprint": "63fdd8ca400d3cab668cb823d5fa2e2110142dc85d6db79a1de3b917c03e34b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39219697303",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39219697303",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7650",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7652",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7653",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7659",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7662",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7661",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7663",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7664",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7666",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7668"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261019080803_abb445748c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Shared Claude commands may have mirrored copies under `.claude/commands` and `workflow-templates/.claude/commands`.",
+  "timestamps": {
+    "created_at": "2026-10-19T08:08:03Z",
+    "promoted_at": "2026-10-19T08:09:21Z",
+    "superseded_at": null
+  }
+}
