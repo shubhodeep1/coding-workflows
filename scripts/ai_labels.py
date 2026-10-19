@@ -401,6 +401,14 @@ def cmd_resolve_phase(args: argparse.Namespace) -> int:
     return 0
 
 
+# ai:needs-human is a person's latch, parked on top of the item's stop label
+# (unblock judge park, operator_step_issue.py needs-human park). Repair keeps it
+# beside a later phase-group member instead of dropping it, unless that member
+# is terminal.
+REPAIR_OVERLAY_PHASE_LABELS = frozenset({"ai:needs-human"})
+REPAIR_TERMINAL_PHASE_LABELS = frozenset({"ai:merged", "ai:closed"})
+
+
 def cmd_repair_labels(args: argparse.Namespace) -> int:
     contract = load_label_contract(Path(args.contract_file).resolve())
     issue_labels = sorted({item.strip() for item in (args.issue_labels or "").split(",") if item.strip()})
@@ -426,8 +434,18 @@ def cmd_repair_labels(args: argparse.Namespace) -> int:
             # This avoids regressing issue state during repairs (e.g., keeping ai:done over ai:implementing).
             keep = present[-1]
             desired.append(keep)
+            kept = {keep}
+            # Keep-last ranks ai:blocked, ai:review-blocked and
+            # ai:implementation-failed above ai:needs-human, so it used to drop
+            # the latch the unblock judge parks on top of them: the needs-human
+            # digest then pruned the item and the judge parked it again every
+            # round. A terminal label still wins.
+            if keep not in REPAIR_TERMINAL_PHASE_LABELS:
+                overlay = {label for label in present if label in REPAIR_OVERLAY_PHASE_LABELS}
+                desired.extend(sorted(overlay - kept))
+                kept |= overlay
             for label in present:
-                if label != keep:
+                if label not in kept:
                     remove.add(label)
         else:
             desired.append(present[0])
