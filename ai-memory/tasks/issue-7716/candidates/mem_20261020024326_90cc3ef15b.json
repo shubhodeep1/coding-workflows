@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7716,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7716\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7721\",\"pr_number\":7721,\"branch\":\"ai/issue-7716\",\"run_id\":\"39358617213\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39358617213\",\"changed_files\":[\".github/workflows/mark-stable.yml\",\".github/workflows/test-and-mark-stable.yml\",\"agents.d/wfopt-0922-release-tag-rejection.md\",\"changelog.d/wfopt-0922-release-tag-rejection.md\",\"tests/test_mark_stable_release_tag_refspec_contract.py\"]}",
+  "fingerprint": "d53ddb3cac99363aeea972d3f3b7df7606aa118ecd96670703390c9b58f6128e",
+  "lineage": {
+    "issue_number": 7716,
+    "parent_ids": [],
+    "pr_number": 7721,
+    "run_id": "39358617213",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39358617213",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7721"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261020024326_90cc3ef15b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7716,
+    "level": "run",
+    "pr_number": 7721,
+    "run_id": "39358617213"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7716: https://github.com/shubhodeep1/coding-workflows/pull/7721",
+  "timestamps": {
+    "created_at": "2026-10-20T02:43:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
