@@ -4396,20 +4396,24 @@ jobs:
           # Wait for a new cancel-on-close run to register and complete.
           # Internal-cancel-on-pr-close fires near-immediately on the
           # pull_request[closed] webhook but the API can take a few
-          # seconds to index the new run. Poll fast for the first 30s
+          # seconds to index the new run. Poll every 3s for the first 30s
           # to catch quick runs (the cancel job is short — it only
-          # cancels other workflows), then back off to a slower cadence
-          # to ride out longer execution. Total budget defaults to 10m.
+          # cancels other workflows), then wait 10s, 20s and 30s for every
+          # later poll, never sleeping past DEADLINE. Total budget
+          # defaults to 10m.
           DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
           POLL_START=$(date +%s)
           NEW_RUN_ID=""
           NEW_CONCLUSION=""
+          PHASE7_POLL_COUNT=0
+          PHASE7_SLOW_POLL_COUNT=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             if ! phase7_list_cancel_runs 10; then
               echo "::error::Could not list internal-cancel-on-pr-close runs after closing PR #${PR_NUMBER}."
               echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
               exit 1
             fi
+            PHASE7_POLL_COUNT=$(( PHASE7_POLL_COUNT + 1 ))
             CANDIDATE_RUNS_JSON="${PHASE7_CANCEL_RUNS_JSON}"
             CANDIDATE=$(printf '%s' "${CANDIDATE_RUNS_JSON}" | jq -c \
               --argjson pre_run_id "${PRE_RUN_ID}" \
@@ -4433,13 +4437,55 @@ jobs:
             fi
             ELAPSED=$(( $(date +%s) - POLL_START ))
             if [ "${ELAPSED}" -lt 30 ]; then
-              sleep 3
+              PHASE7_POLL_SLEEP=3
             else
-              sleep 10
+              PHASE7_SLOW_POLL_COUNT=$(( PHASE7_SLOW_POLL_COUNT + 1 ))
+              case "${PHASE7_SLOW_POLL_COUNT}" in
+                1) PHASE7_POLL_SLEEP=10 ;;
+                2) PHASE7_POLL_SLEEP=20 ;;
+                *) PHASE7_POLL_SLEEP=30 ;;
+              esac
             fi
+            PHASE7_POLL_REMAINING=$(( DEADLINE - $(date +%s) ))
+            if [ "${PHASE7_POLL_REMAINING}" -le 0 ]; then
+              break
+            fi
+            if [ "${PHASE7_POLL_SLEEP}" -gt "${PHASE7_POLL_REMAINING}" ]; then
+              PHASE7_POLL_SLEEP="${PHASE7_POLL_REMAINING}"
+            fi
+            sleep "${PHASE7_POLL_SLEEP}"
           done
 
           if [ -z "${NEW_RUN_ID}" ]; then
+            # No-run diagnostic. Run fields are data, so control
+            # characters become spaces and any line or value that starts
+            # with a workflow command is prefixed with [neutralised].
+            echo "::group::Phase 7 no-run diagnostic"
+            PHASE7_DIAG_ELAPSED=$(( $(date +%s) - POLL_START ))
+            printf '%s\n' "pr=${PR_NUMBER} closed_at=${PR_CLOSED_AT} pre_run_id=${PRE_RUN_ID} polls=${PHASE7_POLL_COUNT} elapsed_secs=${PHASE7_DIAG_ELAPSED}" \
+              | tr -d '\r' | sed -e 's/^\(::\|##\[\)/[neutralised]\1/' || true
+            PHASE7_DIAG_RUNS=""
+            if PHASE7_DIAG_RUNS=$(printf '%s' "${CANDIDATE_RUNS_JSON:-}" | jq -r '
+                def safe: tostring | gsub("[[:cntrl:]]"; " ") | if startswith("::") then "[neutralised]" + . else . end;
+                .workflow_runs[]? | "  run id=\(.id|safe) event=\(.event|safe) status=\(.status|safe) conclusion=\(.conclusion // ""|safe) head_sha=\(.head_sha // ""|safe) created_at=\(.created_at // ""|safe)"' 2>/dev/null); then
+              if [ -n "${PHASE7_DIAG_RUNS}" ]; then
+                printf '%s\n' "${PHASE7_DIAG_RUNS}" | sed -e 's/^\(::\|##\[\)/[neutralised]\1/' || echo "  runs: unrenderable"
+              else
+                echo "  runs: none"
+              fi
+            else
+              echo "  runs: unrenderable"
+            fi
+            # §15: the runs listing above carries no workflow state, so
+            # this one read, made only on this failure path, is the only
+            # extra call. A failed read prints workflow_state=unknown and
+            # never changes the step's outcome.
+            PHASE7_CANCEL_WORKFLOW_STATE=$(gh api "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml" --jq '.state // ""' 2>/dev/null || true)
+            if ! [[ "${PHASE7_CANCEL_WORKFLOW_STATE}" =~ ^[a-z_]+$ ]]; then
+              PHASE7_CANCEL_WORKFLOW_STATE="unknown"
+            fi
+            echo "  workflow_state=${PHASE7_CANCEL_WORKFLOW_STATE}"
+            echo "::endgroup::"
             echo "::error::internal-cancel-on-pr-close did not register a new run within timeout"
             echo "status=no_run" >> "$GITHUB_OUTPUT"
             exit 1

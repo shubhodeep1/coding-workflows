@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -105,6 +106,65 @@ def test_open_pr_wait_loop_fetches_workflow_list_once_and_fails_on_api_error() -
 	assert "if ! phase7_list_cancel_runs 10; then" in loop
 	assert "|| echo" not in loop
 	assert 'echo "status=lookup_failed" >> "$GITHUB_OUTPUT"' in loop
+
+
+
+def _no_run_branch(branch: str) -> str:
+	return _slice_between(
+		branch,
+		'if [ -z "${NEW_RUN_ID}" ]; then',
+		"exit 1",
+	)
+
+
+def test_open_pr_wait_loop_backoff_caps_at_30s_and_clamps_to_deadline() -> None:
+	wf = _read_workflow()
+	loop = _new_run_wait_loop(_open_pr_close_branch(wf))
+	assert "PHASE7_POLL_SLEEP=3" in loop
+	for value in ("1) PHASE7_POLL_SLEEP=10 ;;", "2) PHASE7_POLL_SLEEP=20 ;;", "*) PHASE7_POLL_SLEEP=30 ;;"):
+		assert value in loop
+	sleeps = re.findall(r"PHASE7_POLL_SLEEP=(\d+)", loop)
+	assert sleeps and max(int(s) for s in sleeps) == 30
+	assert re.search(r"\bsleep [0-9]", loop) is None
+	remaining = 'PHASE7_POLL_REMAINING=$(( DEADLINE - $(date +%s) ))'
+	brk = 'if [ "${PHASE7_POLL_REMAINING}" -le 0 ]; then'
+	clamp = 'if [ "${PHASE7_POLL_SLEEP}" -gt "${PHASE7_POLL_REMAINING}" ]; then'
+	sleep_stmt = 'sleep "${PHASE7_POLL_SLEEP}"'
+	assert loop.index(remaining) < loop.index(brk) < loop.index(clamp) < loop.index(sleep_stmt)
+	assert loop.count(sleep_stmt) == 1
+
+
+def test_open_pr_no_run_diagnostic_precedes_error() -> None:
+	wf = _read_workflow()
+	open_branch = _open_pr_close_branch(wf)
+	start = open_branch.index('if [ -z "${NEW_RUN_ID}" ]; then')
+	tail = open_branch[start:]
+	group = tail.index('echo "::group::Phase 7 no-run diagnostic"')
+	endgroup = tail.index('echo "::endgroup::"')
+	error = tail.index('echo "::error::internal-cancel-on-pr-close did not register a new run within timeout"')
+	status = tail.index('echo "status=no_run" >> "$GITHUB_OUTPUT"')
+	assert group < endgroup < error < status
+	diag = tail[group:endgroup]
+	for field in ("closed_at=", "pre_run_id=", "polls=", "elapsed_secs=", "pr=${PR_NUMBER}"):
+		assert field in diag
+	for field in ("id=", "event=", "status=", "conclusion=", "head_sha=", "created_at="):
+		assert field in diag
+	assert "[neutralised]" in diag
+	assert '[[:cntrl:]]' in diag
+
+
+def test_no_run_diagnostic_makes_no_second_listing() -> None:
+	wf = _read_workflow()
+	diag = _no_run_branch(_open_pr_close_branch(wf))
+	assert "phase7_list_cancel_runs" not in diag
+	assert "/runs?" not in diag
+	assert "${CANDIDATE_RUNS_JSON:-}" in diag
+	assert diag.count("gh api") == 1
+	state_read = 'gh api "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml" --jq \'.state // ""\''
+	assert state_read in diag
+	assert diag.index("# \u00a715: the runs listing above carries no workflow state") < diag.index(state_read)
+	assert 'PHASE7_CANCEL_WORKFLOW_STATE="unknown"' in diag
+	assert "${{" not in diag
 
 
 def main() -> int:
