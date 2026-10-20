@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:929-937 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The post-loop error condition requires validation_dispatched = \"false\", so it only fires when no validation dispatch ever succeeded, and a later required dispatch failure is silently skipped after an earlier success.\n  WHY: validation_dispatched is never reset after the first success, so the job exits 0 although a required validation failed to dispatch. Severity is BLOCKER from both reviewers. qwen_qwen3_7-plus disputes this finding (see its section).\n- tests/test_review_autofix_review_pipeline_contract.py:~8558-8560 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The runtime test case later_dispatch_succeeds in test_post_merge_validate_dispatch_exit_status_after_loop expects exit 0 with no ::error::, which encodes the partial-success behavior as acceptable.\n  WHY: The fixture uses a single global gh workflow run counter, so the case where an earlier issue succeeds and a later one fails cannot be reached. Severity is MAJOR.\n- tests/test_review_autofix_review_pipeline_contract.py:~8531 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The static test test_post_merge_validate_dispatch_fails_closed_when_required_dispatch_fails never asserts that the elif line excludes validation_dispatched.\n  WHY: The validation_dispatched = \"false\" guard therefore passes the test, so the contract test does not enforce the intended fail-closed behavior. Severity is MAJOR.\n- .github/workflows/test-and-mark-stable.yml:4466-4487 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The Phase 7 no-run diagnostic prints CANDIDATE_RUNS_JSON fields untruncated.\n  WHY: A large run listing could produce a long log group on the failure path. The impact is cosmetic only. Severity is NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: BUG-001 in analysis/recommendation-processing-report.md (~line 1387): \"the `post-merge-validate-dispatch` job now fails, keeping the label, when required validation could not be dispatched.\"\n  expected_change_site: .github/workflows/review_autofix.yml post-loop elif branch (lines 932-934) and companion tests in tests/test_review_autofix_review_pipeline_contract.py\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The elif reads `[ \"${validation_dispatched}\" = \"false\" ] && [ -n \"${validation_required_seen}\" ] && [ -n \"${validation_dispatch_failed}\" ]`, so it short-circuits whenever any earlier dispatch succeeded, and the later_dispatch_succeeds test asserts that behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:929-937 | severity=BLOCKER | confidence=5\n  PROBLEM: The error condition `[ \"${validation_dispatched}\" = \"false\" ] && [ -n \"${validation_required_seen}\" ] && [ -n \"${validation_dispatch_failed}\" ]` only detects a failure if no validation was ever successfully dispatched.\n  WHY: If one required validation succeeds and a later one fails, validation_dispatched stays \"true\" and the final error check is bypassed, silently skipping the failed requirement.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:932-934 | severity=BLOCKER | confidence=5\n  PROBLEM: The new elif requires validation_dispatched = \"false\", but that flag is set to \"true\" by the first successful dispatch and never reset, so a later required dispatch failure leaves the job green.\n  WHY: With two required issues where #11 fails and #12 succeeds, neither the ::error:: nor the ::warning:: branch fires and the job exits 0, although #11's required validation never ran.\n- tests/test_review_autofix_review_pipeline_contract.py:~8558-8560 | severity=MAJOR | confidence=4\n  PROBLEM: The later_dispatch_succeeds runtime case expects exit 0 with no ::error::, which encodes the partial-success bug as acceptable.\n  WHY: The fixture's single global gh workflow run counter cannot simulate \"issue #11 succeeds, issue #12 fails\", so the bug case is unreachable from the current tests.\n- tests/test_review_autofix_review_pipeline_contract.py:~8531 | severity=MAJOR | confidence=4\n  PROBLEM: The static test only checks that the elif line contains validation_dispatch_failed and validation_required_seen, and never asserts that validation_dispatched is absent.\n  WHY: A guard on validation_dispatched passes the test, so the contract does not enforce the stated effect.\n- .github/workflows/test-and-mark-stable.yml:4466-4487 | severity=NIT | confidence=2\n  PROBLEM: The Phase 7 no-run diagnostic prints CANDIDATE_RUNS_JSON fields untruncated.\n  WHY: A large listing could produce a long log group on the failure path. The impact is cosmetic only.\n- TASK_GAP: Requirement: BUG-001 in analysis/recommendation-processing-report.md (~line 1387): \"the `post-merge-validate-dispatch` job now fails, keeping the label, when required validation could not be dispatched.\"\n  Expected change site: .github/workflows/review_autofix.yml post-loop elif branch (lines 932-934) and companion tests in tests/test_review_autofix_review_pipeline_contract.py\n  Evidence of absence: The elif reads `[ \"${validation_dispatched}\" = \"false\" ] && ...`, so the failure path short-circuits after any prior success, and the later_dispatch_succeeds test asserts that behavior.\n  ISSUE_CONFIDENCE: 5\n  SEVERITY: BLOCKER\n- HARDENING_SUGGESTIONS: Drop the validation_dispatched clause from the elif, update the later_dispatch_succeeds test to expect rc=1 with ::error::, and make the fake gh fail per issue. HARDENING_RISK_SCORE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:912-927, 932-934 | confidence=5\n  PROBLEM: The reviewer states that the gemini-3_1-flash-lite finding (validation_dispatched = \"false\" on line 932 lets a required validation be silently skipped) is incorrect, so it reports no new bug.\n  WHY: The dispatch is PR-scoped (pr_number=\"${PR_NUMBER}\", tracking_issue=\"0\"), and line 912 guards it with validation_dispatched = \"false\", so one success validates the PR. Label removal at line 925 is outside the if, and the exit 1 branch fires only when no dispatch succeeded. The later_dispatch_succeeds test correctly expects rc=0.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4af2cb1b2aa4b6203a7eaef3cbbf1da550aa09917dc960ed7579b9efd55f4120",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7736,
+    "run_id": "39420048978",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39420048978",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020122527_a28cf97240",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7736,
+    "run_id": "39420048978"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T12:25:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
