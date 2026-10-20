@@ -4068,6 +4068,40 @@ def test_security_pass_audit_failure_logs_stderr_tail_and_reports_audit_error() 
 	assert "injected workflow command" not in failure_comments[-1]
 
 
+@pytest.mark.parametrize("input_phase", ["oversized-scope", "diff-scope", "prior-findings", "waived-findings"])
+def test_security_pass_audit_input_rejection_is_not_reported_as_engine_outage(input_phase: str) -> None:
+	"""fun-token-multi-chain#579: the audit refused a scoped `.env.example`
+	before any model ran, and the poller called it engine_unavailable on every
+	tick. Phases where the audit rejects its own input now get their own
+	reason; the pass still fails closed and stays retryable."""
+	audit_stderr = (
+		f"security-audit: phase={input_phase} cwd=/w path=/w "
+		"error=::error::CODEX_ISOLATION\\ export-oversized\\ rejected\n"
+	)
+	result = _run_poller(
+		state=_security_pass_audit_tree_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_exit_code=1,
+		security_audit_stderr=audit_stderr,
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FAILED reason=audit_input_rejected tracking_issue=192" in combined_log
+	assert "reason=engine_unavailable" not in combined_log
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["status"] != "complete"
+	comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	failure_comments = [body for body in comment_bodies if "Project security pass unavailable" in body]
+	assert failure_comments, comment_bodies
+	assert "rejected its input before any model ran (exit status 1;" in failure_comments[-1]
+	assert f"last audit error: `phase {input_phase}, error " in failure_comments[-1]
+	assert "This is not an engine outage" in failure_comments[-1]
+
+
 def test_security_pass_audit_failure_without_structured_error_points_to_job_log() -> None:
 	result = _run_poller(
 		state=_security_pass_audit_tree_state(),
