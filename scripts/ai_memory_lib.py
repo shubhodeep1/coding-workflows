@@ -3272,9 +3272,10 @@ _MEMORY_PUSH_AUTH_FAILURE_RE = re.compile(
     r"|returned error: 401",
     re.IGNORECASE,
 )
-_MEMORY_PUSH_RATE_LIMIT_RE = re.compile(
-    r"rate[ _-]?limit|abuse[ _-]?detect|triggered an abuse", re.IGNORECASE
-)
+# Checked only for a 403 and only after URLs are removed, so a bare `abuse`
+# (issue #7714: a 403 naming `rate limit` or `abuse` is not permanent) cannot
+# turn a credential failure named in a URL back into 16 retries.
+_MEMORY_PUSH_RATE_LIMIT_RE = re.compile(r"rate[ _-]?limit|abuse", re.IGNORECASE)
 _MEMORY_PUSH_HTTP_403_RE = re.compile(r"returned error: 403", re.IGNORECASE)
 _MEMORY_PUSH_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
 # Whole URLs (scheme, host and path) are dropped too: the origin URL must
@@ -3286,7 +3287,7 @@ def _is_permanent_memory_push_failure(stderr: str) -> bool:
     """Return True when a failed memory push is a credential/permission error.
 
     Such failures are deterministic and must not consume the retry budget.
-    Text that names a rate limit or abuse detection is treated as temporary
+    A 403 whose text names a rate limit or abuse is treated as temporary
     (a secondary-rate-limit 403), so it is never classified as permanent.
     """
     text = stderr or ""

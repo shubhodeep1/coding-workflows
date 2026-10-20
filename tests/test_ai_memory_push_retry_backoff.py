@@ -528,6 +528,8 @@ def test_permanent_memory_push_failure_classifier() -> None:
 		"fatal: could not read Username for 'https://github.com/o/rate-limit-tool': terminal prompts disabled",
 		"fatal: unable to access 'https://github.com/o/abuse-detector/': The requested URL returned error: 403",
 		"remote: Permission to o/rate-limiter.git denied to some-bot.",
+		# Abuse wording without a 403 does not exempt a credential failure.
+		"remote: abuse-warning for repo\nfatal: could not read Username: terminal prompts disabled",
 	]
 	for text in permanent:
 		assert ai_memory_lib._is_permanent_memory_push_failure(text), text
@@ -539,6 +541,7 @@ def test_permanent_memory_push_failure_classifier() -> None:
 		"The requested URL returned error: 403 (secondary rate limit)",
 		"remote: You have triggered an abuse detection mechanism.\nThe requested URL returned error: 403",
 		"fatal: unable to access: The requested URL returned error: 502",
+		"The requested URL returned error: 403 (abuse limit exceeded)",
 	]
 	for text in retryable:
 		assert not ai_memory_lib._is_permanent_memory_push_failure(text), text
