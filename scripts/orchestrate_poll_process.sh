@@ -19174,6 +19174,8 @@ _reconcile_merged_pr_issue() {
 # default-branch read falls back to tagging ai:merged as before; a failed
 # issue read or gate run leaves the issue unlabelled and open.
 _STALL_STANDALONE_DEFAULT_BRANCH=""
+# Set once the lookup ran, so a failed read is not repeated per candidate.
+_STALL_STANDALONE_DEFAULT_BRANCH_TRIED=false
 _reconcile_standalone_merged_pr_issue() {
   local issue_num="$1"
   local phase="$2"
@@ -19191,7 +19193,8 @@ _reconcile_standalone_merged_pr_issue() {
     return 0
   fi
 
-  if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
+  if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ] && [ "${_STALL_STANDALONE_DEFAULT_BRANCH_TRIED}" != "true" ]; then
+    _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=true
     _STALL_STANDALONE_DEFAULT_BRANCH="${CWS_DEFAULT_BRANCH:-}"
     if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
       _STALL_STANDALONE_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
