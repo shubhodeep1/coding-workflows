@@ -6779,6 +6779,8 @@ jobs:
             local max_attempts=5
             local backoff_seconds=2
             local lookup_rc=0
+            local push_error_file=""
+            local push_rc=0
 
             case "${publication_mode}" in
               immutable|moving) ;;
@@ -6799,13 +6801,28 @@ jobs:
 
             while [ "${attempt}" -le "${max_attempts}" ]; do
               echo "Publishing ${tag_ref} (attempt ${attempt}/${max_attempts})..."
+              push_error_file="$(mktemp "${RUNNER_TEMP:-/tmp}/release_tag_push_err.XXXXXX")"
+              set +e
               if [ "${publication_mode}" = "immutable" ]; then
-                if git push origin "${tag_ref}"; then
-                  return 0
-                fi
-              elif git push -f origin "${tag_ref}"; then
+                git push origin "${tag_ref}" 2>"${push_error_file}"
+              else
+                git push -f origin "${tag_ref}" 2>"${push_error_file}"
+              fi
+              push_rc=$?
+              set -e
+              cat "${push_error_file}" >&2 || true
+              if [ "${push_rc}" -eq 0 ]; then
+                rm -f "${push_error_file}"
                 return 0
               fi
+              # A missing workflow scope never clears on retry (run 35639756385): stop now.
+              if { grep -qi 'refusing to allow' "${push_error_file}" && grep -qi 'workflow' "${push_error_file}"; } \
+                || grep -qiE 'workflows[^[:alnum:]]{0,2}permission' "${push_error_file}"; then
+                rm -f "${push_error_file}"
+                echo "::error::RELEASE_TAG_PUBLISH outcome=failed error_class=workflow_scope tag_ref=${tag_ref}: GitHub refused the push because the release credential cannot update workflow files. Give GH_PAT the \`workflow\` scope (classic PAT) or \`workflows: write\` (fine-grained PAT / GitHub App), then re-run the release."
+                return 1
+              fi
+              rm -f "${push_error_file}"
 
               remote_lookup_error_file="$(mktemp "${RUNNER_TEMP:-/tmp}/release_tag_lsremote_err.XXXXXX")"
               set +e
