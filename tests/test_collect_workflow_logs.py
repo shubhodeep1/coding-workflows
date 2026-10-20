@@ -1635,6 +1635,39 @@ def test_apply_cost_telemetry_from_full_logs_dedupes_wrapper_child_structured_li
 	assert summary["semble_runtime_fallbacks"] == 1
 
 
+def test_apply_cost_telemetry_from_full_logs_dedupes_parent_child_codex_usage():
+	header = "2026-09-22T00:00:00.0000000Z tokens used"
+	number = "2026-09-22T00:00:00.0000001Z 12,345"
+	run = {
+		"repository": "owner/repo",
+		"run_id": 413,
+		"conclusion": "failure",
+		"duration_seconds": 12,
+		"workflow_family": "implement",
+	}
+	full_logs = [
+		{"step_name": "review", "content": "\n".join([header, number, "wrapper detail"]) + "\n"},
+		{"step_name": "review/pass1", "content": "\n".join([header, number, "pass1 detail"]) + "\n"},
+	]
+
+	deduped_full_logs = collector._dedupe_structured_cost_telemetry_full_logs(full_logs)
+	assert header not in deduped_full_logs[0]["content"]
+	assert header in deduped_full_logs[1]["content"]
+
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	assert run["cost_telemetry"]["codex_tokens_used"] == 12345
+	assert run["cost_telemetry"]["codex_calls"] == 1
+
+	sibling_run = dict(run, run_id=414)
+	sibling_logs = [
+		{"step_name": "review/pass1", "content": "\n".join([header, number]) + "\n"},
+		{"step_name": "review/pass2", "content": "\n".join([header, number]) + "\n"},
+	]
+	collector._apply_cost_telemetry_from_full_logs(sibling_run, sibling_logs)
+	assert sibling_run["cost_telemetry"]["codex_tokens_used"] == 24690
+	assert sibling_run["cost_telemetry"]["codex_calls"] == 2
+
+
 def test_apply_cost_telemetry_from_full_logs_keeps_sibling_duplicates():
 	duplicate_openrouter_line = (
 		"INFO: openrouter usage phase=review call=pass1 model=openai/gpt-5.4 "
