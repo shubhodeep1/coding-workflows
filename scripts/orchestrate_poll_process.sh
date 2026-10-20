@@ -18346,7 +18346,8 @@ _fetch_candidate_issue_details_graphql() {
 # Input: JSON array of issue numbers, e.g. "[123, 456]"
 # Output: JSON object keyed by stringified issue number:
 #   { "123": {"number":N,"state":"OPEN|CLOSED|MERGED","merged":bool,
-#              "labels":[string],"headPushedAt":"ISO8601"|null},
+#              "labels":[string],"base_ref":string|null,
+#              "headPushedAt":"ISO8601"|null},
 #     "456": null, ... }
 # `headPushedAt` is the linked PR's head commit pushedDate (coalesced
 # to committedDate when pushedDate is null).  Consumed by
@@ -18396,6 +18397,7 @@ _fetch_linked_pr_status_graphql() {
                   ... on PullRequest {
                     number state merged
                     labels(first: 100) { nodes { name } }
+                    baseRefName
                     repository { nameWithOwner }
                     commits(last: 1) { nodes { commit { pushedDate committedDate } } }
                   }
@@ -18439,6 +18441,7 @@ _fetch_linked_pr_status_graphql() {
                   state: .state,
                   merged: (.merged // false),
                   labels: [(.labels.nodes // [])[]?.name],
+                  base_ref: (.baseRefName // null),
                   headPushedAt: (
                     ((.commits.nodes // [])[0].commit.pushedDate)
                     // ((.commits.nodes // [])[0].commit.committedDate)
@@ -19133,6 +19136,142 @@ _reconcile_merged_pr_issue() {
   if declare -F tg_notify >/dev/null 2>&1; then
     tg_notify "Stall recovery: skipped '${action}' for issue #${issue_num} (phase=${phase}) because linked PR #${pr_num} is already merged. Tagged ai:merged."$'\n'"Issue: $(_gh_url "issues/${issue_num}")"$'\n'"PR: $(_gh_url "pull/${pr_num}")" "DEBUG"
   fi
+}
+
+# _reconcile_standalone_merged_pr_issue — standalone stall recovery's
+# wrapper around _reconcile_merged_pr_issue. It applies the target-merge rule
+# that close_merged_issues_sweep and issue_pr_status.yml already use (issue
+# #6631, _pr_json_base_is_target_merge) before tagging ai:merged.
+#
+# Without it, the standalone path tagged ai:merged for a PR merged into ANY
+# branch. The sweep then refused that merge and sent a stale-label WARNING
+# every tick: multi-user-ai-agent #300, whose fix PR #301 merged into the
+# triaged PR's head branch ai/issue-298, which is where
+# scripts/resolve_integration_ref.sh routes ai:check-triage fixes.
+#
+# Outcomes (log prefix STALL_SKIP / STALL_CHECK_TRIAGE_GATE):
+#   - base ref or default branch unknown: tag ai:merged as before (fail open
+#     to the previous behaviour, never to a new write).
+#   - target merge: tag ai:merged (unchanged behaviour).
+#   - non-target merge: no label, log
+#     `STALL_SKIP issue=<n> reason=merged_non_target_base ...`. For an
+#     ai:check-triage issue, then run `scripts/check_triage_resolution.py
+#     gate` (issue #7095), which closes the issue with an evidence comment
+#     once the triaged PR merged and its failing check is green on the
+#     default branch, and otherwise changes nothing.
+#
+# Args: issue_num phase action pr_num linked_json issue_json_file labels_json
+#   linked_json carries `base_ref` (GraphQL caches) or `.base.ref` (REST).
+#   issue_json_file holds the issue body (the standalone loop's per-issue
+#   file); labels_json is a JSON array of label names.
+# API calls (§15): unknown-base merges add none. Any merge with a known base
+# (target or not) adds at most one repos/<repo> read per poller process
+# (default branch, memoized; none when CWS_DEFAULT_BRANCH is set). A non-target
+# ai:check-triage merge adds one issues/<n> read (the gate's trust check
+# needs `user.type`, which no cached payload carries) plus the gate's own
+# documented budget, on each tick until the gate closes the issue (its
+# traceback comments are posted once per failing job). A failed
+# default-branch read falls back to tagging ai:merged as before; a failed
+# issue read or gate run leaves the issue unlabelled and open.
+_STALL_STANDALONE_DEFAULT_BRANCH=""
+# Set once the lookup ran, so a failed read is not repeated per candidate.
+_STALL_STANDALONE_DEFAULT_BRANCH_TRIED=false
+_reconcile_standalone_merged_pr_issue() {
+  local issue_num="$1"
+  local phase="$2"
+  local action="$3"
+  local pr_num="$4"
+  local linked_json="$5"
+  local issue_json_file="$6"
+  local labels_json="${7:-[]}"
+  local _stall_nt_base _stall_nt_body _stall_nt_declared _stall_nt_managed _stall_nt_pr_json
+
+  _stall_nt_base="$(printf '%s' "${linked_json}" | jq -r '(.base_ref // .base.ref // "") | strings' 2>/dev/null | tr -d '\r\n' || echo "")"
+  if [ -z "${_stall_nt_base}" ]; then
+    echo "  [standalone-stall] Issue #${issue_num}: base branch of PR #${pr_num} unknown — tagging ai:merged."
+    _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${pr_num}"
+    return 0
+  fi
+
+  if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ] && [ "${_STALL_STANDALONE_DEFAULT_BRANCH_TRIED}" != "true" ]; then
+    _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=true
+    _STALL_STANDALONE_DEFAULT_BRANCH="${CWS_DEFAULT_BRANCH:-}"
+    if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
+      _STALL_STANDALONE_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+    fi
+    _STALL_STANDALONE_DEFAULT_BRANCH="$(printf '%s' "${_STALL_STANDALONE_DEFAULT_BRANCH}" | tr -d '\r\n')"
+    [ "${_STALL_STANDALONE_DEFAULT_BRANCH}" = "null" ] && _STALL_STANDALONE_DEFAULT_BRANCH=""
+  fi
+  if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
+    echo "  [standalone-stall] Issue #${issue_num}: default branch unavailable — tagging ai:merged."
+    _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${pr_num}"
+    return 0
+  fi
+
+  _stall_nt_body=""
+  if [ -n "${issue_json_file}" ] && [ -f "${issue_json_file}" ]; then
+    _stall_nt_body="$(jq -r '.body // "" | strings' "${issue_json_file}" 2>/dev/null || echo "")"
+  fi
+  _stall_nt_declared="$(printf '%s' "${_stall_nt_body}" | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_lib.py extract-integration-branch 2>/dev/null | head -n 1 || echo "")"
+  _stall_nt_managed=false
+  if printf '%s' "${labels_json}" | jq -e 'index("ai:orchestrator-managed") != null' >/dev/null 2>&1 \
+      || [[ "${_stall_nt_body}" == *"Managed by: AI Orchestrator"* ]]; then
+    _stall_nt_managed=true
+  fi
+  _stall_nt_pr_json="$(jq -cn --arg b "${_stall_nt_base}" '{base: {ref: $b}}')"
+  if _pr_json_base_is_target_merge "${issue_num}" "${_stall_nt_pr_json}" "${_STALL_STANDALONE_DEFAULT_BRANCH}" "${_stall_nt_declared}" "${_stall_nt_managed}"; then
+    echo "  [standalone-stall] Issue #${issue_num}: PR #${pr_num} merged into a target branch (reason=${_TARGET_MERGE_REASON}) — tagging ai:merged."
+    _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${pr_num}"
+    return 0
+  fi
+
+  echo "STALL_SKIP issue=${issue_num} reason=merged_non_target_base pr=${pr_num} base=$(_close_sweep_log_ref "${_stall_nt_base}" "unknown") declared=$(_close_sweep_log_ref "${_stall_nt_declared}" "none") phase=${phase} action=${action}"
+  if printf '%s' "${labels_json}" | jq -e 'index("ai:check-triage") != null' >/dev/null 2>&1; then
+    _stall_check_triage_resolution_gate "${issue_num}" "${pr_num}"
+  fi
+  return 0
+}
+
+# _stall_check_triage_resolution_gate <issue> <fix_pr> — run the issue #7095
+# check-triage resolution gate for a standalone ai:check-triage issue whose
+# fix PR merged into a non-target branch (normally the triaged PR's head).
+# The gate reads the triaged PR from the issue's trusted header, not from
+# <fix_pr>; <fix_pr> is only logged. Never fails the caller.
+_stall_check_triage_resolution_gate() {
+  local issue_num="$1"
+  local pr_num="$2"
+  local _stall_ct_file _stall_ct_verdict _stall_ct_status _stall_ct_reason _stall_ct_rc=0
+
+  if [ "$(printf '%s' "${CHECK_TRIAGE_RESOLVED_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+    echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=skip reason=disabled"
+    return 0
+  fi
+  if [ ! -f scripts/check_triage_resolution.py ] || [ ! -f scripts/workflow_failure_heal.py ]; then
+    echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=skip reason=support_missing"
+    return 0
+  fi
+  _stall_ct_file="${RUNTIME_DIR:-/tmp}/stall_check_triage_issue_${issue_num}.json"
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${_stall_ct_file}" 2>/dev/null \
+      || ! jq -e 'type == "object"' "${_stall_ct_file}" >/dev/null 2>&1; then
+    echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=skip reason=issue_unavailable"
+    return 0
+  fi
+  _stall_ct_verdict="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/check_triage_resolution.py gate \
+    --issue-json "${_stall_ct_file}" --repo "${GITHUB_REPOSITORY}" --issue-number "${issue_num}" \
+    --default-branch "${_STALL_STANDALONE_DEFAULT_BRANCH}" 2>"${_stall_ct_file}.err")" || _stall_ct_rc=$?
+  if [ "${_stall_ct_rc}" -ne 0 ] && [ -s "${_stall_ct_file}.err" ]; then
+    # Last few stderr lines, printable ASCII only, prefixed so they cannot act as workflow commands.
+    tail -n 5 "${_stall_ct_file}.err" 2>/dev/null | tr -cd '\11\12\40-\176' | cut -c1-300 | sed 's/^/STALL_CHECK_TRIAGE_GATE stderr| /; s/::/: :/g' || true
+  fi
+  _stall_ct_status="$(printf '%s' "${_stall_ct_verdict}" | jq -r '.status // ""' 2>/dev/null | tr -cd 'a-z_' | cut -c1-40 || echo "")"
+  _stall_ct_reason="$(printf '%s' "${_stall_ct_verdict}" | jq -r '.reason // ""' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || echo "")"
+  echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=${_stall_ct_status:-error} reason=${_stall_ct_reason:-none} rc=${_stall_ct_rc}"
+  if [ "${_stall_ct_rc}" -eq 0 ] && { [ "${_stall_ct_status}" = "resolved" ] || [ "${_stall_ct_status}" = "already_resolved" ]; }; then
+    if declare -F add_healing_note >/dev/null 2>&1; then
+      add_healing_note "Issue #${issue_num}: ai:check-triage fix PR #${pr_num} merged into the triaged PR's branch; the check-triage resolution gate verified the fix on the default branch and closed the issue"
+    fi
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------
@@ -20881,7 +21020,7 @@ PY
         _std_linked_json="$(printf '%s' "${STALL_IMPL_PR_JSON}" | jq -c '{
           number: (.number // null), state: (.state // null), merged: (.merged // false),
           labels: [(.labels // [])[]? | if type == "object" then (.name // empty) else . end],
-          head_ref: (.head.ref // null), head_sha: (.head.sha // null),
+          head_ref: (.head.ref // null), head_sha: (.head.sha // null), base_ref: (.base.ref // null),
           mergeable: (.mergeable // null), merge_state_status: (.mergeable_state // null)
         }' 2>/dev/null || echo "null")"
       fi
@@ -20901,8 +21040,8 @@ PY
       continue
     fi
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
-      echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
-      _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+      echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}'."
+      _reconcile_standalone_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}" "${_std_linked_json}" "${_security_dependency_issue_file}" "${labels_json}"
       if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
         write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
@@ -20957,13 +21096,14 @@ PY
             if [ -n "${_std_lpr_num}" ] && [ "${_std_lpr_merged}" = "true" ]; then
               # Synthesise the same shape the cache would have produced
               # so _check_merged_pr_guard can consume it uniformly.
-              _std_linked_json="$(jq -cn --argjson n "${_std_lpr_num}" '{number: $n, state: "MERGED", merged: true}' 2>/dev/null || echo "null")"
+              _std_linked_json="$(jq -cn --argjson n "${_std_lpr_num}" --arg b "$(_jq_field "${_std_lpr_json}" '.base.ref')" \
+                '{number: $n, state: "MERGED", merged: true, base_ref: (if $b == "" then null else $b end)}' 2>/dev/null || echo "null")"
             fi
           fi
         fi
         if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
-          echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}' and tagging ai:merged."
-          _reconcile_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}"
+          echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}'."
+          _reconcile_standalone_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}" "${_std_linked_json}" "${_security_dependency_issue_file}" "${labels_json}"
           if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
             write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
           fi
