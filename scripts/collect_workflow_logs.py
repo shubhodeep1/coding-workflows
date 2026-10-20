@@ -112,6 +112,15 @@ PAT_BUDGET_LINE = re.compile(
     r"remaining=(?:[0-9]+|unknown) reset=(?:[0-9]+|unknown) used_in_job=([0-9]+|unknown)$"
 )
 PAT_BUDGET_MAX_RUN_ARCHIVES = 1500
+# Review/autofix run summary (scripts/review_autofix_step_iteration_summary.sh).
+# Anchored so echoed script text (structured_summary_line='...') never matches;
+# the optional prefix is the GitHub Actions log timestamp.
+REVIEW_AUTOFIX_RUN_SUMMARY_PREFIX = "REVIEW_AUTOFIX_RUN_SUMMARY_V1 "
+REVIEW_AUTOFIX_RUN_SUMMARY_LINE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z )?REVIEW_AUTOFIX_RUN_SUMMARY_V1 (\{.*\})$"
+)
+ROOT_FAILURE_CLASS_RE = re.compile(r"[a-z0-9_]{1,64}")
+ROOT_FAILURE_CLASS_CONCLUSIONS = frozenset({"failure", "cancelled"})
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -892,6 +901,8 @@ def _apply_untrusted_origin_exclusion(row: dict[str, Any]) -> bool:
     row["workflow_name"] = None
     row["workflow_path"] = None
     row["head_repository"] = None
+    row["root_failure_class"] = None
+    row["symptom_step"] = None
     if row.get("workflow_family") not in _FIXED_WORKFLOW_FAMILIES:
         row["workflow_family"] = "other"
     _set_diagnostic_failure_reason(row, "logs", None)
@@ -1140,6 +1151,11 @@ def compute_run_metrics(
         "updated_at": run.get("updated_at"),
         "duration_seconds": duration_seconds,
         "failure_point": failure_point,
+        # Additive: the structured root cause comes from the run's own logs
+        # (_apply_root_failure_class_from_full_logs); symptom_step mirrors
+        # failure_point.step_name, which stays unchanged.
+        "root_failure_class": None,
+        "symptom_step": failure_point.get("step_name"),
         "jobs_fetch_status": jobs_fetch_status
         or ("success" if normalized_conclusion in {"failure", "cancelled"} else "not_required"),
         "log_download_status": "not_selected",
@@ -1633,6 +1649,63 @@ def _apply_cost_telemetry_from_full_logs(run: dict[str, Any], full_logs: list[di
     run["cost_telemetry"] = telemetry
 
 
+def _root_failure_class_from_value(value: Any) -> str | None:
+    """Return value only when it is a valid root failure class, else None."""
+    if isinstance(value, str) and ROOT_FAILURE_CLASS_RE.fullmatch(value):
+        return value
+    return None
+
+
+def _root_failure_class_from_full_logs(full_logs: Any) -> str | None:
+    """Parse finalize_reason from the last REVIEW_AUTOFIX_RUN_SUMMARY_V1 line.
+
+    Fails open: any missing, malformed or out-of-shape summary yields None.
+    """
+    try:
+        if not isinstance(full_logs, list):
+            return None
+        last_payload: str | None = None
+        for step in full_logs:
+            if not isinstance(step, dict):
+                continue
+            content = step.get("content")
+            if not isinstance(content, str) or REVIEW_AUTOFIX_RUN_SUMMARY_PREFIX not in content:
+                continue
+            for line in content.splitlines():
+                match = REVIEW_AUTOFIX_RUN_SUMMARY_LINE.fullmatch(line.rstrip())
+                if match is not None:
+                    last_payload = match.group(1)
+        if last_payload is None:
+            return None
+        parsed = json.loads(last_payload)
+        if not isinstance(parsed, dict):
+            return None
+        return _root_failure_class_from_value(parsed.get("finalize_reason"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _symptom_step_from_row(row: dict[str, Any]) -> Any:
+    failure_point = row.get("failure_point")
+    if isinstance(failure_point, dict):
+        return failure_point.get("step_name")
+    return None
+
+
+def _apply_root_failure_class_from_full_logs(run: dict[str, Any], full_logs: list[dict[str, str]]) -> None:
+    root_failure_class = None
+    if (
+        run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
+        and (run.get("conclusion") or "").lower() in ROOT_FAILURE_CLASS_CONCLUSIONS
+    ):
+        root_failure_class = _root_failure_class_from_full_logs(full_logs)
+    run["root_failure_class"] = root_failure_class
+    run["symptom_step"] = (
+        _symptom_step_from_row(run) if run.get("origin_trust", "trusted") == "trusted" else None
+    )
+
+
 def _sanitize_path_component(value: str, fallback: str) -> str:
     candidate = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
     candidate = candidate.strip("._-")
@@ -1816,6 +1889,7 @@ def export_categorized_logs(
             full_logs_by_identity[identity] = full_logs
             if full_logs:
                 _apply_cost_telemetry_from_full_logs(run, full_logs)
+                _apply_root_failure_class_from_full_logs(run, full_logs)
         except Exception as exc:  # noqa: BLE001
             _apply_log_download_exception(run, exc)
             _append_log_error(errors, repository, run_id, exc)
@@ -2056,6 +2130,12 @@ def main(argv: list[str] | None = None) -> int:
                 row_copy = _ensure_run_diagnostics(dict(reused_row))
                 if (run.get("conclusion") or "").lower() in {"failure", "cancelled"}:
                     row_copy["jobs_fetch_status"] = "cached"
+                # Legacy cached rows lack the additive fields; re-validate a
+                # cached class so a tampered cache value can only become None.
+                row_copy["root_failure_class"] = _root_failure_class_from_value(
+                    row_copy.get("root_failure_class")
+                )
+                row_copy["symptom_step"] = _symptom_step_from_row(row_copy)
                 # Re-stamp origin from the live run, never from the cached row,
                 # so a fork row cached before #6637 cannot re-emit its excerpts.
                 _stamp_run_origin(row_copy, run, repo)
@@ -2167,8 +2247,12 @@ def main(argv: list[str] | None = None) -> int:
                 cached_excerpts = _cached_log_excerpts(cached_row)
                 cached_cost_telemetry = _cached_cost_telemetry(cached_row)
                 if cached_excerpts is not None and cached_cost_telemetry is not None:
+                    cached_root_failure_class = _root_failure_class_from_value(
+                        cached_row.get("root_failure_class") if isinstance(cached_row, dict) else None
+                    )
                     run["log_excerpts"] = cached_excerpts
                     run["cost_telemetry"] = cached_cost_telemetry
+                    run["root_failure_class"] = cached_root_failure_class
                     run["log_download_status"] = "cached"
                     _set_diagnostic_failure_reason(run, "logs", None)
                     identity = (repository, run_id)
@@ -2176,6 +2260,7 @@ def main(argv: list[str] | None = None) -> int:
                     if canonical is not None:
                         canonical["log_excerpts"] = cached_excerpts
                         canonical["cost_telemetry"] = cached_cost_telemetry
+                        canonical["root_failure_class"] = cached_root_failure_class
                         canonical["log_download_status"] = "cached"
                         _set_diagnostic_failure_reason(canonical, "logs", None)
                     continue
@@ -2186,6 +2271,7 @@ def main(argv: list[str] | None = None) -> int:
             log_excerpts = build_log_excerpts_from_full_logs(full_logs) if full_logs else []
             if full_logs:
                 _apply_cost_telemetry_from_full_logs(run, full_logs)
+                _apply_root_failure_class_from_full_logs(run, full_logs)
                 run["log_excerpts"] = log_excerpts
             else:
                 run.pop("log_excerpts", None)
@@ -2202,6 +2288,8 @@ def main(argv: list[str] | None = None) -> int:
                     canonical.pop("cost_telemetry", None)
                 if "cost_telemetry" in run:
                     canonical["cost_telemetry"] = dict(run["cost_telemetry"])
+                if "root_failure_class" in run:
+                    canonical["root_failure_class"] = run["root_failure_class"]
 
             if isinstance(repo_cache, dict) and run["log_download_status"] == "success":
                 logs_seen_set = _touch_seen_set(_normalize_seen_set(repo_cache.get("logs_seen_set")), run_id)
@@ -2216,6 +2304,7 @@ def main(argv: list[str] | None = None) -> int:
                         merged_row["log_excerpts"] = log_excerpts
                         if "cost_telemetry" in run:
                             merged_row["cost_telemetry"] = dict(run["cost_telemetry"])
+                        merged_row["root_failure_class"] = run.get("root_failure_class")
                         updated_rows.append(merged_row)
                         replaced = True
                     else:
