@@ -5,13 +5,26 @@
   "entry_id": "processed_command_7715_6281835396_approved",
   "issue_number": 7715,
   "metadata": {
+    "branch": "ai/issue-7715",
+    "changed_files": [
+      "changelog.d/wfopt-0922-codex-usage-anchored.md",
+      "scripts/collect_workflow_logs.py",
+      "scripts/cost_audit.py",
+      "tests/test_collect_workflow_logs.py",
+      "tests/test_cost_audit_semble_metrics.py"
+    ],
+    "issue_number": 7715,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7715",
+    "pr_number": 7722,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7722",
+    "run_attempt": "1",
+    "run_id": "39358483145",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39358483145"
   },
   "run_attempt": 1,
   "run_id": "39358483145",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-20T02:24:32Z",
+  "status": "completed",
+  "timestamp": "2026-10-20T02:46:27Z",
   "workflow": "implement"
 }
