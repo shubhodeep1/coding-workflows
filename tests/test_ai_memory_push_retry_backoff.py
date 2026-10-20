@@ -441,6 +441,8 @@ def test_persist_memory_operation_auth_failure_stops_after_one_attempt() -> None
 	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
 	assert "error_class=auth" in str(exc), str(exc)
 	assert "attempts=1" in str(exc), str(exc)
+	assert "github.com" not in str(exc), str(exc)
+	assert "https://" not in str(exc), str(exc)
 	assert _push_count(call_log) == 1, call_log
 	assert not any(op in ("fetch", "rebase", "show-ref") for op, _args in call_log), call_log
 	assert backoff_attempts == [], backoff_attempts
@@ -507,6 +509,7 @@ def test_persist_memory_operation_auth_error_message_has_class_and_no_token() ->
 	assert "attempts=1" in message, message
 	assert sentinel not in message, message
 	assert "x-access-token:" not in message, message
+	assert "github.com/o/r" not in message, message
 	assert "Authentication failed" in message, message
 	assert _push_count(call_log) == 1, call_log
 

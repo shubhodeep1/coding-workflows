@@ -3272,8 +3272,13 @@ _MEMORY_PUSH_AUTH_FAILURE_RE = re.compile(
     r"|returned error: 401",
     re.IGNORECASE,
 )
-_MEMORY_PUSH_RATE_LIMIT_RE = re.compile(r"rate[ _-]?limit|abuse", re.IGNORECASE)
+_MEMORY_PUSH_RATE_LIMIT_RE = re.compile(
+    r"rate[ _-]?limit|abuse[ _-]?detect|triggered an abuse", re.IGNORECASE
+)
 _MEMORY_PUSH_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
+# Whole URLs (scheme, host and path) are dropped too: the origin URL must
+# never appear in the raised message (issue #7714).
+_MEMORY_PUSH_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+")
 
 
 def _is_permanent_memory_push_failure(stderr: str) -> bool:
@@ -3292,13 +3297,14 @@ def _is_permanent_memory_push_failure(stderr: str) -> bool:
 
 
 def _redact_memory_push_stderr(stderr: str) -> str:
-    """Scrub credential values and URL userinfo from git push stderr."""
+    """Scrub credential values and URLs (including the origin URL) from git push stderr."""
     text = stderr or ""
     for env_name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT"):
         secret = os.environ.get(env_name, "")
         if secret:
             text = text.replace(secret, "***")
     text = _MEMORY_PUSH_URL_USERINFO_RE.sub(r"\1***@", text)
+    text = _MEMORY_PUSH_URL_RE.sub("<redacted-url>", text)
     return text.strip()
 
 
