@@ -1380,6 +1380,167 @@ def test_full_clone_release_jobs_have_room_for_the_checkout() -> None:
 				assert job.get("timeout-minutes", 360) >= 10, f"{name} jobs.{job_name}: a full clone needs timeout-minutes >= 10"
 
 
+PREFLIGHT_SCRIPT = REPO_ROOT / "scripts" / "release_tag_preflight.sh"
+PREFLIGHT_STEP_NAME = "Preflight release tag credential"
+PREFLIGHT_SENTINEL_TOKEN = "ghp_preflightSentinelTokenValue0123456789"
+
+
+def _run_release_tag_preflight_scenario(
+	*,
+	scopes: str | None,
+	workflow_change: bool,
+	gh_fails: bool = False,
+	token: str = PREFLIGHT_SENTINEL_TOKEN,
+	base_override: str | None = None,
+	extra_env: dict[str, str] | None = None,
+	rename_out: bool = False,
+) -> subprocess.CompletedProcess[str]:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		repo = root / "repo"
+		repo.mkdir()
+
+		def git(*args: str) -> str:
+			return subprocess.run(
+				["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
+			).stdout.strip()
+
+		git("init", "-q")
+		git("config", "user.name", "t")
+		git("config", "user.email", "t@example.invalid")
+		(repo / "README.md").write_text("base\n", encoding="utf-8")
+		if rename_out:
+			(repo / ".github" / "workflows").mkdir(parents=True)
+			(repo / ".github" / "workflows" / "moved.yml").write_text("name: moved\non: push\n", encoding="utf-8")
+		git("add", "-A")
+		git("commit", "-q", "-m", "base")
+		git("tag", "stable")
+		base = git("rev-parse", "HEAD")
+		if rename_out:
+			(repo / "scripts").mkdir()
+			git("mv", ".github/workflows/moved.yml", "scripts/moved.yml")
+		elif workflow_change:
+			(repo / ".github" / "workflows").mkdir(parents=True)
+			(repo / ".github" / "workflows" / "x.yml").write_text("name: x\n", encoding="utf-8")
+		else:
+			(repo / "scripts").mkdir()
+			(repo / "scripts" / "x.sh").write_text("echo x\n", encoding="utf-8")
+		git("add", "-A")
+		git("commit", "-q", "-m", "head")
+		head = git("rev-parse", "HEAD")
+
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		if gh_fails:
+			gh_body = "echo 'HTTP 502: Bad Gateway' >&2\nexit 1\n"
+		else:
+			header = "" if scopes is None else f"X-Oauth-Scopes: {scopes}\\r\\n"
+			gh_body = (
+				"printf 'HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n"
+				+ header
+				+ "\\r\\n{\"login\":\"x-oauth-scopes: repo, workflow\"}\\n'\n"
+			)
+		gh = bin_dir / "gh"
+		gh.write_text("#!/usr/bin/env bash\n" + gh_body, encoding="utf-8")
+		gh.chmod(0o755)
+
+		env = _clean_bash_environment(
+			PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+			GH_TOKEN=token,
+			RUNNER_TEMP=str(root),
+			RELEASE_TAG_PREFLIGHT_BASE_SHA=base if base_override is None else base_override,
+			RELEASE_TAG_PREFLIGHT_HEAD_SHA=head,
+			RELEASE_TAG_PREFLIGHT_GIT_DIR=str(repo),
+		)
+		for key in ("RELEASE_TAG_PREFLIGHT_ENABLED", "STABLE_RELEASE_ENABLED", "RELEASE_TAGGING_ENABLED"):
+			env.pop(key, None)
+		env.update(extra_env or {})
+		return subprocess.run(
+			["bash", str(PREFLIGHT_SCRIPT)], env=env, capture_output=True, text=True, check=False,
+		)
+
+
+def test_release_tag_preflight_script_is_executable_with_tabs() -> None:
+	assert PREFLIGHT_SCRIPT.is_file()
+	assert os.access(PREFLIGHT_SCRIPT, os.X_OK), "release_tag_preflight.sh must be mode 0755"
+	text = _read(PREFLIGHT_SCRIPT)
+	assert text.startswith("#!/usr/bin/env bash\n")
+	assert "§14" in text, "the GET /user call must carry its §14 API-audit comment"
+	assert not re.search(r"^ {2,}\S", text, re.MULTILINE), "indent the script with tabs"
+
+
+def test_release_tag_preflight_executes_decision_matrix() -> None:
+	cases = [
+		(dict(scopes="repo, workflow", workflow_change=True), 0, "result=pass error_class=none reason=workflow_scope_present"),
+		(dict(scopes="repo", workflow_change=False), 0, "result=pass error_class=none reason=no_workflow_changes"),
+		(dict(scopes="repo", workflow_change=True), 1, "result=fail error_class=workflow_scope reason=classic_pat_missing_workflow_scope"),
+		(dict(scopes="", workflow_change=True), 1, "result=fail error_class=workflow_scope"),
+		(dict(scopes="repo", workflow_change=False, rename_out=True), 1, "result=fail error_class=workflow_scope reason=classic_pat_missing_workflow_scope"),
+		(dict(scopes=None, workflow_change=True), 0, "result=unknown error_class=none reason=no_scope_header"),
+		(dict(scopes="repo", workflow_change=True, gh_fails=True), 0, "result=unknown error_class=none reason=api_failed"),
+		(dict(scopes="repo", workflow_change=True, token=""), 0, "result=unknown error_class=none reason=gh_pat_missing"),
+		(dict(scopes="repo", workflow_change=True, base_override="not-a-sha"), 0, "result=unknown error_class=none reason=invalid_range"),
+		(dict(scopes="repo", workflow_change=True, base_override="0" * 40), 0, "result=unknown error_class=none reason=git_failed"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"RELEASE_TAG_PREFLIGHT_ENABLED": "FALSE"}), 0, "result=skipped error_class=none reason=disabled"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"RELEASE_TAG_PREFLIGHT_ENABLED": "bogus-value"}), 0, "result=skipped error_class=none reason=invalid_switch"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"RELEASE_TAG_PREFLIGHT_ENABLED": "True"}), 1, "result=fail error_class=workflow_scope"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"RELEASE_TAGGING_ENABLED": "false"}), 0, "result=skipped error_class=none reason=publishing_disabled"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"STABLE_RELEASE_ENABLED": "false"}), 0, "result=skipped error_class=none reason=publishing_disabled"),
+	]
+	for kwargs, expected_rc, expected_line in cases:
+		result = _run_release_tag_preflight_scenario(**kwargs)
+		combined = result.stdout + result.stderr
+		assert result.returncode == expected_rc, (kwargs, result.returncode, combined)
+		assert f"RELEASE_TAG_PREFLIGHT {expected_line}" in result.stdout, (kwargs, combined)
+		assert PREFLIGHT_SENTINEL_TOKEN not in combined, f"token leaked: {kwargs}"
+		assert "Content-Type" not in combined and "HTTP/2.0" not in combined, f"headers leaked: {kwargs}"
+		if expected_rc == 1:
+			assert "::error::" in result.stdout and "workflow" in result.stdout, combined
+		if "bogus-value" in str(kwargs):
+			assert "::warning::" in combined and "bogus-value" not in combined, combined
+
+
+def _preflight_step_text(workflow_text: str) -> str:
+	job = _top_level_job_block(workflow_text, "resolve-version")
+	match = re.search(
+		rf"^      - name: {re.escape(PREFLIGHT_STEP_NAME)}\n(.*?)(?=^      - |^      #|^[ \t]*$|\Z)",
+		job,
+		re.MULTILINE | re.DOTALL,
+	)
+	assert match is not None, "resolve-version must carry the release tag preflight step"
+	return match.group(0)
+
+
+def test_release_tag_preflight_wired_into_resolve_version_before_release() -> None:
+	run_bodies = []
+	for wf in WORKFLOWS:
+		text = _read(wf)
+		job = _top_level_job_block(text, "resolve-version")
+		assert job.index("      - name: Resolve version tag\n") < job.index(f"      - name: {PREFLIGHT_STEP_NAME}\n"), wf.name
+		step = _preflight_step_text(text)
+		assert "        id: release_tag_preflight\n" in step
+		assert "GH_TOKEN: ${{ secrets.GH_PAT }}\n" in step, f"{wf.name}: pass GH_PAT only, no github.token fallback"
+		assert "RELEASE_TAG_PREFLIGHT_ENABLED: ${{ vars.RELEASE_TAG_PREFLIGHT_ENABLED || 'true' }}" in step
+		assert "continue-on-error" not in step, f"{wf.name}: a preflight failure must fail the job"
+		if_line = re.search(r"^        if: (.*)$", step, re.MULTILINE)
+		assert if_line is not None and "!inputs.dry_run" in if_line.group(1), wf.name
+		if wf.name == "test-and-mark-stable.yml":
+			assert "!inputs.gate_only" in if_line.group(1)
+		run_body = step[step.index("        run: |\n"):]
+		assert "${{" not in run_body, f"{wf.name}: pass expression values through env:"
+		assert "bash scripts/release_tag_preflight.sh" in run_body
+		run_bodies.append(run_body)
+		release_job = _top_level_job_block(text, "release")
+		needs = re.search(r"^    needs: \[(.*)\]$", release_job, re.MULTILINE)
+		assert needs is not None and "resolve-version" in [n.strip() for n in needs.group(1).split(",")], wf.name
+	assert run_bodies[0] == run_bodies[1], "both workflows must run the identical preflight body"
+
+
+def test_workflows_stay_under_size_guard_after_preflight() -> None:
+	for wf in WORKFLOWS:
+		assert wf.stat().st_size < 480_000, f"{wf.name} is at or above the 480,000-byte guard"
+
+
 def main() -> None:
 	# Failures surface via uncaught AssertionError → Python's default non-zero
 	# exit; on full success we just print and return None.

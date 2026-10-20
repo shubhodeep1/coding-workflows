@@ -436,6 +436,32 @@ jobs:
 
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
 
+      # Release credential preflight (analysis/workflow-optimization-2026-09-22.md,
+      # Speed #4 / Reliability #2): release run 35639756385 spent about 94
+      # minutes before GitHub refused the tag push for a classic GH_PAT without
+      # the `workflow` scope. Fails here only when the classic PAT lacks that
+      # scope AND stable..HEAD changes .github/workflows/; every uncertain case
+      # proceeds. RELEASE_TAG_PREFLIGHT_ENABLED=false turns it off.
+      - name: Preflight release tag credential
+        id: release_tag_preflight
+        if: ${{ !inputs.dry_run && !inputs.gate_only }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          RELEASE_TAG_PREFLIGHT_ENABLED: ${{ vars.RELEASE_TAG_PREFLIGHT_ENABLED || 'true' }}
+          STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
+          RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          base="$(git rev-parse -q --verify 'refs/tags/stable^{commit}' 2>/dev/null || true)"
+          head="$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null || true)"
+          if [ ! -f scripts/release_tag_preflight.sh ] || [ -L scripts/release_tag_preflight.sh ]; then
+            echo "::warning::scripts/release_tag_preflight.sh is missing on this commit; skipping the release credential preflight."
+            echo "RELEASE_TAG_PREFLIGHT result=unknown error_class=none reason=script_missing"
+            exit 0
+          fi
+          RELEASE_TAG_PREFLIGHT_BASE_SHA="${base}" RELEASE_TAG_PREFLIGHT_HEAD_SHA="${head}" \
+            bash scripts/release_tag_preflight.sh
+
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
       # This diagnostic runs after checkout's main step and before
