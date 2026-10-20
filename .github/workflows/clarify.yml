@@ -659,7 +659,6 @@ jobs:
           COMMENT_USER_LOGIN: ${{ github.event.comment.user.login || '' }}
           COMMENT_AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association || '' }}
           RUN_ID: ${{ github.run_id }}
-          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # Same value the runner exports; the run body reads it instead of an
@@ -861,27 +860,6 @@ jobs:
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
           fi
 
-          # Issue #7251 waits for PR #6667 to merge into the default branch
-          # (unblock fix-up #7257). Applies to #7251 in this workflow's source
-          # repository only; the helper makes no API call for any other issue.
-          # No labels are written; the scheduled poller releases the issue.
-          # ISSUE_7251_DEPENDENCY_WAIT_ENABLED=false turns the hold off.
-          ISSUE_7251_HELD="false"
-          if [ "${IS_CLOSED}" != "true" ]; then
-            source scripts/gh_helpers.sh 2>/dev/null || true
-            if type issue_7251_dependency_wait_applies >/dev/null 2>&1 \
-              && issue_7251_dependency_wait_applies "${GITHUB_REPOSITORY}" "${ISSUE_NUMBER}"; then
-              ISSUE_7251_STATE="$(issue_7251_dependency_gate_state "${GITHUB_REPOSITORY}")"
-              case "${ISSUE_7251_STATE}" in
-                open|unverified|merged_pending|closed_pending)
-                  ISSUE_7251_HELD="true"
-                  SKIP_CODEX="true"
-                  echo "AI_PHASE_GATE_V1 phase=clarify gate=issue_7251_dependency_wait reason=pr_6667_unmerged outcome=skip issue=${ISSUE_NUMBER} detail=${ISSUE_7251_STATE}"
-                  ;;
-              esac
-            fi
-          fi
-
           # Hold a generated security follow-up before any label or automatic
           # /answer write until the issue it depends on has merged (issue
           # #4934). The target is already fetched; only a dependent issue
@@ -960,7 +938,7 @@ jobs:
           echo "check_triage_resolved=${CHECK_TRIAGE_RESOLVED}" >> "$GITHUB_OUTPUT"
 
           # Only a verified orchestrator fast path may post its automatic /answer.
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${COMMENT_ROUTE_TRUSTED}" = "true" ] && [ "${ISSUE_7251_HELD}" != "true" ] && [ "${CHECK_TRIAGE_RESOLVED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${COMMENT_ROUTE_TRUSTED}" = "true" ] && [ "${CHECK_TRIAGE_RESOLVED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
             echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"

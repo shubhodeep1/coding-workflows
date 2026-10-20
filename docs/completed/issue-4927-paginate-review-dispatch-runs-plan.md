@@ -127,5 +127,5 @@ Ships with the poller on the next `@stable` release; consumer repos pick it up w
 ## References
 
 - Issue #4927, security audit tracker #3576.
-- Issue #4701 and its plan `docs/plans/issue-4701-review-dispatch-default-branch-plan.md` (PR #4725); issue #4618 (sweep).
+- Issue #4701 and its plan `docs/completed/issue-4701-review-dispatch-default-branch-plan.md` (PR #4725); issue #4618 (sweep).
 - PR #3895 incident (duplicate dispatches), PR #3082 / issue #3081 (empty-commit push discarding a review).
