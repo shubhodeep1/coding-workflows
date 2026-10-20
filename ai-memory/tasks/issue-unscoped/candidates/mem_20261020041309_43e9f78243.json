@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:3286-3305 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The rate-limit/abuse exclusion in `_is_permanent_memory_push_failure` scans the stderr text after only URLs are removed. A repo slug such as `rate-limiter` in a `Permission to <repo> denied` line therefore matches, and a 403 permission denial is classified as temporary.\n  WHY: Such a deterministic denial burns all 16 `AI_MEMORY_PUSH_RETRIES` attempts, which is the behaviour issue #7714 removes. The combined 403 plus permission-line case is untested. Reviewers rated it NIT, which is mapped to low. The same root cause was flagged on lines 3301-3303 by openai_gpt-6-luna.\n- tests/test_ai_memory_push_retry_backoff.py:~519 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `test_permanent_memory_push_failure_classifier` has no case combining a 403 line with a `Permission to <slug> denied` line whose slug contains `rate-limit` or `abuse`.\n  WHY: Without that case, the regression path stays invisible to CI. This was given as a hardening suggestion, with no severity stated.\n- scripts/ai_memory_lib.py:3290-3291 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The docstring says a 403 \"names a rate limit or abuse\" without saying that URLs are stripped first.\n  WHY: A reader might assume `abuse` in any URL exempts the failure. This was given as a hardening suggestion, with no severity or confidence stated.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ai_memory_lib.py:`_is_permanent_memory_push_failure` | severity=NIT | confidence=3\n  PROBLEM: The rate-limit/abuse exclusion runs on the whole stderr after only URLs are removed. A repo slug in the `remote: Permission to <owner>/rate-limiter.git denied` line matches, so a 403 permission denial is classified as temporary.\n  WHY: A repo named `rate-limiter` or `abuse-tools` gets all 16 retries with backoff, fetch and rebase. The suggested fix is to remove the `permission to \\S+ denied` span before the rate-limit search and add a test pairing that line with a 403 line.\n- HARDENING_SUGGESTIONS: scripts/ai_memory_lib.py, rate-limit exclusion; remove the permission span and add a classifier test (3-4 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_memory_lib.py:3286-3305 (also 3275-3278) | severity=NIT | confidence=3\n  PROBLEM: When stderr has both a 403 and a `Permission to <repo> denied` line whose slug contains `rate-limit`, the failure is still misclassified as temporary. For example, `The requested URL returned error: 403\\nremote: Permission to o/rate-limiter.git denied to some-bot.` returns False.\n  WHY: Pushes to repos named with `rate-limit` or `abuse` burn the full 16-attempt retry budget on a deterministic denial. The widened `abuse` regex also treats a non-URL string containing `abuse`, next to a 403 and an auth-failure pattern, as temporary.\n- tests/test_ai_memory_push_retry_backoff.py:~519 (hardening)\n  PROBLEM: The combined 403, permission-line and `rate-limit`-slug scenario is not covered by the permanent or retryable lists.\n  WHY: The suggested fix is two permanent cases, one with a `rate-limit` slug and one with `abuse` next to a credential failure (about 6 lines).\n- scripts/ai_memory_lib.py:3290-3291 (hardening)\n  PROBLEM: The docstring omits that URLs are stripped before the rate-limit or abuse match.\n  WHY: The suggested fix is to change the wording to \"non-URL text\" (1 line). HARDENING_RISK_SCORE: 1 (the section also gave a score of 2).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/ai_memory_lib.py:3301-3303 | severity=NIT | confidence=4\n  PROBLEM: The 403 retry exemption scans stderr after removing URLs but not the repo name in `Permission to <repo> denied`. A repo named `rate-limiter` matches `_MEMORY_PUSH_RATE_LIMIT_RE` even when the 403 is a permanent permission denial.\n  WHY: Git can print both lines, so the classifier returns False and the push enters the normal retry loop.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/ai_memory_lib.py:3286-3305 | severity=NIT | confidence=4\n  PROBLEM: The rate-limit exclusion matches \"rate-limit\" or \"abuse\" anywhere in the text after URL removal, including in repo slugs. A permission denial for `rate-limiter.git` plus a 403 line is classified as temporary.\n  WHY: `persist_memory_operation` retries all 16 attempts on a deterministic denial, which is the old behaviour issue #7714 removes. The existing test omits the 403 line, so the combination is untested.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6b06c5b2ab5f2c8c345ceef2ce208d9eba25bbf3bbf06bc9b7a6932f40c621a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7720,
+    "run_id": "39366712141",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39366712141",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020041309_43e9f78243",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7720,
+    "run_id": "39366712141"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T04:13:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
