@@ -8,4 +8,4 @@
 | New row fields | 2 (`root_failure_class`, `symptom_step`) |
 | New GitHub API calls | 0 (parsed from archives already downloaded) |
 
-What this means for workflow-log analysis: group failures by `root_failure_class` where it is set and fall back to `symptom_step`. Rows cached before this change read `null` until their log archive is downloaded again.
+What this means for workflow-log analysis: the collector rows now carry the root cause, so a reader can group failures by `root_failure_class` where it is set and fall back to `symptom_step`. The analysis pass (`scripts/analyze_workflow_logs.py`) does not read the two fields yet; that is a separate change. Rows cached before this change keep `null` while the cache reuses them, because a cache hit does not download the log archive again.

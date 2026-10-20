@@ -3022,6 +3022,7 @@ def test_main_root_failure_class_null_without_summary():
 def test_main_root_failure_class_null_for_malformed_summary():
 	for log_text in (
 		_summary_line('{not json'),
+		_summary_line('{not json}'),
 		_summary_line('{"finalize_reason":"Bad Value!"}'),
 		_summary_line('{"finalize_reason":"x\\n::error::boom"}'),
 		_summary_line('{"finalize_reason":42}'),
