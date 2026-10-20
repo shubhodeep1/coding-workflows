@@ -4450,8 +4450,10 @@ jobs:
             if [ "${PHASE7_POLL_REMAINING}" -le 0 ]; then
               break
             fi
-            if [ "${PHASE7_POLL_SLEEP}" -gt "${PHASE7_POLL_REMAINING}" ]; then
-              PHASE7_POLL_SLEEP="${PHASE7_POLL_REMAINING}"
+            if [ "${PHASE7_POLL_SLEEP}" -ge "${PHASE7_POLL_REMAINING}" ]; then
+              # Wake one second before DEADLINE so the loop makes one last
+              # listing instead of exiting straight after the sleep.
+              PHASE7_POLL_SLEEP=$(( PHASE7_POLL_REMAINING - 1 ))
             fi
             sleep "${PHASE7_POLL_SLEEP}"
           done

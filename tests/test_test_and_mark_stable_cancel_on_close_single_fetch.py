@@ -128,7 +128,10 @@ def test_open_pr_wait_loop_backoff_caps_at_30s_and_clamps_to_deadline() -> None:
 	assert re.search(r"\bsleep [0-9]", loop) is None
 	remaining = 'PHASE7_POLL_REMAINING=$(( DEADLINE - $(date +%s) ))'
 	brk = 'if [ "${PHASE7_POLL_REMAINING}" -le 0 ]; then'
-	clamp = 'if [ "${PHASE7_POLL_SLEEP}" -gt "${PHASE7_POLL_REMAINING}" ]; then'
+	clamp = 'if [ "${PHASE7_POLL_SLEEP}" -ge "${PHASE7_POLL_REMAINING}" ]; then'
+	# The clamped sleep ends one second before DEADLINE so one last
+	# listing still runs inside the budget.
+	assert 'PHASE7_POLL_SLEEP=$(( PHASE7_POLL_REMAINING - 1 ))' in loop
 	sleep_stmt = 'sleep "${PHASE7_POLL_SLEEP}"'
 	assert loop.index(remaining) < loop.index(brk) < loop.index(clamp) < loop.index(sleep_stmt)
 	assert loop.count(sleep_stmt) == 1
