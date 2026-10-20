@@ -618,6 +618,24 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Standalone stall recovery runs the check-triage resolution gate
+          # (issue #7095) when an ai:check-triage fix PR merged into the
+          # triaged PR's branch instead of the default branch. Optional: when
+          # absent, the issue stays open and unlabelled (STALL_CHECK_TRIAGE_GATE
+          # outcome=skip reason=support_missing).
+          for f in check_triage_resolution.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; the stall-recovery check-triage close gate stays off."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
           # Issue #7177: the noop-suspicious recovery sweep's force-merge gate B
           # sources this audit helper. Optional: when absent, gate B fails closed.
           for f in validate_editor_audit.sh; do

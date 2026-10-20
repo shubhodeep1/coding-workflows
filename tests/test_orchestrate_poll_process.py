@@ -14057,6 +14057,73 @@ def test_standalone_stall_recovery_reconciles_merged_pr_with_stale_merge_train_l
 	assert "reason=merge_train_queued pr=419" not in result["stdout"]
 
 
+def _run_standalone_merged_base_tick(*, base: str, labels: list[str], env_overrides: dict[str, str] | None = None) -> dict:
+	"""Standalone ai:done issue #501 whose linked PR #419 merged into ``base``."""
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:done",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: labels},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 419},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides=env_overrides,
+		prs=[{
+			"number": 419,
+			"body": "Closes #501",
+			"state": "closed",
+			"merged": True,
+			"merged_at": "2026-10-19T10:39:17Z",
+			"baseRefName": base,
+			"headRefName": "ai/issue-501",
+		}],
+	)
+
+
+def test_standalone_stall_recovery_does_not_tag_merged_for_non_target_base():
+	"""multi-user-ai-agent #300: a PR merged into another PR's branch must not
+	earn ai:merged, because close_merged_issues_sweep refuses that merge and
+	would alert on the stale label every tick (issue #6631 target rule)."""
+	result = _run_standalone_merged_base_tick(base="ai/issue-298", labels=["ai:done"])
+	assert "ai:merged" not in result["issues"]["501"]["labels"]
+	assert (
+		"STALL_SKIP issue=501 reason=merged_non_target_base pr=419 base=ai/issue-298 declared=none"
+		in result["stdout"]
+	)
+	assert "STALL_CHECK_TRIAGE_GATE issue=501" not in result["stdout"]
+
+
+def test_standalone_stall_recovery_tags_merged_for_default_branch_base():
+	result = _run_standalone_merged_base_tick(base="main", labels=["ai:done"])
+	assert "ai:merged" in result["issues"]["501"]["labels"]
+	assert "merged into a target branch (reason=default_branch)" in result["stdout"]
+	assert "reason=merged_non_target_base" not in result["stdout"]
+
+
+def test_standalone_stall_recovery_runs_check_triage_gate_for_non_target_base():
+	result = _run_standalone_merged_base_tick(
+		base="ai/issue-298",
+		labels=["ai:done", "ai:check-triage"],
+		env_overrides={"CHECK_TRIAGE_RESOLVED_GATE_ENABLED": "false"},
+	)
+	assert "ai:merged" not in result["issues"]["501"]["labels"]
+	assert "reason=merged_non_target_base pr=419" in result["stdout"]
+	assert "STALL_CHECK_TRIAGE_GATE issue=501 fix_pr=419 outcome=skip reason=disabled" in result["stdout"]
+	gate_result = _run_standalone_merged_base_tick(base="ai/issue-298", labels=["ai:done", "ai:check-triage"])
+	assert "ai:merged" not in gate_result["issues"]["501"]["labels"]
+	assert "STALL_CHECK_TRIAGE_GATE issue=501 fix_pr=419 outcome=" in gate_result["stdout"]
+
+
 def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
