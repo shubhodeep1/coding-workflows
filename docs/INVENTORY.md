@@ -234,6 +234,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/propagate_consumer_secrets.sh` — Copy the library's consumer-facing Actions secrets into registered consumer repositories.
 - `scripts/release_ci_gate.sh` — Stable-release CI gate: require a successful github-actions `lint` check-run from `ci.yml` on the exact released SHA before tagging (log prefix `RELEASE_CI_GATE`, issue #6797).
+- `scripts/release_tag_preflight.sh` — Early release-credential check in the `resolve-version` job of both release workflows: fail when a classic GH_PAT lacks the `workflow` scope and the release range changes `.github/workflows/`; every uncertain case proceeds (log prefix `RELEASE_TAG_PREFLIGHT`).
 - `scripts/release_manifest.py` — Build the deterministic release manifest of files the consumer updater copies from a release.
 - `scripts/release_manifest_publish.sh` — Build the release manifest from the tagged tree and upload it as a GitHub Release asset in the stable release jobs.
 - `scripts/verify_release_manifest.py` — Verify a release tree (`verify`) or an updater PR tree (`verify-pr-tree`) against the attested release manifest; fail-closed, used by `update_workflows.yml` (log prefix `UPDATER_MANIFEST_VERIFY`).

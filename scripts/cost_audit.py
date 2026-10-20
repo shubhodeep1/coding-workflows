@@ -56,11 +56,42 @@ DEFAULT_WORKFLOWS = [
     "orchestrate_clarify_respond.yml",
 ]
 
-# Multi-line "tokens used\n<digits>" emitted by Codex; we capture the number
-# on the line following "tokens used" (case-insensitive). The single-line
-# variant "tokens used 123,456" is also handled.
+# Codex CLI usage, line-anchored. Two forms count (case-insensitive):
+#   1. a line that is exactly "tokens used", followed by a line that is only
+#      the number ("tokens used\n12,345");
+#   2. a single line "tokens used 12,345" with nothing else on it.
+# Each line may start with an optional UTF-8 BOM, the `<job>\t<step>\t` fields
+# `gh run view --log` adds, ANSI SGR escapes and a GitHub Actions timestamp.
+# The old unanchored pattern also matched "tokens used" inside prompt and
+# diff text echoed into logs, which inflated the collector total to 7.945M
+# Codex tokens (analysis/workflow-optimization-2026-09-22.md).
+_CODEX_USAGE_ANSI_RE_SRC = r"(?:\x1b\[[0-9;]*m)*"
+_CODEX_USAGE_LINE_PREFIX_RE_SRC = (
+    r"^\ufeff?(?:[^\t\n]*\t[^\t\n]*\t)?"
+    + _CODEX_USAGE_ANSI_RE_SRC
+    + r"(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z[ \t]+)?"
+    + _CODEX_USAGE_ANSI_RE_SRC
+)
+_CODEX_USAGE_LINE_END_RE_SRC = r"[ \t]*" + _CODEX_USAGE_ANSI_RE_SRC + r"[ \t]*\r?$"
 CODEX_TOKENS_RE = re.compile(
-    r"tokens\s+used[^0-9\n]*\n?\s*([0-9][0-9,]*)", re.IGNORECASE
+    _CODEX_USAGE_LINE_PREFIX_RE_SRC
+    + r"tokens[ \t]+used"
+    + r"(?:[ \t]*" + _CODEX_USAGE_ANSI_RE_SRC + r"[ \t]*\r?\n"
+    + _CODEX_USAGE_LINE_PREFIX_RE_SRC
+    + r"|[ \t]+)"
+    + r"([0-9][0-9,]*)"
+    + _CODEX_USAGE_LINE_END_RE_SRC,
+    re.IGNORECASE | re.MULTILINE,
+)
+# The "tokens used" header line alone (or the single-line form). The workflow
+# log collector uses it as a structured-line key, so a parent step's copy of
+# a child step's usage header is dropped and its orphaned number line no
+# longer matches CODEX_TOKENS_RE.
+CODEX_TOKENS_HEADER_RE = re.compile(
+    _CODEX_USAGE_LINE_PREFIX_RE_SRC
+    + r"tokens[ \t]+used(?:[ \t]+[0-9][0-9,]*)?"
+    + _CODEX_USAGE_LINE_END_RE_SRC,
+    re.IGNORECASE | re.MULTILINE,
 )
 
 # OpenRouter structured usage line — strict field order matches the producers

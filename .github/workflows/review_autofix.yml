@@ -883,6 +883,7 @@ jobs:
           fi
 
           validation_dispatched="false"
+          validation_required_seen="" validation_label_unknown=""
           validate_workflow="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
           while IFS=$'\t' read -r issue_number has_validate_label labels_known; do
             [ -n "${issue_number}" ] || continue
@@ -896,6 +897,7 @@ jobs:
                 fi
               else
                 echo "::warning::Unable to read labels for issue #${issue_number} after retries; skipping standalone validation because ai:orchestrator-validate-required state is unknown."
+                validation_label_unknown=1
                 continue
               fi
             fi
@@ -904,6 +906,7 @@ jobs:
               echo "Issue #${issue_number} does not have ai:orchestrator-validate-required; skipping."
               continue
             fi
+            validation_required_seen=1
 
             if [ "${validation_dispatched}" = "false" ]; then
               echo "Dispatching standalone validation for linked issue #${issue_number} (tracking_issue=0)."
@@ -922,7 +925,9 @@ jobs:
             fi
           done < <(printf '%s' "${issue_nodes_json}" | jq -r '.[] | [.number, (if (.labels | type) == "array" then ((.labels | index("ai:orchestrator-validate-required")) != null) else false end), ((.labels | type) == "array")] | @tsv')
 
-          if [ "${validation_dispatched}" = "false" ]; then
+          if [ -z "${validation_required_seen}${validation_label_unknown}" ]; then
+            echo "::notice::No linked issue of merged PR #${PR_NUMBER} required standalone validation; nothing dispatched."
+          elif [ "${validation_dispatched}" = "false" ]; then
             echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
           fi
 

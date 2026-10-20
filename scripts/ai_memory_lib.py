@@ -3257,6 +3257,70 @@ def _push_retry_backoff_seconds(attempt: int) -> float:
     return random.uniform(0.0, ceiling)
 
 
+# A push that fails on missing or rejected credentials fails the same way on
+# every attempt, so retrying it only burns runner time: run 35665803378 spent
+# all 16 attempts on `could not read Username` for nine separate writes.
+# Rate-limit / abuse text is temporary and keeps the retry loop.
+_MEMORY_PUSH_AUTH_FAILURE_RE = re.compile(
+    r"could not read username"
+    r"|could not read password"
+    r"|authentication failed"
+    r"|terminal prompts disabled"
+    r"|invalid username or password"
+    r"|permission to \S+ denied"
+    r"|the requested url returned error: 403"
+    r"|returned error: 401",
+    re.IGNORECASE,
+)
+# Checked only for a 403 and only after URLs are removed, so a bare `abuse`
+# (issue #7714: a 403 naming `rate limit` or `abuse` is not permanent) cannot
+# turn a credential failure named in a URL back into 16 retries.
+_MEMORY_PUSH_RATE_LIMIT_RE = re.compile(r"rate[ _-]?limit|abuse", re.IGNORECASE)
+_MEMORY_PUSH_HTTP_403_RE = re.compile(r"returned error: 403", re.IGNORECASE)
+_MEMORY_PUSH_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
+# Whole URLs (scheme, host and path) are dropped too: the origin URL must
+# never appear in the raised message (issue #7714).
+_MEMORY_PUSH_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+")
+# The repository named in `Permission to <repo> denied` is also removed before
+# the rate-limit search, so a repo such as `o/rate-limiter` cannot turn a
+# permanent 403 permission denial back into 16 retries.
+_MEMORY_PUSH_PERMISSION_SPAN_RE = re.compile(r"permission to \S+ denied", re.IGNORECASE)
+
+
+def _is_permanent_memory_push_failure(stderr: str) -> bool:
+    """Return True when a failed memory push is a credential/permission error.
+
+    Such failures are deterministic and must not consume the retry budget.
+    A 403 whose text names a rate limit or abuse is treated as temporary
+    (a secondary-rate-limit 403), so it is never classified as permanent.
+    """
+    text = stderr or ""
+    if not text.strip():
+        return False
+    if not _MEMORY_PUSH_AUTH_FAILURE_RE.search(text):
+        return False
+    # The rate-limit exclusion applies only to a 403, and URLs are removed
+    # before matching, so a repository URL or name containing `rate-limit`
+    # cannot turn a `could not read Username` failure back into 16 retries.
+    if _MEMORY_PUSH_HTTP_403_RE.search(text) and _MEMORY_PUSH_RATE_LIMIT_RE.search(
+        _MEMORY_PUSH_PERMISSION_SPAN_RE.sub(" ", _MEMORY_PUSH_URL_RE.sub(" ", text))
+    ):
+        return False
+    return True
+
+
+def _redact_memory_push_stderr(stderr: str) -> str:
+    """Scrub credential values and URLs (including the origin URL) from git push stderr."""
+    text = stderr or ""
+    for env_name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT"):
+        secret = os.environ.get(env_name, "")
+        if secret:
+            text = text.replace(secret, "***")
+    text = _MEMORY_PUSH_URL_USERINFO_RE.sub(r"\1***@", text)
+    text = _MEMORY_PUSH_URL_RE.sub("<redacted-url>", text)
+    return text.strip()
+
+
 def persist_memory_operation(
     repo_root: Path,
     *,
@@ -3312,6 +3376,17 @@ def persist_memory_operation(
                         "push_attempts": attempt,
                         "operation_result": op_result,
                     }
+
+                # Credential/permission failures (run 35665803378: nine writes
+                # x 16 attempts on `could not read Username`) cannot succeed on
+                # a retry: stop now, with no backoff, fetch or rebase. The
+                # message never carries the origin URL or the token.
+                if _is_permanent_memory_push_failure(push.stderr or ""):
+                    raise MemoryGitError(
+                        f"Failed to push memory branch: error_class=auth attempts={attempt} "
+                        f"(permanent credential/permission failure, not retried): "
+                        f"{_redact_memory_push_stderr(push.stderr or '')}"
+                    )
 
                 if attempt >= push_retries:
                     raise MemoryGitError(

@@ -302,12 +302,15 @@ def _run_publication_helper_scenario(
 	working_directory: Path,
 	publication_scenario: str,
 	publication_mode: str,
+	workflow_path: Path = WORKFLOWS[0],
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-	publication_call_log = working_directory / f"{publication_scenario}-{publication_mode}.log"
+	publication_call_log = (
+		working_directory / f"{workflow_path.stem}-{publication_scenario}-{publication_mode}.log"
+	)
 	workflow_publication_script = "\n".join(
 		(
 			"set -euo pipefail",
-			_workflow_publication_helper(_read(WORKFLOWS[0])),
+			_workflow_publication_helper(_read(workflow_path)),
 			r'''
 git() {
 	local publication_mock_command="$1"
@@ -318,7 +321,26 @@ git() {
 			;;
 		push)
 			printf 'push:%s\n' "$*" >> "${PUBLICATION_HELPER_CALL_LOG}"
-			[ "${PUBLICATION_HELPER_SCENARIO}" = "push-success" ]
+			case "${PUBLICATION_HELPER_SCENARIO}" in
+				push-success)
+					return 0
+					;;
+				push-workflow-scope)
+					printf '%s\n' ' ! [remote rejected] test -> test (refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)' >&2
+					return 1
+					;;
+				push-workflows-permission)
+					printf '%s\n' ' ! [remote rejected] test -> test (REFUSING TO ALLOW a GitHub App to create or update workflow `.github/workflows/x.yml` without `Workflows` permission)' >&2
+					return 1
+					;;
+				push-generic-error)
+					printf '%s\n' 'remote: Internal Server Error' >&2
+					return 1
+					;;
+				*)
+					return 1
+					;;
+			esac
 			;;
 		ls-remote)
 			printf 'lookup:%s\n' "$*" >> "${PUBLICATION_HELPER_CALL_LOG}"
@@ -333,7 +355,7 @@ git() {
 					printf 'mock ls-remote transport failure\n' >&2
 					return 128
 					;;
-				remote-absent)
+				remote-absent|push-generic-error)
 					return 2
 					;;
 			esac
@@ -422,6 +444,53 @@ def test_workflow_tag_publication_helper_executes_failure_matrix() -> None:
 		assert absent_remote_calls.count("push:origin refs/tags/test") == 5
 		assert absent_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 5
 		assert "Failed to publish and verify" in absent_remote.stdout
+
+
+def test_workflow_tag_publication_helper_stops_on_workflow_scope_refusal() -> None:
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+		for workflow_path in WORKFLOWS:
+			for scenario, mode, expected_push in (
+				("push-workflow-scope", "immutable", "push:origin refs/tags/test"),
+				("push-workflow-scope", "moving", "push:-f origin refs/tags/test"),
+				("push-workflows-permission", "immutable", "push:origin refs/tags/test"),
+			):
+				refused, refused_calls = _run_publication_helper_scenario(
+					working_directory, scenario, mode, workflow_path
+				)
+				assert refused.returncode != 0, f"{workflow_path.name} {scenario}/{mode}"
+				assert refused_calls == [expected_push], (
+					f"{workflow_path.name} {scenario}/{mode}: a workflow-scope refusal must stop "
+					f"after one push with no lookup or retry sleep, got {refused_calls}"
+				)
+				assert (
+					"::error::RELEASE_TAG_PUBLISH outcome=failed error_class=workflow_scope "
+					"tag_ref=refs/tags/test"
+				) in refused.stdout, f"{workflow_path.name} {scenario}/{mode}"
+				assert "GH_PAT" in refused.stdout
+				assert "refusing to allow" in refused.stderr.lower(), (
+					f"{workflow_path.name}: git's push stderr must still be printed"
+				)
+			scoped, _ = _run_publication_helper_scenario(
+				working_directory, "push-workflow-scope", "immutable", workflow_path
+			)
+			assert "without `workflow` scope" in scoped.stderr
+
+			generic, generic_calls = _run_publication_helper_scenario(
+				working_directory, "push-generic-error", "immutable", workflow_path
+			)
+			assert generic.returncode != 0
+			assert generic_calls.count("push:origin refs/tags/test") == 5
+			assert generic_calls.count("lookup:--exit-code origin refs/tags/test") == 5
+			assert [call for call in generic_calls if call.startswith("sleep:")] == [
+				"sleep:2",
+				"sleep:4",
+				"sleep:8",
+				"sleep:16",
+			], f"{workflow_path.name}: generic push failures must keep the retry backoff"
+			assert "Failed to publish and verify" in generic.stdout
+			assert "RELEASE_TAG_PUBLISH" not in generic.stdout + generic.stderr
+			assert "Internal Server Error" in generic.stderr
 
 
 def test_workflow_version_tag_preflight_executes_recovery_matrix() -> None:
@@ -623,6 +692,26 @@ def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -
 		)
 		assert "Failed to publish and verify" in helper_text, (
 			f"{workflow_path.name}: absent, malformed, or non-converged refs must fail after retries"
+		)
+		assert 'mktemp "${RUNNER_TEMP:-/tmp}/release_tag_push_err.XXXXXX"' in helper_text, (
+			f"{workflow_path.name}: push diagnostics must use an isolated temporary file"
+		)
+		assert '2>"${push_error_file}"' in helper_text, (
+			f"{workflow_path.name}: push stderr must be captured for classification"
+		)
+		assert "grep -qi 'refusing to allow'" in helper_text, (
+			f"{workflow_path.name}: the workflow-scope refusal must be matched case-insensitively"
+		)
+		classification_index = helper_text.index("error_class=workflow_scope")
+		sleep_index = helper_text.index('sleep "${backoff_seconds}"')
+		assert classification_index < sleep_index, (
+			f"{workflow_path.name}: the workflow-scope refusal must be classified before the retry sleep"
+		)
+		assert "return 1" in helper_text[classification_index:sleep_index], (
+			f"{workflow_path.name}: the workflow-scope refusal must return before retrying"
+		)
+		assert classification_index < helper_text.index('git ls-remote --exit-code origin "${tag_ref}"'), (
+			f"{workflow_path.name}: the workflow-scope refusal must stop before remote verification"
 		)
 
 
@@ -1289,6 +1378,167 @@ def test_full_clone_release_jobs_have_room_for_the_checkout() -> None:
 			)
 			if full_clone:
 				assert job.get("timeout-minutes", 360) >= 10, f"{name} jobs.{job_name}: a full clone needs timeout-minutes >= 10"
+
+
+PREFLIGHT_SCRIPT = REPO_ROOT / "scripts" / "release_tag_preflight.sh"
+PREFLIGHT_STEP_NAME = "Preflight release tag credential"
+PREFLIGHT_SENTINEL_TOKEN = "ghp_preflightSentinelTokenValue0123456789"
+
+
+def _run_release_tag_preflight_scenario(
+	*,
+	scopes: str | None,
+	workflow_change: bool,
+	gh_fails: bool = False,
+	token: str = PREFLIGHT_SENTINEL_TOKEN,
+	base_override: str | None = None,
+	extra_env: dict[str, str] | None = None,
+	rename_out: bool = False,
+) -> subprocess.CompletedProcess[str]:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		repo = root / "repo"
+		repo.mkdir()
+
+		def git(*args: str) -> str:
+			return subprocess.run(
+				["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
+			).stdout.strip()
+
+		git("init", "-q")
+		git("config", "user.name", "t")
+		git("config", "user.email", "t@example.invalid")
+		(repo / "README.md").write_text("base\n", encoding="utf-8")
+		if rename_out:
+			(repo / ".github" / "workflows").mkdir(parents=True)
+			(repo / ".github" / "workflows" / "moved.yml").write_text("name: moved\non: push\n", encoding="utf-8")
+		git("add", "-A")
+		git("commit", "-q", "-m", "base")
+		git("tag", "stable")
+		base = git("rev-parse", "HEAD")
+		if rename_out:
+			(repo / "scripts").mkdir()
+			git("mv", ".github/workflows/moved.yml", "scripts/moved.yml")
+		elif workflow_change:
+			(repo / ".github" / "workflows").mkdir(parents=True)
+			(repo / ".github" / "workflows" / "x.yml").write_text("name: x\n", encoding="utf-8")
+		else:
+			(repo / "scripts").mkdir()
+			(repo / "scripts" / "x.sh").write_text("echo x\n", encoding="utf-8")
+		git("add", "-A")
+		git("commit", "-q", "-m", "head")
+		head = git("rev-parse", "HEAD")
+
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		if gh_fails:
+			gh_body = "echo 'HTTP 502: Bad Gateway' >&2\nexit 1\n"
+		else:
+			header = "" if scopes is None else f"X-Oauth-Scopes: {scopes}\\r\\n"
+			gh_body = (
+				"printf 'HTTP/2.0 200 OK\\r\\nContent-Type: application/json\\r\\n"
+				+ header
+				+ "\\r\\n{\"login\":\"x-oauth-scopes: repo, workflow\"}\\n'\n"
+			)
+		gh = bin_dir / "gh"
+		gh.write_text("#!/usr/bin/env bash\n" + gh_body, encoding="utf-8")
+		gh.chmod(0o755)
+
+		env = _clean_bash_environment(
+			PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+			GH_TOKEN=token,
+			RUNNER_TEMP=str(root),
+			RELEASE_TAG_PREFLIGHT_BASE_SHA=base if base_override is None else base_override,
+			RELEASE_TAG_PREFLIGHT_HEAD_SHA=head,
+			RELEASE_TAG_PREFLIGHT_GIT_DIR=str(repo),
+		)
+		for key in ("RELEASE_TAG_PREFLIGHT_ENABLED", "STABLE_RELEASE_ENABLED", "RELEASE_TAGGING_ENABLED"):
+			env.pop(key, None)
+		env.update(extra_env or {})
+		return subprocess.run(
+			["bash", str(PREFLIGHT_SCRIPT)], env=env, capture_output=True, text=True, check=False,
+		)
+
+
+def test_release_tag_preflight_script_is_executable_with_tabs() -> None:
+	assert PREFLIGHT_SCRIPT.is_file()
+	assert os.access(PREFLIGHT_SCRIPT, os.X_OK), "release_tag_preflight.sh must be mode 0755"
+	text = _read(PREFLIGHT_SCRIPT)
+	assert text.startswith("#!/usr/bin/env bash\n")
+	assert "§14" in text, "the GET /user call must carry its §14 API-audit comment"
+	assert not re.search(r"^ {2,}\S", text, re.MULTILINE), "indent the script with tabs"
+
+
+def test_release_tag_preflight_executes_decision_matrix() -> None:
+	cases = [
+		(dict(scopes="repo, workflow", workflow_change=True), 0, "result=pass error_class=none reason=workflow_scope_present"),
+		(dict(scopes="repo", workflow_change=False), 0, "result=pass error_class=none reason=no_workflow_changes"),
+		(dict(scopes="repo", workflow_change=True), 1, "result=fail error_class=workflow_scope reason=classic_pat_missing_workflow_scope"),
+		(dict(scopes="", workflow_change=True), 1, "result=fail error_class=workflow_scope"),
+		(dict(scopes="repo", workflow_change=False, rename_out=True), 1, "result=fail error_class=workflow_scope reason=classic_pat_missing_workflow_scope"),
+		(dict(scopes=None, workflow_change=True), 0, "result=unknown error_class=none reason=no_scope_header"),
+		(dict(scopes="repo", workflow_change=True, gh_fails=True), 0, "result=unknown error_class=none reason=api_failed"),
+		(dict(scopes="repo", workflow_change=True, token=""), 0, "result=unknown error_class=none reason=gh_pat_missing"),
+		(dict(scopes="repo", workflow_change=True, base_override="not-a-sha"), 0, "result=unknown error_class=none reason=invalid_range"),
+		(dict(scopes="repo", workflow_change=True, base_override="0" * 40), 0, "result=unknown error_class=none reason=git_failed"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"RELEASE_TAG_PREFLIGHT_ENABLED": "FALSE"}), 0, "result=skipped error_class=none reason=disabled"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"RELEASE_TAG_PREFLIGHT_ENABLED": "bogus-value"}), 0, "result=skipped error_class=none reason=invalid_switch"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"RELEASE_TAG_PREFLIGHT_ENABLED": "True"}), 1, "result=fail error_class=workflow_scope"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"RELEASE_TAGGING_ENABLED": "false"}), 0, "result=skipped error_class=none reason=publishing_disabled"),
+		(dict(scopes="repo", workflow_change=True, extra_env={"STABLE_RELEASE_ENABLED": "false"}), 0, "result=skipped error_class=none reason=publishing_disabled"),
+	]
+	for kwargs, expected_rc, expected_line in cases:
+		result = _run_release_tag_preflight_scenario(**kwargs)
+		combined = result.stdout + result.stderr
+		assert result.returncode == expected_rc, (kwargs, result.returncode, combined)
+		assert f"RELEASE_TAG_PREFLIGHT {expected_line}" in result.stdout, (kwargs, combined)
+		assert PREFLIGHT_SENTINEL_TOKEN not in combined, f"token leaked: {kwargs}"
+		assert "Content-Type" not in combined and "HTTP/2.0" not in combined, f"headers leaked: {kwargs}"
+		if expected_rc == 1:
+			assert "::error::" in result.stdout and "workflow" in result.stdout, combined
+		if "bogus-value" in str(kwargs):
+			assert "::warning::" in combined and "bogus-value" not in combined, combined
+
+
+def _preflight_step_text(workflow_text: str) -> str:
+	job = _top_level_job_block(workflow_text, "resolve-version")
+	match = re.search(
+		rf"^      - name: {re.escape(PREFLIGHT_STEP_NAME)}\n(.*?)(?=^      - |^      #|^[ \t]*$|\Z)",
+		job,
+		re.MULTILINE | re.DOTALL,
+	)
+	assert match is not None, "resolve-version must carry the release tag preflight step"
+	return match.group(0)
+
+
+def test_release_tag_preflight_wired_into_resolve_version_before_release() -> None:
+	run_bodies = []
+	for wf in WORKFLOWS:
+		text = _read(wf)
+		job = _top_level_job_block(text, "resolve-version")
+		assert job.index("      - name: Resolve version tag\n") < job.index(f"      - name: {PREFLIGHT_STEP_NAME}\n"), wf.name
+		step = _preflight_step_text(text)
+		assert "        id: release_tag_preflight\n" in step
+		assert "GH_TOKEN: ${{ secrets.GH_PAT }}\n" in step, f"{wf.name}: pass GH_PAT only, no github.token fallback"
+		assert "RELEASE_TAG_PREFLIGHT_ENABLED: ${{ vars.RELEASE_TAG_PREFLIGHT_ENABLED || 'true' }}" in step
+		assert "continue-on-error" not in step, f"{wf.name}: a preflight failure must fail the job"
+		if_line = re.search(r"^        if: (.*)$", step, re.MULTILINE)
+		assert if_line is not None and "!inputs.dry_run" in if_line.group(1), wf.name
+		if wf.name == "test-and-mark-stable.yml":
+			assert "!inputs.gate_only" in if_line.group(1)
+		run_body = step[step.index("        run: |\n"):]
+		assert "${{" not in run_body, f"{wf.name}: pass expression values through env:"
+		assert "bash scripts/release_tag_preflight.sh" in run_body
+		run_bodies.append(run_body)
+		release_job = _top_level_job_block(text, "release")
+		needs = re.search(r"^    needs: \[(.*)\]$", release_job, re.MULTILINE)
+		assert needs is not None and "resolve-version" in [n.strip() for n in needs.group(1).split(",")], wf.name
+	assert run_bodies[0] == run_bodies[1], "both workflows must run the identical preflight body"
+
+
+def test_workflows_stay_under_size_guard_after_preflight() -> None:
+	for wf in WORKFLOWS:
+		assert wf.stat().st_size < 480_000, f"{wf.name} is at or above the 480,000-byte guard"
 
 
 def main() -> None:

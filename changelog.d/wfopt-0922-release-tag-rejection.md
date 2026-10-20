@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **A release tag push that GitHub refuses for a missing `workflow` scope now fails on the first attempt with `RELEASE_TAG_PUBLISH outcome=failed error_class=workflow_scope`.** Before, the `Tag version and update stable pointer` step in `mark-stable.yml` and `test-and-mark-stable.yml` retried the same refusal five times with backoff (release run 35639756385).
+
+The tag helper now keeps `git push`'s error output, still prints it, and checks it for GitHub's workflow-permission refusal ("refusing to allow ... workflow", or "workflows permission"). That refusal cannot clear on a retry, so the step stops at once and names the fix: give `GH_PAT` the `workflow` scope (classic token) or `workflows: write` (fine-grained token or GitHub App), then re-run the release. Every other push failure still retries and checks the remote tag as before.

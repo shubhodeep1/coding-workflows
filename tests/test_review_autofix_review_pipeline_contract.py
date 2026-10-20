@@ -8429,6 +8429,27 @@ def test_post_merge_validate_dispatch_retries_label_removal_but_not_dispatch() -
 	assert "but failed to remove ai:orchestrator-validate-required." in job
 
 
+def test_post_merge_validate_dispatch_notice_when_no_issue_requires_validation() -> None:
+	job = _job_block("post-merge-validate-dispatch")
+	init = 'validation_required_seen="" validation_label_unknown=""'
+	assert init in job
+	assert job.index(init) < job.index("while IFS=$'\\t' read -r issue_number has_validate_label labels_known")
+	unknown_warn = job.index("Unable to read labels for issue #${issue_number}")
+	unknown_set = job.index("validation_label_unknown=1")
+	assert unknown_warn < unknown_set < job.index("continue", unknown_warn)
+	assert job[unknown_set:job.index("continue", unknown_warn)].strip() == "validation_label_unknown=1"
+	seen_set = job.index("validation_required_seen=1")
+	assert job.index("does not have ai:orchestrator-validate-required; skipping.") < seen_set
+	assert seen_set < job.index("Dispatching standalone validation for linked issue")
+	lines = [line.strip() for line in job.splitlines() if line.strip()]
+	notice = 'echo "::notice::No linked issue of merged PR #${PR_NUMBER} required standalone validation; nothing dispatched."'
+	assert notice in lines
+	assert lines[lines.index(notice) - 1] == 'if [ -z "${validation_required_seen}${validation_label_unknown}" ]; then'
+	warning = 'echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."'
+	assert lines.count(warning) == 1
+	assert lines[lines.index(warning) - 1] == 'elif [ "${validation_dispatched}" = "false" ]; then'
+
+
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
@@ -8573,6 +8594,7 @@ def main() -> int:
 	test_review_sandbox_cleanup_reports_path_free_reason()
 	test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge()
 	test_post_merge_validate_dispatch_retries_label_removal_but_not_dispatch()
+	test_post_merge_validate_dispatch_notice_when_no_issue_requires_validation()
 	test_normalize_openrouter_usage_reports_missing_reason()
 	test_normalize_openrouter_usage_available_line_has_no_reason()
 	test_cost_audit_openrouter_re_matches_line_with_missing_reason()
