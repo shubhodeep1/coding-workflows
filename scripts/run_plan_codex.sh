@@ -70,6 +70,10 @@ Create a structured implementation plan that includes:
 1. `## Files likely to change` — a markdown section with exactly this heading. List one
    repo-relative path per bullet, each in backticks. Put the next item under its own `##`
    heading (for example `## Functions or modules to implement`) so the file list ends there.
+   A bullet may add a short note such as `(new)`, but the note must not name another path
+   or a directory such as `scripts/`: the plan approval gate reads every `.github/`,
+   `.claude/`, `scripts/`, `prompts/` and `workflow-templates/` token in this section, and a
+   bare directory holds the plan for a human. Explain why a file changes in a later section.
 2. Functions or modules to implement
 3. Data structures affected
 4. API or interface changes
