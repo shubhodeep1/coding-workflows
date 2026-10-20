@@ -158,7 +158,8 @@ release_tag_preflight_main() {
 	local git_dir="${RELEASE_TAG_PREFLIGHT_GIT_DIR:-.}"
 	local changed_file="${work_dir}/changed"
 	# --no-renames: a rename out of .github/workflows/ must list its source path.
-	if ! git -C "${git_dir}" diff --no-renames --name-only "${base_sha}..${head_sha}" >"${changed_file}" 2>/dev/null; then
+	# core.quotepath=off: a non-ASCII path must print unquoted for the grep below.
+	if ! git -C "${git_dir}" -c core.quotepath=off diff --no-renames --name-only "${base_sha}..${head_sha}" >"${changed_file}" 2>/dev/null; then
 		release_tag_preflight_emit unknown none git_failed
 		return 0
 	fi
