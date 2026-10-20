@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Workflow changes in the sampled runs were paired with tests covering their specific contracts, including release-manifest behavior, script references, and actionlint retry handling. When modifying a workflow, look for an existing focused contract test and update or add one for the behavior changed.",
+  "fingerprint": "0a6564b1ac1ba124a92d59fd20d89ad947b5e449d86da4ea9bb1ac7654d21120",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39352269104",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39352269104",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7689",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7690",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7695",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7697",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7699",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7692",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7693",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7696",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7698",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7700"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261020012209_9158fc7104",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow behavior in this repository is commonly validated with focused contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-20T01:22:09Z",
+    "promoted_at": "2026-10-20T01:24:04Z",
+    "superseded_at": null
+  }
+}
