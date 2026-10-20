@@ -1396,8 +1396,6 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
-          # Issue #7251 dependency wait (unblock fix-up #7257); false turns it off.
-          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           bash scripts/orchestrate_poll_process.sh
@@ -1533,8 +1531,6 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
-          # Issue #7251 dependency wait (unblock fix-up #7257); false turns it off.
-          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
           STANDALONE_RECOVERY_SWEEP_ONLY: "true"
         run: |
           set -euo pipefail
@@ -1582,8 +1578,6 @@ jobs:
           UNBLOCK_SCAN_SWEEP_ONLY: "true"
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           PYTHONDONTWRITEBYTECODE: "1"
-          # Issue #7251 dependency wait (unblock fix-up #7257); false turns it off.
-          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
         run: bash scripts/orchestrate_poll_process.sh
 
       # Standalone PR conflict and noop-suspicious recovery sweeps (issue

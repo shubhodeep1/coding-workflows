@@ -19985,8 +19985,6 @@ run_unblock_scan() {
   # not the unblock judge is switched on (stale fix-ups are cleaned up while
   # the judge is off) and never ends the scan: a failure inside is logged.
   close_orphan_fixup_chains_sweep || echo "ORPHAN_FIXUP_CLOSE outcome=skip reason=error rc=$?"
-  # Issue #7251 dependency wait: refresh the hold before #7251 can be judged.
-  if declare -F _issue_7251_dependency_wait_once >/dev/null 2>&1; then _issue_7251_dependency_wait_once; fi
   if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
     echo "UNBLOCK_SCAN outcome=skip reason=disabled"
     return 0
@@ -20021,12 +20019,6 @@ run_unblock_scan() {
       else . end | .[:30]) as $projects
     | $projects + ([.[].number] | unique | map(select(. as $number | $projects | index($number) == null)) | .[:(30 - ($projects | length))])
   ' "${work_dir}/search.json" 2>/dev/null || echo '[]')"
-  # Issue #7251 dependency wait: do not judge #7251 while it is held.
-  if issue_7251_dependency_wait_held \
-    && printf '%s' "${numbers_json}" | jq -e --argjson n "${ISSUE_7251_DEPENDENCY_ISSUE:-7251}" 'index($n) != null' >/dev/null 2>&1; then
-    numbers_json="$(printf '%s' "${numbers_json}" | jq -c --argjson n "${ISSUE_7251_DEPENDENCY_ISSUE:-7251}" 'map(select(. != $n))' 2>/dev/null || echo '[]')"
-    echo "UNBLOCK_SCAN item=${ISSUE_7251_DEPENDENCY_ISSUE:-7251} outcome=skip reason=issue_7251_dependency_wait"
-  fi
   count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
   [[ "${count}" =~ ^[0-9]+$ ]] || count=0
   if [ "${count}" -eq 0 ]; then
@@ -20397,206 +20389,7 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
   done
 }
 
-# ---------------------------------------------------------------
-# Issue #7251 dependency wait (unblock fix-up #7257)
-# ---------------------------------------------------------------
-# #7251 waits for PR #6667 to merge into the default branch. While it has
-# not, this tick holds #7251 out of the standalone stall loop and the
-# unblock scan (hold file below) and posts nothing. After the merge it runs
-# both plans' Phase 0 preflight against the default-branch tip and either
-# restarts #7251 with one /reclarify or reports the failed preflight once.
-# If #6667 closes without merging it re-blocks #7251 once for the unblock
-# judge. Dedup markers count only from OWNER/MEMBER/COLLABORATOR comments.
-# Helpers and the ISSUE_7251_DEPENDENCY_WAIT_ENABLED off switch live in
-# scripts/gh_helpers.sh; other issues and repositories are untouched.
-_issue_7251_dependency_hold_file() {
-  printf '%s' "${RUNTIME_DIR:-/tmp}/issue_7251_dependency_wait_hold"
-}
-
-issue_7251_dependency_wait_held() {
-  [ "$(cat "$(_issue_7251_dependency_hold_file)" 2>/dev/null || true)" = "true" ]
-}
-
-_issue_7251_dependency_set_hold() {
-  printf '%s\n' "$1" > "$(_issue_7251_dependency_hold_file)" 2>/dev/null || true
-}
-
-# _issue_7251_trusted_marker_present <snapshot_json> <prefixes_json_array>
-# 0 = a trusted comment starts with one of the prefixes, 1 = none,
-# 2 = the history is longer than the snapshot window and could not be read.
-_issue_7251_trusted_marker_present() {
-  local snapshot="$1" prefixes="$2" total count comments
-  local filter='any(.[]; ((.authorAssociation // .author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
-    and ((.body // "") as $b | any($ps[]; . as $p | $b | startswith($p))))'
-  if printf '%s' "${snapshot}" | jq -e --argjson ps "${prefixes}" "(.issue.comments.nodes // []) | ${filter}" >/dev/null 2>&1; then
-    return 0
-  fi
-  total="$(printf '%s' "${snapshot}" | jq -r '.issue.comments.totalCount // 0' 2>/dev/null || echo 0)"
-  count="$(printf '%s' "${snapshot}" | jq -r '(.issue.comments.nodes // []) | length' 2>/dev/null || echo 0)"
-  [[ "${total}" =~ ^[0-9]+$ ]] || total=0
-  [[ "${count}" =~ ^[0-9]+$ ]] || count=0
-  if [ "${total}" -le "${count}" ]; then
-    return 1
-  fi
-  if ! comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_7251_DEPENDENCY_ISSUE:-7251}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
-    return 2
-  fi
-  if printf '%s' "${comments}" | jq -e --argjson ps "${prefixes}" "${filter}" >/dev/null 2>&1; then
-    return 0
-  fi
-  return 1
-}
-
-run_issue_7251_dependency_wait() {
-  local issue="${ISSUE_7251_DEPENDENCY_ISSUE:-7251}" pr="${ISSUE_7251_DEPENDENCY_PR:-6667}"
-  local snapshot state issue_state marker_rc default_branch default_sha engine_text missing missing_display symbol body labels_csv
-  local released_marker="<!-- ai:issue-${issue}-dependency-released:${pr} -->"
-  local preflight_marker="<!-- ai:issue-${issue}-preflight-failed:${pr} -->"
-  local closed_marker="<!-- ai:issue-${issue}-dependency-closed:${pr} -->"
-  local log_prefix="STALL_SKIP issue=${issue} reason=dependency_wait"
-
-  if ! declare -F issue_7251_dependency_wait_applies >/dev/null 2>&1 \
-    || ! issue_7251_dependency_wait_applies "${GITHUB_REPOSITORY:-}" "${issue}"; then
-    _issue_7251_dependency_set_hold false
-    return 0
-  fi
-
-  if snapshot="$(issue_7251_dependency_snapshot "${GITHUB_REPOSITORY}")"; then
-    state="$(issue_7251_dependency_pr_state "${snapshot}")"
-    issue_state="$(printf '%s' "${snapshot}" | jq -r '.issue.state // ""' 2>/dev/null || true)"
-  else
-    snapshot='{}'
-    state="unverified"
-    issue_state=""
-  fi
-
-  if [ "${issue_state}" = "CLOSED" ]; then
-    _issue_7251_dependency_set_hold false
-    echo "${log_prefix} detail=issue_closed action=none"
-    return 0
-  fi
-
-  case "${state}" in
-    merged)
-      marker_rc=0
-      _issue_7251_trusted_marker_present "${snapshot}" \
-        "$(jq -cn --arg a "/reclarify"$'\n'"${released_marker}" --arg b "${preflight_marker}" '[$a, $b]')" || marker_rc=$?
-      if [ "${marker_rc}" -eq 0 ]; then
-        _issue_7251_dependency_set_hold false
-        echo "${log_prefix} detail=merged action=none"
-        return 0
-      elif [ "${marker_rc}" -eq 2 ]; then
-        _issue_7251_dependency_set_hold true
-        echo "${log_prefix} detail=merged action=none comments_unavailable"
-        return 0
-      fi
-      # Phase 0 preflight of both plans (docs/plans/claude-capacity-wait-plan.md
-      # and docs/plans/claude-pool-capacity-tiers-remaining-callers-plan.md),
-      # read from the default-branch tip. The file is only searched, never run.
-      default_branch="$(printf '%s' "${snapshot}" | jq -r '.defaultBranchRef.name // ""' 2>/dev/null || true)"
-      if ! [[ "${default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${default_branch}" == -* ]] || [[ "${default_branch}" == *..* ]] \
-        || ! git fetch --no-tags --quiet origin "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" >/dev/null 2>&1 \
-        || ! default_sha="$(git rev-parse --verify --quiet "refs/remotes/origin/${default_branch}^{commit}" 2>/dev/null)" \
-        || ! engine_text="$(git show "${default_sha}:scripts/ai_engine.sh" 2>/dev/null)"; then
-        _issue_7251_dependency_set_hold true
-        echo "${log_prefix} detail=merged action=none preflight=unreadable"
-        return 0
-      fi
-      missing=""
-      for symbol in _AI_ENGINE_EXIT_REFUSED ai_engine_fallback_class; do
-        if ! printf '%s' "${engine_text}" | grep -qF -- "${symbol}"; then
-          missing="${missing:+${missing},}${symbol}"
-        fi
-      done
-      if [ -z "${missing}" ]; then
-        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" \
-          -f body="/reclarify
-${released_marker}" >/dev/null; then
-          _issue_7251_dependency_set_hold false
-          echo "${log_prefix} detail=merged action=reclarify"
-        else
-          _issue_7251_dependency_set_hold true
-          echo "${log_prefix} detail=merged action=none preflight=passed retrigger=failed"
-        fi
-        return 0
-      fi
-      missing_display="$(printf '%s' "${missing}" | sed -e 's/^/`/' -e 's/,/`, `/g' -e 's/$/`/')"
-      body="${preflight_marker}
-PR #${pr} has merged into \`${default_branch}\`, but the Phase 0 preflight of both plans failed on \`${default_branch}\` at \`${default_sha}\`: \`scripts/ai_engine.sh\` does not contain ${missing_display}.
-
-The poller did not restart this issue and does not recreate #${pr}'s changes. The dependency wait for this issue has ended."
-      if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null; then
-        tg_notify_issue "${issue}" "Issue #${issue}: PR #${pr} merged but the Phase 0 preflight failed (missing: ${missing}). #${issue} was not restarted." "WARNING"
-        _issue_7251_dependency_set_hold false
-        echo "${log_prefix} detail=merged action=none preflight=failed missing=${missing}"
-      else
-        _issue_7251_dependency_set_hold true
-        echo "${log_prefix} detail=merged action=none preflight=failed missing=${missing} report=failed"
-      fi
-      return 0
-      ;;
-    closed_unmerged)
-      marker_rc=0
-      _issue_7251_trusted_marker_present "${snapshot}" "$(jq -cn --arg a "${closed_marker}" '[$a]')" || marker_rc=$?
-      if [ "${marker_rc}" -eq 0 ]; then
-        _issue_7251_dependency_set_hold false
-        echo "${log_prefix} detail=closed_unmerged action=none"
-        return 0
-      elif [ "${marker_rc}" -eq 2 ]; then
-        _issue_7251_dependency_set_hold true
-        echo "${log_prefix} detail=closed_unmerged action=none comments_unavailable"
-        return 0
-      fi
-      # Labels first (idempotent), then the dedup marker, so a failed write
-      # is retried on the next tick.
-      _issue_7251_dependency_set_hold false
-      labels_csv="$(printf '%s' "${snapshot}" | jq -r '[.issue.labels.nodes[]?.name] | join(",")' 2>/dev/null || true)"
-      ensure_label_exists "ai:blocked" || true
-      if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue}/labels" -f 'labels[]=ai:blocked' >/dev/null; then
-        echo "${log_prefix} detail=closed_unmerged action=none reblock=failed"
-        return 0
-      fi
-      for symbol in ai:clarification ai:planning; do
-        if [[ ",${labels_csv}," == *",${symbol},"* ]]; then
-          if ! gh_retry gh issue edit "${issue}" --repo "${GITHUB_REPOSITORY}" --remove-label "${symbol}" >/dev/null 2>&1; then
-            echo "${log_prefix} detail=closed_unmerged action=none reblock=failed"
-            return 0
-          fi
-        fi
-      done
-      body="${closed_marker}
-PR #${pr} was closed without merging into the default branch, so this issue cannot continue as planned. The dependency wait has ended and this issue is \`ai:blocked\` again; the unblock judge now decides what happens next."
-      if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null; then
-        echo "${log_prefix} detail=closed_unmerged action=reblocked"
-      else
-        echo "${log_prefix} detail=closed_unmerged action=none reblock=failed"
-      fi
-      return 0
-      ;;
-    *)
-      _issue_7251_dependency_set_hold true
-      echo "${log_prefix} detail=${state} action=none"
-      return 0
-      ;;
-  esac
-}
-
-# _issue_7251_dependency_wait_once: run the handler at most once per poller
-# process, so the stall loop and the unblock scan share one GraphQL read.
-_ISSUE_7251_DEPENDENCY_WAIT_RAN="false"
-_issue_7251_dependency_wait_once() {
-  [ "${_ISSUE_7251_DEPENDENCY_WAIT_RAN:-false}" = "true" ] && return 0
-  _ISSUE_7251_DEPENDENCY_WAIT_RAN="true"
-  if declare -F run_issue_7251_dependency_wait >/dev/null 2>&1; then
-    run_issue_7251_dependency_wait || true
-  fi
-  return 0
-}
-
 run_standalone_stall_recovery() {
-  # Issue #7251 dependency wait: runs on every path that reaches stall
-  # recovery (full tick and the STANDALONE_RECOVERY_SWEEP_ONLY idle tick).
-  if declare -F _issue_7251_dependency_wait_once >/dev/null 2>&1; then _issue_7251_dependency_wait_once; fi
   if [ "${ENABLE_STANDALONE_STALL_RECOVERY}" != "true" ]; then
     echo "Standalone stall recovery disabled by ENABLE_STANDALONE_STALL_RECOVERY=${ENABLE_STANDALONE_STALL_RECOVERY}."
     return
@@ -20708,12 +20501,6 @@ run_standalone_stall_recovery() {
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
     [ -n "${issue_num}" ] || continue
-
-    # Issue #7251 dependency wait: run_issue_7251_dependency_wait already
-    # logged the hold for this tick.
-    if [ "${issue_num}" = "${ISSUE_7251_DEPENDENCY_ISSUE:-7251}" ] && issue_7251_dependency_wait_held; then
-      continue
-    fi
 
     if [ -n "${orchestrator_managed_set}" ] && echo "${orchestrator_managed_set}" | grep -qxF "${issue_num}"; then
       continue
