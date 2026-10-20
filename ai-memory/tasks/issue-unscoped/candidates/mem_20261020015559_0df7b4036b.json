@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:19194-19201 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: A failed `repos/${GITHUB_REPOSITORY}` default-branch lookup in `_reconcile_standalone_merged_pr_issue` is not memoized, so `_STALL_STANDALONE_DEFAULT_BRANCH` stays empty and every later merged-PR candidate repeats the read.\n  WHY: This exceeds the documented limit of one read per poller process and adds avoidable API calls during an outage. Behaviour still falls back to tagging `ai:merged`. All reviewers rated it NIT, with no severity disagreement.\n- scripts/orchestrate_poll_process.sh:final `STALL_SKIP ... reason=merged_non_target_base` branch | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: A non-`ai:check-triage` standalone issue whose PR merged into a non-target branch gets no label and no alert, only a log line each tick.\n  WHY: The reviewer says this is the intended behaviour and not a regression, so it did not raise it as a defect (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:19194-19199 | severity=NIT | confidence=4\n  PROBLEM: A failed `repos/${GITHUB_REPOSITORY}` read leaves `_STALL_STANDALONE_DEFAULT_BRANCH` empty and the failure is not recorded, so every later merged-PR candidate with a known base repeats the read.\n  WHY: The header comment and changelog say at most one read per poller process. During an outage the read runs once per candidate with `gh_retry` backoff. The cost is small and the behaviour is fail-open. A flag such as `_STALL_STANDALONE_DEFAULT_BRANCH_TRIED=1` would make the claim true.\n- scripts/orchestrate_poll_process.sh:final `STALL_SKIP ... reason=merged_non_target_base` branch | severity=NIT | confidence=2\n  PROBLEM: A non-`ai:check-triage` standalone issue whose PR merged into a non-target branch gets no label and no alert, only a log line each tick.\n  WHY: It does not fail. This is the intended behaviour and the changelog tells operators to close such issues by hand. It is not a regression, so the reviewer did not raise it.\n- HARDENING_SUGGESTIONS: scripts/orchestrate_poll_process.sh, `_reconcile_standalone_merged_pr_issue` default-branch lookup block. Add a \"lookup attempted\" flag and skip the read when it is set (about 3 lines changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:19194-19199 | severity=NIT | confidence=5\n  PROBLEM: Failed default-branch lookups are not memoized.\n  WHY: When `gh_retry` fails, `_STALL_STANDALONE_DEFAULT_BRANCH` stays empty and each later merged-PR candidate with a known base repeats the `repos/${GITHUB_REPOSITORY}` call. This exceeds the documented one read per poller process and raises API usage during outages.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:19194-19201 | severity=NIT | confidence=5\n  PROBLEM: When the default-branch lookup fails, `_STALL_STANDALONE_DEFAULT_BRANCH` is set to the empty string (the `|| echo \"\"` fallback plus the `null` check on line 19200). The next call re-enters the guard on line 19194 and re-issues the API call, so N candidates can cause up to N reads instead of the documented one per process.\n  WHY: Under an API outage every merged-linked-PR candidate retries the failing read. The per-call behaviour is still correct (fallback to tagging `ai:merged`), but the ceiling holds only on a successful lookup. A sentinel such as `_STALL_STANDALONE_DEFAULT_BRANCH=\"__unavailable__\"` would let later calls skip the lookup and fall through the line-19202 guard.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:19194-19200 | severity=NIT | confidence=5\n  PROBLEM: A failed default-branch lookup is not memoized.\n  WHY: When CWS_DEFAULT_BRANCH is unset and the repository lookup fails, `_STALL_STANDALONE_DEFAULT_BRANCH` stays empty. Each later merged-PR candidate with a known base repeats the lookup, exceeding the documented one read per poller process.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2b7aecef3aa4253b8930b0dddbf4f696ba7d89d64f769538e026a6edefb32cd0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7709,
+    "run_id": "39354357066",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39354357066",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020015559_0df7b4036b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7709,
+    "run_id": "39354357066"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T01:55:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
