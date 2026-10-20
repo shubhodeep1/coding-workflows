@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7724,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7724\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7727\",\"pr_number\":7727,\"branch\":\"ai/issue-7724\",\"run_id\":\"39374894206\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39374894206\",\"changed_files\":[\".github/workflows/mark-stable.yml\",\".github/workflows/test-and-mark-stable.yml\",\"agents.d/wfopt-0922-release-tag-preflight.md\",\"changelog.d/wfopt-0922-release-tag-preflight.md\",\"docs/INVENTORY.md\",\"scripts/release_tag_preflight.sh\",\"tests/test_mark_stable_release_tag_refspec_contract.py\"]}",
+  "fingerprint": "8456053d4959f37921f8acc2ffa05b061d64afa5f418586699a17b1738095d5a",
+  "lineage": {
+    "issue_number": 7724,
+    "parent_ids": [],
+    "pr_number": 7727,
+    "run_id": "39374894206",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39374894206",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7727"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261020055124_df0e3943a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7724,
+    "level": "run",
+    "pr_number": 7727,
+    "run_id": "39374894206"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7724: https://github.com/shubhodeep1/coding-workflows/pull/7727",
+  "timestamps": {
+    "created_at": "2026-10-20T05:51:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
