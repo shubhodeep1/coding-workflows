@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #7705: rewrite `tests/e2e_smoke_canary.txt` with three fixed lines\n\nPlanning ref: `git rev-parse HEAD` = `31860dca26350dac0e0aa7ef45c8572a56c5fb38`, branch `main`. The issue has no integration branch line, and the mismatch line reads `unknown`, not `true`, so planning continues.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one file and its exact content, and it says no other file may change. This plan changes only that file. No helper, workflow, test or doc changes are needed, so the scope stays exactly as written.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. Replace the whole file content with exactly these three lines, with a newline after the last one:\n```\nstatus: ok\nrun_id: 39348533727\nupdated-by: ai-pipeline\n```\nThis is the same result as running `printf 'status: ok\\nrun_id: 39348533727\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n\n## Data structures affected\nNone. It is a plain-text fixture.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the file entirely\n- Chosen: Replace all of the file content with the three specified lines and a final newline.\n- Alternatives considered: Edit only the changed lines in place. Append the new lines.\n- Why: The issue asks for the file to be exactly those three lines. Overwriting is the only option that removes any old content, extra lines or comments.\n\n## Security considerations\n- Trust boundaries: none. This is a test fixture, and no workflow or script reads it as code.\n- Authorization: no new endpoint or other exposed surface.\n- External input: the content is fixed by the issue, and it contains no secrets or credentials.\n- Abuse cases: none. The content is three static key/value lines.\n\n## Risks and edge cases\n- The file must end with exactly one newline: no CRLF line endings, no missing final newline, no trailing blank line.\n- No other file may change. That includes the `.ai/.workspace_source_manifest.txt` artefact and any changelog fragment; this smoke-test issue forbids touching other files.\n- Conflict check: the issue says the file already exists. I did not read the file in this run. If it is missing on the ref, create it with the same content; its directory `tests/` already exists in this repo.\n\n## Testing considerations\n- `cat -A tests/e2e_smoke_canary.txt` should print the three lines, each ending in `$`, and nothing else.\n- `wc -l tests/e2e_smoke_canary.txt` should print `3`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\nThe plan covers every constraint in the issue (one file, exact content, final newline, no new directories). It needs no external inputs, and it changes no automation paths.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "277e5e9bdc9336e0b765e8c37dd6023ab5f71808baccf3c4ca44f3b8eaae515f",
+  "lineage": {
+    "issue_number": 7705,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39349157669",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39349157669",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7705"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261020004939_8fa63dae81",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7705,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39349157669"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7705",
+  "timestamps": {
+    "created_at": "2026-10-20T00:49:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
