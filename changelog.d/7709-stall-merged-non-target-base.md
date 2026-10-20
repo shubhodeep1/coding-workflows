@@ -5,8 +5,7 @@ When a standalone issue's linked PR had merged, stall recovery in `scripts/orche
 
 | The numbers that matter | Value |
 | --- | --- |
-| Extra API calls for target merges | 0 |
-| Extra calls for a non-target merge | at most 1 `repos/<repo>` read per poller run |
+| Extra calls for any merged linked PR with a known base | at most 1 `repos/<repo>` read per poller run (none when `CWS_DEFAULT_BRANCH` is set) |
 | Extra calls for a non-target `ai:check-triage` merge | 1 `issues/<n>` read plus the gate's own reads, each tick until it closes |
 | Off switch for the gate | `CHECK_TRIAGE_RESOLVED_GATE_ENABLED=false` |
 

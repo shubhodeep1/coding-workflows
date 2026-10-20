@@ -14122,6 +14122,9 @@ def test_standalone_stall_recovery_runs_check_triage_gate_for_non_target_base():
 	gate_result = _run_standalone_merged_base_tick(base="ai/issue-298", labels=["ai:done", "ai:check-triage"])
 	assert "ai:merged" not in gate_result["issues"]["501"]["labels"]
 	assert "STALL_CHECK_TRIAGE_GATE issue=501 fix_pr=419 outcome=" in gate_result["stdout"]
+	# The sandbox copies scripts/, so the gate must reach its helper rather than skip.
+	assert "STALL_CHECK_TRIAGE_GATE issue=501 fix_pr=419 outcome=skip reason=support_missing" not in gate_result["stdout"]
+	assert "STALL_CHECK_TRIAGE_GATE issue=501 fix_pr=419 outcome=skip reason=disabled" not in gate_result["stdout"]
 
 
 def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_branch_but_matching_sha():

@@ -19164,9 +19164,9 @@ _reconcile_merged_pr_issue() {
 #   linked_json carries `base_ref` (GraphQL caches) or `.base.ref` (REST).
 #   issue_json_file holds the issue body (the standalone loop's per-issue
 #   file); labels_json is a JSON array of label names.
-# API calls (§15): target and unknown-base merges add none. A non-target
-# merge adds at most one repos/<repo> read per poller process (default
-# branch, memoized; none when CWS_DEFAULT_BRANCH is set). A non-target
+# API calls (§15): unknown-base merges add none. Any merge with a known base
+# (target or not) adds at most one repos/<repo> read per poller process
+# (default branch, memoized; none when CWS_DEFAULT_BRANCH is set). A non-target
 # ai:check-triage merge adds one issues/<n> read (the gate's trust check
 # needs `user.type`, which no cached payload carries) plus the gate's own
 # documented budget, on each tick until the gate closes the issue (its
