@@ -1574,7 +1574,11 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 			break
 		fi
 		validate_err="$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" 2>/dev/null || true)"
-		[[ "${validate_err}" == sandbox_incompatible:* ]] || break
+		if [[ "${validate_err}" != sandbox_incompatible:* ]]; then
+			# A re-asked answer that fails for another reason still closes the re-ask in the log.
+			[ "${sandbox_reasked}" = "true" ] && unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=refused_after_reask reason=other"
+			break
+		fi
 		sandbox_reason="$(printf '%s' "${validate_err#sandbox_incompatible:}" | tr -cd 'a-z_' | cut -c1-40)"
 		if [ "${sandbox_reasked}" = "true" ] || [ "${terminal}" = "true" ]; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=refused_after_reask reason=${sandbox_reason}"
