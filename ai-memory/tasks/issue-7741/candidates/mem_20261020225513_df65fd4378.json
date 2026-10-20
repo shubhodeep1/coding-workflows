@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Sandbox-aware unblock verdicts, Implements #N PR adoption, and a default-branch reference for the planner\",\"issues\":[{\"id\":\"phase1-unblock-sandbox-instructions\",\"title\":\"Unblock judge: refuse verdict instructions the implementer sandbox cannot run, re-ask once (Phase 1)\",\"priority\":1},{\"id\":\"phase2-implements-marker\",\"title\":\"Poller: `Implements #N` in a PR body links the PR to an orchestrator item (Phase 2)\",\"priority\":1},{\"id\":\"phase3-plan-isolated-base\",\"title\":\"Planner sandbox gets the default branch as `isolated-base` (Phase 3)\",\"priority\":2}],\"dependency_edges\":[{\"from\":\"phase1-unblock-sandbox-instructions\",\"to\":\"phase2-implements-marker\"},{\"from\":\"phase1-unblock-sandbox-instructions\",\"to\":\"phase3-plan-isolated-base\"},{\"from\":\"phase2-implements-marker\",\"to\":\"phase3-plan-isolated-base\"}]}",
+  "fingerprint": "8ed98f4ebf228c486a215eebabbaa1c73a31b542f2021959cb7e1e2802034dbf",
+  "lineage": {
+    "issue_number": 7741,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39510455737",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39510455737",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261020225513_df65fd4378",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7741,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39510455737"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Sandbox-aware unblock verdicts, Implements #N PR adoption, and a default-branch reference for the planner' into 3 issues (tracking #7741)",
+  "timestamps": {
+    "created_at": "2026-10-20T22:55:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
