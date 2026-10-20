@@ -3281,6 +3281,10 @@ _MEMORY_PUSH_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+
 # Whole URLs (scheme, host and path) are dropped too: the origin URL must
 # never appear in the raised message (issue #7714).
 _MEMORY_PUSH_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+")
+# The repository named in `Permission to <repo> denied` is also removed before
+# the rate-limit search, so a repo such as `o/rate-limiter` cannot turn a
+# permanent 403 permission denial back into 16 retries.
+_MEMORY_PUSH_PERMISSION_SPAN_RE = re.compile(r"permission to \S+ denied", re.IGNORECASE)
 
 
 def _is_permanent_memory_push_failure(stderr: str) -> bool:
@@ -3299,7 +3303,7 @@ def _is_permanent_memory_push_failure(stderr: str) -> bool:
     # before matching, so a repository URL or name containing `rate-limit`
     # cannot turn a `could not read Username` failure back into 16 retries.
     if _MEMORY_PUSH_HTTP_403_RE.search(text) and _MEMORY_PUSH_RATE_LIMIT_RE.search(
-        _MEMORY_PUSH_URL_RE.sub(" ", text)
+        _MEMORY_PUSH_PERMISSION_SPAN_RE.sub(" ", _MEMORY_PUSH_URL_RE.sub(" ", text))
     ):
         return False
     return True

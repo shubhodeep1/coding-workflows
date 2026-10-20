@@ -530,6 +530,9 @@ def test_permanent_memory_push_failure_classifier() -> None:
 		"remote: Permission to o/rate-limiter.git denied to some-bot.",
 		# Abuse wording without a 403 does not exempt a credential failure.
 		"remote: abuse-warning for repo\nfatal: could not read Username: terminal prompts disabled",
+		# A repo slug naming a rate limit or abuse next to a 403 is still permanent.
+		"remote: Permission to o/rate-limiter.git denied to some-bot.\nfatal: unable to access: The requested URL returned error: 403",
+		"remote: Permission to o/abuse-tools.git denied to some-bot.\nfatal: unable to access: The requested URL returned error: 403",
 	]
 	for text in permanent:
 		assert ai_memory_lib._is_permanent_memory_push_failure(text), text
