@@ -65,17 +65,6 @@ Copy this block when adding a new entry:
   - The removal PR also drops the `recovery_scan` origin and `REPORT_AUTH=reconstructed` from `scripts/workflow_failure_heal_intake.sh`, `heal-scope-recovery reconstruct` / `scan-marker` from `scripts/workflow_failure_heal.py`, `tests/test_workflow_failure_heal_recovery_scan.py` (and its `ci.yml` entry) and the `docs/INVENTORY.md` line.
 - **Owner:** @shubhodeep1
 
-### `run_issue_7251_dependency_wait` in `scripts/orchestrate_poll_process.sh` + `issue_7251_*` helpers in `scripts/gh_helpers.sh` + the `issue_7251_dependency_wait` gates in `.github/workflows/clarify.yml` and `.github/workflows/plan.yml`
-
-- **Introduced in:** unblock fix-up #7257 for #7251 (2026-10-12)
-- **Type:** single-use
-- **Removal trigger:** #7251 carries a trusted `ai:issue-7251-dependency-released:6667`, `ai:issue-7251-preflight-failed:6667` or `ai:issue-7251-dependency-closed:6667` marker comment, or #7251 is closed. Until removal the poller spends one GraphQL call per tick on it.
-- **Removal preflight checks:**
-  - `gh api repos/shubhodeep1/coding-workflows/issues/7251/comments --paginate --jq '.[].body' | grep -c 'ai:issue-7251-dependency-\(released\|closed\):6667\|ai:issue-7251-preflight-failed:6667'` returns at least 1, or `gh issue view 7251 --repo shubhodeep1/coding-workflows --json state --jq .state` prints `CLOSED`.
-  - The last 24 hours of `orchestrate_poll` run logs contain no `STALL_SKIP issue=7251 reason=dependency_wait detail=open` line.
-  - `rg -n 'issue_7251|ISSUE_7251' .github scripts tests` lists only the files this entry names (the handler, the helpers, the two gates, the `orchestrate_poll.yml` env lines, `tests/test_issue_7251_dependency_wait.py` and its `ci.yml` wiring), so they are all removed together.
-- **Owner:** @shubhodeep1
-
 ### `scripts/sync_claude_live_copies.py` + `.github/workflows/sync-claude-live-copies.yml`
 
 - **Introduced in:** #6118 (2026-10-05)

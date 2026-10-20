@@ -697,7 +697,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRIGGER_COMMENT_BODY: ${{ github.event.comment.body }}
-          ISSUE_7251_DEPENDENCY_WAIT_ENABLED: ${{ vars.ISSUE_7251_DEPENDENCY_WAIT_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -721,21 +720,6 @@ jobs:
             echo "AI_PHASE_GATE_V1 phase=plan gate=trigger_validation reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
             exit 0
-          fi
-          # Issue #7251 waits for PR #6667 to merge into the default branch
-          # (unblock fix-up #7257): skip before any label edit or claim. The
-          # helper makes no API call for any other issue or repository.
-          # ISSUE_7251_DEPENDENCY_WAIT_ENABLED=false turns the hold off.
-          if type issue_7251_dependency_wait_applies >/dev/null 2>&1 \
-            && issue_7251_dependency_wait_applies "${GITHUB_REPOSITORY}" "${ISSUE_NUMBER}"; then
-            ISSUE_7251_STATE="$(issue_7251_dependency_gate_state "${GITHUB_REPOSITORY}")"
-            case "${ISSUE_7251_STATE}" in
-              open|unverified|merged_pending|closed_pending)
-                echo "AI_PHASE_GATE_V1 phase=plan gate=issue_7251_dependency_wait reason=pr_6667_unmerged outcome=skip issue=${ISSUE_NUMBER} detail=${ISSUE_7251_STATE}"
-                echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
-                exit 0
-                ;;
-            esac
           fi
           # A standalone issue that declares a pull-request dependency (issue
           # #7228) is not planned until that PR is merged into the default
