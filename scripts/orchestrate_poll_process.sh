@@ -19258,7 +19258,11 @@ _stall_check_triage_resolution_gate() {
   fi
   _stall_ct_verdict="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/check_triage_resolution.py gate \
     --issue-json "${_stall_ct_file}" --repo "${GITHUB_REPOSITORY}" --issue-number "${issue_num}" \
-    --default-branch "${_STALL_STANDALONE_DEFAULT_BRANCH}" 2>/dev/null)" || _stall_ct_rc=$?
+    --default-branch "${_STALL_STANDALONE_DEFAULT_BRANCH}" 2>"${_stall_ct_file}.err")" || _stall_ct_rc=$?
+  if [ "${_stall_ct_rc}" -ne 0 ] && [ -s "${_stall_ct_file}.err" ]; then
+    # Last few stderr lines, printable ASCII only, prefixed so they cannot act as workflow commands.
+    tail -n 5 "${_stall_ct_file}.err" 2>/dev/null | tr -cd '\11\12\40-\176' | cut -c1-300 | sed 's/^/STALL_CHECK_TRIAGE_GATE stderr| /; s/::/: :/g' || true
+  fi
   _stall_ct_status="$(printf '%s' "${_stall_ct_verdict}" | jq -r '.status // ""' 2>/dev/null | tr -cd 'a-z_' | cut -c1-40 || echo "")"
   _stall_ct_reason="$(printf '%s' "${_stall_ct_verdict}" | jq -r '.reason // ""' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || echo "")"
   echo "STALL_CHECK_TRIAGE_GATE issue=${issue_num} fix_pr=${pr_num} outcome=${_stall_ct_status:-error} reason=${_stall_ct_reason:-none} rc=${_stall_ct_rc}"
