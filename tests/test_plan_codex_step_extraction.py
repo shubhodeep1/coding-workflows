@@ -21,11 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # Issue #7657 added the 11-line item-12 `## Deferred scope` rule to the
 # inline prompt (230 -> 241 lines); the pins below include it.
+# Issue #7724 added the 4-line "notes must not name another path" rule to
+# item 1 `## Files likely to change` (241 -> 245 lines).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"81834338788b2f8c441a689ce72ebd866d7e5463cc76b785a3f6a3bc66d8ddba"
+	"e2e2e8e6ca492208ea4f7ac4a507b91860f30907eeeca7c2a12dd83f7581ab7b"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 15_577
-PRE_EXTRACTION_PROMPT_LINES = 241
+PRE_EXTRACTION_PROMPT_BYTES = 15_938
+PRE_EXTRACTION_PROMPT_LINES = 245
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
@@ -101,6 +103,22 @@ def test_extracted_prompt_matches_pre_extraction_bytes() -> None:
 	assert hashlib.sha256(prompt_bytes).hexdigest() == PRE_EXTRACTION_PROMPT_SHA256
 	assert "${{" not in runner_text
 	assert runner_text.count("repos/${GITHUB_REPOSITORY}/issues/comments/") == 2
+
+
+def test_plan_prompts_keep_paths_out_of_files_section_notes() -> None:
+	# Issue #7724: a note "(one added `scripts/` bullet)" in the Files section
+	# made the plan approval gate hold on the bare directory `scripts/`.
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import files_touched_scope_guard as guard  # noqa: E402
+
+	rule = "the note must not name another path\n   or a directory such as `scripts/`"
+	for prompt in (PLAN_RUNNER, REPO_ROOT / "prompts" / "mode-plan.txt",
+			REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		assert rule in prompt.read_text(encoding="utf-8"), prompt
+	held = "## Files likely to change\n- `docs/INVENTORY.md` (one added `scripts/` bullet)\n\n## Next\n"
+	compliant = "## Files likely to change\n- `docs/INVENTORY.md` (new)\n- `scripts/x.sh` (new)\n\n## Next\n"
+	assert "scripts/" in guard.extract_plan_automation_paths(held)
+	assert guard.extract_plan_automation_paths(compliant) == ["scripts/x.sh"]
 
 
 def _write_executable(path: Path, content: str) -> None:
