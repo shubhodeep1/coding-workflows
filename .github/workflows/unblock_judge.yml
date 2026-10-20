@@ -166,6 +166,8 @@ jobs:
           # a hold is judged again after this many days.
           UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
           UNBLOCK_JUDGE_WAIT_MAX_DAYS: ${{ vars.UNBLOCK_JUDGE_WAIT_MAX_DAYS || '14' }}
+          # Refuse verdict instructions the network-less implementer cannot run, and re-ask once.
+          UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED: ${{ vars.UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED || 'true' }}
           # Q129: the check-triage resolution gate clarify runs (#7095).
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           # Q148: close a heal issue whose failure a sibling already fixed.
