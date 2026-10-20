@@ -1357,7 +1357,7 @@ Processed: 2026-10-20
 - Reliability 4 (actionlint download retry) — already-implemented: `changelog.d/wfopt-2026-09-21-4-actionlint-retry.md`.
 - Reliability 5 (structured `root_failure_class`) — applied: collector-root-failure-class (`changelog.d/wfopt-0922-collector-root-failure-class.md`).
 - Reliability 6 (telemetry de-duplication) — applied for Codex usage with Cost 1; `event_id` on all telemetry is rejected as a broad cross-producer change.
-- AI memory telemetry fields — `error_class` applied with Cost 3 (`changelog.d/wfopt-0922-memory-push-auth.md`); the remaining fields are rejected.
+- AI memory telemetry fields — `error_class` partly applied with Cost 3 (`changelog.d/wfopt-0922-memory-push-auth.md`): `error_class=auth` appears in the raised push error message, not as a structured `AI_MEMORY_TELEMETRY` field. The remaining fields are rejected.
 - GH API audit (`GH_API_SUMMARY`) and prompt cache (`PROMPT_SECTION_BYTES`) — rejected: broad, with no consumer; `GH_API_RETRY` already logs retries.
 - Orchestrator Health (validation-dispatch notice) — applied: validate-dispatch-notice (`changelog.d/wfopt-0922-validate-dispatch-notice.md`).
 - Orchestrator Health (clarify/plan fan-out narrowing) — rejected: the phase wrapper predicate parity contract pins those predicates.
