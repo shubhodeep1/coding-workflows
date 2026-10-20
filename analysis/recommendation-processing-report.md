@@ -130,6 +130,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-21-2.md`
 - `analysis/workflow-optimization-2026-09-21-3.md`
 - `analysis/workflow-optimization-2026-09-22.md`
+- `analysis/workflow-optimization-2026-09-22-2.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1376,3 +1377,31 @@ Processed: 2026-10-20
 - SHELL-001 (warning-level ShellCheck) — rejected: unmeasured warning volume across three gates.
 - DEAD-API — no findings in the source.
 - Executive summary, per-repo breakdown and metrics appendix — INVALID/non-material: evidence, not recommendations.
+
+### `analysis/workflow-optimization-2026-09-22-2.md`
+Processed: 2026-10-20
+- BUG-001 (required standalone validation silently skipped on dispatch failure) — applied: post-merge-validate-fail (`changelog.d/wfopt-0922-2-post-merge-validate-fail.md`); the `post-merge-validate-dispatch` job now fails, keeping the label, when required validation could not be dispatched. The source's registration-only `dispatch_and_watch_workflow_run.sh` mode is rejected: that helper retries dispatches and matches any new workflow_dispatch run, which conflicts with the deliberate single-attempt dispatch.
+- Reliability 4 / GH API audit Phase 7 hotspot — applied: phase7-no-run-diagnostics (`changelog.d/wfopt-0922-2-phase7-no-run-diagnostics.md`), adding a no-run diagnostic and a poll backoff capped at 30 s. The root cause, a conflicted smoke PR, was already fixed by the Phase 7 unconflict step.
+- Speed 5 (90-second Phase 7 registration deadline) — rejected: the step also accepts the scheduled cleanup run, which usually registers well after 90 s.
+- Speed 1 / Reliability 1 / per-repo action 1 (parity checks first; stale `scripts/helper.sh` references) — already-implemented: CI runs as parallel jobs (#4707). `agents.md` no longer references `scripts/helper.sh`; `implement.yml` mentions it only in a comment describing the fixed ledger incident (the `tests/conftest.py` strip and `env -u` fix, 2026-09-22 precedent). The `PARITY_FAILURE` marker is rejected as telemetry nothing reads.
+- Speed 2 / Cost 1 / Reliability 2 / per-repo action 2 (editor isolation preflight and credential propagation) — already-implemented: `REVIEW_EDITOR_PREFLIGHT` runs before the reviewers, the `OPENROUTER_API_KEY must be set for editor isolation` message no longer exists in the repository, and the editor runs in the review sandbox with a host-side broker. The `EDITOR_PREFLIGHT` marker is rejected.
+- Speed 3 and the GH API sweep prefetch — already-implemented: review dispatches are PR-named default-branch runs checked by `_pr_named_review_dispatch_runs`, with pending-aware guards, `SWEEP_STALE_QUEUED_MINUTES` and a single paginated sweep snapshot. Re-keying concurrency by head SHA is rejected: it would let runs for different heads of one PR run concurrently.
+- Speed 4 (batch poll memory writes, reuse support checkouts) — rejected (2026-09-16, 2026-09-18 and 2026-09-20-2 precedent).
+- Cost 2 / per-repo action 3 (reviewer circuit breaker on by default) — rejected: `mistralai/mistral-small-2603` is no longer on the panel, and `vars.REVIEWER_CIRCUIT_BREAKER_ENABLED` exists (2026-09-18 Cost 2 precedent).
+- Cost 3 (`AUTOFIX_SKIP_SELF_TRIGGERED` canary) — rejected: it is a repository-variable change, and the `false` default is deliberate (2026-09-20 precedent).
+- Cost 4 (reduce oversized review context) — rejected: automatic prompt reduction risks dropping review evidence (2026-09-21-3 Cost 3 precedent).
+- Cost 5 / Reliability 5 (retain Semble; dashboard exclusion) — non-material: no change was requested, and no dashboard lives in this repository.
+- Reliability 3 (atomic linked-issue metadata digest) — rejected as obsolete: no linked-issue metadata digest publication exists in `scripts/` or the workflows, and `LINKED_ISSUE_METADATA_FILE` is exported.
+- AI Memory Health telemetry fields — rejected (2026-09-21-3 and 2026-09-22 precedent).
+- GH API audit (`GH_API_CALL` marker, cleanup correlation telemetry, closingIssuesReferences fallback caching) — rejected: `GH_API_RETRY` and `GH_PAT_BUDGET` cover part of this, and the fallback paths are fail-closed and unmeasured.
+- Prompt Cache item 1 (weighted cache hit) — already-implemented: `compute_cache_hit_rate` in `scripts/cost_audit.py`. Items 2 to 4 are rejected (2026-09-21-3 precedent).
+- Orchestrator Health (direct-dispatch fallback after a failed empty-commit checkout) — rejected: the 30-minute review sweep already recovers such PRs, as the source itself shows. A dispatched run on an unchanged head can be ended by the terminal same-head gate (`AUTOFIX_SKIP_TERMINAL_SAME_HEAD`), so the fallback may not retrigger anything. It would also change two stall-recovery sites in `scripts/orchestrate_poll_process.sh`.
+- Pipeline flow table — clarify/plan skip reasons already-implemented (`AI_PHASE_GATE_V1`); the implementation failure-class telemetry is rejected as having no consumer.
+- API-001, BATCH-001, MERGE-004 — rejected: tagged RISKY_SKIP in the source.
+- BATCH-002, BATCH-003, MERGE-001, MERGE-002, MERGE-003, REUSE-001 — rejected: tagged NEEDS_VERIFICATION in the source; fail-closed paths whose per-item error behaviour is pinned (2026-09-21-3 precedent).
+- DUP-001, DUP-002 — rejected: refactors with no behaviour change.
+- EXPR-001 — already-implemented: the staging step binds its values through `env:` (2026-09-18 verdict).
+- CONSIST-001 — already-implemented: `changelog.d/wfopt-0922-final-report.md` updated the README `CODEX_THREAD_REUSE_ENABLED` row.
+- DEAD-001 — rejected for naming immutability.
+- DEAD-API — no findings in the source.
+- Executive summary, per-repo breakdown and metrics appendix — non-material: evidence, not recommendations.

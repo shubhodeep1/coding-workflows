@@ -884,6 +884,7 @@ jobs:
 
           validation_dispatched="false"
           validation_required_seen="" validation_label_unknown=""
+          validation_dispatch_failed=""
           validate_workflow="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
           while IFS=$'\t' read -r issue_number has_validate_label labels_known; do
             [ -n "${issue_number}" ] || continue
@@ -915,7 +916,8 @@ jobs:
               if gh workflow run "${validate_workflow}" --repo "${REPOSITORY}" -f tracking_issue="0" -f pr_number="${PR_NUMBER}" || { [ "${validate_workflow}" != "internal-validate.yml" ] && gh workflow run "internal-validate.yml" --repo "${REPOSITORY}" -f tracking_issue="0" -f pr_number="${PR_NUMBER}"; }; then
                 validation_dispatched="true"
               else
-                echo "::warning::Failed to dispatch ${validate_workflow}/internal-validate.yml for issue #${issue_number}; continuing without failing workflow."
+                validation_dispatch_failed=1
+                echo "::warning::Failed to dispatch ${validate_workflow}/internal-validate.yml for issue #${issue_number}; the job fails after the remaining linked issues are processed if none of them dispatches validation."
                 continue
               fi
             fi
@@ -927,6 +929,9 @@ jobs:
 
           if [ -z "${validation_required_seen}${validation_label_unknown}" ]; then
             echo "::notice::No linked issue of merged PR #${PR_NUMBER} required standalone validation; nothing dispatched."
+          elif [ "${validation_dispatched}" = "false" ] && [ -n "${validation_required_seen}" ] && [ -n "${validation_dispatch_failed}" ]; then
+            echo "::error::Standalone validation was required for merged PR #${PR_NUMBER} but could not be dispatched; the ai:orchestrator-validate-required label is kept, re-run this job to retry."
+            exit 1
           elif [ "${validation_dispatched}" = "false" ]; then
             echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
           fi

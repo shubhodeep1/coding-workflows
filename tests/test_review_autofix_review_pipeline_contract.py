@@ -8450,6 +8450,97 @@ def test_post_merge_validate_dispatch_notice_when_no_issue_requires_validation()
 	assert lines[lines.index(warning) - 1] == 'elif [ "${validation_dispatched}" = "false" ]; then'
 
 
+def test_post_merge_validate_dispatch_fails_closed_when_required_dispatch_fails() -> None:
+	job = _job_block("post-merge-validate-dispatch")
+	init = 'validation_dispatch_failed=""'
+	assert init in job
+	assert job.index(init) < job.index("while IFS=$'\\t' read -r issue_number has_validate_label labels_known")
+	per_issue = "the job fails after the remaining linked issues are processed if none of them dispatches validation."
+	failed_set = job.index("validation_dispatch_failed=1")
+	assert failed_set < job.index(per_issue) < job.index("continue", job.index(per_issue))
+	assert "continuing without failing workflow" not in job
+	lines = [line.strip() for line in job.splitlines() if line.strip()]
+	error = (
+		'echo "::error::Standalone validation was required for merged PR #${PR_NUMBER} but could not be dispatched; '
+		'the ai:orchestrator-validate-required label is kept, re-run this job to retry."'
+	)
+	assert lines.count(error) == 1
+	idx = lines.index(error)
+	assert lines[idx - 1].startswith("elif ") and "validation_dispatch_failed" in lines[idx - 1]
+	assert "validation_required_seen" in lines[idx - 1]
+	assert lines[idx + 1] == "exit 1"
+	after_loop = job[job.index("done < <("):]
+	assert after_loop.count("exit 1") == 1
+	assert after_loop.index("exit 1") < after_loop.index('elif [ "${validation_dispatched}" = "false" ]; then')
+	assert "continue-on-error" not in job
+
+
+def test_post_merge_validate_dispatch_exit_status_after_loop() -> None:
+	if shutil.which("jq") is None:
+		# The step's loop reads its input through jq; CI runners provide it.
+		print("skip: jq not available", file=sys.stderr)
+		return
+	script = _step_run_script("Dispatch standalone validate for orchestrator short-circuit issues")
+	start = script.index('validation_dispatched="false"')
+	body = script[start:]
+	fake_gh = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		echo "$*" >> "${FAKE_GH_LOG}"
+		case "$1 $2" in
+		  "workflow run")
+		    n=$(( $(cat "${FAKE_GH_COUNT}" 2>/dev/null || echo 0) + 1 ))
+		    echo "${n}" > "${FAKE_GH_COUNT}"
+		    if [ "${n}" -le "${FAKE_GH_FAIL_RUNS}" ]; then exit 1; fi
+		    exit 0 ;;
+		  "issue view") exit "${FAKE_GH_VIEW_RC:-0}" ;;
+		  *) exit 0 ;;
+		esac
+		"""
+	)
+	label = "ai:orchestrator-validate-required"
+	cases = [
+		# (name, issue nodes, failing workflow-run calls, issue view rc, expected rc, expected text)
+		("required_dispatch_fails", [{"number": 11, "labels": [label]}], 99, 0, 1, "::error::Standalone validation was required"),
+		("later_dispatch_succeeds", [{"number": 11, "labels": [label]}, {"number": 12, "labels": [label]}], 2, 0, 0, None),
+		("nothing_required", [{"number": 11, "labels": []}], 99, 0, 0, "::notice::No linked issue"),
+		("labels_unknown", [{"number": 11, "labels": None}], 99, 1, 0, "::warning::No standalone validation workflow"),
+	]
+	for name, nodes, fail_runs, view_rc, want_rc, want_text in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_path = Path(tmp)
+			bin_dir = tmp_path / "bin"
+			bin_dir.mkdir()
+			gh = bin_dir / "gh"
+			gh.write_text(fake_gh, encoding="utf-8")
+			gh.chmod(0o755)
+			log = tmp_path / "gh.log"
+			prelude = "set -euo pipefail\ngh_retry() { \"$@\"; }\nissue_nodes_json=\"${ISSUE_NODES_JSON}\"\n"
+			env = {
+				**os.environ,
+				"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+				"PR_NUMBER": "42",
+				"REPOSITORY": "owner/repo",
+				"VALIDATE_WORKFLOW_NAME": "ai-validate.yml",
+				"ISSUE_NODES_JSON": json.dumps(nodes),
+				"FAKE_GH_LOG": str(log),
+				"FAKE_GH_COUNT": str(tmp_path / "count"),
+				"FAKE_GH_FAIL_RUNS": str(fail_runs),
+				"FAKE_GH_VIEW_RC": str(view_rc),
+			}
+			result = subprocess.run(["bash", "-c", prelude + body], env=env, capture_output=True, text=True)
+			output = result.stdout + result.stderr
+			assert result.returncode == want_rc, (name, result.returncode, output)
+			if want_text:
+				assert want_text in output, (name, output)
+			calls = log.read_text(encoding="utf-8") if log.exists() else ""
+			if name == "required_dispatch_fails":
+				assert "--remove-label" not in calls, calls
+			if name == "later_dispatch_succeeds":
+				assert "::error::" not in output, output
+				assert "issue edit 12" in calls and "--remove-label" in calls, calls
+
+
 def main() -> int:
 	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
 	test_opencode_full_review_cutover_removes_codex_runtime()
@@ -8595,6 +8686,8 @@ def main() -> int:
 	test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge()
 	test_post_merge_validate_dispatch_retries_label_removal_but_not_dispatch()
 	test_post_merge_validate_dispatch_notice_when_no_issue_requires_validation()
+	test_post_merge_validate_dispatch_fails_closed_when_required_dispatch_fails()
+	test_post_merge_validate_dispatch_exit_status_after_loop()
 	test_normalize_openrouter_usage_reports_missing_reason()
 	test_normalize_openrouter_usage_available_line_has_no_reason()
 	test_cost_audit_openrouter_re_matches_line_with_missing_reason()
