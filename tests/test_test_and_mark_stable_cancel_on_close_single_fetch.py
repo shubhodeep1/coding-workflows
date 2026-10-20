@@ -132,8 +132,12 @@ def test_open_pr_wait_loop_backoff_caps_at_30s_and_clamps_to_deadline() -> None:
 	# The clamped sleep ends one second before DEADLINE so one last
 	# listing still runs inside the budget.
 	assert 'PHASE7_POLL_SLEEP=$(( PHASE7_POLL_REMAINING - 1 ))' in loop
+	# A clamp to 0 (one second left) is raised to 1 so the final second
+	# cannot run back-to-back listings.
+	floor = 'if [ "${PHASE7_POLL_SLEEP}" -lt 1 ]; then'
+	assert floor in loop
 	sleep_stmt = 'sleep "${PHASE7_POLL_SLEEP}"'
-	assert loop.index(remaining) < loop.index(brk) < loop.index(clamp) < loop.index(sleep_stmt)
+	assert loop.index(remaining) < loop.index(brk) < loop.index(clamp) < loop.index(floor) < loop.index(sleep_stmt)
 	assert loop.count(sleep_stmt) == 1
 
 

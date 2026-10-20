@@ -4455,6 +4455,11 @@ jobs:
               # listing instead of exiting straight after the sleep.
               PHASE7_POLL_SLEEP=$(( PHASE7_POLL_REMAINING - 1 ))
             fi
+            if [ "${PHASE7_POLL_SLEEP}" -lt 1 ]; then
+              # With one second left the clamp gives 0; wait one second
+              # instead so the last second cannot run back-to-back listings.
+              PHASE7_POLL_SLEEP=1
+            fi
             sleep "${PHASE7_POLL_SLEEP}"
           done
 
