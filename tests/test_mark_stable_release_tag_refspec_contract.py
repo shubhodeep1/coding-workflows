@@ -1393,6 +1393,7 @@ def _run_release_tag_preflight_scenario(
 	token: str = PREFLIGHT_SENTINEL_TOKEN,
 	base_override: str | None = None,
 	extra_env: dict[str, str] | None = None,
+	rename_out: bool = False,
 ) -> subprocess.CompletedProcess[str]:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
@@ -1408,11 +1409,17 @@ def _run_release_tag_preflight_scenario(
 		git("config", "user.name", "t")
 		git("config", "user.email", "t@example.invalid")
 		(repo / "README.md").write_text("base\n", encoding="utf-8")
+		if rename_out:
+			(repo / ".github" / "workflows").mkdir(parents=True)
+			(repo / ".github" / "workflows" / "moved.yml").write_text("name: moved\non: push\n", encoding="utf-8")
 		git("add", "-A")
 		git("commit", "-q", "-m", "base")
 		git("tag", "stable")
 		base = git("rev-parse", "HEAD")
-		if workflow_change:
+		if rename_out:
+			(repo / "scripts").mkdir()
+			git("mv", ".github/workflows/moved.yml", "scripts/moved.yml")
+		elif workflow_change:
 			(repo / ".github" / "workflows").mkdir(parents=True)
 			(repo / ".github" / "workflows" / "x.yml").write_text("name: x\n", encoding="utf-8")
 		else:
@@ -1468,6 +1475,7 @@ def test_release_tag_preflight_executes_decision_matrix() -> None:
 		(dict(scopes="repo", workflow_change=False), 0, "result=pass error_class=none reason=no_workflow_changes"),
 		(dict(scopes="repo", workflow_change=True), 1, "result=fail error_class=workflow_scope reason=classic_pat_missing_workflow_scope"),
 		(dict(scopes="", workflow_change=True), 1, "result=fail error_class=workflow_scope"),
+		(dict(scopes="repo", workflow_change=False, rename_out=True), 1, "result=fail error_class=workflow_scope reason=classic_pat_missing_workflow_scope"),
 		(dict(scopes=None, workflow_change=True), 0, "result=unknown error_class=none reason=no_scope_header"),
 		(dict(scopes="repo", workflow_change=True, gh_fails=True), 0, "result=unknown error_class=none reason=api_failed"),
 		(dict(scopes="repo", workflow_change=True, token=""), 0, "result=unknown error_class=none reason=gh_pat_missing"),
