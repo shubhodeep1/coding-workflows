@@ -1,0 +1,1 @@
+{"dispatch_status": "pending", "last_attempt_payload": {"issue": 7712, "reason": "poll-progress", "run_id": 39354168560, "source_workflow": "orchestrate_poll"}, "last_attempted_timestamp": "2026-10-20T01:40:26Z", "last_dispatch_payload": null, "last_dispatch_timestamp": null, "schema_version": "force_tick.v1", "tracking_issue": 7712}
