@@ -4077,7 +4077,15 @@ def test_security_pass_audit_input_rejection_is_not_reported_as_engine_outage() 
 	CI runs this module through main(), which calls every test as func(), so
 	the phases loop here instead of using pytest.mark.parametrize (see
 	test_custom_runner_tests_need_no_pytest_arguments)."""
-	for input_phase in ("oversized-scope", "diff-scope", "prior-findings", "waived-findings"):
+	for input_phase in (
+		"oversized-scope",
+		"diff-scope",
+		"prior-findings",
+		"waived-findings",
+		"project-spec-preflight",
+		"prior-findings-preflight",
+		"waived-findings-preflight",
+	):
 		audit_stderr = (
 			f"security-audit: phase={input_phase} cwd=/w path=/w "
 			"error=::error::CODEX_ISOLATION\\ export-oversized\\ rejected\n"

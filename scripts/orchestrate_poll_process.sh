@@ -8879,10 +8879,12 @@ run_security_pass_inline() {
     security_pass_audit_failure_phase="$(LC_ALL=C grep -E '^security-audit: phase=' "${audit_error_file}" 2>/dev/null | tail -n 1 | sed -nE 's/^security-audit: phase=([^ ]*).*/\1/p')" || security_pass_audit_failure_phase=""
     if [ -n "${security_pass_audit_failure_summary}" ]; then
       case "${security_pass_audit_failure_phase}" in
-        oversized-scope|diff-scope|prior-findings|waived-findings)
+        oversized-scope|diff-scope|prior-findings|waived-findings|project-spec-preflight|prior-findings-preflight|waived-findings-preflight)
           # security_audit.sh refused its input before any model ran: the
-          # audited diff, the oversized-file export, or the prior/waived
-          # findings the poller handed it. The engine is fine, so do not report
+          # audited diff, the oversized-file export, or the project spec and
+          # prior/waived findings files the poller handed it. The output
+          # destination check (findings-output-preflight) is not an input and
+          # keeps engine_unavailable. The engine is fine, so do not report
           # an outage. The poller still retries, but the same input fails the
           # same way until the integration branch or the audit code changes
           # (fun-token-multi-chain#579 sat on engine_unavailable for this).
