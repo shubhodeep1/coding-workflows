@@ -302,12 +302,15 @@ def _run_publication_helper_scenario(
 	working_directory: Path,
 	publication_scenario: str,
 	publication_mode: str,
+	workflow_path: Path = WORKFLOWS[0],
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-	publication_call_log = working_directory / f"{publication_scenario}-{publication_mode}.log"
+	publication_call_log = (
+		working_directory / f"{workflow_path.stem}-{publication_scenario}-{publication_mode}.log"
+	)
 	workflow_publication_script = "\n".join(
 		(
 			"set -euo pipefail",
-			_workflow_publication_helper(_read(WORKFLOWS[0])),
+			_workflow_publication_helper(_read(workflow_path)),
 			r'''
 git() {
 	local publication_mock_command="$1"
@@ -318,7 +321,26 @@ git() {
 			;;
 		push)
 			printf 'push:%s\n' "$*" >> "${PUBLICATION_HELPER_CALL_LOG}"
-			[ "${PUBLICATION_HELPER_SCENARIO}" = "push-success" ]
+			case "${PUBLICATION_HELPER_SCENARIO}" in
+				push-success)
+					return 0
+					;;
+				push-workflow-scope)
+					printf '%s\n' ' ! [remote rejected] test -> test (refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)' >&2
+					return 1
+					;;
+				push-workflows-permission)
+					printf '%s\n' ' ! [remote rejected] test -> test (REFUSING TO ALLOW a GitHub App to create or update workflow `.github/workflows/x.yml` without `Workflows` permission)' >&2
+					return 1
+					;;
+				push-generic-error)
+					printf '%s\n' 'remote: Internal Server Error' >&2
+					return 1
+					;;
+				*)
+					return 1
+					;;
+			esac
 			;;
 		ls-remote)
 			printf 'lookup:%s\n' "$*" >> "${PUBLICATION_HELPER_CALL_LOG}"
@@ -333,7 +355,7 @@ git() {
 					printf 'mock ls-remote transport failure\n' >&2
 					return 128
 					;;
-				remote-absent)
+				remote-absent|push-generic-error)
 					return 2
 					;;
 			esac
@@ -422,6 +444,53 @@ def test_workflow_tag_publication_helper_executes_failure_matrix() -> None:
 		assert absent_remote_calls.count("push:origin refs/tags/test") == 5
 		assert absent_remote_calls.count("lookup:--exit-code origin refs/tags/test") == 5
 		assert "Failed to publish and verify" in absent_remote.stdout
+
+
+def test_workflow_tag_publication_helper_stops_on_workflow_scope_refusal() -> None:
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+		for workflow_path in WORKFLOWS:
+			for scenario, mode, expected_push in (
+				("push-workflow-scope", "immutable", "push:origin refs/tags/test"),
+				("push-workflow-scope", "moving", "push:-f origin refs/tags/test"),
+				("push-workflows-permission", "immutable", "push:origin refs/tags/test"),
+			):
+				refused, refused_calls = _run_publication_helper_scenario(
+					working_directory, scenario, mode, workflow_path
+				)
+				assert refused.returncode != 0, f"{workflow_path.name} {scenario}/{mode}"
+				assert refused_calls == [expected_push], (
+					f"{workflow_path.name} {scenario}/{mode}: a workflow-scope refusal must stop "
+					f"after one push with no lookup or retry sleep, got {refused_calls}"
+				)
+				assert (
+					"::error::RELEASE_TAG_PUBLISH outcome=failed error_class=workflow_scope "
+					"tag_ref=refs/tags/test"
+				) in refused.stdout, f"{workflow_path.name} {scenario}/{mode}"
+				assert "GH_PAT" in refused.stdout
+				assert "refusing to allow" in refused.stderr.lower(), (
+					f"{workflow_path.name}: git's push stderr must still be printed"
+				)
+			scoped, _ = _run_publication_helper_scenario(
+				working_directory, "push-workflow-scope", "immutable", workflow_path
+			)
+			assert "without `workflow` scope" in scoped.stderr
+
+			generic, generic_calls = _run_publication_helper_scenario(
+				working_directory, "push-generic-error", "immutable", workflow_path
+			)
+			assert generic.returncode != 0
+			assert generic_calls.count("push:origin refs/tags/test") == 5
+			assert generic_calls.count("lookup:--exit-code origin refs/tags/test") == 5
+			assert [call for call in generic_calls if call.startswith("sleep:")] == [
+				"sleep:2",
+				"sleep:4",
+				"sleep:8",
+				"sleep:16",
+			], f"{workflow_path.name}: generic push failures must keep the retry backoff"
+			assert "Failed to publish and verify" in generic.stdout
+			assert "RELEASE_TAG_PUBLISH" not in generic.stdout + generic.stderr
+			assert "Internal Server Error" in generic.stderr
 
 
 def test_workflow_version_tag_preflight_executes_recovery_matrix() -> None:
@@ -623,6 +692,26 @@ def test_workflow_tag_publication_helper_is_bounded_verified_and_fail_closed() -
 		)
 		assert "Failed to publish and verify" in helper_text, (
 			f"{workflow_path.name}: absent, malformed, or non-converged refs must fail after retries"
+		)
+		assert 'mktemp "${RUNNER_TEMP:-/tmp}/release_tag_push_err.XXXXXX"' in helper_text, (
+			f"{workflow_path.name}: push diagnostics must use an isolated temporary file"
+		)
+		assert '2>"${push_error_file}"' in helper_text, (
+			f"{workflow_path.name}: push stderr must be captured for classification"
+		)
+		assert "grep -qi 'refusing to allow'" in helper_text, (
+			f"{workflow_path.name}: the workflow-scope refusal must be matched case-insensitively"
+		)
+		classification_index = helper_text.index("error_class=workflow_scope")
+		sleep_index = helper_text.index('sleep "${backoff_seconds}"')
+		assert classification_index < sleep_index, (
+			f"{workflow_path.name}: the workflow-scope refusal must be classified before the retry sleep"
+		)
+		assert "return 1" in helper_text[classification_index:sleep_index], (
+			f"{workflow_path.name}: the workflow-scope refusal must return before retrying"
+		)
+		assert classification_index < helper_text.index('git ls-remote --exit-code origin "${tag_ref}"'), (
+			f"{workflow_path.name}: the workflow-scope refusal must stop before remote verification"
 		)
 
 
