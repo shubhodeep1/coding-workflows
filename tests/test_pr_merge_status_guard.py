@@ -3371,6 +3371,10 @@ def test_prefixed_non_writes_do_not_prompt(merged_branch_repo, command: str) -> 
 	"enable -n cd; cd {worktree}; git push origin HEAD:feature/x",
 	"cd() {{ :; }}; cd {worktree} && git push origin HEAD:feature/x",
 	"function cd {{ :; }}; cd {worktree} && git push origin HEAD:feature/x",
+	"eval 'cd() {{ :; }}'; cd {worktree} && git push origin HEAD:feature/x",
+	"{{ git push origin HEAD:feature/x; }}",
+	"eval git push origin HEAD:feature/x",
+	"case x in x) git push origin HEAD:feature/x ;; esac",
 ])
 def test_stranded_checkout_is_judged_behind_prefixes_and_redefined_cd(merged_branch_repo, command: str) -> None:
 	"""Scenario A: the session checkout sits on merged `feature/x`; a clean
@@ -3397,6 +3401,7 @@ def test_stranded_checkout_is_judged_behind_prefixes_and_redefined_cd(merged_bra
 	"time cd -- {worktree} && git push origin HEAD:feature/x",
 	"command -p cd {worktree} && git push origin HEAD:feature/x",
 	"X=1 command -p cd {worktree} && git push origin HEAD:feature/x",
+	"cd {worktree} && bash -c 'git push origin HEAD:feature/x'",
 ])
 def test_worktree_push_is_judged_behind_prefixes(merged_branch_repo, command: str) -> None:
 	"""Scenario B: the session checkout is clean on `main`; the worktree sits
@@ -3436,6 +3441,10 @@ def test_worktree_push_is_judged_behind_prefixes(merged_branch_repo, command: st
 	"command . /dev/null; git push origin HEAD:feature/x",
 	"builtin enable -n cd; cd {worktree}; git push origin HEAD:feature/x",
 	"command export CDPATH={parent}; cd {name} && git push origin HEAD:feature/x",
+	# A subshell resets directory tracking, so the cd before it is not trusted.
+	"cd {worktree} && ( git push origin HEAD:feature/x )",
+	"cd {worktree} && (git push origin HEAD:feature/x)",
+	"env git push origin HEAD:feature/x",
 ])
 def test_unknown_directory_or_prefix_asks_instead_of_passing(merged_branch_repo, command: str) -> None:
 	"""Scenario B again: where the cd lands, or where a prefix runs Git, is
@@ -3450,6 +3459,29 @@ def test_unknown_directory_or_prefix_asks_instead_of_passing(merged_branch_repo,
 	proc = _run_hook(repo, stub_bin, formatted)
 	assert proc.returncode == 0, formatted + "\n" + proc.stdout + proc.stderr
 	assert _ask_decision(proc) is not None, formatted + "\n" + proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"cd {worktree} && git push origin HEAD~1:feature/x",
+	"git -C {worktree} push origin HEAD~1:feature/x",
+])
+def test_ancestry_suffix_in_refspec_is_resolved_in_worktree(merged_branch_repo, command: str) -> None:
+	"""Scenario B with one commit on top of the merged head in the worktree:
+	`HEAD~1` is git revision syntax, not tilde expansion, and names the merged
+	head, so the push re-publishes merged history (#6038)."""
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "feature/x")
+	_git(repo, "checkout", "main")
+	(worktree / "extra.txt").write_text("extra\n", encoding="utf-8")
+	_git(worktree, "add", "-A")
+	_git(worktree, "commit", "-m", "extra")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	formatted = command.format(worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 2, formatted + "\n" + proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
 
 
 @pytest.mark.parametrize("command", [
