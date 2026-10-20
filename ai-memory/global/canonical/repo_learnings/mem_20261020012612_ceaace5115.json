@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Most sampled implementation PRs that changed workflows or scripts included a descriptively named `changelog.d/` file. When making a user- or maintainer-visible change, check the repository\u2019s changelog-fragment convention and include an appropriately named entry.",
+  "fingerprint": "3e1d5e2aef0891bf028578579ccaad4f8f30382099fbfa8f588bc43d809d4243",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39352269104",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39352269104",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7689",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7690",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7695",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7697",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7699",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7692",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7693",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7696",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7698",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7700"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261020012612_ceaace5115",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Merged changes commonly include a per-change fragment under `changelog.d/`.",
+  "timestamps": {
+    "created_at": "2026-10-20T01:26:12Z",
+    "promoted_at": "2026-10-20T01:28:06Z",
+    "superseded_at": null
+  }
+}
