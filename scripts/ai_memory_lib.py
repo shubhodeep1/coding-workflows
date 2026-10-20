@@ -3275,6 +3275,7 @@ _MEMORY_PUSH_AUTH_FAILURE_RE = re.compile(
 _MEMORY_PUSH_RATE_LIMIT_RE = re.compile(
     r"rate[ _-]?limit|abuse[ _-]?detect|triggered an abuse", re.IGNORECASE
 )
+_MEMORY_PUSH_HTTP_403_RE = re.compile(r"returned error: 403", re.IGNORECASE)
 _MEMORY_PUSH_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
 # Whole URLs (scheme, host and path) are dropped too: the origin URL must
 # never appear in the raised message (issue #7714).
@@ -3291,9 +3292,16 @@ def _is_permanent_memory_push_failure(stderr: str) -> bool:
     text = stderr or ""
     if not text.strip():
         return False
-    if _MEMORY_PUSH_RATE_LIMIT_RE.search(text):
+    if not _MEMORY_PUSH_AUTH_FAILURE_RE.search(text):
         return False
-    return bool(_MEMORY_PUSH_AUTH_FAILURE_RE.search(text))
+    # The rate-limit exclusion applies only to a 403, and URLs are removed
+    # before matching, so a repository URL or name containing `rate-limit`
+    # cannot turn a `could not read Username` failure back into 16 retries.
+    if _MEMORY_PUSH_HTTP_403_RE.search(text) and _MEMORY_PUSH_RATE_LIMIT_RE.search(
+        _MEMORY_PUSH_URL_RE.sub(" ", text)
+    ):
+        return False
+    return True
 
 
 def _redact_memory_push_stderr(stderr: str) -> str:

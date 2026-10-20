@@ -524,6 +524,10 @@ def test_permanent_memory_push_failure_classifier() -> None:
 		"remote: Permission to owner/repo.git denied to some-bot.",
 		"fatal: unable to access 'https://github.com/o/r/': The requested URL returned error: 403",
 		"fatal: unable to access 'https://github.com/o/r/': The requested URL Returned Error: 401",
+		# Rate-limit wording inside a URL or outside a 403 does not exempt it.
+		"fatal: could not read Username for 'https://github.com/o/rate-limit-tool': terminal prompts disabled",
+		"fatal: unable to access 'https://github.com/o/abuse-detector/': The requested URL returned error: 403",
+		"remote: Permission to o/rate-limiter.git denied to some-bot.",
 	]
 	for text in permanent:
 		assert ai_memory_lib._is_permanent_memory_push_failure(text), text

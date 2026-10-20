@@ -8,6 +8,6 @@
 - `Invalid username or password` or `Permission to <repo> denied`;
 - `The requested URL returned error: 403` or `returned error: 401`.
 
-A failure whose text names a rate limit or abuse detection (`triggered an abuse detection mechanism`) still retries. The raised error reads `Failed to push memory branch: error_class=auth attempts=<n> ...` and includes git's stderr. The `GH_TOKEN`, `GITHUB_TOKEN` and `GH_PAT` values are removed from that text, and every URL in it, including the origin URL, becomes `<redacted-url>`.
+A 403 failure whose text, outside any URL, names a rate limit or abuse detection (`triggered an abuse detection mechanism`) still retries. The raised error reads `Failed to push memory branch: error_class=auth attempts=<n> ...` and includes git's stderr. The `GH_TOKEN`, `GITHUB_TOKEN` and `GH_PAT` values are removed from that text, and every URL in it, including the origin URL, becomes `<redacted-url>`.
 
 Ref-lock (`cannot lock ref`), non-fast-forward and other failures keep the existing jittered retry loop and `AI_MEMORY_PUSH_RETRIES` budget. Callers still treat the error as before, so memory writes stay fail-open.
