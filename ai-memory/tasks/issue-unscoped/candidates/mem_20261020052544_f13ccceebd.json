@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_collect_workflow_logs.py:~3024 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: test_main_root_failure_class_null_for_malformed_summary uses malformed payloads (e.g. `_summary_line('{not json')`) that are rejected by the REVIEW_AUTOFIX_RUN_SUMMARY_LINE regex or value regex before json.loads, so the json.loads failure branch is never exercised.\n  WHY: The test would still pass if the `except Exception` handler were removed; a payload like `{not json}` would reach json.loads. Reported as NIT by both reviewers.\n- changelog.d/wfopt-0922-collector-root-failure-class.md:11 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The changelog overstates behavior: analysis does not yet group by `root_failure_class` (`_normalized_run_view` in scripts/analyze_workflow_logs.py does not forward `root_failure_class` or `symptom_step`), and legacy cached rows stay null because the cache-hit branch in main() (scripts/collect_workflow_logs.py:2245-2266) does not re-download archives.\n  WHY: The text could mislead readers about when the field becomes useful; fail-open, no runtime breakage. All reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_collect_workflow_logs.py:test_main_root_failure_class_null_for_malformed_summary (`_summary_line('{not json')` case) | severity=NIT | confidence=3\n  PROBLEM: That payload does not end in `}`, so REVIEW_AUTOFIX_RUN_SUMMARY_LINE rejects the line before json.loads runs.\n  WHY: Nothing fails in production; the test would still pass if the `except Exception` handler were removed. A payload such as `{\"finalize_reason\": }` would reach json.loads.\n- changelog.d/wfopt-0922-collector-root-failure-class.md:last line | severity=NIT | confidence=3\n  PROBLEM: Claims overstate behavior: `_normalized_run_view` in scripts/analyze_workflow_logs.py does not forward `root_failure_class` or `symptom_step`, and the main() cache-hit branch does `continue` without downloading, so legacy cached rows stay null.\n  WHY: Fail-open; the text could mislead a reader about when the field becomes useful.\n- Other sections (security, correctness, concurrency, performance, index/DB, naming, trust-boundary, task completeness): NONE. HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/wfopt-0922-collector-root-failure-class.md:11 | severity=NIT | confidence=4\n  PROBLEM: Changelog says rows cached before this change read null \"until their log archive is downloaded again\", but the cache-hit branch in scripts/collect_workflow_logs.py (lines 2245-2266) avoids re-downloading archives for cached runs, so these rows remain null indefinitely.\n  WHY: Not a runtime failure, but the changelog is factually misleading about recovery of legacy cached records.\n- Other sections: NONE. Assumption noted: the analysis-grouping update was intentionally deferred per the \"Stay inside the listed files\" instruction.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_collect_workflow_logs.py:test_main_root_failure_class_null_for_malformed_summary (around line 3024) | severity=NIT | confidence=3\n  PROBLEM: All four \"malformed\" inputs reject before json.loads is reached (`{not json` fails the regex; `{\"finalize_reason\":\"Bad Value!\"}`, `{\"finalize_reason\":\"x\\\\n::error::boom\"}` and `{\"finalize_reason\":42}` fail value validation), so none would catch removal of the bare `except Exception` in _root_failure_class_from_full_logs (scripts/collect_workflow_logs.py:1680).\n  WHY: A regex-matching but invalid-JSON payload like `{not json}` would propagate json.JSONDecodeError if the handler were removed, and the test would still pass.\n- changelog.d/wfopt-0922-collector-root-failure-class.md:final paragraph | severity=NIT | confidence=3\n  PROBLEM: The changelog says analysis groups by `root_failure_class` with fallback to `symptom_step`, but `_normalized_run_view` in scripts/analyze_workflow_logs.py (lines 189-211) forwards neither field, and that file is excluded from files_touched.\n  WHY: A reader will expect the behavior now; until a follow-up, runs are still filed by `failure_point.step_name`.\n- HARDENING (risk 1): tests/test_collect_workflow_logs.py, test_main_root_failure_class_null_for_malformed_summary (~line 3024): add `_summary_line('{not json}')` to the tuple so json.loads is exercised. Estimated lines changed: 1.\n- HARDENING (advisory, risk 0): changelog.d/wfopt-0922-collector-root-failure-class.md line 11: reword to forward-looking wording and note the analysis pass is updated separately. Estimated lines changed: 1.\n- Overall HARDENING_RISK_SCORE: 2. Other sections: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1689180dfb08b39ceb2052e5b479fcc374b848800aee38366148b41c28f09550",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7725,
+    "run_id": "39373185340",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39373185340",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020052544_f13ccceebd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7725,
+    "run_id": "39373185340"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T05:25:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
