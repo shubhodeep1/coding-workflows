@@ -917,7 +917,7 @@ jobs:
                 validation_dispatched="true"
               else
                 validation_dispatch_failed=1
-                echo "::warning::Failed to dispatch ${validate_workflow}/internal-validate.yml for issue #${issue_number}; the job fails after the remaining linked issues are processed."
+                echo "::warning::Failed to dispatch ${validate_workflow}/internal-validate.yml for issue #${issue_number}; the job fails after the remaining linked issues are processed if none of them dispatches validation."
                 continue
               fi
             fi

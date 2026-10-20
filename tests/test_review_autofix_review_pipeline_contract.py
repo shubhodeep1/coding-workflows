@@ -8455,7 +8455,7 @@ def test_post_merge_validate_dispatch_fails_closed_when_required_dispatch_fails(
 	init = 'validation_dispatch_failed=""'
 	assert init in job
 	assert job.index(init) < job.index("while IFS=$'\\t' read -r issue_number has_validate_label labels_known")
-	per_issue = "the job fails after the remaining linked issues are processed."
+	per_issue = "the job fails after the remaining linked issues are processed if none of them dispatches validation."
 	failed_set = job.index("validation_dispatch_failed=1")
 	assert failed_set < job.index(per_issue) < job.index("continue", job.index(per_issue))
 	assert "continuing without failing workflow" not in job
