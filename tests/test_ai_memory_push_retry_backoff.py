@@ -117,6 +117,7 @@ def _scripted_run_git(
 	rebase_stderr: str = "rebase conflict",
 	rebase_stdout: str = "",
 	call_log: list[tuple[str, tuple[str, ...]]] | None = None,
+	push_stderr: str = "! [remote rejected] cannot lock ref",
 ):
 	"""Build a fake _run_git with scripted failure points in the retry loop."""
 
@@ -163,7 +164,7 @@ def _scripted_run_git(
 			rc = next(push_results)
 			return _FakeProc(
 				returncode=rc,
-				stderr="" if rc == 0 else "! [remote rejected] cannot lock ref",
+				stderr="" if rc == 0 else push_stderr,
 			)
 		return _FakeProc(returncode=0)
 
@@ -180,6 +181,8 @@ def _run_persist(
 	rebase_abort_codes: list[int] | None = None,
 	rebase_stderr: str = "rebase conflict",
 	rebase_stdout: str = "",
+	push_stderr: str = "! [remote rejected] cannot lock ref",
+	sleep_log: list[float] | None = None,
 ):
 	"""Drive persist_memory_operation; return (result, backoff_attempts, call_log, exc).
 
@@ -218,8 +221,16 @@ def _run_persist(
 			rebase_stderr=rebase_stderr,
 			rebase_stdout=rebase_stdout,
 			call_log=call_log,
+			push_stderr=push_stderr,
 		)
 		ai_memory_lib._push_retry_backoff_seconds = fake_backoff
+		original_sleep = ai_memory_lib.time.sleep
+
+		def fake_sleep(seconds: float) -> None:
+			if sleep_log is not None:
+				sleep_log.append(seconds)
+
+		ai_memory_lib.time.sleep = fake_sleep
 
 		def _op(_clone_dir: Path) -> dict:
 			return {"claimed": True}
@@ -239,6 +250,7 @@ def _run_persist(
 		finally:
 			ai_memory_lib._run_git = original_run_git
 			ai_memory_lib._push_retry_backoff_seconds = original_backoff
+			ai_memory_lib.time.sleep = original_sleep
 	finally:
 		tempfile.tempdir = work_tempdir
 		if work is not None:
@@ -411,6 +423,118 @@ def test_persist_memory_operation_rebase_error_uses_stdout_when_stderr_empty() -
 		"Memory branch rebase failed while retrying push: "
 		"rebase stdout: CONFLICT (add/add): Merge conflict in lineage.json"
 	), str(exc)
+
+
+def _push_count(call_log: list[tuple[str, tuple[str, ...]]]) -> int:
+	return sum(1 for op, _args in call_log if op == "push")
+
+
+def test_persist_memory_operation_auth_failure_stops_after_one_attempt() -> None:
+	sleeps: list[float] = []
+	result, backoff_attempts, call_log, exc = _run_persist(
+		[1] * 16,
+		push_retries=16,
+		push_stderr="fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+		sleep_log=sleeps,
+	)
+	assert result is None
+	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	assert "error_class=auth" in str(exc), str(exc)
+	assert "attempts=1" in str(exc), str(exc)
+	assert _push_count(call_log) == 1, call_log
+	assert not any(op in ("fetch", "rebase", "show-ref") for op, _args in call_log), call_log
+	assert backoff_attempts == [], backoff_attempts
+	assert sleeps == [], sleeps
+
+
+def test_persist_memory_operation_cannot_lock_ref_still_retries() -> None:
+	sleeps: list[float] = []
+	result, backoff_attempts, call_log, exc = _run_persist(
+		[1, 1, 0],
+		push_retries=16,
+		push_stderr="! [remote rejected] HEAD -> ai-memory (cannot lock ref 'refs/heads/ai-memory')",
+		sleep_log=sleeps,
+	)
+	assert exc is None, exc
+	assert result is not None
+	assert result["did_push"] is True, result
+	assert result["push_attempts"] == 3, result
+	assert backoff_attempts == [1, 2], backoff_attempts
+	assert len(sleeps) == 2, sleeps
+	assert _push_count(call_log) == 3, call_log
+
+
+def test_persist_memory_operation_rate_limit_403_still_retries() -> None:
+	result, backoff_attempts, call_log, exc = _run_persist(
+		[1, 0],
+		push_retries=16,
+		push_stderr=(
+			"remote: API rate limit exceeded\n"
+			"fatal: unable to access 'https://github.com/o/r/': The requested URL returned error: 403"
+		),
+	)
+	assert exc is None, exc
+	assert result is not None
+	assert result["did_push"] is True, result
+	assert result["push_attempts"] == 2, result
+	assert backoff_attempts == [1], backoff_attempts
+	assert _push_count(call_log) == 2, call_log
+
+
+def test_persist_memory_operation_auth_error_message_has_class_and_no_token() -> None:
+	sentinel = "ghp_TESTSENTINEL123"
+	previous = ai_memory_lib.os.environ.get("GH_TOKEN")
+	ai_memory_lib.os.environ["GH_TOKEN"] = sentinel
+	try:
+		result, _backoff_attempts, call_log, exc = _run_persist(
+			[1] * 4,
+			push_retries=4,
+			push_stderr=(
+				f"remote: Invalid credentials\n"
+				f"fatal: Authentication failed for 'https://x-access-token:{sentinel}@github.com/o/r'\n"
+				f"token was {sentinel}"
+			),
+		)
+	finally:
+		if previous is None:
+			ai_memory_lib.os.environ.pop("GH_TOKEN", None)
+		else:
+			ai_memory_lib.os.environ["GH_TOKEN"] = previous
+	assert result is None
+	assert isinstance(exc, ai_memory_lib.MemoryGitError), exc
+	message = str(exc)
+	assert "error_class=auth" in message, message
+	assert "attempts=1" in message, message
+	assert sentinel not in message, message
+	assert "x-access-token:" not in message, message
+	assert "Authentication failed" in message, message
+	assert _push_count(call_log) == 1, call_log
+
+
+def test_permanent_memory_push_failure_classifier() -> None:
+	permanent = [
+		"fatal: COULD NOT READ USERNAME for 'https://github.com': No such device",
+		"fatal: could not read Password for 'https://x@github.com'",
+		"fatal: Authentication Failed for 'https://github.com/o/r/'",
+		"fatal: could not read Username: Terminal Prompts Disabled",
+		"remote: Invalid Username or Password.",
+		"remote: Permission to owner/repo.git denied to some-bot.",
+		"fatal: unable to access 'https://github.com/o/r/': The requested URL returned error: 403",
+		"fatal: unable to access 'https://github.com/o/r/': The requested URL Returned Error: 401",
+	]
+	for text in permanent:
+		assert ai_memory_lib._is_permanent_memory_push_failure(text), text
+	retryable = [
+		"",
+		"   ",
+		"! [remote rejected] HEAD -> ai-memory (cannot lock ref 'refs/heads/ai-memory')",
+		"! [rejected] HEAD -> ai-memory (non-fast-forward)",
+		"The requested URL returned error: 403 (secondary rate limit)",
+		"remote: You have triggered an abuse detection mechanism.\nThe requested URL returned error: 403",
+		"fatal: unable to access: The requested URL returned error: 502",
+	]
+	for text in retryable:
+		assert not ai_memory_lib._is_permanent_memory_push_failure(text), text
 
 
 def main() -> int:

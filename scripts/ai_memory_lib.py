@@ -3257,6 +3257,51 @@ def _push_retry_backoff_seconds(attempt: int) -> float:
     return random.uniform(0.0, ceiling)
 
 
+# A push that fails on missing or rejected credentials fails the same way on
+# every attempt, so retrying it only burns runner time: run 35665803378 spent
+# all 16 attempts on `could not read Username` for nine separate writes.
+# Rate-limit / abuse text is temporary and keeps the retry loop.
+_MEMORY_PUSH_AUTH_FAILURE_RE = re.compile(
+    r"could not read username"
+    r"|could not read password"
+    r"|authentication failed"
+    r"|terminal prompts disabled"
+    r"|invalid username or password"
+    r"|permission to \S+ denied"
+    r"|the requested url returned error: 403"
+    r"|returned error: 401",
+    re.IGNORECASE,
+)
+_MEMORY_PUSH_RATE_LIMIT_RE = re.compile(r"rate[ _-]?limit|abuse", re.IGNORECASE)
+_MEMORY_PUSH_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
+
+
+def _is_permanent_memory_push_failure(stderr: str) -> bool:
+    """Return True when a failed memory push is a credential/permission error.
+
+    Such failures are deterministic and must not consume the retry budget.
+    Text that names a rate limit or abuse detection is treated as temporary
+    (a secondary-rate-limit 403), so it is never classified as permanent.
+    """
+    text = stderr or ""
+    if not text.strip():
+        return False
+    if _MEMORY_PUSH_RATE_LIMIT_RE.search(text):
+        return False
+    return bool(_MEMORY_PUSH_AUTH_FAILURE_RE.search(text))
+
+
+def _redact_memory_push_stderr(stderr: str) -> str:
+    """Scrub credential values and URL userinfo from git push stderr."""
+    text = stderr or ""
+    for env_name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT"):
+        secret = os.environ.get(env_name, "")
+        if secret:
+            text = text.replace(secret, "***")
+    text = _MEMORY_PUSH_URL_USERINFO_RE.sub(r"\1***@", text)
+    return text.strip()
+
+
 def persist_memory_operation(
     repo_root: Path,
     *,
@@ -3312,6 +3357,17 @@ def persist_memory_operation(
                         "push_attempts": attempt,
                         "operation_result": op_result,
                     }
+
+                # Credential/permission failures (run 35665803378: nine writes
+                # x 16 attempts on `could not read Username`) cannot succeed on
+                # a retry: stop now, with no backoff, fetch or rebase. The
+                # message never carries the origin URL or the token.
+                if _is_permanent_memory_push_failure(push.stderr or ""):
+                    raise MemoryGitError(
+                        f"Failed to push memory branch: error_class=auth attempts={attempt} "
+                        f"(permanent credential/permission failure, not retried): "
+                        f"{_redact_memory_push_stderr(push.stderr or '')}"
+                    )
 
                 if attempt >= push_retries:
                     raise MemoryGitError(
