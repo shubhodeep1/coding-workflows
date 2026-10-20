@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-19T10:11:07Z",
+  "tick_at": "2026-10-20T09:16:09Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 7
+    "tracking_issues": 8
   },
   "tracking_issues": [
     {
@@ -135,14 +135,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "4",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 2,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -152,7 +151,27 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Apply workflow-optimization-2026-09-21-4 recommendations (verified subset)",
-      "total_waves": 3,
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 0,
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 7713,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply workflow-optimization-2026-09-22 recommendations (verified subset)",
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
