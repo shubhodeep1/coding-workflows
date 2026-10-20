@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The project security pass should fail closed as `audit_input_rejected` for any pre-model input-rejection phase in `scripts/security_audit.sh`, not only for the four enumerated phases (`oversized-scope`, `diff-scope`, `prior-findings`, `waived-findings`).\n  expected_change_site: scripts/orchestrate_poll_process.sh line 8881-8890 (`case \"${security_pass_audit_failure_phase}\"` inside `run_security_pass_inline`) and the test loop in tests/test_orchestrate_poll_process.py:4080\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: scripts/security_audit.sh emits additional preflight phases (`findings-output-preflight` at :691/:694, `project-spec-preflight` at :696, `prior-findings-preflight` at :699, `waived-findings-preflight` at :702) that are missing from the case statement in scripts/orchestrate_poll_process.sh:8882 (so they fall through to `engine_unavailable`), and are not covered in the phase loop in tests/test_orchestrate_poll_process.py:4080\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP (SEVERITY: BLOCKER, ISSUE_CONFIDENCE: 4)\n  Requirement: The project security pass should fail closed as `audit_input_rejected` for any pre-model input-rejection phase in `scripts/security_audit.sh`, not only for the four enumerated phases (`oversized-scope`, `diff-scope`, `prior-findings`, `waived-findings`).\n  Expected change site: scripts/orchestrate_poll_process.sh line 8881-8890 (`case \"${security_pass_audit_failure_phase}\"` inside `run_security_pass_inline`) and the test loop in `tests/test_orchestrate_poll_process.py`.\n  Evidence of absence: `scripts/security_audit.sh` defines additional preflight phases such as `findings-output-preflight`, `project-spec-preflight`, `prior-findings-preflight`, and `waived-findings-preflight`. These are missing from the `case` statement in `scripts/orchestrate_poll_process.sh` (where they fall through to `engine_unavailable`) and are not included in the phase loop in `tests/test_orchestrate_poll_process.py`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (SEVERITY: MAJOR, ISSUE_CONFIDENCE: 4)\n  Requirement: \"When the phase is one of these four, the pass now fails closed as `audit_input_rejected`\"; the intent is that any pre-model input-rejection phase maps to `audit_input_rejected` rather than `engine_unavailable`.\n  Expected change site: scripts/orchestrate_poll_process.sh line 8882 (`case \"${security_pass_audit_failure_phase}\" in`) inside `run_security_pass_inline`.\n  Evidence of absence: scripts/security_audit.sh emits four additional pre-model input-rejection phases not in the case pattern: `findings-output-preflight` (scripts/security_audit.sh:691, :694), `project-spec-preflight` (:696), `prior-findings-preflight` (:699), `waived-findings-preflight` (:702). The case statement at scripts/orchestrate_poll_process.sh:8882 covers only `oversized-scope`, `diff-scope`, `prior-findings`, `waived-findings`; the test loop at tests/test_orchestrate_poll_process.py:4080 mirrors the same four. These share the same false-engine-outage failure mode.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4723a2b2eb7d7fc66fcaa799d19dcaf50d68e6d30a0f575e7f302fe3f85d5d4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7728,
+    "run_id": "39380125075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39380125075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261020064226_1568e3a2ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7728,
+    "run_id": "39380125075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-20T06:42:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
