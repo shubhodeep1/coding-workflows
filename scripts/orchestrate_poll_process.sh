@@ -8874,10 +8874,26 @@ run_security_pass_inline() {
     return 1
   fi
   if [ "${security_pass_audit_rc}" -ne 0 ]; then
-    local security_pass_audit_failure_summary=""
+    local security_pass_audit_failure_summary="" security_pass_audit_failure_phase=""
     security_pass_audit_failure_summary="$(security_pass_report_audit_stderr "${audit_error_file}" "${security_pass_audit_rc}")" || security_pass_audit_failure_summary=""
+    security_pass_audit_failure_phase="$(LC_ALL=C grep -E '^security-audit: phase=' "${audit_error_file}" 2>/dev/null | tail -n 1 | sed -nE 's/^security-audit: phase=([^ ]*).*/\1/p')" || security_pass_audit_failure_phase=""
     if [ -n "${security_pass_audit_failure_summary}" ]; then
-      security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited with status ${security_pass_audit_rc} without a usable result (last audit error: \`${security_pass_audit_failure_summary}\`)" "${prior_security_status}"
+      case "${security_pass_audit_failure_phase}" in
+        oversized-scope|diff-scope|prior-findings|waived-findings|project-spec-preflight|prior-findings-preflight|waived-findings-preflight)
+          # security_audit.sh refused its input before any model ran: the
+          # audited diff, the oversized-file export, or the project spec and
+          # prior/waived findings files the poller handed it. The output
+          # destination check (findings-output-preflight) is not an input and
+          # keeps engine_unavailable. The engine is fine, so do not report
+          # an outage. The poller still retries, but the same input fails the
+          # same way until the integration branch or the audit code changes
+          # (fun-token-multi-chain#579 sat on engine_unavailable for this).
+          security_pass_fail_closed "audit_input_rejected" "The findings-JSON security audit rejected its input before any model ran (exit status ${security_pass_audit_rc}; last audit error: \`${security_pass_audit_failure_summary}\`). This is not an engine outage: the same input fails the same way on every retry until the integration branch or the audit support code changes" "${prior_security_status}"
+          ;;
+        *)
+          security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited with status ${security_pass_audit_rc} without a usable result (last audit error: \`${security_pass_audit_failure_summary}\`)" "${prior_security_status}"
+          ;;
+      esac
     else
       security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited with status ${security_pass_audit_rc} without a usable result; its stderr tail is in this run's job log under SECURITY_PASS_AUDIT_STDERR" "${prior_security_status}"
     fi
