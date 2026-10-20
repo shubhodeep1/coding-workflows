@@ -618,6 +618,24 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Standalone stall recovery runs the check-triage resolution gate
+          # (issue #7095) when an ai:check-triage fix PR merged into the
+          # triaged PR's branch instead of the default branch. Optional: when
+          # absent, the issue stays open and unlabelled (STALL_CHECK_TRIAGE_GATE
+          # outcome=skip reason=support_missing).
+          for f in check_triage_resolution.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; the stall-recovery check-triage close gate stays off."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
           # Issue #7177: the noop-suspicious recovery sweep's force-merge gate B
           # sources this audit helper. Optional: when absent, gate B fails closed.
           for f in validate_editor_audit.sh; do
@@ -1317,6 +1335,8 @@ jobs:
           # Issue #6680 kill switch for closing and re-issuing a PR whose only
           # host-only conflicts are retired files the base no longer has.
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
+          # PR #7709: stall recovery's check-triage resolution gate; false turns it off.
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'false' }}
           CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
           CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
@@ -1489,6 +1509,8 @@ jobs:
           ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
+          # PR #7709: stall recovery's check-triage resolution gate; false turns it off.
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'false' }}
           CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
           CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
