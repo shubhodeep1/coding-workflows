@@ -46,6 +46,7 @@ except ModuleNotFoundError:
 try:
     from cost_audit import (
         BREAK_GLASS_RE,
+        CODEX_TOKENS_HEADER_RE,
         CONTEXT_BUDGET_WARN_RE,
         OPENROUTER_RE,
         aggregate_run_cost_telemetry,
@@ -55,6 +56,7 @@ try:
 except ModuleNotFoundError:
     from scripts.cost_audit import (
         BREAK_GLASS_RE,
+        CODEX_TOKENS_HEADER_RE,
         CONTEXT_BUDGET_WARN_RE,
         OPENROUTER_RE,
         aggregate_run_cost_telemetry,
@@ -90,6 +92,7 @@ STRUCTURED_COST_TELEMETRY_PATTERNS = (
     OPENROUTER_RE,
     BREAK_GLASS_RE,
     CONTEXT_BUDGET_WARN_RE,
+    CODEX_TOKENS_HEADER_RE,
 )
 DIAGNOSTIC_FAILURE_CONCLUSIONS = frozenset({"failure", "startup_failure"})
 PAT_BUDGET_WORKFLOWS = {
