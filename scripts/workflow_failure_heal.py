@@ -121,8 +121,9 @@ _SYNCED_SECURITY_FILE_RE = re.compile(r"^[A-Za-z0-9._/+-]{1,300}$")
 # by no year at all. Any other number after the code (A01:2017, A011) is
 # rejected: 2017 numbering maps codes to different categories.
 _SYNCED_SECURITY_OWASP_RE = re.compile(r"^\s*(A0[1-9]|A10)(?:[\s:-]+2021(?![0-9])|(?![0-9A-Za-z])(?![\s:-]*[0-9]))", re.IGNORECASE)
-# A year written right after the code, e.g. `A01 (2017)` or `A01 - 2021`.
-_SYNCED_SECURITY_YEAR_RE = re.compile(r"[\s:(\[-]*((?:19|20)[0-9]{2})(?![0-9])")
+# A year written right after the code after any separators, e.g. `A01 (2017)`,
+# `A01/2017` or `A01 - 2021`.
+_SYNCED_SECURITY_YEAR_RE = re.compile(r"[^0-9A-Za-z]*((?:19|20)[0-9]{2})(?![0-9])")
 _SYNCED_SECURITY_STRIDE_PREFIX_RE = re.compile(r"^stride(?:\s*[:-]\s*|\s+)", re.IGNORECASE)
 # The audit's categories (prompts/mode-security-audit.txt): OWASP Top 10 2021
 # and STRIDE. Only these canonical tokens are ever published.
