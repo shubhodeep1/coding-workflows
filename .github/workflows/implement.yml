@@ -439,11 +439,32 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && steps.existing_pr_check.outputs.existing_pr == 'true'
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "DUPLICATE_NOTICE_SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "DUPLICATE_NOTICE_SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
             # take the support scripts from that same commit, not a newer
@@ -722,12 +743,33 @@ jobs:
         id: pr_not_open_support_ref
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           # Same shape as the other "Resolve workflow support ref" steps
           # (tests/test_workflow_support_ref_follows_pin.py): one line to GITHUB_ENV.
           if [ "${{ github.repository }}" = "shubhodeep1/coding-workflows" ]; then
-            echo "PR_NOT_OPEN_SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "PR_NOT_OPEN_SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             pin="stable"
             wf_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
@@ -1281,11 +1323,32 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
             # take the support scripts from that same commit, not a newer
@@ -3382,8 +3445,23 @@ jobs:
             export CODEX_ISOLATED_EXEC CODEX_ISOLATED_ROOT CODEX_ISOLATED_MODE
             echo "CODEX_ISOLATED_IMPLEMENT_ROOT=${CODEX_ISOLATED_ROOT}" >> "$GITHUB_ENV"
 
+            # Name the engine that actually runs, so a Claude run is not logged as
+            # Codex. codex_thread_reuse.sh writes the claude-implement.unavailable
+            # marker when Claude is unavailable and the codex path takes over.
+            implement_engine_display_name()
+            {
+              if [ "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" = "claude" ] \
+                && [ ! -f "${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR}}/codex-thread-reuse/states/claude-implement.unavailable" ]; then
+                printf 'Claude'
+              else
+                printf 'Codex'
+              fi
+            }
+            implement_engine_name="$(implement_engine_display_name)"
+
             for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex implement attempt ${attempt}/${max_attempts}..."
+            implement_engine_name="$(implement_engine_display_name)"
+            echo "${implement_engine_name} implement attempt ${attempt}/${max_attempts}..."
 
             # Budget check: skip attempt if not enough time remains
             now_epoch="$(date +%s)"
@@ -3555,6 +3633,7 @@ jobs:
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?
             fi
+            implement_engine_name="$(implement_engine_display_name)"
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3562,16 +3641,16 @@ jobs:
               case "${stall_state}" in
                 observed|killed)
                   if [ "${stall_state}" = "killed" ]; then
-                    echo "::warning::Codex implement attempt ${attempt} recorded codex_stall_killed."
+                    echo "::warning::${implement_engine_name} implement attempt ${attempt} recorded codex_stall_killed."
                     emit_implement_substate "implement" "implement" "codex_stall_killed" "${attempt}" "${attempt_log_file}"
                   else
-                    echo "Codex implement attempt ${attempt} recorded codex_stall_observed (observe-only mode)."
+                    echo "${implement_engine_name} implement attempt ${attempt} recorded codex_stall_observed (observe-only mode)."
                     emit_implement_substate "implement" "implement" "codex_stall_observed" "${attempt}" "${attempt_log_file}"
                   fi
                   ;;
               esac
             elif [ -s "${attempt_stall_status_file}" ]; then
-              echo "::warning::Codex implement attempt ${attempt} recorded an unrecognized codex stall guard state."
+              echo "::warning::${implement_engine_name} implement attempt ${attempt} recorded an unrecognized codex stall guard state."
             fi
             rm -f "${attempt_stall_status_file}"
 
@@ -3585,7 +3664,7 @@ jobs:
               exit 0
             fi
             if [ "${cmd_rc}" -eq 124 ]; then
-              echo "::warning::Codex implement attempt ${attempt} hit the outer wall-clock limit (${attempt_wall}s)."
+              echo "::warning::${implement_engine_name} implement attempt ${attempt} hit the outer wall-clock limit (${attempt_wall}s)."
             fi
 
             attempt_was_empty=false
@@ -3597,7 +3676,7 @@ jobs:
                 # count as a false-positive Codex change.
                 codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
                 if [ -n "${codex_delta}" ]; then
-                  echo "Codex implement succeeded with file changes on attempt ${attempt}."
+                  echo "${implement_engine_name} implement succeeded with file changes on attempt ${attempt}."
                   implement_succeeded=true
                   emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
                   break
@@ -3650,14 +3729,14 @@ jobs:
                   fi
                   if printf '%s' "${codex_blocked_reason}" | grep -qiE "${BLOCKED_ALREADY_SATISFIED_REGEX}" 2>/dev/null \
                      && ! printf '%s' "${codex_blocked_first_sentence}" | grep -qiE "${BLOCKED_REAL_OBSTACLE_REGEX}" 2>/dev/null; then
-                    echo "Codex returned a BLOCKED verdict on attempt ${attempt} that reports the requested work is already present — treating it as success-no-op. Model reason: $(_gh_actions_escape "${codex_blocked_reason}")"
+                    echo "${implement_engine_name} returned a BLOCKED verdict on attempt ${attempt} that reports the requested work is already present — treating it as success-no-op. Model reason: $(_gh_actions_escape "${codex_blocked_reason}")"
                     : > "${RUNTIME_DIR}/codex_success_noop.flag"
                     implement_succeeded=true
                     emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
                     break
                   fi
                   # Escape the annotation channel, but preserve the raw line in the flag file below.
-                  echo "::error::Codex returned a deliberate BLOCKED verdict on attempt ${attempt} — not retrying (a verdict is not a stuck attempt). Model reason: $(_gh_actions_escape "${codex_blocked_reason}")"
+                  echo "::error::${implement_engine_name} returned a deliberate BLOCKED verdict on attempt ${attempt} — not retrying (a verdict is not a stuck attempt). Model reason: $(_gh_actions_escape "${codex_blocked_reason}")"
                   printf '%s\n' "${codex_blocked_reason}" > "${RUNTIME_DIR}/codex_blocked.flag"
                   emit_implement_substate "implement" "implement" "Failed" "${attempt}" "${attempt_log_file}"
                   break
@@ -3670,7 +3749,7 @@ jobs:
                 # "Handle no-op implementation" step so it can close the
                 # issue with ai:closed instead of re-issuing it.
                 if grep -qEi '^([[:space:]]*([-[:space:]]*)?)?(no file changes were made|nothing to change|already (aligned|implemented|satisfied|up[- ]to[- ]date|done|exists|present|complete)|no changes needed|no repository changes (were )?made|no file changes made|no repository changes (were )?required|no files (were )?modified|no repository changes (were )?needed|no file changes (were )?needed)([[:space:]]*[.!?])?[[:space:]]*$' "${CODEX_OUTPUT_FILE}"; then
-                  echo "Codex implement reported success-no-op on attempt ${attempt} (model says the requested work is already present)."
+                  echo "${implement_engine_name} implement reported success-no-op on attempt ${attempt} (model says the requested work is already present)."
                   : > "${RUNTIME_DIR}/codex_success_noop.flag"
                   implement_succeeded=true
                   emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
@@ -3700,10 +3779,10 @@ jobs:
                 # empty, so broadening strictly increases recall on a
                 # path that is already a confirmed no-op.
                 if grep -qEi "${ANNOUNCE_EDIT_REGEX}" "${CODEX_OUTPUT_FILE}" 2>/dev/null; then
-                  echo "::warning::Codex announced an edit/apply_patch on attempt ${attempt} but produced no file changes — counting toward empty_streak."
+                  echo "::warning::${implement_engine_name} announced an edit/apply_patch on attempt ${attempt} but produced no file changes — counting toward empty_streak."
                   attempt_was_empty=true
                 fi
-                echo "::warning::Codex returned output but produced no file changes on attempt ${attempt}."
+                echo "::warning::${implement_engine_name} returned output but produced no file changes on attempt ${attempt}."
               else
                 # Codex exited 0 with no stdout — in practice this is the
                 # watchdog SIGTERM path: codex catches TERM, exits 0, and
@@ -3714,12 +3793,12 @@ jobs:
                 # Salvage any file changes already on disk here too.
                 codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
                 if delta_is_substantive "${codex_delta}"; then
-                  echo "::warning::Codex returned empty output on attempt ${attempt} but produced file changes; salvaging partial work."
+                  echo "::warning::${implement_engine_name} returned empty output on attempt ${attempt} but produced file changes; salvaging partial work."
                   implement_succeeded=true
                   emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
                   break
                 elif [ -n "${codex_delta}" ]; then
-                  echo "::warning::Codex returned empty output on attempt ${attempt} and only made whitespace-only worktree changes — refusing to salvage; treating as empty."
+                  echo "::warning::${implement_engine_name} returned empty output on attempt ${attempt} and only made whitespace-only worktree changes — refusing to salvage; treating as empty."
                 fi
                 # Stuck-intent on stderr: when stdout is empty but the
                 # per-attempt stderr log carries an announce-edit
@@ -3737,9 +3816,9 @@ jobs:
                 # stderr; the stdout-only stuck-intent check missed it
                 # and the bail message mis-reported "empty output".
                 if [ -f "${attempt_log_file}" ] && grep -qEi "${ANNOUNCE_EDIT_REGEX}" "${attempt_log_file}" 2>/dev/null; then
-                  echo "::warning::Codex announced an edit/apply_patch on attempt ${attempt} (in stderr) but produced no file changes — counting toward empty_streak."
+                  echo "::warning::${implement_engine_name} announced an edit/apply_patch on attempt ${attempt} (in stderr) but produced no file changes — counting toward empty_streak."
                 else
-                  echo "::warning::Codex returned empty output on attempt ${attempt}."
+                  echo "::warning::${implement_engine_name} returned empty output on attempt ${attempt}."
                 fi
                 attempt_was_empty=true
               fi
@@ -3751,16 +3830,16 @@ jobs:
               # discarded and the loop wastes its remaining budget restarting
               # from scratch (see analyze-log run 24989488561).
               if codex_stall_guard_kill_detected "${cmd_rc}" "${stall_state}"; then
-                echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} after a codex stall-guard kill."
+                echo "::warning::${implement_engine_name} exited with code $cmd_rc on attempt ${attempt} after a codex stall-guard kill."
               fi
               codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}" || true)"
               if delta_is_substantive "${codex_delta}"; then
-                echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} but produced file changes; salvaging partial work."
+                echo "::warning::${implement_engine_name} exited with code $cmd_rc on attempt ${attempt} but produced file changes; salvaging partial work."
                 implement_succeeded=true
                 emit_implement_substate "implement" "implement" "Succeeded" "${attempt}" "${attempt_log_file}"
                 break
               elif [ -n "${codex_delta}" ]; then
-                echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} and only made whitespace-only worktree changes — refusing to salvage; treating as empty."
+                echo "::warning::${implement_engine_name} exited with code $cmd_rc on attempt ${attempt} and only made whitespace-only worktree changes — refusing to salvage; treating as empty."
               fi
               # Stall-guard-kill / timeout / non-zero-exit + empty stdout is the same
               # stuck/no-output failure mode as the cmd_rc==0 + empty
@@ -3779,13 +3858,13 @@ jobs:
                 # narrative on stderr don't get mis-classified as a
                 # plain empty-output failure.
                 if [ -f "${attempt_log_file}" ] && grep -qEi "${ANNOUNCE_EDIT_REGEX}" "${attempt_log_file}" 2>/dev/null; then
-                  echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt} after announcing an edit/apply_patch (in stderr) but producing no file changes."
+                  echo "::warning::${implement_engine_name} exited with code $cmd_rc on attempt ${attempt} after announcing an edit/apply_patch (in stderr) but producing no file changes."
                 else
-                  echo "::warning::Codex exited with code $cmd_rc and returned empty output on attempt ${attempt}."
+                  echo "::warning::${implement_engine_name} exited with code $cmd_rc and returned empty output on attempt ${attempt}."
                 fi
                 attempt_was_empty=true
               else
-                echo "::warning::Codex exited with code $cmd_rc on attempt ${attempt}."
+                echo "::warning::${implement_engine_name} exited with code $cmd_rc on attempt ${attempt}."
               fi
             fi
 
@@ -3811,7 +3890,7 @@ jobs:
             if [ -f "${attempt_log_file}" ] && \
                 grep -q 'request_user_input is not supported in exec mode' \
                   "${attempt_log_file}"; then
-              echo "::error::Codex emitted request_user_input in exec mode (issue/plan ambiguity). Aborting retry loop and routing back to clarify."
+              echo "::error::${implement_engine_name} emitted request_user_input in exec mode (issue/plan ambiguity). Aborting retry loop and routing back to clarify."
               : > "${RUNTIME_DIR}/codex_request_user_input.flag"
               emit_implement_substate "implement" "implement" "Failed" "${attempt}" "${attempt_log_file}"
               break
@@ -3843,7 +3922,7 @@ jobs:
             if [ "${attempt_was_empty}" = "true" ]; then
               empty_streak=$((empty_streak + 1))
               if [ "${empty_streak}" -ge "${empty_streak_threshold}" ]; then
-                echo "::error::Codex produced no actionable output ${empty_streak} attempts in a row (empty-output and/or announced-edit-without-changes) — agent loop is stuck in exploration. Aborting retry loop."
+                echo "::error::${implement_engine_name} produced no actionable output ${empty_streak} attempts in a row (empty-output and/or announced-edit-without-changes) — agent loop is stuck in exploration. Aborting retry loop."
                 : > "${RUNTIME_DIR}/codex_stuck_in_exploration.flag"
                 emit_implement_substate "implement" "implement" "Failed" "${attempt}" "${attempt_log_file}"
                 break
@@ -3889,18 +3968,18 @@ jobs:
           # job log. Mirrors the validation-harness exit-14 pattern
           # documented in the spec.
           if [ "${implement_succeeded}" != "true" ]; then
-            diag_reason="Codex implement failed after ${max_attempts} attempts"
+            diag_reason="${implement_engine_name} implement failed after ${max_attempts} attempts"
             if [ -f "${RUNTIME_DIR}/codex_request_user_input.flag" ]; then
-              diag_reason="Codex bailed: request_user_input rejected in exec mode (issue/plan ambiguity — route back to clarify)"
+              diag_reason="${implement_engine_name} bailed: request_user_input rejected in exec mode (issue/plan ambiguity — route back to clarify)"
             elif [ -f "${RUNTIME_DIR}/codex_blocked.flag" ]; then
-              diag_reason="Codex bailed on attempt ${attempt}: deliberate BLOCKED verdict (the model reported the task cannot be completed as specified; its \`BLOCKED:\` line was captured from final assistant output and logged by the Run Codex implementation step, while the tails below contain stderr only; this is a terminal answer, not a retryable failure, so the loop stopped instead of exhausting all ${max_attempts} attempts)"
+              diag_reason="${implement_engine_name} bailed on attempt ${attempt}: deliberate BLOCKED verdict (the model reported the task cannot be completed as specified; its \`BLOCKED:\` line was captured from final assistant output and logged by the Run Codex implementation step, while the tails below contain stderr only; this is a terminal answer, not a retryable failure, so the loop stopped instead of exhausting all ${max_attempts} attempts)"
             elif [ -f "${RUNTIME_DIR}/codex_stuck_in_exploration.flag" ]; then
-              diag_reason="Codex bailed: ${empty_streak} consecutive attempts with no actionable output (empty-output and/or announced-edit-without-changes — agent loop stuck in exploration)"
+              diag_reason="${implement_engine_name} bailed: ${empty_streak} consecutive attempts with no actionable output (empty-output and/or announced-edit-without-changes — agent loop stuck in exploration)"
             fi
 
             diag_file="${RUNTIME_DIR}/codex_failure_diagnostics.md"
             {
-              printf '## Codex implement diagnostics\n\n'
+              printf '## %s implement diagnostics\n\n' "${implement_engine_name}"
               printf '%s.\n\n' "${diag_reason}"
               printf 'Run: <https://github.com/%s/actions/runs/%s>\n\n' \
                 "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}"
@@ -4009,9 +4088,9 @@ jobs:
               if gh issue comment "${ISSUE_NUMBER}" \
                   --repo "${GITHUB_REPOSITORY}" \
                   --body-file "${diag_file}" >/dev/null 2>&1; then
-                echo "Posted Codex implement failure diagnostics to issue #${ISSUE_NUMBER}."
+                echo "Posted ${implement_engine_name} implement failure diagnostics to issue #${ISSUE_NUMBER}."
               else
-                echo "::warning::Could not post Codex failure diagnostics to issue #${ISSUE_NUMBER} (gh issue comment failed); diagnostics saved at ${diag_file}."
+                echo "::warning::Could not post ${implement_engine_name} failure diagnostics to issue #${ISSUE_NUMBER} (gh issue comment failed); diagnostics saved at ${diag_file}."
               fi
             else
               echo "::warning::Skipping diagnostics issue comment (ISSUE_NUMBER='${ISSUE_NUMBER:-}', diag_file size=$(wc -c < "${diag_file}" 2>/dev/null || echo 0)); diagnostics saved locally."
@@ -6911,11 +6990,32 @@ jobs:
       - name: Resolve workflow support ref
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/implement\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
             # take the support scripts from that same commit, not a newer

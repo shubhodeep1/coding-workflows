@@ -46,7 +46,7 @@ permissions:
 
 jobs:
   validate:
-    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@main
+    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@promote-candidate
     with:
       tracking_issue: ${{ inputs.tracking_issue || '0' }}
       pr_number: ${{ inputs.pr_number || '0' }}

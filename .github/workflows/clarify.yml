@@ -376,11 +376,32 @@ jobs:
         if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/clarify\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
             # take the support scripts from that same commit, not a newer
@@ -1621,7 +1642,10 @@ jobs:
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex clarify attempt ${attempt}/${max_attempts} (engine ${CLARIFY_ENGINE})..."
+            # Name the engine that actually runs, so a Claude run is not logged as Codex.
+            clarify_engine_name="Codex"
+            if [ "${CLARIFY_ENGINE}" = "claude" ]; then clarify_engine_name="Claude"; fi
+            echo "${clarify_engine_name} clarify attempt ${attempt}/${max_attempts}..."
             rc=0
             if [ "${CLARIFY_ENGINE}" = "claude" ]; then
               bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY || rc=$?
@@ -1637,6 +1661,7 @@ jobs:
                 # Claude unavailable (logged as AI_ENGINE_FALLBACK): this
                 # attempt and the rest run the codex path (plan D1).
                 CLARIFY_ENGINE="codex"
+                clarify_engine_name="Codex"
                 rc=0
               fi
             fi
@@ -1645,19 +1670,19 @@ jobs:
             fi
             if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "Codex clarify succeeded on attempt ${attempt}."
+                echo "${clarify_engine_name} clarify succeeded on attempt ${attempt}."
                 break
               fi
-              echo "::warning::Codex returned empty output on attempt ${attempt}."
+              echo "::warning::${clarify_engine_name} returned empty output on attempt ${attempt}."
             else
-              echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+              echo "::warning::${clarify_engine_name} exited with code $rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
               echo "Retrying in ${sleep_secs}s (includes jitter)..."
               sleep "${sleep_secs}"
             else
-              echo "::error::Codex clarify failed after ${max_attempts} attempts."
+              echo "::error::${clarify_engine_name} clarify failed after ${max_attempts} attempts."
               exit 1
             fi
           done
@@ -2319,11 +2344,32 @@ jobs:
       - name: Resolve workflow support ref
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/clarify\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
             # take the support scripts from that same commit, not a newer
