@@ -5,13 +5,31 @@
   "entry_id": "processed_command_7765_6306220847_approved",
   "issue_number": 7765,
   "metadata": {
+    "branch": "ai/issue-7765",
+    "changed_files": [
+      ".claude/commands/investigate-issue.md",
+      ".claude/commands/validate-consumer-issue.md",
+      ".github/workflows/orchestrate_poll.yml",
+      "agents.d/7765-implements-marker.md",
+      "changelog.d/7765-implements-marker.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_linked_pr_implementation_guard.py",
+      "tests/test_stall_retired_conflict_reissue.py",
+      "workflow-templates/.claude/commands/investigate-issue.md",
+      "workflow-templates/.claude/commands/validate-consumer-issue.md"
+    ],
+    "issue_number": 7765,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7765",
+    "pr_number": 7769,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7769",
+    "run_attempt": "1",
+    "run_id": "39531159262",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39531159262"
   },
   "run_attempt": 1,
   "run_id": "39531159262",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-21T02:09:55Z",
+  "status": "completed",
+  "timestamp": "2026-10-21T02:37:10Z",
   "workflow": "implement"
 }
