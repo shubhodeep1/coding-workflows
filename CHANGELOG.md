@@ -3123,6 +3123,21 @@ The "Semantic cache lookup", "Write run summary" and "Telegram failure notificat
 
 What this means for operators: to release a held issue, either restore `ai:check-triage` and remove `ai:orchestrator-managed`, or, only on an issue that keeps `ai:orchestrator-managed`, add the canonical tracking line to the issue body, then comment `/reclarify`. Once routing passes, that clarify run removes the hold's `ai:blocked` label (only when the `GH_PAT` account wrote the hold marker) and rewrites the marker to `<!-- ai:integration-ref-label-missing:v1 issue=<n> released -->`, so a later `ai:blocked` set for another reason is never removed by it (the marker is retired even when `ai:blocked` was already removed by hand), and planning and the unblock scan do not see a stale block. For #7511 and #7515, whose pull requests have merged, restoring the labels lets clarify close them through the check-triage resolution gate.
 
+- **The AI Orchestrate Poller can run its Claude roles again.** Its "Stage workflow support files" step now copies `claude_anthropic_relay.py` next to `codex_isolated_exec.sh`.
+
+Without the relay, every Claude run from the poller stopped with `CODEX_ISOLATION unavailable engine=claude reason=support_missing`. Under `AI_ENGINE_FALLBACK_POLICY=capacity` that meant the orchestrator security pass failed closed with `SECURITY_PASS_FAILED reason=engine_unavailable`, and each poller run sent a Telegram warning: `refused Claude fallback (non-capacity) … SECURITY_AUDIT:isolation_unavailable`. This happened even when the Claude pool had free accounts. `orchestrate.yml` had the same gap, fixed in #6908.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Workflow changed | `.github/workflows/orchestrate_poll.yml` |
+| Consumer runs seen failing | fun-token-multi-chain 39563863015, 39564851636, 39565576987; tele-funtoken-msg-scoring 39562537641, 39563450320, 39565021848 |
+
+What this means for consumer repos: after the next `@stable` sync, blocked security passes run on Claude on the next poller tick, and the refused-fallback warnings stop. No variable change is needed.
+
+### For contributors
+
+`tests/test_codex_agent_isolation_contract.py::test_orchestrate_poll_stages_every_claude_isolation_support_file` reads the Claude support files from `codex_isolated_exec.sh` and fails if the poller's required loop does not stage all of them.
+
 ### For contributors
 
 The labels on #7511 and #7515 most likely come from stall recovery's close-and-reissue in `scripts/orchestrate_poll_process.sh` (`execute_stall_recovery_action`), which copies the original body, always adds `ai:orchestrator-managed`, carries `ai:workflow-heal` but not `ai:check-triage`, and writes no tracking line. That script is outside this fix's scope and is left to a follow-up issue. The hold also covers any other writer that produces the same shape.
