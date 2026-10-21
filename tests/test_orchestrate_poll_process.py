@@ -2685,6 +2685,20 @@ if args[0] == 'api':
 		print(json.dumps({'ref': f'refs/heads/{branch}'}))
 		sys.exit(0)
 
+	m_tag_del = re.search(r'/git/refs/tags/(.+)$', path)
+	if m_tag_del and method == 'DELETE':
+		tag_name = m_tag_del.group(1)
+		store.setdefault('deleted_tags', []).append(tag_name)
+		tag_refs = dict(store.get('tag_refs') or {})
+		if tag_name not in tag_refs:
+			save()
+			print('HTTP 422: Reference does not exist', file=sys.stderr)
+			sys.exit(1)
+		tag_refs.pop(tag_name, None)
+		store['tag_refs'] = tag_refs
+		save()
+		sys.exit(0)
+
 	if re.search(r'/git/refs$', path) and method == 'POST':
 		ref = ''
 		sha = ''
