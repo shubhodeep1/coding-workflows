@@ -224,7 +224,6 @@ def test_label_create_helper_does_not_retry_an_existing_label() -> None:
 	assert calls == 6
 
 
-
 GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 
 
@@ -294,6 +293,7 @@ def test_label_helpers_retry_through_real_gh_retry() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		rc, calls = _run_label_helpers_with_real_gh_retry(tmp, add, "HTTP 502: Bad Gateway", 1)
 	assert (rc, calls) == (0, 2)
+
 
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
