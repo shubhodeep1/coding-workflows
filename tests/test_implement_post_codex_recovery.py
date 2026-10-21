@@ -4502,7 +4502,7 @@ def test_codex_blocked_verdict_bail_and_flag() -> None:
 	)
 	assert "captured from final assistant output" in codex_block[diag_idx:diag_idx + 600]
 	assert "tails below contain stderr only" in codex_block[diag_idx:diag_idx + 600]
-	generic_idx = codex_block.find('diag_reason="Codex implement failed after ${max_attempts} attempts"')
+	generic_idx = codex_block.find('diag_reason="${implement_engine_name} implement failed after ${max_attempts} attempts"')
 	assert generic_idx != -1 and generic_idx < diag_idx, (
 		"the BLOCKED branch must override the generic default reason"
 	)
@@ -4590,7 +4590,7 @@ def test_blocked_already_satisfied_routes_to_success_noop() -> None:
 		'grep -qiE "${BLOCKED_ALREADY_SATISFIED_REGEX}"'
 	)
 	fail_bail_idx = codex_block.find(
-		"Codex returned a deliberate BLOCKED verdict on attempt"
+		"${implement_engine_name} returned a deliberate BLOCKED verdict on attempt"
 	)
 	assert -1 not in (blocked_idx, classifier_idx, fail_bail_idx)
 	assert blocked_idx < classifier_idx < fail_bail_idx, (
@@ -4964,7 +4964,7 @@ def test_codex_empty_output_streak_bail_and_flag() -> None:
 	# streak. Without this, a series of watchdog kills (which exit
 	# with non-zero AND empty stdout) would never trip the bail and
 	# the loop would burn the full 5-attempt budget on stuck runs.
-	assert 'Codex exited with code $cmd_rc and returned empty output' in codex_block, (
+	assert '${implement_engine_name} exited with code $cmd_rc and returned empty output' in codex_block, (
 		"the cmd_rc != 0 branch must distinguish empty-stdout exits "
 		"(stuck/no-output, count toward streak) from non-empty exits "
 		"(legitimate work attempted, don't count). Without this, a run "
@@ -5191,7 +5191,7 @@ def test_salvage_branches_gate_on_substantive_changes() -> None:
 		"trailing-newline append (PR #2176 root cause)"
 	)
 	assert (
-		"Codex returned empty output on attempt ${attempt} and only made "
+		"${implement_engine_name} returned empty output on attempt ${attempt} and only made "
 		"whitespace-only worktree changes — refusing to salvage; treating as empty."
 	) in codex_block, (
 		"empty-stdout branch must emit a distinct warning when the "
@@ -5199,7 +5199,7 @@ def test_salvage_branches_gate_on_substantive_changes() -> None:
 		"loop continues retrying instead of breaking"
 	)
 	assert (
-		"Codex exited with code $cmd_rc on attempt ${attempt} and only made "
+		"${implement_engine_name} exited with code $cmd_rc on attempt ${attempt} and only made "
 		"whitespace-only worktree changes — refusing to salvage; treating as empty."
 	) in codex_block, (
 		"watchdog-kill / non-zero-exit branch must emit the symmetric "
@@ -5288,7 +5288,7 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 		"diagnostics file must have a stable name so future tooling "
 		"can read it"
 	)
-	assert "Codex bailed: request_user_input rejected" in codex_block, (
+	assert "${implement_engine_name} bailed: request_user_input rejected" in codex_block, (
 		"diagnostics reason must distinguish the request_user_input "
 		"bail so the orchestrator can route accordingly"
 	)
@@ -5425,7 +5425,7 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 	)
 	# gh failure must not abort the job — the diagnostics file is
 	# preserved locally as a fallback.
-	assert "Could not post Codex failure diagnostics" in codex_block, (
+	assert "Could not post ${implement_engine_name} failure diagnostics" in codex_block, (
 		"a failed gh issue comment must downgrade to a warning, not "
 		"abort the job — the underlying Codex failure is still the "
 		"primary signal"
