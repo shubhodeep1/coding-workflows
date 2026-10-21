@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the system should this issue change?\nChoices:\n- A: A specific workflow or pipeline phase (name it, e.g. clarify, plan, implement, review/autofix, orchestrator poller)\n- B: A specific script, prompt or test file (give its path)\n- C: Documentation (README, agents.md fragments, docs/)\n- D: None yet: close this issue and file a new one that describes the concrete problem (RECOMMENDED)\nQ2: What does \"better\" mean here? What problem or outcome should the change produce?\nChoices:\n- A: Fix a specific bug or failure (link the failing run, issue or PR and the error)\n- B: Improve performance or cost (name the metric and the target)\n- C: Add or change a specific behaviour (describe the expected behaviour and when it should happen)\n- D: Provide the concrete problem statement and acceptance criteria in the issue body (RECOMMENDED)",
+  "fingerprint": "af53f766f2a84b2fb72ec0c34e09b6f4c53736184d671b1dec2c4c72a1e0afd4",
+  "lineage": {
+    "issue_number": 7750,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39522256008",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39522256008",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261021004148_dab6146017",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7750,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39522256008"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7750 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-21T00:41:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
