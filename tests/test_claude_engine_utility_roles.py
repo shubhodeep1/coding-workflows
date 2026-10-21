@@ -151,6 +151,34 @@ def test_validate_workflow_installs_claude_before_the_workspace_copy() -> None:
 	assert 'echo "AI_ENGINE_LABELS=${labels_json}" >> "$GITHUB_ENV"' in text
 
 
+def test_validate_stages_the_script_the_pool_token_action_runs(tmp_path: Path) -> None:
+	# claude-pool-token/main.js runs <action>/../../../scripts/claude_pool_token.sh.
+	# validate.yml copied only the action folders, so the credential step exited
+	# 127 and VALIDATE ended with no_credential (tele-funtoken-msg-scoring
+	# validate runs 39669571530 and 39677334128). Run the real staging step
+	# against this checkout and resolve the script the way main.js does.
+	import yaml
+
+	main_js = (REPO_ROOT / ".github" / "actions" / "claude-pool-token" / "main.js").read_text(encoding="utf-8")
+	assert 'path.resolve(__dirname, "..", "..", "..", "scripts", "claude_pool_token.sh")' in main_js
+	steps = yaml.safe_load((WORKFLOWS / "validate.yml").read_text(encoding="utf-8"))["jobs"]["validate"]["steps"]
+	body = next(step["run"] for step in steps if step.get("name") == "Stage trusted Claude engine actions")
+	workspace = tmp_path / "workspace"
+	workspace.mkdir()
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"VALIDATE_HELPER_STAGE_DIR": str(REPO_ROOT),
+		"GITHUB_WORKSPACE": str(workspace),
+	}
+	result = subprocess.run(["bash", "-c", body], env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	action_dir = workspace / ".codex-workflow-src" / ".github" / "actions" / "claude-pool-token"
+	script = (action_dir / ".." / ".." / ".." / "scripts" / "claude_pool_token.sh").resolve()
+	assert script.is_file() and os.access(script, os.X_OK)
+	assert (script.parent / "claude_engine.py").is_file()
+	assert (workspace / ".codex-workflow-src" / ".github" / "ai" / "claude_engine.json").is_file()
+
+
 def test_workspace_copy_excludes_the_staged_action_directory() -> None:
 	# The pool-token post step needs its action directory until the job ends,
 	# so the copies live where workspace_init.sh never materializes them.
