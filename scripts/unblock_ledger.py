@@ -250,21 +250,25 @@ LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 # Commands the implement sandbox (scripts/codex_isolated_exec.sh: no network,
 # no git remote, no GitHub token) cannot run. `validate --sandbox-check`
 # refuses verdict instructions that name one (fun-token-multi-chain#639).
+_GIT_GLOBAL_OPTS = r"(?:\s+(?:-[Cc]\s+\S+|--(?:git-dir|work-tree|namespace)\s+\S+|--[A-Za-z][\w-]*(?:=\S+)?|-[A-Za-z]))*"
 SANDBOX_INCOMPATIBLE_PATTERNS = (
 	# `git remote` counts only as a command (a subcommand or flag follows), so
 	# prose such as "no git remote" from the judge prompt itself is not refused.
+	# Git global options may sit before the subcommand (`git -C <dir> fetch`,
+	# `git -c k=v pull`, `git --git-dir=.git fetch`); _GIT_GLOBAL_OPTS skips them.
 	("git_remote_op", re.compile(
-		r"\bgit\s+(fetch|pull|clone|push|ls-remote)\b|\bgit\s+remote\s+(add|set-url|get-url|update|show|prune|remove|rm|rename|-v)\b",
+		r"\bgit" + _GIT_GLOBAL_OPTS + r"\s+(fetch|pull|clone|push|ls-remote)\b"
+		r"|\bgit" + _GIT_GLOBAL_OPTS + r"\s+remote\s+(add|set-url|get-url|set-head|set-branches|update|show|prune|remove|rm|rename|-v|--verbose)\b",
 		re.IGNORECASE,
 	)),
 	("git_history_deepen", re.compile(r"--unshallow|--deepen", re.IGNORECASE)),
 	("origin_ref", re.compile(r"\borigin/[A-Za-z0-9._/-]+", re.IGNORECASE)),
 	("package_install", re.compile(
-		r"\b(npm\s+(ci|install|i)|yarn(\s+install)?|pnpm\s+(install|i)|pip3?\s+install|poetry\s+install|bundle\s+install|cargo\s+fetch|go\s+mod\s+download)\b",
+		r"\b(npm\s+(ci|install|i)|yarn(\s+install)?|pnpm\s+(install|i)|pip3?\s+install|pipx\s+install|conda\s+install|poetry\s+install|bundle\s+install|cargo\s+fetch|go\s+mod\s+download)\b",
 		re.IGNORECASE,
 	)),
 	("http_fetch", re.compile(r"\b(curl|wget)\s", re.IGNORECASE)),
-	("gh_cli", re.compile(r"\bgh\s+(api|pr|issue|run|repo|release|workflow)\b", re.IGNORECASE)),
+	("gh_cli", re.compile(r"\bgh\s+(api|pr|issue|run|repo|release|workflow|label|auth|secret|search|status|gist|codespace)\b", re.IGNORECASE)),
 )
 SANDBOX_CHECKED_VERDICTS = ("retry_budget", "descope", "reissue", "accept_with_followup", "operator_step")
 

@@ -3726,6 +3726,29 @@ def test_sandbox_check_accepts_prose_that_restates_the_environment() -> None:
 			ledger.validate({"verdict": "retry_budget", "reason": "r", "instructions": command}, SANDBOX_DECISION, "o/r", sandbox_check=True)
 
 
+@pytest.mark.parametrize("pattern_id,text", [
+	("git_remote_op", "run git -C . fetch origin main first"),
+	("git_remote_op", "git -c core.longpaths=true clone x"),
+	("git_remote_op", "git --git-dir=.git pull"),
+	("git_remote_op", "git --git-dir .git --work-tree . fetch origin"),
+	("git_remote_op", "git -C sub remote set-head origin -a"),
+	("git_remote_op", "git remote --verbose"),
+	("package_install", "pipx install ruff"),
+	("package_install", "conda install numpy"),
+	("gh_cli", "gh label create ai:blocked"),
+])
+def test_sandbox_check_refuses_global_options_and_extended_lists(pattern_id: str, text: str) -> None:
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+	with pytest.raises(ledger.UsageError, match=f"^sandbox_incompatible:{pattern_id}$"):
+		ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
+def test_sandbox_check_accepts_local_git_with_global_options() -> None:
+	text = "Run git -C . show isolated-base:scripts/x.sh and git -c core.pager=cat diff isolated-base -- scripts/x.sh."
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+	assert ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)["instructions"] == text
+
+
 def test_sandbox_check_accepts_the_isolated_base_rewrite() -> None:
 	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639_REWRITTEN}
 	assert ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)["instructions"] == ROUND2_639_REWRITTEN
