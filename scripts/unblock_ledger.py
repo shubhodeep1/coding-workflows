@@ -250,7 +250,16 @@ LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 # Commands the implement sandbox (scripts/codex_isolated_exec.sh: no network,
 # no git remote, no GitHub token) cannot run. `validate --sandbox-check`
 # refuses verdict instructions that name one (fun-token-multi-chain#639).
-_GIT_GLOBAL_OPTS = r"(?:\s+(?:-[Cc]\s+\S+|--(?:git-dir|work-tree|namespace)\s+\S+|--[A-Za-z][\w-]*(?:=\S+)?|-[A-Za-z]))*"
+# The alternatives are disjoint (a token can start only one of them) and the
+# repetition is bounded, so a long run such as `git -c -c -c ... status` cannot
+# backtrack exponentially. An option value may be quoted and contain spaces.
+_GIT_OPT_VALUE = r"""(?:"[^"\n]*"|'[^'\n]*'|\S+)"""
+_GIT_GLOBAL_OPTS = (
+	r"(?:\s+(?:-[Cc]\s+" + _GIT_OPT_VALUE
+	+ r"|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+" + _GIT_OPT_VALUE + r")"
+	+ r"|--(?!(?:git-dir|work-tree|namespace)(?![\w-]))[A-Za-z][\w-]*(?:=\S+)?"
+	+ r"|-(?![Cc](?![\w-]))[A-Za-z][\w-]*)){0,8}"
+)
 SANDBOX_INCOMPATIBLE_PATTERNS = (
 	# `git remote` counts only as a command (a subcommand or flag follows), so
 	# prose such as "no git remote" from the judge prompt itself is not refused.

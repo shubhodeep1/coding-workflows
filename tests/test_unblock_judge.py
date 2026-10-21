@@ -3749,6 +3749,22 @@ def test_sandbox_check_accepts_local_git_with_global_options() -> None:
 	assert ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)["instructions"] == text
 
 
+def test_sandbox_check_long_option_runs_do_not_backtrack() -> None:
+	import time
+	for text in ("git " + "-c " * 395 + "status", "git " + "--git-dir " * 130 + "status"):
+		verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text[:1200]}
+		start = time.monotonic()
+		ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+		assert time.monotonic() - start < 2, text[:40]
+
+
+def test_sandbox_check_refuses_quoted_option_values_with_spaces() -> None:
+	for text in ('git -C "/repo root" fetch origin main', "git -c 'a=b c' pull"):
+		verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+		with pytest.raises(ledger.UsageError, match="^sandbox_incompatible:git_remote_op$"):
+			ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
 def test_sandbox_check_accepts_the_isolated_base_rewrite() -> None:
 	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639_REWRITTEN}
 	assert ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)["instructions"] == ROUND2_639_REWRITTEN
