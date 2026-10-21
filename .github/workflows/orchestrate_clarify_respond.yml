@@ -1032,7 +1032,10 @@ jobs:
 
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex clarify-respond attempt ${attempt}/${max_attempts} (engine ${CLARIFY_RESPOND_ENGINE})..."
+            # Name the engine that actually runs, so a Claude run is not logged as Codex.
+            clarify_respond_engine_name="Codex"
+            if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then clarify_respond_engine_name="Claude"; fi
+            echo "${clarify_respond_engine_name} clarify-respond attempt ${attempt}/${max_attempts}..."
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
@@ -1050,6 +1053,7 @@ jobs:
                 # Claude unavailable (logged as AI_ENGINE_FALLBACK): this
                 # attempt and the rest run the codex path (plan D1).
                 CLARIFY_RESPOND_ENGINE="codex"
+                clarify_respond_engine_name="Codex"
                 rc=0
               fi
             fi
@@ -1058,19 +1062,19 @@ jobs:
             fi
             if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "Codex clarify-respond succeeded on attempt ${attempt}."
+                echo "${clarify_respond_engine_name} clarify-respond succeeded on attempt ${attempt}."
                 break
               fi
-              echo "::warning::Codex returned empty output on attempt ${attempt}."
+              echo "::warning::${clarify_respond_engine_name} returned empty output on attempt ${attempt}."
             else
-              echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+              echo "::warning::${clarify_respond_engine_name} exited with code $rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
               echo "Retrying in ${sleep_secs}s (includes jitter)..."
               sleep "${sleep_secs}"
             else
-              echo "::error::Codex clarify-respond failed after ${max_attempts} attempts."
+              echo "::error::${clarify_respond_engine_name} clarify-respond failed after ${max_attempts} attempts."
               exit 1
             fi
           done

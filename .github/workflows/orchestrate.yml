@@ -820,7 +820,10 @@ jobs:
           echo "Decomposer per-attempt timeout: ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s."
 
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex orchestrate attempt ${attempt}/${max_attempts}..."
+            # Name the engine that actually runs, so a Claude run is not logged as Codex.
+            orchestrate_engine_name="Codex"
+            if [ "${ORCHESTRATE_ENGINE}" = "claude" ]; then orchestrate_engine_name="Claude"; fi
+            echo "${orchestrate_engine_name} orchestrate attempt ${attempt}/${max_attempts}..."
             attempt_ok=0
             attempt_started_at="$(date +%s)"
             attempt_worktree_before="$(git status --porcelain=v1 --untracked-files=all)"
@@ -860,6 +863,7 @@ jobs:
               fi
               if [ "${decomposer_rc}" -eq 75 ]; then
                 ORCHESTRATE_ENGINE="codex"
+                orchestrate_engine_name="Codex"
               fi
             fi
             if [ "${decomposer_rc}" -eq 75 ]; then
@@ -869,7 +873,7 @@ jobs:
             fi
             if [ "${decomposer_rc}" -eq 0 ]; then
               if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "::warning::Codex returned empty output on attempt ${attempt}."
+                echo "::warning::${orchestrate_engine_name} returned empty output on attempt ${attempt}."
                 last_status="empty output"
               else
                 # Try to extract a JSON object from the response.
@@ -947,7 +951,7 @@ jobs:
                     EMITTED_DESC="${EMITTED} issue(s)"
                   fi
                   if [ "${EMITTED}" -ge "${EXPECTED_MIN_ISSUES}" ]; then
-                    echo "Codex orchestrate succeeded on attempt ${attempt}: emitted=${EMITTED} >= expected_min=${EXPECTED_MIN_ISSUES}."
+                    echo "${orchestrate_engine_name} orchestrate succeeded on attempt ${attempt}: emitted=${EMITTED} >= expected_min=${EXPECTED_MIN_ISSUES}."
                     attempt_ok=1
                   else
                     echo "::warning::Attempt ${attempt} produced ${EMITTED_DESC}; author enumeration requires >= ${EXPECTED_MIN_ISSUES}. Re-prompting with corrective feedback."
@@ -971,7 +975,7 @@ jobs:
                     } >> "${CODEX_PROMPT_FILE}"
                   fi
                 else
-                  echo "::warning::Could not extract JSON from Codex output on attempt ${attempt}."
+                  echo "::warning::Could not extract JSON from ${orchestrate_engine_name} output on attempt ${attempt}."
                   last_status="invalid JSON"
                 fi
               fi
@@ -989,24 +993,24 @@ jobs:
               #     clock: a timer-driven 137 should arrive only after
               #     the configured budget has elapsed.
               if [ "$rc" = "124" ]; then
-                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 124, elapsed ${attempt_elapsed}s)."
-                last_status="codex timeout 124 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+                echo "::warning::${orchestrate_engine_name} decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 124, elapsed ${attempt_elapsed}s)."
+                last_status="${ORCHESTRATE_ENGINE} timeout 124 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
               elif [ "$rc" = "137" ] && [ "${attempt_elapsed}" -ge "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
-                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 137 after kill-after backstop, elapsed ${attempt_elapsed}s)."
-                last_status="codex timeout 137 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+                echo "::warning::${orchestrate_engine_name} decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 137 after kill-after backstop, elapsed ${attempt_elapsed}s)."
+                last_status="${ORCHESTRATE_ENGINE} timeout 137 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
               else
                 if [ "$rc" = "137" ]; then
-                  echo "::warning::Codex exited with code 137 on attempt ${attempt} before the per-attempt timer budget elapsed (${attempt_elapsed}s < ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s); likely OOM kill or external SIGKILL, not the timeout wrapper."
-                  last_status="codex exit 137 (elapsed ${attempt_elapsed}s < budget ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s; likely OOM/external SIGKILL)"
+                  echo "::warning::${orchestrate_engine_name} exited with code 137 on attempt ${attempt} before the per-attempt timer budget elapsed (${attempt_elapsed}s < ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s); likely OOM kill or external SIGKILL, not the timeout wrapper."
+                  last_status="${ORCHESTRATE_ENGINE} exit 137 (elapsed ${attempt_elapsed}s < budget ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s; likely OOM/external SIGKILL)"
                 else
-                  echo "::warning::Codex exited with code $rc on attempt ${attempt}."
-                  last_status="codex exit ${rc}"
+                  echo "::warning::${orchestrate_engine_name} exited with code $rc on attempt ${attempt}."
+                  last_status="${ORCHESTRATE_ENGINE} exit ${rc}"
                 fi
               fi
             fi
             attempt_worktree_after="$(git status --porcelain=v1 --untracked-files=all)"
             if [ "${attempt_worktree_after}" != "${attempt_worktree_before}" ]; then
-              echo "::error::Codex decomposer attempt ${attempt} changed the repository worktree versus the pre-attempt baseline; refusing to continue on partial edits."
+              echo "::error::${orchestrate_engine_name} decomposer attempt ${attempt} changed the repository worktree versus the pre-attempt baseline; refusing to continue on partial edits."
               git status --short
               exit 1
             fi
@@ -1018,7 +1022,7 @@ jobs:
               echo "Retrying in ${sleep_secs}s (includes jitter)..."
               sleep "${sleep_secs}"
             else
-              echo "::error::Codex orchestrate failed after ${max_attempts} attempts (last_status=${last_status}, last_emitted=${last_emitted}, expected_min=${EXPECTED_MIN_ISSUES})."
+              echo "::error::${orchestrate_engine_name} orchestrate failed after ${max_attempts} attempts (last_status=${last_status}, last_emitted=${last_emitted}, expected_min=${EXPECTED_MIN_ISSUES})."
               exit 1
             fi
           done
