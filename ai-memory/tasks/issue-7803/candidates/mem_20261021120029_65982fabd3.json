@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlan for #7803: add the `Implements #N` bullet to CLAUDE.md \u00a719 (activation gap from project #7741)\n\nThere is nothing for the pipeline to implement here. This issue repeats an operator step that is already tracked, so the right outcome is to close it as a duplicate of that step. The planned change is no repository edits at all.\n\nThe answers to the clarification questions were both option A:\n- **Q1: A.** Treat this as the operator step that `agents.d/7765-implements-marker.md` already records, under the unset placeholder `IMPLEMENTS_MARKER_CLAUDE_MD_UNSET_OPERATOR_STEP`. A trusted interactive session adds the bullet by hand, and this issue closes as a duplicate.\n- **Q2: A.** The bullet uses the wording already recorded in `agents.d/7765-implements-marker.md`. That wording cites #3817 and ends with \"keep `Refs #N` for the tracking issue itself\".\n\nPlanning ref: `main` at `8e9851c796f39ae945a23ca9f803048e347a5fc2`. The integration branch mismatch reads `unknown`, and there is no integration branch.\n\nChecked on this ref:\n- `agents.d/7765-implements-marker.md` exists. Its line 4 records the placeholder, says \"The implement pipeline may not write `CLAUDE.md`\", and holds the exact bullet text.\n- `changelog.d/7765-implements-marker.md:16` points to the same operator step.\n- `CLAUDE.md` contains no `Implements #`. The \"blocker bug surfaced by an orchestrator project\" bullet starts at line 659, which matches the issue body.\n- `tests/test_claude_md_section_numbers.py` exists.\n\nScope-mode: Hold Scope\nReuse-audit: extends IMPLEMENTS_MARKER_CLAUDE_MD_UNSET_OPERATOR_STEP\nScope-mode justification: The gap this issue reports is the operator step `agents.d/7765-implements-marker.md` already records. The isolated implement workspace hides the root `CLAUDE.md` (`hide_claude_md` in `scripts/ai_engine.sh` and `scripts/codex_isolated_exec.sh`), and only a trusted interactive session should change `CLAUDE.md`, because it is the instruction file for interactive sessions. A pipeline edit would therefore either be refused or be unsafe. Keeping the existing handoff adds no new mechanism and changes no behaviour, which follows \u00a76 (security, then correctness, then backward compatibility). The issue also says the gap does not block activation: the poller already honours the marker by default (`ORCH_IMPLEMENTS_MARKER_ENABLED`), and the session commands already tell people to write it.\n\n## Files likely to change\n\nNone in this pipeline run. The implementer should make no edits.\n\n## Functions or modules to implement\n\nNone.\n\nOperator handoff, already recorded and repeated here for whoever closes the issue. A trusted interactive session does all of this in one commit:\n1. Add the bullet recorded in `agents.d/7765-implements-marker.md` to CLAUDE.md \u00a719, directly after the \"blocker bug surfaced by an orchestrator project\" bullet. Do not renumber anything. `workflow-templates/CLAUDE.md` is a symlink, so it follows automatically.\n2. Remove the placeholder paragraph from `agents.d/7765-implements-marker.md`, which retires `IMPLEMENTS_MARKER_CLAUDE_MD_UNSET_OPERATOR_STEP`.\n3. Run `tests/test_claude_md_section_numbers.py` and `tests/test_claude_template_live_parity.py`.\n\n## Data structures affected\n\nNone.\n\n## API or interface changes\n\nNone. No environment variables, labels, log prefixes or workflow inputs change.\n\n## Decisions\n\n### D1 \u2014 Close as a duplicate of the operator step already recorded\n- Chosen: No pipeline edits. This issue is closed as a duplicate of `IMPLEMENTS_MARKER_CLAUDE_MD_UNSET_OPERATOR_STEP`, and a trusted interactive session lands the bullet.\n- Alternatives considered: Run implement on the codex engine (`ai:codex`) and write `CLAUDE.md` directly (Q1/B). Keep the issue in `ai:blocked` with no work (Q1/C).\n- Why: The implement workspace hides `CLAUDE.md`, and the pipeline may not write it, so Q1/B would loop back to blocked. Q1/C adds nothing over the handoff that already exists. Q1/A was the chosen answer.\n\n### D2 \u2014 Bullet wording\n- Chosen: The text recorded in `agents.d/7765-implements-marker.md` (Q2/A).\n- Alternatives considered: The shorter wording in the issue body (Q2/B). The recorded wording plus the issue's closing sentence (Q2/C).\n- Why: The recorded text is more precise. It says the poller links the PR as the item's implementation PR, it cites #3817, and it keeps `Refs #N` for the tracking issue. Q2/C would say the tracking-issue point twice.\n\n## Security considerations\n\n- The trust boundary this keeps intact: `CLAUDE.md` is instruction text for interactive sessions, and only a trusted interactive session may edit it. Pipeline editors work on untrusted input in an isolated sandbox.\n- No new endpoint, surface, credential or external input is added. No money state is involved.\n- Abuse case this avoids: a pipeline editor rewriting the root `CLAUDE.md`, which interactive sessions follow, from untrusted issue text.\n\n## Risks and edge cases\n\n- There is no diff for the implement phase to produce. If the plan is auto-approved and implement runs, it may report \"no changes\". The intended outcome is that the issue closes as a duplicate.\n- The gap stays open until an operator acts. It does not block activation, because the poller already honours the `Implements #N` marker.\n- No conflict found: the issue's line numbers (659-662) match CLAUDE.md at this ref.\n\n## Testing considerations\n\n- Nothing to test in this run.\n- For the operator commit: `tests/test_claude_md_section_numbers.py` and `tests/test_claude_template_live_parity.py`, plus `scripts/assemble_agents.py check` once the agents.d paragraph is removed.\n\n## Pre-execution self-check\n\nThe answers are interpretable, consistent, and mapped to Q1 and Q2. The plan follows Q1/A and Q2/A. It edits no files and changes no behaviour.\n\nPLAN_SELF_CHECK: WARNING: The plan intentionally edits nothing. The implement phase should not run; the issue should close as a duplicate of the IMPLEMENTS_MARKER_CLAUDE_MD_UNSET_OPERATOR_STEP operator step in agents.d/7765-implements-marker.md.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "2f5c1e65e94197f6fa18298d6dd7dafffeb8b8426284fdf3c73aaa1660f56a5b",
+  "lineage": {
+    "issue_number": 7803,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39594997849",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39594997849",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7803"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261021120029_65982fabd3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7803,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39594997849"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7803",
+  "timestamps": {
+    "created_at": "2026-10-21T12:00:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
