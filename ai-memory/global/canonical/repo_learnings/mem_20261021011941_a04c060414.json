@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "When changing GitHub Actions behavior, look for a dedicated test that checks the workflow contract, rather than relying only on general CI coverage. Recent changes to review-autofix and stable-release workflows followed this pattern.",
+  "fingerprint": "bb624191321e79af392be1f86bb4d042b4c756f251e031969723d48019e4c89e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39525927004",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39525927004",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7724",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7729",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7732",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7733",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7737",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7727",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7730",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7734",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7735",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7738"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261021011941_a04c060414",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow changes in this repository are commonly guarded by focused contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-21T01:19:41Z",
+    "promoted_at": "2026-10-21T01:21:48Z",
+    "superseded_at": null
+  }
+}

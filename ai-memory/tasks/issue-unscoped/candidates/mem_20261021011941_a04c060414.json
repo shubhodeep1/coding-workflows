@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "Workflow changes in this repository are commonly guarded by focused contract tests.",
   "timestamps": {
     "created_at": "2026-10-21T01:19:41Z",
-    "promoted_at": null,
+    "promoted_at": "2026-10-21T01:21:48Z",
     "superseded_at": null
   }
 }
