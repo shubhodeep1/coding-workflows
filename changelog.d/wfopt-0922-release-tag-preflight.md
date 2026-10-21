@@ -1,4 +1,0 @@
-<!-- changelog: added -->
-- **The stable release workflows now check the release credential before the long test jobs.** A new "Preflight release tag credential" step in the `resolve-version` job of `test-and-mark-stable.yml` and `mark-stable.yml` fails the run within minutes when `GH_PAT` is a classic token without the `workflow` scope and the release changes files under `.github/workflows/`, which GitHub would refuse at tag-push time. Release run 35639756385 spent about 94 minutes before hitting that refusal.
-
-The check reads the token's scopes with one `GET /user` call and logs `RELEASE_TAG_PREFLIGHT result=<pass|fail|unknown|skipped>`. When it cannot tell (no `GH_PAT`, a fine-grained token or GitHub App, an API or git error), the release proceeds. It is skipped on dry runs, `gate_only` runs and when publishing is switched off. Set the repository variable `RELEASE_TAG_PREFLIGHT_ENABLED=false` to turn it off.

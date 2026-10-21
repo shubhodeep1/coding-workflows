@@ -1,3 +1,0 @@
-<!-- agents: section="Stable log prefixes (contractual)" -->
-- `CLAUDE_POOL_DAILY_USAGE` (`scripts/claude_pool_daily_usage.sh`, the "Check Claude pool daily usage slot" step of the `poll` job and the "Send Claude pool daily usage report" step of the `claude_pool_daily_usage` job in `orchestrate_poll.yml`: `op=slot in_slot=true|false reason=due|before_hour|disabled|silent|telegram_not_configured date= hour= start_hour=`; `op=send accounts= usable= gated= auth_failed= probe_failed= outcome=sent|not_delivered truncated=true|false`; `sent` means one `📊` Telegram message listed every pool account's 5-hour and 7-day usage (`truncated=true`: the list was cut at 3700 characters and the message says so), see README "Daily usage report")
-LOG_PREFIX.name=CLAUDE_POOL_DAILY_USAGE

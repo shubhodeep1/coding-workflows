@@ -1,2 +1,0 @@
-<!-- changelog: fixed -->
-- **Editor audit check reports an unreadable summary as a usage error.** `scripts/validate_editor_audit.sh` now exits 3 with its `missing or unreadable` warning when the editor summary file exists but cannot be read, or when `awk` fails to read it. Before this it exited 1, so the review workflow warned that the editor audit section was empty and the poller's alert named the wrong cause. Both callers already treat any non-zero exit as an unhealthy audit, so nothing else changes. Exit codes 0, 1 and 2 and their warnings are unchanged.
