@@ -84,6 +84,46 @@ def test_valid_payload_keeps_only_the_allowed_fields() -> None:
 
 
 @pytest.mark.parametrize(
+	("raw", "expected"),
+	[
+		("A01:2021-Broken Access Control", "A01:2021-Broken Access Control"),
+		("A01: Broken Access Control", "A01:2021-Broken Access Control"),
+		("A03 Injection", "A03:2021-Injection"),
+		("a10", "A10:2021-Server-Side Request Forgery"),
+		("A05 - 2021 Security Misconfiguration", "A05:2021-Security Misconfiguration"),
+		("STRIDE: Tampering", "Tampering"),
+		("stride - elevation of privilege", "Elevation of Privilege"),
+		("Tampering / Elevation of Privilege", "Tampering"),
+		("STRIDE: Spoofing/Repudiation", "Spoofing"),
+		("  information   disclosure ", "Information Disclosure"),
+	],
+)
+def test_category_accepts_common_owasp_and_stride_spellings(raw, expected) -> None:
+	assert heal.normalize_synced_security_category(raw) == expected
+
+
+@pytest.mark.parametrize(
+	"raw",
+	[
+		"A01:2017-Injection",  # 2017 numbering differs from 2021
+		"A01 2017",
+		"A1:2017-Injection",
+		"A011",
+		"A01x",
+		"A00: Nothing",
+		"A11",
+		"STRIDE",
+		"STRIDE: Made Up",
+		"Made Up / Tampering",
+		"Something else",
+	],
+)
+def test_category_still_rejects_unmappable_spellings(raw) -> None:
+	with pytest.raises(ValueError):
+		heal.normalize_synced_security_category(raw)
+
+
+@pytest.mark.parametrize(
 	"finding",
 	[
 		_finding(finding_id="bad id"),

@@ -315,6 +315,18 @@ def test_unmappable_category_is_dropped_not_the_whole_report(env_setup) -> None:
 	assert "outcome=dispatched findings=1" in result.stdout and "dropped=1" in result.stdout
 
 
+
+def test_common_category_spellings_are_sent_canonical(env_setup) -> None:
+	tmp_path, env = env_setup
+	_write_export(env, [
+		_finding(0, owasp_or_stride_category="A01: Broken Access Control"),
+		_finding(1, owasp_or_stride_category="STRIDE: Tampering", line=200),
+	])
+	result = _run(env)
+	assert "outcome=dispatched findings=2" in result.stdout, result.stdout + result.stderr
+	categories = sorted(f["category"] for f in _body(tmp_path)["client_payload"]["report"]["findings"])
+	assert categories == ["A01:2021-Broken Access Control", "Tampering"]
+
 def test_no_identity_sends_nothing(env_setup) -> None:
 	tmp_path, env = env_setup
 	_write_export(env, [_finding()])
