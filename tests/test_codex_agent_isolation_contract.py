@@ -245,6 +245,45 @@ def test_orchestrate_stages_the_claude_relay_beside_the_isolation_helper():
 	assert "::error::Missing required support script" in stage
 
 
+def _helper_required_support() -> dict[str, list[str]]:
+	"""The engine -> required_support lists codex_isolated_exec.sh checks."""
+	text = HELPER.read_text(encoding="utf-8")
+	lists = re.findall(r"^\s*required_support=\(([^)]*)\)", text, re.M)
+	assert len(lists) == 2, "codex_isolated_exec.sh must keep one required_support list per engine"
+	return {"claude": lists[0].split(), "codex": lists[1].split()}
+
+
+def _staging_steps_with_isolation_helper() -> list[tuple[str, str]]:
+	"""(workflow, step text) for every step whose `for f in` loop stages the helper."""
+	found = []
+	for path in sorted(WORKFLOWS.glob("*.yml")):
+		text = path.read_text(encoding="utf-8")
+		for step in re.split(r"\n(?=      - name: )", text):
+			loops = re.findall(r"^\s*for f in ([^;\n]+); do$", step, re.M)
+			if any("codex_isolated_exec.sh" in loop.split() for loop in loops):
+				found.append((path.name, step))
+	return found
+
+
+def test_every_step_staging_the_isolation_helper_stages_its_required_support():
+	# codex_isolated_exec.sh refuses to run (support_missing) unless every file
+	# of its required_support list sits next to it. orchestrate_poll.yml staged
+	# the helper without claude_anthropic_relay.py, so every consumer security
+	# pass on the Claude engine failed with isolation_unavailable.
+	required = _helper_required_support()
+	steps = _staging_steps_with_isolation_helper()
+	assert {name for name, _ in steps} >= {"plan.yml", "implement.yml", "orchestrate.yml", "orchestrate_poll.yml"}
+	missing = []
+	for workflow, step in steps:
+		staged = set()
+		for loop in re.findall(r"^\s*for f in ([^;\n]+); do$", step, re.M):
+			staged.update(loop.split())
+		staged.update(re.findall(r"\.codex-workflow-src/scripts/([A-Za-z0-9_.-]+)", step))
+		for engine, names in required.items():
+			missing.extend(f"{workflow}: {name} ({engine})" for name in names if name not in staged)
+	assert not missing, f"stage these beside codex_isolated_exec.sh: {missing}"
+
+
 @pytest.mark.parametrize(
 	"workflow",
 	[
