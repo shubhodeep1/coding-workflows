@@ -710,6 +710,7 @@ _synced_security_finding_intake()
 	local ss_path_check="" ss_count=0 ss_index=0 ss_links="" ss_action="" ss_reason="" ss_level="DEBUG"
 	local ss_group="" ss_decision="" ss_existing="" ss_prior="" ss_gen="" ss_root="" ss_label=""
 	local ss_scope="" ss_scope_input="" ss_scope_status="" ss_title="" ss_body="" ss_url="" ss_number=""
+	local ss_retired="" ss_group_file=""
 	mkdir -p "${ss_dir}"
 	HEAL_SCOPE_RECOVERY_ACTIVE="false"
 	CLASSIFICATION="workflow-defect"

@@ -121,6 +121,7 @@ _SYNCED_SECURITY_FILE_RE = re.compile(r"^[A-Za-z0-9._/+-]{1,300}$")
 # by no year at all. Any other number after the code (A01:2017, A011) is
 # rejected: 2017 numbering maps codes to different categories.
 _SYNCED_SECURITY_OWASP_RE = re.compile(r"^\s*(A0[1-9]|A10)(?:[\s:-]+2021(?![0-9])|(?![0-9A-Za-z])(?![\s:-]*[0-9]))", re.IGNORECASE)
+_SYNCED_SECURITY_YEAR_RE = re.compile(r"(?<![0-9])((?:19|20)[0-9]{2})(?![0-9])")
 _SYNCED_SECURITY_STRIDE_PREFIX_RE = re.compile(r"^stride(?:\s*[:-]\s*|\s+)", re.IGNORECASE)
 # The audit's categories (prompts/mode-security-audit.txt): OWASP Top 10 2021
 # and STRIDE. Only these canonical tokens are ever published.
@@ -4657,6 +4658,10 @@ def normalize_synced_security_category(raw: Any) -> str:
 	match = _SYNCED_SECURITY_OWASP_RE.match(raw)
 	if match:
 		code = match.group(1).upper()
+		# A year other than 2021 anywhere after the code (A01 (2017)) means
+		# different numbering, so it is rejected rather than renamed.
+		if any(year != "2021" for year in _SYNCED_SECURITY_YEAR_RE.findall(raw)):
+			raise ValueError("category names an OWASP year other than 2021")
 		return f"{code}:2021-{SYNCED_SECURITY_OWASP_2021[code]}"
 	collapsed = " ".join(raw.split())
 	collapsed = _SYNCED_SECURITY_STRIDE_PREFIX_RE.sub("", collapsed, count=1)

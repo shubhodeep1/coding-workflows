@@ -91,6 +91,7 @@ def test_valid_payload_keeps_only_the_allowed_fields() -> None:
 		("A03 Injection", "A03:2021-Injection"),
 		("a10", "A10:2021-Server-Side Request Forgery"),
 		("A05 - 2021 Security Misconfiguration", "A05:2021-Security Misconfiguration"),
+		("A01 (2021) Broken Access Control", "A01:2021-Broken Access Control"),
 		("STRIDE: Tampering", "Tampering"),
 		("stride - elevation of privilege", "Elevation of Privilege"),
 		("Tampering / Elevation of Privilege", "Tampering"),
@@ -107,6 +108,8 @@ def test_category_accepts_common_owasp_and_stride_spellings(raw, expected) -> No
 	[
 		"A01:2017-Injection",  # 2017 numbering differs from 2021
 		"A01 2017",
+		"A01 (2017)",
+		"A07 (2017) Cross-Site Scripting",
 		"A1:2017-Injection",
 		"A011",
 		"A01x",
