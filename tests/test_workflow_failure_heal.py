@@ -274,7 +274,7 @@ def test_consumer_template_is_pinned_and_in_full_profile() -> None:
 	manifest = (REPO_ROOT / "workflow-templates" / "profiles" / "full.txt").read_text(encoding="utf-8").split()
 	assert "ai-workflow-failure-heal.yml" in manifest
 	internal = INTERNAL_WRAPPER.read_text(encoding="utf-8")
-	assert "workflow_failure_heal.yml@main" in internal
+	assert "workflow_failure_heal.yml@promote-candidate" in internal
 
 
 def test_intake_workflow_triggers_and_release_names() -> None:
