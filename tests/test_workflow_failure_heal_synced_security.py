@@ -92,6 +92,8 @@ def test_valid_payload_keeps_only_the_allowed_fields() -> None:
 		("a10", "A10:2021-Server-Side Request Forgery"),
 		("A05 - 2021 Security Misconfiguration", "A05:2021-Security Misconfiguration"),
 		("A01 (2021) Broken Access Control", "A01:2021-Broken Access Control"),
+		("A08:2021-Software and Data Integrity Failures (CVE-2020-1234)", "A08:2021-Software and Data Integrity Failures"),
+		("A03 Injection (CVE-2019-0001)", "A03:2021-Injection"),
 		("STRIDE: Tampering", "Tampering"),
 		("stride - elevation of privilege", "Elevation of Privilege"),
 		("Tampering / Elevation of Privilege", "Tampering"),
