@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:179 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The `CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED` row says the keep covers only index stages `1 2`, but forward-merge heads with stages `1 3` are now also resolved, and the new `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED` variable has no README row.\n  WHY: It is documentation drift only and does not fail at runtime. Both reviewers rated it NIT. The behavior is documented in `agents.d/7796-forward-merge-fragment-keep.md` and the changelog fragment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Gate only the new code path behind `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED` as an off switch. Setting it to `false` must turn that path off.\n  expected_change_site: .github/workflows/review_autofix.yml, env of the \"Prepare merge-conflict resolution\" step\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The step passes `CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED` at line 3946 but not `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED`. The agents fragment notes that a repository variable alone does not reach the script. Setting the new switch as a repository variable therefore has no effect in workflow runs. Severity stated by the reviewer: MAJOR.\n- requirement: Before the loop set `_ff_branch_class=\"${TARGET_BRANCH:-${HEAD_REF:-}}\"` and `_ff_stage=2`.\n  expected_change_site: scripts/review_conflict_prepare.sh, immediately before the folded-fragment `while` loop\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `_ff_branch_class` is set before the loop (line 393). `_ff_stage=2` is set inside the loop at line 418, not before it. Behavior is identical, so this is a placement NIT. anthropic_claude-sonnet-5_5 judged \"no fix needed\".\n- requirement: Lint the PR body with `Refs #7796`, not a close keyword.\n  expected_change_site: PR description / body\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR body reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/7800\" and has no `Refs #7796` line. anthropic_claude-sonnet-5_5 judged this not a code gap, because the `Closes` targets sub-issue #7800, which \u00a721 allows. All three rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:179 | severity=NIT | confidence=2\n  PROBLEM: The `CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED` row says the keep covers only stages `1 2`. That is no longer true for forward-merge heads (stages `1 3`), and the new `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED` variable has no README row.\n  WHY: It is documentation drift only. The linked issue lists four files and does not include the README.\n- TASK_GAP (NIT): Requirement: `_ff_stage=2` before the loop. Evidence: it is set inside the loop at line 418. Behavior is identical and the reviewer said no fix is needed.\n- TASK_GAP (NIT): Requirement: `Refs #7796` in the PR body. The reviewer said the diff cannot show the PR body, and the `Closes` targets sub-issue #7800, which \u00a721 allows. No code gap.\n- All other checklist categories: NONE. The reviewer verified the merge direction (stage 3 is the base) and found the `cmp` check against `:3:<path>` on lines 433-436 correct.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:179 | severity=NIT | confidence=2\n  PROBLEM: The row says the fragment-keep resolves only index stages `1 2`. The script now also resolves stages `1 3` on `auto/forward-merge-stable-*` heads, and the new `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED` switch is not documented.\n  WHY: It is documentation drift only. The behavior is captured in `agents.d/7796-forward-merge-fragment-keep.md` and the changelog fragment. The issue does not require a README update.\n- TASK_GAP: Requirement: \"Lint the PR body with Refs #7796, not a close keyword.\" Expected change site: PR description / body. Evidence of absence: the PR body has no `Refs #7796` line. SEVERITY: NIT. ISSUE_CONFIDENCE: 3.\n- TASK_GAP: Requirement: \"before the loop set _ff_branch_class=... and _ff_stage=2\". Expected change site: scripts/review_conflict_prepare.sh, just before the `while IFS= read -r _ff_path; do` line. Evidence of absence: `_ff_stage=2` is set inside the loop at line 418, though behavior is identical. SEVERITY: NIT. ISSUE_CONFIDENCE: 4.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: gate only the new code path behind `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED` as an off switch. Expected change site: `.github/workflows/review_autofix.yml`, env of the \"Prepare merge-conflict resolution\" step. Evidence of absence: the step passes `CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED` at line 3946 but not the new variable, so setting it as a repository variable has no effect. SEVERITY: MAJOR. ISSUE_CONFIDENCE: 5.\n- TASK_GAP: Requirement: `_ff_branch_class` and `_ff_stage=2` set before the loop. Evidence of absence: `_ff_stage=2` is initialized inside the loop at line 418. SEVERITY: NIT. ISSUE_CONFIDENCE: 5.\n- TASK_GAP: Requirement: \"Lint the PR body with Refs #7796, not a close keyword.\" Evidence of absence: the PR body has no `Refs #7796` reference. SEVERITY: NIT. ISSUE_CONFIDENCE: 5.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c2c0fc503513c8fd4c5b9b5b30cfd16e952251cf21c93481cc27fee240a08f1f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7801,
+    "run_id": "39591232772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39591232772",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021114010_b807f2f228",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7801,
+    "run_id": "39591232772"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T11:40:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
