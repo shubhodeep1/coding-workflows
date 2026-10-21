@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the step durations come from to choose which steps move and which job receives them?\nChoices:\nA. You paste into the answer the step timings of `tests-hooks-and-orchestrator` from run 39575950300 and the total duration of each other test job in that run (`tests-heal-plan-and-validation`, `tests-promote-stall-and-review`, `tests-release-and-log-analysis`, each `orchestrate-poll` group). The plan moves the slowest steps, about 4-6 minutes in total, into the job with the shortest duration. (RECOMMENDED)\nB. No timings: the planner picks, by reading the steps, the ones likely to be slowest (the isolated-container and sandbox-image test steps, and the Node 22 setup plus the claude-pool-broker vitest steps moved together). It moves them into `tests-heal-plan-and-validation`, the test job with the fewest steps. This is a guess and may not free enough time.\nC. You name the exact steps and the target job in the answer, and the plan moves exactly those.\nQ2: How should the parity and guard-hook steps that rely on the \"Prepare template-only PR live copies for parity tests\" step be handled? These are \"Live .claude/ copies match their templates\", the merged-PR, PR-watch and `gh api` guard hook tests, and the pre-push gate tests.\nChoices:\nA. Keep them, and the preparation step, in `tests-hooks-and-orchestrator`, and move only steps that do not depend on it. (RECOMMENDED)\nB. Move the preparation step together with every step that depends on it into the target job as one group, so nothing runs in two jobs.\n**Note:** with Q1:C, if you name a step that depends on the preparation step, you must choose B here.",
+  "fingerprint": "9c567c34e93c6667391c696417af2ff901dcd64faa2cf582d0897d1f22710682",
+  "lineage": {
+    "issue_number": 7798,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39578515163",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39578515163",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261021094519_474f09e8b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7798,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39578515163"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7798 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-21T09:45:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
