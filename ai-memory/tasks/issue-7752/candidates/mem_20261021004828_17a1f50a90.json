@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: overwrite `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `main` at `ac517d3d60c2236c7e3b64a1e5072b90a106fb1a`. The integration branch mismatch line reads `unknown`, not `true`, so planning goes ahead on `main`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the work: replace one existing file's contents with three exact lines. Nothing is ambiguous and there is nothing more complete to build, so the plan keeps exactly the requested scope. It edits a single data file, adds no helper or test, and changes no other path.\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n\nNone. This is a data-file content replacement.\n\n## Data structures affected\n\nThe plain-text content of `tests/e2e_smoke_canary.txt`. The final bytes must be exactly:\n\n```\nstatus: ok\\nrun_id: 39522103038\\nupdated-by: ai-pipeline\\n\n```\n\n## API or interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Overwrite the file whole instead of editing it in place\n- Chosen: overwrite the file with exactly the three lines from the issue, for example `printf 'status: ok\\nrun_id: 39522103038\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n- Alternatives considered: edit only the lines that differ from the current content.\n- Why: the issue requires the content to be exactly these three lines, with no leftover lines. Writing the whole file guarantees that and the trailing newline.\n\n## Security considerations\n\n- No trust boundary, endpoint, credential or money state is touched.\n- The content is a fixed literal, so there is no external input to validate.\n- Abuse cases: none.\n\n## Risks and edge cases\n\n- **Missing trailing newline or a CRLF line ending.** Write it with `printf` (LF only, newline at the end).\n- **Scope creep.** No other file may change, including changelog fragments. This is a smoke canary and the issue forbids touching other files.\n- **Missing file.** The issue says the file exists. If it is absent on the ref, create it at the same path without creating any new directory. `tests/` already exists.\n\n## Testing considerations\n\n- Run `cmp <(printf 'status: ok\\nrun_id: 39522103038\\nupdated-by: ai-pipeline\\n') tests/e2e_smoke_canary.txt`; it must exit 0.\n- Run `git diff --stat`; it must list only `tests/e2e_smoke_canary.txt`.\n\n## Pre-execution self-check\n\n- The only file listed is `tests/e2e_smoke_canary.txt`.\n- No automation paths are listed.\n- No `## Deferred scope` section is needed, because the plan covers the whole issue.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "a81fb3210174d983eae1e5567a4ec22308fdaa07cc6f5dd16caa57e8e677d783",
+  "lineage": {
+    "issue_number": 7752,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39522722448",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39522722448",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7752"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261021004828_17a1f50a90",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7752,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39522722448"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7752",
+  "timestamps": {
+    "created_at": "2026-10-21T00:48:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
