@@ -991,8 +991,8 @@ class MergeTrainStepContractTest(unittest.TestCase):
 	"""The merge-train step runs its largest module in local shards (#7579).
 
 	Group 1 of `orchestrate-poll` took 15m13s of its 20 minutes with this step
-	running serially. The step stays in place, by name and guard, and splits
-	tests/test_review_merge_train.py across 3 processes beside one process for
+	running serially. The step was split in place there, keeping its name, and
+	splits tests/test_review_merge_train.py across 3 processes beside one process for
 	the small modules. Every test must still run exactly once, and a shard that
 	fails or records no exit code must fail the step.
 
@@ -1166,7 +1166,7 @@ class MovedReleaseStepsContractTest(unittest.TestCase):
 		group_count = poll_group_count()
 		for name, (group, _modules) in MOVED_RELEASE_STEPS.items():
 			with self.subTest(step=name):
-				self.assertNotIn(group, (0, 1), "groups 0 and 1 already carry extra steps")
+				self.assertNotIn(group, (0, 1), "group 0 carries extra steps and group 1 carried the merge-train step until #7766")
 				self.assertLess(group, group_count, "guard names a group the matrix does not run")
 
 	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:

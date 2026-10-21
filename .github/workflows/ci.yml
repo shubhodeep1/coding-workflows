@@ -854,24 +854,20 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
 
-      # Moved from tests-hooks-and-orchestrator, which took 15m52s of its 20
-      # minutes on main (run 39038112755, budget-watch issue #7575). Before
-      # that it moved there from tests-release-and-log-analysis (20m16s, run
-      # 39030079651, #7560), and earlier out of tests-hooks-and-orchestrator
-      # when it measured 19.6 of its 20 minutes (2026-10-09). The single test
-      # jobs record 12.8 minutes to 20m16s while poll groups record about 5
-      # minutes (#4707); group 0 already carries the fast-fail subset and the
-      # single-file modules, so the step runs in group 1 only, once per CI run.
-      # Budget-watch issue #7579: group 1 then took 15m13s of its 20 minutes
-      # (run 39047759102). Every other job was estimated at or above the
-      # 15-minute warning line with this step added, and the step had already
-      # moved three times, so it stays here and is split in place instead, the
-      # way the workflow failure heal step was (#7387):
+      # History: the step moved out of this job (15m52s of its 20 minutes, run
+      # 39038112755, budget-watch issue #7575) into orchestrate-poll group 1.
+      # Before that it moved here from tests-release-and-log-analysis (20m16s,
+      # run 39030079651, #7560), and earlier out of this job when it measured
+      # 19.6 of its 20 minutes (2026-10-09). In orchestrate-poll it ran in
+      # group 1 only, because group 0 carries the fast-fail subset and the
+      # single-file modules. Budget-watch issue #7579: group 1 then took
+      # 15m13s of its 20 minutes (run 39047759102), and the step was split in
+      # place there, the way the workflow failure heal step was (#7387):
       # tests/test_review_merge_train.py runs in 3 local shards (split by test
       # function, parametrized cases together) and the five small modules run
-      # in one more process beside them, on the runner's 4 cores, which are
-      # idle once the poll step has finished. Every test seeds its own temp
-      # dirs and fake gh, and each shard is a separate pytest process. Step
+      # in one more process beside them, on the runner's 4 cores. Every test
+      # seeds its own temp dirs and fake gh, and each shard is a separate
+      # pytest process. Step
       # times here are estimates from test counts and earlier changelog
       # figures, not measurements of run 39047759102. The step seeds its own
       # git repositories and needs no Node or prepared .claude/ live copies.
@@ -2362,8 +2358,8 @@ jobs:
       # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
       # #7677), while poll groups record about 5 minutes (#4707). Group 0
       # carries the fast-fail subset and the single-file modules and group 1
-      # the merge-train step, so this step runs in group 2 only, once per CI
-      # run. It needs only checkout, Python 3.12 and the shared pip install,
+      # then carried the merge-train step (moved out in #7766), so this step
+      # runs in group 2 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
       - name: Regression tests wired by the CI wiring guard (part 2)
         if: strategy.job-index == 2
@@ -2427,8 +2423,8 @@ jobs:
       # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
       # #7677), while poll groups record about 5 minutes (#4707). Group 0
       # carries the fast-fail subset and the single-file modules and group 1
-      # the merge-train step, so this step runs in group 3 only, once per CI
-      # run. It needs only checkout, Python 3.12 and the shared pip install,
+      # then carried the merge-train step (moved out in #7766), so this step
+      # runs in group 3 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
       - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
         if: strategy.job-index == 3
