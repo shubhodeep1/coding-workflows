@@ -760,3 +760,208 @@ Context: `tests/test_workflow_file_size_limit.py:66-91` already fails CI for any
 | Code modularization | `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/actions/install-codex/action.yml`, new `scripts/wla_codex_pass.sh`, `scripts/label_helpers.sh`, `scripts/review_rb_judge.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/tg_helpers.sh` | Large |
 | Expression size reduction | `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/implement.yml`, new `scripts/implement_handle_noop.sh`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `.github/workflows/orchestrate_poll.yml`, `.github/workflows/orchestrate.yml`, `.github/workflows/implement.yml`, `.github/workflows/lint-pr-body-auto-close.yml`, `.github/workflows/workflow-log-analysis.yml`, `scripts/tg_helpers.sh`, `scripts/gh_helpers.sh`, `scripts/check_integration_pr_readiness.py`, `prompts/mode-workflow-audit.txt` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-21)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`:** the consolidation meets every precondition: the same endpoint (or a strict subset of its fields) with the same pagination, filters and auth; the calls sit in the same function or step with no mutation between them; error and retry behaviour is unchanged; no concurrency boundary is crossed; and any documented cache contract is kept. The implement stage may act on it directly.
+- **`NEEDS_VERIFICATION`:** the change looks correct, but static reading cannot prove every precondition. Do the listed checks before implementing.
+- **`RISKY_SKIP`:** at least one hard trigger applies: a retry, backoff or stall-recovery path; auth; pagination; a rate-limit-sensitive or dispatch-gating path; any code in `scripts/orchestrate_poll_process.sh`; race-defending code; or log keys that other code greps. These findings are listed so they are visible. They must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: the auto-merge guard reads PR labels and the PR object in two separate calls**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/review_enable_auto_merge.sh:155`: paginated labels read.
+  - `scripts/review_enable_auto_merge.sh:221`: full PR read.
+  - `scripts/review_enable_auto_merge.sh:100`: `reviewed_head_is_current_for_labels`, a third read of the same PR, which only runs on the e2e early-exit path at 158.
+- **Call count:**
+  - Current: 2 on the normal path (155 plus 221). 2 on the e2e path (155 plus 100). The labels call costs more when it spans several pages.
+  - Proposed: 1 on both paths.
+- **Endpoints:** `GET repos/{repo}/issues/{n}/labels?per_page=100` (`--paginate`), and `GET repos/{repo}/pulls/{n}`.
+- **Evidence:** the `pulls/{n}` payload already carries `.labels[]`, `.head.sha` and `.head.ref`. Line 221 is fetched only after the e2e label exit at 157-163. The script's own comment at 98-99 says the head read exists because "the full PR-metadata call below is unreachable on these intentional early-exit paths":
+  ```bash
+  if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' 2>"${_label_err_file}")"; then
+  ...
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+  ```
+- **Proposed fix:**
+  - Move the `_ORCH_PR_META_JSON` read above line 155.
+  - Derive `PR_LABELS_RAW` with `jq -r '.labels[]?.name'` from that read.
+  - Pass its `.head.sha` into `reviewed_head_is_current_for_labels`, so that function makes no call of its own.
+  - Keep both fail-closed `exit 0` branches with their existing warning texts.
+- **Safety rationale:** the labels call is deliberately paginated (comment at 144-153, Copilot review #3 on PR #1823). It is also a fail-closed guard against an e2e PR auto-merging mid-test, which is a race-defence path. Both are RISKY_SKIP triggers.
+- **Downstream signal:** do not auto-implement. A human must first confirm that the `.labels` array in the `pulls/{n}` REST response is complete, not truncated, for PRs with more than 30 labels. They must also confirm that reordering keeps the warning text on the e2e exit path at 168, and that the reviewed-head check reads the same snapshot in both orders.
+
+**MERGE-002: the review-blocked judge reads the PR over REST and then over GraphQL, back to back**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/review_rb_judge.sh:1071` (REST `_pr_meta`).
+  - `scripts/review_rb_judge.sh:1114-1118` (GraphQL `RB_LINKED_ISSUES_GRAPHQL_JSON`).
+  - `scripts/review_rb_judge.sh:1139` (REST fallback for title and body).
+- **Call count:**
+  - Current: 2, or 3 when the fallback runs.
+  - Proposed: 1 (a single GraphQL call).
+- **Endpoints:** `GET repos/{repo}/pulls/{n}`; GraphQL `repository.pullRequest{baseRefName closingIssuesReferences…}`.
+- **Evidence:**
+  - The GraphQL query already fetches `baseRefName`, and 1120-1121 falls back to `_pr_meta.base.ref` for the same value.
+  - `_pr_meta` is only used for `state`, `merged_at`/`merged` (1072-1073), `draft` (1097), `base.ref` (1121) and `title`/`body` (1135-1136), all of which GraphQL exposes.
+  - The only call between the two reads is `ensure_label_exists` (1108-1109). It does not change the PR.
+- **Proposed fix:**
+  - Add `state merged isDraft title body` to the 1118 query and move the query above line 1071.
+  - Map GraphQL `state` (`OPEN`/`CLOSED`/`MERGED`) and `isDraft` onto the existing `_pr_state`/`_pr_merged`/`_pr_draft` variables.
+  - Remove 1071 and 1139.
+  - Follow the alias and fail-open shape of `_fetch_linked_pr_status_graphql` (`scripts/orchestrate_poll_process.sh:18375`).
+- **Safety rationale:** 1071 is the guard against acting on a closed or merged PR (comment ending at 1062). It is race-defending code, and the REST and GraphQL payloads differ in shape (`merged_at` vs `merged`, `draft` vs `isDraft`, lower- vs upper-case state).
+- **Downstream signal:** do not auto-implement. A human must check that on a failed read the GraphQL path still yields `_pr_state=""` and continues, exactly as today's `'{}'` fallback does. The separate pre-action re-read at 1927 must stay unchanged: it is a deliberate freshness read (comment 1917-1923).
+
+**MERGE-003: the scheduled cancel sweep and the merge-train release in the same job both list queued and in-progress Actions runs**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `.github/workflows/cancel_on_pr_close.yml:146-165` (`_cpr_fetch_active_runs`, two `--paginate` listings).
+  - `.github/workflows/cancel_on_pr_close.yml:382`, which invokes `scripts/review_merge_train.sh:1166-1182` (`_mt_inflight_review_branches`). That function lists `status=` `requested`, `pending`, `queued`, `waiting` and `in_progress`, each status twice.
+- **Call count:**
+  - Current: 2 or more (paginated), plus about 10 when a queued PR passes the base filter (`review_merge_train.sh:83-90`), on every 5-minute tick.
+  - Proposed: at best 2 fewer per tick, and only on ticks where the release lists runs.
+- **Endpoint:** `GET repos/{repo}/actions/runs?status=…`.
+- **Evidence:** both steps run in one job, one after the other, on the same 5-minute schedule. However, they are not strict subsets of each other:
+  - The cancel step filters `event=pull_request` and needs `.pull_requests` (lines 246 and 264).
+  - The merge-train `--jq` projection at 1178 drops `pull_requests`.
+  - The merge train deliberately re-reads each status (the second pass in 1166, and the shifted-listing handling at 1209-1219, Q59).
+- **Proposed fix:** none to implement now. Reuse would mean widening the merge-train projection and sharing a file between steps.
+- **Safety rationale:** both listings are paginated, and the merge-train listing is a race defence against double-dispatching a review beside one that is already running.
+- **Downstream signal:** do not auto-implement. Revisit only after `POLL_PHASE_TIMING`/`GH_PAT_BUDGET` data shows this job is a material API consumer. Any reuse must keep the merge train's two-pass union semantics.
+
+**MERGE-004: the poll's `find_tracking` step makes two separate label-filtered issue listings**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Calls involved:**
+  - `.github/workflows/orchestrate_poll.yml:267-275`: provider-outage trackers, over REST.
+  - `.github/workflows/orchestrate_poll.yml:280-290`: tracking issues, through `gh issue list`, which uses GraphQL.
+- **Call count:** current 2 per tick (about 576 a day at `*/5`); proposed 1 per tick.
+- **Endpoints:** `GET repos/{repo}/issues?labels=ai:provider-outage&state=open&per_page=100`; GraphQL `repository.issues(labels:["ai:orchestrator-tracking"], states:OPEN, first:20)`.
+- **Evidence:** both calls are unconditional, in the same step, back to back, with no mutation between them. Both list open issues filtered by one label.
+- **Proposed fix:**
+  - Replace them with one aliased GraphQL query:
+    - `outage: issues(labels:["ai:provider-outage"],states:OPEN,first:100){nodes{number body authorAssociation}}`
+    - `tracking: issues(labels:["ai:orchestrator-tracking"],states:OPEN,first:N){nodes{number title labels(first:100){nodes{name}}}}`
+  - Write each alias to its existing file in its existing shape: the `provider_outage_trackers.json` array, and `tracking_issues.json` with `labels:[{name}]`.
+  - If the GraphQL call fails, fall back to the two existing calls.
+  - Use the batching contract of `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh:18216`).
+- **Safety rationale:** the two calls handle errors differently today. The outage listing fails open to `capacity_wait=false` (273-275). The tracking listing fails the step under `set -e`. A merged call would couple those two behaviours unless the legacy fallback is kept.
+- **Downstream signal (verify first):**
+  1. Every consumer of `tracking_issues.json` must accept the adapted label shape. These include `tracking_issue_is_smoke_fixture` at `orchestrate_poll_process.sh:22931`, and the loops at 22941+, 5799-5801 and 20411-20414 cited by BUG-003.
+  2. GraphQL `authorAssociation` must return the same `OWNER`/`MEMBER`/`COLLABORATOR` strings that line 270 tests.
+  3. Dropping the REST `.pull_request | not` filter must be safe, which it should be because GraphQL `issues` excludes PRs.
+  4. Coordinate the `first:` value with BUG-003's limit change.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: `FINAL_DEFAULT_BRANCH` re-reads the value that `DEFAULT_BRANCH_TRACKING` was just set to**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/orchestrate_poll_process.sh:23772-23774`, which sets `DEFAULT_BRANCH_TRACKING` (or it was already set at 23159).
+  - `scripts/orchestrate_poll_process.sh:23818` (`FINAL_DEFAULT_BRANCH`), in the same loop iteration.
+- **Call count:** current 2 per `merge_conflict` project per tick; proposed 1.
+- **Endpoint:** `GET repos/{repo}` with `--jq '.default_branch'`.
+- **Evidence:** both use the same endpoint, the same `--jq`, and the same `|| echo "main"` fallback. Nothing assigns `DEFAULT_BRANCH_TRACKING` between 23774 and 23818:
+  ```bash
+  if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
+    DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  fi
+  ...
+    FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  ```
+  The file already uses this reuse pattern at 28810: `FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq …)}"`.
+- **Proposed fix:** change 23818 to the same `${DEFAULT_BRANCH_TRACKING:-$(…)}` form used at 28810.
+- **Safety rationale:** this would meet every `SAFE_TO_MERGE` precondition, but it sits inside `orchestrate_poll_process.sh`, which is a mandatory RISKY_SKIP trigger.
+- **Downstream signal:** do not auto-implement. A poller owner must approve it. Review only that the fallback value matches (`"main"` in both places), which it does.
+
+**REUSE-002: the default branch is read from 18 sites in the poller, plus once more in the merge-train step**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/orchestrate_poll_process.sh`: 3837, 5122, 5586, 6337, 14944, 19216, 22353, 23159, 23331, 23622, 23773, 23818, 24224, 24294, 24371, 28465, 28810 and 29572.
+  - `scripts/review_merge_train.sh:1142`, run as a separate step at `orchestrate_poll.yml:242`.
+- **Call count:**
+  - Current: about P (one per active project at 23159 or 23773) plus 1 (standalone sweep at 29572) plus up to 1 (`_review_run_default_branch`) plus up to 1 (merge train), plus conditional sites, per tick.
+  - Proposed: 1 per poller process plus up to 1 for the merge-train step.
+- **Endpoint:** `GET repos/{repo}`.
+- **Evidence:** a per-process memo already exists in `_review_run_default_branch` (22321-22374; "API calls: at most one `GET repos/<repo>` per poller process (§14)"). However, each site handles failure differently, and that is deliberate:
+  - 22303-22307 have no `main` fallback ("a fallback would trust a spoofed run").
+  - 5110-5118 say "FINAL_DEFAULT_BRANCH is deliberately not reused" because of its `main` fallback.
+  - Sites 23159, 23773 and 28465 fall back to `"main"`; sites 3837, 5122, 6337 and 19216 fall back to `""`.
+- **Proposed fix:**
+  - Add a memo helper that caches successes only. The name `_poll_repo_default_branch_memo` is unused in `scripts/`.
+  - The helper returns the raw value and a return code. Each site keeps its own fallback: `|| echo main`, `|| echo ""`, or fail closed.
+  - A failed read must not be memoized for the sites that today retry on each call.
+- **Safety rationale:** the sites sit inside `orchestrate_poll_process.sh`, and some of them defend against spoofed review runs. Sharing a cached failure state would change fail-open and fail-closed behaviour.
+- **Downstream signal:** do not auto-implement. A human must map each of the 18 sites to its fallback class and confirm that only successful values are shared. Measure the saving with `POLL_PHASE_TIMING gh_calls=` first.
+
+**REUSE-003: orchestrate's integration-branch step re-reads a default branch the event payload already carries**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Call involved:** `.github/workflows/orchestrate.yml:1267`.
+- **Call count:** current 1 per orchestrate run; proposed 0, with 1 as a fallback when the payload lacks the field.
+- **Endpoint:** `GET repos/{repo}`.
+- **Evidence:** `implement.yml` already takes this value from the event payload, at `implement.yml:924` (`${{ github.event.repository.default_branch }}`) and `implement.yml:1972`. `orchestrate.yml` is `workflow_call` (lines 4-5), so `github.event` is the caller's event.
+- **Proposed fix:** pass `ORCH_EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}` through the step's `env:`. Use it when it matches `^[A-Za-z0-9._/-]+$`, and otherwise run the existing call.
+- **Safety rationale:** whether every caller's trigger includes `repository.default_branch` cannot be proved statically.
+- **Downstream signal (verify first):**
+  - List the trigger events of every workflow that calls `orchestrate.yml`, and confirm each payload includes `repository.default_branch`.
+  - Coordinate with BUG-006, which edits the same step at 1272-1279.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001: the labels fallback in "Validate approval phase label" is effectively unreachable**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Call involved:** `.github/workflows/implement.yml:2252-2254`.
+- **Call count:** current about 0 per run in practice; proposed 0.
+- **Endpoint:** `GET repos/{repo}/issues/{n}` with `--jq '[.labels[].name]'`.
+- **Evidence:**
+  - The same step has just fetched this endpoint at 2204 and written it to `ISSUE_META_FILE` at 2210, and it exits at 2205-2209 when that read is empty.
+  - 2250 parses those same bytes. The fallback at 2253 only runs if that `jq` fails, and it then repeats the same `jq` on a new copy of the same endpoint.
+  - The comment at 2241-2247 is stale: the file now comes from 2210, not from "Fetch issue metadata".
+- **Proposed fix:** replace the fallback with a fail-closed gate:
+  ```bash
+  echo "AI_PHASE_GATE_V1 phase=implement gate=phase_validation reason=labels_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+  echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+  exit 0
+  ```
+- **Safety rationale:** do not simply delete the call. An empty `ISSUE_LABELS_JSON` makes `jq -e 'index(…)'` at 2263 and 2275 produce no output, which is a non-zero exit, so the `ai:destructive-blocked` and `ai:scope-blocked` latches would fail **open**. The replacement also adds a new `reason=` value to `AI_PHASE_GATE_V1`.
+- **Downstream signal:** confirm that no consumer enumerates `AI_PHASE_GATE_V1 reason=` values strictly. Then apply the fail-closed replacement, not a deletion.
+
+**Reviewed and intentionally not raised (deliberate freshness re-reads):**
+- `implement.yml:2620`: the security-dependency recheck before edits.
+- `review_autofix.yml:2219` and `5339`: the PR state at job start vs. on the failure path.
+- `review_rb_judge.sh:1927`: the merged-race guard.
+- `implement_handle_guard_block.sh:112`, `230` and `404`: post-write latch checks.
+- `orchestrate_poll_process.sh:24593`: `VSP_FRESH_LABELS`.
+
+The `pr_checks_lib.sh:256` and `:821` reads are already skipped, because `review_enable_auto_merge.sh:282` passes both the head SHA and the base ref.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — in `orchestrate_poll_process.sh`. New detail:
+  - Labels seeded from `tracking_issues.json` (written at `orchestrate_poll.yml:290`) are stale by however much of the tick has already run for project k (poll p50 is 642s). The poller deliberately takes a fresh read elsewhere (24593).
+  - Seeding would also bypass the 30-label cap of `get_issue_labels_json` (BUG-010) for this read only.
+  - `get_issue_labels_json` fails open to `[]`, and the seed must too.
+- BATCH-001: RISKY_SKIP — poller loop whose output drives issue closes, which is destructive. The REST fallback is paginated. Call sites confirmed at 5155 and 5205.
+- BATCH-002: RISKY_SKIP — poller; the files read at 9288 is `--paginate`, and GraphQL `files(first:100)` changes where page boundaries fall.
+- BATCH-003: RISKY_SKIP — this code only runs when GraphQL is degraded (`gh_helpers.sh:1651-1665`), and it sits on top of a paginated timeline read.
+- API-002: RISKY_SKIP — the release run gates workflow dispatch on a race-defending `actions/runs` listing (`review_merge_train.sh:1209-1219`, Q59). Removing the scheduled backstop at `cancel_on_pr_close.yml:367-368` also changes release latency for core-profile repos.
+- API-003: SAFE_TO_MERGE — the same `gh label create` POST, cached per process inside `ensure_label_exists` (`label_helpers.sh:161-195`). Implementation constraints:
+  - Cache only `return 0` results.
+  - Key the cache on `"${repo}|${label}"` in a new `declare -gA _LABEL_HELPERS_ENSURED` (the name is unused in `scripts/`).
+  - Leave retry and error paths untouched.
+  - Confirmed saving: `review_autofix.yml:4479` plus the per-issue `set_issue_phase_label_resilient` loop at 4483-4497 (each pass calls `ensure_label_exists` at `label_helpers.sh:220`) drops from 1+N to 1.
+- API-004: RISKY_SKIP — the change edits the attempt and backoff loop in `curl_gh_api` (`gh_helpers.sh:1389-1395`), which is a retry-loop trigger.
+- API-005: NEEDS_VERIFICATION — caching the comment *body* across messages would widen the existing read-modify-write window, because concurrent jobs PATCH the same `tg_cleanup` comment (`tg_helpers.sh:252-267`). A safer saving is 3→2: cache only `tracking_id`, then `GET issues/comments/{id}` plus PATCH. Verify that no two jobs append to the same issue's marker at the same time.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 1 | API-003 (cross-ref) |
+| NEEDS_VERIFICATION | 4 | MERGE-004, REUSE-003, DEAD-API-001, API-005 (cross-ref) |
+| RISKY_SKIP | 11 | MERGE-001, MERGE-002, MERGE-003, REUSE-001, REUSE-002, API-001, API-002, API-004, BATCH-001, BATCH-002, BATCH-003 (last five are cross-refs) |
+
+### Implement-Stage Handoff
+- API-003: in `scripts/label_helpers.sh` `ensure_label_exists`, add a per-process success-only cache keyed on `repo|label` (`declare -gA _LABEL_HELPERS_ENSURED`), and return 0 on a hit before calling `gh_retry gh label create`.
+- This pass added no new SAFE_TO_MERGE findings. Every other item needs the verification or manual review described above.
