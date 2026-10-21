@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-21T07:50:14Z",
+  "tick_at": "2026-10-21T08:08:59Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -195,13 +195,14 @@
       "wave_complete": false
     },
     {
-      "current_wave": 0,
+      "current_wave": 3,
+      "integration_ahead_by": "15",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 1,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -209,14 +210,14 @@
       },
       "number": 7741,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Sandbox-aware unblock verdicts, Implements #N PR adoption, and a default-branch reference for the planner",
-      "total_waves": 0,
-      "wave_complete": false
+      "total_waves": 3,
+      "wave_complete": true
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "13",
+      "integration_ahead_by": "14",
       "issue_counts": {
         "closed": 0,
         "done": 1,
