@@ -220,6 +220,14 @@ def test_created_branch_alerts_on_first_scheduled_run_after_midnight() -> None:
 	assert "CRITICAL" in curl and "ruleset" in curl
 
 
+def test_rejected_create_is_an_error() -> None:
+	routes = _routes(branch=[404, {"message": "Branch not found"}], writes={f"POST repos/{REPO}/git/refs": [422, {"message": "Reference already exists"}]})
+	result, calls, _ = _run(routes)
+	assert result.returncode == 1
+	assert _follow_lines(result) == ["PROMOTE_CANDIDATE_FOLLOW outcome=error reason=create_failed protected=unknown"]
+	assert [_method(c) for c in _writes(calls)] == ["POST"]
+
+
 def test_frozen_by_fresh_annotated_tag() -> None:
 	routes = _routes(tag=_annotated_tag(), tag_object=_message(f"frozen_at={NOW - 3600} cycle_run=42\n"))
 	result, calls, _ = _run(routes)

@@ -190,7 +190,7 @@ if [ "${BRANCH_EXISTS}" = "false" ]; then
 	[ "${FOLLOW_RC}" -eq 0 ] || follow_fail create_failed
 	# A new branch has no ruleset yet: apply the step-5 daily alert here too.
 	if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ] && [ "$(date -u +%H)" = "00" ]; then
-		follow_alert "promote-candidate follower (${REPO}): created the branch ${FOLLOW_BRANCH}; it is not protected (protected=${FOLLOW_PROTECTED}). Operator step: add the promote-candidate ruleset (no deletion, no force-push, updates only from the pipeline account)."
+		follow_alert "promote-candidate follower (${REPO}): created the branch ${FOLLOW_BRANCH}; its protection was not read (protected=${FOLLOW_PROTECTED}). Operator step: confirm or add the promote-candidate ruleset (no deletion, no force-push, updates only from the pipeline account)."
 		follow_emit unprotected action=created "to=${MAIN_SHA}"
 		exit 0
 	fi
