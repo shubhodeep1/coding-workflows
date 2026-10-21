@@ -188,6 +188,12 @@ if [ "${BRANCH_EXISTS}" = "false" ]; then
 	follow_api "${FOLLOW_TMP}/create.json" -X POST "repos/${REPO}/git/refs" \
 		-f "ref=refs/heads/${FOLLOW_BRANCH}" -f "sha=${MAIN_SHA}"
 	[ "${FOLLOW_RC}" -eq 0 ] || follow_fail create_failed
+	# A new branch has no ruleset yet: apply the step-5 daily alert here too.
+	if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ] && [ "$(date -u +%H)" = "00" ]; then
+		follow_alert "promote-candidate follower (${REPO}): created the branch ${FOLLOW_BRANCH}; it is not protected (protected=${FOLLOW_PROTECTED}). Operator step: add the promote-candidate ruleset (no deletion, no force-push, updates only from the pipeline account)."
+		follow_emit unprotected action=created "to=${MAIN_SHA}"
+		exit 0
+	fi
 	follow_emit created "to=${MAIN_SHA}"
 	exit 0
 fi
@@ -204,7 +210,7 @@ if [ "${TAG_EXISTS}" = "true" ]; then
 			follow_api "${FOLLOW_TMP}/tag_object.json" "repos/${REPO}/git/tags/${TAG_OBJECT_SHA}"
 			[ "${FOLLOW_RC}" -eq 0 ] || follow_fail tag_object_read_failed
 			TAG_MESSAGE="$(follow_json_get "${FOLLOW_TMP}/tag_object.json" message)"
-			if [[ "${TAG_MESSAGE}" =~ (^|[^[:alnum:]_])frozen_at=([0-9]{1,12})([^0-9]|$) ]]; then
+			if [[ "${TAG_MESSAGE}" =~ (^|[^[:alnum:]_])frozen_at=([0-9]{1,12})([[:space:]]|$) ]]; then
 				FROZEN_AT="$(( 10#${BASH_REMATCH[2]} ))"
 			fi
 		fi

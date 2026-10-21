@@ -211,6 +211,15 @@ def test_created_when_branch_missing() -> None:
 	assert "ref=refs/heads/promote-candidate" in writes[0] and f"sha={MAIN_SHA}" in writes[0]
 
 
+def test_created_branch_alerts_on_first_scheduled_run_after_midnight() -> None:
+	routes = _routes(branch=[404, {"message": "Branch not found"}])
+	result, calls, curl = _run(routes, event="schedule", hour="00")
+	assert result.returncode == 0, result.stderr
+	assert _follow_lines(result) == [f"PROMOTE_CANDIDATE_FOLLOW outcome=unprotected action=created to={MAIN_SHA} protected=unknown"]
+	assert [_method(c) for c in _writes(calls)] == ["POST"]
+	assert "CRITICAL" in curl and "ruleset" in curl
+
+
 def test_frozen_by_fresh_annotated_tag() -> None:
 	routes = _routes(tag=_annotated_tag(), tag_object=_message(f"frozen_at={NOW - 3600} cycle_run=42\n"))
 	result, calls, _ = _run(routes)
@@ -225,6 +234,7 @@ def test_lightweight_or_unparsable_or_future_tag_counts_as_fresh() -> None:
 		_routes(tag=_lightweight_tag()),
 		_routes(tag=_annotated_tag(), tag_object=_message("no timestamp here")),
 		_routes(tag=_annotated_tag(), tag_object=_message("xfrozen_at=1 cycle_run=1")),
+		_routes(tag=_annotated_tag(), tag_object=_message("frozen_at=1oops")),
 		_routes(tag=_annotated_tag(), tag_object=_message(f"frozen_at={NOW + 10_000_000}")),
 	):
 		result, calls, _ = _run(routes)
