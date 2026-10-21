@@ -495,7 +495,10 @@ def test_validate_support_sites_take_protected_promote_candidate_tip(tmp_path: P
 		env = {"GITHUB_REPOSITORY": SUPPORT_REPO, "SUPPORT_REF_WORKFLOW_JOB_JSON": job, "VALIDATE_WORKFLOW_JOB_JSON": job, "TRACKING_ISSUE": "5"}
 		result, values, outputs, _calls = _run_script(resolver, tmp_path, env, pc_json=pc_json)
 		assert result.returncode == 0 and values == {"RESOLVER": resolver_expected}, (workflow_ref, result.stderr)
-		assert outputs == ({"promote_candidate_sha": PC_TIP} if helper_ref == PC_TIP else {}), (workflow_ref, outputs)
+		expected_outputs = {"promote_candidate_checked": "true"} if workflow_ref == exact else {}
+		if helper_ref == PC_TIP:
+			expected_outputs["promote_candidate_sha"] = PC_TIP
+		assert outputs == expected_outputs, (workflow_ref, outputs)
 		result, _values, _outputs, _calls = _run_script(support, tmp_path, env, pc_json=pc_json)
 		assert result.returncode == 0, (workflow_ref, result.stderr)
 		assert f"VALIDATE_SUPPORT_REF ref={helper_ref} " in result.stdout, (workflow_ref, result.stdout)
@@ -513,6 +516,18 @@ def test_validate_support_sites_take_protected_promote_candidate_tip(tmp_path: P
 	result, _values, _outputs, calls = _run_script(support, tmp_path, env)
 	assert result.returncode == 0 and calls == [], result.stderr
 	assert "VALIDATE_SUPPORT_REF ref=main " in result.stdout, result.stdout
+	# When the resolver read the branch and rejected it, the support fetch keeps
+	# main instead of reading again (a second read could pick a different source).
+	env = {
+		"GITHUB_REPOSITORY": SUPPORT_REPO,
+		"VALIDATE_WORKFLOW_JOB_JSON": json.dumps({"workflow_ref": exact}),
+		"VALIDATE_PROMOTE_CANDIDATE_SHA": "",
+		"VALIDATE_PROMOTE_CANDIDATE_CHECKED": "true",
+	}
+	result, _values, _outputs, calls = _run_script(support, tmp_path, env, pc_json=PC_PROTECTED)
+	assert result.returncode == 0 and calls == [], result.stderr
+	assert "VALIDATE_SUPPORT_REF ref=main " in result.stdout, result.stdout
+	assert "SUPPORT_REF source=promote_candidate_unprotected" in result.stdout, result.stdout
 
 
 def test_memory_maintenance_checks_out_protected_promote_candidate_tip(tmp_path: Path) -> None:

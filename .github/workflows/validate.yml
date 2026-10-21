@@ -202,6 +202,9 @@ jobs:
             # from its tip; a look-alike ref, an unprotected branch or a failed read
             # keep the source above. One branches read, only on this path.
             if [[ "${resolver_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$ ]]; then
+              # Tells "Fetch workflow support files" this step already decided, so a
+              # rejected read is not repeated there with a possibly different answer.
+              echo "promote_candidate_checked=true" >> "$GITHUB_OUTPUT"
               source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
               type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
               promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
@@ -443,6 +446,7 @@ jobs:
           VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
           VALIDATE_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           VALIDATE_PROMOTE_CANDIDATE_SHA: ${{ steps.refctx.outputs.promote_candidate_sha }}
+          VALIDATE_PROMOTE_CANDIDATE_CHECKED: ${{ steps.refctx.outputs.promote_candidate_checked }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -468,9 +472,9 @@ jobs:
             if [[ "${validate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$ ]]; then
               # Reuse the SHA "Resolve integration ref" accepted (a step output,
               # which later steps cannot overwrite). Read the branch only when that
-              # step accepted none (no tracking issue, unprotected, failed read).
+              # step never read it (no tracking issue); a rejection there keeps main.
               promote_candidate_sha="${VALIDATE_PROMOTE_CANDIDATE_SHA:-}"
-              if [[ ! "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              if [[ ! "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]] && [ "${VALIDATE_PROMOTE_CANDIDATE_CHECKED:-}" != "true" ]; then
                 source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
                 type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
                 promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
