@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When changing a GitHub Actions workflow, check for an existing focused test under `tests/` and add or update one to cover the workflow contract. Merged workflow changes in the supplied runs also include a `changelog.d/` entry.",
+  "fingerprint": "4d483f52373f9a2f7a56eb2f6df1d8ab5f3d7efc0fd21abf3191d83affc37cd7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39606827305",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39606827305",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7765",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7766",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7772",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7798",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7800",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7769",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7770",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7774",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7799",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7801"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261021132134_9c3bf00c8b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow changes in this repository are commonly paired with focused contract tests and a changelog fragment.",
+  "timestamps": {
+    "created_at": "2026-10-21T13:21:34Z",
+    "promoted_at": "2026-10-21T13:23:03Z",
+    "superseded_at": null
+  }
+}
