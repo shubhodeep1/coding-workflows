@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When planning a code or workflow change, check whether the repository's changelog-fragment convention applies and include a focused entry under `changelog.d/`. This appeared alongside many merged implementation changes, though documentation- or analysis-only changes did not always include one.",
+  "fingerprint": "5fc912f24b1b3a7fdbbb19f21f5fe79202f8de8d5622be3a139588d884eefd10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39532223142",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39532223142",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7729",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7732",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7733",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7737",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7742",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7730",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7734",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7735",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7738",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7744"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261021023036_c48801de2b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Code and workflow changes commonly include a `changelog.d/` fragment.",
+  "timestamps": {
+    "created_at": "2026-10-21T02:30:36Z",
+    "promoted_at": "2026-10-21T02:31:56Z",
+    "superseded_at": null
+  }
+}
