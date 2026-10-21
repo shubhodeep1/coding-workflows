@@ -253,14 +253,20 @@ LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 # The alternatives are disjoint (a token, or an option value, can start only
 # one of them: an unquoted value never starts with a quote), so each option run
 # parses one way and a long run such as `git -c -c -c ... status` cannot
-# backtrack exponentially. An option value may be quoted and contain spaces.
+# backtrack exponentially; the run is therefore unbounded (`*`), since any cap
+# lets one more option hide a remote command. An option value may be quoted
+# and contain spaces.
 _GIT_OPT_VALUE = r"""(?:"[^"\n]*"|'[^'\n]*'|[^\s"'][^\s]*)"""
 _GIT_GLOBAL_OPTS = (
 	r"(?:\s+(?:-[Cc]\s+" + _GIT_OPT_VALUE
 	+ r"|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+" + _GIT_OPT_VALUE + r")"
 	+ r"|--(?!(?:git-dir|work-tree|namespace)(?![\w-]))[A-Za-z][\w-]*(?:=\S+)?"
-	+ r"|-(?![Cc](?![\w-]))[A-Za-z][\w-]*)){0,32}"
+	+ r"|-(?![Cc](?![\w-]))[A-Za-z][\w-]*))*"
 )
+# Quoted runs are replaced by one placeholder character before a second search,
+# so an option value with an embedded quoted run (`-c user.name="A B"`) still
+# reads as one token; the replacement is linear and only adds matches.
+_QUOTED_RUN_RE = re.compile(r""""[^"\n]*"|'[^'\n]*'""")
 SANDBOX_INCOMPATIBLE_PATTERNS = (
 	# `git remote` counts only as a command (a subcommand or flag follows), so
 	# prose such as "no git remote" from the judge prompt itself is not refused.
@@ -898,8 +904,9 @@ def _check_sandbox_instructions(text: str) -> None:
 	"""Refuse instructions the network-less implement sandbox cannot follow."""
 	if not text:
 		return
+	candidates = (text, _QUOTED_RUN_RE.sub("Q", text))
 	for pattern_id, pattern in SANDBOX_INCOMPATIBLE_PATTERNS:
-		if pattern.search(text):
+		if any(pattern.search(candidate) for candidate in candidates):
 			raise UsageError(f"sandbox_incompatible:{pattern_id}")
 
 
