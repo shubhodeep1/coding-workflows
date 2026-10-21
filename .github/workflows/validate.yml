@@ -751,9 +751,20 @@ jobs:
             echo "::warning::Trusted .github/ai/claude_engine.json is missing; codex runs."
             exit 1
           fi
-          mkdir -p "${dest}/.github/actions" "${dest}/.github/ai"
+          # The pool-token action runs <action>/../../../scripts/claude_pool_token.sh,
+          # which calls claude_engine.py beside it. Without them the credential
+          # step exits 127 and every Claude role ends with no_credential.
+          for rel in scripts/claude_pool_token.sh scripts/claude_engine.py; do
+            if [ ! -f "${src}/${rel}" ] || [ -L "${src}/${rel}" ]; then
+              echo "::warning::Trusted ${rel} is missing; codex runs."
+              exit 1
+            fi
+          done
+          mkdir -p "${dest}/.github/actions" "${dest}/.github/ai" "${dest}/scripts"
           cp -R "${src}/.github/actions/install-claude" "${src}/.github/actions/claude-pool-token" "${dest}/.github/actions/"
           install -m 0644 "${src}/.github/ai/claude_engine.json" "${dest}/.github/ai/claude_engine.json"
+          install -m 0755 "${src}/scripts/claude_pool_token.sh" "${dest}/scripts/claude_pool_token.sh"
+          install -m 0644 "${src}/scripts/claude_engine.py" "${dest}/scripts/claude_engine.py"
 
       - name: Install Claude Code CLI
         if: steps.ai_engine.outputs.engine == 'claude' && steps.claude_engine_actions.outcome == 'success'
