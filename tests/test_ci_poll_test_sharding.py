@@ -440,7 +440,7 @@ class ReleaseValidateScriptsShardContractTest(unittest.TestCase):
 		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
 			with self.subTest(workflow=workflow_name):
 				self.assertEqual(
-					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 60
+					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 90
 				)
 
 
@@ -941,6 +941,8 @@ class CiFailedShardLogSummaryTest(unittest.TestCase):
 
 
 MERGE_TRAIN_STEP_NAME = "Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)"
+# Moved back here from orchestrate-poll group 1 (budget-watch issue #7766).
+MERGE_TRAIN_JOB_ID = "tests-hooks-and-orchestrator"
 MERGE_TRAIN_MODULE = "tests/test_review_merge_train.py"
 MERGE_TRAIN_SMALL_MODULES = (
 	"tests/test_gh_helpers_parse_reset_header.py",
@@ -952,6 +954,14 @@ MERGE_TRAIN_SMALL_MODULES = (
 MERGE_TRAIN_AWK_RE = re.compile(
 	r"""awk -v n="\$\{mt_shard\}" -v total="\$\{mt_shards\}" '(?P<expr>[^']+)'"""
 )
+
+
+def merge_train_job_step(step_name: str) -> dict:
+	job = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"][MERGE_TRAIN_JOB_ID]
+	for step in job["steps"]:
+		if step.get("name") == step_name:
+			return step
+	raise AssertionError(f"{step_name!r} step not found in the ci.yml {MERGE_TRAIN_JOB_ID} job")
 
 
 def run_merge_train_judge(step_run: str, files: dict[str, dict[str, str]]) -> subprocess.CompletedProcess:
@@ -981,14 +991,18 @@ class MergeTrainStepContractTest(unittest.TestCase):
 	"""The merge-train step runs its largest module in local shards (#7579).
 
 	Group 1 of `orchestrate-poll` took 15m13s of its 20 minutes with this step
-	running serially. The step stays in place, by name and guard, and splits
-	tests/test_review_merge_train.py across 3 processes beside one process for
+	running serially. The step was split in place there, keeping its name, and
+	splits tests/test_review_merge_train.py across 3 processes beside one process for
 	the small modules. Every test must still run exactly once, and a shard that
 	fails or records no exit code must fail the step.
+
+	Budget-watch issue #7766: group 1 then took 15m42s of its 20 minutes (run
+	39526504422), so the step moved, unchanged and still sharded, to
+	`tests-hooks-and-orchestrator`, which has no matrix and so no group guard.
 	"""
 
 	def setUp(self) -> None:
-		self.step = poll_job_step(MERGE_TRAIN_STEP_NAME)
+		self.step = merge_train_job_step(MERGE_TRAIN_STEP_NAME)
 		self.run = self.step["run"]
 
 	def green(self) -> dict[str, dict[str, str]]:
@@ -996,8 +1010,8 @@ class MergeTrainStepContractTest(unittest.TestCase):
 		files["rest"] = {"log": "ok\n", "rc": "0\n"}
 		return files
 
-	def test_step_keeps_its_name_job_and_group_guard(self) -> None:
-		self.assertEqual(self.step["if"], "strategy.job-index == 1")
+	def test_step_keeps_its_name_in_the_hooks_job_without_guard(self) -> None:
+		self.assertNotIn("if", self.step)
 		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
 		owners = [
 			job_id
@@ -1005,7 +1019,11 @@ class MergeTrainStepContractTest(unittest.TestCase):
 			for step in job.get("steps", [])
 			if step.get("name") == MERGE_TRAIN_STEP_NAME
 		]
-		self.assertEqual(owners, [POLL_JOB_ID])
+		self.assertEqual(owners, [MERGE_TRAIN_JOB_ID])
+
+	def test_step_left_the_poll_job(self) -> None:
+		poll_step_names = [step.get("name") for step in load_poll_job()["steps"]]
+		self.assertNotIn(MERGE_TRAIN_STEP_NAME, poll_step_names)
 
 	def test_all_six_modules_are_named_literally(self) -> None:
 		for module in (MERGE_TRAIN_MODULE, *MERGE_TRAIN_SMALL_MODULES):
@@ -1148,7 +1166,7 @@ class MovedReleaseStepsContractTest(unittest.TestCase):
 		group_count = poll_group_count()
 		for name, (group, _modules) in MOVED_RELEASE_STEPS.items():
 			with self.subTest(step=name):
-				self.assertNotIn(group, (0, 1), "groups 0 and 1 already carry extra steps")
+				self.assertNotIn(group, (0, 1), "group 0 carries extra steps and group 1 carried the merge-train step until #7766")
 				self.assertLess(group, group_count, "guard names a group the matrix does not run")
 
 	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
