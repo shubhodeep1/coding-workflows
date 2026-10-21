@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the fix to `scripts/review_conflict_prepare.sh` get past the frozen heal scope, which does not include that file?\nChoices:\nA) Close this heal issue as not planned. A trusted owner then files an ordinary issue with the same diagnosis and a `files_touched:` block listing exactly `scripts/review_conflict_prepare.sh`, `tests/test_conflict_folded_fragment_keep.py` and `changelog.d/<issue>-forward-merge-fragment-keep.md`. That issue goes through the normal implement path with the automation-path grant. (RECOMMENDED)\nB) Keep this issue and put the `1 3` keep logic in a new inline step in `.github/workflows/review_autofix.yml` (which is in scope) that runs after conflict preparation. **Note:** this splits one rule across two places, grows a workflow file that is close to the 480,000-byte guard, and goes against the root-cause fix the diagnosis asks for.\nC) Keep this issue open as an operator step. An interactive session applies the `review_conflict_prepare.sh` change and its tests by hand, and the pipeline does nothing more here.",
+  "fingerprint": "caf825da5da2eee16d674bdf9476cad243ba613beecffe7d230c3d307c344f77",
+  "lineage": {
+    "issue_number": 7796,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39566519500",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39566519500",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261021081143_4c1aeb0cef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7796,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39566519500"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7796 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-21T08:11:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
