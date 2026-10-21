@@ -781,7 +781,11 @@ _synced_security_finding_intake()
 		ss_index=$((ss_index + 1))
 		FP="$(jq -r '.fingerprint' "${ss_group}")"
 		ss_group_file="$(jq -r '.file // empty' "${ss_group}")"
-		[ -n "${ss_group_file}" ] || log "warn empty_group_file fp=${FP} source=${SOURCE_REPO}"
+		if [ -z "${ss_group_file}" ]; then
+			log "warn empty_group_file fp=${FP} source=${SOURCE_REPO}"
+			ss_skipped=$((ss_skipped + 1))
+			continue
+		fi
 		if [ -s "${ss_retired}" ] && grep -Fxq -- "${ss_group_file}" "${ss_retired}"; then
 			# Not an attention case: the consumer's next sync removes the file.
 			log "skip reason=retired_file file=${ss_group_file} fp=${FP} source=${SOURCE_REPO}"
