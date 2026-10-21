@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:4189 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: agents.md line 4189 still says the `validate-scripts` budget is \"60 minutes since #4707\", but both release workflows and `tests/test_ci_poll_test_sharding.py` now use 90 minutes.\n  WHY: Nothing fails at runtime, but maintainers and agents reading the doc get the wrong timeout. Reviewers called this a NIT, which is recorded here as low. Per \u00a725 the fix is an `agents.d/` fragment, not a direct edit.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Raise the `validate-scripts` `timeout-minutes` from 60 to 90 in both `test-and-mark-stable.yml` and `mark-stable.yml`. The related contract documentation should stay in sync through the `agents.d/` fragment pipeline.\n  expected_change_site: agents.d/7773-release-validate-scripts-timeout.md, which would update the budget sentence at agents.md:4189\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No `agents.d/7773*` fragment exists, and agents.md:4189 still reads \"Its budget is 60 minutes since #4707\". The only 7773 artefact is `changelog.d/7773-release-validate-scripts-timeout.md`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:4189 | severity=NIT | confidence=4\n  PROBLEM: The CI poll-test sharding bullet says \"Its budget is 60 minutes since #4707\", but this PR raises the budget to 90 minutes. No `agents.d/` fragment is added and agents.md is not corrected.\n  WHY: Nothing fails at runtime, but the documentation now contradicts what `tests/test_ci_poll_test_sharding.py` enforces. The suggested fix is a fragment such as `agents.d/7773-release-validate-scripts-timeout.md` with `section=\"Review pipeline consolidator + ledger contract\"`.\n- All other lenses reported NONE, and task completeness found no gaps.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP | severity=NIT | confidence=4\n  Requirement: The PR description says both release gates now allow 90 minutes. The repo expects behaviour changes to a contract-pinned workflow property to be reflected in the agents.md narrative through the `agents.d/` fragment pipeline.\n  Expected change site: A new `agents.d/7773-release-validate-scripts-timeout.md` fragment with `<!-- agents: section=\"Workflow architecture\" -->` that updates the budget sentence at `agents.md:4189`.\n  Evidence of absence: agents.md:4189 still reads \"Its budget is 60 minutes since #4707, because that job measured 37 minutes on test-and-mark-stable run 36374918973\". `ls agents.d/7773*` returns no matches, and the only 7773 artefact is `changelog.d/7773-release-validate-scripts-timeout.md`.\n- All other lenses reported NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:4189 | severity=NIT | confidence=5\n  PROBLEM: The doc says the release gates' `validate-scripts` budget is 60 minutes, which contradicts both release workflows that now set the job timeout to 90 minutes.\n  WHY: No runtime path fails, but the architecture documentation gives maintainers an incorrect timeout when reasoning about or changing the release gates.\n- All other lenses reported NONE, and task completeness reported NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e5c19f9ca72770bff582be2116e2a6bf22345b6d07b586392df11c63e6bd5921",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7773,
+    "run_id": "39540740653",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39540740653",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021041935_870e8d6b21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7773,
+    "run_id": "39540740653"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T04:19:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
