@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "When preparing a change, check whether the repository expects a fragment in changelog.d/ and include one for workflow, script, or documentation updates unless the task indicates otherwise. This convention appears across a range of recent merged changes.",
+  "fingerprint": "de859e0c3ae6a2ab7942ac2e1052fb4ff43e11c5105bbb6a9069b06e587b2319",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39551706894",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39551706894",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7737",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7742",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7765",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7766",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7772",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7738",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7744",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7769",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7770",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7774"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261021055840_f012f59de6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Most changes include a changelog fragment under changelog.d/.",
+  "timestamps": {
+    "created_at": "2026-10-21T05:58:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
