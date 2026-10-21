@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_log_analysis_failure_contract.py:226-298 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: Blank-line spacing is inconsistent around the new `GH_HELPERS` constant (extra blank lines before it) and before `def main()` (too few blank lines).\n  WHY: This is a whitespace and style nit, not a runtime failure. Sonnet-5.5 reported it as a hardening suggestion with no severity. Qwen rated it NIT, shown here as low. The two reviewers differ on whether the `def main()` gap is one blank line too many or too few, and on the expected count elsewhere in the file.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_log_analysis_failure_contract.py:lines around `GH_HELPERS = ...` and before `def main()`\n  PROBLEM: Whitespace nit only. There are three blank lines before the new module constant and a single blank line before `def main()`, where the surrounding code uses two. Suggested fix: normalize to two blank lines (about 2 lines changed).\n  WHY: Style consistency. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_log_analysis_failure_contract.py:297-298 | severity=low (source: NIT) | confidence=5\n  PROBLEM: Missing blank line between `test_label_helpers_retry_through_real_gh_retry()` and `def main()`.\n  WHY: Not a runtime failure. It violates PEP 8 and the existing code style in this file.\n- tests/test_workflow_log_analysis_failure_contract.py:226-227 | severity=low (source: NIT) | confidence=5\n  PROBLEM: Two blank lines between `test_label_create_helper_does_not_retry_an_existing_label()` and the `GH_HELPERS` constant, while the rest of the file uses single blank lines between top-level definitions.\n  WHY: Not a runtime failure. It is inconsistent with the file's existing style.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "043037778e9cd7f157b314bcc5b0f66f496673ffa95713c53863b5cf9024ca05",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7782,
+    "run_id": "39548109539",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39548109539",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021055633_cd2fde421d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7782,
+    "run_id": "39548109539"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T05:56:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
