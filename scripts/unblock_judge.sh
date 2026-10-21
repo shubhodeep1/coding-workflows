@@ -1587,7 +1587,10 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		sandbox_reasked="true"
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=reasked reason=${sandbox_reason}"
 		UNBLOCK_JUDGE_REASK_NOTE="Your previous verdict was refused: its instructions need network or remote access (${sandbox_reason}). The implementer has none. Rewrite them using only the Implementer environment above."
-		unblock_ask_model || return 0
+		if ! unblock_ask_model; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=refused_after_reask reason=ask_failed"
+			return 0
+		fi
 	done
 	if [ "${validate_ok}" != "true" ]; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} outcome=skip reason=invalid_verdict detail=$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" | tr ' ' '_' | cut -c1-120)"

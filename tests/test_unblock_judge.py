@@ -3791,6 +3791,18 @@ def test_judge_falls_back_to_invalid_verdict_after_a_second_refusal(tmp_path: Pa
 	assert [comment["body"].splitlines()[-1] for comment in state["comments"]] == ["<!-- ai:unblock-wait:v1 item=7 reason=invalid_verdict -->"]
 
 
+def test_judge_logs_reason_other_when_the_reask_fails_for_another_reason(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639},
+		MOCK_UNBLOCK_JUDGE_JSON_REASK=json.dumps({"verdict": "close", "reason": "r"}))
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.count("outcome=reasked reason=git_remote_op") == 1
+	assert "op=instruction_sandbox_check outcome=refused_after_reask reason=other" in result.stdout
+	assert "reason=invalid_verdict" in result.stdout
+	assert [comment["body"].splitlines()[-1] for comment in state["comments"]] == ["<!-- ai:unblock-wait:v1 item=7 reason=invalid_verdict -->"]
+
+
 def test_judge_sandbox_check_kill_switch(tmp_path: Path) -> None:
 	if not shutil.which("jq"):
 		pytest.skip("jq is required for the unblock judge fixture")
