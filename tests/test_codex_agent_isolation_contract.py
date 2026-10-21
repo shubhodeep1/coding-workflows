@@ -245,6 +245,24 @@ def test_orchestrate_stages_the_claude_relay_beside_the_isolation_helper():
 	assert "::error::Missing required support script" in stage
 
 
+def test_orchestrate_poll_stages_every_claude_isolation_support_file():
+	# The poller runs SECURITY_AUDIT and the judges on Claude from its staged
+	# scripts/ directory. Without the relay beside codex_isolated_exec.sh every
+	# Claude run there ends as CODEX_ISOLATION unavailable reason=support_missing
+	# and, under the capacity policy, SECURITY_PASS_FAILED reason=engine_unavailable.
+	# The required set is read from the helper itself, so a new Claude support
+	# file must be staged here too.
+	helper = (SCRIPTS / "codex_isolated_exec.sh").read_text(encoding="utf-8")
+	match = re.search(r"required_support=\(([^)]*claude_anthropic_relay\.py[^)]*)\)", helper)
+	assert match, "codex_isolated_exec.sh no longer declares its Claude support files"
+	needed = set(match.group(1).split()) | {"codex_isolated_exec.sh", "ai_engine.sh", "claude_engine.py"}
+	text = (WORKFLOWS / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	stage = step_block(text, "Stage workflow support files")
+	staged = set(stage.split("for f in ", 1)[1].split("; do", 1)[0].split())
+	assert needed <= staged, f"orchestrate_poll.yml must stage {sorted(needed - staged)} in the required loop"
+	assert "::error::Missing required support script" in stage
+
+
 @pytest.mark.parametrize(
 	"workflow",
 	[
