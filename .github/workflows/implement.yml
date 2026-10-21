@@ -4025,9 +4025,9 @@ jobs:
               if gh issue comment "${ISSUE_NUMBER}" \
                   --repo "${GITHUB_REPOSITORY}" \
                   --body-file "${diag_file}" >/dev/null 2>&1; then
-                echo "Posted Codex implement failure diagnostics to issue #${ISSUE_NUMBER}."
+                echo "Posted ${implement_engine_name} implement failure diagnostics to issue #${ISSUE_NUMBER}."
               else
-                echo "::warning::Could not post Codex failure diagnostics to issue #${ISSUE_NUMBER} (gh issue comment failed); diagnostics saved at ${diag_file}."
+                echo "::warning::Could not post ${implement_engine_name} failure diagnostics to issue #${ISSUE_NUMBER} (gh issue comment failed); diagnostics saved at ${diag_file}."
               fi
             else
               echo "::warning::Skipping diagnostics issue comment (ISSUE_NUMBER='${ISSUE_NUMBER:-}', diag_file size=$(wc -c < "${diag_file}" 2>/dev/null || echo 0)); diagnostics saved locally."

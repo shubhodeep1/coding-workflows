@@ -8009,3 +8009,16 @@ def test_heal_already_fixed_candidates() -> None:
 	# At most three candidates, newest first.
 	many = [_fixed_heal_item(number, payload) for number in (7001, 7002, 7003, 7004)]
 	assert run(heal_issues=many, reissues=())["candidates"] == [7004, 7003, 7002]
+
+
+def test_error_signature_ignores_which_engine_ran_the_attempt_loop() -> None:
+	# Attempt-loop errors now name the engine (PR #7776); the heal fingerprint
+	# must stay the one the earlier "Codex ..." lines produced.
+	codex = "##[error]Codex clarify failed after 3 attempts.\n"
+	claude = "##[error]Claude clarify failed after 3 attempts.\n"
+	assert heal.error_signature(claude) == heal.error_signature(codex)
+	orch_codex = "::error::Codex orchestrate failed after 3 attempts (last_status=codex exit 1, last_emitted=0)\n"
+	orch_claude = "::error::Claude orchestrate failed after 3 attempts (last_status=claude exit 1, last_emitted=0)\n"
+	assert heal.error_signature(orch_claude) == heal.error_signature(orch_codex)
+	# Only the leading engine word is mapped; other text keeps "claude".
+	assert "claude_pool" in heal.normalize_error_line("##[error]claude_pool token missing")

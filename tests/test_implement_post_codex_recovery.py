@@ -5425,7 +5425,7 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 	)
 	# gh failure must not abort the job — the diagnostics file is
 	# preserved locally as a fallback.
-	assert "Could not post Codex failure diagnostics" in codex_block, (
+	assert "Could not post ${implement_engine_name} failure diagnostics" in codex_block, (
 		"a failed gh issue comment must downgrade to a warning, not "
 		"abort the job — the underlying Codex failure is still the "
 		"primary signal"
