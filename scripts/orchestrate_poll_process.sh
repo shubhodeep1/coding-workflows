@@ -18586,6 +18586,102 @@ _pr_json_closes_issue() {
   return 2
 }
 
+# _pr_json_implements_issue — explicit opt-in "Implements #N" marker
+# (fun-token-multi-chain#639: a person's PR #667 with base
+# orchestrator/project-579 and body "Refs #639" did the work, but the poller
+# logged LINKED_PR_CROSS_REF_REJECTED reason=not_implementation_pr and #639
+# stayed ai:blocked). A bare "Refs #N" stays rejected (issue #3817 / PR #3825);
+# only this explicit, non-closing marker links such a PR.
+#
+# Input:   $1 issue number, $2 full REST `pulls/N` JSON (reads .body,
+#          .base.ref, .number).
+# Output:  return 0 (implements), 1 (no), 2 (bad input). Logs
+#          `LINKED_PR_IMPLEMENTS_MARKER issue= pr= base= outcome=accepted` or
+#          `... outcome=rejected reason=base_not_target|default_branch_unknown`
+#          on stderr, only when the body carries the marker.
+# Match:   case-insensitive `implements` followed by `#N`, `<this repo>#N` or
+#          `https://github.com/<this repo>/issues/N`, with N the exact number
+#          (`#6390` never matches `#639`; other repositories never match). The
+#          trailing boundary is `([^[:alnum:]_]|$)`, unlike
+#          _pr_json_closes_issue, so `#639-x` matches.
+# Base:    .base.ref must be `orchestrator/project-<n>` or the repository
+#          default branch from the memoized _review_run_default_branch.
+# API:     0 calls of its own; the default-branch read is the memoized helper
+#          (at most one `GET repos/<repo>` per poller process), made only when
+#          the body matches and the base is not a project branch.
+_pr_json_implements_issue() {
+	local issue_num="$1"
+	local pr_json="$2"
+	local _impl_repo="" _impl_rc=0 _impl_base="" _impl_pr="" _impl_default="" _impl_base_log=""
+
+	if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+		return 2
+	fi
+	if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+		return 2
+	fi
+	if [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		_impl_repo="${GITHUB_REPOSITORY}"
+	fi
+
+	printf '%s' "${pr_json}" | jq -e --arg n "${issue_num}" --arg repo "${_impl_repo}" '
+		if type != "object" then
+			false
+		else
+			(.body // "") as $body
+			| ($repo | gsub("\\."; "\\.")) as $re_repo
+			| (if $repo == "" then
+					"#" + $n
+				else
+					"#" + $n
+					+ "|" + $re_repo + "#" + $n
+					+ "|https?://github\\.com/" + $re_repo + "/issues/" + $n
+				end) as $refs
+			| (($body | type) == "string")
+				and ($body | test(
+					"(?i)(^|[^[:alnum:]_-])implements[[:space:]]+("
+					+ $refs
+					+ ")([^[:alnum:]_]|$)"
+				))
+		end
+	' >/dev/null 2>&1 || _impl_rc=$?
+	if [ "${_impl_rc}" -eq 1 ]; then
+		return 1
+	fi
+	if [ "${_impl_rc}" -ne 0 ]; then
+		return 2
+	fi
+
+	_impl_base="$(printf '%s' "${pr_json}" | jq -r '.base.ref // "" | if type == "string" then . else "" end' 2>/dev/null || echo "")"
+	_impl_pr="$(printf '%s' "${pr_json}" | jq -r '.number // "" | tostring' 2>/dev/null || echo "")"
+	[[ "${_impl_pr}" =~ ^[0-9]+$ ]] || _impl_pr="unknown"
+	if [ -z "${_impl_base}" ]; then
+		_impl_base_log="none"
+	elif [[ "${_impl_base}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+		_impl_base_log="${_impl_base}"
+	else
+		_impl_base_log="invalid"
+	fi
+
+	if [[ "${_impl_base}" =~ ^orchestrator/project-[0-9]+$ ]]; then
+		echo "LINKED_PR_IMPLEMENTS_MARKER issue=${issue_num} pr=${_impl_pr} base=${_impl_base_log} outcome=accepted" >&2
+		return 0
+	fi
+	if declare -F _review_run_default_branch >/dev/null 2>&1; then
+		_impl_default="$(_review_run_default_branch 2>/dev/null || true)"
+	fi
+	if [ -z "${_impl_default}" ]; then
+		echo "LINKED_PR_IMPLEMENTS_MARKER issue=${issue_num} pr=${_impl_pr} base=${_impl_base_log} outcome=rejected reason=default_branch_unknown" >&2
+		return 1
+	fi
+	if [ -n "${_impl_base}" ] && [ "${_impl_base}" = "${_impl_default}" ]; then
+		echo "LINKED_PR_IMPLEMENTS_MARKER issue=${issue_num} pr=${_impl_pr} base=${_impl_base_log} outcome=accepted" >&2
+		return 0
+	fi
+	echo "LINKED_PR_IMPLEMENTS_MARKER issue=${issue_num} pr=${_impl_pr} base=${_impl_base_log} outcome=rejected reason=base_not_target" >&2
+	return 1
+}
+
 # _pr_json_is_issue_implementation_pr — decide whether a PR (full REST
 # `pulls/N` JSON from _fetch_pr_json) is the issue's OWN implementation PR,
 # rather than a PR that merely mentions the issue.  The issue #3817 /
@@ -18601,7 +18697,14 @@ _pr_json_closes_issue() {
 #     `ai/issue-<n>`, or
 #   - its body carries a GitHub closing-keyword reference to the issue
 #     (_pr_json_closes_issue rc=0; covers claude-branch and validation-fix
-#     PRs that close the issue without the conventional branch name).
+#     PRs that close the issue without the conventional branch name), or
+#   - its body carries the explicit, non-closing marker `Implements #N` and
+#     its base is the default branch or an orchestrator/project-<n> branch
+#     (_pr_json_implements_issue rc=0; kill switch
+#     ORCH_IMPLEMENTS_MARKER_ENABLED=false). The marker is explicit because
+#     a bare "Refs #N" must stay rejected (issue #3817), while a person's PR
+#     that finishes a blocked item needs a way to be linked
+#     (fun-token-multi-chain#639, PR #667, rejected as not_implementation_pr).
 #
 # Return codes: 0=yes, 1=no.  Unknown/parse errors map to 1: unlike the
 # skip-recovery guards, the caller's follow-up act (adopting merged state /
@@ -18622,6 +18725,7 @@ _pr_json_is_issue_implementation_pr() {
   if _pr_json_closes_issue "${issue_num}" "${pr_json}"; then
     return 0
   fi
+  if [ "${ORCH_IMPLEMENTS_MARKER_ENABLED:-true}" != "false" ] && _pr_json_implements_issue "${issue_num}" "${pr_json}"; then return 0; fi
   return 1
 }
 
