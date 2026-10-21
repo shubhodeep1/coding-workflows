@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/wfopt-0922-validate-dispatch-notice.md:1-2 | severity=high | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The fragment says a failed required dispatch now fails the job, but CHANGELOG.md line 3443 says a failed dispatch still only warns, so the two contradict each other.\n  WHY: The conflict resolution kept the fragment but did not reconcile it with CHANGELOG.md, so the next release fold could produce a duplicate or conflicting entry. The source rated this MAJOR; it is mapped to high.\n- agents.md:\"Synced-file security findings in the heal intake\" block | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: None found. The deleted fragment agents.d/7604-synced-security-finding-intake.md is already folded into agents.md exactly once.\n  WHY: No duplicate or lost content. The source rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\" Both conflicting files (agents.d/7604-synced-security-finding-intake.md and changelog.d/wfopt-0922-validate-dispatch-notice.md) must end up cleared.\n  expected_change_site: changelog.d/wfopt-0922-validate-dispatch-notice.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The diff shows only the deletion of agents.d/7604-synced-security-finding-intake.md and no visible resolution for changelog.d/wfopt-0922-validate-dispatch-notice.md. The file still exists, and qwen says its content differs from the CHANGELOG.md entry. minimax could not verify the resolution because the diff was truncated. Severity ranged from BLOCKER (gemini) to MAJOR (minimax, qwen). Note: anthropic_claude-sonnet-5_5 judged this not a gap (the file exists with no conflict markers), and openai_gpt-6-luna reported none.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:\"Synced-file security findings in the heal intake\" block | severity=NIT | confidence=1\n  PROBLEM: None found. The deleted fragment agents.d/7604-synced-security-finding-intake.md is already folded into agents.md exactly once.\n  WHY: No duplicate or lost content.\n- Task completeness: the reviewer treats the second conflicting file, changelog.d/wfopt-0922-validate-dispatch-notice.md, as resolved by being kept. It confirmed only that the file exists and has no conflict markers, and did not read its content. It says nothing in this PR needs fixing.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0. All other lenses: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Resolve the conflicts and merge this PR so the bug fix on stable is also present on main. Both conflicting files must end up cleared.\n  Expected change site: changelog.d/wfopt-0922-validate-dispatch-notice.md\n  Evidence of absence: The last run diff shows only the deletion of agents.d/7604-synced-security-finding-intake.md. No resolution is present for changelog.d/wfopt-0922-validate-dispatch-notice.md.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n- All other lenses: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\" Both listed conflicting files must end up cleared.\n  Expected change site: `agents.d/7604-synced-security-finding-intake.md` and `changelog.d/wfopt-0922-validate-dispatch-notice.md`\n  Evidence of absence: The diff shows the deletion of agents.d/7604-synced-security-finding-intake.md, with its content folded into agents.md lines 1496-1640. The diff for changelog.d/wfopt-0922-validate-dispatch-notice.md was truncated, so its resolution cannot be verified. The two conflicting fragments may have been treated differently.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- Notes: The visible agents.md and CHANGELOG.md hunks are well formatted, with no duplicate headings or LOG_PREFIX entries. No workflow, hook or MCP files are modified. Unverified: the full agents.md insertions at lines 1496-1640 and 2982-3036, the full CHANGELOG.md insertions at lines 1459-1674 and 3105-3509, the resolution of the changelog fragment, and the PR comments, CI results and commit stat. It recommends confirming that both fragments are resolved symmetrically and running scripts/assemble_changelog.py check and scripts/assemble_agents.py check.\n- All other lenses: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- (No findings reported.) All lenses: NONE; TASK COMPLETENESS / INTENT GAPS: NONE; HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/wfopt-0922-validate-dispatch-notice.md:1-2 | severity=MAJOR | confidence=4\n  PROBLEM: The fragment says a failed required dispatch now fails the job, but CHANGELOG.md line 3443 says a failed dispatch still only warns, so the two contradict each other.\n  WHY: The resolution kept the fragment but did not update CHANGELOG.md, so the next release fold could duplicate or fail to reconcile the entry.\n- TASK_GAP\n  Requirement: \"Resolve the conflicts and merge this PR so the bug fix on stable is also present on main.\" Both conflicting files must end up cleared.\n  Expected change site: `changelog.d/wfopt-0922-validate-dispatch-notice.md`\n  Evidence of absence: The file exists and its content differs from the folded CHANGELOG.md entry, and the conflict resolution did not reconcile the difference. agents.d/7604-synced-security-finding-intake.md was correctly deleted.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- All other lenses: NONE.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (No findings reported.) The reviewer said no task was provided, because the message held only an unfilled template placeholder, and asked for the task.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9e3a59ff6f5f00195fc2477a5dc7f993fb1174ee8ddac5c65f804a582bdfd7d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7807,
+    "run_id": "39607014195",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39607014195",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021140218_3d46f66668",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7807,
+    "run_id": "39607014195"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T14:02:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
