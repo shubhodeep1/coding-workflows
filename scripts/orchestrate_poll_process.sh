@@ -13714,7 +13714,7 @@ comprehensive_stable_tag_commit() {
   local ref_json object_type object_sha tag_json err_file
   err_file="$(mktemp)"
   if ! ref_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag_name}" 2>"${err_file}")"; then
-    if grep -qiE '404|not found' "${err_file}"; then
+    if grep -qiE '(^|[^0-9])404([^0-9]|$)|not found' "${err_file}"; then
       rm -f "${err_file}"
       return 0
     fi
