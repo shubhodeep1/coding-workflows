@@ -5,13 +5,23 @@
   "entry_id": "processed_command_7814_6316940680_approved",
   "issue_number": 7814,
   "metadata": {
+    "branch": "ai/issue-7814",
+    "changed_files": [
+      "changelog.d/7802-forward-merge-two-fragment-test.md",
+      "tests/test_conflict_folded_fragment_keep.py"
+    ],
+    "issue_number": 7814,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7814",
+    "pr_number": 7818,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7818",
+    "run_attempt": "1",
+    "run_id": "39605996180",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39605996180"
   },
   "run_attempt": 1,
   "run_id": "39605996180",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-21T13:18:31Z",
+  "status": "completed",
+  "timestamp": "2026-10-21T13:28:32Z",
   "workflow": "implement"
 }
