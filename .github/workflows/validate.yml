@@ -197,6 +197,23 @@ jobs:
           fi
           if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
             resolver_ref="${{ github.sha }}"
+            source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+            type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+            # Runs pinned to the protected promote-candidate branch (promote cycle,
+            # docs/plans/pin-promote-cycle-to-candidate-plan.md) take support code
+            # from its tip; a look-alike ref, an unprotected branch or a failed read
+            # keep the source above. One branches read, only on this path.
+            if [[ "${resolver_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$ ]]; then
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                resolver_ref="${promote_candidate_sha}"
+                resolver_ref_pinned=true
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
           fi
 
           resolver_stage_root="${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -438,6 +455,24 @@ jobs:
           validate_support_pin_pattern='^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@[0-9a-f]{40}$'
           if [ "${GITHUB_REPOSITORY}" != "${wf_source}" ] && [[ "${validate_workflow_ref}" =~ ${validate_support_pin_pattern} ]]; then
             helper_ref="${validate_workflow_ref##*@}"
+          fi
+          if [ "${GITHUB_REPOSITORY}" = "${wf_source}" ]; then
+            source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+            type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+            # Runs pinned to the protected promote-candidate branch (promote cycle,
+            # docs/plans/pin-promote-cycle-to-candidate-plan.md) take support code
+            # from its tip; a look-alike ref, an unprotected branch or a failed read
+            # keep the source above. One branches read, only on this path.
+            if [[ "${validate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$ ]]; then
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                helper_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
           fi
           echo "VALIDATE_SUPPORT_REF ref=${helper_ref} workflow_ref=${validate_workflow_ref:-unknown}"
           helper_stage_root="${RUNNER_TEMP}/codex-validate-helper-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

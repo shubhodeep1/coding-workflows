@@ -268,3 +268,260 @@ def test_gh_api_retry_bootstrap_fetches_the_pinned_commit() -> None:
 		assert "SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in step, workflow
 		assert 'fetch -q --no-tags --depth 1 --filter=blob:none origin "${ghr_pin}"' in step, workflow
 		assert '[ "$(git -C "${ghr_dir}/src" rev-parse FETCH_HEAD 2>/dev/null)" = "${ghr_pin}" ]' in step, workflow
+
+
+# Phase 1 of docs/plans/pin-promote-cycle-to-candidate-plan.md: in this
+# repository, a run whose job workflow_ref is exactly
+# `<this file>@refs/heads/promote-candidate` takes support code from that
+# branch's tip, but only when the branches API reports it protected. Every
+# other ref (look-alikes, other files, @main, consumer pins) keeps its source.
+PROMOTE_CANDIDATE_WORKFLOWS = tuple(workflow for workflow in WORKFLOWS if workflow != "sync_ai_labels.yml")
+ALL_PROMOTE_CANDIDATE_WORKFLOWS = PROMOTE_CANDIDATE_WORKFLOWS + (
+	"issue_pr_status.yml",
+	"memory_maintenance.yml",
+	"review_autofix.yml",
+	"validate.yml",
+)
+PC_TIP = "a" * 40
+MAIN_TIP = "b" * 40
+GITHUB_SHA = "1" * 40
+PC_PROTECTED = json.dumps({"protected": True, "commit": {"sha": PC_TIP}})
+PC_UNPROTECTED = json.dumps({"protected": False, "commit": {"sha": PC_TIP}})
+PC_BAD_SHA = json.dumps({"protected": True, "commit": {"sha": "not-a-sha"}})
+MAIN_PROTECTED = json.dumps({"protected": True, "commit": {"sha": MAIN_TIP}})
+
+
+def _fake_gh(tmp_path: Path) -> Path:
+	bin_dir = tmp_path / "fake-gh-bin"
+	bin_dir.mkdir(exist_ok=True)
+	fake = bin_dir / "gh"
+	fake.write_text(
+		"#!/bin/sh\n"
+		'printf \'%s\\n\' "$*" >> "${FAKE_GH_LOG}"\n'
+		'case "$*" in\n'
+		'  *repos/shubhodeep1/coding-workflows/branches/promote-candidate*)\n'
+		'    [ "${MOCK_PC_RC:-0}" = 0 ] || exit "${MOCK_PC_RC}"; printf \'%s\\n\' "${MOCK_PC_JSON:-}" ;;\n'
+		'  *repos/shubhodeep1/coding-workflows/branches/main*) printf \'%s\\n\' "${MOCK_MAIN_JSON:-}" ;;\n'
+		"  *) exit 1 ;;\n"
+		"esac\n",
+		encoding="utf-8",
+	)
+	fake.chmod(0o755)
+	return bin_dir
+
+
+def _run_script(script: str, tmp_path: Path, env_extra: dict[str, str], pc_json: str = PC_PROTECTED, pc_rc: int = 0):
+	env_file = tmp_path / "github_env"
+	out_file = tmp_path / "github_output"
+	gh_log = tmp_path / "gh_calls.log"
+	for path in (env_file, out_file, gh_log):
+		path.write_text("", encoding="utf-8")
+	env = {k: v for k, v in os.environ.items() if k != "GH_API_RETRY_HELPERS"}
+	env.update(
+		{
+			"PATH": f"{_fake_gh(tmp_path)}:{os.environ['PATH']}",
+			"GITHUB_ENV": str(env_file),
+			"GITHUB_OUTPUT": str(out_file),
+			"FAKE_GH_LOG": str(gh_log),
+			"MOCK_PC_JSON": pc_json,
+			"MOCK_PC_RC": str(pc_rc),
+			"MOCK_MAIN_JSON": MAIN_PROTECTED,
+			"GH_TOKEN": "test-token",
+		}
+	)
+	env.update(env_extra)
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True)
+	env_values = dict(line.split("=", 1) for line in env_file.read_text(encoding="utf-8").splitlines() if "=" in line)
+	outputs = dict(line.split("=", 1) for line in out_file.read_text(encoding="utf-8").splitlines() if "=" in line)
+	calls = [line for line in gh_log.read_text(encoding="utf-8").splitlines() if line]
+	return result, env_values, outputs, calls
+
+
+def _substitute(script: str, repository: str) -> str:
+	script = script.replace("${{ github.repository }}", repository).replace("${{ github.sha }}", GITHUB_SHA)
+	assert "${{" not in script
+	return script
+
+
+def _step(workflow: str, name: str) -> dict:
+	steps = [step for step in _all_steps(workflow) if step.get("name") == name]
+	assert len(steps) == 1, (workflow, name, len(steps))
+	return steps[0]
+
+
+def _ref(workflow: str, ref: str) -> str:
+	return f"{SUPPORT_REPO}/.github/workflows/{workflow}@{ref}"
+
+
+def _look_alikes(workflow: str) -> tuple[str, ...]:
+	other = "plan.yml" if workflow != "plan.yml" else "clarify.yml"
+	return (
+		_ref(workflow, "refs/heads/promote-candidate-x"),
+		_ref(workflow, "refs/heads/promote-candidate/x"),
+		_ref(other, "refs/heads/promote-candidate"),
+		f"evil/coding-workflows/.github/workflows/{workflow}@refs/heads/promote-candidate",
+	)
+
+
+@pytest.mark.parametrize("workflow", PROMOTE_CANDIDATE_WORKFLOWS)
+def test_support_ref_follows_protected_promote_candidate(workflow: str, tmp_path: Path) -> None:
+	steps = _resolve_steps(workflow)
+	assert steps, workflow
+	exact = _ref(workflow, "refs/heads/promote-candidate")
+	for step in steps:
+		assert step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT || github.token }}", (workflow, step["name"])
+		self_script = _substitute(step["run"], SUPPORT_REPO)
+		consumer_script = _substitute(step["run"], "shubhodeep1/binance-blessings")
+
+		def run(script: str, workflow_ref: str, **kwargs):
+			result, values, _outputs, calls = _run_script(
+				script, tmp_path, {"SUPPORT_REF_WORKFLOW_JOB_JSON": json.dumps({"workflow_ref": workflow_ref})}, **kwargs
+			)
+			assert result.returncode == 0, (workflow, step["name"], result.stdout, result.stderr)
+			assert len(values) == 1, (workflow, step["name"], values)
+			return list(values.values())[0], result.stdout, calls
+
+		value, stdout, calls = run(self_script, exact)
+		assert value == PC_TIP, (workflow, step["name"])
+		assert f"SUPPORT_REF source=promote_candidate sha={PC_TIP}" in stdout
+		assert len(calls) == 1 and "branches/promote-candidate" in calls[0]
+		for kwargs in ({"pc_json": PC_UNPROTECTED}, {"pc_json": PC_BAD_SHA}, {"pc_json": "", "pc_rc": 1}):
+			value, stdout, _calls = run(self_script, exact, **kwargs)
+			assert value == GITHUB_SHA, (workflow, step["name"], kwargs)
+			assert "SUPPORT_REF source=promote_candidate_unprotected" in stdout
+		for workflow_ref in _look_alikes(workflow) + (_ref(workflow, "refs/heads/main"), _ref(workflow, PIN)):
+			value, stdout, calls = run(self_script, workflow_ref)
+			assert value == GITHUB_SHA, (workflow, step["name"], workflow_ref)
+			assert calls == [] and "source=promote_candidate" not in stdout, (workflow, workflow_ref)
+		value, _stdout, calls = run(consumer_script, _ref(workflow, PIN))
+		assert value == PIN and calls == []
+		value, _stdout, calls = run(consumer_script, exact)
+		assert value == "stable" and calls == []
+
+
+def _review_gate_job_json(workflow_ref: str) -> str:
+	return json.dumps({"workflow_repository": SUPPORT_REPO, "workflow_ref": workflow_ref, "workflow_sha": "c" * 40})
+
+
+def test_review_gate_takes_protected_promote_candidate_tip(tmp_path: Path) -> None:
+	script = _step("review_autofix.yml", "Resolve trusted review support commit")["run"]
+	assert "${{" not in script
+	exact = _ref("review_autofix.yml", "refs/heads/promote-candidate")
+
+	def run(workflow_ref: str, caller: str = SUPPORT_REPO, **kwargs):
+		result, _values, outputs, calls = _run_script(
+			script, tmp_path, {"CALLER_REPOSITORY": caller, "WORKFLOW_JOB_JSON": _review_gate_job_json(workflow_ref)}, **kwargs
+		)
+		assert result.returncode == 0, (workflow_ref, result.stdout, result.stderr)
+		return outputs, result.stdout, calls
+
+	outputs, stdout, _calls = run(exact)
+	assert outputs["review_support_sha"] == PC_TIP
+	assert outputs["review_support_ref"] == "refs/heads/promote-candidate"
+	assert f"SUPPORT_REF source=promote_candidate sha={PC_TIP}" in stdout
+	outputs, stdout, _calls = run(exact, pc_json=PC_UNPROTECTED)
+	assert (outputs["review_support_sha"], outputs["review_support_ref"]) == (MAIN_TIP, "refs/heads/main")
+	assert "SUPPORT_REF source=promote_candidate_unprotected" in stdout
+	for workflow_ref in (_ref("review_autofix.yml", "refs/heads/promote-candidate-x"), _ref("review_autofix.yml", "refs/heads/main")):
+		outputs, stdout, calls = run(workflow_ref)
+		assert (outputs["review_support_sha"], outputs["review_support_ref"]) == (MAIN_TIP, "refs/heads/main")
+		assert not any("promote-candidate" in call for call in calls)
+	outputs, _stdout, calls = run(_ref("review_autofix.yml", PIN), caller="shubhodeep1/binance-blessings")
+	assert (outputs["review_support_sha"], outputs["review_support_ref"]) == (PIN, PIN)
+	assert calls == []
+
+
+def test_review_downstream_allowlists_accept_promote_candidate(tmp_path: Path) -> None:
+	text = (ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert "^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$" not in text
+	assert text.count("^(refs/heads/main|refs/heads/promote-candidate|refs/tags/stable|[0-9a-f]{40})$") == 7
+	data = yaml.safe_load(text)
+	step = next(step for step in data["jobs"]["codex-agent"]["steps"] if step.get("name") == "Resolve workflow support ref")
+	for ref, ok in (("refs/heads/promote-candidate", True), ("refs/heads/promote-candidate-x", False)):
+		result, values, _outputs, _calls = _run_script(
+			step["run"], tmp_path, {"WORKFLOW_REPOSITORY": SUPPORT_REPO, "WORKFLOW_REF": ref, "WORKFLOW_SHA": PC_TIP}
+		)
+		assert (result.returncode == 0) == ok, (ref, result.stdout, result.stderr)
+		if ok:
+			assert values == {"SCRIPT_REF": PC_TIP}
+
+
+def test_activation_support_takes_protected_promote_candidate_tip(tmp_path: Path) -> None:
+	script = _step("issue_pr_status.yml", "Resolve trusted activation support commit")["run"]
+	assert "${{" not in script
+	exact = _ref("issue_pr_status.yml", "refs/heads/promote-candidate")
+
+	def run(workflow_ref: str, caller: str = SUPPORT_REPO, **kwargs):
+		job = json.dumps({"workflow_repository": SUPPORT_REPO, "workflow_ref": workflow_ref})
+		return _run_script(script, tmp_path, {"CALLER_REPOSITORY": caller, "WORKFLOW_JOB_JSON": job}, **kwargs)
+
+	result, _values, outputs, _calls = run(exact)
+	assert result.returncode == 0 and outputs == {"support_sha": PC_TIP}, result.stderr
+	assert f"SUPPORT_REF source=promote_candidate sha={PC_TIP}" in result.stdout
+	result, _values, outputs, _calls = run(exact, pc_json=PC_UNPROTECTED)
+	assert result.returncode == 0 and outputs == {"support_sha": MAIN_TIP}, result.stderr
+	assert "SUPPORT_REF source=promote_candidate_unprotected" in result.stdout
+	for workflow_ref in (_ref("issue_pr_status.yml", "refs/heads/promote-candidate/x"), _ref("issue_pr_status.yml", "refs/heads/main")):
+		result, _values, outputs, calls = run(workflow_ref)
+		assert result.returncode == 0 and outputs == {"support_sha": MAIN_TIP}, result.stderr
+		assert not any("promote-candidate" in call for call in calls)
+	result, _values, outputs, calls = run(_ref("issue_pr_status.yml", PIN), caller="shubhodeep1/binance-blessings")
+	assert result.returncode == 0 and outputs == {"support_sha": PIN} and calls == []
+
+
+def _script_prefix(script: str, stop_marker: str, tail: str) -> str:
+	index = script.index(stop_marker)
+	return script[:index] + tail
+
+
+def test_validate_support_sites_take_protected_promote_candidate_tip(tmp_path: Path) -> None:
+	# The gh-retry bootstrap stays byte-identical across workflows
+	# (tests/test_workflow_gh_retry_fallback_contract.py), so only the resolver
+	# and the support-files fetch follow promote-candidate.
+	exact = _ref("validate.yml", "refs/heads/promote-candidate")
+	resolver = _substitute(_step("validate.yml", "Resolve integration ref")["run"], SUPPORT_REPO)
+	resolver = _script_prefix(resolver, "resolver_stage_root=", 'echo "RESOLVER=${resolver_ref}|${resolver_ref_pinned}" >> "$GITHUB_ENV"\n')
+	support = _step("validate.yml", "Fetch workflow support files")["run"]
+	support = _script_prefix(support, "helper_stage_root=", "")
+	cases = (
+		(exact, PC_PROTECTED, f"{PC_TIP}|true", PC_TIP),
+		(exact, PC_UNPROTECTED, f"{GITHUB_SHA}|false", "main"),
+		(_ref("validate.yml", "refs/heads/promote-candidate-x"), PC_PROTECTED, f"{GITHUB_SHA}|false", "main"),
+		(_ref("plan.yml", "refs/heads/promote-candidate"), PC_PROTECTED, f"{GITHUB_SHA}|false", "main"),
+		(_ref("validate.yml", "refs/heads/main"), PC_PROTECTED, f"{GITHUB_SHA}|false", "main"),
+	)
+	for workflow_ref, pc_json, resolver_expected, helper_ref in cases:
+		job = json.dumps({"workflow_ref": workflow_ref})
+		env = {"GITHUB_REPOSITORY": SUPPORT_REPO, "SUPPORT_REF_WORKFLOW_JOB_JSON": job, "VALIDATE_WORKFLOW_JOB_JSON": job, "TRACKING_ISSUE": "5"}
+		result, values, _outputs, _calls = _run_script(resolver, tmp_path, env, pc_json=pc_json)
+		assert result.returncode == 0 and values == {"RESOLVER": resolver_expected}, (workflow_ref, result.stderr)
+		result, _values, _outputs, _calls = _run_script(support, tmp_path, env, pc_json=pc_json)
+		assert result.returncode == 0, (workflow_ref, result.stderr)
+		assert f"VALIDATE_SUPPORT_REF ref={helper_ref} " in result.stdout, (workflow_ref, result.stdout)
+
+
+def test_memory_maintenance_checks_out_protected_promote_candidate_tip(tmp_path: Path) -> None:
+	step = _step("memory_maintenance.yml", "Resolve workflow support ref")
+	assert step["id"] == "promote_candidate_ref"
+	checkout = _step("memory_maintenance.yml", "Checkout repository")
+	assert checkout["with"]["ref"] == "${{ steps.promote_candidate_ref.outputs.ref }}"
+	exact = _ref("memory_maintenance.yml", "refs/heads/promote-candidate")
+	cases = (
+		(SUPPORT_REPO, exact, PC_PROTECTED, {"ref": PC_TIP}),
+		(SUPPORT_REPO, exact, PC_UNPROTECTED, {}),
+		(SUPPORT_REPO, _ref("memory_maintenance.yml", "refs/heads/promote-candidate-x"), PC_PROTECTED, {}),
+		(SUPPORT_REPO, _ref("memory_maintenance.yml", "refs/heads/main"), PC_PROTECTED, {}),
+		("shubhodeep1/binance-blessings", exact, PC_PROTECTED, {}),
+	)
+	for caller, workflow_ref, pc_json, expected in cases:
+		env = {"CALLER_REPOSITORY": caller, "SUPPORT_REF_WORKFLOW_JOB_JSON": json.dumps({"workflow_ref": workflow_ref})}
+		result, _values, outputs, _calls = _run_script(step["run"], tmp_path, env, pc_json=pc_json)
+		assert result.returncode == 0 and outputs == expected, (caller, workflow_ref, result.stderr)
+
+
+@pytest.mark.parametrize("workflow", ALL_PROMOTE_CANDIDATE_WORKFLOWS)
+def test_promote_candidate_markers_present(workflow: str) -> None:
+	text = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+	assert "SUPPORT_REF source=promote_candidate sha=" in text, workflow
+	assert "SUPPORT_REF source=promote_candidate_unprotected" in text, workflow
+	assert f"{workflow.replace('.yml', '')}\\.yml@refs/heads/promote-candidate$" in text, workflow
