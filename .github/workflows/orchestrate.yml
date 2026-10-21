@@ -877,8 +877,8 @@ jobs:
                 last_status="empty output"
               else
                 # Try to extract a JSON object from the response.
-                if python3 - "${CODEX_OUTPUT_FILE}" "${DECOMPOSITION_FILE}" <<'PYEOF'
-          import json, re, sys
+                if ORCHESTRATE_ENGINE_NAME="${orchestrate_engine_name}" python3 - "${CODEX_OUTPUT_FILE}" "${DECOMPOSITION_FILE}" <<'PYEOF'
+          import json, os, re, sys
 
           raw = open(sys.argv[1]).read()
           out_path = sys.argv[2]
@@ -921,7 +921,7 @@ jobs:
                           except json.JSONDecodeError:
                               start = None
           if data is None:
-              print('ERROR: Could not extract valid JSON from Codex output', file=sys.stderr)
+              print('ERROR: Could not extract valid JSON from %s output' % (os.environ.get('ORCHESTRATE_ENGINE_NAME') or 'Codex'), file=sys.stderr)
               print(raw[:2000], file=sys.stderr)
               sys.exit(1)
           json.dump(data, open(out_path, 'w'), indent=2)
