@@ -1,2 +1,0 @@
-<!-- changelog: fixed -->
-- **README no longer says review/autofix reuses Codex sessions.** The `CODEX_THREAD_REUSE_ENABLED` row now lists implement and validate, and says the review editor and the conflict resolver use the fresh full-prompt path on both engines and only log that reuse was requested. The variable and its helpers are unchanged. The findings of `analysis/workflow-optimization-2026-09-22.md` are recorded in `analysis/recommendation-processing-report.md`, and the source doc was deleted.

@@ -1,3 +1,0 @@
-<!-- agents: section="Stable log prefixes (contractual)" -->
-- `REVIEWER_PASS2_SHADOW` (`scripts/review_run_reviewers.sh` `reviewer_pass2_shadow_log`, two-pass mode only, after pass 1 and before pass 2: `would_skip=true|false|unknown reason=eligible|pass1_insufficient|high_findings|large_diff|sensitive_paths|evaluation_failed pass1_ok= high_findings= diff_loc= threshold= sensitive=`; `high_findings` counts `SEVERITY: high|critical|blocker|major` lines in the pass-1 `pass1_<slot>.txt` outputs; shadow only, nothing reads it and pass 2 always runs; `REVIEWER_PASS2_SHADOW_ENABLED`, default on, defaulted in the script)
-LOG_PREFIX.name=REVIEWER_PASS2_SHADOW
