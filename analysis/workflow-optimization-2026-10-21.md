@@ -671,3 +671,187 @@ Other workflows and scripts were covered only by targeted greps. Line counts com
 | Code modularization | `scripts/label_helpers.sh`, new `scripts/issue_lineage_helpers.sh`, new `.github/actions/resolve-support-ref/action.yml`, `scripts/stage_workflow_support.sh`, 10 workflows using the support-ref block, `scripts/workflow_failure_heal_intake.sh` | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml` (plus optional new `scripts/implement_handle_noop.sh`, `scripts/release_notify_telegram.sh`) | Small |
 | Medium/Low fixes | `scripts/tg_helpers.sh`, `.github/workflows/update_workflows.yml`, `.github/workflows/check_failure_triage.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/implement.yml`, `.github/workflows/test-and-mark-stable.yml`, `scripts/orchestrate_poll_process.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-21)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means static reading shows that every precondition holds: the same endpoint and auth scope, the same job or step, no mutation in between, unchanged error handling, no concurrency boundary crossed, and no cache contract broken. The implement stage may apply the one-line directive directly. `NEEDS_VERIFICATION` means the change looks right, but at least one precondition cannot be proven from source alone. The listed verification steps must pass before anyone implements it. `RISKY_SKIP` means a hard trigger applies: a retry or backoff loop, pagination, a rate-limit-sensitive path, `orchestrate_poll_process.sh`, stall recovery, or a path that defends against races. It is reported only for visibility and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: the standalone-validate dispatch reads labels once per fallback issue; one aliased GraphQL read could replace the N reads**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - `.github/workflows/review_autofix.yml:882` builds the fallback nodes with `labels: null`.
+  - `.github/workflows/review_autofix.yml:889-904` does the per-issue read inside the dispatch loop.
+  - The loop input is at `review_autofix.yml:928`.
+- **Current → proposed calls:** N `gh issue view --json labels` calls (each is a GraphQL request made by `gh`) → 1 aliased GraphQL request. This applies only when `closingIssuesReferences` is empty and the issue numbers came from the PR title/body fallback (`review_autofix.yml:850-883`).
+- **Endpoint(s):** GraphQL `repository.issue(number:).labels`, issued once per issue by `gh issue view`.
+- **Evidence:** every fallback node is built with unknown labels, so every loop iteration makes its own read:
+  ```bash
+  issue_nodes_json="$(printf '%s\n' "${issue_numbers}" | jq -Rsc 'split("\n") | map(select(length > 0)) | map({number: tonumber, labels: null})')"
+  ...
+  if [ "${labels_known}" != "true" ]; then
+    if issue_labels="$(gh_retry gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+  ```
+  Inside the loop, the only writes are `gh workflow run` (916) and `gh issue edit --remove-label` on the *current* issue (925). Neither can change another issue's labels.
+- **Proposed fix:** right after line 882, prefetch the labels for every `labels: null` node in one aliased query (`i0: issue(number: N) { number labels(first: 100) { nodes { name } } }`, following the alias pattern in `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh` and the existing per-issue REST fallback at `issue_pr_status.yml:649-683`). Rewrite `issue_nodes_json` with `labels` filled in, so line 892 skips the read. Keep the per-issue `gh issue view` as a fallback when the batch fails or an alias comes back null.
+- **Safety rationale:** the merge changes error handling. Today one failed read marks only that issue `validation_label_unknown=1` (900-902). A failed batch would mark every issue, unless the per-issue fallback is kept.
+- **Downstream signal (verification):**
+  1. Confirm what `issue(number:)` returns when `extract_repo_scoped_issue_refs_from_text` yields a pull-request number. `gh issue view` may resolve PR numbers that `issue(number:)` rejects with NOT_FOUND. If it does, use `issueOrPullRequest(number:)`.
+  2. Confirm that `labels(first: 100)` matches the label limit `gh issue view --json labels` uses.
+  3. Confirm that a duplicated issue number in `issue_numbers` cannot make the line-925 removal change the prefetched labels of a later iteration.
+
+**MERGE-002: implement.yml reads the same issue up to 3 times. Do not merge: these are deliberate re-check gates**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - `.github/workflows/implement.yml:1989-1990`: conditional refetch when `ISSUE_META_FILE` fails `issue_meta_matches_issue`.
+  - `.github/workflows/implement.yml:2204`: `DEPENDENCY_META`.
+  - `.github/workflows/implement.yml:2620`: "Recheck security dependency before edits".
+- **Current → proposed calls:** 2–3 `GET /repos/{o}/{r}/issues/{n}` per run → keep 2–3.
+- **Endpoint(s):** REST `GET /repos/{owner}/{repo}/issues/{number}`.
+- **Evidence:** both later reads explain themselves as freshness gates:
+  ```bash
+  # Recheck just before advancing the phase. /approved must not
+  # bypass a still-open security prerequisite or a failed API read.
+  DEPENDENCY_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null || true)"
+  ```
+  The line-2620 read sets `SKIP_IMPLEMENT=true` on failure (2621-2622).
+- **Proposed fix:** none. The calls are listed so that a later pass does not "consolidate" them.
+- **Safety rationale:** RISKY_SKIP trigger: the code defends against an upstream race (a security prerequisite reopening between the phase advance and the edits) and acts as a fail-closed permission gate.
+- **Downstream signal (manual review):** do not auto-implement. Any merge would let a stale snapshot authorize edits. That needs a security owner's sign-off that the prerequisite state cannot change between lines 2204 and 2620.
+
+**MERGE-003: validate_process.sh reads the tracking issue at context assembly and again at the tracker-open guard. Do not merge**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:** `scripts/validate_process.sh:3523` (`.body`) and `scripts/validate_process.sh:4854` (`.state`).
+- **Current → proposed calls:** 2 → keep 2.
+- **Endpoint(s):** REST `GET /repos/{owner}/{repo}/issues/{number}`.
+- **Evidence:** the same endpoint is read twice. Asking for `{body, state}` at line 3523 would look like a free merge, but the second read is a freshness guard taken after the validation run:
+  ```bash
+  # Tracker-open guard: never open a fix-up against a closed tracker.
+  TRACKER_STATE="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_RAW}" --jq '.state' ...
+  ```
+- **Proposed fix:** none.
+- **Safety rationale:** RISKY_SKIP trigger: the code explicitly defends against an upstream race (the tracker closing during a long validation run). Reusing the line-3523 snapshot would defeat the guard.
+- **Downstream signal (manual review):** do not auto-implement. Keep both reads.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: the smoke-test PR backstop re-runs `ensure_label_exists` for two labels that the same job has already ensured as a fatal gate**
+- **Safety tag:** `SAFE_TO_MERGE`
+- **Files / lines:**
+  - First (fatal) ensure: `.github/workflows/implement.yml:5700-5754`, step "Ensure E2E smoke-test labels exist on repo".
+  - Redundant re-ensure: `.github/workflows/implement.yml:6092-6110`, step "Backstop E2E smoke-test labels on PR after creation".
+  - Helper: `scripts/label_helpers.sh:161-195`.
+- **Current → proposed calls:** 2 redundant `gh label create` POSTs per smoke-test implement run that reaches PR creation. Each returns `already_exists`, which `label_helpers.sh:188-190` treats as success. Proposed: 0. The PR label POST at 6112-6114 is unchanged.
+- **Endpoint(s):** REST `POST /repos/{owner}/{repo}/labels`.
+- **Evidence:**
+  - The first step fails the job if either ensure fails:
+    ```bash
+    ensure_label_exists "force-review" "${REPOSITORY}" || {
+      echo "::error::Could not ensure 'force-review' label exists; aborting smoke-test PR creation (gh pr create --label would fail)"
+      exit 1
+    }
+    ```
+  - The backstop repeats the same calls and swallows every outcome:
+    ```bash
+    ensure_label_exists "force-review" "${REPOSITORY}" >/dev/null 2>&1 || true
+    ensure_label_exists "e2e-smoke-test" "${REPOSITORY}" >/dev/null 2>&1 || true
+    ```
+  - Both steps are in the single `implement:` job (lines 92-6881) and both use `GH_TOKEN: ${{ secrets.GH_PAT }}` (5713, 6078).
+  - The backstop's `if:` (6076) contains every term of the ensure step's `if:` (5711), plus `pr_url != ''`.
+  - Neither step sets `continue-on-error` (the nearest are 5314 and 6341). `IS_SMOKE_TEST` is only written at 2113, and `SKIP_IMPLEMENT` is only ever set to `true`, always before line 5700. So the backstop can only run after the fatal ensure succeeded.
+  - No `gh label delete` exists anywhere in the repository.
+  - No test in `tests/` matches the line-6109 warning text, and a grep found no test asserting `ensure_label_exists "force-review"`.
+- **Proposed fix:** in the "Backstop E2E smoke-test labels on PR after creation" step, remove the `label_helpers.sh` source and the `ensure_label_exists` block (6092-6110). Keep the PR number parse (6086-6090) and the `issues/${PR_NUMBER}/labels` POST with its warning and success lines (6112-6118) exactly as they are. Update the step comment to say the labels were ensured by the earlier step.
+- **Safety rationale:** same endpoint, label names, repo and token, in the same job with no label-deleting step in between. The removed calls' failures were already discarded (`>/dev/null 2>&1 || true`), so no caller's error handling or retry behaviour changes, and no contractual log key is removed.
+- **Downstream signal (directive):** delete `implement.yml:6092-6110` (the label_helpers source and the two `ensure_label_exists` calls) in the backstop step, and keep 6112-6118 byte-identical.
+
+**REUSE-002: the inline no-op ancestor walk in implement.yml re-fetches the current issue's body, which `ISSUE_META_FILE` already holds**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - `.github/workflows/implement.yml:5466-5468`: hop 1 runs with `current="${ISSUE_NUMBER}"`.
+  - `.github/workflows/implement.yml:2620`: the last write of `ISSUE_META_FILE`, a full `GET /issues/{n}` payload.
+  - Gate on the no-op step: `implement.yml:5317`.
+- **Current → proposed calls:** up to 2×threshold (the comment at 5458 says "up to 2 * threshold calls") → 2×threshold − 1. This saves the hop-1 body GET on every no-op run that walks the chain.
+- **Endpoint(s):** REST `GET /repos/{owner}/{repo}/issues/{number}`.
+- **Evidence:**
+  ```bash
+  current="${ISSUE_NUMBER}"
+  for hop in $(seq 1 "${threshold}"); do
+    parent_body="$(gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+  ```
+  - All writes to `ISSUE_META_FILE` are at 202, 929, 948, 957, 1990, 2210 and 2620. None comes after 2620; the later references (5787, 5856, 5964-5965, 6287) only read it.
+  - The no-op step requires `env.SKIP_IMPLEMENT != 'true'` (5317), and line 2620 sets `SKIP_IMPLEMENT=true` on failure (2621-2622). So whenever the step runs, the file holds a successful issue read.
+- **Proposed fix:** before the loop, use `jq -r '.body // ""' "${ISSUE_META_FILE}"` as the hop-1 body. Fall back to the existing GET when the file fails the `issue_meta_matches_issue` shape check (the inline definition at `implement.yml:1978-1987`) or is empty. Hops 2+ stay unchanged. If DUP-004 lands first, add an optional "hop-1 body" argument to the shared `count_noop_ancestors`. The poller's callers would not pass it.
+- **Safety rationale:** the snapshot is about 2,800 lines and possibly many minutes older than the live read. Its integrity across the Codex execution steps cannot be proven statically.
+- **Downstream signal (verification):**
+  1. Confirm that `${RUNTIME_DIR}/issue_meta.json` is not mounted read-write into the isolated Codex container (`scripts/codex_isolated_exec.sh`). Codex-controlled content must not be able to forge or remove a `Re-issued from #N` line and so change the #1292 no-op cap.
+  2. Confirm that no workflow step edits the issue body between line 2620 and line 5324.
+
+**REUSE-003: on poller terminal paths, `tg_cleanup_msgs` re-paginates tracking-issue comments that the tick already holds in `COMMENTS`**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - Tick-level fetch: `scripts/orchestrate_poll_process.sh:22958-22978`, `gh_retry_to_file ... gh api --paginate ".../issues/${TRACKING_NUM}/comments?per_page=100"`, which sets `COMMENTS_FETCH_OK`.
+  - Re-scan: `scripts/tg_helpers.sh:449-512`, a manual `page=` loop at 465-511.
+  - Poller call sites with `TRACKING_NUM`: `orchestrate_poll_process.sh:5889`, `14818`, `14864`, `14925`, `15023`, `15061`, `23752`, `23852`, `28336`, `28831`, `28906`, `28960`.
+- **Current → proposed calls:** ceil(C/100) comment-page GETs + k DELETEs → 0 GETs + k DELETEs, where C is the comment count. This is only possible if the cache is proven complete.
+- **Endpoint(s):** REST `GET /repos/{o}/{r}/issues/{n}/comments` (paginated) and `DELETE /repos/{o}/{r}/issues/comments/{id}`.
+- **Evidence:**
+  - `COMMENTS` is complete only as of the start of the tick. The poller's `tg_notify` (727-754) calls `tg_send_tracked "${TRACKING_NUM}"` (749), which writes or patches `tg_cleanup` marker comments through `tg_store_msg_id` (`tg_helpers.sh:227-276`) and never updates `COMMENTS`.
+  - Only the completion-status writer patches `COMMENTS` in place (`orchestrate_poll_process.sh:3757-3763`).
+  - A cleanup driven by `COMMENTS` would therefore miss markers posted earlier in the same tick, and their Telegram messages would never be deleted.
+- **Proposed fix (for manual review only):** make `tg_store_msg_id` report the comment id it wrote back to the caller, so the poller can append it to `COMMENTS`. Then add a `tg_cleanup_msgs_from_json` variant that takes the comment array and is used only when `COMMENTS_FETCH_OK=true` and `COMMENTS_FOR_TRACKING_NUM == TRACKING_NUM`. Otherwise fall back to today's live scan. This also sidesteps BUG-003's skip-while-deleting pagination defect for the cached path.
+- **Safety rationale:** RISKY_SKIP triggers: the call is reached from `orchestrate_poll_process.sh`, and it replaces a paginated read (a manual `page` loop compared with `--paginate`), which risks changing page-boundary semantics.
+- **Downstream signal (manual review):** do not auto-implement. It needs a design that keeps `COMMENTS` coherent with `tg_store_msg_id` writes, and a test showing that same-tick markers are cleaned.
+
+**REUSE-004: the 2 lookup reads of a store right after `tg_cleanup_msgs` look for a marker the cleanup has just deleted**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - Cleanup-then-notify pairs: `scripts/orchestrate_poll_process.sh:5889-5890`, `14818-14819`, `14864-14865`, `14925-14926`.
+  - The lookup: `scripts/tg_helpers.sh:204-218` (`_tg_newest_comments_json`), called from `tg_store_msg_id` at `tg_helpers.sh:241`.
+- **Current → proposed calls:** 3 per pair (`GET /issues/{n}`, `GET /issues/{n}/comments?page=last`, then POST or PATCH) → 1 POST.
+- **Endpoint(s):** REST `GET /repos/{o}/{r}/issues/{n}`, `GET /repos/{o}/{r}/issues/{n}/comments`, `POST /repos/{o}/{r}/issues/{n}/comments`.
+- **Evidence:**
+  ```bash
+  tg_cleanup_msgs "${TRACKING_NUM}"
+  tg_notify "Project #${TRACKING_NUM} validation harness is broken (raw_status=harness_error). ..." "CRITICAL"
+  ```
+  `tg_cleanup_msgs` deletes every `<!-- tg_(cleanup|phase): -->` comment it sees (`tg_helpers.sh:481-505`). The next `tg_store_msg_id` then spends 2 reads to find the newest `tg_cleanup` marker (`tg_helpers.sh:252-256`). That marker is now absent unless BUG-003's page skip left one behind, or a concurrent job wrote one.
+- **Proposed fix (for manual review only):** have `tg_cleanup_msgs` set a process-local `_TG_CLEANED_ISSUE="${issue_num}"`, after checking that the name is unique per §10. `tg_store_msg_id` would then POST a new marker directly, without the 2 reads, when that variable equals the target issue. This complements API-004 and BUG-004.
+- **Safety rationale:** RISKY_SKIP trigger: the code is reached from `orchestrate_poll_process.sh`. Skipping the lookup also depends on the BUG-003 pagination behaviour, and could leave a surviving marker unpatched, which adds one more marker comment.
+- **Downstream signal (manual review):** do not auto-implement. Fix BUG-003 first. Then confirm that no concurrent job (review_autofix, issue_pr_status) writes `tg_cleanup` markers on tracking issues between the cleanup and the notify.
+
+### Dead Calls (DEAD-API-###)
+No findings. I checked these candidates:
+- the GH_PAT login lookup in `issue_pr_status.yml:230-243` (memoized, and its result is consumed);
+- the output-discarded existence probes at `scripts/check_failure_triage.sh:567-571`, `scripts/orchestrate_poll_process.sh:5899`, `scripts/workflow_failure_heal_intake.sh:2215` and `.github/workflows/orchestrate.yml:1272` (each result is consumed through the exit code);
+- the post-write label verification reads at `scripts/validate_process.sh:4501-4503` and `scripts/implement_handle_guard_block.sh:110-117` and `402-409` (they are consumed, and they deliberately confirm a write).
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — it is in `orchestrate_poll_process.sh`, and the timeline read is paginated. Net-new details:
+  - The reconcile `for` loop (25235) runs in the main shell, so a cycle-local cache written there survives. Writes made inside the piped RTM and IP loops (SHELL-001) would not.
+  - The reconcile loop `break`s on the first merged candidate (25275-25277), so its `LINKED_PR_NUM` is "first merged or last verified unmerged", not the open PR the RTM loop needs.
+  - Cache the verified PR *number* only, and keep a fresh `_fetch_pr_json` in RTM, because `mergeable` is computed lazily. That still removes the second timeline fetch.
+- API-002: RISKY_SKIP — it is in `orchestrate_poll_process.sh`. Net-new details:
+  - The harness path also issues a separate `--add-label "ai:harness-broken"` edit at 14810, after the remove at 14803. Both could join the single `edit_args` edit in `set_issue_phase_label` (4111-4116), since `ensure_label_exists` (14804) already runs earlier.
+  - Before passing `_tracking_labels` (14799) into `set_issue_phase_label`, check whether `handle_comprehensive_release_callback_if_needed` (14800) can mutate labels. If it can, the prefetched list is stale before line 4091.
+- API-003: RISKY_SKIP — this is stall-recovery and re-issue logic, and the parent-comment read is `--paginate` (16189). Net-new details:
+  - The proposed `comments(last:100)` is not equivalent to that read: an ancestor with more than 100 comments whose no-op marker is older would be undercounted, which weakens the #1292 cap. Any GraphQL form must page with `hasPreviousPage`.
+  - The real saving is fetching the parent's body and comments together, because the next hop's body read is the parent's body: 2×depth → depth+1 calls.
+  - For the implement.yml copy, see REUSE-002.
+- API-004: NEEDS_VERIFICATION — `tg_helpers.sh` is shared by 11 files. A per-process `(comment_id, body)` cache is only valid while no other job writes markers on the same issue. Verify against the concurrent writers named in BUG-004. See also REUSE-004.
+- API-005: RISKY_SKIP — this changes the retry and backoff loop and the rate-limit branch of `curl_gh_api` (`gh_helpers.sh:1350-1403`, per the Deep Audit). It needs manual review of breaker accounting.
+- API-006: RISKY_SKIP — this replaces a retry wrapper (`review_autofix.yml:1144-1166`, per the Deep Audit; not re-read in this pass). Changing retry policy on label POSTs and `gh pr merge --auto` needs manual review of the single-attempt POST contract.
+- API-007: RISKY_SKIP — it is in `orchestrate_poll_process.sh`, the comment read is paginated, and it is an authorization-bearing path ("Incomplete or malformed comment history never authorizes replay").
+
+### Summary Counts
+The counts cover the new findings in this pass plus the Deep Audit IDs cross-referenced above.
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 3 | MERGE-001, REUSE-002, API-004 |
+| RISKY_SKIP | 10 | MERGE-002, MERGE-003, REUSE-003, REUSE-004, API-001, API-002, API-003, API-005, API-006, API-007 |
+
+### Implement-Stage Handoff
+- REUSE-001: in the "Backstop E2E smoke-test labels on PR after creation" step, delete `.github/workflows/implement.yml:6092-6110`, the redundant `label_helpers.sh` source and the two `ensure_label_exists` calls. Keep the PR label POST and its log lines at 6112-6118 unchanged.
