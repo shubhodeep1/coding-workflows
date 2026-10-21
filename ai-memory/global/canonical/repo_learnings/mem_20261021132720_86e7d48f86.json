@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.76,
+  "details": "A merged plan-mode change touched `prompts/mode-plan.txt` and `prompts/_templates/mode-plan.txt`, alongside its runner and workflow. When changing a prompt mode, check for a corresponding template and any consumers that need coordinated updates.",
+  "fingerprint": "b4d252668394052eff709a02a2bfcfe43cfc49fa1b2218341274ea60f120d47c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39606827305",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39606827305",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7765",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7766",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7772",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7798",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7800",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7769",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7770",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7774",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7799",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7801"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261021132720_86e7d48f86",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Prompt-mode changes may need coordinated updates to both the mode prompt and its template.",
+  "timestamps": {
+    "created_at": "2026-10-21T13:27:20Z",
+    "promoted_at": "2026-10-21T13:28:45Z",
+    "superseded_at": null
+  }
+}
