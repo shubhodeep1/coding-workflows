@@ -506,12 +506,12 @@ jobs:
           fi
           install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile
 
-          # render_prompt.py is the optional Python backend for the
-          # render_prompt.sh shim adopted by branches that took the issue
-          # #3043 refactor.  main ships a self-contained bash render_prompt.sh
-          # that needs no backend, so the file is absent on main and must be
-          # staged only when the branch under processing actually carries it.
-          # Absence is expected (non-shim branches, incl. main) and must not
+          # render_prompt.py is the Python backend of the render_prompt.sh
+          # shim (issue #3043 refactor). main ships both, the shim needs the
+          # backend, and check_workflow_script_refs.py fails CI if it goes
+          # missing. Some older refs still bundle a self-contained bash
+          # render_prompt.sh with no backend, so absence on the ref under
+          # processing (and on main's copy) only skips staging and must not
           # fail the bootstrap; presence stages it beside the shim so the
           # shim resolves ${SCRIPT_DIR}/render_prompt.py.
           for f in render_prompt.py; do
