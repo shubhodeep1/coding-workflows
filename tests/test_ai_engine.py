@@ -21,6 +21,7 @@ import shlex
 import shutil
 import stat
 import subprocess
+import textwrap
 from pathlib import Path
 
 import sys
@@ -1468,3 +1469,71 @@ def test_capacity_wait_switch_trims_whitespace_like_provider_outage(sandbox: dic
 	result = _bash(sandbox, 'tg_send_msg() { :; }; ai_engine_fallback PLAN all_gated; echo "RC=${AI_ENGINE_FALLBACK_EXIT}"', CLAUDE_POOL_CAPACITY_WAIT_ENABLED=value)
 	assert _rc(result) == 80, result.stderr
 	assert "invalid CLAUDE_POOL_CAPACITY_WAIT_ENABLED" not in result.stderr
+
+
+# Attempt logs name the engine that runs. Before this, every attempt line said
+# "Codex" even when the role ran on Claude (tele-funtoken-msg-scoring#4687).
+ENGINE_NAMED_LOOPS = [
+	(".github/workflows/clarify.yml", "CLARIFY_ENGINE", "clarify_engine_name", "clarify attempt"),
+	(".github/workflows/orchestrate_clarify_respond.yml", "CLARIFY_RESPOND_ENGINE", "clarify_respond_engine_name", "clarify-respond attempt"),
+	(".github/workflows/orchestrate.yml", "ORCHESTRATE_ENGINE", "orchestrate_engine_name", "orchestrate attempt"),
+	("scripts/run_plan_codex.sh", "PLAN_ENGINE", "plan_engine_name", "planning attempt"),
+]
+
+
+@pytest.mark.parametrize(("path", "engine_var", "name_var", "attempt_text"), ENGINE_NAMED_LOOPS)
+def test_attempt_logs_name_the_running_engine(path: str, engine_var: str, name_var: str, attempt_text: str) -> None:
+	text = (REPO_ROOT / path).read_text(encoding="utf-8")
+	assert f'echo "Codex {attempt_text}' not in text
+	assert f'echo "${{{name_var}}} {attempt_text} ${{attempt}}/${{max_attempts}}..."' in text
+	assert f'if [ "${{{engine_var}}}" = "claude" ]; then {name_var}="Claude"; fi' in text
+	# Every switch to codex inside the attempt loop also switches the logged name.
+	loop_start = text.index(f'echo "${{{name_var}}} {attempt_text} ')
+	loop_end = text.index(" failed after ${max_attempts} attempts", loop_start)
+	loop = text[loop_start:loop_end]
+	fallbacks = [m.end() for m in re.finditer(rf'(?m)^\s*{engine_var}="?codex"?\n', loop)]
+	assert fallbacks, f"{path}: no {engine_var}=codex fallback found in the attempt loop"
+	for end in fallbacks:
+		assert re.match(rf'\s*{name_var}="Codex"\n', loop[end:]), f"{path}: a fallback in the attempt loop keeps the Claude name"
+
+
+def _implement_engine_display_name_function() -> str:
+	text = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	match = re.search(r"(?ms)^(\s*)implement_engine_display_name\(\)\n\1\{\n.*?^\1\}\n", text)
+	assert match, "implement.yml must define implement_engine_display_name()"
+	return textwrap.dedent(match.group(0))
+
+
+@pytest.mark.parametrize(
+	("resolved", "marker", "expected"),
+	[
+		("claude", False, "Claude"),
+		("claude", True, "Codex"),
+		("codex", False, "Codex"),
+		("", False, "Codex"),
+	],
+)
+def test_implement_engine_display_name_follows_the_fallback_marker(tmp_path: Path, resolved: str, marker: bool, expected: str) -> None:
+	states = tmp_path / "codex-thread-reuse" / "states"
+	states.mkdir(parents=True)
+	if marker:
+		(states / "claude-implement.unavailable").write_text("", encoding="utf-8")
+	env = {"PATH": os.environ["PATH"], "CODEX_THREAD_REUSE_RUNTIME_DIR": str(tmp_path), "RUNTIME_DIR": "/nonexistent"}
+	if resolved:
+		env["AI_ENGINE_RESOLVED_IMPLEMENT"] = resolved
+	script = "set -euo pipefail\n" + _implement_engine_display_name_function() + "implement_engine_display_name\n"
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == expected
+
+
+def test_implement_attempt_logs_and_diagnostics_use_the_engine_name() -> None:
+	text = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	assert 'echo "Codex implement attempt' not in text
+	assert 'echo "${implement_engine_name} implement attempt ${attempt}/${max_attempts}..."' in text
+	assert 'diag_reason="Codex ' not in text
+	assert "printf '## %s implement diagnostics\\n\\n' \"${implement_engine_name}\"" in text
+	# Refreshed after the editor call, where codex_thread_reuse.sh may fall back.
+	call = text.index('codex_thread_reuse.sh" direct-run || cmd_rc=$?')
+	finishing = text.index('emit_implement_substate "implement" "implement" "Finishing"', call)
+	assert 'implement_engine_name="$(implement_engine_display_name)"' in text[call:finishing]

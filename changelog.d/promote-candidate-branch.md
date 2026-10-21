@@ -1,0 +1,8 @@
+<!-- changelog: changed -->
+- **Internal runs now call their reusable workflows from the `promote-candidate` branch instead of `main`.** The 13 `.github/workflows/internal-*.yml` wrappers use `@promote-candidate`. A new workflow, `promote-candidate-follow.yml`, keeps that branch at the `main` tip: it runs on every push to `main`, hourly at 17 past and on dispatch, fast-forwards the branch with `force=false`, and creates it when it is missing. This prepares the daily promote cycle to freeze one candidate commit while a cycle is in flight (Phase 2 of `docs/plans/pin-promote-cycle-to-candidate-plan.md`).
+
+While the tag `promote-cycle-frozen` exists the follower leaves the branch alone. A freeze older than `PROMOTE_CYCLE_FREEZE_MAX_SECS` (default `172800`, two days) is deleted with a CRITICAL alert, and `PROMOTE_CYCLE_PIN_ENABLED=false` ignores the tag. Nothing creates that tag yet, so with no freeze every internal run executes the same commit as `main`, at most one follower run behind. A rejected fast-forward fails the run and never rewinds the branch. Every run logs one `PROMOTE_CANDIDATE_FOLLOW outcome=...` line.
+
+The Claude pool broker now accepts `refs/heads/promote-candidate` for this repository only, and only when the signed workflow commit is an ancestor of `main` or `stable`.
+
+What this means for operators: add a `promote-candidate` ruleset (no deletion, no force-push, updates only from the pipeline account); until it exists the follower sends one CRITICAL alert per UTC day. Redeploy the `claude-pool-broker` Worker once this change is on `main`, because Claude roles in this repository fail closed until then. Consumer repositories are unaffected.

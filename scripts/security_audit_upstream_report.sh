@@ -316,7 +316,7 @@ DISPATCH_ERROR_FILE="${REPORT_DIR}/dispatch_error.txt"
 if ! gh_retry gh api -X POST "repos/${UPSTREAM_REPO}/dispatches" --input "${DISPATCH_FILE}" >/dev/null 2> "${DISPATCH_ERROR_FILE}"; then
 	detail="$(head -c 200 "${DISPATCH_ERROR_FILE}" 2>/dev/null | tr '\r\n' '  ' | tr -cd '[:print:]' | sed 's/::/: :/g')"
 	log "outcome=failed reason=dispatch_denied findings=${FINDINGS} upstream=${UPSTREAM_REPO} detail=${detail}"
-	echo "::warning::Synced-file security findings could not be dispatched to ${UPSTREAM_REPO}; the next audit retries."
+	echo "::warning::Synced-file security findings could not be dispatched to ${UPSTREAM_REPO}. The report is not retried: an incremental audit reports a synced file again only after a sync changes it."
 	summary_line "dispatch failed (${FINDINGS} findings)"
 	exit 0
 fi

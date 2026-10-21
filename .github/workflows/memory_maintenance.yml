@@ -13,9 +13,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Resolve workflow support ref
+        id: promote_candidate_ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Runs of this repository pinned to the protected promote-candidate
+          # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+          # check out its tip. Every other run leaves ref empty, which is
+          # actions/checkout's default (today's behaviour).
+          promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] &&
+             [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/memory_maintenance\.yml@refs/heads/promote-candidate$ ]]; then
+            # One branches read, only on this path.
+            promote_candidate_json="$(gh api repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+            promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+            if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "ref=${promote_candidate_sha}" >> "$GITHUB_OUTPUT"
+              echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+            else
+              echo "SUPPORT_REF source=promote_candidate_unprotected"
+            fi
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ steps.promote_candidate_ref.outputs.ref }}
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
 

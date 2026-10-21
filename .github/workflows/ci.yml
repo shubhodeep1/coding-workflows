@@ -692,15 +692,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine_utility_roles.py
 
-      - name: Isolated agent container tests (codex_isolated_exec.sh)
-        # The real-Docker e2e file skips itself unless CODEX_ISOLATION_DOCKER_E2E=1.
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_codex_agent_isolation_contract.py tests/test_codex_isolated_exec.py tests/test_dependency_registry_proxy.py \
-            tests/test_codex_isolated_workspace.py tests/test_codex_isolated_exec_docker_e2e.py \
-            tests/test_integration_judge_scope_guard.py tests/test_clarify_sandbox_base_image_preseed.py
-
       - name: Claude engine decision tests
         run: |
           set -euo pipefail
@@ -725,16 +716,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_pool_telemetry.py
-
-      - name: Prebuilt sandbox image tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_sandbox_image.py
-
-      - name: Review sandbox image build retry tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_build_retry.py
 
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
@@ -775,18 +756,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_install_claude_action.py
-
-      - name: Set up Node 22 for the claude-pool-broker Worker tests
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-
-      - name: claude-pool-broker Worker tests (vitest)
-        working-directory: tools/claude-pool-broker
-        run: |
-          set -euo pipefail
-          npm ci --no-audit --no-fund
-          npx vitest run
 
       - name: Session automation retirement guard and retired labels/files tests
         run: |
@@ -1719,6 +1688,7 @@ jobs:
             tests/test_auto_release_stable.py
             tests/test_orchestrate_poll_promote_cycle.py
             tests/test_implement_blocked_verdict_terminalizes.py
+            tests/test_promote_candidate_follow.py
           )
           rm -f /tmp/promote_cycle_collect.log /tmp/promote_cycle_tests.txt \
             /tmp/promote_cycle_shard_*.txt /tmp/promote_cycle_shard_*.log /tmp/promote_cycle_shard_*.rc
@@ -2065,6 +2035,26 @@ jobs:
           python3 -m coverage run tests/test_semantic_cache.py
           python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
 
+      # Moved from tests-hooks-and-orchestrator, which took 15m06s of its 20
+      # minutes on main (run 39575950300, budget-watch issue #7798). That run's
+      # step timings were not readable and the implement sandbox had no network
+      # for `npm ci`, so this pair is from the plan's fallback list, chosen by
+      # estimated cost, not measured. This job is estimated at about 12-13
+      # minutes after #7699 sharded its promote-cycle step. The Node setup runs
+      # first and the vitest step keeps its working directory. Names and bodies
+      # unchanged.
+      - name: Set up Node 22 for the claude-pool-broker Worker tests
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: claude-pool-broker Worker tests (vitest)
+        working-directory: tools/claude-pool-broker
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx vitest run
+
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
     # (about 20 minutes on 4 local shards). Each matrix group runs one
@@ -2410,6 +2400,39 @@ jobs:
             tests/test_validate_process_fixup_labels.py \
             tests/test_verify_integration_fingerprints_baseline.py \
             tests/test_workflow_untrusted_input_contract.py
+
+      # Moved from tests-hooks-and-orchestrator, which took 15m06s of its 20
+      # minutes on main (run 39575950300, budget-watch issue #7798). That run's
+      # step timings were not readable, and the implement sandbox could not
+      # time every candidate (PyYAML and network were missing, so the vitest
+      # pair could not run), so these steps are the plan's fallback list, chosen
+      # by estimated cost, not measured. Group 2 is estimated at about 12.5-13
+      # minutes after #7697 moved its promote-cycle step out. These steps need
+      # no git history beyond HEAD (this job checks out at depth 1; every git
+      # use in these modules is a temp repo), Node or the prepared .claude/
+      # live copies, and this job has the same pip set and Python 3.12. They
+      # run in group 2 only, once per CI run. Names and bodies unchanged.
+      - name: Isolated agent container tests (codex_isolated_exec.sh)
+        if: strategy.job-index == 2
+        # The real-Docker e2e file skips itself unless CODEX_ISOLATION_DOCKER_E2E=1.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_codex_agent_isolation_contract.py tests/test_codex_isolated_exec.py tests/test_dependency_registry_proxy.py \
+            tests/test_codex_isolated_workspace.py tests/test_codex_isolated_exec_docker_e2e.py \
+            tests/test_integration_judge_scope_guard.py tests/test_clarify_sandbox_base_image_preseed.py
+
+      - name: Prebuilt sandbox image tests
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_sandbox_image.py
+
+      - name: Review sandbox image build retry tests
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_build_retry.py
 
       # Moved from tests-heal-plan-and-validation, which took 15m26s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7690). That run's
