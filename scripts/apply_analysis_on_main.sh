@@ -84,6 +84,9 @@
 #   APPLY_ANALYSIS_SMOKE_SHA                   main tip the smoke gate ran on (marker line)
 #   APPLY_ANALYSIS_PROMOTE_SHA                 commit a verifying run promotes (marker line)
 #   APPLY_ANALYSIS_PROVING_MERGE_SHA           the proving run's merge commit (marker line)
+#   APPLY_ANALYSIS_PINNED                      true: the cycle is pinned to the frozen
+#                                              promote-candidate branch (default false);
+#                                              adds the apply-analysis-pinned marker line
 #   APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE     tracking issue number the in-flight
 #                                              guard ignores (the completing proving run)
 #   APPLY_ANALYSIS_LIST_ONLY                   true: print the unprocessed docs, no dispatch
@@ -110,6 +113,7 @@ APPLY_ANALYSIS_SMOKE_SHA="${APPLY_ANALYSIS_SMOKE_SHA:-}"
 APPLY_ANALYSIS_PROMOTE_SHA="${APPLY_ANALYSIS_PROMOTE_SHA:-}"
 APPLY_ANALYSIS_PROVING_MERGE_SHA="${APPLY_ANALYSIS_PROVING_MERGE_SHA:-}"
 APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE="${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE:-}"
+APPLY_ANALYSIS_PINNED="${APPLY_ANALYSIS_PINNED:-false}"
 APPLY_ANALYSIS_LIST_ONLY="${APPLY_ANALYSIS_LIST_ONLY:-false}"
 APPLY_ANALYSIS_IN_FLIGHT_DOCS="${APPLY_ANALYSIS_IN_FLIGHT_DOCS:-false}"
 APPLY_ANALYSIS_DOC_GLOB="${APPLY_ANALYSIS_DOC_GLOB:-analysis/workflow-optimization-*.md}"
@@ -144,6 +148,15 @@ for sha_env in APPLY_ANALYSIS_CYCLE_BASELINE_SHA APPLY_ANALYSIS_SMOKE_SHA APPLY_
 		exit 1
 	fi
 done
+# Only the literal `true` marks a pinned cycle; anything else is unpinned.
+case "$(printf '%s' "${APPLY_ANALYSIS_PINNED}" | tr '[:upper:]' '[:lower:]')" in
+	true) apply_analysis_pinned_cycle=true ;;
+	false|"") apply_analysis_pinned_cycle=false ;;
+	*)
+		echo "::warning::APPLY_ANALYSIS_PINNED must be true or false; treating '${APPLY_ANALYSIS_PINNED}' as false." >&2
+		apply_analysis_pinned_cycle=false
+		;;
+esac
 if [ -n "${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE}" ] && ! [[ "${APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE}" =~ ^[0-9]+$ ]]; then
 	echo "::error::APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE must be an issue number."
 	exit 1
@@ -498,8 +511,13 @@ apply-analysis-role: ${APPLY_ANALYSIS_ROLE}"
 [ -n "${APPLY_ANALYSIS_SMOKE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-smoke-sha: ${APPLY_ANALYSIS_SMOKE_SHA}"
 [ -n "${APPLY_ANALYSIS_PROMOTE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-promote-sha: ${APPLY_ANALYSIS_PROMOTE_SHA}"
 [ -n "${APPLY_ANALYSIS_PROVING_MERGE_SHA}" ] && marker_lines+=$'\n'"apply-analysis-proving-merge-sha: ${APPLY_ANALYSIS_PROVING_MERGE_SHA}"
+[ "${apply_analysis_pinned_cycle}" = "true" ] && marker_lines+=$'\n'"apply-analysis-pinned: true"
 
-if [ "${APPLY_ANALYSIS_ROLE}" = "verifying" ]; then
+if [ "${APPLY_ANALYSIS_ROLE}" = "verifying" ] && [ "${apply_analysis_pinned_cycle}" = "true" ]; then
+	role_prose="This is the VERIFYING run of a pinned promote cycle. When it reaches ready-to-merge, the orchestrator poller promotes the pinned candidate \`apply-analysis-promote-sha\` to \`stable\`: the commit the smoke gate tested and that the \`promote-candidate\` branch is frozen on. Commits merged into \`main\` during the cycle, this run's own merge included, ride the next cycle."
+elif [ "${APPLY_ANALYSIS_ROLE}" = "proving" ] && [ "${apply_analysis_pinned_cycle}" = "true" ]; then
+	role_prose="This is the PROVING run of a pinned promote cycle: once it merges, the orchestrator poller dispatches the verifying run on the next analysis doc, and that run's ready-to-merge point promotes the pinned candidate (the commit the smoke gate tested on the frozen \`promote-candidate\` branch) to \`stable\`. This project's own merge rides the next cycle."
+elif [ "${APPLY_ANALYSIS_ROLE}" = "verifying" ]; then
 	role_prose="This is the VERIFYING run of a promote cycle: it re-proves the pipeline on top of the proving run's merged changes. When it reaches ready-to-merge, the orchestrator poller promotes \`apply-analysis-promote-sha\` to \`stable\` and holds this project's final merge until that release finishes. Its own merge never promotes anything; the next daily cycle covers it."
 else
 	role_prose="This is the PROVING run of a promote cycle: once it merges, the orchestrator poller dispatches the verifying run on the next analysis doc, and that run's ready-to-merge point promotes \`main\` (including this project's merge) to \`stable\`."

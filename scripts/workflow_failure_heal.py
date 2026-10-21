@@ -2149,8 +2149,23 @@ def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> s
 	return result
 
 
+# Only the attempt-loop wording the engine-name change touched is mapped, so
+# unrelated lines such as "::error::Claude pool at capacity" keep their own
+# fingerprint.
+_ENGINE_LEAD_RE = re.compile(
+	r"((?:::error::|##\[error\]|::warning::|##\[warning\])\s*)claude"
+	r"(?= (?:clarify|planning|orchestrate|decomposer|implement|returned|exited|announced|emitted|produced)\b)"
+	r"|(last_status=)claude\b"
+)
+
+
 def normalize_error_line(line: str) -> str:
 	text = _LOG_TIMESTAMP_RE.sub("", sanitize_text(line)).strip().lower()
+	# Attempt-loop errors name the engine that ran ("Claude clarify failed ...",
+	# orchestrate's last_status=claude exit 1). Map the engine word back to the
+	# "codex" those lines always printed, so a failure keeps one fingerprint
+	# whichever engine ran and existing heal lineages still match.
+	text = _ENGINE_LEAD_RE.sub(lambda m: (m.group(1) or m.group(2)) + "codex", text)
 	text = re.sub(r"https?://\S+", "<url>", text)
 	text = re.sub(r"\b[0-9a-f]{40}\b", "<sha>", text)
 	text = re.sub(r"\b[0-9a-f]{64}\b", "<hash>", text)
@@ -4713,7 +4728,9 @@ def validate_synced_security_findings(raw: Any) -> list[dict[str, Any]]:
 
 
 def synced_security_line_bucket(value: Any) -> int:
-	"""Line bucket size: unset/empty -> 25, non-integer -> 25 with a warning, minimum 1."""
+	"""Line bucket size: unset/empty -> 25, non-integer -> 25 with a warning,
+	minimum 1, maximum SYNCED_SECURITY_LINE_MAX (a larger bucket would put
+	bucket_end past what _load_synced_security_group accepts)."""
 	text = "" if value is None else str(value).strip()
 	if not text:
 		return SYNCED_SECURITY_DEFAULT_LINE_BUCKET
@@ -4722,7 +4739,7 @@ def synced_security_line_bucket(value: Any) -> int:
 	except ValueError:
 		print("WORKFLOW_HEAL warn invalid_line_bucket name=HEAL_SYNCED_SECURITY_LINE_BUCKET; using 25", file=sys.stderr)
 		return SYNCED_SECURITY_DEFAULT_LINE_BUCKET
-	return max(1, bucket)
+	return min(max(1, bucket), SYNCED_SECURITY_LINE_MAX)
 
 
 def synced_security_fingerprint(path: str, category: str, line: int, bucket: int) -> str:
@@ -4770,7 +4787,7 @@ def synced_security_source_paths(file: str, audit_gate_contract: Any = None) -> 
 
 def group_synced_security_findings(findings: Iterable[dict[str, Any]], bucket: int, audit_gate_contract: Any = None) -> list[dict[str, Any]]:
 	"""Group validated findings by fingerprint, in order of first appearance."""
-	bucket = max(1, int(bucket))
+	bucket = min(max(1, int(bucket)), SYNCED_SECURITY_LINE_MAX)
 	groups: dict[str, dict[str, Any]] = {}
 	for finding in findings:
 		fp = synced_security_fingerprint(finding["file"], finding["category"], finding["line"], bucket)
@@ -6071,7 +6088,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--file", required=True)
 	p.add_argument("--category", required=True)
 	p.add_argument("--line", required=True, type=int)
-	p.add_argument("--bucket", default=None, help="line bucket size (default: HEAL_SYNCED_SECURITY_LINE_BUCKET, else 25; minimum 1)")
+	p.add_argument("--bucket", default=None, help="line bucket size (default: HEAL_SYNCED_SECURITY_LINE_BUCKET, else 25; minimum 1, maximum 1000000)")
 	p.set_defaults(func=_cmd_synced_security_fingerprint)
 
 	p = sub.add_parser("synced-security-check-paths", help="Exit 0 when every finding's file is a managed path of the release, else print {reason} and exit 1")

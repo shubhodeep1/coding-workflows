@@ -197,11 +197,32 @@ jobs:
       - name: Resolve workflow support ref for run-start
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
             # take the support scripts from that same commit, never a newer
@@ -350,11 +371,32 @@ jobs:
       - name: Resolve workflow support ref
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
             # take the support scripts from that same commit, never a newer
@@ -434,12 +476,12 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
-          # render_prompt.py is the optional Python backend for the
-          # render_prompt.sh shim adopted by branches that took the issue
-          # #3043 refactor.  main ships a self-contained bash render_prompt.sh
-          # that needs no backend, so the file is absent on main and must be
-          # staged only when the branch under processing actually carries it.
-          # Absence is expected (non-shim branches, incl. main) and must not
+          # render_prompt.py is the Python backend of the render_prompt.sh
+          # shim (issue #3043 refactor). main ships both, the shim needs the
+          # backend, and check_workflow_script_refs.py fails CI if it goes
+          # missing. Some older refs still bundle a self-contained bash
+          # render_prompt.sh with no backend, so absence on the ref under
+          # processing (and on main's copy) only skips staging and must not
           # fail the bootstrap; presence stages it beside the shim so the
           # shim resolves ${SCRIPT_DIR}/render_prompt.py.
           for f in render_prompt.py; do
@@ -820,7 +862,10 @@ jobs:
           echo "Decomposer per-attempt timeout: ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s."
 
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex orchestrate attempt ${attempt}/${max_attempts}..."
+            # Name the engine that actually runs, so a Claude run is not logged as Codex.
+            orchestrate_engine_name="Codex"
+            if [ "${ORCHESTRATE_ENGINE}" = "claude" ]; then orchestrate_engine_name="Claude"; fi
+            echo "${orchestrate_engine_name} orchestrate attempt ${attempt}/${max_attempts}..."
             attempt_ok=0
             attempt_started_at="$(date +%s)"
             attempt_worktree_before="$(git status --porcelain=v1 --untracked-files=all)"
@@ -860,6 +905,7 @@ jobs:
               fi
               if [ "${decomposer_rc}" -eq 75 ]; then
                 ORCHESTRATE_ENGINE="codex"
+                orchestrate_engine_name="Codex"
               fi
             fi
             if [ "${decomposer_rc}" -eq 75 ]; then
@@ -869,12 +915,12 @@ jobs:
             fi
             if [ "${decomposer_rc}" -eq 0 ]; then
               if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "::warning::Codex returned empty output on attempt ${attempt}."
+                echo "::warning::${orchestrate_engine_name} returned empty output on attempt ${attempt}."
                 last_status="empty output"
               else
                 # Try to extract a JSON object from the response.
-                if python3 - "${CODEX_OUTPUT_FILE}" "${DECOMPOSITION_FILE}" <<'PYEOF'
-          import json, re, sys
+                if ORCHESTRATE_ENGINE_NAME="${orchestrate_engine_name}" python3 - "${CODEX_OUTPUT_FILE}" "${DECOMPOSITION_FILE}" <<'PYEOF'
+          import json, os, re, sys
 
           raw = open(sys.argv[1]).read()
           out_path = sys.argv[2]
@@ -917,7 +963,7 @@ jobs:
                           except json.JSONDecodeError:
                               start = None
           if data is None:
-              print('ERROR: Could not extract valid JSON from Codex output', file=sys.stderr)
+              print('ERROR: Could not extract valid JSON from %s output' % (os.environ.get('ORCHESTRATE_ENGINE_NAME') or 'Codex'), file=sys.stderr)
               print(raw[:2000], file=sys.stderr)
               sys.exit(1)
           json.dump(data, open(out_path, 'w'), indent=2)
@@ -947,7 +993,7 @@ jobs:
                     EMITTED_DESC="${EMITTED} issue(s)"
                   fi
                   if [ "${EMITTED}" -ge "${EXPECTED_MIN_ISSUES}" ]; then
-                    echo "Codex orchestrate succeeded on attempt ${attempt}: emitted=${EMITTED} >= expected_min=${EXPECTED_MIN_ISSUES}."
+                    echo "${orchestrate_engine_name} orchestrate succeeded on attempt ${attempt}: emitted=${EMITTED} >= expected_min=${EXPECTED_MIN_ISSUES}."
                     attempt_ok=1
                   else
                     echo "::warning::Attempt ${attempt} produced ${EMITTED_DESC}; author enumeration requires >= ${EXPECTED_MIN_ISSUES}. Re-prompting with corrective feedback."
@@ -971,7 +1017,7 @@ jobs:
                     } >> "${CODEX_PROMPT_FILE}"
                   fi
                 else
-                  echo "::warning::Could not extract JSON from Codex output on attempt ${attempt}."
+                  echo "::warning::Could not extract JSON from ${orchestrate_engine_name} output on attempt ${attempt}."
                   last_status="invalid JSON"
                 fi
               fi
@@ -989,24 +1035,24 @@ jobs:
               #     clock: a timer-driven 137 should arrive only after
               #     the configured budget has elapsed.
               if [ "$rc" = "124" ]; then
-                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 124, elapsed ${attempt_elapsed}s)."
-                last_status="codex timeout 124 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+                echo "::warning::${orchestrate_engine_name} decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 124, elapsed ${attempt_elapsed}s)."
+                last_status="${ORCHESTRATE_ENGINE} timeout 124 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
               elif [ "$rc" = "137" ] && [ "${attempt_elapsed}" -ge "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
-                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 137 after kill-after backstop, elapsed ${attempt_elapsed}s)."
-                last_status="codex timeout 137 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+                echo "::warning::${orchestrate_engine_name} decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 137 after kill-after backstop, elapsed ${attempt_elapsed}s)."
+                last_status="${ORCHESTRATE_ENGINE} timeout 137 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
               else
                 if [ "$rc" = "137" ]; then
-                  echo "::warning::Codex exited with code 137 on attempt ${attempt} before the per-attempt timer budget elapsed (${attempt_elapsed}s < ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s); likely OOM kill or external SIGKILL, not the timeout wrapper."
-                  last_status="codex exit 137 (elapsed ${attempt_elapsed}s < budget ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s; likely OOM/external SIGKILL)"
+                  echo "::warning::${orchestrate_engine_name} exited with code 137 on attempt ${attempt} before the per-attempt timer budget elapsed (${attempt_elapsed}s < ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s); likely OOM kill or external SIGKILL, not the timeout wrapper."
+                  last_status="${ORCHESTRATE_ENGINE} exit 137 (elapsed ${attempt_elapsed}s < budget ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s; likely OOM/external SIGKILL)"
                 else
-                  echo "::warning::Codex exited with code $rc on attempt ${attempt}."
-                  last_status="codex exit ${rc}"
+                  echo "::warning::${orchestrate_engine_name} exited with code $rc on attempt ${attempt}."
+                  last_status="${ORCHESTRATE_ENGINE} exit ${rc}"
                 fi
               fi
             fi
             attempt_worktree_after="$(git status --porcelain=v1 --untracked-files=all)"
             if [ "${attempt_worktree_after}" != "${attempt_worktree_before}" ]; then
-              echo "::error::Codex decomposer attempt ${attempt} changed the repository worktree versus the pre-attempt baseline; refusing to continue on partial edits."
+              echo "::error::${orchestrate_engine_name} decomposer attempt ${attempt} changed the repository worktree versus the pre-attempt baseline; refusing to continue on partial edits."
               git status --short
               exit 1
             fi
@@ -1018,7 +1064,7 @@ jobs:
               echo "Retrying in ${sleep_secs}s (includes jitter)..."
               sleep "${sleep_secs}"
             else
-              echo "::error::Codex orchestrate failed after ${max_attempts} attempts (last_status=${last_status}, last_emitted=${last_emitted}, expected_min=${EXPECTED_MIN_ISSUES})."
+              echo "::error::${orchestrate_engine_name} orchestrate failed after ${max_attempts} attempts (last_status=${last_status}, last_emitted=${last_emitted}, expected_min=${EXPECTED_MIN_ISSUES})."
               exit 1
             fi
           done

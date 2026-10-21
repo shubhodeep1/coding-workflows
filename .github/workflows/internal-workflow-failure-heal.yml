@@ -19,7 +19,7 @@ jobs:
     if: >-
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
       contains(fromJson('["ai:needs-human","ai:check-triage-escalated","ai:destructive-blocked","ai:scope-blocked","ai:harness-broken","ai:resolver-escalated","ai:security-pass-failed"]'), github.event.label.name)
-    uses: shubhodeep1/coding-workflows/.github/workflows/workflow_failure_heal.yml@main
+    uses: shubhodeep1/coding-workflows/.github/workflows/workflow_failure_heal.yml@promote-candidate
     with:
       issue_number: ${{ github.event.issue.number || github.event.pull_request.number }}
       label: ${{ github.event.label.name }}
