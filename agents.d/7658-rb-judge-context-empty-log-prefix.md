@@ -1,3 +1,0 @@
-<!-- agents: section="Stable log prefixes (contractual)" -->
-- `RB_JUDGE_CONTEXT_EMPTY` (`scripts/review_rb_judge.sh` and the poller's review-blocked judge in `scripts/orchestrate_poll_process.sh`: `pr= reason=assembly_failed|invalid_shape`; emitted as one `::warning::` when the PR comment context could not be assembled and the judge proceeds with `{}`. Since #7658, `_gh_pr_with_all_comments_rest` and both judges pass PR metadata and comment JSON to `jq` through `--slurpfile` with process substitution, never through argv, because one argument is capped at 131,072 bytes (`MAX_ARG_STRLEN`))
-LOG_PREFIX.name=RB_JUDGE_CONTEXT_EMPTY
