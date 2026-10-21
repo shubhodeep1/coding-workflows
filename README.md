@@ -246,6 +246,8 @@ deployment fallback.
 | `COMPREHENSIVE_RELEASE_WORKFLOW_FILE` | No | `promote-main-to-stable.yml` | orchestrate_poll | Workflow the comprehensive release callback (12f) dispatches when a tracking issue labelled `ai:comprehensive-test-pending` completes. The default fast-forwards `stable` to the default branch and runs the full release gate; set `test-and-mark-stable.yml` (with `COMPREHENSIVE_RELEASE_WORKFLOW_REF=stable`) to restore the stable-only patch path. |
 | `COMPREHENSIVE_RELEASE_WORKFLOW_REF` | No | `main` | orchestrate_poll | `--ref` passed with `COMPREHENSIVE_RELEASE_WORKFLOW_FILE`. |
 | `PROMOTE_CYCLE_ENABLED` | No | `true` | promote-main-to-stable (cycle job) | Kill switch for the daily promote cycle in `.github/workflows/promote-main-to-stable.yml` (schedule `0 0 * * *`). The cycle promotes `main` only after a code change since the `stable` tag, a passing `gate_only` smoke gate, and two apply-analysis orchestrator runs (proving, then verifying). `false` logs `PROMOTE_CYCLE_SKIPPED reason=disabled`. Manual `workflow_dispatch` promotion is unaffected. |
+| `PROMOTE_CYCLE_PIN_ENABLED` | No | `true` | promote-candidate-follow | Read by `scripts/promote_candidate_follow.sh` (`.github/workflows/promote-candidate-follow.yml`). `true` keeps the `promote-candidate` branch on the cycle's candidate while the `promote-cycle-frozen` tag exists (`PROMOTE_CANDIDATE_FOLLOW outcome=frozen`); `false` ignores the tag and fast-forwards the branch to the `main` tip anyway (`outcome=unfrozen_disabled`). Phase 3 of `docs/plans/pin-promote-cycle-to-candidate-plan.md` extends this switch to the promote cycle. |
+| `PROMOTE_CYCLE_FREEZE_MAX_SECS` | No | `172800` | promote-candidate-follow | Age in seconds after which the follower treats a `promote-cycle-frozen` tag whose annotated message carries `frozen_at=<epoch>` as stale: it deletes the tag, sends a CRITICAL alert and fast-forwards the branch (`outcome=stale_tag_deleted`). A lightweight or unparsable tag counts as fresh. Non-integer or zero values fall back to `172800` with a warning. |
 | `PROMOTE_CYCLE_MIN_DOCS` | No | `2` | promote-main-to-stable (cycle job) | Analysis docs that must be available before a cycle starts (one for the proving run, one for the verifying run). Fewer logs `PROMOTE_CYCLE_SKIPPED reason=insufficient_docs`. |
 | `PROMOTE_CYCLE_GATE_WAIT_SECS` | No | `18000` | promote-main-to-stable (cycle job) | How long the cycle gives its newly dispatched `gate_only` smoke gate to finish before failing the tick (`PROMOTE_CYCLE_FAILED reason=smoke_gate_timeout`). This budget starts after dispatch, so waiting for an earlier gate does not reduce it. Keep this plus `PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS` below the cycle job's 340-minute cap. |
 | `PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS` | No | `1800` | promote-main-to-stable (cycle job) | How long the cycle waits for existing `test-and-mark-stable.yml` runs on any branch to finish before skipping the tick (`PROMOTE_CYCLE_SKIPPED reason=gate_busy`). Keep this plus `PROMOTE_CYCLE_GATE_WAIT_SECS` below the cycle job's 340-minute cap. |
@@ -4231,6 +4233,23 @@ Two automations take the operator out of that loop by default:
   the tip hold (`AUTO_RELEASE_SKIPPED reason=last_gate_failed ... attempts=N max=M`) until the branch
   moves or an operator re-runs the gate. A cancelled gate is retried on the next tick and never
   counts as an attempt. Kill switch: `AUTO_RELEASE_STABLE_ENABLED=false`.
+
+**The `promote-candidate` branch.** The internal wrappers (`.github/workflows/internal-*.yml`) call
+their reusable workflows at `@promote-candidate`, not `@main`. Between promote cycles
+[`promote-candidate-follow.yml`](.github/workflows/promote-candidate-follow.yml) (on every push to
+`main`, hourly at 17 past, and on `workflow_dispatch`) runs `scripts/promote_candidate_follow.sh`,
+which fast-forwards the branch to the `main` tip with `force=false` and creates it at the `main` tip
+when it is missing. While the `promote-cycle-frozen` tag exists the branch stays on the cycle's
+candidate (`outcome=frozen`); a tag whose annotated message carries a `frozen_at=<epoch>` older than
+`PROMOTE_CYCLE_FREEZE_MAX_SECS` is deleted with a CRITICAL alert, and `PROMOTE_CYCLE_PIN_ENABLED=false`
+ignores the tag. A rejected fast-forward fails the run (`outcome=error`) and never rewinds the branch.
+Every run logs one `PROMOTE_CANDIDATE_FOLLOW outcome=...` line. The script never creates branch
+protection: the repository owner adds a `promote-candidate` ruleset that forbids deletion and
+force-pushes and restricts updates to the pipeline account. Until it exists the follower sends one
+CRITICAL Telegram alert per UTC day (from the first scheduled run after 00:00 UTC). The Claude pool
+broker (`tools/claude-pool-broker`) accepts `refs/heads/promote-candidate` only for this repository
+and only when the signed `job_workflow_sha` is an ancestor of `main` or `stable`; Claude roles here
+fail closed until the broker Worker is redeployed with that change after it reaches `main`.
 
 ## Task-state mirror flag
 

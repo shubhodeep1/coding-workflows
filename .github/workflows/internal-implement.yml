@@ -30,5 +30,5 @@ jobs:
           contains(github.event.comment.body, '[auto-approved-by-plan]')
         )
       )
-    uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@main
+    uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@promote-candidate
     secrets: inherit
