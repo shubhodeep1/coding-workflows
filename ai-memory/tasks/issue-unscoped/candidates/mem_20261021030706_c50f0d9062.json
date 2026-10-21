@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/promote_candidate_follow.sh:191-195 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When the branch is missing, the script creates it and then sends a CRITICAL alert with outcome=unprotected on the first scheduled run in the 00 UTC hour, even though FOLLOW_PROTECTED is still unknown.\n  WHY: The new branch's protection status is never queried, so the script assumes protection is missing and pages the operator unnecessarily (the source severity was MAJOR, mapped here to high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cBefore opening the PR, create `refs/heads/promote-candidate` at the current `main` tip\u201d if it does not exist; the plan\u2019s done criterion says the branch exists at the main tip before the PR merges.\n  expected_change_site: A pre-merge branch bootstrap for Phase 2, P2.1.\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The only branch-creation path in the PR is `scripts/promote_candidate_follow.sh`, invoked by `.github/workflows/promote-candidate-follow.yml` on pushes to `main`, hourly, or manual dispatch, so the branch is created only after the merge-triggered push and not before the PR merges; there is no pre-merge bootstrap in the PR, and if the branch is absent at merge time the internal wrappers already reference `@promote-candidate` and can fail to resolve that ref until the follower creates it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/promote_candidate_follow.sh:lines 191-195 | severity=MAJOR | confidence=4\n  PROBLEM: When the branch is missing, the script creates it and then sends a CRITICAL alert with outcome=unprotected on the first scheduled run in the 00 UTC hour, even though FOLLOW_PROTECTED is still unknown.\n  WHY: The new branch's protection status is never queried. The script assumes protection is missing and pages the operator unnecessarily.\n- TASK_GAP\n  Requirement: Before opening the PR, create refs/heads/promote-candidate at the current main tip if the branch does not exist; Phase 2 is done when the branch exists at the main tip before the PR merges.\n  Expected change site: Pre-merge branch bootstrap for Phase 2, P2.1.\n  Evidence of absence: The PR creates the branch only in scripts/promote_candidate_follow.sh, which .github/workflows/promote-candidate-follow.yml invokes on pushes to main, on its hourly schedule, or by manual dispatch. The branch is therefore created only after the merge-triggered push, not before the PR merges. If the branch is absent at merge time, the internal wrappers already reference @promote-candidate and can fail to resolve that ref until the follower creates it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cBefore opening the PR, create `refs/heads/promote-candidate` at the current `main` tip\u201d if it does not exist; the plan\u2019s done criterion says the branch exists at the main tip before the PR merges.\n  Expected change site: A pre-merge branch bootstrap for Phase 2, P2.1.\n  Evidence of absence: The only branch-creation path in the PR is `scripts/promote_candidate_follow.sh`, invoked by `.github/workflows/promote-candidate-follow.yml` on pushes to `main`, hourly, or manual dispatch. There is no pre-merge bootstrap in the PR. If the branch is absent when the PR merges, the wrappers already reference `@promote-candidate` while branch creation waits for the follower run.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "95a0990430cabbfb439891d228854e8a22f49d8539b72e264482b28ec20d1a8b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7748,
+    "run_id": "39533015576",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39533015576",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021030706_c50f0d9062",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7748,
+    "run_id": "39533015576"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-21T03:07:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
