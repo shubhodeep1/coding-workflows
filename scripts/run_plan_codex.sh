@@ -383,7 +383,10 @@ plan_ref_retry_note_added=false
 
 max_attempts=3
 for attempt in $(seq 1 "${max_attempts}"); do
-  echo "Codex planning attempt ${attempt}/${max_attempts} (engine ${PLAN_ENGINE})..."
+  # Name the engine that actually runs, so a Claude run is not logged as Codex.
+  plan_engine_name="Codex"
+  if [ "${PLAN_ENGINE}" = "claude" ]; then plan_engine_name="Claude"; fi
+  echo "${plan_engine_name} planning attempt ${attempt}/${max_attempts}..."
   # Capacity-fallback: on the final attempt switch the editor model
   # to MODEL_EDITOR_FALLBACK (a different OpenRouter/OpenAI per-model
   # TPM bucket) so a sustained saturation of the primary editor model
@@ -402,6 +405,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" "${PLAN_ENGINE}" PLAN || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
       PLAN_ENGINE=codex
+      plan_engine_name="Codex"
       MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" codex PLAN || plan_rc=$?
     fi
   elif [ "${PLAN_ENGINE}" = "claude" ]; then
@@ -409,6 +413,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
       claude_run PLAN "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
       PLAN_ENGINE="codex"
+      plan_engine_name="Codex"
       plan_rc=0
     fi
   fi
@@ -427,7 +432,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
   fi
   if [ "${plan_rc}" -eq 0 ]; then
     if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-      echo "::warning::Codex returned empty output on attempt ${attempt}."
+      echo "::warning::${plan_engine_name} returned empty output on attempt ${attempt}."
     elif plan_output_contradicts_ref_context "${CODEX_OUTPUT_FILE}" && [ "${attempt}" -lt "${max_attempts}" ]; then
       echo "PLAN_REF_MISMATCH_RETRY attempt=${attempt} outcome=retry planning_ref_mismatch=false"
       echo "::warning::Planner answered 'BLOCKED: integration branch mismatch' on attempt ${attempt}, but the workflow found no mismatch; retrying."
@@ -443,11 +448,11 @@ for attempt in $(seq 1 "${max_attempts}"); do
         echo "PLAN_REF_MISMATCH_RETRY attempt=${attempt} outcome=kept planning_ref_mismatch=false"
       fi
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
-      echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
+      echo "${plan_engine_name} planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
       break
     fi
   else
-    echo "::warning::Codex exited with code ${plan_rc} on attempt ${attempt}."
+    echo "::warning::${plan_engine_name} exited with code ${plan_rc} on attempt ${attempt}."
   fi
   if [ "${attempt}" -lt "${max_attempts}" ]; then
     sleep_secs=$((10 * (2 ** (attempt - 1))))
@@ -461,7 +466,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     fi
     sleep "${sleep_secs}"
   else
-    echo "::error::Codex planning failed after ${max_attempts} attempts."
+    echo "::error::${plan_engine_name} planning failed after ${max_attempts} attempts."
     exit 1
   fi
 done

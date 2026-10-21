@@ -254,6 +254,110 @@ def test_review_apply_fixes_stall_fallback_predicate_behaviour() -> None:
 	assert not applies("1", editor_stall_fallback_switch_on="0")
 
 
+
+SELECTION_START = '  EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"\n'
+SELECTION_END = '  emit_editor_substate "PreparingWorkspace" "${attempt}"\n'
+
+
+def _attempt_model_selection_block() -> str:
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	assert text.count(SELECTION_START) == 1, "attempt model selection start not unique"
+	start = text.index(SELECTION_START)
+	end = text.index(SELECTION_END, start)
+	return text[start:end]
+
+
+def _run_attempt_loop(max_attempts: int, stall_killed: str, env: dict) -> list:
+	"""Run the real per-attempt model selection of review_apply_fixes.sh.
+
+	stall_killed holds one 0/1 flag per attempt: whether that attempt was
+	stall-killed, which feeds editor_prev_attempt_stall_killed for the next
+	attempt the way the loop's stall_state case does.
+	"""
+	script = (
+		"set -euo pipefail\n"
+		f"editor_max_attempts={max_attempts}\n"
+		"editor_stall_fallback_switch_on=0\n"
+		'if editor_stall_fallback_switch_enabled "${EDITOR_STALL_FALLBACK_ENABLED-}"; '
+		"then editor_stall_fallback_switch_on=1; fi\n"
+		"editor_prev_attempt_stall_killed=0\n"
+		"editor_stall_fallback_active=0\n"
+		f"read -r -a stall_flags <<< '{stall_killed}'\n"
+		"attempt=1\n"
+		'while [ "${attempt}" -le "${editor_max_attempts}" ]; do\n'
+		+ _attempt_model_selection_block()
+		+ '  echo "SELECTED attempt=${attempt} model=${EDITOR_ATTEMPT_MODEL}"\n'
+		'  editor_prev_attempt_stall_killed="${stall_flags[$((attempt - 1))]:-0}"\n'
+		"  attempt=$((attempt + 1))\n"
+		"done\n"
+	)
+	base = {
+		"MODEL_EDITOR": "openai/gpt-6-sol",
+		"MODEL_EDITOR_FALLBACK": "openai/gpt-5.6-sol",
+	}
+	base.update(env)
+	result = _run_shell(script, base)
+	assert result.returncode == 0, result
+	return result.stdout.splitlines()
+
+
+def _selected_models(lines: list) -> list:
+	return [
+		line.split("model=", 1)[1]
+		for line in lines
+		if line.startswith("SELECTED attempt=")
+	]
+
+
+def test_review_apply_fixes_attempt_loop_without_stall_uses_final_capacity_fallback() -> None:
+	lines = _run_attempt_loop(3, "0 0 0", {})
+	assert _selected_models(lines) == [
+		"openai/gpt-6-sol",
+		"openai/gpt-6-sol",
+		"openai/gpt-5.6-sol",
+	]
+	assert any(line.startswith("Final editor attempt: switching model") for line in lines)
+	assert not any("stall-killed" in line for line in lines)
+
+
+def test_review_apply_fixes_attempt_loop_stall_switch_is_sticky() -> None:
+	lines = _run_attempt_loop(4, "1 0 0 0", {})
+	assert _selected_models(lines) == [
+		"openai/gpt-6-sol",
+		"openai/gpt-5.6-sol",
+		"openai/gpt-5.6-sol",
+		"openai/gpt-5.6-sol",
+	]
+	# The switch is logged once, on the attempt after the stall; the sticky
+	# attempts and the final attempt do not log it again or claim capacity.
+	assert sum("stall-killed" in line for line in lines) == 1
+	assert "Editor attempt 2: previous attempt was stall-killed" in "\n".join(lines)
+	assert not any(line.startswith("Final editor attempt") for line in lines)
+
+
+def test_review_apply_fixes_attempt_loop_stall_before_final_names_stall() -> None:
+	lines = _run_attempt_loop(3, "0 1 0", {})
+	assert _selected_models(lines) == [
+		"openai/gpt-6-sol",
+		"openai/gpt-6-sol",
+		"openai/gpt-5.6-sol",
+	]
+	assert "Editor attempt 3: previous attempt was stall-killed" in "\n".join(lines)
+	assert not any(line.startswith("Final editor attempt") for line in lines)
+
+
+def test_review_apply_fixes_attempt_loop_stall_ignored_when_off_or_claude() -> None:
+	for env in (
+		{"EDITOR_STALL_FALLBACK_ENABLED": "false"},
+		{"AI_ENGINE_RESOLVED_REVIEW_EDITOR": "claude"},
+		{"MODEL_EDITOR_FALLBACK": "openai/gpt-6-sol"},
+	):
+		lines = _run_attempt_loop(3, "1 0 0", env)
+		models = _selected_models(lines)
+		assert models[:2] == ["openai/gpt-6-sol", "openai/gpt-6-sol"], env
+		assert not any("stall-killed" in line for line in lines), env
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	for func in test_funcs:

@@ -505,7 +505,8 @@ def test_claude_engine_runs_claude_run_and_not_codex() -> None:
 	runtime_dir = root / "runtime"
 
 	assert result.returncode == 0, result.stderr
-	assert "Codex planning attempt 1/3 (engine claude)..." in result.stdout
+	assert "Claude planning attempt 1/3..." in result.stdout
+	assert "Codex planning" not in result.stdout
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "claude plan output\n"
 	assert _read_lines(runtime_dir / "claude-run.log") == [
 		f"PLAN|{runtime_dir / 'codex_prompt.txt'}|{runtime_dir / 'codex_output.txt'}|{root}|primary/model|high"
@@ -521,6 +522,9 @@ def test_claude_unavailable_falls_back_to_the_unchanged_codex_call() -> None:
 
 	assert result.returncode == 0, result.stderr
 	assert "AI_ENGINE_FALLBACK role=PLAN reason=no_credential" in result.stderr
+	# The attempt starts on Claude; once it falls back the log names Codex.
+	assert "Claude planning attempt 1/3..." in result.stdout
+	assert "Codex planning succeeded on attempt 1 (1 lines of output)." in result.stdout
 	assert len(_read_lines(runtime_dir / "claude-run.log")) == 1
 	assert _read_lines(runtime_dir / "codex-args.log") == [CODEX_ARGS]
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "primary plan output\n"
@@ -532,7 +536,7 @@ def test_a_claude_crash_retries_on_claude_and_never_reaches_codex() -> None:
 	runtime_dir = root / "runtime"
 
 	assert result.returncode == 1
-	assert "Codex exited with code 1 on attempt 1." in result.stdout
+	assert "Claude exited with code 1 on attempt 1." in result.stdout
 	assert len(_read_lines(runtime_dir / "claude-run.log")) == 3
 	assert not (runtime_dir / "codex-args.log").exists()
 

@@ -2149,8 +2149,23 @@ def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> s
 	return result
 
 
+# Only the attempt-loop wording the engine-name change touched is mapped, so
+# unrelated lines such as "::error::Claude pool at capacity" keep their own
+# fingerprint.
+_ENGINE_LEAD_RE = re.compile(
+	r"((?:::error::|##\[error\]|::warning::|##\[warning\])\s*)claude"
+	r"(?= (?:clarify|planning|orchestrate|decomposer|implement|returned|exited|announced|emitted|produced)\b)"
+	r"|(last_status=)claude\b"
+)
+
+
 def normalize_error_line(line: str) -> str:
 	text = _LOG_TIMESTAMP_RE.sub("", sanitize_text(line)).strip().lower()
+	# Attempt-loop errors name the engine that ran ("Claude clarify failed ...",
+	# orchestrate's last_status=claude exit 1). Map the engine word back to the
+	# "codex" those lines always printed, so a failure keeps one fingerprint
+	# whichever engine ran and existing heal lineages still match.
+	text = _ENGINE_LEAD_RE.sub(lambda m: (m.group(1) or m.group(2)) + "codex", text)
 	text = re.sub(r"https?://\S+", "<url>", text)
 	text = re.sub(r"\b[0-9a-f]{40}\b", "<sha>", text)
 	text = re.sub(r"\b[0-9a-f]{64}\b", "<hash>", text)
