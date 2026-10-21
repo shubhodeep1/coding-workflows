@@ -7072,6 +7072,11 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 				"REVIEW_SUPPORT_SHA": support_sha,
 				"AUTO_MERGE_CHECKS_POLL_SECONDS": "1",
 				"AUTO_MERGE_CHECKS_WAIT_MINUTES": "1",
+				# Do not inherit the runner's repository: in this repo the
+				# required CI check defaults to `lint` (#6963), which the fake
+				# gh cannot bind to a CI run, so the wait would time out.
+				"GITHUB_REPOSITORY": "test-owner/test-repo",
+				"AUTO_MERGE_REQUIRED_CI_CHECK": "none",
 			})
 			result = subprocess.run(["bash", "-c", step["run"]], env=env, cwd=tmp, capture_output=True, text=True, check=False)
 			assert result.returncode == 0, result.stderr
