@@ -129,6 +129,23 @@ def test_human_gate_prefix_is_spelled_identically_everywhere() -> None:
 		)
 
 
+def test_system_instructions_let_json_only_prompt_override_report_sections() -> None:
+	# The audit prompt asks for one JSON array and nothing else, while §16 of
+	# the unattended instructions asks every result for assumptions and
+	# missing-context notes. Claude followed §16 and replied "[]" plus a
+	# summary, which security_audit.sh rejects as malformed_output (poller
+	# run 39619619223 in fun-token-multi-chain). §16 must say that a
+	# machine-readable format in the role prompt wins.
+	audit_prompt = (PROMPTS_DIR / "mode-security-audit.txt").read_text(encoding="utf-8")
+	assert "- Output one JSON array and nothing else." in audit_prompt
+	instructions = (REPO_ROOT / "unattended_system_instructions.md").read_text(encoding="utf-8")
+	section = instructions.split("## §16. Output Contract", 1)[1].split("\n## §17.", 1)[0]
+	assert "Unless the role\nprompt fixes a machine-readable output format" in section
+	assert "**A machine-readable format in the role prompt wins.**" in section
+	assert "reply with exactly that and nothing before or after\nit." in section
+	assert "Leave out the actions, assumptions and missing-context notes above" in section
+
+
 def main() -> int:
 	import unittest
 
