@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run the block with head_ref auto/forward-merge-stable-123-1.\"\n  expected_change_site: tests/test_conflict_folded_fragment_keep.py (test_forward_merge_head_keeps_both_pr7794_fragments_on_stages_1_3)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test function test_forward_merge_head_keeps_both_pr7794_fragments_on_stages_1_3 uses head_ref=FORWARD_MERGE_HEAD instead of the specified branch name 'auto/forward-merge-stable-123-1'.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP (severity=BLOCKER, confidence=4)\n  Requirement: \"Run the block with head_ref auto/forward-merge-stable-123-1.\"\n  Expected change site: tests/test_conflict_folded_fragment_keep.py\n  Evidence of absence: The test function test_forward_merge_head_keeps_both_pr7794_fragments_on_stages_1_3 uses head_ref=FORWARD_MERGE_HEAD instead of the specified branch name 'auto/forward-merge-stable-123-1'.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "72585ef73843b51799c6c313659f27eceb0f73b89b52214ffc2c31a79db62dc0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7818,
+    "run_id": "39607753131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39607753131",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021135909_2664bb1e33",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7818,
+    "run_id": "39607753131"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-21T13:59:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
