@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.76,
+  "details": "A merged command change updated both `.claude/commands/` and `workflow-templates/.claude/commands/`. When editing a command, check whether the workflow-template copy must receive the same change.",
+  "fingerprint": "9e5a07ce5bb36ceee55142b240d6f7f255a19972ffb805d6426e8dd60fb6f60a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39606827305",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39606827305",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7765",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7766",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7772",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7798",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7800",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7769",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7770",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7774",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7799",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7801"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261021132432_bcacf0d13d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Keep mirrored workflow-template command files in sync with their `.claude/commands/` counterparts.",
+  "timestamps": {
+    "created_at": "2026-10-21T13:24:32Z",
+    "promoted_at": "2026-10-21T13:25:56Z",
+    "superseded_at": null
+  }
+}
