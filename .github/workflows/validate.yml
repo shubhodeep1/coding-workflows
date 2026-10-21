@@ -209,6 +209,9 @@ jobs:
               if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
                 resolver_ref="${promote_candidate_sha}"
                 resolver_ref_pinned=true
+                # "Fetch workflow support files" reuses this SHA, so both checkouts
+                # come from one candidate commit even if the branch moves meanwhile.
+                echo "promote_candidate_sha=${promote_candidate_sha}" >> "$GITHUB_OUTPUT"
                 echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
               else
                 echo "SUPPORT_REF source=promote_candidate_unprotected"
@@ -439,6 +442,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
           VALIDATE_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          VALIDATE_PROMOTE_CANDIDATE_SHA: ${{ steps.refctx.outputs.promote_candidate_sha }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -462,10 +466,16 @@ jobs:
             # from its tip; a look-alike ref, an unprotected branch or a failed read
             # keep the source above. One branches read, only on this path.
             if [[ "${validate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$ ]]; then
-              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
-              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
-              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
-              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              # Reuse the SHA "Resolve integration ref" accepted (a step output,
+              # which later steps cannot overwrite). Read the branch only when that
+              # step accepted none (no tracking issue, unprotected, failed read).
+              promote_candidate_sha="${VALIDATE_PROMOTE_CANDIDATE_SHA:-}"
+              if [[ ! "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+                type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+                promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+                promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              fi
               if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
                 helper_ref="${promote_candidate_sha}"
                 echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"

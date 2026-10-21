@@ -493,11 +493,26 @@ def test_validate_support_sites_take_protected_promote_candidate_tip(tmp_path: P
 	for workflow_ref, pc_json, resolver_expected, helper_ref in cases:
 		job = json.dumps({"workflow_ref": workflow_ref})
 		env = {"GITHUB_REPOSITORY": SUPPORT_REPO, "SUPPORT_REF_WORKFLOW_JOB_JSON": job, "VALIDATE_WORKFLOW_JOB_JSON": job, "TRACKING_ISSUE": "5"}
-		result, values, _outputs, _calls = _run_script(resolver, tmp_path, env, pc_json=pc_json)
+		result, values, outputs, _calls = _run_script(resolver, tmp_path, env, pc_json=pc_json)
 		assert result.returncode == 0 and values == {"RESOLVER": resolver_expected}, (workflow_ref, result.stderr)
+		assert outputs == ({"promote_candidate_sha": PC_TIP} if helper_ref == PC_TIP else {}), (workflow_ref, outputs)
 		result, _values, _outputs, _calls = _run_script(support, tmp_path, env, pc_json=pc_json)
 		assert result.returncode == 0, (workflow_ref, result.stderr)
 		assert f"VALIDATE_SUPPORT_REF ref={helper_ref} " in result.stdout, (workflow_ref, result.stdout)
+	# Both checkouts use one candidate commit: the support fetch reuses the
+	# resolver's accepted SHA instead of reading the (possibly moved) branch.
+	moved = "c" * 40
+	job = json.dumps({"workflow_ref": exact})
+	env = {"GITHUB_REPOSITORY": SUPPORT_REPO, "VALIDATE_WORKFLOW_JOB_JSON": job, "VALIDATE_PROMOTE_CANDIDATE_SHA": moved}
+	result, _values, _outputs, calls = _run_script(support, tmp_path, env)
+	assert result.returncode == 0 and calls == [], result.stderr
+	assert f"VALIDATE_SUPPORT_REF ref={moved} " in result.stdout, result.stdout
+	# The reused output only applies on the exact promote-candidate ref.
+	job = json.dumps({"workflow_ref": _ref("validate.yml", "refs/heads/main")})
+	env["VALIDATE_WORKFLOW_JOB_JSON"] = job
+	result, _values, _outputs, calls = _run_script(support, tmp_path, env)
+	assert result.returncode == 0 and calls == [], result.stderr
+	assert "VALIDATE_SUPPORT_REF ref=main " in result.stdout, result.stdout
 
 
 def test_memory_maintenance_checks_out_protected_promote_candidate_tip(tmp_path: Path) -> None:
