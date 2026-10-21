@@ -201,6 +201,17 @@ Rules:
   commit ID never matches the planning ref; some sandboxes have no git at
   all. Neither `git branch`, `git rev-parse` nor a "not a git repository"
   error there is evidence of a mismatch.
+- Default-branch reference: your workspace's git has no remote and no
+  network, so `origin/...` refs do not exist. When `git branch --list
+  isolated-base` shows that branch, it is the repository's default branch as
+  it was when this run started, filtered like your checkout (credential-like
+  and oversized files are left out). Read it with `git show
+  isolated-base:<path>`, `git diff isolated-base -- <path>` or `git ls-tree -r
+  --name-only isolated-base`; a file missing there may only have been filtered
+  out. When the plan restores or preserves production behaviour, read that
+  behaviour from `isolated-base` and cite its paths there. Never plan steps
+  that fetch from a remote or deepen history. When the branch is absent, plan
+  without it.
 - Before exiting, run a self-check on the plan you are about to emit.
   If the plan is implementation-ready, end with `STATUS: CLEAR` and
   `PLAN_SELF_CHECK: PASS`. If you find non-blocking concerns, emit one
@@ -314,6 +325,34 @@ if [ "${PLAN_ENGINE}" = "claude" ]; then
   fi
 fi
 
+# BEGIN plan isolated base (#7772)
+# The planner checks out the integration branch on project items, so without
+# this it cannot read production code (#7548, fun-token-multi-chain#639).
+# Fetch the default branch's tip into a private ref; codex_isolated_exec.sh's
+# seed-git adds it, filtered like the snapshot, as branch `isolated-base`.
+# A failed fetch only leaves that branch out. Defaults live here (section 8):
+# PLAN_ISOLATED_BASE_ENABLED defaults to true (only `false` turns it off) and
+# an empty PLAN_ISOLATED_BASE_BRANCH skips the fetch.
+plan_prepare_isolated_base()
+{
+  local enabled="${PLAN_ISOLATED_BASE_ENABLED:-true}" branch="${PLAN_ISOLATED_BASE_BRANCH:-}"
+  unset CODEX_ISOLATED_GIT_BASE_REF
+  if [ "${enabled}" != "false" ] && [[ "${branch}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+    && git check-ref-format --branch "${branch}" >/dev/null 2>&1; then
+    if git fetch --no-tags --depth=1 origin "+refs/heads/${branch}:refs/codex-isolated/base" >/dev/null 2>&1; then
+      export CODEX_ISOLATED_GIT_BASE_REF="refs/codex-isolated/base"
+      echo "CODEX_ISOLATION base_branch=${branch} outcome=fetched role=plan"
+    else
+      echo "::warning::CODEX_ISOLATION base_branch=${branch} outcome=fetch_failed role=plan; the sandbox git has no isolated-base branch."
+    fi
+  else
+    echo "::notice::CODEX_ISOLATION base_branch=unset_or_invalid outcome=skipped role=plan; the sandbox git has no isolated-base branch."
+  fi
+  return 0
+}
+# END plan isolated base (#7772)
+plan_prepare_isolated_base
+
 # The planner's sandbox git is a filtered snapshot on branch `isolated`
 # (scripts/codex_isolated_workspace.py seed_git), so a model that checks git
 # there sees a "mismatch" that is not real. Issue #7172 sat blocked for a
@@ -344,7 +383,10 @@ plan_ref_retry_note_added=false
 
 max_attempts=3
 for attempt in $(seq 1 "${max_attempts}"); do
-  echo "Codex planning attempt ${attempt}/${max_attempts} (engine ${PLAN_ENGINE})..."
+  # Name the engine that actually runs, so a Claude run is not logged as Codex.
+  plan_engine_name="Codex"
+  if [ "${PLAN_ENGINE}" = "claude" ]; then plan_engine_name="Claude"; fi
+  echo "${plan_engine_name} planning attempt ${attempt}/${max_attempts}..."
   # Capacity-fallback: on the final attempt switch the editor model
   # to MODEL_EDITOR_FALLBACK (a different OpenRouter/OpenAI per-model
   # TPM bucket) so a sustained saturation of the primary editor model
@@ -363,6 +405,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" "${PLAN_ENGINE}" PLAN || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
       PLAN_ENGINE=codex
+      plan_engine_name="Codex"
       MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" codex PLAN || plan_rc=$?
     fi
   elif [ "${PLAN_ENGINE}" = "claude" ]; then
@@ -370,6 +413,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
       claude_run PLAN "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
       PLAN_ENGINE="codex"
+      plan_engine_name="Codex"
       plan_rc=0
     fi
   fi
@@ -388,7 +432,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
   fi
   if [ "${plan_rc}" -eq 0 ]; then
     if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-      echo "::warning::Codex returned empty output on attempt ${attempt}."
+      echo "::warning::${plan_engine_name} returned empty output on attempt ${attempt}."
     elif plan_output_contradicts_ref_context "${CODEX_OUTPUT_FILE}" && [ "${attempt}" -lt "${max_attempts}" ]; then
       echo "PLAN_REF_MISMATCH_RETRY attempt=${attempt} outcome=retry planning_ref_mismatch=false"
       echo "::warning::Planner answered 'BLOCKED: integration branch mismatch' on attempt ${attempt}, but the workflow found no mismatch; retrying."
@@ -404,11 +448,11 @@ for attempt in $(seq 1 "${max_attempts}"); do
         echo "PLAN_REF_MISMATCH_RETRY attempt=${attempt} outcome=kept planning_ref_mismatch=false"
       fi
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
-      echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
+      echo "${plan_engine_name} planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
       break
     fi
   else
-    echo "::warning::Codex exited with code ${plan_rc} on attempt ${attempt}."
+    echo "::warning::${plan_engine_name} exited with code ${plan_rc} on attempt ${attempt}."
   fi
   if [ "${attempt}" -lt "${max_attempts}" ]; then
     sleep_secs=$((10 * (2 ** (attempt - 1))))
@@ -422,7 +466,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     fi
     sleep "${sleep_secs}"
   else
-    echo "::error::Codex planning failed after ${max_attempts} attempts."
+    echo "::error::${plan_engine_name} planning failed after ${max_attempts} attempts."
     exit 1
   fi
 done

@@ -274,7 +274,7 @@ def test_consumer_template_is_pinned_and_in_full_profile() -> None:
 	manifest = (REPO_ROOT / "workflow-templates" / "profiles" / "full.txt").read_text(encoding="utf-8").split()
 	assert "ai-workflow-failure-heal.yml" in manifest
 	internal = INTERNAL_WRAPPER.read_text(encoding="utf-8")
-	assert "workflow_failure_heal.yml@main" in internal
+	assert "workflow_failure_heal.yml@promote-candidate" in internal
 
 
 def test_intake_workflow_triggers_and_release_names() -> None:
@@ -8009,3 +8009,20 @@ def test_heal_already_fixed_candidates() -> None:
 	# At most three candidates, newest first.
 	many = [_fixed_heal_item(number, payload) for number in (7001, 7002, 7003, 7004)]
 	assert run(heal_issues=many, reissues=())["candidates"] == [7004, 7003, 7002]
+
+
+def test_error_signature_ignores_which_engine_ran_the_attempt_loop() -> None:
+	# Attempt-loop errors now name the engine (PR #7776); the heal fingerprint
+	# must stay the one the earlier "Codex ..." lines produced.
+	codex = "##[error]Codex clarify failed after 3 attempts.\n"
+	claude = "##[error]Claude clarify failed after 3 attempts.\n"
+	assert heal.error_signature(claude) == heal.error_signature(codex)
+	orch_codex = "::error::Codex orchestrate failed after 3 attempts (last_status=codex exit 1, last_emitted=0)\n"
+	orch_claude = "::error::Claude orchestrate failed after 3 attempts (last_status=claude exit 1, last_emitted=0)\n"
+	assert heal.error_signature(orch_claude) == heal.error_signature(orch_codex)
+	# Only the leading engine word is mapped; other text keeps "claude".
+	assert "claude_pool" in heal.normalize_error_line("##[error]claude_pool token missing")
+	assert heal.error_signature("::warning::Claude exited with code 1 on attempt 2.\n") == heal.error_signature("::warning::Codex exited with code 1 on attempt 2.\n")
+	# Unrelated messages that merely start with "Claude" keep their own fingerprint.
+	assert heal.normalize_error_line("::error::Claude pool at capacity (role RETRO)").startswith("::error::claude pool")
+	assert heal.normalize_error_line("##[warning]Claude capacity wait recorded").startswith("##[warning]claude capacity")

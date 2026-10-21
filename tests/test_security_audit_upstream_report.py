@@ -330,6 +330,10 @@ def test_dispatch_failure_is_logged_and_exits_zero(env_setup) -> None:
 	assert result.returncode == 0
 	assert "outcome=failed reason=dispatch_denied findings=1" in result.stdout
 	assert "::warning::" in result.stdout
+	# The report is one shot: incremental audits do not re-report an
+	# unchanged synced file, so the warning must not promise a retry.
+	assert "The report is not retried" in result.stdout
+	assert "next audit retries" not in result.stdout
 
 
 def test_script_is_executable_and_logs_only_its_prefix(env_setup) -> None:

@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 from pathlib import Path
 
 
@@ -176,6 +181,132 @@ def test_no_run_diagnostic_makes_no_second_listing() -> None:
 	assert 'PHASE7_CANCEL_WORKFLOW_STATE="unknown"' in diag
 	assert "${{" not in diag
 
+
+
+def _wait_loop_and_no_run_block(wf: str) -> str:
+	"""The real wait loop plus the no-run diagnostic, dedented to plain bash."""
+	branch = _open_pr_close_branch(wf)
+	block = _slice_between(
+		branch,
+		"DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))",
+		'if [ "${NEW_CONCLUSION}" != "success" ]; then',
+	)
+	return textwrap.dedent("          " + block)
+
+
+def _run_phase7_wait(tmp: str, runs_json: str, state_reply: str | None) -> tuple[subprocess.CompletedProcess, list, str]:
+	"""Run the extracted Phase 7 wait loop with a fake clock.
+
+	date +%s reads a clock file, sleep advances it and records the
+	duration, phase7_list_cancel_runs returns ``runs_json`` (never a new
+	run), and gh answers the workflow-state read with ``state_reply`` or
+	fails when it is None.
+	"""
+	clock = os.path.join(tmp, "clock")
+	sleeps = os.path.join(tmp, "sleeps")
+	output = os.path.join(tmp, "github_output")
+	runs_file = os.path.join(tmp, "runs.json")
+	with open(clock, "w", encoding="utf-8") as fh:
+		fh.write("1000\n")
+	for path in (sleeps, output):
+		open(path, "w", encoding="utf-8").close()
+	with open(runs_file, "w", encoding="utf-8") as fh:
+		fh.write(runs_json)
+	prelude = "\n".join(
+		[
+			"set -euo pipefail",
+			'date() { if [ "${1:-}" = "+%s" ]; then cat "$CLOCK"; else command date "$@"; fi; }',
+			'sleep() { echo "$1" >> "$SLEEPS"; echo $(( $(cat "$CLOCK") + $1 )) > "$CLOCK"; }',
+			'phase7_list_cancel_runs() { PHASE7_CANCEL_RUNS_JSON="$(cat "$RUNS_FILE")"; return 0; }',
+			'gh() { if [ -n "${STATE_REPLY+x}" ]; then printf \'%s\\n\' "$STATE_REPLY"; return 0; fi; return 1; }',
+			"PR_NUMBER=42",
+			"PR_CLOSED_AT=2026-10-20T00:00:00Z",
+			"PRE_RUN_ID=100",
+			"TEST_REPO=o/r",
+			"",
+		]
+	)
+	env = dict(
+		os.environ,
+		CLOCK=clock,
+		SLEEPS=sleeps,
+		RUNS_FILE=runs_file,
+		GITHUB_OUTPUT=output,
+		PHASE7_WAIT_BUDGET_MINUTES="1",
+	)
+	env.pop("STATE_REPLY", None)
+	if state_reply is not None:
+		env["STATE_REPLY"] = state_reply
+	proc = subprocess.run(
+		["bash", "-c", prelude + _wait_loop_and_no_run_block(_read_workflow())],
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	with open(sleeps, encoding="utf-8") as fh:
+		sleep_values = [int(v) for v in fh.read().split()]
+	with open(output, encoding="utf-8") as fh:
+		github_output = fh.read()
+	return proc, sleep_values, github_output
+
+
+def test_open_pr_wait_loop_backoff_runs_as_specified() -> None:
+	"""Executes the loop: 3 s polls for the first 30 s, then 10 s, then a
+	20 s wait clamped to end one second before DEADLINE, then a final
+	listing and a stop instead of a zero-second sleep."""
+	runs = json.dumps({"workflow_runs": [{"id": 90, "event": "pull_request", "status": "completed"}]})
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, sleeps, github_output = _run_phase7_wait(tmp, runs, "active")
+	assert proc.returncode == 1, proc.stderr
+	assert sleeps == [3] * 10 + [10, 19], sleeps
+	assert sum(sleeps) < 60
+	assert "polls=13 elapsed_secs=59" in proc.stdout
+	assert "status=no_run" in github_output
+
+
+def test_open_pr_no_run_diagnostic_runs_and_neutralises_run_fields() -> None:
+	hostile = {
+		"workflow_runs": [
+			{
+				"id": 99,
+				"event": "::error::x\nfoo",
+				"status": "completed",
+				"conclusion": "success",
+				"head_sha": "::set-output name=a::b",
+				"created_at": "2026-10-19T23:59:00Z",
+			}
+		]
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _sleeps, github_output = _run_phase7_wait(tmp, json.dumps(hostile), None)
+	assert proc.returncode == 1, proc.stderr
+	lines = proc.stdout.splitlines()
+	assert lines[0] == "::group::Phase 7 no-run diagnostic"
+	assert "  workflow_state=unknown" in lines
+	assert lines[-2:] == [
+		"::endgroup::",
+		"::error::internal-cancel-on-pr-close did not register a new run within timeout",
+	]
+	run_lines = [line for line in lines if line.startswith("  run id=")]
+	assert len(run_lines) == 1
+	assert "event=[neutralised]::error::x foo" in run_lines[0]
+	assert "head_sha=[neutralised]::set-output" in run_lines[0]
+	# Only the group, endgroup and error lines may start a workflow command.
+	commands = [line for line in lines if line.startswith(("::", "##["))]
+	assert commands == [lines[0], lines[-2], lines[-1]]
+	assert "status=no_run" in github_output
+
+
+def test_open_pr_no_run_diagnostic_reports_an_empty_listing() -> None:
+	# gh api only succeeds with valid JSON, so an empty listing is the
+	# reachable "nothing to show" case for the loop above.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _sleeps, _out = _run_phase7_wait(tmp, json.dumps({"workflow_runs": []}), "disabled_manually")
+	assert proc.returncode == 1, proc.stderr
+	lines = proc.stdout.splitlines()
+	assert "  runs: none" in lines, (proc.stdout, proc.stderr)
+	assert "  workflow_state=disabled_manually" in lines
 
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

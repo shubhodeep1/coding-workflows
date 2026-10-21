@@ -14,6 +14,14 @@ Read-only exploration sub-phase:
   drafting and treat them as soft priors, not gospel.
 
 {% include "_prelude_output_contract.txt" %}
+Default-branch reference: your git has no remote, so `origin/...` refs do not
+exist. When `git branch --list isolated-base` shows it, that branch is the
+default branch at run start, filtered like your checkout (a missing file may
+only be filtered out). Read it with `git show isolated-base:<path>`, `git diff
+isolated-base -- <path>` or `git ls-tree -r --name-only isolated-base`. When the
+plan restores or keeps production behaviour, cite its paths there. Never plan
+steps that fetch from a remote. When the branch is absent, plan without it.
+
 Output contract — produce a plan covering, in order:
 1. `## Files likely to change` — a markdown section with exactly this heading. List one
    repo-relative path per bullet, each in backticks. Put the next item under its own `##`
