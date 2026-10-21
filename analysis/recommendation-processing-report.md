@@ -1346,21 +1346,21 @@ Processed: 2026-10-20
 - Speed 1 / Reliability 1 (staged-support reinstallation guard, `scripts/helper.sh`) — already-implemented: the root cause was the editor's own pytest writing fixture paths into the live staged-support ledgers, fixed by the `tests/conftest.py` strip and `env -u` at both editor launches in `implement.yml`. Relaxing the fail-closed guard is rejected.
 - Speed 2 (cheap deterministic gates before the CI test corpus) — already-implemented: #4707 split CI into parallel jobs.
 - Speed 3 (review dispatch de-duplication) — already-implemented: review dispatches run from the default branch as PR-named runs, checked by the active-run guards.
-- Speed 4 (release token-capability preflight) — applied: release-tag-preflight (`changelog.d/wfopt-0922-release-tag-preflight.md`); `scripts/release_tag_preflight.sh` runs in the `resolve-version` job of both release workflows (`RELEASE_TAG_PREFLIGHT`).
+- Speed 4 (release token-capability preflight) — applied: release-tag-preflight (PR #7727, `changelog.d/wfopt-0922-release-tag-preflight.md`); `scripts/release_tag_preflight.sh` runs in the `resolve-version` job of both release workflows (`RELEASE_TAG_PREFLIGHT`).
 - Speed 5 (parallel CI lint job) — already-implemented: #4707.
-- Cost 1 (usage accounting) — applied: codex-usage-anchored (`changelog.d/wfopt-0922-codex-usage-anchored.md`) anchors and de-duplicates Codex usage parsing. The OpenRouter/MCP parent/child de-duplication was already implemented.
+- Cost 1 (usage accounting) — applied: codex-usage-anchored (PR #7722, `changelog.d/wfopt-0922-codex-usage-anchored.md`) anchors and de-duplicates Codex usage parsing. The OpenRouter/MCP parent/child de-duplication was already implemented.
 - Cost 2 (failure-fingerprint rerun avoidance) — rejected: the root cause is fixed, and a new resume subsystem is not justified.
-- Cost 3 (memory push auth retries) — applied: memory-push-auth (`changelog.d/wfopt-0922-memory-push-auth.md`); credential failures stop after one attempt.
+- Cost 3 (memory push auth retries) — applied: memory-push-auth (PR #7720, `changelog.d/wfopt-0922-memory-push-auth.md`); credential failures stop after one attempt.
 - Cost 4 (prompt pressure) — already-implemented: the review tier resolver and `CONTEXT_BUDGET_WARN`. Per-section byte logging is rejected as measurement-only.
 - Cost 5 (Semble byte fields) — rejected: measurement-only, the MCP telemetry validator is strict, and nothing consumes the fields.
-- Reliability 2 (release permission failures permanent, preflight) — applied: release-tag-rejection (`changelog.d/wfopt-0922-release-tag-rejection.md`, `RELEASE_TAG_PUBLISH error_class=workflow_scope`) and the Speed 4 preflight.
+- Reliability 2 (release permission failures permanent, preflight) — applied: release-tag-rejection (PR #7721, `changelog.d/wfopt-0922-release-tag-rejection.md`, `RELEASE_TAG_PUBLISH error_class=workflow_scope`) and the Speed 4 preflight.
 - Reliability 3 (state-snapshot persistence) — already-implemented: the artifact upload is `continue-on-error` and the branch publish is best-effort.
 - Reliability 4 (actionlint download retry) — already-implemented: `changelog.d/wfopt-2026-09-21-4-actionlint-retry.md`.
-- Reliability 5 (structured `root_failure_class`) — applied: collector-root-failure-class (`changelog.d/wfopt-0922-collector-root-failure-class.md`).
+- Reliability 5 (structured `root_failure_class`) — applied: collector-root-failure-class (PR #7725, `changelog.d/wfopt-0922-collector-root-failure-class.md`).
 - Reliability 6 (telemetry de-duplication) — applied for Codex usage with Cost 1; `event_id` on all telemetry is rejected as a broad cross-producer change.
 - AI memory telemetry fields — `error_class` partly applied with Cost 3 (`changelog.d/wfopt-0922-memory-push-auth.md`): `error_class=auth` appears in the raised push error message, not as a structured `AI_MEMORY_TELEMETRY` field. The remaining fields are rejected.
 - GH API audit (`GH_API_SUMMARY`) and prompt cache (`PROMPT_SECTION_BYTES`) — rejected: broad, with no consumer; `GH_API_RETRY` already logs retries.
-- Orchestrator Health (validation-dispatch notice) — applied: validate-dispatch-notice (`changelog.d/wfopt-0922-validate-dispatch-notice.md`).
+- Orchestrator Health (validation-dispatch notice) — applied: validate-dispatch-notice (PR #7718, `changelog.d/wfopt-0922-validate-dispatch-notice.md`).
 - Orchestrator Health (clarify/plan fan-out narrowing) — rejected: the phase wrapper predicate parity contract pins those predicates.
 - Orchestrator Health (tracking metrics) — rejected: observability with no consumer.
 - BUG-001 (transient API failure selects the wrong checkout branch) — already-implemented: `scripts/resolve_integration_ref.sh` exits 75 or 2 and the callers fail closed.
@@ -1371,7 +1371,7 @@ Processed: 2026-10-20
 - DUP-001, DUP-002, DUP-004 — rejected: refactors with no behaviour change.
 - DUP-003 (integration-ref bootstrap) — rejected: branch-selection risk.
 - EXPR-001, EXPR-002 — already-implemented: the expressions moved to `env:`, and `tests/test_workflow_file_size_limit.py` enforces the 21,000-character limit.
-- CONSIST-001 (documented review thread reuse is ignored) — applied: final-report (`changelog.d/wfopt-0922-final-report.md`); the README `CODEX_THREAD_REUSE_ENABLED` row now says the review editor and conflict resolver use the fresh full-prompt path. The variable and the helpers stay.
+- CONSIST-001 (documented review thread reuse is ignored) — applied: final-report (PR #7730, `changelog.d/wfopt-0922-final-report.md`); the README `CODEX_THREAD_REUSE_ENABLED` row now says the review editor and conflict resolver use the fresh full-prompt path. The variable and the helpers stay.
 - DEAD-001 (definition-only poller helpers) — rejected for naming immutability.
 - DEAD-002 (`resolve_label_repair_evidence`) — rejected: a documented reserved contract.
 - SHELL-001 (warning-level ShellCheck) — rejected: unmeasured warning volume across three gates.
