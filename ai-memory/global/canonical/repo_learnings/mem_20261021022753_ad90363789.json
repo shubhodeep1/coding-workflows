@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "When changing a GitHub Actions workflow, look for an existing test in `tests/` that asserts its workflow contract and extend or add a focused test for the behavior. Several merged workflow changes paired edits under `.github/workflows/` with contract-oriented tests, including release-tag, review-pipeline, and stable-marking behavior.",
+  "fingerprint": "c5ce55e6619693f353bc8dc760fba19b772f42ae6dbe1f957695a1406a6d26ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39532223142",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39532223142",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7729",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7732",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7733",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7737",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7742",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7730",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7734",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7735",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7738",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7744"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261021022753_ad90363789",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow behavior changes in this repository are commonly protected by focused contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-21T02:27:53Z",
+    "promoted_at": "2026-10-21T02:29:14Z",
+    "superseded_at": null
+  }
+}
