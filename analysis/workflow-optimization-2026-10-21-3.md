@@ -448,3 +448,156 @@ The CI guard (`tests/test_workflow_file_size_limit.py:31-32, 84-97`) fails any `
 | Code modularization | `scripts/label_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`, `scripts/review_rb_judge.sh`, `scripts/review_autofix_step_mark_ready_to_merge.sh`, `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh`, new `.github/actions/bootstrap-gh-retry/` and `.github/actions/resolve-support-ref/`, 10+ workflows | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml` (env moves); new `scripts/test_and_mark_stable_step_*.sh` for extraction | Small |
 | Medium/Low fixes | `.github/workflows/test-and-mark-stable.yml`, `scripts/comprehensive_test_and_release_gh_api.sh`, `.github/workflows/cancel_on_pr_close.yml`, `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`, `scripts/review_collect_pr_metadata.sh`, 5 workflows carrying the bootstrap block | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-21)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means static reading proves every precondition. The calls hit the same endpoint, or one fetches a strict subset of the other's fields. Pagination, filters and token are the same. Both sites are in the same function or step, with no mutation between them. Error handling and retry behaviour do not change, no job or concurrency boundary is crossed, and any documented cache contract is kept. The implement stage may act on these without further review. `NEEDS_VERIFICATION` means the change looks right, but at least one precondition cannot be proven from source alone; run the listed checks first. `RISKY_SKIP` means at least one hard trigger applies: a retry or backoff loop, an auth or identity probe, pagination, a rate-limit path, code in `orchestrate_poll_process.sh` or a judge, an explicit race defence, or a change to log keys. These are listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: Two helpers query the same open `ai/issue-<n>` PRs separately** — `RISKY_SKIP`
+- **Files / lines:**
+  - `scripts/orchestrate_poll_process.sh:4488-4495` (`_linked_prs_by_branch_name`)
+  - `scripts/orchestrate_poll_process.sh:4632-4655` (`_resolve_linked_pr_fresh_by_branch`)
+  - Callers of the first helper: `_find_all_linked_prs` (4539), which `close_linked_pr` calls (16005); `_resolve_issue_implementation_pr` (18810); line 24844.
+  - Callers of the second helper: `_check_fresh_push_guard_with_fallback` (19040); line 28054.
+- **Current → proposed calls:** up to 2 `gh pr list` calls per issue when the stall-freshness fallback and close/recovery both hit the same issue in one cycle → 1, using a per-cycle cache keyed by issue number.
+- **Endpoint:** `gh pr list --head ai/issue-<n> --state open`. This is one PR-list query each time; the first asks for `number`, the second for `number,commits`.
+- **Evidence:** the filters are identical. Only the requested fields differ, and the first call's fields are a strict subset of the second's:
+  ```bash
+  gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" \
+  	--head "ai/issue-${issue_num}" --state open \
+  	--json number --jq '.[].number' 2>/dev/null
+  ```
+  ```bash
+  prs_json="$(gh_retry gh pr list --repo "${GITHUB_REPOSITORY}" \
+  	--head "ai/issue-${issue_num}" --state open \
+  	--json number,commits 2>/dev/null || echo '[]')"
+  ```
+  The §15 comment at 4616-4623 already says the second helper "reuses the existing branch-lookup pattern". Neither helper caches its result.
+- **Proposed fix:** add a cycle-local associative cache. The name must be checked as unique first; `_BRANCH_OPEN_PR_LIST_CACHE` is one option. Fill it in `_resolve_linked_pr_fresh_by_branch` with the raw `number,commits` JSON. Have `_linked_prs_by_branch_name` read `.[].number` from the cache before making its own call. Document the contract the way `STALL_MANAGED_LINKED_PR_CACHE` is documented.
+- **Safety rationale:** both calls sit in `orchestrate_poll_process.sh` on stall-recovery paths, and their error handling differs. `_linked_prs_by_branch_name` passes its exit code through, and 18810 captures it as `_ripr_branch_discovery_rc`. `_resolve_linked_pr_fresh_by_branch` swallows failures (`|| echo '[]'`). Merging them would change error handling.
+- **Downstream signal:** do not auto-implement. A maintainer must first:
+  1. confirm from poll logs (`STALL_FRESH_PUSH_FALLBACK` lines next to `close_linked_pr` activity) that both helpers really run for the same issue in one cycle;
+  2. decide whether a cached failure should be returned to the exit-code-sensitive caller at 18810;
+  3. accept that number-only callers would then get the heavier `commits` payload on a cache miss.
+
+**MERGE-002: Auto-merge enablement reads labels and PR metadata in separate calls** — `RISKY_SKIP`
+- **Files / lines:**
+  - `scripts/review_enable_auto_merge.sh:155` (paginated labels read)
+  - `scripts/review_enable_auto_merge.sh:221` (full `/pulls/{n}` read)
+  - `scripts/review_enable_auto_merge.sh:100` (`reviewed_head_is_current_for_labels`, a third `/pulls/{n}` read that only runs on the e2e early-exit path at 158)
+- **Current → proposed calls:**
+  - Non-e2e path: 1 labels read (P pages) + 1 PR read → 1 PR read.
+  - e2e path: P label pages + 1 PR read (at 100) → 1 PR read.
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}/labels?per_page=100` (paginated) and `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** the full `/pulls/{n}` response stored in `_ORCH_PR_META_JSON` also carries `.labels[]`, `.head.sha` and `.head.ref`. The script reads labels first, and then does its own PR read for the head check:
+  ```bash
+  if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' 2>"${_label_err_file}")"; then
+  ```
+  ```bash
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+  ```
+- **Proposed fix:** move the 221 read above the e2e guard. Take the `e2e-smoke-test` check from `.labels[].name` in `_ORCH_PR_META_JSON`. Let `reviewed_head_is_current_for_labels` take a preloaded head SHA from the same response. Keep the separate `::warning::` texts for "labels" and "PR metadata" failures.
+- **Safety rationale:** the labels call is paginated on purpose. The comment at 144-153 records a production gap where labels on page 2 were dropped. The guard fails closed against an e2e race, and reordering would change which `::warning::` line appears on failure.
+- **Downstream signal:** do not auto-implement. A maintainer must first confirm, against the GitHub REST reference and a live PR carrying more than 30 labels, that `pulls/{n}` returns the complete `labels` array without truncation. They must also check that no test or log consumer greps for the order of the "Could not fetch labels" and "Could not fetch PR metadata" warnings.
+
+**MERGE-003: Post-merge validate dispatch reads labels one issue at a time on the PR-text fallback path** — `NEEDS_VERIFICATION`
+- **Files / lines:** `.github/workflows/review_autofix.yml:889-928` (loop) and `:893` (call), job `post-merge-validate-dispatch` (728).
+- **Current → proposed calls:** N `gh issue view --json labels` calls, where N is the number of issue refs found in the PR title and body → ceil(N/25) aliased GraphQL calls.
+- **Endpoint:** `gh issue view <n> --json labels`, one GraphQL query per issue.
+- **Evidence:** `labels_known` is false only when the linked issues came from the title/body fallback, which sets `labels: null` at 882:
+  ```bash
+  if [ "${labels_known}" != "true" ]; then
+    if issue_labels="$(gh_retry gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+  ```
+  The other paths already batch. The gate's `post_merge_linked_issues_json` and the live `closingIssuesReferences` GraphQL call at 835-841 both return labels for every issue in a single call.
+- **Proposed fix:** before the loop, collect the numbers where `labels_known` is false and run one aliased query. Follow the shape of `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh:18216`). The closest existing label-only helper is `_fetch_issue_labels_batch_graphql` (4331-4355): batches of 25, incomplete label pages left out, and missing keys treated as cache misses. Put the helper under `scripts/`, not inline (§24). Keep the per-issue `gh issue view` as the fallback for any issue the batch leaves out.
+- **Safety rationale:** the endpoint and filter match, but two things cannot be proven statically.
+  - Error handling: today one failed issue sets `validation_label_unknown=1` and only that issue is skipped. A failed batch must fall back per issue to keep that behaviour.
+  - Ordering: the loop makes mutations between iterations, `gh workflow run` at 916 and `gh issue edit --remove-label` at 925. A label read up front would come before them.
+- **Downstream signal:** before implementing, verify:
+  1. that a dispatched validate run cannot add or remove `ai:orchestrator-validate-required` on a *different* linked issue before the loop reaches it (read `validate.yml` and `scripts/validate_process.sh` for writes to that label);
+  2. that the batched query checks `labels.pageInfo.hasNextPage`, the same way `review_rb_judge.sh:1179-1182` does.
+  
+  Impact is low because this path only runs when `closingIssuesReferences` is empty.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: The single-issue security-pass gate repeats the `gh api user` lookup the `gate` job already exports** — `RISKY_SKIP`
+- **Files / lines:**
+  - `scripts/review_single_issue_security_pass.sh:369-373` (the repeat lookup)
+  - `scripts/review_autofix_step_evaluate_gate.sh:334` (the original lookup) and `:1371` (where it is written as an output)
+  - `.github/workflows/review_autofix.yml:328` (job output), `:1787-1788` (`codex-agent` has `needs: gate`), `:4151-4179` (the security-pass step inside `codex-agent`)
+- **Current → proposed calls:** 1 `GET /user` per security-pass gate run → 0 when the gate output is non-empty; otherwise the live call stays as the fallback.
+- **Endpoint:** `GET /user`.
+- **Evidence:** the comment at line 369 says the identity is "not exported to this job":
+  ```bash
+  # The gate job also probes /user, but its identity is not exported to this job.
+  SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+  ```
+  In fact it is exported as a job output, and other jobs already read it, at `review_autofix.yml:1500` and `:5665`:
+  ```yaml
+  fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
+  ```
+  It is just not passed into this step's `env:`.
+- **Proposed fix:** add an env var with a default (§8), for example `SECURITY_PASS_AUTHOR_LOGIN_PRELOADED: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}`, after checking the name is unique. In `single_pass_gate`, use it when non-empty and fall back to `gh api user` when empty. Correct the comment at 369.
+- **Safety rationale:** this is an identity probe. The login decides which marker comments are trusted. It also crosses a job boundary with different tokens: the gate step uses `secrets.GH_PAT` (`review_autofix.yml:595`), the security-pass step uses `secrets.GH_PAT || github.token` (4166). And the gate only does the lookup lazily, through `gate_fetch_marker_comments` (411, 621, 657, 841, 1218, 1294), so the output is often empty.
+- **Downstream signal:** do not auto-implement. A maintainer must confirm three things:
+  1. A gate output of `""` always falls through to the live probe.
+  2. When `GH_PAT` is unset, the `SECURITY_PASS_AUTHOR_LOGIN_FALLBACK` (`github-actions[bot]`) behaviour at 4176 is unchanged.
+  3. A login trusted from another job is acceptable for authenticating `single_pass_markers`.
+
+  The saving is 1 non-quota-heavy call per review, so this is a trust-model decision more than a budget one.
+
+**REUSE-002: The rb judge's final-attempt `fix` → merge path re-reads PR state the guard read already returned** — `RISKY_SKIP`
+- **Files / lines:** `scripts/review_rb_judge.sh:1927-1940` (guard read, `_guard_pr_meta`, unset at 1940) and `:2345` (`fix)` branch when `IS_FINAL=true`).
+- **Current → proposed calls:** 2 `GET /pulls/{n}` → 1 on the `fix` final-attempt path.
+- **Endpoint:** `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** the guard read is a full payload, and only `merged` and `head.sha` are kept from it (1928, 1936). The later read asks again for `.state`:
+  ```bash
+  PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
+  ```
+- **Proposed fix:** at 1936, also capture `.state` from `_guard_pr_meta` into a new, uniquely named variable such as `RB_LIVE_PR_STATE`. Use it at 2345 instead of the second read.
+- **Safety rationale:** the comment at 1917-1923 says the guard re-read exists to defend against an upstream race ("auto-merge … could complete asynchronously"). Between the two reads the script runs `rb_security_severity_block` (2002), `post_review_blocked_assessment` (2057) and the security-gate block (from 2066). That window is non-trivial, and a stale `open` would change whether `gh pr merge` is attempted. `--match-head-commit` limits the damage.
+- **Downstream signal:** do not auto-implement. It needs manual review of whether the security-gate section (2066-2190) can wait, sleep or dispatch. If it can, keep the live read.
+
+**REUSE-003: Calling the freshness gate a second time re-lists the paginated PR files for the same head** — `RISKY_SKIP`
+- **Files / lines:**
+  - `scripts/pr_checks_lib.sh:797-894` (`_pr_base_freshness`; files listing at 884)
+  - First and second calls in `scripts/review_enable_auto_merge.sh`: 266 and 293. The second runs only when `PR_CHECKS_WAIT_WAITED_S > 0`.
+  - First and second calls in `scripts/review_rb_judge.sh`: 2258 and 2271, in the `merge)` branch.
+- **Current → proposed calls:** 2 compare + 2×P file pages → 2 compare + 1×P file pages, when both calls reach the overlap check (`ahead_by` > 0 and fewer than 300 base files).
+- **Endpoints:** `GET /repos/{o}/{r}/compare/{head}...{base}` and `GET /repos/{o}/{r}/pulls/{n}/files?per_page=100` (paginated, `--slurp`).
+- **Evidence:** both calls pass the same bound head (`INITIAL_HEAD_SHA` / `RB_JUDGED_HEAD_SHA`). The files listing runs every time:
+  ```bash
+  pr_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/pulls/${pr_number}/files?per_page=100" 2>/dev/null || echo "{}")"
+  ```
+  The API-budget comment (786-792) counts one listing "per gated merge" but does not account for the re-check after the wait.
+- **Proposed fix:** cache the listing in a process-local variable keyed by `${pr_number}:${head_sha}`, with a unique name. Reuse it only when the key matches. The `compare` call stays live.
+- **Safety rationale:** the call is paginated, and the second freshness call exists to defend against the base moving during the checks wait (comment at `review_enable_auto_merge.sh:288-290`). GitHub computes `pulls/{n}/files` against the merge base, so a base push that changes the merge base could change the list.
+- **Downstream signal:** do not auto-implement. A maintainer must confirm that, with the head fixed, the `pulls/{n}/files` result cannot change when the merge base moves. If it can, the second listing is load-bearing and must stay.
+
+### Dead Calls (DEAD-API-###)
+No findings. In every call site read in this pass, the response is used later, either as data or through its exit code. That includes `review_rb_judge.sh:1071` (state, merged, draft, base, title and body are all read), `review_enable_auto_merge.sh:100/155/221`, `unblock_judge.sh:1075/1113/1604/1766`, `review_single_issue_security_pass.sh:600/615/634`, `pr_checks_lib.sh:256/821/884`, `review_collect_pr_metadata.sh:231-247/280` and `review_autofix.yml:835-893`. Post-write reads such as `implement_handle_guard_block.sh:112/230/404` and `validate_process.sh:4501` are deliberate latch and label checks after a write, not dead calls.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — it changes `_is_gh_permanent_failure` (`gh_helpers.sh:194`, checked: the regex matches `HTTP 422` but no "already exists" text), which every `gh_retry` / `gh_retry_to_file` / `_gh_api_classify` retry loop uses. Before landing, record the stderr of `gh label create` on an existing label with the pinned `gh` version, and grep for every non-label "already exists" path the new pattern would make permanent.
+- API-002: RISKY_SKIP — it changes the retry and backoff loops of `gh_api_json_to_file` and `curl_gh_api`. The `403` / `408` / `429` exclusions must stay identical to `_gh_api_classify`, so rate-limit handling cannot regress.
+- API-003: RISKY_SKIP — the code is in `orchestrate_poll_process.sh` (checked: 14799 read, 14801 `set_tracking_phase_label`, 14803 / 14810 single-label edits). Extra detail: the preloaded `_tracking_labels` comes from the unpaginated `get_issue_labels_json` (4138-4141, BUG-002). A "remove only if present" filter built on it would silently skip `ai:validate-failed` when it sits past label 30. Land BUG-002 first.
+- API-004: RISKY_SKIP — the code is in `orchestrate_poll_process.sh`, and the comment read is paginated and is the dedup key before a POST.
+- API-005: RISKY_SKIP — `rate_limit` probes in `orchestrate_poll_process.sh` are a hard trigger.
+- API-006: RISKY_SKIP — these are inline retry and backoff loops. Sourcing `GH_API_RETRY_HELPERS` also switches POSTs to single attempts (`_gh_cmd_is_unsafe_post`), which changes retry behaviour for callers such as 1388 and 1428.
+- API-007: RISKY_SKIP — a hand-rolled retry loop around a paginated read (checked: `implement.yml:2165-2176`). The outer loop also retries "approval comment not yet visible", and that must stay separate from API-error retries.
+
+### Summary Counts
+These counts cover only the new findings in this section. The seven cross-referenced Deep Audit findings (API-001 to API-007) are all RISKY_SKIP and are listed above.
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | MERGE-003 |
+| RISKY_SKIP | 5 | MERGE-001, MERGE-002, REUSE-001, REUSE-002, REUSE-003 |
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass. Every saving found sits behind pagination, a race-defence re-read, an identity probe, a job boundary, or `orchestrate_poll_process.sh`. MERGE-003 is the only candidate that could be promoted, once its two verification steps are done.
