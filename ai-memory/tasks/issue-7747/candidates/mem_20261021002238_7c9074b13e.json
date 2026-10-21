@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7747,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7747\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7748\",\"pr_number\":7748,\"branch\":\"ai/issue-7747\",\"run_id\":\"39518865727\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39518865727\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/internal-cancel-on-pr-close.yml\",\".github/workflows/internal-check-failure-triage.yml\",\".github/workflows/internal-clarify.yml\",\".github/workflows/internal-implement.yml\",\".github/workflows/internal-issue-pr-status.yml\",\".github/workflows/internal-memory-maintenance.yml\",\".github/workflows/internal-orchestrate-clarify-respond.yml\",\".github/workflows/internal-orchestrate-poll.yml\",\".github/workflows/internal-orchestrate.yml\",\".github/workflows/internal-plan.yml\",\".github/workflows/internal-review.yml\",\".github/workflows/internal-validate.yml\",\".github/workflows/internal-workflow-failure-heal.yml\",\".github/workflows/promote-candidate-follow.yml\",\"README.md\",\"agents.d/promote-candidate-follow.md\",\"agents.md\",\"changelog.d/promote-candidate-branch.md\",\"docs/INVENTORY.md\",\"scripts/promote_candidate_follow.sh\",\"tests/test_promote_candidate_follow.py\",\"tests/test_workflow_failure_heal.py\",\"tests/test_workflow_failure_heal_pr_reconcile.py\",\"tools/claude-pool-broker/src/index.ts\",\"tools/claude-pool-broker/test/broker.test.ts\"]}",
+  "fingerprint": "ac9653495a8c1697a63f99fdb84582e868bd368a04235e8033777489e5c248ac",
+  "lineage": {
+    "issue_number": 7747,
+    "parent_ids": [],
+    "pr_number": 7748,
+    "run_id": "39518865727",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39518865727",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7748"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261021002238_7c9074b13e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7747,
+    "level": "run",
+    "pr_number": 7748,
+    "run_id": "39518865727"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7747: https://github.com/shubhodeep1/coding-workflows/pull/7748",
+  "timestamps": {
+    "created_at": "2026-10-21T00:22:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
