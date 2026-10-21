@@ -117,7 +117,14 @@ SYNCED_SECURITY_ISSUE_TITLE = "Synced-file security findings"
 SYNCED_SECURITY_WORKFLOW_NAME = "AI Security Audit"
 _SYNCED_SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
 _SYNCED_SECURITY_FILE_RE = re.compile(r"^[A-Za-z0-9._/+-]{1,300}$")
-_SYNCED_SECURITY_OWASP_RE = re.compile(r"^\s*(A0[1-9]|A10):2021(?![0-9])", re.IGNORECASE)
+# A01..A10 followed by the 2021 year (any of `:`, `-` or spaces before it) or
+# by no year at all. Any other number after the code (A01:2017, A011) is
+# rejected: 2017 numbering maps codes to different categories.
+_SYNCED_SECURITY_OWASP_RE = re.compile(r"^\s*(A0[1-9]|A10)(?:[\s:-]+2021(?![0-9])|(?![0-9A-Za-z])(?![\s:-]*[0-9]))", re.IGNORECASE)
+# A year written right after the code after any separators, e.g. `A01 (2017)`,
+# `A01/2017` or `A01 - 2021`.
+_SYNCED_SECURITY_YEAR_RE = re.compile(r"[^0-9A-Za-z]*((?:19|20)[0-9]{2})(?![0-9])")
+_SYNCED_SECURITY_STRIDE_PREFIX_RE = re.compile(r"^stride(?:\s*[:-]\s*|\s+)", re.IGNORECASE)
 # The audit's categories (prompts/mode-security-audit.txt): OWASP Top 10 2021
 # and STRIDE. Only these canonical tokens are ever published.
 SYNCED_SECURITY_OWASP_2021: dict[str, str] = {
@@ -4642,20 +4649,29 @@ def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str) 
 def normalize_synced_security_category(raw: Any) -> str:
 	"""Map an audit category onto a fixed OWASP 2021 / STRIDE token.
 
-	``A01:2021`` .. ``A10:2021`` (any name or separator after it) becomes
-	``A0x:2021-<canonical name>``; exactly one STRIDE term (any letter case)
-	becomes that term. Anything else raises ValueError, so the consumer's own
-	wording is never published.
+	``A01`` .. ``A10``, with or without the ``:2021`` year and with any name
+	or separator after it, becomes ``A0x:2021-<canonical name>``. A STRIDE
+	term (any letter case), optionally after a ``STRIDE:`` prefix, becomes that
+	term; in a slash-separated list the first term decides. Anything else
+	raises ValueError, so the consumer's own wording is never published.
 	"""
 	if not isinstance(raw, str) or not raw or len(raw) > 200:
 		raise ValueError("category is missing or too long")
 	match = _SYNCED_SECURITY_OWASP_RE.match(raw)
 	if match:
 		code = match.group(1).upper()
+		# A year other than 2021 right after the code (A01 (2017)) means
+		# different numbering, so it is rejected rather than renamed. Years
+		# later in the name (a CVE reference) do not count.
+		year = _SYNCED_SECURITY_YEAR_RE.match(raw, match.end(1))
+		if year and year.group(1) != "2021":
+			raise ValueError("category names an OWASP year other than 2021")
 		return f"{code}:2021-{SYNCED_SECURITY_OWASP_2021[code]}"
-	collapsed = " ".join(raw.split()).lower()
+	collapsed = " ".join(raw.split())
+	collapsed = _SYNCED_SECURITY_STRIDE_PREFIX_RE.sub("", collapsed, count=1)
+	first_term = collapsed.split("/", 1)[0].strip().lower()
 	for term in SYNCED_SECURITY_STRIDE:
-		if collapsed == term.lower():
+		if first_term == term.lower():
 			return term
 	raise ValueError("category is not an OWASP Top 10 2021 or STRIDE category")
 

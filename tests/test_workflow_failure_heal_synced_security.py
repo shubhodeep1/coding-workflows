@@ -84,6 +84,54 @@ def test_valid_payload_keeps_only_the_allowed_fields() -> None:
 
 
 @pytest.mark.parametrize(
+	("raw", "expected"),
+	[
+		("A01:2021-Broken Access Control", "A01:2021-Broken Access Control"),
+		("A01: Broken Access Control", "A01:2021-Broken Access Control"),
+		("A03 Injection", "A03:2021-Injection"),
+		("a10", "A10:2021-Server-Side Request Forgery"),
+		("A05 - 2021 Security Misconfiguration", "A05:2021-Security Misconfiguration"),
+		("A01 (2021) Broken Access Control", "A01:2021-Broken Access Control"),
+		("A08:2021-Software and Data Integrity Failures (CVE-2020-1234)", "A08:2021-Software and Data Integrity Failures"),
+		("A03 Injection (CVE-2019-0001)", "A03:2021-Injection"),
+		("STRIDE: Tampering", "Tampering"),
+		("stride - elevation of privilege", "Elevation of Privilege"),
+		("Tampering / Elevation of Privilege", "Tampering"),
+		("STRIDE: Spoofing/Repudiation", "Spoofing"),
+		("  information   disclosure ", "Information Disclosure"),
+	],
+)
+def test_category_accepts_common_owasp_and_stride_spellings(raw, expected) -> None:
+	assert heal.normalize_synced_security_category(raw) == expected
+
+
+@pytest.mark.parametrize(
+	"raw",
+	[
+		"A01:2017-Injection",  # 2017 numbering differs from 2021
+		"A01 2017",
+		"A01 (2017)",
+		"A07 (2017) Cross-Site Scripting",
+		"A01/2017-Injection",
+		"A01, 2017",
+		"A01 \u2013 2017",
+		"A1:2017-Injection",
+		"A011",
+		"A01x",
+		"A00: Nothing",
+		"A11",
+		"STRIDE",
+		"STRIDE: Made Up",
+		"Made Up / Tampering",
+		"Something else",
+	],
+)
+def test_category_still_rejects_unmappable_spellings(raw) -> None:
+	with pytest.raises(ValueError):
+		heal.normalize_synced_security_category(raw)
+
+
+@pytest.mark.parametrize(
 	"finding",
 	[
 		_finding(finding_id="bad id"),
@@ -267,8 +315,9 @@ def _git(cwd: Path, *args: str) -> None:
 class _Release:
 	"""setup_git hook for base._run_intake: a release commit and a signed identity."""
 
-	def __init__(self, payload: dict, *, identity: bool = True, workflow_file: str = "security-audit.yml", ref_sha: str | None = None, consumers: tuple[str, ...] = (CONSUMER_A, CONSUMER_B)) -> None:
+	def __init__(self, payload: dict, *, identity: bool = True, workflow_file: str = "security-audit.yml", ref_sha: str | None = None, consumers: tuple[str, ...] = (CONSUMER_A, CONSUMER_B), retired: tuple[str, ...] = ()) -> None:
 		self.payload = payload
+		self.retired = retired
 		self.identity = identity
 		self.workflow_file = workflow_file
 		self.ref_sha = ref_sha
@@ -291,6 +340,9 @@ class _Release:
 		(work / "workflow-templates" / ".claude" / "hooks" / "guard.py").write_text("print('guard')\n", encoding="utf-8")
 		(work / "workflow-templates" / "ai-review.yml").write_text(
 			"jobs:\n  review:\n    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable\n", encoding="utf-8")
+		if self.retired:
+			(work / "workflow-templates" / "retired_files.txt").write_text(
+				"# Consumer files retired from the sync.\n" + "".join(f"{path} {'a' * 64}\n" for path in self.retired), encoding="utf-8")
 		_git(work, "init", "-q", "-b", "main")
 		_git(work, "config", "user.name", "test")
 		_git(work, "config", "user.email", "test@example.invalid")
@@ -413,6 +465,32 @@ def test_intake_rejects_unmanaged_and_retired_paths() -> None:
 	assert "report_auth=rejected reason=unmanaged_path " in result.stdout
 	assert not _api_writes(state)
 
+
+
+RETIRED = ".claude/commands/retired-helper.md"
+
+
+def test_intake_skips_retired_file_findings_with_a_named_reason() -> None:
+	"""A retired file is a managed path (the consumer's sync deletes its
+	byte-identical copies), but nothing in coding-workflows ships it any more,
+	so there is no source to fix: skip it early with reason=retired_file
+	instead of reaching scope_unresolved, and open nothing."""
+	result, state = _intake(_payload(findings=[_finding(file=RETIRED)]), extra_env=SCOPE_GUARD_ON, retired=(RETIRED,))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "report_auth=rejected" not in result.stdout
+	assert f"skip reason=retired_file file={RETIRED} " in result.stdout
+	assert "scope_unresolved" not in result.stdout
+	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=1 opened=0 occurrences=0 skipped=1" in result.stdout
+	assert not _api_writes(state)
+
+
+def test_intake_retired_skip_leaves_live_findings_in_the_same_report() -> None:
+	payload = _payload(findings=[_finding(file=RETIRED, finding_id="old"), _finding(line=30, finding_id="live")])
+	result, state = _intake(payload, extra_env=SCOPE_GUARD_ON, retired=(RETIRED,))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"skip reason=retired_file file={RETIRED} " in result.stdout
+	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=2 opened=1 occurrences=0 skipped=1" in result.stdout
+	assert len(state.get("issues_created", [])) == 1
 
 def test_intake_rejects_self_repo_and_unregistered_consumers() -> None:
 	result, state = _intake(_payload(repo="shubhodeep1/unknown-consumer"), extra_env=SCOPE_GUARD_ON)

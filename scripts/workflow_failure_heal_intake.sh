@@ -710,6 +710,7 @@ _synced_security_finding_intake()
 	local ss_path_check="" ss_count=0 ss_index=0 ss_links="" ss_action="" ss_reason="" ss_level="DEBUG"
 	local ss_group="" ss_decision="" ss_existing="" ss_prior="" ss_gen="" ss_root="" ss_label=""
 	local ss_scope="" ss_scope_input="" ss_scope_status="" ss_title="" ss_body="" ss_url="" ss_number=""
+	local ss_retired="" ss_group_file=""
 	mkdir -p "${ss_dir}"
 	HEAL_SCOPE_RECOVERY_ACTIVE="false"
 	CLASSIFICATION="workflow-defect"
@@ -742,6 +743,15 @@ _synced_security_finding_intake()
 		|| ! jq -e 'type == "object"' "${ss_contract}" >/dev/null 2>&1; then
 		printf '{}' > "${ss_contract}"
 	fi
+	# Retired files are managed paths (the consumer's sync deletes byte-identical
+	# copies), but coding-workflows no longer ships them, so a finding on one has
+	# no source to fix. Their consumer paths come from the release's own list
+	# and from HEAD's (a file retired after the consumer's pin has no source at
+	# HEAD either); an absent or unreadable list means no file is retired.
+	ss_retired="${ss_dir}/retired_paths.txt"
+	{ git show "${WRAPPER_SHA}:workflow-templates/retired_files.txt" 2>/dev/null || true
+		git show "HEAD:workflow-templates/retired_files.txt" 2>/dev/null || true; } \
+		| awk '$1 != "" && substr($1, 1, 1) != "#" { print $1 }' > "${ss_retired}" 2>/dev/null || : > "${ss_retired}"
 	if ! ss_path_check="$(python3 "${HEAL_PY}" synced-security-check-paths --payload-json "${PAYLOAD_FILE}" --managed-digests-json "${ss_digests}" 2>/dev/null)"; then
 		ss_reason="$(jq -r '.reason // "unmanaged_path"' <<< "${ss_path_check}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
 		_report_auth_reject "${ss_reason:-unmanaged_path}"
@@ -770,6 +780,18 @@ _synced_security_finding_intake()
 		jq ".[${ss_index}]" "${ss_groups}" > "${ss_group}"
 		ss_index=$((ss_index + 1))
 		FP="$(jq -r '.fingerprint' "${ss_group}")"
+		ss_group_file="$(jq -r '.file // empty' "${ss_group}")"
+		if [ -z "${ss_group_file}" ]; then
+			log "warn empty_group_file fp=${FP} source=${SOURCE_REPO}"
+			ss_skipped=$((ss_skipped + 1))
+			continue
+		fi
+		if [ -s "${ss_retired}" ] && grep -Fxq -- "${ss_group_file}" "${ss_retired}"; then
+			# Not an attention case: the consumer's next sync removes the file.
+			log "skip reason=retired_file file=${ss_group_file} fp=${FP} source=${SOURCE_REPO}"
+			ss_skipped=$((ss_skipped + 1))
+			continue
+		fi
 		ss_decision="${ss_dir}/decision_${ss_index}.json"
 		python3 "${HEAL_PY}" budget --issues-json "${ss_issues}" --fingerprint "${FP}" --preferred-repo "${SELF_REPO}" \
 			--max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}" > "${ss_decision}" \
