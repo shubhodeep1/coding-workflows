@@ -1600,6 +1600,7 @@ jobs:
             tests/test_auto_release_stable.py
             tests/test_orchestrate_poll_promote_cycle.py
             tests/test_implement_blocked_verdict_terminalizes.py
+            tests/test_promote_candidate_follow.py
           )
           rm -f /tmp/promote_cycle_collect.log /tmp/promote_cycle_tests.txt \
             /tmp/promote_cycle_shard_*.txt /tmp/promote_cycle_shard_*.log /tmp/promote_cycle_shard_*.rc

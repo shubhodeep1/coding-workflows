@@ -497,6 +497,56 @@ describe("workflow identity", () => {
 	});
 });
 
+describe("promote-candidate branch", () => {
+	const SELF = "shubhodeep1/coding-workflows";
+	function candidate(extra: Record<string, unknown> = {}): Record<string, unknown>
+	{
+		return claims({ repository: SELF, job_workflow_ref: `${WF}clarify.yml@refs/heads/promote-candidate`, job_workflow_sha: SHA, ...extra });
+	}
+
+	for (const status of ["behind", "identical"]) {
+		it(`is granted to the self repo when the signed SHA is ${status} main`, async () => {
+			const s = stub();
+			s.compare[`main...${SHA}`] = { status: 200, body: { status } };
+			expect((await call(s, request(await sign(candidate())))).status).toBe(200);
+			expect(compareCalls(s)).toEqual([`${GITHUB_API}/compare/main...${SHA}?per_page=1`]);
+		});
+	}
+
+	it("is refused when the signed SHA is diverged from main and stable", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 200, body: { status: "diverged" } };
+		s.compare[`stable...${SHA}`] = { status: 200, body: { status: "diverged" } };
+		const { status, body } = await call(s, request(await sign(candidate())));
+		expect([status, body.error]).toEqual([403, "workflow_sha_unverified"]);
+	});
+
+	it("is refused when the compare call is unverifiable", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 503, body: {} };
+		const { status, body } = await call(s, request(await sign(candidate())));
+		expect([status, body.error]).toEqual([403, "workflow_sha_unverifiable"]);
+	});
+
+	for (const [name, sha] of [["missing", undefined], ["malformed", "abc123"], ["uppercase", SHA.toUpperCase()]] as const) {
+		it(`is refused when the SHA claim is ${name}`, async () => {
+			const s = stub();
+			s.compare[`main...${SHA}`] = { status: 200, body: { status: "behind" } };
+			const { status, body } = await call(s, request(await sign(candidate({ job_workflow_sha: sha }))));
+			expect([status, body.error]).toEqual([403, "workflow_sha_mismatch"]);
+			expect(compareCalls(s)).toEqual([]);
+		});
+	}
+
+	it("is refused for a consumer repository", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 200, body: { status: "behind" } };
+		const { status, body } = await call(s, request(await sign(candidate({ repository: "shubhodeep1/digital_pa" }))));
+		expect([status, body.error]).toEqual([403, "workflow_ref_not_allowed"]);
+		expect(compareCalls(s)).toEqual([]);
+	});
+});
+
 describe("parseWorkflowRef", () => {
 	it("splits the file and ref", () => {
 		expect(parseWorkflowRef(`${WF}plan.yml@refs/heads/main`)).toEqual({ file: "plan.yml", ref: "refs/heads/main" });

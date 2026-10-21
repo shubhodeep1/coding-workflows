@@ -23,6 +23,10 @@
  *     A verification call that fails, times out or is rate limited is
  *     refused too (403 workflow_sha_unverifiable); nothing is granted on
  *     uncertainty (issue #6636).
+ *   - or, for shubhodeep1/coding-workflows only, name refs/heads/promote-candidate
+ *     (the branch its internal-*.yml wrappers call), with a signed 40-hex
+ *     job_workflow_sha that passes the same main/stable ancestry check. The
+ *     branch may be unprotected, so the ref alone never grants anything.
  *
  * Success: 200 `{"accounts":[{"name","token"}],"probe_model","gate"}`.
  * Refusal: 403 `{"error": <reason code>}`. Broker-side trouble (JWKS or
@@ -85,6 +89,13 @@ export const ALLOWED_WORKFLOW_FILES: readonly string[] = Object.freeze([
 	"workflow-log-analysis.yml",
 ]);
 export const TRUSTED_BRANCH_REF = "refs/heads/main";
+/**
+ * The branch coding-workflows' internal-*.yml wrappers call
+ * (docs/plans/pin-promote-cycle-to-candidate-plan.md, Phase 2). Accepted only
+ * for SELF_REPO and only when the signed job_workflow_sha is an ancestor of
+ * (or identical to) main or stable.
+ */
+export const CANDIDATE_BRANCH_REF = "refs/heads/promote-candidate";
 /**
  * A SHA-pinned workflow is trusted when it is reachable from one of these
  * branches. Assumption: both are protected and never force-pushed; release
@@ -469,6 +480,17 @@ export function createHandler(deps: Deps)
 		}
 		if (workflow.ref === TRUSTED_BRANCH_REF) {
 			return repository;
+		}
+		if (workflow.ref === CANDIDATE_BRANCH_REF && repository.toLowerCase() === SELF_REPO.toLowerCase()) {
+			const signedSha = claims.job_workflow_sha;
+			if (typeof signedSha !== "string" || !SHA_RE.test(signedSha)) {
+				throw new Refusal(403, "workflow_sha_mismatch");
+			}
+			const verdict = await verifyTrustedSha(signedSha, env);
+			if (verdict === "trusted") {
+				return repository;
+			}
+			throw new Refusal(403, verdict === "untrusted" ? "workflow_sha_unverified" : "workflow_sha_unverifiable");
 		}
 		if (SHA_RE.test(workflow.ref)) {
 			const signedSha = claims.job_workflow_sha;
