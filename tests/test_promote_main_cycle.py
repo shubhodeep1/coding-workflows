@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -92,7 +93,7 @@ if args[:1] == ["api"]:
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
         respond({"object": {"type": "tag", "sha": "9" * 40}})
     if "/git/tags/" in path:
-        respond({"object": {"type": "commit", "sha": state["tag_commit"]}})
+        respond({"object": {"type": "commit", "sha": state["tag_commit"]}, "message": state.get("tag_message", "")})
     if "/compare/" in path:
         base = path.split("/compare/")[1].split("...")[0]
         entry = state.get("compares", {}).get(base)
@@ -887,6 +888,13 @@ def test_pinned_cycle_deletes_a_stale_tag_before_freezing() -> None:
 	assert "PROMOTE_CYCLE_PIN outcome=stale_tag_deleted" in proc.stdout
 	assert final["tag_deletes"] == 1
 	assert "PROMOTE_CYCLE_PIN outcome=frozen" in proc.stdout
+
+
+def test_pinned_cycle_reports_the_stale_tag_age() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"pin_tag_exists": True, "tag_message": "frozen_at=1 cycle_run=5"})
+	assert re.search(r"PROMOTE_CYCLE_PIN outcome=stale_tag_deleted age=[0-9]+s", proc.stdout), proc.stdout
+	assert final["tag_deletes"] == 1
 
 
 def test_pinned_cycle_reconciles_an_advanced_branch() -> None:
