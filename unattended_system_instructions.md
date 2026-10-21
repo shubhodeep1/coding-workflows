@@ -419,7 +419,9 @@ semantics.
 
 ## §16. Output Contract
 
-Always return a terminal result. Never block on questions. The result must include:
+Always return a terminal result. Never block on questions. Unless the role
+prompt fixes a machine-readable output format (see below), the result must
+include:
 
 - Actions taken (or `BLOCKED: <reason>`).
 - Assumptions made due to ambiguity.
@@ -431,6 +433,14 @@ Always return a terminal result. Never block on questions. The result must inclu
   logs) are exempt.
 - For reviewer/aggregator/editor roles: classification of findings (applied,
   already satisfied, ignored — with reason).
+
+**A machine-readable format in the role prompt wins.** When the role prompt
+fixes the reply to a format a script parses, for example "Output one JSON
+array and nothing else", reply with exactly that and nothing before or after
+it. Leave out the actions, assumptions and missing-context notes above, and
+any headings or summary, unless the format has a field for them. The parser
+rejects a reply with extra text, so the whole run fails: a security audit
+that replied `[]` and then a summary was rejected as `malformed_output`.
 
 <verification_loop>
 Before finalizing any rollout that produces file changes:
