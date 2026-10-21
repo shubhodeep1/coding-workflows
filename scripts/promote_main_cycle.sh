@@ -576,6 +576,9 @@ pin_freeze()
 			skip_cycle cycle_in_flight "tag=${PROMOTE_CYCLE_PIN_TAG}"
 		fi
 		rm -f "${err_file}"
+		# GitHub may have created the ref even though the response failed;
+		# guards 1-2 showed no other cycle owns it, so remove it (idempotent).
+		pin_delete_tag || echo "::warning::Could not delete a possibly created ${PROMOTE_CYCLE_PIN_TAG} tag; the next cycle or the follower's age limit removes it."
 		PIN_FREEZE_DETAIL=tag_ref_create
 		return 1
 	fi
@@ -599,6 +602,10 @@ pin_freeze()
 		return 0
 	fi
 	compare_status="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/compare/${tip}...${branch_tip}" 2>/dev/null | jq -r '.status // empty' 2>/dev/null || true)"
+	if [ -z "${compare_status}" ]; then
+		PIN_FREEZE_DETAIL=compare_unavailable
+		return 1
+	fi
 	if [ "${compare_status}" != "ahead" ]; then
 		PIN_FREEZE_DETAIL=branch_not_fast_forward
 		return 1
@@ -839,8 +846,9 @@ echo "Smoke gate passed on ${smoke_sha} (run ${gate_run_id})."
 # The dispatcher reads the analysis docs from this checkout and stamps
 # GITHUB_SHA into the project description, so both must be the smoke-tested
 # commit, not the tip this job happened to check out. Move the working tree
-# there when the gate tested a newer commit; refuse the cycle if that fails.
-if [ "${pin_mode}" != "true" ] && [ "${smoke_sha}" != "${main_tip}" ]; then
+# there when the gate tested a newer commit (or, pinned, when the candidate
+# advanced past the tip read at cycle start); refuse the cycle if that fails.
+if [ "${smoke_sha}" != "${main_tip}" ]; then
 	if ! git fetch --quiet --depth 1 origin "${smoke_sha}" \
 		|| ! git checkout --quiet --detach "${smoke_sha}" \
 		|| [ "$(git rev-parse HEAD 2>/dev/null || true)" != "${smoke_sha}" ]; then

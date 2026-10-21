@@ -70,6 +70,8 @@ if args[:1] == ["api"]:
         state.setdefault("ref_creates", []).append(args)
         if state.get("tag_ref_race"):
             save(); sys.stderr.write("HTTP 422: Reference already exists\n"); sys.exit(1)
+        if state.get("tag_ref_fail"):
+            save(); sys.stderr.write("HTTP 502: Bad Gateway\n"); sys.exit(1)
         respond({})
     if path.endswith("/git/refs/heads/promote-candidate") and method == "PATCH":
         state.setdefault("branch_patches", []).append(args)
@@ -902,6 +904,8 @@ def test_pinned_cycle_reconciles_an_advanced_branch() -> None:
 	assert f"object={PIN_ADVANCED}" in final["tag_objects_created"][1]
 	assert any("force=true" in patch for patch in final["tag_ref_patches"])
 	assert f"APPLY_ANALYSIS_SMOKE_SHA={PIN_ADVANCED}" in env_lines
+	# The dispatcher reads docs from the checkout, so it must be the candidate.
+	assert ["checkout", "--quiet", "--detach", PIN_ADVANCED] in final["git_calls"]
 
 
 def test_pinned_cycle_trap_deletes_tag_on_gate_failure() -> None:
@@ -938,3 +942,19 @@ def test_pinned_cycle_freeze_failure_runs_unpinned() -> None:
 	assert final["tag_deletes"] == 1
 	assert final["dispatches"][0][4] == "main"
 	assert "pinned=false" in proc.stdout
+
+
+def test_pinned_cycle_tag_ref_create_failure_deletes_tag_and_runs_unpinned() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"tag_ref_fail": True, "gate_runs_sequence": GATE_SUCCESS})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_PIN outcome=skipped reason=freeze_failed detail=tag_ref_create" in proc.stdout
+	assert final["tag_deletes"] == 1
+	assert final["dispatches"][0][4] == "main"
+
+
+def test_pinned_cycle_compare_failure_is_reported_as_unavailable() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"pin_branch_patch": "error", "pin_branch_tip": "0" * 40, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), TIP: {}}, "gate_runs_sequence": GATE_SUCCESS})
+	assert "PROMOTE_CYCLE_PIN outcome=skipped reason=freeze_failed detail=compare_unavailable" in proc.stdout
+	assert final["tag_deletes"] == 1

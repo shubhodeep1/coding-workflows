@@ -13707,6 +13707,8 @@ comprehensive_cycle_metadata_json() {
 # tag). Prints nothing and returns 0 when the tag does not exist; returns 2
 # when the lookup itself failed, so callers can tell "no tag yet" from "could
 # not read the tag" and never treat a transient API error as an absent tag.
+# Optional $1 names another tag (default `stable`); the pinned promotion gate
+# reads `promote-cycle-frozen` through it.
 comprehensive_stable_tag_commit() {
   # Optional $1: another tag name (the pinned cycle reads promote-cycle-frozen).
   local tag_name="${1:-stable}"
@@ -14006,7 +14008,7 @@ comprehensive_release_cycle_freeze() {
   local err_file outcome="deleted"
   err_file="$(mktemp)"
   if ! gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/promote-cycle-frozen" >/dev/null 2>"${err_file}"; then
-    if grep -qiE '404|422|not found|does not exist' "${err_file}"; then
+    if grep -qiE '(^|[^0-9])(404|422)([^0-9]|$)|not found|does not exist' "${err_file}"; then
       outcome="absent"
     else
       outcome="delete_failed"
@@ -14362,9 +14364,13 @@ handle_comprehensive_release_callback_if_needed() {
     case "${verification_outcome}" in
       DISPATCHED*)
         echo "COMPREHENSIVE_VERIFICATION_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome#DISPATCHED }"
+        local verifying_promotes="\`${DEFAULT_BRANCH_TRACKING:-main}\` as of this merge"
+        if [ "$(printf '%s' "${cycle_metadata_json}" | jq -r 'if .pinned == true then "true" else "false" end' 2>/dev/null || echo false)" = "true" ]; then
+          verifying_promotes="the pinned candidate (the smoke-tested commit the \`promote-candidate\` branch is frozen on; this merge rides the next cycle)"
+        fi
         post_tracking_comment "## 🔁 Verifying run dispatched
 
-The proving run merged. The next analysis doc (${verification_outcome#DISPATCHED doc=}) was handed to the orchestrator as the verifying run; its ready-to-merge point promotes \`${DEFAULT_BRANCH_TRACKING:-main}\` as of this merge to \`stable\`."
+The proving run merged. The next analysis doc (${verification_outcome#DISPATCHED doc=}) was handed to the orchestrator as the verifying run; its ready-to-merge point promotes ${verifying_promotes} to \`stable\`."
         tg_notify "Project #${TRACKING_NUM} (proving) merged; verifying run dispatched (${verification_outcome#DISPATCHED }). Promotion follows its ready-to-merge." "DEBUG"
         ;;
       *)
@@ -14373,6 +14379,8 @@ The proving run merged. The next analysis doc (${verification_outcome#DISPATCHED
 
 The proving run merged, but the verifying run could not be dispatched (${verification_outcome}). Nothing is promoted; the next daily promote cycle starts over once \`${DEFAULT_BRANCH_TRACKING:-main}\` carries a new code change and enough analysis docs exist."
         tg_notify "Project #${TRACKING_NUM} (proving) merged but the verifying run was not dispatched (${verification_outcome}); no promotion this cycle." "DEBUG"
+        # Terminal for a pinned cycle: no verifying gate will release the tag.
+        comprehensive_release_cycle_freeze "$(printf '%s' "${cycle_metadata_json}" | jq -r 'if .pinned == true then "true" else "false" end' 2>/dev/null || echo false)"
         ;;
     esac
   elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_marker')" = "true" ]; then
@@ -14460,6 +14468,8 @@ This tracking issue carries \`ai:comprehensive-test-pending\` but its only apply
     fi
   elif [ "${project_status}" = "failed" ] || [ "${project_status}" = "validation-failed" ]; then
     tg_notify "Comprehensive pipeline aborted for project #${TRACKING_NUM} (status: ${project_status}). Release workflow not dispatched." "DEBUG"
+    # A failed project of a pinned cycle ends the cycle: release its freeze tag.
+    comprehensive_release_cycle_freeze "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r 'if .pinned == true then "true" else "false" end' 2>/dev/null || echo false)"
 
     jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \

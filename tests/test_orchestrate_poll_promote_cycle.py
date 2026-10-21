@@ -660,3 +660,43 @@ def test_pinned_proving_completion_dispatches_verifying_run_on_the_candidate() -
 	assert f"APPLY_ANALYSIS_PROMOTE_SHA={SMOKE_SHA}" in env_lines
 	assert "APPLY_ANALYSIS_PINNED=true" in env_lines
 	assert f"GITHUB_SHA={PROMOTE_SHA}" in env_lines
+
+
+def test_pinned_proving_completion_releases_tag_when_verifying_not_dispatched() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		stub, _ = _stub_dispatcher(Path(tmp), outcome="skipped")
+		result = _run_poller(
+			state=_project_state(),
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_labels=[LABEL],
+			tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=SMOKE_SHA, smoke_sha=SMOKE_SHA, pinned="true"))],
+			issue_labels={10: ["ai:merged"]},
+			prs=[_open_final_pr()],
+			existing_branches=["main", "orchestrator/project-192"],
+			branch_ref_shas={"main": PROMOTE_SHA},
+			mock_store_extra={"tag_refs": {PIN_TAG: {"type": "tag", "sha": PIN_TAG_OBJECT}}},
+			env_overrides={"APPLY_ANALYSIS_DISPATCHER": str(stub)},
+		)
+	assert "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED" in result["stdout"]
+	assert result.get("deleted_tags") == [PIN_TAG]
+	assert "tag=deleted" in result["stdout"]
+
+
+def test_unpinned_proving_not_dispatched_leaves_the_freeze_tag_alone() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		stub, _ = _stub_dispatcher(Path(tmp), outcome="skipped")
+		result = _run_poller(
+			state=_project_state(),
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_labels=[LABEL],
+			tracking_comments=[_trusted(_marker("proving", cycle_baseline_sha=BASELINE_SHA, smoke_sha=SMOKE_SHA))],
+			issue_labels={10: ["ai:merged"]},
+			prs=[_open_final_pr()],
+			existing_branches=["main", "orchestrator/project-192"],
+			branch_ref_shas={"main": PROMOTE_SHA},
+			env_overrides={"APPLY_ANALYSIS_DISPATCHER": str(stub)},
+		)
+	assert "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED" in result["stdout"]
+	assert result.get("deleted_tags", []) == []
