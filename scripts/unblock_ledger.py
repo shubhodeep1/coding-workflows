@@ -251,7 +251,12 @@ LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 # no git remote, no GitHub token) cannot run. `validate --sandbox-check`
 # refuses verdict instructions that name one (fun-token-multi-chain#639).
 SANDBOX_INCOMPATIBLE_PATTERNS = (
-	("git_remote_op", re.compile(r"\bgit\s+(fetch|pull|clone|push|remote|ls-remote)\b", re.IGNORECASE)),
+	# `git remote` counts only as a command (a subcommand or flag follows), so
+	# prose such as "no git remote" from the judge prompt itself is not refused.
+	("git_remote_op", re.compile(
+		r"\bgit\s+(fetch|pull|clone|push|ls-remote)\b|\bgit\s+remote\s+(add|set-url|get-url|update|show|prune|remove|rm|rename|-v)\b",
+		re.IGNORECASE,
+	)),
 	("git_history_deepen", re.compile(r"--unshallow|--deepen", re.IGNORECASE)),
 	("origin_ref", re.compile(r"\borigin/[A-Za-z0-9._/-]+", re.IGNORECASE)),
 	("package_install", re.compile(

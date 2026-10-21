@@ -1586,7 +1586,7 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		fi
 		sandbox_reasked="true"
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=reasked reason=${sandbox_reason}"
-		UNBLOCK_JUDGE_REASK_NOTE="Your previous verdict was refused: its instructions need network or remote access (${sandbox_reason}). The implementer has none. Rewrite them using only the Implementer environment above."
+		UNBLOCK_JUDGE_REASK_NOTE="Your previous verdict was refused: its instructions need network or remote access (${sandbox_reason}). The implementer has none. Rewrite them using only the Implementer environment above, and do not name a git fetch/pull/push/clone, an origin/ ref, a package install, curl/wget or gh at all, not even to forbid it."
 		if ! unblock_ask_model; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=refused_after_reask reason=ask_failed"
 			return 0

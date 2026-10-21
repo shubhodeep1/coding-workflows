@@ -3717,6 +3717,15 @@ def test_sandbox_check_refuses_the_639_round_two_text_as_git_remote_op() -> None
 	assert str(raised.value) == "sandbox_incompatible:git_remote_op"
 
 
+def test_sandbox_check_accepts_prose_that_restates_the_environment() -> None:
+	text = "The implementer has no network and no git remote; read the baseline with git show isolated-base:<path>."
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+	assert ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)["instructions"] == text
+	for command in ("git remote add up x", "git remote -v", "git ls-remote origin"):
+		with pytest.raises(ledger.UsageError, match="^sandbox_incompatible:git_remote_op$"):
+			ledger.validate({"verdict": "retry_budget", "reason": "r", "instructions": command}, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
 def test_sandbox_check_accepts_the_isolated_base_rewrite() -> None:
 	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639_REWRITTEN}
 	assert ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)["instructions"] == ROUND2_639_REWRITTEN
