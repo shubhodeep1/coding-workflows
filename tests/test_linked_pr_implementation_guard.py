@@ -64,8 +64,35 @@ extract_fn() {
 """
 
 
+_DEFAULT_BRANCH_STUB = r"""
+_review_run_default_branch() {
+	if [ -n "${STUB_DEFAULT_BRANCH:-}" ]; then
+		printf '%s\n' "${STUB_DEFAULT_BRANCH}"
+		return 0
+	fi
+	return 1
+}
+"""
+
+
 def _guard_rc(issue_num: str, pr_json: str) -> int:
 	"""Source the extracted helpers and return the guard's exit code."""
+	return _guard_result(issue_num, pr_json)[0]
+
+
+def _guard_result(issue_num: str, pr_json: str, env: dict[str, str] | None = None) -> tuple[int, str]:
+	"""Source the extracted helpers and return (exit code, stderr).
+
+	The memoized default-branch helper is stubbed: STUB_DEFAULT_BRANCH set
+	prints it, unset or empty fails the read like an unreadable repository.
+	"""
+	run_env = {
+		"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
+		"STUB_DEFAULT_BRANCH": "main",
+	}
+	run_env["ORCH_IMPLEMENTS_MARKER_ENABLED"] = "true"
+	if env:
+		run_env.update(env)
 	with tempfile.TemporaryDirectory() as td:
 		tmp = Path(td)
 		extractor = _EXTRACT_FN.replace("__POLLER__", str(POLLER_SCRIPT))
@@ -74,6 +101,7 @@ def _guard_rc(issue_num: str, pr_json: str) -> int:
 		{extractor}
 		: > helpers.sh
 		extract_fn '_pr_json_closes_issue' >> helpers.sh
+		extract_fn '_pr_json_implements_issue' >> helpers.sh
 		extract_fn '_pr_json_is_issue_implementation_pr' >> helpers.sh
 		""")
 		r = _run_bash(bootstrap, cwd=tmp)
@@ -81,6 +109,8 @@ def _guard_rc(issue_num: str, pr_json: str) -> int:
 		body = (tmp / "helpers.sh").read_text(encoding="utf-8")
 		assert "_pr_json_closes_issue()" in body, "missing _pr_json_closes_issue in helpers.sh"
 		assert "_pr_json_is_issue_implementation_pr()" in body, "missing guard in helpers.sh"
+		assert "_pr_json_implements_issue()" in body, "missing marker helper in helpers.sh"
+		(tmp / "helpers.sh").write_text(body + _DEFAULT_BRANCH_STUB, encoding="utf-8")
 		pr_json_file = tmp / "pr.json"
 		pr_json_file.write_text(pr_json, encoding="utf-8")
 		script = textwrap.dedent(f"""
@@ -88,18 +118,19 @@ def _guard_rc(issue_num: str, pr_json: str) -> int:
 		source helpers.sh
 		_pr_json_is_issue_implementation_pr '{issue_num}' "$(cat pr.json)"
 		""")
-		r = _run_bash(script, cwd=tmp)
-		return r.returncode
+		run_env["RUNTIME_DIR"] = str(tmp)
+		r = _run_bash(script, cwd=tmp, env=run_env)
+		return r.returncode, r.stderr
 
 
-def _pr(head_ref: str, body: str) -> str:
+def _pr(head_ref: str, body: str, base_ref: str = "main") -> str:
 	return json.dumps({
 		"number": 3825,
 		"state": "closed",
 		"merged_at": "2026-08-25T15:18:27Z",
 		"body": body,
 		"head": {"ref": head_ref, "sha": "0" * 40},
-		"base": {"ref": "main"},
+		"base": {"ref": base_ref},
 	})
 
 
@@ -182,6 +213,7 @@ def _resolver_result(
 		{extractor}
 		: > helpers.sh
 		extract_fn '_pr_json_closes_issue' >> helpers.sh
+		extract_fn '_pr_json_implements_issue' >> helpers.sh
 		extract_fn '_pr_json_is_issue_implementation_pr' >> helpers.sh
 		extract_fn '_resolve_issue_implementation_pr' >> helpers.sh
 		""")
@@ -391,6 +423,85 @@ def test_resolver_rejection_outweighs_mixed_fetch_failures_in_either_order():
 		assert failure_reason == "not_implementation_pr", failure_reason
 		assert "reason=pr_fetch_failed" in err
 		assert "reason=not_implementation_pr" in err
+
+
+# ---------------------------------------------------------------------------
+# Explicit "Implements #N" marker (fun-token-multi-chain#639): a person's PR
+# that finishes a blocked orchestrator item links through this non-closing
+# marker, while a bare "Refs #N" stays rejected (#3817).
+# ---------------------------------------------------------------------------
+
+
+def test_implements_marker_on_project_base_is_accepted():
+	"""The fun-token-multi-chain#639 shape, with the marker added. No
+	default-branch read is needed for an orchestrator/project-<n> base."""
+	rc, err = _guard_result(
+		"639",
+		_pr("claude/amazing-galileo-e32yjo", "Implements #639", "orchestrator/project-579"),
+		{"STUB_DEFAULT_BRANCH": ""},
+	)
+	assert rc == 0, err
+	assert "LINKED_PR_IMPLEMENTS_MARKER issue=639 pr=3825 base=orchestrator/project-579 outcome=accepted" in err
+
+
+def test_implements_marker_repo_and_url_forms_are_accepted():
+	for body in (
+		"implements shubhodeep1/coding-workflows#639",
+		"Work done.\nImplements https://github.com/shubhodeep1/coding-workflows/issues/639\n",
+	):
+		rc, err = _guard_result("639", _pr("claude/x", body, "orchestrator/project-579"))
+		assert rc == 0, (body, err)
+		assert "outcome=accepted" in err
+
+
+def test_implements_marker_on_default_branch_base_is_accepted():
+	rc, err = _guard_result("639", _pr("claude/x", "Implements #639", "main"))
+	assert rc == 0, err
+	assert "base=main outcome=accepted" in err
+
+
+def test_refs_without_marker_is_rejected_silently():
+	rc, err = _guard_result("639", _pr("claude/x", "Refs #639", "orchestrator/project-579"))
+	assert rc == 1
+	assert "LINKED_PR_IMPLEMENTS_MARKER" not in err
+
+
+def test_implements_marker_for_other_number_or_repo_is_rejected():
+	for body in ("Implements #6390", "Implements other/repo#639", "Implements https://github.com/other/repo/issues/639"):
+		rc, err = _guard_result("639", _pr("claude/x", body, "orchestrator/project-579"))
+		assert rc == 1, (body, err)
+		assert "LINKED_PR_IMPLEMENTS_MARKER" not in err, body
+
+
+def test_implements_marker_on_feature_base_is_rejected():
+	rc, err = _guard_result("639", _pr("claude/x", "Implements #639", "feature/x"))
+	assert rc == 1
+	assert "base=feature/x outcome=rejected reason=base_not_target" in err
+
+
+def test_implements_marker_with_unreadable_default_branch_is_rejected():
+	rc, err = _guard_result(
+		"639",
+		_pr("claude/x", "Implements #639", "feature/x"),
+		{"STUB_DEFAULT_BRANCH": ""},
+	)
+	assert rc == 1
+	assert "outcome=rejected reason=default_branch_unknown" in err
+
+
+def test_conventional_head_and_closer_unchanged_with_marker_rules():
+	assert _guard_result("639", _pr("ai/issue-639", "Automated implementation.", "feature/x"))[0] == 0
+	assert _guard_result("639", _pr("claude/x", "Closes #639", "feature/x"))[0] == 0
+
+
+def test_implements_marker_kill_switch():
+	rc, err = _guard_result(
+		"639",
+		_pr("claude/x", "Implements #639", "orchestrator/project-579"),
+		{"ORCH_IMPLEMENTS_MARKER_ENABLED": "false"},
+	)
+	assert rc == 1
+	assert "LINKED_PR_IMPLEMENTS_MARKER" not in err
 
 
 # ---------------------------------------------------------------------------

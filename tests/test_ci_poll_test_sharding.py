@@ -1091,10 +1091,14 @@ class MergeTrainStepContractTest(unittest.TestCase):
 
 
 # Steps moved into single orchestrate-poll groups from tests-heal-plan-and-validation
-# (#7690). Without its guard such a step would run in all four groups.
+# (#7690) and from tests-hooks-and-orchestrator (budget-watch issue #7798).
+# Without its guard such a step would run in all four groups.
 GROUP_PINNED_STEPS = {
 	"Regression tests wired by the CI wiring guard (part 2)": 2,
 	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 3,
+	"Isolated agent container tests (codex_isolated_exec.sh)": 2,
+	"Prebuilt sandbox image tests": 2,
+	"Review sandbox image build retry tests": 2,
 }
 POLL_JOB_UNGUARDED_STEPS = {
 	"Checkout repository",
@@ -1246,6 +1250,77 @@ class MovedPollGroupTwoStepsContractTest(unittest.TestCase):
 				with self.subTest(step=name, module=module):
 					self.assertIn(module, steps[0][1]["run"])
 					self.assertTrue((REPO_ROOT / module).is_file(), module)
+
+
+# Steps moved out of tests-hooks-and-orchestrator, which took 15m06s of its 20
+# minutes (run 39575950300, budget-watch issue #7798): step name -> (owning job
+# id, module paths or tool directory its body names). The group-2 steps of the
+# same move are in GROUP_PINNED_STEPS.
+HOOKS_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
+HOOKS_NODE_SETUP_STEP = "Set up Node 22 for the claude-pool-broker Worker tests"
+HOOKS_VITEST_STEP = "claude-pool-broker Worker tests (vitest)"
+MOVED_HOOKS_JOB_STEPS = {
+	HOOKS_NODE_SETUP_STEP: ("tests-release-and-log-analysis", ()),
+	HOOKS_VITEST_STEP: ("tests-release-and-log-analysis", ("tools/claude-pool-broker",)),
+}
+MOVED_HOOKS_GROUP_TWO_STEPS = (
+	"Isolated agent container tests (codex_isolated_exec.sh)",
+	"Prebuilt sandbox image tests",
+	"Review sandbox image build retry tests",
+)
+
+
+class MovedHooksJobStepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-hooks-and-orchestrator run once, in one job (#7798)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_job(self) -> None:
+		for name, (job_id, _paths) in MOVED_HOOKS_JOB_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_HOOKS_JOB_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_vitest_step_keeps_its_working_directory(self) -> None:
+		steps = self.owning_steps(HOOKS_VITEST_STEP)
+		self.assertEqual(len(steps), 1)
+		step = steps[0][1]
+		self.assertEqual(step["working-directory"], "tools/claude-pool-broker")
+		self.assertIn("npx vitest run", step["run"])
+		for path in MOVED_HOOKS_JOB_STEPS[HOOKS_VITEST_STEP][1]:
+			self.assertTrue((REPO_ROOT / path).is_dir(), path)
+
+	def test_node_setup_runs_before_vitest_in_the_same_job(self) -> None:
+		job_id = MOVED_HOOKS_JOB_STEPS[HOOKS_VITEST_STEP][0]
+		names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+		self.assertLess(names.index(HOOKS_NODE_SETUP_STEP), names.index(HOOKS_VITEST_STEP))
+		setup = self.jobs()[job_id]["steps"][names.index(HOOKS_NODE_SETUP_STEP)]
+		self.assertEqual(str(setup["with"]["node-version"]), "22")
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[HOOKS_SOURCE_JOB_ID]["steps"]}
+		for name in (*MOVED_HOOKS_JOB_STEPS, *MOVED_HOOKS_GROUP_TWO_STEPS):
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_group_two_steps_are_registered_as_group_pinned(self) -> None:
+		for name in MOVED_HOOKS_GROUP_TWO_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), 2)
 
 
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"

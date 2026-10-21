@@ -1593,7 +1593,7 @@ excerpts. In `scripts/workflow_failure_heal_intake.sh`:
 - A verified identity is required whatever `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` says (`identity_required`), and the `@<sha>` of its `job_workflow_ref` must equal `wrapper_sha` (`release_mismatch`).
 - Reports from this repository are skipped (`skip reason=synced_security_self_repo`).
 - After binding, `_synced_security_finding_intake` runs and the script exits, so no run log is read and no diagnosis model runs. It fetches the release commit and checks `compare/<sha>...stable` (`ahead` or `identical`, else `release_not_on_stable`; one call per report). It builds `build_sync_manifest.py managed-digests` from this trusted checkout under `env -i` / `python3 -I -B` (`release_unavailable` on failure), and requires every finding's file to be a key of that list (`unmanaged_path`).
-- `synced-security-groups` groups findings by `sha256(path|category|line//bucket)` (`HEAL_SYNCED_SECURITY_LINE_BUCKET`, default 25, minimum 1). Each group runs the unchanged `budget` decision against this repository's heal issues. A duplicate gets `compose-synced-security-occurrence`, an escalation labels the prior issue, and an open renders a heal scope from the mapped `workflow-templates/` source paths and the reporter run (`skip reason=scope_unresolved` when none exists at HEAD). The open then passes the unchanged scope guard (`skip reason=scope_guard_disabled` while it is off) before `gh issue create`. Each opened issue is added to the in-memory list, so later groups see it.
+- `synced-security-groups` groups findings by `sha256(path|category|line//bucket)` (`HEAL_SYNCED_SECURITY_LINE_BUCKET`, default 25, minimum 1, maximum 1000000). Each group runs the unchanged `budget` decision against this repository's heal issues. A duplicate gets `compose-synced-security-occurrence`, an escalation labels the prior issue, and an open renders a heal scope from the mapped `workflow-templates/` source paths and the reporter run (`skip reason=scope_unresolved` when none exists at HEAD). The open then passes the unchanged scope guard (`skip reason=scope_guard_disabled` while it is off) before `gh issue create`. Each opened issue is added to the in-memory list, so later groups see it.
 - The run logs `received kind=synced_security_finding findings=N opened=X occurrences=Y skipped=Z`: N counts findings, the other three count fingerprint groups. It writes the same to the step summary and sends one Telegram message (WARNING when a group was skipped for budget, lineage or scope, else DEBUG); a compose or create failure ends the run red.
 - `_heal_fetch_issue_list` and `_heal_intake_scope_guard_is_on` are shared helpers, and `_git_fetch_diagnosis_ref` and the scope-guard functions are now defined ahead of this branch.
 
@@ -4788,6 +4788,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/orchestrate_poll.yml
 .github/workflows/plan.yml
 .github/workflows/pr6576-shard-followup.yml
+.github/workflows/promote-candidate-follow.yml
 .github/workflows/promote-main-to-stable.yml
 .github/workflows/propagate-consumer-secrets.yml
 .github/workflows/publish-sandbox-images.yml

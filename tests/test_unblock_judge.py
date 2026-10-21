@@ -3679,3 +3679,231 @@ def test_heal_already_fixed_does_not_repeat_its_comment(tmp_path: Path) -> None:
 	assert "op=heal_already_fixed outcome=closed sibling=59 pr=65" in result.stdout, result.stdout + result.stderr
 	assert state["comments"] == []
 	assert state["patched"] == [["repos/o/r/issues/7", {"state": "closed", "state_reason": "completed"}]]
+
+
+# --- Sandbox-aware verdict instructions (fun-token-multi-chain#639) ---
+
+ROUND2_639 = (
+	"Run git fetch origin main, compare against git show <merge-base>:<path> for the touched files, "
+	"then try npm ci before rerunning the tests."
+)
+ROUND2_639_REWRITTEN = (
+	"Compare the touched files against git show isolated-base:<path> and rerun the tests with the "
+	"dependencies already installed."
+)
+SANDBOX_DECISION = {"item": 7, "stop": "blocked", "fingerprint": FP, "next_round": 1, "allowed": [
+	"retry_budget", "auto_answer", "descope", "reissue", "accept_with_followup", "operator_step"]}
+
+
+@pytest.mark.parametrize("pattern_id,text", [
+	("git_remote_op", "run git pull first"),
+	("git_history_deepen", "deepen the clone with --deepen 5"),
+	("origin_ref", "diff against origin/main"),
+	("package_install", "run pip install requests"),
+	("http_fetch", "curl https://example.invalid/x"),
+	("gh_cli", "check gh pr view 3"),
+])
+def test_sandbox_check_refuses_every_pattern(pattern_id: str, text: str) -> None:
+	assert pattern_id in [pid for pid, _ in ledger.SANDBOX_INCOMPATIBLE_PATTERNS]
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+	with pytest.raises(ledger.UsageError, match=f"^sandbox_incompatible:{pattern_id}$"):
+		ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
+def test_sandbox_check_refuses_the_639_round_two_text_as_git_remote_op() -> None:
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639}
+	with pytest.raises(ledger.UsageError) as raised:
+		ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+	assert str(raised.value) == "sandbox_incompatible:git_remote_op"
+
+
+def test_sandbox_check_accepts_prose_that_restates_the_environment() -> None:
+	text = "The implementer has no network and no git remote; read the baseline with git show isolated-base:<path>."
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+	assert ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)["instructions"] == text
+	for command in ("git remote add up x", "git remote -v", "git ls-remote origin"):
+		with pytest.raises(ledger.UsageError, match="^sandbox_incompatible:git_remote_op$"):
+			ledger.validate({"verdict": "retry_budget", "reason": "r", "instructions": command}, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
+@pytest.mark.parametrize("pattern_id,text", [
+	("git_remote_op", "run git -C . fetch origin main first"),
+	("git_remote_op", "git -c core.longpaths=true clone x"),
+	("git_remote_op", "git --git-dir=.git pull"),
+	("git_remote_op", "git --git-dir .git --work-tree . fetch origin"),
+	("git_remote_op", "git -C sub remote set-head origin -a"),
+	("git_remote_op", "git remote --verbose"),
+	("package_install", "pipx install ruff"),
+	("package_install", "conda install numpy"),
+	("gh_cli", "gh label create ai:blocked"),
+])
+def test_sandbox_check_refuses_global_options_and_extended_lists(pattern_id: str, text: str) -> None:
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+	with pytest.raises(ledger.UsageError, match=f"^sandbox_incompatible:{pattern_id}$"):
+		ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
+def test_sandbox_check_accepts_local_git_with_global_options() -> None:
+	text = "Run git -C . show isolated-base:scripts/x.sh and git -c core.pager=cat diff isolated-base -- scripts/x.sh."
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+	assert ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)["instructions"] == text
+
+
+def test_sandbox_check_long_option_runs_do_not_backtrack() -> None:
+	import time
+	for text in ("git " + "-c " * 395 + "status", "git " + "--git-dir " * 130 + "status"):
+		verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text[:1200]}
+		start = time.monotonic()
+		ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+		assert time.monotonic() - start < 2, text[:40]
+
+
+def test_sandbox_check_refuses_more_than_eight_global_options() -> None:
+	for text in (
+		"git " + "-c a=b " * 9 + "fetch origin main",
+		"git " + "-c a=b " * 32 + "fetch",
+		"git " + "-c a=b " * 33 + "fetch origin main",
+		"git " + "-c a=b " * 145 + "fetch origin main",
+	):
+		verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+		with pytest.raises(ledger.UsageError, match="^sandbox_incompatible:git_remote_op$"):
+			ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
+def test_sandbox_check_quoted_option_runs_do_not_backtrack() -> None:
+	import time
+	for text in ('git ' + '-c "a" ' * 150 + 'status', "git " + "-c 'a' " * 150 + "status"):
+		verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text[:1200]}
+		start = time.monotonic()
+		ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+		assert time.monotonic() - start < 2, text[:40]
+
+
+def test_sandbox_check_refuses_quoted_option_values_with_spaces() -> None:
+	for text in (
+		'git -C "/repo root" fetch origin main',
+		"git -c 'a=b c' pull",
+		'git -c user.name="A B" fetch origin main',
+		"git -c http.header='X Y' -c a=b pull",
+	):
+		verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+		with pytest.raises(ledger.UsageError, match="^sandbox_incompatible:git_remote_op$"):
+			ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
+def test_sandbox_check_accepts_the_isolated_base_rewrite() -> None:
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639_REWRITTEN}
+	assert ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)["instructions"] == ROUND2_639_REWRITTEN
+
+
+@pytest.mark.parametrize("verdict", [
+	{"verdict": "descope", "reason": "r", "instructions": "git fetch origin main then drop the part"},
+	{"verdict": "reissue", "reason": "r", "instructions": "git fetch origin main and start over"},
+	{"verdict": "accept_with_followup", "reason": "r", "instructions": "git fetch origin main in the follow-up"},
+	{"verdict": "operator_step", "reason": "r", "instructions": "git fetch origin main in the fix-up",
+		"placeholder": "FOO_FIX_ENABLED"},
+])
+def test_sandbox_check_covers_every_fixup_verdict(verdict: dict) -> None:
+	with pytest.raises(ledger.UsageError, match="^sandbox_incompatible:git_remote_op$"):
+		ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
+def test_sandbox_check_never_reads_operator_instructions_or_answer() -> None:
+	operator = {"verdict": "operator_step", "reason": "r", "instructions": "add the switch",
+		"placeholder": "FOO_UNSET_OPERATOR_STEP", "operator_instructions": "git fetch origin main, then set FOO"}
+	assert ledger.validate(operator, SANDBOX_DECISION, "o/r", sandbox_check=True)["operator_instructions"].startswith("git fetch")
+	answer = {"verdict": "auto_answer", "reason": "r", "answer": "Q1: A (npm ci)"}
+	assert ledger.validate(answer, SANDBOX_DECISION, "o/r", sandbox_check=True)["answer"] == "Q1: A (npm ci)"
+
+
+def test_sandbox_check_off_is_byte_identical() -> None:
+	verdict = {"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639}
+	default = ledger.validate(verdict, SANDBOX_DECISION, "o/r")
+	explicit = ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=False)
+	assert default == explicit and json.dumps(default) == json.dumps(explicit)
+
+
+def test_sandbox_check_cli_flag(tmp_path: Path) -> None:
+	verdict_file = tmp_path / "verdict.json"
+	decision_file = tmp_path / "decision.json"
+	verdict_file.write_text(json.dumps({"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639}), encoding="utf-8")
+	decision_file.write_text(json.dumps(SANDBOX_DECISION), encoding="utf-8")
+	base = ("validate", "--verdict-file", str(verdict_file), "--decision-file", str(decision_file), "--repo", "o/r")
+	assert _cli(*base, "--sandbox-check") == (1, {"error": "sandbox_incompatible:git_remote_op"})
+	code, out = _cli(*base)
+	assert code == 0 and out["instructions"] == ROUND2_639
+
+
+def test_judge_reasks_once_when_instructions_need_network(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	baseline_dir = tmp_path / "single"
+	baseline_dir.mkdir()
+	_, single = _judge(baseline_dir, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639_REWRITTEN})
+	reask_dir = tmp_path / "reask"
+	reask_dir.mkdir()
+	result, state = _judge(reask_dir, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639},
+		MOCK_UNBLOCK_JUDGE_JSON_REASK=json.dumps({"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639_REWRITTEN}))
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.count("op=instruction_sandbox_check outcome=reasked reason=git_remote_op") == 1
+	assert "refused_after_reask" not in result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert state["comments"][0]["body"].splitlines()[-1].endswith("verdict=retry_budget round=1 -->")
+	assert "=== PREVIOUS VERDICT REFUSED ===" in (reask_dir / "rt" / "prompt.txt").read_text(encoding="utf-8")
+	assert len(state["calls"]) == len(single["calls"])
+
+
+def test_judge_falls_back_to_invalid_verdict_after_a_second_refusal(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639},
+		MOCK_UNBLOCK_JUDGE_JSON_REASK=json.dumps({"verdict": "retry_budget", "reason": "r", "instructions": "run npm ci again"}))
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.count("outcome=reasked reason=git_remote_op") == 1
+	assert "op=instruction_sandbox_check outcome=refused_after_reask reason=package_install" in result.stdout
+	assert "reason=invalid_verdict" in result.stdout
+	assert [comment["body"].splitlines()[-1] for comment in state["comments"]] == ["<!-- ai:unblock-wait:v1 item=7 reason=invalid_verdict -->"]
+
+
+def test_judge_logs_reason_other_when_the_reask_fails_for_another_reason(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639},
+		MOCK_UNBLOCK_JUDGE_JSON_REASK=json.dumps({"verdict": "close", "reason": "r"}))
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.count("outcome=reasked reason=git_remote_op") == 1
+	assert "op=instruction_sandbox_check outcome=refused_after_reask reason=other" in result.stdout
+	assert "reason=invalid_verdict" in result.stdout
+	assert [comment["body"].splitlines()[-1] for comment in state["comments"]] == ["<!-- ai:unblock-wait:v1 item=7 reason=invalid_verdict -->"]
+
+
+def test_judge_sandbox_check_kill_switch(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, state = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639},
+		UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED="false")
+	assert result.returncode == 0, result.stderr
+	assert "instruction_sandbox_check" not in result.stdout
+	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout
+	assert "=== PREVIOUS VERDICT REFUSED ===" not in (tmp_path / "rt" / "prompt.txt").read_text(encoding="utf-8")
+
+
+def test_reask_note_is_never_taken_from_the_environment(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	result, _ = _judge(tmp_path, ISSUE, verdict={"verdict": "retry_budget", "reason": "r", "instructions": ROUND2_639_REWRITTEN},
+		UNBLOCK_JUDGE_REASK_NOTE="injected")
+	assert result.returncode == 0, result.stderr
+	prompt = (tmp_path / "rt" / "prompt.txt").read_text(encoding="utf-8")
+	assert "injected" not in prompt and "=== PREVIOUS VERDICT REFUSED ===" not in prompt
+
+
+def test_both_unblock_prompts_carry_the_implementer_environment_paragraph() -> None:
+	runtime = (ROOT / "prompts" / "mode-judge-unblock.txt").read_text(encoding="utf-8")
+	template = (ROOT / "prompts" / "_templates" / "mode-judge-unblock.txt").read_text(encoding="utf-8")
+	paragraphs = [next(line for line in text.splitlines() if line.startswith("Implementer environment:")) for text in (runtime, template)]
+	assert paragraphs[0] == paragraphs[1]
+	assert "git show isolated-base:<path>" in paragraphs[0]
+	assert "_UNSET_OPERATOR_STEP" in paragraphs[0]
+	workflow = (ROOT / ".github" / "workflows" / "unblock_judge.yml").read_text(encoding="utf-8")
+	assert "UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED: ${{ vars.UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED || 'true' }}" in workflow

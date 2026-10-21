@@ -23,11 +23,13 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # inline prompt (230 -> 241 lines); the pins below include it.
 # Issue #7724 added the 4-line "notes must not name another path" rule to
 # item 1 `## Files likely to change` (241 -> 245 lines).
+# Issue #7772 added the 11-line "Default-branch reference" rule about the
+# `isolated-base` sandbox branch (245 -> 256 lines).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"e2e2e8e6ca492208ea4f7ac4a507b91860f30907eeeca7c2a12dd83f7581ab7b"
+	"0008cf9d9af4dbc012ad0552f2c2126d352b8cce6566845c37ad9a4044163383"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 15_938
-PRE_EXTRACTION_PROMPT_LINES = 245
+PRE_EXTRACTION_PROMPT_BYTES = 16_693
+PRE_EXTRACTION_PROMPT_LINES = 256
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
@@ -297,6 +299,9 @@ esac
 	)
 	environment.pop("PLAN_ENGINE", None)
 	environment.pop("PLANNING_REF_MISMATCH", None)
+	environment.pop("PLAN_ISOLATED_BASE_BRANCH", None)
+	environment.pop("PLAN_ISOLATED_BASE_ENABLED", None)
+	environment.pop("CODEX_ISOLATED_GIT_BASE_REF", None)
 	if planning_ref_mismatch is not None:
 		environment["PLANNING_REF_MISMATCH"] = planning_ref_mismatch
 	if engine:
@@ -500,7 +505,8 @@ def test_claude_engine_runs_claude_run_and_not_codex() -> None:
 	runtime_dir = root / "runtime"
 
 	assert result.returncode == 0, result.stderr
-	assert "Codex planning attempt 1/3 (engine claude)..." in result.stdout
+	assert "Claude planning attempt 1/3..." in result.stdout
+	assert "Codex planning" not in result.stdout
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "claude plan output\n"
 	assert _read_lines(runtime_dir / "claude-run.log") == [
 		f"PLAN|{runtime_dir / 'codex_prompt.txt'}|{runtime_dir / 'codex_output.txt'}|{root}|primary/model|high"
@@ -516,6 +522,9 @@ def test_claude_unavailable_falls_back_to_the_unchanged_codex_call() -> None:
 
 	assert result.returncode == 0, result.stderr
 	assert "AI_ENGINE_FALLBACK role=PLAN reason=no_credential" in result.stderr
+	# The attempt starts on Claude; once it falls back the log names Codex.
+	assert "Claude planning attempt 1/3..." in result.stdout
+	assert "Codex planning succeeded on attempt 1 (1 lines of output)." in result.stdout
 	assert len(_read_lines(runtime_dir / "claude-run.log")) == 1
 	assert _read_lines(runtime_dir / "codex-args.log") == [CODEX_ARGS]
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "primary plan output\n"
@@ -527,7 +536,7 @@ def test_a_claude_crash_retries_on_claude_and_never_reaches_codex() -> None:
 	runtime_dir = root / "runtime"
 
 	assert result.returncode == 1
-	assert "Codex exited with code 1 on attempt 1." in result.stdout
+	assert "Claude exited with code 1 on attempt 1." in result.stdout
 	assert len(_read_lines(runtime_dir / "claude-run.log")) == 3
 	assert not (runtime_dir / "codex-args.log").exists()
 
@@ -833,6 +842,118 @@ def test_clarify_pool_token_action_pin_keeps_existing_package_json() -> None:
 		assert result.returncode == 0, result.stderr
 		assert "reason=action_dir_unavailable" in result.stdout
 		assert not (target / "package.json").exists()
+
+
+ISOLATED_BASE_BEGIN = "# BEGIN plan isolated base (#7772)\n"
+ISOLATED_BASE_END = "# END plan isolated base (#7772)\n"
+
+
+def _isolated_base_block() -> str:
+	runner_text = PLAN_RUNNER.read_text(encoding="utf-8")
+	start = runner_text.index(ISOLATED_BASE_BEGIN)
+	end = runner_text.index(ISOLATED_BASE_END, start) + len(ISOLATED_BASE_END)
+	return runner_text[start:end]
+
+
+def _run_isolated_base(
+	branch: str | None,
+	enabled: str | None = None,
+	fetch_rc: int = 0,
+	inherited_ref: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str, list[str]]:
+	real_git = shutil.which("git")
+	assert real_git, "git is required for check-ref-format"
+	with tempfile.TemporaryDirectory(prefix="plan-isolated-base-") as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		fetch_log = root / "fetch.log"
+		_write_executable(
+			bin_dir / "git",
+			f"""#!/usr/bin/env bash
+if [ "$1" = fetch ]; then
+  printf '%s\\n' "$*" >> "{fetch_log}"
+  exit "${{STUB_GIT_FETCH_RC:-0}}"
+fi
+exec "{real_git}" "$@"
+""",
+		)
+		block = root / "block.sh"
+		block.write_text(_isolated_base_block(), encoding="utf-8")
+		env = _clean_env(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", STUB_GIT_FETCH_RC=str(fetch_rc))
+		for key in ("PLAN_ISOLATED_BASE_BRANCH", "PLAN_ISOLATED_BASE_ENABLED", "CODEX_ISOLATED_GIT_BASE_REF"):
+			env.pop(key, None)
+		if branch is not None:
+			env["PLAN_ISOLATED_BASE_BRANCH"] = branch
+		if enabled is not None:
+			env["PLAN_ISOLATED_BASE_ENABLED"] = enabled
+		if inherited_ref is not None:
+			env["CODEX_ISOLATED_GIT_BASE_REF"] = inherited_ref
+		result = subprocess.run(
+			["bash", "-c", f'set -euo pipefail; source "{block}"; plan_prepare_isolated_base; printf "REF=%s\\n" "${{CODEX_ISOLATED_GIT_BASE_REF-}}"'],
+			cwd=root, env=env, capture_output=True, text=True, check=False,
+		)
+		fetches = fetch_log.read_text(encoding="utf-8").splitlines() if fetch_log.exists() else []
+		ref_lines = [line for line in result.stdout.splitlines() if line.startswith("REF=")]
+		return result, ref_lines[-1] if ref_lines else "", fetches
+
+
+def test_isolated_base_fetch_success_exports_ref() -> None:
+	result, ref, fetches = _run_isolated_base("main")
+	assert result.returncode == 0, result.stderr
+	assert ref == "REF=refs/codex-isolated/base"
+	assert "CODEX_ISOLATION base_branch=main outcome=fetched role=plan" in result.stdout
+	assert fetches == ["fetch --no-tags --depth=1 origin +refs/heads/main:refs/codex-isolated/base"]
+
+
+def test_isolated_base_fetch_failure_warns_and_leaves_unset() -> None:
+	result, ref, fetches = _run_isolated_base("main", fetch_rc=1, inherited_ref="refs/stale")
+	assert result.returncode == 0, result.stderr
+	assert ref == "REF="
+	assert "::warning::CODEX_ISOLATION base_branch=main outcome=fetch_failed role=plan" in result.stdout
+	assert len(fetches) == 1
+
+
+def test_isolated_base_disabled_skips() -> None:
+	result, ref, fetches = _run_isolated_base("main", enabled="false")
+	assert result.returncode == 0, result.stderr
+	assert ref == "REF="
+	assert fetches == []
+	assert "::notice::CODEX_ISOLATION base_branch=unset_or_invalid outcome=skipped role=plan" in result.stdout
+
+
+def test_isolated_base_invalid_branch_skips() -> None:
+	for branch in ("a..b", "", None, "-x", "a b"):
+		result, ref, fetches = _run_isolated_base(branch)
+		assert result.returncode == 0, (branch, result.stderr)
+		assert ref == "REF=", branch
+		assert fetches == [], branch
+		assert "outcome=skipped role=plan" in result.stdout, branch
+
+
+def test_plan_workflow_step_carries_isolated_base_env() -> None:
+	step = _workflow_step(PLAN_WORKFLOW.read_text(encoding="utf-8"), "Run Codex planning")
+	assert "          PLAN_ISOLATED_BASE_BRANCH: ${{ github.event.repository.default_branch }}\n" in step
+	assert "          PLAN_ISOLATED_BASE_ENABLED: ${{ vars.PLAN_ISOLATED_BASE_ENABLED || 'true' }}\n" in step
+
+
+def test_isolated_base_runs_before_the_first_sandbox_call() -> None:
+	runner_text = PLAN_RUNNER.read_text(encoding="utf-8")
+	call = runner_text.index(ISOLATED_BASE_END + "plan_prepare_isolated_base\n")
+	assert call < runner_text.index("claude_run PLAN")
+	assert call < runner_text.index('bash "${CODEX_ISOLATED_EXEC}" run --mode read-only')
+
+
+def test_plan_prompts_mention_isolated_base() -> None:
+	assert "git show\n  isolated-base:<path>" in _inline_prompt(PLAN_RUNNER.read_text(encoding="utf-8"))
+	paragraphs = []
+	for prompt in (REPO_ROOT / "prompts" / "mode-plan.txt", REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		text = prompt.read_text(encoding="utf-8")
+		start = text.index("Default-branch reference:")
+		end = text.index("Output contract — produce a plan covering", start)
+		paragraphs.append(text[start:end])
+		assert "Never plan" in text[start:end]
+	assert paragraphs[0] == paragraphs[1]
 
 
 def main() -> int:
