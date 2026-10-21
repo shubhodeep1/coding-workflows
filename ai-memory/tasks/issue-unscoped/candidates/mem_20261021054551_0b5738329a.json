@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal_synced_security.py:213-217 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Three blank lines separate test_groups_merge_findings_of_one_bucket and test_line_bucket_is_capped_so_groups_stay_loadable instead of the PEP 8 standard two.\n  WHY: The reviewer rated it NIT; it is cosmetic only and does not affect runtime behavior or pytest discovery.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal_synced_security.py:213-217 | severity=NIT | confidence=4\n  PROBLEM: Three blank lines separate the two test functions instead of the PEP 8 standard two blank lines.\n  WHY: The extra blank line is cosmetic only and does not affect runtime behavior; pytest still discovers and runs both functions correctly.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "119092afc091269e9984ec5e636fbcd8fb415d0b87ad2bca02e30b6d4ab656ee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7780,
+    "run_id": "39548085859",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39548085859",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261021054551_0b5738329a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7780,
+    "run_id": "39548085859"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-21T05:45:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
