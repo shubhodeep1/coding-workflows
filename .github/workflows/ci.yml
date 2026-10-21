@@ -854,6 +854,125 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
 
+      # History: the step moved out of this job (15m52s of its 20 minutes, run
+      # 39038112755, budget-watch issue #7575) into orchestrate-poll group 1.
+      # Before that it moved here from tests-release-and-log-analysis (20m16s,
+      # run 39030079651, #7560), and earlier out of this job when it measured
+      # 19.6 of its 20 minutes (2026-10-09). In orchestrate-poll it ran in
+      # group 1 only, because group 0 carries the fast-fail subset and the
+      # single-file modules. Budget-watch issue #7579: group 1 then took
+      # 15m13s of its 20 minutes (run 39047759102), and the step was split in
+      # place there, the way the workflow failure heal step was (#7387):
+      # tests/test_review_merge_train.py runs in 3 local shards (split by test
+      # function, parametrized cases together) and the five small modules run
+      # in one more process beside them, on the runner's 4 cores. Every test
+      # seeds its own temp dirs and fake gh, and each shard is a separate
+      # pytest process. Step
+      # times here are estimates from test counts and earlier changelog
+      # figures, not measurements of run 39047759102. The step seeds its own
+      # git repositories and needs no Node or prepared .claude/ live copies.
+      # Moved back from orchestrate-poll group 1, which took 15m42s of its 20
+      # minutes (run 39526504422, budget-watch issue #7766); sharded since
+      # #7579, so its estimated cost here is about 1.5 to 2 minutes. This job
+      # has no matrix, so the step no longer carries a group guard.
+      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
+        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
+        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
+        # PR per release tick), plus _parse_reset_header's Retry-After
+        # precedence, gh_retry's per-attempt stdout buffering (#5495) and
+        # the non-retryable HTTP 400/401 classification in
+        # scripts/gh_helpers.sh, and PR comment JSON kept out of jq argv
+        # (#7658).
+        run: |
+          set -euo pipefail
+          mt_shards=3
+          mt_module="tests/test_review_merge_train.py"
+          rm -f /tmp/merge_train_collect.log /tmp/merge_train_tests.txt \
+            /tmp/merge_train_shard_*.txt /tmp/merge_train_shard_*.log /tmp/merge_train_shard_*.rc \
+            /tmp/merge_train_rest.log /tmp/merge_train_rest.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${mt_module}" \
+            > /tmp/merge_train_collect.log 2>&1 \
+            || { cat /tmp/merge_train_collect.log; echo "::error::Test collection failed for ${mt_module}."; exit 1; }
+          { grep -F "${mt_module}::" /tmp/merge_train_collect.log || true; } \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/merge_train_tests.txt
+          mt_test_count="$(wc -l < /tmp/merge_train_tests.txt | tr -d '[:space:]')"
+          if ! [ "${mt_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from ${mt_module}."
+            exit 1
+          fi
+          echo "${mt_module}: ${mt_test_count} test functions across ${mt_shards} shards"
+          mt_pids=()
+          for mt_shard in $(seq 0 "$((mt_shards - 1))"); do
+            awk -v n="${mt_shard}" -v total="${mt_shards}" 'NR % total == n' \
+              /tmp/merge_train_tests.txt > "/tmp/merge_train_shard_${mt_shard}.txt"
+            [ -s "/tmp/merge_train_shard_${mt_shard}.txt" ] || continue
+            (
+              mapfile -t mt_shard_tests < "/tmp/merge_train_shard_${mt_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${mt_shard_tests[@]}" > "/tmp/merge_train_shard_${mt_shard}.log" 2>&1
+              echo "$?" > "/tmp/merge_train_shard_${mt_shard}.rc"
+            ) &
+            mt_pids+=("$!")
+          done
+          (
+            set +e
+            PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+              tests/test_gh_helpers_parse_reset_header.py \
+              tests/test_gh_retry_stdout_isolation.py \
+              tests/test_gh_retry_permanent_auth_failures.py \
+              tests/test_gh_api_retry.py \
+              tests/test_gh_api_retry_py.py \
+              tests/test_gh_pr_comments_argv_limit.py > /tmp/merge_train_rest.log 2>&1
+            echo "$?" > /tmp/merge_train_rest.rc
+          ) &
+          mt_pids+=("$!")
+          # Reap every process before judging any, so none is left orphaned.
+          for mt_pid in "${mt_pids[@]}"; do
+            wait "${mt_pid}" || true
+          done
+          mt_ids=()
+          for mt_shard in $(seq 0 "$((mt_shards - 1))"); do
+            [ -s "/tmp/merge_train_shard_${mt_shard}.txt" ] || continue
+            mt_ids+=("${mt_shard}")
+          done
+          mt_ids+=("rest")
+          mt_failed=()
+          for mt_id in "${mt_ids[@]}"; do
+            if [ "${mt_id}" = "rest" ]; then
+              mt_stem="/tmp/merge_train_rest"
+            else
+              mt_stem="/tmp/merge_train_shard_${mt_id}"
+            fi
+            echo "::group::merge-train step shard ${mt_id}"
+            cat "${mt_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            mt_rc="$(cat "${mt_stem}.rc" 2>/dev/null || echo 1)"
+            case "${mt_rc}" in
+              ''|*[!0-9]*) mt_rc=1 ;;
+            esac
+            if [ "${mt_rc}" != "0" ]; then
+              mt_failed+=("${mt_id}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for mt_id in "${mt_failed[@]}"; do
+            if [ "${mt_id}" = "rest" ]; then
+              mt_stem="/tmp/merge_train_rest"
+            else
+              mt_stem="/tmp/merge_train_shard_${mt_id}"
+            fi
+            echo "--- merge-train step shard ${mt_id} failed; last 40 log lines:"
+            { tail -n 40 "${mt_stem}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#mt_failed[@]}" -gt 0 ]; then
+            echo "::error::merge-train step shards failed: ${mt_failed[*]}"
+            exit 1
+          fi
+
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -2227,126 +2346,6 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
           fi
 
-      # Moved from tests-hooks-and-orchestrator, which took 15m52s of its 20
-      # minutes on main (run 39038112755, budget-watch issue #7575). Before
-      # that it moved there from tests-release-and-log-analysis (20m16s, run
-      # 39030079651, #7560), and earlier out of tests-hooks-and-orchestrator
-      # when it measured 19.6 of its 20 minutes (2026-10-09). The single test
-      # jobs record 12.8 minutes to 20m16s while poll groups record about 5
-      # minutes (#4707); group 0 already carries the fast-fail subset and the
-      # single-file modules, so the step runs in group 1 only, once per CI run.
-      # Budget-watch issue #7579: group 1 then took 15m13s of its 20 minutes
-      # (run 39047759102). Every other job was estimated at or above the
-      # 15-minute warning line with this step added, and the step had already
-      # moved three times, so it stays here and is split in place instead, the
-      # way the workflow failure heal step was (#7387):
-      # tests/test_review_merge_train.py runs in 3 local shards (split by test
-      # function, parametrized cases together) and the five small modules run
-      # in one more process beside them, on the runner's 4 cores, which are
-      # idle once the poll step has finished. Every test seeds its own temp
-      # dirs and fake gh, and each shard is a separate pytest process. Step
-      # times here are estimates from test counts and earlier changelog
-      # figures, not measurements of run 39047759102. The step seeds its own
-      # git repositories and needs no Node or prepared .claude/ live copies.
-      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
-        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
-        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
-        # PR per release tick), plus _parse_reset_header's Retry-After
-        # precedence, gh_retry's per-attempt stdout buffering (#5495) and
-        # the non-retryable HTTP 400/401 classification in
-        # scripts/gh_helpers.sh, and PR comment JSON kept out of jq argv
-        # (#7658).
-        if: strategy.job-index == 1
-        run: |
-          set -euo pipefail
-          mt_shards=3
-          mt_module="tests/test_review_merge_train.py"
-          rm -f /tmp/merge_train_collect.log /tmp/merge_train_tests.txt \
-            /tmp/merge_train_shard_*.txt /tmp/merge_train_shard_*.log /tmp/merge_train_shard_*.rc \
-            /tmp/merge_train_rest.log /tmp/merge_train_rest.rc
-          # Keep the raw collect output so a collection error prints its traceback.
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${mt_module}" \
-            > /tmp/merge_train_collect.log 2>&1 \
-            || { cat /tmp/merge_train_collect.log; echo "::error::Test collection failed for ${mt_module}."; exit 1; }
-          { grep -F "${mt_module}::" /tmp/merge_train_collect.log || true; } \
-            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/merge_train_tests.txt
-          mt_test_count="$(wc -l < /tmp/merge_train_tests.txt | tr -d '[:space:]')"
-          if ! [ "${mt_test_count}" -ge 1 ] 2>/dev/null; then
-            echo "::error::No tests collected from ${mt_module}."
-            exit 1
-          fi
-          echo "${mt_module}: ${mt_test_count} test functions across ${mt_shards} shards"
-          mt_pids=()
-          for mt_shard in $(seq 0 "$((mt_shards - 1))"); do
-            awk -v n="${mt_shard}" -v total="${mt_shards}" 'NR % total == n' \
-              /tmp/merge_train_tests.txt > "/tmp/merge_train_shard_${mt_shard}.txt"
-            [ -s "/tmp/merge_train_shard_${mt_shard}.txt" ] || continue
-            (
-              mapfile -t mt_shard_tests < "/tmp/merge_train_shard_${mt_shard}.txt"
-              set +e
-              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-                "${mt_shard_tests[@]}" > "/tmp/merge_train_shard_${mt_shard}.log" 2>&1
-              echo "$?" > "/tmp/merge_train_shard_${mt_shard}.rc"
-            ) &
-            mt_pids+=("$!")
-          done
-          (
-            set +e
-            PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-              tests/test_gh_helpers_parse_reset_header.py \
-              tests/test_gh_retry_stdout_isolation.py \
-              tests/test_gh_retry_permanent_auth_failures.py \
-              tests/test_gh_api_retry.py \
-              tests/test_gh_api_retry_py.py \
-              tests/test_gh_pr_comments_argv_limit.py > /tmp/merge_train_rest.log 2>&1
-            echo "$?" > /tmp/merge_train_rest.rc
-          ) &
-          mt_pids+=("$!")
-          # Reap every process before judging any, so none is left orphaned.
-          for mt_pid in "${mt_pids[@]}"; do
-            wait "${mt_pid}" || true
-          done
-          mt_ids=()
-          for mt_shard in $(seq 0 "$((mt_shards - 1))"); do
-            [ -s "/tmp/merge_train_shard_${mt_shard}.txt" ] || continue
-            mt_ids+=("${mt_shard}")
-          done
-          mt_ids+=("rest")
-          mt_failed=()
-          for mt_id in "${mt_ids[@]}"; do
-            if [ "${mt_id}" = "rest" ]; then
-              mt_stem="/tmp/merge_train_rest"
-            else
-              mt_stem="/tmp/merge_train_shard_${mt_id}"
-            fi
-            echo "::group::merge-train step shard ${mt_id}"
-            cat "${mt_stem}.log" || true
-            echo "::endgroup::"
-            # A missing or non-numeric exit code counts as a failure.
-            mt_rc="$(cat "${mt_stem}.rc" 2>/dev/null || echo 1)"
-            case "${mt_rc}" in
-              ''|*[!0-9]*) mt_rc=1 ;;
-            esac
-            if [ "${mt_rc}" != "0" ]; then
-              mt_failed+=("${mt_id}")
-            fi
-          done
-          # Repeat failing shards' tails outside the collapsed groups. Each line
-          # gets a "| " prefix so log text cannot act as a workflow command.
-          for mt_id in "${mt_failed[@]}"; do
-            if [ "${mt_id}" = "rest" ]; then
-              mt_stem="/tmp/merge_train_rest"
-            else
-              mt_stem="/tmp/merge_train_shard_${mt_id}"
-            fi
-            echo "--- merge-train step shard ${mt_id} failed; last 40 log lines:"
-            { tail -n 40 "${mt_stem}.log" 2>/dev/null || true; } | sed 's/^/| /'
-          done
-          if [ "${#mt_failed[@]}" -gt 0 ]; then
-            echo "::error::merge-train step shards failed: ${mt_failed[*]}"
-            exit 1
-          fi
-
       # Moved from tests-heal-plan-and-validation, which took 15m26s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7690). That run's
       # step timings were not readable, so the steps were chosen by timing each
@@ -2359,8 +2358,8 @@ jobs:
       # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
       # #7677), while poll groups record about 5 minutes (#4707). Group 0
       # carries the fast-fail subset and the single-file modules and group 1
-      # the merge-train step, so this step runs in group 2 only, once per CI
-      # run. It needs only checkout, Python 3.12 and the shared pip install,
+      # then carried the merge-train step (moved out in #7766), so this step
+      # runs in group 2 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
       - name: Regression tests wired by the CI wiring guard (part 2)
         if: strategy.job-index == 2
@@ -2424,8 +2423,8 @@ jobs:
       # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
       # #7677), while poll groups record about 5 minutes (#4707). Group 0
       # carries the fast-fail subset and the single-file modules and group 1
-      # the merge-train step, so this step runs in group 3 only, once per CI
-      # run. It needs only checkout, Python 3.12 and the shared pip install,
+      # then carried the merge-train step (moved out in #7766), so this step
+      # runs in group 3 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
       - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
         if: strategy.job-index == 3
