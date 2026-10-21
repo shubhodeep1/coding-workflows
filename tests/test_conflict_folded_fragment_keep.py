@@ -74,7 +74,14 @@ def _block() -> str:
 	return text[start:end]
 
 
-def _run_block(repo: Path, tmp: Path, *, head_ref: str = "feat", enabled: str | None = None) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+def _run_block(
+	repo: Path,
+	tmp: Path,
+	*,
+	head_ref: str = "feat",
+	enabled: str | None = None,
+	forward_merge_enabled: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
 	runtime = tmp / "runtime"
 	runtime.mkdir()
 	stash = tmp / "stash"
@@ -97,8 +104,11 @@ echo "AFTER_BLOCK count=${{_resolver_allowlist_count}} defer=${{_ff_defer_commit
 	env = _env()
 	env.pop("TARGET_BRANCH", None)
 	env.pop("CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED", None)
+	env.pop("CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED", None)
 	if enabled is not None:
 		env["CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED"] = enabled
+	if forward_merge_enabled is not None:
+		env["CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED"] = forward_merge_enabled
 	return subprocess.run(["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True), github_env, allowlist
 
 
@@ -191,3 +201,56 @@ def test_check_resolver_diff_names_an_untouched_unmerged_path() -> None:
 		result = subprocess.run(args, cwd=repo, env=_env(), text=True, capture_output=True)
 		assert result.returncode == 0, result.stdout + result.stderr
 		assert "check_resolver_diff: OK" in result.stdout
+
+
+FORWARD_MERGE_HEAD = "auto/forward-merge-stable-123-1"
+
+
+def test_forward_merge_head_keeps_the_base_copy_on_stages_1_3() -> None:
+	"""#7796: the forward-merge head carries the fold; main changed the fragment."""
+	for flag in (None, "", "true", "TRUE"):
+		with tempfile.TemporaryDirectory() as tmp_name:
+			tmp, repo = _setup(tmp_name, reverse=True)
+			result, github_env, _ = _run_block(repo, tmp, head_ref=FORWARD_MERGE_HEAD, forward_merge_enabled=flag)
+			assert result.returncode == 0, result.stdout + result.stderr
+			assert f"Folded fragment keep: kept the base branch's {FRAGMENT}" in result.stdout, (flag, result.stdout)
+			assert "(index stages: 1 3)" in result.stdout
+			assert "AFTER_BLOCK" not in result.stdout, "the block must commit and exit"
+			assert "::warning::" not in result.stdout
+			assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
+			parents = _git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
+			assert len(parents) == 3
+			assert _git(repo, "show", f"HEAD:{FRAGMENT}").stdout == PR_TEXT
+			assert _git(repo, "diff", "--name-only", "--diff-filter=U").stdout == ""
+
+
+def test_ai_issue_head_leaves_stages_1_3_to_the_resolver() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name, reverse=True)
+		result, github_env, _ = _run_block(repo, tmp, head_ref="ai/issue-7796")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "AFTER_BLOCK count=1 defer=false" in result.stdout
+		assert "Folded fragment keep: kept" not in result.stdout
+		assert not github_env.exists()
+
+
+def test_forward_merge_keep_switch_false_leaves_stages_1_3_to_the_resolver() -> None:
+	for flag, warns in (("false", False), ("FALSE", False), ("bogus-value", True)):
+		with tempfile.TemporaryDirectory() as tmp_name:
+			tmp, repo = _setup(tmp_name, reverse=True)
+			result, github_env, _ = _run_block(repo, tmp, head_ref=FORWARD_MERGE_HEAD, forward_merge_enabled=flag)
+			assert result.returncode == 0, result.stdout + result.stderr
+			assert "AFTER_BLOCK count=1 defer=false" in result.stdout, (flag, result.stdout)
+			assert "Folded fragment keep: kept" not in result.stdout
+			assert not github_env.exists()
+			assert ("::warning::" in result.stdout) is warns, (flag, result.stdout)
+			assert "bogus-value" not in result.stdout + result.stderr
+
+
+def test_forward_merge_head_still_keeps_stages_1_2() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		result, github_env, _ = _run_block(repo, tmp, head_ref=FORWARD_MERGE_HEAD, forward_merge_enabled="false")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert f"Folded fragment keep: kept the PR's {FRAGMENT}" in result.stdout
+		assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"

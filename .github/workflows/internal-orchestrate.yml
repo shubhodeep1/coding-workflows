@@ -34,7 +34,7 @@ permissions:
 
 jobs:
   orchestrate:
-    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@main
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@promote-candidate
     with:
       project_description: ${{ inputs.project_description }}
       tracking_labels: ${{ inputs.tracking_labels }}
