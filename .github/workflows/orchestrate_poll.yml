@@ -118,11 +118,32 @@ jobs:
       - name: Resolve workflow support ref for gh retry
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_poll\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
             # take the support scripts from that same commit, never a newer
@@ -493,11 +514,32 @@ jobs:
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_poll\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
             # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
             # take the support scripts from that same commit, never a newer
@@ -1245,6 +1287,7 @@ jobs:
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
@@ -1273,6 +1316,7 @@ jobs:
           COMPREHENSIVE_RELEASE_WORKFLOW_FILE: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_FILE || 'promote-main-to-stable.yml' }}
           COMPREHENSIVE_RELEASE_WORKFLOW_REF: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_REF || 'main' }}
           COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS: ${{ vars.COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS || '21600' }}
+          PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}
           COMPREHENSIVE_CYCLE_BOT_LOGINS: ${{ vars.COMPREHENSIVE_CYCLE_BOT_LOGINS || 'github-actions[bot]' }}
           COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
           COMPREHENSIVE_VERIFICATION_RETRY_MAX: ${{ vars.COMPREHENSIVE_VERIFICATION_RETRY_MAX || '24' }}
@@ -1448,6 +1492,7 @@ jobs:
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
@@ -1474,6 +1519,7 @@ jobs:
           COMPREHENSIVE_RELEASE_WORKFLOW_FILE: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_FILE || 'promote-main-to-stable.yml' }}
           COMPREHENSIVE_RELEASE_WORKFLOW_REF: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_REF || 'main' }}
           COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS: ${{ vars.COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS || '21600' }}
+          PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}
           COMPREHENSIVE_CYCLE_BOT_LOGINS: ${{ vars.COMPREHENSIVE_CYCLE_BOT_LOGINS || 'github-actions[bot]' }}
           COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
           COMPREHENSIVE_VERIFICATION_RETRY_MAX: ${{ vars.COMPREHENSIVE_VERIFICATION_RETRY_MAX || '24' }}

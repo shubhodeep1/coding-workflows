@@ -587,3 +587,53 @@ def test_in_flight_docs_reads_every_comment_page() -> None:
 	assert proc.stdout.splitlines() == [doc]
 	comment_calls = [call for call in final["calls"] if any(a.endswith("/comments?per_page=100") for a in call)]
 	assert comment_calls and all("--paginate" in call and "--slurp" in call for call in comment_calls)
+
+
+# --- pinned promote cycle (phase 3) -------------------------------------------
+
+def _pinned_dispatch_marker(role: str, pinned: str | None) -> tuple[str, str]:
+	env = {
+		"APPLY_ANALYSIS_ROLE": role,
+		"APPLY_ANALYSIS_CYCLE_BASELINE_SHA": "c" * 40,
+		"APPLY_ANALYSIS_SMOKE_SHA": "c" * 40,
+		"APPLY_ANALYSIS_PROMOTE_SHA": "c" * 40,
+	}
+	if pinned is not None:
+		env["APPLY_ANALYSIS_PINNED"] = pinned
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), {"open_tracking": [_tracking(3)]}, docs=["analysis/workflow-optimization-2026-09-01.md"], env=env)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	dispatch = final["dispatches"][0]
+	fields = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in dispatch if "=" in a and not a.startswith("--")}
+	return fields["tracking_comment"], proc.stderr
+
+
+def test_pinned_marker_line_present_only_when_pinned() -> None:
+	marker, _ = _pinned_dispatch_marker("verifying", "true")
+	assert "\napply-analysis-pinned: true\n" in marker
+	assert "promotes the pinned candidate" in marker
+	assert "`promote-candidate` branch is frozen on" in marker
+	for value in (None, "false"):
+		marker, _ = _pinned_dispatch_marker("verifying", value)
+		assert "apply-analysis-pinned" not in marker
+		assert "pinned candidate" not in marker
+	marker, stderr = _pinned_dispatch_marker("proving", "maybe")
+	assert "apply-analysis-pinned" not in marker
+	assert "APPLY_ANALYSIS_PINNED must be true or false" in stderr
+
+
+def test_pinned_proving_marker_says_its_merge_rides_the_next_cycle() -> None:
+	marker, _ = _pinned_dispatch_marker("proving", "true")
+	assert "apply-analysis-pinned: true" in marker
+	assert "rides the next cycle" in marker
+
+
+def test_pin_switches_are_forwarded_with_defaults() -> None:
+	wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	run_step = next(s for s in wf["jobs"]["cycle"]["steps"] if "run" in s)
+	assert run_step["env"]["PROMOTE_CYCLE_PIN_ENABLED"] == "${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}"
+	assert run_step["env"]["PROMOTE_CYCLE_FREEZE_MAX_SECS"] == "${{ vars.PROMOTE_CYCLE_FREEZE_MAX_SECS || '172800' }}"
+	poll = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	hold_lines = poll.count("COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS:")
+	assert hold_lines >= 1
+	assert poll.count("PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}") == hold_lines

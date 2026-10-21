@@ -495,7 +495,7 @@ AI_ENGINE = SCRIPTS / "ai_engine.sh"
 def _decomposer_engine_branches() -> tuple[str, str]:
 	"""The decomposer step's Claude branch and codex-fallback branch (logical lines)."""
 	run = step_block((WORKFLOWS / "orchestrate.yml").read_text(encoding="utf-8"), "Run Codex (decomposer)")
-	start = run.index('if [ "${ORCHESTRATE_ENGINE}" = "claude" ]; then')
+	start = run.index('if [ "${ORCHESTRATE_ENGINE}" = "claude" ]; then\n')
 	fallback = run.index('if [ "${decomposer_rc}" -eq 75 ]; then\n              decomposer_rc=0', start)
 	end = run.index("\n            fi\n", fallback)
 	return "\n".join(logical_lines(run[start:fallback])), "\n".join(logical_lines(run[fallback:end]))

@@ -1082,12 +1082,30 @@ jobs:
             exit 1
           fi
           if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
-            if ! support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)" ||
-               ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
-              echo "::error::Activation support main branch is not confirmed protected."
-              exit 1
+            # Runs pinned to the protected promote-candidate branch (promote
+            # cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md) take
+            # support code from its tip; a look-alike ref, an unprotected
+            # branch or a failed read fall through to protected main.
+            support_sha=""
+            if [[ "${support_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/issue_pr_status\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path.
+              promote_candidate_json="$(gh api repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                support_sha="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
             fi
-            support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
+            if [ -z "${support_sha}" ]; then
+              if ! support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)" ||
+                 ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
+                echo "::error::Activation support main branch is not confirmed protected."
+                exit 1
+              fi
+              support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
+            fi
           elif [[ "${support_workflow_ref}" =~ ${consumer_pin} ]]; then
             support_sha="${support_workflow_ref##*@}"
           else

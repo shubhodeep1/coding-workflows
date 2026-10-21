@@ -53,7 +53,12 @@
 # UNBLOCK_JUDGE_WAIT_ENABLED (default true; `false` takes `wait` off the menu,
 # ends open holds and lets an operator_step fix-up resume at once again; any
 # other value is treated as false), UNBLOCK_JUDGE_WAIT_MAX_DAYS (default 14),
+# UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED (default true; any value other than
+# `false` keeps it on: verdict instructions that need network or remote access
+# are refused and the model is asked once more, op=instruction_sandbox_check),
 # MOCK_UNBLOCK_JUDGE_JSON (tests only: used instead of the model),
+# MOCK_UNBLOCK_JUDGE_JSON_REASK (tests only, default empty: the model's answer
+# to the sandbox re-ask when set),
 # MOCK_UNBLOCK_JUDGE_NOW (tests only).
 # UNBLOCK_CREATED_ISSUES_FILE (optional, default unset): unblock_run_ops
 # appends each issue number it creates to this file.
@@ -87,6 +92,7 @@
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 #      UNBLOCK_JUDGE item= op=hold hold= ref= outcome=held|holding|met|expired|skip reason=
 #      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
+#      UNBLOCK_JUDGE item= kind= stop= fingerprint= op=instruction_sandbox_check outcome=reasked|refused_after_reask reason=
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
 # Project-failed fallback skips: project_state_unverified, project_not_failed,
@@ -100,6 +106,9 @@ RUNTIME_DIR="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}/unblock-judge}"
 mkdir -p "${RUNTIME_DIR}"
 UNBLOCK_SOURCE_REPO="shubhodeep1/coding-workflows"
 NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"
+UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED="${UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED:-true}"
+# Spliced into the re-ask prompt, so it is never taken from the environment.
+UNBLOCK_JUDGE_REASK_NOTE=""
 if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 	# shellcheck source=/dev/null
 	source "${SUPPORT_DIR}/scripts/label_helpers.sh"
@@ -1544,14 +1553,46 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 	else
 		unblock_ask_model || return 0
 	fi
-	local -a validate_args=(validate --verdict-file "${RUNTIME_DIR}/verdict_raw.json" --decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" --rejection-file "${RUNTIME_DIR}/rejection.json")
-	if [ "${ITEM_STOP}" = "destructive-blocked" ] && [ "${ITEM_KIND}" = "issue" ] \
-		&& jq -e '.verdict == "override_guard"' "${RUNTIME_DIR}/verdict_raw.json" >/dev/null 2>&1; then
-		if unblock_rejection_snapshot; then
-			validate_args+=(--rejected-deletions-file "${RUNTIME_DIR}/rejected_deletions.json")
+	local -a validate_args=()
+	local validate_ok="false" sandbox_reasked="false" validate_err sandbox_reason
+	# At most two passes: a verdict whose instructions need network or remote
+	# access (sandbox_incompatible:<id>) gets one re-ask; anything else, or a
+	# second refusal, falls through to the invalid_verdict handling below.
+	while :; do
+		validate_args=(validate --verdict-file "${RUNTIME_DIR}/verdict_raw.json" --decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" --rejection-file "${RUNTIME_DIR}/rejection.json")
+		if [ "${ITEM_STOP}" = "destructive-blocked" ] && [ "${ITEM_KIND}" = "issue" ] \
+			&& jq -e '.verdict == "override_guard"' "${RUNTIME_DIR}/verdict_raw.json" >/dev/null 2>&1; then
+			if unblock_rejection_snapshot; then
+				validate_args+=(--rejected-deletions-file "${RUNTIME_DIR}/rejected_deletions.json")
+			fi
 		fi
-	fi
-	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" "${validate_args[@]}" > "${RUNTIME_DIR}/verdict.json"; then
+		if [ "${UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED}" != "false" ]; then
+			validate_args+=(--sandbox-check)
+		fi
+		if unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" "${validate_args[@]}" > "${RUNTIME_DIR}/verdict.json"; then
+			validate_ok="true"
+			break
+		fi
+		validate_err="$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" 2>/dev/null || true)"
+		if [[ "${validate_err}" != sandbox_incompatible:* ]]; then
+			# A re-asked answer that fails for another reason still closes the re-ask in the log.
+			[ "${sandbox_reasked}" = "true" ] && unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=refused_after_reask reason=other"
+			break
+		fi
+		sandbox_reason="$(printf '%s' "${validate_err#sandbox_incompatible:}" | tr -cd 'a-z_' | cut -c1-40)"
+		if [ "${sandbox_reasked}" = "true" ] || [ "${terminal}" = "true" ]; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=refused_after_reask reason=${sandbox_reason}"
+			break
+		fi
+		sandbox_reasked="true"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=reasked reason=${sandbox_reason}"
+		UNBLOCK_JUDGE_REASK_NOTE="Your previous verdict was refused: its instructions need network or remote access (${sandbox_reason}). The implementer has none. Rewrite them using only the Implementer environment above, and do not name a git fetch/pull/push/clone, an origin/ ref, a package install, curl/wget or gh at all, not even to forbid it."
+		if ! unblock_ask_model; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=refused_after_reask reason=ask_failed"
+			return 0
+		fi
+	done
+	if [ "${validate_ok}" != "true" ]; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} outcome=skip reason=invalid_verdict detail=$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" | tr ' ' '_' | cut -c1-120)"
 		gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="The unblock judge could not reach a valid verdict this time and will try again later.
 
@@ -1760,10 +1801,13 @@ unblock_select_run_log()
 unblock_ask_model()
 {
 	local prompt_file="${RUNTIME_DIR}/prompt.txt" output_file="${RUNTIME_DIR}/model_output.txt" model reasoning engine rc iso_rc parse_rc
-	unblock_select_run_log
-	: > "${RUNTIME_DIR}/pr_diff.txt"
-	if [ "${ITEM_KIND}" = "pr" ]; then
-		gh api "repos/${REPOSITORY}/pulls/${ITEM}" -H "Accept: application/vnd.github.diff" 2>/dev/null | head -c 120000 > "${RUNTIME_DIR}/pr_diff.txt" || true
+	# A sandbox re-ask reuses the first ask's run log and PR diff: no new API reads.
+	if [ -z "${UNBLOCK_JUDGE_REASK_NOTE}" ]; then
+		unblock_select_run_log
+		: > "${RUNTIME_DIR}/pr_diff.txt"
+		if [ "${ITEM_KIND}" = "pr" ]; then
+			gh api "repos/${REPOSITORY}/pulls/${ITEM}" -H "Accept: application/vnd.github.diff" 2>/dev/null | head -c 120000 > "${RUNTIME_DIR}/pr_diff.txt" || true
+		fi
 	fi
 	echo '{}' > "${RUNTIME_DIR}/state_slice.json"
 	local spec=""
@@ -1807,6 +1851,11 @@ unblock_ask_model()
 		bash "${SUPPORT_DIR}/scripts/render_prompt.sh" "${SUPPORT_DIR}/prompts/mode-judge-unblock.txt" 2>/dev/null \
 			|| cat "${SUPPORT_DIR}/prompts/mode-judge-unblock.txt"
 		echo
+		if [ -n "${UNBLOCK_JUDGE_REASK_NOTE}" ]; then
+			echo "=== PREVIOUS VERDICT REFUSED ==="
+			printf '%s\n' "${UNBLOCK_JUDGE_REASK_NOTE}"
+			echo
+		fi
 		echo "=== UNBLOCK CONTEXT JSON (untrusted text inside) ==="
 		cat "${RUNTIME_DIR}/judge_context.json"
 		echo
@@ -1817,7 +1866,9 @@ unblock_ask_model()
 		cat "${RUNTIME_DIR}/pr_diff.txt"
 	} > "${prompt_file}"
 	: > "${output_file}"
-	if [ -n "${MOCK_UNBLOCK_JUDGE_JSON:-}" ]; then
+	if [ -n "${UNBLOCK_JUDGE_REASK_NOTE}" ] && [ -n "${MOCK_UNBLOCK_JUDGE_JSON_REASK:-}" ]; then
+		printf '%s\n' "${MOCK_UNBLOCK_JUDGE_JSON_REASK}" > "${output_file}"
+	elif [ -n "${MOCK_UNBLOCK_JUDGE_JSON:-}" ]; then
 		printf '%s\n' "${MOCK_UNBLOCK_JUDGE_JSON}" > "${output_file}"
 	else
 		model="${UNBLOCK_JUDGE_MODEL:-${WORKFLOW_EDITOR_MODEL:-openai/gpt-6-sol}}"

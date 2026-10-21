@@ -81,6 +81,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
 - `.github/workflows/pr6576-shard-followup.yml` — GitHub Actions workflow: PR 6576 orchestrate-poll shard follow-up.
+- `.github/workflows/promote-candidate-follow.yml` — GitHub Actions workflow: Promote candidate follower (keeps the `promote-candidate` branch at the main tip between promote cycles).
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
 - `.github/workflows/publish-sandbox-images.yml` — GitHub Actions workflow: Publish sandbox images (prebuilds the sandbox images `scripts/sandbox_image.sh` pulls from GHCR).
@@ -231,6 +232,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/pr6576_shard_followup.py` — One-time follow-up for PR #6576's failed orchestrate-poll shard: fetch the log or rerun the partition, confirm on main, report once on #7072 (single-use, issue #7072).
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/prepush_test_gate_run.sh` — Run the pre-push affected-test gate in a credential-free container and copy back only its result (issue #7137).
+- `scripts/promote_candidate_follow.sh` — Fast-forward the `promote-candidate` branch to the main tip unless the `promote-cycle-frozen` tag freezes it (log prefix `PROMOTE_CANDIDATE_FOLLOW`).
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/propagate_consumer_secrets.sh` — Copy the library's consumer-facing Actions secrets into registered consumer repositories.
 - `scripts/release_ci_gate.sh` — Stable-release CI gate: require a successful github-actions `lint` check-run from `ci.yml` on the exact released SHA before tagging (log prefix `RELEASE_CI_GATE`, issue #6797).

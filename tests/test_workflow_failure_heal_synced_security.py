@@ -213,6 +213,23 @@ def test_groups_merge_findings_of_one_bucket() -> None:
 	assert (groups[1]["bucket_start"], groups[1]["bucket_end"]) == (1, 24)
 
 
+def test_line_bucket_is_capped_so_groups_stay_loadable(tmp_path) -> None:
+	"""A bucket above the line cap used to give bucket_end past the loader's
+	bound, so every group of the report failed with "invalid group bucket"."""
+	cap = heal.SYNCED_SECURITY_LINE_MAX
+	assert heal.synced_security_line_bucket(str(cap)) == cap
+	assert heal.synced_security_line_bucket("5000000") == cap
+	findings = heal.validate_synced_security_findings([_finding(line=cap, finding_id="edge")])
+	for bucket in ("5000000", cap * 10):
+		groups = heal.group_synced_security_findings(findings, heal.synced_security_line_bucket(bucket) if isinstance(bucket, str) else bucket)
+		assert len(groups) == 1
+		group_file = tmp_path / "group.json"
+		group_file.write_text(json.dumps(groups[0]), encoding="utf-8")
+		loaded = heal._load_synced_security_group(str(group_file))
+		assert loaded["bucket_end"] == groups[0]["bucket_end"]
+		assert loaded["bucket_start"] <= cap <= loaded["bucket_end"]
+
+
 # ---------------------------------------------------------------------------
 # Composition: validated fields only
 # ---------------------------------------------------------------------------

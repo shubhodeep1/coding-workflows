@@ -2384,6 +2384,11 @@ if ! [[ "${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}" =~ ^[0-9]+$ ]] || [ "${COMPRE
   echo "::warning::COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS must be an integer >= 60; defaulting to 21600"
   COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS="21600"
 fi
+# Pinned promote cycle (phase 3): a marker with `apply-analysis-pinned: true`
+# promotes the candidate the promote-candidate branch is frozen on. Only the
+# literal `false` (any case) turns it off; then a pinned cycle's promotion is
+# abandoned on its next tick and the freeze tag released.
+PROMOTE_CYCLE_PIN_ENABLED="${PROMOTE_CYCLE_PIN_ENABLED:-true}"
 # Bot logins whose non-code commits may land on main during a cycle without
 # deferring the promotion (comma-separated). Since #7662 this no longer affects
 # the decision: comprehensive_untested_commits_json exempts every single-parent
@@ -13669,8 +13674,10 @@ extract_comprehensive_release_metadata() {
 #
 # Reads the apply-analysis marker comment (posted by orchestrate.yml from the
 # dispatcher's tracking_comment input) and prints
-#   {role, doc, baseline_sha, smoke_sha, promote_sha, proving_merge_sha}
-# with "" for anything absent. role is "" for a tracking issue that carries
+#   {role, doc, baseline_sha, smoke_sha, promote_sha, proving_merge_sha, pinned}
+# with "" for anything absent; pinned is true only for the literal marker line
+# `apply-analysis-pinned: true` (missing means false, the unpinned path).
+# role is "" for a tracking issue that carries
 # ai:comprehensive-test-pending without a marker (legacy callback path).
 comprehensive_cycle_metadata_json() {
   local comments_json="$1"
@@ -13688,8 +13695,9 @@ comprehensive_cycle_metadata_json() {
         smoke_sha: line($body; "apply-analysis-smoke-sha"),
         promote_sha: line($body; "apply-analysis-promote-sha"),
         proving_merge_sha: line($body; "apply-analysis-proving-merge-sha"),
+        pinned: (line($body; "apply-analysis-pinned") == "true"),
         untrusted_marker: $untrusted
-      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","untrusted_marker":false}'
+      }' 2>/dev/null || echo '{"role":"","doc":"","baseline_sha":"","smoke_sha":"","promote_sha":"","proving_merge_sha":"","pinned":false,"untrusted_marker":false}'
 }
 
 # comprehensive_stable_tag_commit
@@ -13699,11 +13707,14 @@ comprehensive_cycle_metadata_json() {
 # tag). Prints nothing and returns 0 when the tag does not exist; returns 2
 # when the lookup itself failed, so callers can tell "no tag yet" from "could
 # not read the tag" and never treat a transient API error as an absent tag.
+# Optional $1 names another tag (default `stable`); the pinned promotion gate
+# reads `promote-cycle-frozen` through it.
 comprehensive_stable_tag_commit() {
+  local tag_name="${1:-stable}"
   local ref_json object_type object_sha tag_json err_file
   err_file="$(mktemp)"
-  if ! ref_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/tags/stable" 2>"${err_file}")"; then
-    if grep -qiE '404|not found' "${err_file}"; then
+  if ! ref_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag_name}" 2>"${err_file}")"; then
+    if grep -qiE '(^|[^0-9])404([^0-9]|$)|not found' "${err_file}"; then
       rm -f "${err_file}"
       return 0
     fi
@@ -13902,10 +13913,23 @@ dispatch_comprehensive_verification_run() {
     echo "SKIPPED reason=dispatcher_missing path=${APPLY_ANALYSIS_DISPATCHER}"
     return 0
   fi
+  # Pinned cycle: promote the frozen candidate (the smoke-tested commit), not
+  # whatever main is now; the run itself is still dispatched on main.
+  local verifying_promote_sha="${main_tip}" verifying_pinned="false" marker_smoke_sha
+  marker_smoke_sha="$(printf '%s' "${metadata_json}" | jq -r '.smoke_sha // ""' 2>/dev/null || echo "")"
+  if [ "$(printf '%s' "${metadata_json}" | jq -r '.pinned // false' 2>/dev/null || echo false)" = "true" ]; then
+    if [[ "${marker_smoke_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+      verifying_promote_sha="${marker_smoke_sha}"
+      verifying_pinned="true"
+    else
+      echo "::warning::Pinned proving marker on #${TRACKING_NUM} lacks a valid smoke SHA; dispatching the verifying run unpinned." >&2
+    fi
+  fi
   dispatch_output="$(APPLY_ANALYSIS_ROLE=verifying \
+    APPLY_ANALYSIS_PINNED="${verifying_pinned}" \
     APPLY_ANALYSIS_CYCLE_BASELINE_SHA="$(printf '%s' "${metadata_json}" | jq -r '.baseline_sha')" \
     APPLY_ANALYSIS_SMOKE_SHA="$(printf '%s' "${metadata_json}" | jq -r '.smoke_sha')" \
-    APPLY_ANALYSIS_PROMOTE_SHA="${main_tip}" \
+    APPLY_ANALYSIS_PROMOTE_SHA="${verifying_promote_sha}" \
     APPLY_ANALYSIS_PROVING_MERGE_SHA="${proving_merge_sha}" \
     APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE="${TRACKING_NUM}" \
     GITHUB_REF_NAME="${default_branch}" \
@@ -13969,6 +13993,32 @@ comprehensive_promotion_release_outcome() {
   esac
 }
 
+# comprehensive_release_cycle_freeze <pinned>
+#
+# Deletes the promote-cycle-frozen tag a pinned cycle holds, so the
+# promote-candidate follower resumes. A no-op (no call) unless <pinned> is
+# `true`, so unpinned cycles are untouched. 1 DELETE call, idempotent (404 or
+# 422 "does not exist" counts as done), fail-open: always returns 0; a failed
+# delete is cleaned up by the next cycle's stale-tag check or the follower's
+# PROMOTE_CYCLE_FREEZE_MAX_SECS age limit.
+comprehensive_release_cycle_freeze() {
+  local pinned="${1:-false}"
+  [ "${pinned}" = "true" ] || return 0
+  local err_file outcome="deleted"
+  err_file="$(mktemp)"
+  if ! gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/promote-cycle-frozen" >/dev/null 2>"${err_file}"; then
+    if grep -qiE '(^|[^0-9])(404|422)([^0-9]|$)|not found|does not exist' "${err_file}"; then
+      outcome="absent"
+    else
+      outcome="delete_failed"
+      echo "::warning::Could not delete the promote-cycle-frozen tag for #${TRACKING_NUM}; the next cycle or the follower's age limit removes it." >&2
+    fi
+  fi
+  rm -f "${err_file}"
+  echo "COMPREHENSIVE_PROMOTION_PIN_RELEASED tracking_issue=${TRACKING_NUM} tag=${outcome}"
+  return 0
+}
+
 # comprehensive_promotion_gate_before_final_merge <final_pr>
 #
 # The VERIFYING run's ready-to-merge point is where the promote cycle
@@ -13987,12 +14037,13 @@ comprehensive_promotion_gate_before_final_merge() {
   if ! has_label "${TRACKING_LABELS:-[]}" "ai:comprehensive-test-pending"; then
     return 0
   fi
-  local metadata_json role promote_sha smoke_sha proving_merge_sha status now
+  local metadata_json role promote_sha smoke_sha proving_merge_sha status now pinned
   metadata_json="$(comprehensive_cycle_metadata_json "${COMMENTS:-[]}")"
   role="$(printf '%s' "${metadata_json}" | jq -r '.role')"
   if [ "${role}" != "verifying" ]; then
     return 0
   fi
+  pinned="$(printf '%s' "${metadata_json}" | jq -r 'if .pinned == true then "true" else "false" end' 2>/dev/null || echo false)"
   status="$(jq -r '.comprehensive_promotion.status // "pending"' "${STATE_FILE}" 2>/dev/null || echo "pending")"
   now="$(date +%s)"
   case "${status}" in
@@ -14010,6 +14061,7 @@ comprehensive_promotion_gate_before_final_merge() {
 
 \`COMPREHENSIVE_RELEASE_WORKFLOW_FILE\` is \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\`, which cannot promote a pinned commit (only promote-main-to-stable.yml takes \`target_sha\`). Nothing is promoted; the final merge proceeds."
         tg_notify "Project #${TRACKING_NUM}: promotion skipped, ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} cannot pin target_sha." "CRITICAL"
+        comprehensive_release_cycle_freeze "${pinned}"
         return 0
       fi
       if ! [[ "${promote_sha}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${smoke_sha}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -14019,8 +14071,61 @@ comprehensive_promotion_gate_before_final_merge() {
 
 This verifying run's marker comment lacks \`apply-analysis-promote-sha\` / \`apply-analysis-smoke-sha\`, so the poller cannot pin a promotion. The final merge proceeds; promote by hand with promote-main-to-stable.yml if wanted."
         tg_notify "Project #${TRACKING_NUM}: verifying run lacks cycle SHAs; promotion skipped, merge proceeds." "CRITICAL"
+        comprehensive_release_cycle_freeze "${pinned}"
         return 0
       fi
+      if [ "${pinned}" = "true" ]; then
+        # Pinned cycle: the candidate is what the promote-candidate branch is
+        # frozen on, so instead of proving every commit on main since the smoke
+        # gate, check the freeze still holds promote_sha (tag and branch).
+        local pin_tag_commit pin_tag_rc pin_branch_tip pin_branch_err pin_release_detail=""
+        if [ "$(printf '%s' "${PROMOTE_CYCLE_PIN_ENABLED}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
+          pin_release_detail="pin_disabled"
+          pin_branch_tip=""
+        else
+          set +e
+          pin_tag_commit="$(comprehensive_stable_tag_commit promote-cycle-frozen)"
+          pin_tag_rc=$?
+          set -e
+          pin_branch_err="$(mktemp)"
+          pin_branch_tip=""
+          if ! pin_branch_tip="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/promote-candidate" --jq '.object.sha // empty' 2>"${pin_branch_err}")"; then
+            pin_branch_tip=""
+            if ! grep -qiE '(^|[^0-9])404([^0-9]|$)|not found' "${pin_branch_err}"; then
+              pin_tag_rc=2
+            fi
+          fi
+          rm -f "${pin_branch_err}"
+          if [ "${pin_tag_rc}" -ne 0 ]; then
+            if ! comprehensive_promotion_hold_or_fail pin_check_unavailable "${now}" \
+              "Project #${TRACKING_NUM}: could not read the promote-cycle-frozen tag or the promote-candidate branch within the hold cap; promotion abandoned, merge proceeds."; then
+              return 1
+            fi
+            comprehensive_release_cycle_freeze true
+            return 0
+          fi
+        fi
+        if [ -z "${pin_release_detail}" ] && [[ "${pin_tag_commit:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${pin_tag_commit}" = "${promote_sha}" ] && [ "${pin_branch_tip}" = "${promote_sha}" ]; then
+          echo "Pinned promotion: promote-cycle-frozen and promote-candidate both hold ${promote_sha}."
+        else
+          [[ "${pin_branch_tip}" =~ ^[0-9a-f]{40}$ ]] || pin_branch_tip=""
+          jq --arg promote "${promote_sha}" --arg branch "${pin_branch_tip}" --arg detail "${pin_release_detail}" \
+            '.comprehensive_promotion = ({status: "deferred", reason: "pin_released", promote_sha: $promote, branch_tip: $branch} + (if $detail != "" then {detail: $detail} else {} end))' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          post_state_comment || true
+          echo "COMPREHENSIVE_PROMOTION_PIN_RELEASED tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha} branch_tip=${pin_branch_tip:-none}${pin_release_detail:+ detail=${pin_release_detail}}"
+          local pin_release_why="The \`promote-cycle-frozen\` tag or the \`promote-candidate\` branch no longer holds the pinned candidate \`${promote_sha:0:7}\` (branch tip \`${pin_branch_tip:0:7}\`)."
+          if [ "${pin_release_detail}" = "pin_disabled" ]; then
+            pin_release_why="\`PROMOTE_CYCLE_PIN_ENABLED\` is \`false\`, which abandons the promotion of a pinned cycle."
+          fi
+          post_tracking_comment "## ⏸️ Promotion abandoned
+
+${pin_release_why} Nothing is promoted. This project's final merge proceeds; the next daily promote cycle starts over."
+          tg_notify "Project #${TRACKING_NUM}: pinned promotion of ${promote_sha:0:7} abandoned (${pin_release_detail:-pin_moved}); merge proceeds." "DEBUG"
+          comprehensive_release_cycle_freeze true
+          return 0
+        fi
+      else
       local untested_json untested_rc
       set +e
       untested_json="$(comprehensive_untested_commits_json "${smoke_sha}" "${promote_sha}" "${proving_merge_sha}")"
@@ -14051,6 +14156,7 @@ Nothing is promoted. This project's final merge proceeds; the next daily promote
         tg_notify "Project #${TRACKING_NUM}: promotion deferred, ${untested_count} untested commit(s) on main since ${smoke_sha:0:7}. Next daily cycle re-proves." "DEBUG"
         return 0
       fi
+      fi
       # The pre-dispatch tag position is what later proves the promotion
       # moved the tag. A lookup failure must not be recorded as "no tag":
       # hold (bounded) and retry next tick instead.
@@ -14064,6 +14170,7 @@ Nothing is promoted. This project's final merge proceeds; the next daily promote
           "Project #${TRACKING_NUM}: could not read the stable tag before dispatching the promotion within the hold cap; promotion abandoned, merge proceeds."; then
           return 1
         fi
+        comprehensive_release_cycle_freeze "${pinned}"
         return 0
       fi
       local _dispatch_err
@@ -14073,9 +14180,13 @@ Nothing is promoted. This project's final merge proceeds; the next daily promote
         jq --arg promote "${promote_sha}" --arg tag_before "${tag_before}" --argjson t "${now}" '.comprehensive_promotion = {status: "dispatched", promote_sha: $promote, dispatched_at: $t, tag_before: $tag_before}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
         echo "COMPREHENSIVE_PROMOTION_DISPATCHED tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha} workflow=${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}"
+        local promotion_basis="Every commit between the smoke-tested commit \`${smoke_sha:0:7}\` and \`${promote_sha:0:7}\` was proven by this cycle."
+        if [ "${pinned}" = "true" ]; then
+          promotion_basis="The pinned candidate \`${promote_sha:0:7}\` is the commit the smoke gate tested; commits merged into \`${DEFAULT_BRANCH_TRACKING:-main}\` during the cycle ride the next cycle."
+        fi
         post_tracking_comment "## 🚀 Promotion dispatched
 
-Every commit between the smoke-tested commit \`${smoke_sha:0:7}\` and \`${promote_sha:0:7}\` was proven by this cycle. \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched with \`target_sha=${promote_sha}\` (full release gate). This project's final PR #${final_pr} stays unmerged until that release finishes so \`${DEFAULT_BRANCH_TRACKING:-main}\` HEAD is the version under test; hold cap ${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}s."
+${promotion_basis} \`${COMPREHENSIVE_RELEASE_WORKFLOW_FILE}\` was dispatched with \`target_sha=${promote_sha}\` (full release gate). This project's final PR #${final_pr} stays unmerged until that release finishes so \`${DEFAULT_BRANCH_TRACKING:-main}\` HEAD is the version under test; hold cap ${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}s."
         tg_notify "Project #${TRACKING_NUM}: promotion of ${promote_sha:0:7} dispatched; final merge held until the release finishes." "DEBUG"
         return 1
       fi
@@ -14085,6 +14196,7 @@ Every commit between the smoke-tested commit \`${smoke_sha:0:7}\` and \`${promot
       jq --arg reason "${_dispatch_msg}" '.comprehensive_promotion = {status: "failed", reason: ("dispatch failed: " + $reason)}' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       echo "COMPREHENSIVE_PROMOTION_FAILED tracking_issue=${TRACKING_NUM} reason=dispatch_failed"
       tg_notify "Project #${TRACKING_NUM}: could not dispatch ${COMPREHENSIVE_RELEASE_WORKFLOW_FILE} (${_dispatch_msg:-unknown error}); merge proceeds without promotion." "CRITICAL"
+      comprehensive_release_cycle_freeze "${pinned}"
       return 0
       ;;
     dispatched)
@@ -14102,6 +14214,7 @@ Every commit between the smoke-tested commit \`${smoke_sha:0:7}\` and \`${promot
 
 \`${promote_sha:0:7}\` is now \`stable\` (release gate passed). Releasing the hold on final PR #${final_pr}; this project's own merge is covered by the next daily cycle."
           tg_notify "Project #${TRACKING_NUM}: ${promote_sha:0:7} promoted to stable; verifying merge released." "DEBUG"
+          comprehensive_release_cycle_freeze "${pinned}"
           return 0
           ;;
         failed)
@@ -14112,6 +14225,7 @@ Every commit between the smoke-tested commit \`${smoke_sha:0:7}\` and \`${promot
 
 The release run for \`${promote_sha:0:7}\` did not succeed; \`stable\` is unchanged. Releasing the hold on final PR #${final_pr}. The next daily cycle retries once \`${DEFAULT_BRANCH_TRACKING:-main}\` carries a new code change."
           tg_notify "Project #${TRACKING_NUM}: release of ${promote_sha:0:7} failed; stable unchanged, verifying merge released." "DEBUG"
+          comprehensive_release_cycle_freeze "${pinned}"
           return 0
           ;;
       esac
@@ -14123,6 +14237,7 @@ The release run for \`${promote_sha:0:7}\` did not succeed; \`stable\` is unchan
 
 The release run for \`${promote_sha:0:7}\` did not finish within ${COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS}s. Releasing the hold on final PR #${final_pr}; check the release run by hand."
         tg_notify "Project #${TRACKING_NUM}: promotion hold cap reached; verifying merge released, check the release run." "CRITICAL"
+        comprehensive_release_cycle_freeze "${pinned}"
         return 0
       fi
       echo "COMPREHENSIVE_PROMOTION_HOLD tracking_issue=${TRACKING_NUM} promote_sha=${promote_sha} waited=$((now - dispatched_at))s"
@@ -14248,9 +14363,13 @@ handle_comprehensive_release_callback_if_needed() {
     case "${verification_outcome}" in
       DISPATCHED*)
         echo "COMPREHENSIVE_VERIFICATION_DISPATCHED tracking_issue=${TRACKING_NUM} ${verification_outcome#DISPATCHED }"
+        local verifying_promotes="\`${DEFAULT_BRANCH_TRACKING:-main}\` as of this merge"
+        if [ "$(printf '%s' "${cycle_metadata_json}" | jq -r 'if .pinned == true then "true" else "false" end' 2>/dev/null || echo false)" = "true" ]; then
+          verifying_promotes="the pinned candidate (the smoke-tested commit the \`promote-candidate\` branch is frozen on; this merge rides the next cycle)"
+        fi
         post_tracking_comment "## 🔁 Verifying run dispatched
 
-The proving run merged. The next analysis doc (${verification_outcome#DISPATCHED doc=}) was handed to the orchestrator as the verifying run; its ready-to-merge point promotes \`${DEFAULT_BRANCH_TRACKING:-main}\` as of this merge to \`stable\`."
+The proving run merged. The next analysis doc (${verification_outcome#DISPATCHED doc=}) was handed to the orchestrator as the verifying run; its ready-to-merge point promotes ${verifying_promotes} to \`stable\`."
         tg_notify "Project #${TRACKING_NUM} (proving) merged; verifying run dispatched (${verification_outcome#DISPATCHED }). Promotion follows its ready-to-merge." "DEBUG"
         ;;
       *)
@@ -14259,6 +14378,8 @@ The proving run merged. The next analysis doc (${verification_outcome#DISPATCHED
 
 The proving run merged, but the verifying run could not be dispatched (${verification_outcome}). Nothing is promoted; the next daily promote cycle starts over once \`${DEFAULT_BRANCH_TRACKING:-main}\` carries a new code change and enough analysis docs exist."
         tg_notify "Project #${TRACKING_NUM} (proving) merged but the verifying run was not dispatched (${verification_outcome}); no promotion this cycle." "DEBUG"
+        # Terminal for a pinned cycle: no verifying gate will release the tag.
+        comprehensive_release_cycle_freeze "$(printf '%s' "${cycle_metadata_json}" | jq -r 'if .pinned == true then "true" else "false" end' 2>/dev/null || echo false)"
         ;;
     esac
   elif [ "${project_status}" = "complete" ] && [ "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r '.untrusted_marker')" = "true" ]; then
@@ -14346,6 +14467,8 @@ This tracking issue carries \`ai:comprehensive-test-pending\` but its only apply
     fi
   elif [ "${project_status}" = "failed" ] || [ "${project_status}" = "validation-failed" ]; then
     tg_notify "Comprehensive pipeline aborted for project #${TRACKING_NUM} (status: ${project_status}). Release workflow not dispatched." "DEBUG"
+    # A failed project of a pinned cycle ends the cycle: release its freeze tag.
+    comprehensive_release_cycle_freeze "$(comprehensive_cycle_metadata_json "${comments_json}" | jq -r 'if .pinned == true then "true" else "false" end' 2>/dev/null || echo false)"
 
     jq --arg status "${project_status}" --arg handled_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '.comprehensive_release_callback = {handled: true, status: $status, handled_at: $handled_at}' \
@@ -18586,6 +18709,102 @@ _pr_json_closes_issue() {
   return 2
 }
 
+# _pr_json_implements_issue — explicit opt-in "Implements #N" marker
+# (fun-token-multi-chain#639: a person's PR #667 with base
+# orchestrator/project-579 and body "Refs #639" did the work, but the poller
+# logged LINKED_PR_CROSS_REF_REJECTED reason=not_implementation_pr and #639
+# stayed ai:blocked). A bare "Refs #N" stays rejected (issue #3817 / PR #3825);
+# only this explicit, non-closing marker links such a PR.
+#
+# Input:   $1 issue number, $2 full REST `pulls/N` JSON (reads .body,
+#          .base.ref, .number).
+# Output:  return 0 (implements), 1 (no), 2 (bad input). Logs
+#          `LINKED_PR_IMPLEMENTS_MARKER issue= pr= base= outcome=accepted` or
+#          `... outcome=rejected reason=base_not_target|default_branch_unknown`
+#          on stderr, only when the body carries the marker.
+# Match:   case-insensitive `implements` followed by `#N`, `<this repo>#N` or
+#          `https://github.com/<this repo>/issues/N`, with N the exact number
+#          (`#6390` never matches `#639`; other repositories never match). The
+#          trailing boundary is `([^[:alnum:]_]|$)`, unlike
+#          _pr_json_closes_issue, so `#639-x` matches.
+# Base:    .base.ref must be `orchestrator/project-<n>` or the repository
+#          default branch from the memoized _review_run_default_branch.
+# API:     0 calls of its own; the default-branch read is the memoized helper
+#          (at most one `GET repos/<repo>` per poller process), made only when
+#          the body matches and the base is not a project branch.
+_pr_json_implements_issue() {
+	local issue_num="$1"
+	local pr_json="$2"
+	local _impl_repo="" _impl_rc=0 _impl_base="" _impl_pr="" _impl_default="" _impl_base_log=""
+
+	if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+		return 2
+	fi
+	if [ -z "${pr_json}" ] || [ "${pr_json}" = "{}" ]; then
+		return 2
+	fi
+	if [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		_impl_repo="${GITHUB_REPOSITORY}"
+	fi
+
+	printf '%s' "${pr_json}" | jq -e --arg n "${issue_num}" --arg repo "${_impl_repo}" '
+		if type != "object" then
+			false
+		else
+			(.body // "") as $body
+			| ($repo | gsub("\\."; "\\.")) as $re_repo
+			| (if $repo == "" then
+					"#" + $n
+				else
+					"#" + $n
+					+ "|" + $re_repo + "#" + $n
+					+ "|https?://github\\.com/" + $re_repo + "/issues/" + $n
+				end) as $refs
+			| (($body | type) == "string")
+				and ($body | test(
+					"(?i)(^|[^[:alnum:]_-])implements[[:space:]]+("
+					+ $refs
+					+ ")([^[:alnum:]_]|$)"
+				))
+		end
+	' >/dev/null 2>&1 || _impl_rc=$?
+	if [ "${_impl_rc}" -eq 1 ]; then
+		return 1
+	fi
+	if [ "${_impl_rc}" -ne 0 ]; then
+		return 2
+	fi
+
+	_impl_base="$(printf '%s' "${pr_json}" | jq -r '.base.ref // "" | if type == "string" then . else "" end' 2>/dev/null || echo "")"
+	_impl_pr="$(printf '%s' "${pr_json}" | jq -r '.number // "" | tostring' 2>/dev/null || echo "")"
+	[[ "${_impl_pr}" =~ ^[0-9]+$ ]] || _impl_pr="unknown"
+	if [ -z "${_impl_base}" ]; then
+		_impl_base_log="none"
+	elif [[ "${_impl_base}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+		_impl_base_log="${_impl_base}"
+	else
+		_impl_base_log="invalid"
+	fi
+
+	if [[ "${_impl_base}" =~ ^orchestrator/project-[0-9]+$ ]]; then
+		echo "LINKED_PR_IMPLEMENTS_MARKER issue=${issue_num} pr=${_impl_pr} base=${_impl_base_log} outcome=accepted" >&2
+		return 0
+	fi
+	if declare -F _review_run_default_branch >/dev/null 2>&1; then
+		_impl_default="$(_review_run_default_branch 2>/dev/null || true)"
+	fi
+	if [ -z "${_impl_default}" ]; then
+		echo "LINKED_PR_IMPLEMENTS_MARKER issue=${issue_num} pr=${_impl_pr} base=${_impl_base_log} outcome=rejected reason=default_branch_unknown" >&2
+		return 1
+	fi
+	if [ -n "${_impl_base}" ] && [ "${_impl_base}" = "${_impl_default}" ]; then
+		echo "LINKED_PR_IMPLEMENTS_MARKER issue=${issue_num} pr=${_impl_pr} base=${_impl_base_log} outcome=accepted" >&2
+		return 0
+	fi
+	echo "LINKED_PR_IMPLEMENTS_MARKER issue=${issue_num} pr=${_impl_pr} base=${_impl_base_log} outcome=rejected reason=base_not_target" >&2
+	return 1
+}
+
 # _pr_json_is_issue_implementation_pr — decide whether a PR (full REST
 # `pulls/N` JSON from _fetch_pr_json) is the issue's OWN implementation PR,
 # rather than a PR that merely mentions the issue.  The issue #3817 /
@@ -18601,7 +18820,14 @@ _pr_json_closes_issue() {
 #     `ai/issue-<n>`, or
 #   - its body carries a GitHub closing-keyword reference to the issue
 #     (_pr_json_closes_issue rc=0; covers claude-branch and validation-fix
-#     PRs that close the issue without the conventional branch name).
+#     PRs that close the issue without the conventional branch name), or
+#   - its body carries the explicit, non-closing marker `Implements #N` and
+#     its base is the default branch or an orchestrator/project-<n> branch
+#     (_pr_json_implements_issue rc=0; kill switch
+#     ORCH_IMPLEMENTS_MARKER_ENABLED=false). The marker is explicit because
+#     a bare "Refs #N" must stay rejected (issue #3817), while a person's PR
+#     that finishes a blocked item needs a way to be linked
+#     (fun-token-multi-chain#639, PR #667, rejected as not_implementation_pr).
 #
 # Return codes: 0=yes, 1=no.  Unknown/parse errors map to 1: unlike the
 # skip-recovery guards, the caller's follow-up act (adopting merged state /
@@ -18622,6 +18848,7 @@ _pr_json_is_issue_implementation_pr() {
   if _pr_json_closes_issue "${issue_num}" "${pr_json}"; then
     return 0
   fi
+  if [ "${ORCH_IMPLEMENTS_MARKER_ENABLED:-true}" != "false" ] && _pr_json_implements_issue "${issue_num}" "${pr_json}"; then return 0; fi
   return 1
 }
 
