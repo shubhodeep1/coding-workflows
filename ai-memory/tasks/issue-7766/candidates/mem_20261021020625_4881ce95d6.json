@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which job should receive the moved step(s)?\nChoices:\nA: Whichever job had the shortest duration in run 39526504422, taken from that run's job timings. Record the measured durations in the PR body. (RECOMMENDED)\nB: `tests-heal-plan-and-validation` (20-minute budget)\nC: `tests-release-and-log-analysis` (20-minute budget)\nD: Another `orchestrate-poll` matrix group (0, 2 or 3), by changing the step's `if: strategy.job-index == 1`. Group 0 already runs the fast-fail subset and the three single-file modules.\n**Note:** with A, B or C the step's `if: strategy.job-index == 1` line has to be removed, because those jobs have no matrix. That is the only change to the step body; its name stays the same.\nQ2: Which steps should move?\nChoices:\nA: Only \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\", the step that runs in group 1 alone. \"Orchestrate poll process unit tests\" stays in the matrix, and its `NR % total` partition and `tests/test_ci_poll_test_sharding.py` stay unchanged. (RECOMMENDED)\nB: The merge-train step, plus moving some of group 1's share of `tests/test_orchestrate_poll_process.py` elsewhere. This changes the two-level partition and its contract test.\nC: Leave the merge-train step where it is, and rebalance only the orchestrate-poll shard partition.\n**Note:** B and C change the sharding contract that `tests/test_ci_poll_test_sharding.py` checks, which goes beyond \"unchanged\" in the issue text.",
+  "fingerprint": "56a9c79b105e55e47c9f2232a49b53b4647d875c9035dbe0bdc4cfd8ef72782f",
+  "lineage": {
+    "issue_number": 7766,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39529940153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39529940153",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261021020625_4881ce95d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7766,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39529940153"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7766 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-21T02:06:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
