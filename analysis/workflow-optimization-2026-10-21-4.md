@@ -652,3 +652,132 @@ TODO/FIXME/HACK/XXX markers: none found in `scripts/*.sh`, `scripts/*.py` or `.g
 | Code modularization | `scripts/comprehensive_test_and_release_gh_api.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/review_rb_judge.sh`, `.github/workflows/test-and-mark-stable.yml`, new `scripts/bool_helpers.sh` plus 8 scripts with truthy copies | Medium |
 | Expression size reduction | `.github/workflows/implement.yml`, new `prompts/mode-implement-inline.txt`, new `scripts/implement_run_codex.sh`, `tests/test_workflow_file_size_limit.py` | Medium |
 | Medium/Low fixes | `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/integration-pr-readiness.yml`, `.github/workflows/lint-pr-body-auto-close.yml`, `.github/workflows/sync_ai_labels.yml`, `scripts/unblock_judge.sh`, `scripts/workflow_failure_heal_non_retryable_backfill.sh`, `scripts/review_conflict_resolve.sh` | Small |
+## API Call Consolidation & Dead-Call Analysis (2026-10-21)
+
+### Safety Tag Legend
+**`SAFE_TO_MERGE`** means static reading proves every precondition: the calls hit the same endpoint (or one asks for a strict subset of the other's fields) with the same pagination, filters and token; they sit in the same function or step with no write in between; error handling and retries stay the same; no concurrency boundary or cycle-local cache contract is crossed. The implement stage may apply these directly. **`NEEDS_VERIFICATION`** means the change looks right but at least one precondition can't be proven from the source alone, so the listed checks must pass first. **`RISKY_SKIP`** means at least one hard trigger applies: a retry, backoff or stall-recovery path; an identity, auth or permission probe; pagination; a rate-limit-sensitive path; code inside `orchestrate_poll_process.sh`; or log keys that other code greps for. These findings are listed so they stay visible, and must not be implemented automatically.
+
+### Consolidation Candidates (MERGE-###)
+No findings.
+
+The merge-type overlaps found in this pass are already raised in the Deep Audit as API-004, API-005 and API-008. Their tags and the extra detail for each are under Cross-References below.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001 — `RISKY_SKIP`**
+- **Calls involved:**
+  - `scripts/orchestrate_poll_process.sh:3887-3908`: `unblock_trusted_login()`, cached per tick in `UNBLOCK_TRUSTED_LOGIN` / `UNBLOCK_TRUSTED_LOGIN_STATE`, called at `:18898`.
+  - `scripts/orchestrate_poll_process.sh:30106-30109` and `:30361-30369`: the noop-suspicious sweep's own separate cache, `NOOP_CAP_TRUSTED_LOGIN` / `NOOP_CAP_TRUSTED_LOGIN_STATE`.
+- **Endpoint:** `GET /user` (REST) in both places.
+- **Call count:** up to 2 per poll tick today, when both paths run in the same process; 1 after the change.
+- **Evidence:** two caches in the same main-tick process (after the sweep-only exit at `:209-213`) store the same value from the same token:
+  ```bash
+  # :3895
+  UNBLOCK_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
+  # :30362
+  NOOP_CAP_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+  ```
+- **Proposed fix:**
+  - At `:30361`, when `UNBLOCK_TRUSTED_LOGIN_STATE` is `ok`, seed `NOOP_CAP_TRUSTED_LOGIN` from `${UNBLOCK_TRUSTED_LOGIN}`, lowercased, and set `NOOP_CAP_TRUSTED_LOGIN_STATE=ok`. Otherwise keep the existing read.
+  - Do **not** call `unblock_trusted_login()` from the noop path. On failure it sends a `CRITICAL` Telegram alert ("tracking projects are paused", `:3901-3904`), which would change what operators see when the noop path is the first to resolve the login.
+- **Safety rationale:** RISKY_SKIP on two counts. The code is in `orchestrate_poll_process.sh`, and the login is the trust anchor that authenticates fingerprint-cap marker authors. The two caches also validate differently: `:3896` checks a regex that allows a `[bot]` suffix, while `:30363` only checks the value is non-empty.
+- **Downstream signal:** do not implement automatically. Manual review must:
+  1. confirm that `unblock_trusted_login` normally resolves before `:30361` in the same tick, otherwise the saving is zero;
+  2. agree which validation rule wins;
+  3. confirm that the `::warning::` at `:30367` still fires only on a real resolution failure.
+
+**REUSE-002 — `RISKY_SKIP`**
+- **Calls involved:**
+  - `scripts/orchestrate_poll_process.sh:44` (`replay_failed_reclarify_commands`)
+  - `scripts/orchestrate_poll_process.sh:157` (`detect_unrouted_blocked_comments`)
+  - Both are called back to back at `:210-211` in `RECLARIFY_REQUEUE_SWEEP_ONLY` mode.
+- **Endpoint:** `GET /rate_limit` in both places.
+- **Call count:** 2 per sweep-only tick today; 1 after the change.
+- **Evidence:**
+  ```bash
+  # :44
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || return 0
+  # :157
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || budget=""
+  ```
+- **Proposed fix:** have the sweep-only branch at `:209-212` read the budget once and pass it to both functions, with each function keeping its own `-ge 500` / `-lt 500` gate.
+- **Safety rationale:** RISKY_SKIP. Both calls are rate-limit probes in `orchestrate_poll_process.sh`, and the replay between them can spend 1 + 2N calls (`:46`, `:51`, `:55`, `:58`). Reusing the first reading would make the second gate less conservative, and would change the `remaining=` value in the `RECLARIFY_UNROUTED outcome=skip reason=budget_low` log line (`:159`). Inference, not checked here (no web access): GitHub documents `/rate_limit` as not counting against the core quota, so the saving would be one round trip, not quota.
+- **Downstream signal:** do not implement automatically. It needs manual sign-off that a budget reading taken before the replay is acceptable for the unrouted-comment detector. The quota saving is probably nil, so this is low priority.
+
+**REUSE-003 — `NEEDS_VERIFICATION`**
+- **Calls involved:** `.github/workflows/review_autofix_sweep.yml:285`. The same job already reads the event payload's default branch at `:147`.
+- **Endpoint:** `GET /repos/{owner}/{repo}` (`.default_branch`), using `READ_TOKEN` (`github.token`), so it does not spend `GH_PAT` budget.
+- **Call count:** 1 per tick with at least one candidate (up to 48 per day) today; 0 after the change when the payload has the field, with 1 as the fallback.
+- **Evidence:**
+  ```yaml
+  # :147 (same job, earlier step)
+  ref: ${{ github.event.repository.default_branch || github.ref_name }}
+  # :285
+  sweep_default_branch="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}" --jq .default_branch 2>/dev/null || true)"
+  ```
+  This was already recommended and not implemented in `analysis/workflow-optimization-2026-10-15-2.md:397-401`. The env name proposed there, `SWEEP_EVENT_DEFAULT_BRANCH`, appears nowhere else in the repo, so it does not collide.
+- **Proposed fix:**
+  - Add `SWEEP_EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}` to the "Enumerate open PRs" step `env:` (`:202-211`).
+  - At `:285`, use that value when it matches `^[A-Za-z0-9._/-]+$`; otherwise run the existing API read unchanged.
+  - Keep the `default_branch_unavailable` skip at `:286-290` as is.
+- **Safety rationale:** NEEDS_VERIFICATION. It is not proven that `schedule` payloads include `repository.default_branch`; the `|| github.ref_name` fallback at `:147` suggests the authors were not sure either. The value also feeds the #6629 provenance check (`:278-284`, `:376-385`), whose comment says "no fallback".
+- **Downstream signal:** before implementing:
+  1. Inspect `github.event` for a schedule-triggered sweep run, such as run 39596230401, and confirm `repository.default_branch` is present and non-empty.
+  2. Confirm with the #6629 owner that a default branch taken at trigger time is acceptable in place of a live read for the provenance filter.
+
+**REUSE-004 — `RISKY_SKIP`**
+- **Calls involved:**
+  - `scripts/review_single_issue_security_pass.sh:370`, in `single_pass_gate` (`:318-577`). It is run by the review_autofix.yml step "Single-issue security pass" (`:4172-4200`).
+  - `scripts/review_rb_judge_security_pass.sh:210`, in `rb_security_block_already_reported`. It runs only when the review-blocked judge checks a security hold.
+  - The data already exists as the gate job output `fingerprint_cap_marker_author_login` (`.github/workflows/review_autofix.yml:328`). It is written by `scripts/review_autofix_step_evaluate_gate.sh:1371` from the gate's own `GET /user` at `:334`, and is already reused by the heal reporter at `review_autofix.yml:5686`.
+- **Endpoint:** `GET /user`.
+- **Call count:** 1–2 per codex-agent run that reaches the clean-review tail today; 0 after the change when the gate output is non-empty, with the existing reads kept as fallback.
+- **Evidence:**
+  ```bash
+  # review_single_issue_security_pass.sh:370
+  SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+  # review_rb_judge_security_pass.sh:210
+  author="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" || return 2
+  ```
+- **Proposed fix:** pass `needs.gate.outputs.fingerprint_cap_marker_author_login` through a new env var into both steps, and use it only when it is non-empty.
+- **Safety rationale:** RISKY_SKIP, for three reasons:
+  - The login authenticates who posted pipeline markers, which makes this an authentication flow.
+  - The value would cross a job boundary.
+  - The tokens can differ. The security-pass step runs with `GH_TOKEN: ${{ secrets.GH_PAT || github.token }}` (`:4187`) and has a `github-actions[bot]` fallback (`:4197`). The gate's evaluate step appears to run with `secrets.GH_PAT` (`:616`; the step boundary was inferred, not confirmed). So when `GH_PAT` is empty the two identities differ.
+  - Also, the gate output is set only when `gate_fetch_marker_comments` actually ran (`:323-340`); it stays empty while the fetch state is `pending`.
+- **Downstream signal:** do not implement automatically. A security reviewer must:
+  1. confirm the gate evaluate step's `GH_TOKEN`;
+  2. decide whether an identity carried across jobs is acceptable as a trust anchor for blocking or merging;
+  3. make sure the saving (at most 2 of the roughly 200 calls per run) is worth the extra coupling.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+Calls checked and confirmed to be used:
+- `scripts/review_conflict_prepare.sh:1113-1116`: the tracking issue's title and body are read at `:1327-1333` and `:1359-1369`.
+- `scripts/workflow_failure_heal_non_retryable_backfill.sh:150`: `LOGIN` feeds the selector at `:291` and the reporter at `:404`, so the reporter skips its own `GET /user` (`workflow_failure_heal_autofix_report.sh:216-228`).
+- `scripts/workflow_failure_heal_report.sh:172` and `:210`: the second read only happens when `HEAL_REPORTER_LOGIN` is still empty.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — it changes how the shared retry helpers `curl_gh_api` and `gh_api_json_to_file` retry and back off. Every caller of `gh_helpers.sh` inherits the change, so it needs per-caller review of which 404/422 responses those callers currently rely on being retried.
+- API-002: RISKY_SKIP — the code is in `orchestrate_poll_process.sh` and re-reads labels after review-blocked handling. A batched read could return labels from before the review-blocked writes (inference). Fold it into DUP-004 only with a manual review of how fresh the labels must be.
+- API-003: RISKY_SKIP — `orchestrate_poll_process.sh`; the blocker-state reads gate whether a wave advances. Keep the per-issue REST read as the fallback for missing keys, exactly as API-003 proposes.
+- API-004: RISKY_SKIP — this is stall recovery in `orchestrate_poll_process.sh`, and each call is a paginated `gh issue list --limit 1000`. New detail: today each label fails on its own (`|| echo '[]'` at `:20673`), so one failed label loses only that label's issues. A single aliased query would turn one failure into seven missing labels. The batched version must fall back to the per-label loop on any error.
+- API-005: RISKY_SKIP — the `:883` labels call also detects rate-limit backoff (`[ "$RATE_LIMIT_BACKOFF" -gt 0 ] && [ -z "$LABELS" ]`, `:887`). Changing that call's `--jq` output into an object breaks the empty check unless the check is rewritten too. Note also that `.comments` is a total, while today's `length` stops at 30 (first page). That changes `CUR_STATE` (`:894`), which is the intended effect of BUG-002 but is still a behavior change.
+- API-006: NEEDS_VERIFICATION — confirmed at `scripts/workflow_failure_heal_pr_reconcile.sh:243`. It is a single unpaginated `per_page=10` call, and the server-side `head=` filter is already re-checked locally at `:250`. Swapping it for a paginated list of all open PRs would *add* pagination and probably cost more, since `HEAL_ISSUES` is usually 1–2. Measure open-PR count against `HEAL_ISSUES` size before acting.
+- API-007: RISKY_SKIP — the issue GET at `scripts/orchestrate_poll_process.sh:55` is deliberately a *live* re-read. The comment at `:37-41` says "The marker is data, not authorization… live issue read per queued issue", and the `:46` listing already filters by state and label. Batching it would replace a live check against races with an earlier snapshot.
+- API-008: RISKY_SKIP — the calls are paginated (`--paginate`, `:340`). The 404 rule ("workflow file absent counts as no runs", `:331-334`, `:344`) is per workflow, and that distinction is lost with a single repo-wide listing. Snapshot keys are `${workflow}:${head_ref}` (`:424`), so a repo-wide listing would have to rebuild the per-workflow split from `.path`, including runs of the reusable `review_autofix.yml` reached through `internal-review.yml`. The code comment at `:322-324` marks the current shape as §15-audited.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-003, API-006 |
+| RISKY_SKIP | 10 | REUSE-001, REUSE-002, REUSE-004, API-001, API-002, API-003, API-004, API-005, API-007, API-008 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
+- Next best candidate: REUSE-003 can become SAFE_TO_MERGE once its two checks pass (the schedule payload carries `repository.default_branch`, and the #6629 provenance owner signs off).
+- Assumptions: the step boundary at `review_autofix.yml:616` was inferred from where the `env:` blocks sit. The claim that `/rate_limit` does not count against the core quota is from memory; there was no web access to confirm it.
+- Missing context: no run logs were mounted, so the per-step split of the roughly 200 calls in codex-agent is unknown. That limits how far the savings in REUSE-004 can be measured.
