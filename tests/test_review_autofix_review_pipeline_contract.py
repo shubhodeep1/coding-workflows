@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import http.client
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -74,7 +75,14 @@ def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> Non
 	assert 'bash .codex-head-gate-src/scripts/review_head_gate.sh gate' in workflow
 	assert 'auto_merge_enabled: (if has("auto_merge")' in workflow
 	assert 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' in workflow
-	assert workflow.index('if _pr_gate=') < workflow.index('GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}"') < workflow.index('# Port P6: retarget')
+	# The gate's single PR read goes through the classified retry helper
+	# (#6634); the head gate runs only after that read succeeded.
+	assert (
+		workflow.index('_pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}"')
+		< workflow.index('if [ "${_pr_gate_rc}" -eq 0 ]; then')
+		< workflow.index('GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}"')
+		< workflow.index('# Port P6: retarget')
+	)
 	assert 'echo "HEAD_GATE_EARLY_DONE=true" >> "${GITHUB_ENV}"' in workflow
 	assert 'export EVENT_NAME=workflow_dispatch' in workflow
 	for key in ("PR_EVENT_HEAD_SHA", "GATE_HEAD_SHA", "GATE_AUTO_MERGE_ENABLED", "DETERMINISTIC_SKIP", "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED"):
@@ -1845,6 +1853,11 @@ def _run_reviewer_slot_retry_budget_harness() -> dict[str, object]:
 			"HOME": str(home),
 			"CODEX_HOME": str(seed_codex_home),
 			"GITHUB_ENV": str(github_env_file),
+			# review_run_reviewers.sh exits early unless SUPPORT_SCRIPTS_DIR is
+			# absolute (#5824), so its helpers read it without a default. This
+			# harness skips that guard: without the variable,
+			# reviewer_cache_status_for_model dies on `set -u` and kills the run.
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "0",
 			"REVIEWER_FAILBACK_MAX_RETRIES": "1",
 			"REVIEWER_FAILBACK_CHAINS_FILE": str(failback_file),
@@ -7059,6 +7072,11 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 				"REVIEW_SUPPORT_SHA": support_sha,
 				"AUTO_MERGE_CHECKS_POLL_SECONDS": "1",
 				"AUTO_MERGE_CHECKS_WAIT_MINUTES": "1",
+				# Do not inherit the runner's repository: in this repo the
+				# required CI check defaults to `lint` (#6963), which the fake
+				# gh cannot bind to a CI run, so the wait would time out.
+				"GITHUB_REPOSITORY": "test-owner/test-repo",
+				"AUTO_MERGE_REQUIRED_CI_CHECK": "none",
 			})
 			result = subprocess.run(["bash", "-c", step["run"]], env=env, cwd=tmp, capture_output=True, text=True, check=False)
 			assert result.returncode == 0, result.stderr
@@ -8319,10 +8337,15 @@ def test_review_support_identity_is_bound_across_jobs() -> None:
 	assert "review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}" in gate_job
 	assert "review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}" in gate_job
 	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in gate_job
-	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in _step_block("Resolve trusted review support commit")
-	assert "gh api repos/shubhodeep1/coding-workflows/branches/main" in gate_job
-	assert "gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
-	assert "gh api repos/shubhodeep1/coding-workflows/commits/stable" not in gate_job
+	resolve_support_step = _step_block("Resolve trusted review support commit")
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in resolve_support_step
+	# The lookups use the classified retry helper (#6634), with a plain
+	# `gh api` fallback when the helper library did not load.
+	assert 'source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true' in resolve_support_step
+	assert 'type gh_api_retry >/dev/null 2>&1 || gh_api_retry() {' in resolve_support_step
+	assert "gh_api_retry repos/shubhodeep1/coding-workflows/branches/main" in gate_job
+	assert "gh_api_retry repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
+	assert "repos/shubhodeep1/coding-workflows/commits/stable" not in gate_job
 	for job_name in ("gate", "post-merge-validate-dispatch", "post-merge-force-poll", "fingerprint-cap-block", "codex-agent"):
 		job = _job_block(job_name)
 		assert "job.workflow_" not in job, job_name
@@ -8541,157 +8564,66 @@ def test_post_merge_validate_dispatch_exit_status_after_loop() -> None:
 				assert "issue edit 12" in calls and "--remove-label" in calls, calls
 
 
+def _plain_runner_parametrize_cases(func) -> list[dict[str, object]]:
+	"""Expand ``@pytest.mark.parametrize`` marks into keyword sets.
+
+	Input: a test function. Output: one kwargs dict per pytest case
+	(``[{}]`` for an unparametrized test), so main() calls each test the way
+	pytest would.
+	"""
+	cases: list[dict[str, object]] = [{}]
+	for mark in getattr(func, "pytestmark", []):
+		if mark.name != "parametrize":
+			continue
+		argnames, argvalues = mark.args[0], mark.args[1]
+		if isinstance(argnames, str):
+			argnames = tuple(part.strip() for part in argnames.split(","))
+		expanded: list[dict[str, object]] = []
+		for base in cases:
+			for values in argvalues:
+				if len(argnames) == 1:
+					values = (values,)
+				expanded.append({**base, **dict(zip(argnames, values))})
+		cases = expanded
+	return cases
+
+
+def _plain_runner_tests() -> list[object]:
+	"""Every ``test_*`` function in this module, in definition order (pytest's order)."""
+	return [value for name, value in list(globals().items()) if name.startswith("test_") and callable(value)]
+
+
+def test_plain_runner_can_call_every_test() -> None:
+	"""main() supplies only parametrize values and ``tmp_path``.
+
+	A test that needs any other pytest fixture would pass under pytest but
+	crash the ``python3`` runner CI uses, so catch that under pytest too.
+	"""
+	for test_func in _plain_runner_tests():
+		for kwargs in _plain_runner_parametrize_cases(test_func):
+			for name, param in inspect.signature(test_func).parameters.items():
+				assert name in kwargs or name == "tmp_path" or param.default is not inspect.Parameter.empty, (
+					f"{test_func.__name__} needs fixture {name!r}, which main() cannot supply"
+				)
+
+
 def main() -> int:
-	test_review_pipeline_knobs_are_wired_into_codex_agent_env()
-	test_opencode_full_review_cutover_removes_codex_runtime()
-	test_review_preflight_missing_opencode_binary_emits_classified_error()
-	test_reviewer_missing_opencode_helpers_emits_classified_error()
-	test_summariser_missing_opencode_helpers_emits_classified_error()
-	test_review_soft_deadline_budget_contract_is_wired()
-	test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated()
-	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
-	test_collect_pr_check_runs_helper_closes_direct_log_redirect_response()
-	test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion()
-	test_post_review_snapshot_ignores_only_its_own_incomplete_check()
-	test_pending_and_startup_failure_checks_cannot_look_clean()
-	test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list()
-	test_collect_pr_check_runs_helper_rejects_malformed_successful_output()
-	test_collect_pr_check_runs_helper_recovers_from_malformed_snapshot()
-	test_collect_pr_check_runs_helper_stops_malformed_repoll_at_deadline()
-	test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout()
-	test_collect_pr_check_runs_helper_fail_open_contracts()
-	test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
-	test_collect_pr_check_runs_helper_top_level_exception_is_fail_open()
-	test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode()
-	test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default()
-	test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled()
-	test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input()
-	test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions()
-	test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_errors_without_data()
-	test_review_collect_pr_metadata_helper_caps_fallback_graphql_batch_at_twenty_issues()
-	test_extract_repo_scoped_issue_refs_rejects_malformed_repository_input()
-	test_review_scripts_emit_context_budget_warn_signals()
-	test_review_consolidator_prompt_is_staged_for_review_runtime_support()
-	test_review_filter_smoke_fixtures_are_present()
-	test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex()
-	test_review_filter_helper_wiring_is_flag_gated_and_fail_open()
-	test_agents_md_materiality_classifier_and_workflow_wiring()
-	test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers()
-	test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models()
-	test_stall_guard_retryable_failures_log_deterministic_reviewer_advance()
-	test_silent_retry_exhaustion_logs_terminal_failure_reason()
-	test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green()
-	test_reviewer_health_dispatch_logs_to_stderr_only()
-	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()
-	test_reviewer_zero_success_guard_fails_closed_for_lite_without_a_successful_reviewer()
-	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
-	test_reviewer_filter_script_preserves_nested_exempt_paths()
-	test_reviewer_filter_script_preserves_root_level_migration_exempt_paths()
-	test_reviewer_filter_script_strips_deleted_generated_file_when_workspace_copy_is_missing()
-	test_reviewer_filter_script_keeps_deleted_file_when_first_hunk_starts_later()
-	test_reviewer_filter_script_ignores_later_hunk_marker_when_first_hunk_has_no_marker()
-	test_reviewer_filter_script_keeps_existing_file_with_marker_on_line_six()
-	test_reviewer_filter_script_keeps_deleted_file_with_marker_on_line_six()
-	test_reviewer_filter_script_ignores_existing_file_marker_beyond_header_lines()
-	test_reviewer_filter_script_ignores_deleted_file_marker_beyond_header_lines()
-	test_reviewer_filter_harness_fails_open_when_disabled_missing_or_failing()
-	test_reviewer_filter_stat_harness_handles_brace_expansion_renames()
-	test_reject_verifier_bootstrap_and_stage_order_contract()
-	test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branches()
-	test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets()
-	test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain()
-	test_review_pipeline_summary_step_is_local_only_and_grep_friendly()
-	test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_slots()
-	test_review_pipeline_summary_reports_partial_finalize_validated_push()
-	test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety()
-	test_review_pipeline_summary_classifies_editor_noop_recoverable_failure()
-	test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence()
-	test_review_partial_finalize_publish_safety_gate_is_wired()
-	test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout()
-	test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains()
-	test_review_partial_finalize_publish_safety_gate_prefers_codex_budget_start_epoch_when_withholding()
-	test_review_partial_finalize_workflow_path_is_wired()
-	test_review_partial_finalize_comment_and_marker_report_validated_push_state()
-	test_review_partial_finalize_comment_and_marker_report_withheld_state()
-	test_same_head_partial_resume_restore_prefers_latest_matching_marker_and_ignores_other_heads()
-	test_same_head_partial_resume_restore_fails_open_when_no_marker_matches_head()
-	test_reviewer_resume_reuses_cached_successes_and_reruns_only_incomplete_slots()
-	test_review_partial_resume_path_does_not_workflow_dispatch_without_new_push()
-	test_review_partial_finalize_marker_sets_no_progress_terminal_state()
-	test_review_partial_finalize_marker_sets_round_budget_exhausted_terminal_state()
-	test_same_head_partial_resume_restore_rehydrates_cached_artifacts_and_preserves_no_progress_across_run_dirs()
-	test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned()
-	test_reviewer_and_consolidator_slop_scan_context_is_wired()
-	test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides()
-	test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables()
-	test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel()
-	test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer("lite")
-	test_risk_tier_sole_mistral_retries_with_live_larger_window_reviewer()
-	test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args()
-	test_review_tier_protected_paths_match_deterministic_skip_gate()
-	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
-	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path()
-	test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_skip_path()
-	test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse()
-	test_gate_emits_force_full_review_tier_output_for_phase_i_resolver()
-	test_reviewer_prompt_output_rules_still_forbid_scripts()
-	test_reviewer_iteration_scope_first_iteration_keeps_full_diff_context()
-	test_reviewer_iteration_scope_valid_artifacts_narrow_to_last_run_and_actionable_ledger_files()
-	test_reviewer_iteration_scope_fails_open_on_bad_scope_artifacts()
-	test_reviewer_iteration_scope_uses_targeted_context_helper_and_scoped_semble_labels()
-	test_reviewer_iteration_scope_prepare_path_accepts_root_level_actionable_files()
-	test_reviewer_iteration_scope_prepare_path_trims_trailing_parenthesis_from_root_level_actionable_files()
-	test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trailing_punctuation()
-	test_reviewer_iteration_scope_prepare_path_preserves_hidden_directory_prefixes()
-	test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper()
-	test_dependency_install_bootstraps_pytest_when_pyproject_declares_it()
-	test_dependency_install_warns_when_pytest_bootstrap_does_not_take()
-	test_dependency_install_bootstraps_pytest_for_nested_conftest()
-	test_dependency_install_skips_pytest_bootstrap_when_already_importable()
-	test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos()
-	test_dependency_install_stalled_optional_install_times_out_when_bounded()
-	test_dependency_install_unbounded_when_flag_disabled()
-	test_dependency_install_budget_exhausted_skips_remaining_steps()
-	test_review_sandbox_bounded_install_flag_contract()
-	test_review_sandbox_bounded_install_host_normalization()
-	test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha()
-	test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha()
-	test_review_blocked_judge_merges_are_bound_to_judged_head_sha()
-	test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha()
-	test_identical_failure_fingerprint_cap_gate_wiring()
-	test_identical_failure_fingerprint_cap_block_job_wiring()
-	test_identical_failure_fingerprint_marker_on_every_failure_comment()
-	test_identical_failure_fingerprint_stage_stderr_is_captured()
-	test_editor_preflight_mode_covers_every_guard()
-	test_editor_preflight_mode_reports_each_check_and_fails_fast()
-	test_editor_preflight_step_wiring()
-	test_main_pinned_scripts_add_no_runtime_output_over_main()
-	test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop()
-	test_stage_step_backfills_missing_model_catalog_rows_from_main()
-	test_stage_step_model_catalog_backfill_fails_open()
-	test_review_isolation_wiring_and_model_relay()
-	test_review_isolation_workspace_transfer_and_hostile_paths()
-	test_review_isolation_transfer_failure_evidence()
-	test_review_other_sandbox_transfer_failure_evidence()
-	test_review_isolation_traverses_only_allowed_github_directories()
-	test_review_isolation_unsafe_directory_reports_path_free_category()
-	test_review_isolation_rejection_line_drops_unknown_tokens()
-	test_review_isolation_reports_snapshot_refresh_and_transfer_reasons()
-	test_review_isolation_reports_result_conflicts_host()
-	test_review_isolation_transfers_into_active_work_tree()
-	test_review_relay_accepts_only_configured_chat_model()
-	test_review_relay_main_preserves_invoked_mode()
-	test_review_sandbox_cleanup_failure_cannot_skip_commit_or_fake_changes_lost()
-	test_review_sandbox_cleanup_reports_path_free_reason()
-	test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge()
-	test_post_merge_validate_dispatch_retries_label_removal_but_not_dispatch()
-	test_post_merge_validate_dispatch_notice_when_no_issue_requires_validation()
-	test_post_merge_validate_dispatch_fails_closed_when_required_dispatch_fails()
-	test_post_merge_validate_dispatch_exit_status_after_loop()
-	test_normalize_openrouter_usage_reports_missing_reason()
-	test_normalize_openrouter_usage_available_line_has_no_reason()
-	test_cost_audit_openrouter_re_matches_line_with_missing_reason()
-	_run_reviewer_pass2_shadow_tests()
+	"""Run every ``test_*`` function, as pytest would.
+
+	CI and the release gates (ci.yml, mark-stable.yml,
+	test-and-mark-stable.yml) run this file with ``python3``, which executes
+	only main(). main() used to call a hand-kept list; 47 tests were missing
+	from it, so CI never ran them, and four had gone stale unnoticed.
+	Collecting the module's ``test_*`` functions means a new test cannot drop
+	out of CI.
+	"""
+	for test_func in _plain_runner_tests():
+		for kwargs in _plain_runner_parametrize_cases(test_func):
+			if "tmp_path" in inspect.signature(test_func).parameters and "tmp_path" not in kwargs:
+				with tempfile.TemporaryDirectory(prefix="review-pipeline-tmp-path-") as tmp_dir:
+					test_func(tmp_path=Path(tmp_dir), **kwargs)
+				continue
+			test_func(**kwargs)
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 
@@ -9500,14 +9432,38 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 
 
 def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
-	"""The judge selects the sandbox target without replacing the checkout's .git."""
+	"""The judge selects the sandbox target without replacing the checkout's .git.
+
+	The fix writer prepares its sandbox through
+	review_rb_opencode_sandbox_prepare (`prepare-ephemeral codex`, #6208). The
+	harness runs the judge's own selection block, prepare function and call
+	line; only the OpenCode config writer is stubbed.
+	"""
 	judge = RB_JUDGE.read_text(encoding="utf-8")
 	assert 'GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}"' not in judge
 	assert '"GITHUB_WORKSPACE=${RB_OPENCODE_WORKSPACE}"' not in judge
-	selection = judge.split('      rb_fix_checkout_real=', 1)[1].split('      if ! env "${rb_fix_sandbox_workspace_env[@]}"', 1)[0]
-	prepare_line = judge.split('      if ! env "${rb_fix_sandbox_workspace_env[@]}"', 1)[1].splitlines()[0]
-	prepare_command = 'env "${rb_fix_sandbox_workspace_env[@]}"' + prepare_line.removesuffix('; then')
-	judge_prepare = 'RB_OPENCODE_WORKSPACE="$(pwd)"\nrb_fix_checkout_real=' + selection + prepare_command
+	prepare_function = re.search(r"(?ms)^review_rb_opencode_sandbox_prepare\(\)\n\{\n.*?^\}\n", judge)
+	assert prepare_function, "missing review_rb_opencode_sandbox_prepare"
+	assert 'bash "${rb_oc_sandbox_sh}" prepare-ephemeral codex' in prepare_function.group(0)
+	selection = judge.split('      rb_fix_checkout_real=', 1)[1].split('      rb_fix_isolation_deferred=false\n', 1)[0]
+	prepare_lines = [
+		line.strip() for line in judge.splitlines()
+		if 'review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix' in line
+	]
+	assert prepare_lines == [
+		'elif ! WORKSPACE_PATH="${rb_fix_workspace_path}" review_rb_opencode_sandbox_prepare '
+		'"${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"; then'
+	]
+	prepare_command = prepare_lines[0].removeprefix("elif ! ").removesuffix("; then")
+	judge_prepare = (
+		"set -euo pipefail\n"
+		+ prepare_function.group(0)
+		+ "review_rb_prepare_opencode_config() { :; }\n"
+		+ 'RB_OPENCODE_WORKSPACE="$(pwd)"\nrb_fix_serena_mode="off"\n'
+		+ "rb_fix_checkout_real=" + selection
+		+ prepare_command + "\n"
+		+ 'printf "REVIEW_SANDBOX_ROOT=%s\\n" "${RB_OC_SANDBOX_ROOT}"\n'
+	)
 
 	with tempfile.TemporaryDirectory(prefix="rb-fix-iso-") as td:
 		root = Path(td)
@@ -9542,25 +9498,27 @@ def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
 				if [ "$editor" = true ]; then printf 'after\\n' > "${source_dir}/scripts/app.py"; fi
 				"""))
 		docker_stub.chmod(0o755)
-		github_env = root / "github_env"
-		github_env.write_text("")
+		fix_stderr = root / "rb_fix_stderr.txt"
 		env = _git_clean_env({
 			"PATH": f"{stub_bin}:{os.environ['PATH']}",
 			"GIT_DIR": str(checkout / ".git"),
 			"GIT_WORK_TREE": str(work_tree),
 			"WORKSPACE_PATH": str(work_tree),
 			"GITHUB_WORKSPACE": str(checkout),
-			"rb_fix_sandbox_env": str(github_env),
 			"RUNNER_TEMP": str(root),
 			"RUNTIME_DIR": str(root / "runtime"),
 			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RB_FIX_OPENCODE_CONFIG": str(root / "rb_fix_opencode.json"),
+			"RB_FIX_STDERR": str(fix_stderr),
 			"OPENROUTER_API_KEY": "test-only-key",
 			"PYTHONDONTWRITEBYTECODE": "1",
 		})
+		env.pop("GITHUB_ENV", None)
 		sandbox = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+		# #6455: the per-PR tree has no .git, so GITHUB_WORKSPACE must stay the checkout.
 		old_call = subprocess.run(
-			["bash", sandbox, "prepare"], cwd=work_tree,
-			env={**env, "GITHUB_WORKSPACE": str(work_tree), "GITHUB_ENV": str(github_env)},
+			["bash", sandbox, "prepare-ephemeral", "codex"], cwd=work_tree,
+			env={**env, "GITHUB_WORKSPACE": str(work_tree)},
 			capture_output=True, text=True, timeout=120,
 		)
 		assert old_call.returncode != 0 and "Review workspace path rejected" in old_call.stderr
@@ -9568,8 +9526,9 @@ def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
 			["bash", "-c", judge_prepare], cwd=work_tree, env=env,
 			capture_output=True, text=True, timeout=120,
 		)
-		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
-		sandbox_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert prepared.returncode == 0, prepared.stdout + prepared.stderr + fix_stderr.read_text()
+		sandbox_root = prepared.stdout.split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert sandbox_root
 		assert (Path(sandbox_root) / "workspace").read_text().strip() == str(work_tree)
 		prompt = root / "prompt.txt"
 		prompt.write_text("fix it\n")
@@ -9578,8 +9537,9 @@ def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
 			"model": "openrouter/openai/gpt-6-sol",
 			"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}},
 		}))
+		# Same argument shape as the judge's rb_fix_opencode_cmd.
 		ran = subprocess.run(
-			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config)],
+			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config), "codex", "RB_JUDGE", "write"],
 			cwd=work_tree, env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root},
 			capture_output=True, text=True, timeout=120,
 		)
@@ -9588,13 +9548,13 @@ def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
 		assert (checkout / "scripts/app.py").read_text() == "before\n"
 
 		# The checkout layout must ignore a stale inherited per-PR target.
-		github_env.write_text("")
 		legacy = subprocess.run(
 			["bash", "-c", judge_prepare], cwd=checkout, env=env,
 			capture_output=True, text=True, timeout=120,
 		)
-		assert legacy.returncode == 0, legacy.stdout + legacy.stderr
-		legacy_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert legacy.returncode == 0, legacy.stdout + legacy.stderr + fix_stderr.read_text()
+		legacy_root = legacy.stdout.split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert legacy_root and legacy_root != sandbox_root
 		assert (Path(legacy_root) / "workspace").read_text().strip() == str(checkout)
 		for sandbox_root_to_clean in (sandbox_root, legacy_root):
 			subprocess.run(
@@ -10516,10 +10476,10 @@ def test_reviewer_pass2_still_launches_when_shadow_would_skip(tmp_path: Path) ->
 
 
 def _run_reviewer_pass2_shadow_tests() -> None:
-	"""Run the pytest-style pass-2 shadow tests from main().
+	"""Run the pytest-style pass-2 shadow tests, each case in its own temporary directory.
 
-	CI and the release gates run this file with ``python3``, which executes
-	only main(), so each case gets its own temporary directory here.
+	main() no longer calls this: it now runs every ``test_*`` function,
+	these included, with the same parametrize cases and ``tmp_path``.
 	"""
 	cases: list[tuple[object, tuple[object, ...]]] = [
 		(test_reviewer_pass2_shadow_eligible, ()),
