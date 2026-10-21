@@ -74,7 +74,14 @@ def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> Non
 	assert 'bash .codex-head-gate-src/scripts/review_head_gate.sh gate' in workflow
 	assert 'auto_merge_enabled: (if has("auto_merge")' in workflow
 	assert 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' in workflow
-	assert workflow.index('if _pr_gate=') < workflow.index('GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}"') < workflow.index('# Port P6: retarget')
+	# The gate's single PR read goes through the classified retry helper
+	# (#6634); the head gate runs only after that read succeeded.
+	assert (
+		workflow.index('_pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}"')
+		< workflow.index('if [ "${_pr_gate_rc}" -eq 0 ]; then')
+		< workflow.index('GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}"')
+		< workflow.index('# Port P6: retarget')
+	)
 	assert 'echo "HEAD_GATE_EARLY_DONE=true" >> "${GITHUB_ENV}"' in workflow
 	assert 'export EVENT_NAME=workflow_dispatch' in workflow
 	for key in ("PR_EVENT_HEAD_SHA", "GATE_HEAD_SHA", "GATE_AUTO_MERGE_ENABLED", "DETERMINISTIC_SKIP", "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED"):
@@ -1845,6 +1852,11 @@ def _run_reviewer_slot_retry_budget_harness() -> dict[str, object]:
 			"HOME": str(home),
 			"CODEX_HOME": str(seed_codex_home),
 			"GITHUB_ENV": str(github_env_file),
+			# review_run_reviewers.sh exits early unless SUPPORT_SCRIPTS_DIR is
+			# absolute (#5824), so its helpers read it without a default. This
+			# harness skips that guard: without the variable,
+			# reviewer_cache_status_for_model dies on `set -u` and kills the run.
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
 			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "0",
 			"REVIEWER_FAILBACK_MAX_RETRIES": "1",
 			"REVIEWER_FAILBACK_CHAINS_FILE": str(failback_file),
@@ -8319,10 +8331,15 @@ def test_review_support_identity_is_bound_across_jobs() -> None:
 	assert "review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}" in gate_job
 	assert "review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}" in gate_job
 	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in gate_job
-	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in _step_block("Resolve trusted review support commit")
-	assert "gh api repos/shubhodeep1/coding-workflows/branches/main" in gate_job
-	assert "gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
-	assert "gh api repos/shubhodeep1/coding-workflows/commits/stable" not in gate_job
+	resolve_support_step = _step_block("Resolve trusted review support commit")
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in resolve_support_step
+	# The lookups use the classified retry helper (#6634), with a plain
+	# `gh api` fallback when the helper library did not load.
+	assert 'source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true' in resolve_support_step
+	assert 'type gh_api_retry >/dev/null 2>&1 || gh_api_retry() {' in resolve_support_step
+	assert "gh_api_retry repos/shubhodeep1/coding-workflows/branches/main" in gate_job
+	assert "gh_api_retry repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
+	assert "repos/shubhodeep1/coding-workflows/commits/stable" not in gate_job
 	for job_name in ("gate", "post-merge-validate-dispatch", "post-merge-force-poll", "fingerprint-cap-block", "codex-agent"):
 		job = _job_block(job_name)
 		assert "job.workflow_" not in job, job_name
@@ -9500,14 +9517,38 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 
 
 def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
-	"""The judge selects the sandbox target without replacing the checkout's .git."""
+	"""The judge selects the sandbox target without replacing the checkout's .git.
+
+	The fix writer prepares its sandbox through
+	review_rb_opencode_sandbox_prepare (`prepare-ephemeral codex`, #6208). The
+	harness runs the judge's own selection block, prepare function and call
+	line; only the OpenCode config writer is stubbed.
+	"""
 	judge = RB_JUDGE.read_text(encoding="utf-8")
 	assert 'GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}"' not in judge
 	assert '"GITHUB_WORKSPACE=${RB_OPENCODE_WORKSPACE}"' not in judge
-	selection = judge.split('      rb_fix_checkout_real=', 1)[1].split('      if ! env "${rb_fix_sandbox_workspace_env[@]}"', 1)[0]
-	prepare_line = judge.split('      if ! env "${rb_fix_sandbox_workspace_env[@]}"', 1)[1].splitlines()[0]
-	prepare_command = 'env "${rb_fix_sandbox_workspace_env[@]}"' + prepare_line.removesuffix('; then')
-	judge_prepare = 'RB_OPENCODE_WORKSPACE="$(pwd)"\nrb_fix_checkout_real=' + selection + prepare_command
+	prepare_function = re.search(r"(?ms)^review_rb_opencode_sandbox_prepare\(\)\n\{\n.*?^\}\n", judge)
+	assert prepare_function, "missing review_rb_opencode_sandbox_prepare"
+	assert 'bash "${rb_oc_sandbox_sh}" prepare-ephemeral codex' in prepare_function.group(0)
+	selection = judge.split('      rb_fix_checkout_real=', 1)[1].split('      rb_fix_isolation_deferred=false\n', 1)[0]
+	prepare_lines = [
+		line.strip() for line in judge.splitlines()
+		if 'review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix' in line
+	]
+	assert prepare_lines == [
+		'elif ! WORKSPACE_PATH="${rb_fix_workspace_path}" review_rb_opencode_sandbox_prepare '
+		'"${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"; then'
+	]
+	prepare_command = prepare_lines[0].removeprefix("elif ! ").removesuffix("; then")
+	judge_prepare = (
+		"set -euo pipefail\n"
+		+ prepare_function.group(0)
+		+ "review_rb_prepare_opencode_config() { :; }\n"
+		+ 'RB_OPENCODE_WORKSPACE="$(pwd)"\nrb_fix_serena_mode="off"\n'
+		+ "rb_fix_checkout_real=" + selection
+		+ prepare_command + "\n"
+		+ 'printf "REVIEW_SANDBOX_ROOT=%s\\n" "${RB_OC_SANDBOX_ROOT}"\n'
+	)
 
 	with tempfile.TemporaryDirectory(prefix="rb-fix-iso-") as td:
 		root = Path(td)
@@ -9542,25 +9583,27 @@ def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
 				if [ "$editor" = true ]; then printf 'after\\n' > "${source_dir}/scripts/app.py"; fi
 				"""))
 		docker_stub.chmod(0o755)
-		github_env = root / "github_env"
-		github_env.write_text("")
+		fix_stderr = root / "rb_fix_stderr.txt"
 		env = _git_clean_env({
 			"PATH": f"{stub_bin}:{os.environ['PATH']}",
 			"GIT_DIR": str(checkout / ".git"),
 			"GIT_WORK_TREE": str(work_tree),
 			"WORKSPACE_PATH": str(work_tree),
 			"GITHUB_WORKSPACE": str(checkout),
-			"rb_fix_sandbox_env": str(github_env),
 			"RUNNER_TEMP": str(root),
 			"RUNTIME_DIR": str(root / "runtime"),
 			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RB_FIX_OPENCODE_CONFIG": str(root / "rb_fix_opencode.json"),
+			"RB_FIX_STDERR": str(fix_stderr),
 			"OPENROUTER_API_KEY": "test-only-key",
 			"PYTHONDONTWRITEBYTECODE": "1",
 		})
+		env.pop("GITHUB_ENV", None)
 		sandbox = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+		# #6455: the per-PR tree has no .git, so GITHUB_WORKSPACE must stay the checkout.
 		old_call = subprocess.run(
-			["bash", sandbox, "prepare"], cwd=work_tree,
-			env={**env, "GITHUB_WORKSPACE": str(work_tree), "GITHUB_ENV": str(github_env)},
+			["bash", sandbox, "prepare-ephemeral", "codex"], cwd=work_tree,
+			env={**env, "GITHUB_WORKSPACE": str(work_tree)},
 			capture_output=True, text=True, timeout=120,
 		)
 		assert old_call.returncode != 0 and "Review workspace path rejected" in old_call.stderr
@@ -9568,8 +9611,9 @@ def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
 			["bash", "-c", judge_prepare], cwd=work_tree, env=env,
 			capture_output=True, text=True, timeout=120,
 		)
-		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
-		sandbox_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert prepared.returncode == 0, prepared.stdout + prepared.stderr + fix_stderr.read_text()
+		sandbox_root = prepared.stdout.split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert sandbox_root
 		assert (Path(sandbox_root) / "workspace").read_text().strip() == str(work_tree)
 		prompt = root / "prompt.txt"
 		prompt.write_text("fix it\n")
@@ -9578,8 +9622,9 @@ def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
 			"model": "openrouter/openai/gpt-6-sol",
 			"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}},
 		}))
+		# Same argument shape as the judge's rb_fix_opencode_cmd.
 		ran = subprocess.run(
-			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config)],
+			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config), "codex", "RB_JUDGE", "write"],
 			cwd=work_tree, env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root},
 			capture_output=True, text=True, timeout=120,
 		)
@@ -9588,13 +9633,13 @@ def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
 		assert (checkout / "scripts/app.py").read_text() == "before\n"
 
 		# The checkout layout must ignore a stale inherited per-PR target.
-		github_env.write_text("")
 		legacy = subprocess.run(
 			["bash", "-c", judge_prepare], cwd=checkout, env=env,
 			capture_output=True, text=True, timeout=120,
 		)
-		assert legacy.returncode == 0, legacy.stdout + legacy.stderr
-		legacy_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert legacy.returncode == 0, legacy.stdout + legacy.stderr + fix_stderr.read_text()
+		legacy_root = legacy.stdout.split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert legacy_root and legacy_root != sandbox_root
 		assert (Path(legacy_root) / "workspace").read_text().strip() == str(checkout)
 		for sandbox_root_to_clean in (sandbox_root, legacy_root):
 			subprocess.run(
