@@ -391,6 +391,7 @@ _ff_kept=0
 _ff_defer_commit=false
 if [ "${_resolver_allowlist_count}" -gt 0 ] && [ "${CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED:-true}" = "true" ]; then
   _ff_branch_class="${TARGET_BRANCH:-${HEAD_REF:-}}"
+  _ff_stage=2
   _ff_forward_merge_keep=false
   case "${_ff_branch_class}" in
     auto/forward-merge-stable-*)
@@ -415,7 +416,6 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] && [ "${CONFLICT_FOLDED_FRAGMENT_KEE
       README.md) continue ;;
     esac
     _ff_stages="$(git ls-files -u -- "${_ff_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
-    _ff_stage=2
     case "${_ff_stages}" in
       "1 2 ") _ff_stage=2 ;;
       "1 3 ")
