@@ -360,6 +360,7 @@ def _extract_function(name: str) -> str:
 
 HELPER_SOURCE = "\n".join(_extract_function(n) for n in (
 	"_pr_json_closes_issue",
+	"_pr_json_implements_issue",
 	"_pr_json_is_issue_implementation_pr",
 	"_list_integration_conflict_files",
 	"_stall_retired_conflict_branch_ok",
