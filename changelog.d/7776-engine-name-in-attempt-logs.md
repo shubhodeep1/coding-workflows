@@ -8,7 +8,7 @@ Claude is the default engine for these roles, but every retry loop still printed
 | Retry loops renamed | 5 (`clarify.yml`, `orchestrate_clarify_respond.yml`, `scripts/run_plan_codex.sh`, `implement.yml`, `orchestrate.yml`) |
 | Step names changed | 0 (`Run Codex implementation`, `Run Codex planning` and the rest keep their names) |
 
-What this means for operators: read the engine from the attempt line instead of the `AI_ENGINE_SELECTED` line. Anything that searched logs or issue comments for the literal text `Codex implement failed`, `Codex bailed` or `Codex planning attempt` should match `(Claude|Codex)` instead. No workflow or script in this repository matched on that text. Workflow failure heal fingerprints are unchanged: `normalize_error_line()` in `scripts/workflow_failure_heal.py` maps a leading `Claude` in an error line (and `last_status=claude`) back to `codex`, so a failure keeps one fingerprint whichever engine ran.
+What this means for operators: read the engine from the attempt line instead of the `AI_ENGINE_SELECTED` line. Anything that searched logs or issue comments for the literal text `Codex implement failed`, `Codex bailed` or `Codex planning attempt` should match `(Claude|Codex)` instead. No workflow or script in this repository matched on that text. Workflow failure heal fingerprints are unchanged: `normalize_error_line()` in `scripts/workflow_failure_heal.py` maps a leading `Claude` in the renamed attempt-loop error lines (and `last_status=claude`) back to `codex`, and leaves other lines such as `Claude pool at capacity` unchanged, so a failure keeps one fingerprint whichever engine ran.
 
 ### For contributors
 

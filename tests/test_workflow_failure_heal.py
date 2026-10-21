@@ -8022,3 +8022,7 @@ def test_error_signature_ignores_which_engine_ran_the_attempt_loop() -> None:
 	assert heal.error_signature(orch_claude) == heal.error_signature(orch_codex)
 	# Only the leading engine word is mapped; other text keeps "claude".
 	assert "claude_pool" in heal.normalize_error_line("##[error]claude_pool token missing")
+	assert heal.error_signature("::warning::Claude exited with code 1 on attempt 2.\n") == heal.error_signature("::warning::Codex exited with code 1 on attempt 2.\n")
+	# Unrelated messages that merely start with "Claude" keep their own fingerprint.
+	assert heal.normalize_error_line("::error::Claude pool at capacity (role RETRO)").startswith("::error::claude pool")
+	assert heal.normalize_error_line("##[warning]Claude capacity wait recorded").startswith("##[warning]claude capacity")
