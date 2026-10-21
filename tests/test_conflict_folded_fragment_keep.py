@@ -254,3 +254,74 @@ def test_forward_merge_head_still_keeps_stages_1_2() -> None:
 		assert result.returncode == 0, result.stdout + result.stderr
 		assert f"Folded fragment keep: kept the PR's {FRAGMENT}" in result.stdout
 		assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
+
+
+# PR #7794's exact shape (Refs #7802): two fragments, one in agents.d and one
+# in changelog.d, deleted by the forward-merge head's release fold and changed
+# on main, so one merge leaves both at index stages 1 3.
+PR7794_AGENTS_FRAGMENT = "agents.d/7604-synced-security-finding-intake.md"
+PR7794_CHANGELOG_FRAGMENT = "changelog.d/wfopt-0922-validate-dispatch-notice.md"
+PR7794_FRAGMENTS = (PR7794_AGENTS_FRAGMENT, PR7794_CHANGELOG_FRAGMENT)
+PR7794_BASE_TEXT = {
+	PR7794_AGENTS_FRAGMENT: '<!-- agents: section="Workflow architecture" -->\nBase agents text.\n',
+	PR7794_CHANGELOG_FRAGMENT: "<!-- changelog: fixed -->\n- **Base entry.**\n",
+}
+PR7794_MAIN_TEXT = {
+	PR7794_AGENTS_FRAGMENT: '<!-- agents: section="Workflow architecture" -->\nMain edit of the agents text.\n',
+	PR7794_CHANGELOG_FRAGMENT: "<!-- changelog: fixed -->\n- **Main edit.**\n",
+}
+
+
+def _conflict_two_fragments_forward_merge(repo: Path) -> None:
+	"""HEAD (`feat`, the forward-merge head) folds both fragments; `main` edits them."""
+	_git(repo, "init", "-q", "-b", "main")
+	_git(repo, "config", "user.name", "t")
+	_git(repo, "config", "user.email", "t@t")
+	for path in PR7794_FRAGMENTS:
+		(repo / path).parent.mkdir(parents=True, exist_ok=True)
+		(repo / path).write_text(PR7794_BASE_TEXT[path], encoding="utf-8")
+	(repo / "agents.md").write_text("# Agents\n\nbase\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "base")
+
+	_git(repo, "checkout", "-q", "-b", "feat")
+	_git(repo, "rm", "-q", "--", *PR7794_FRAGMENTS)
+	(repo / "CHANGELOG.md").write_text("## v1.32.0\n- **Base entry.**\n", encoding="utf-8")
+	(repo / "agents.md").write_text("# Agents\n\nbase\n\nBase agents text.\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "chore: assemble changelog fragments")
+
+	_git(repo, "checkout", "-q", "main")
+	for path in PR7794_FRAGMENTS:
+		(repo / path).write_text(PR7794_MAIN_TEXT[path], encoding="utf-8")
+	_git(repo, "commit", "-qam", "edit fragments")
+
+	_git(repo, "checkout", "-q", "feat")
+	assert _git(repo, "merge", "--no-commit", "--no-ff", "main", check=False).returncode != 0
+	for path in PR7794_FRAGMENTS:
+		stages = sorted({line.split()[2] for line in _git(repo, "ls-files", "-u", "--", path).stdout.splitlines()})
+		assert stages == ["1", "3"], (path, stages)
+	assert _git(repo, "diff", "--name-only", "--diff-filter=U").stdout.split() == sorted(PR7794_FRAGMENTS)
+
+
+def test_forward_merge_head_keeps_both_pr7794_fragments_on_stages_1_3() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_conflict_two_fragments_forward_merge(repo)
+		result, github_env, _ = _run_block(repo, tmp, head_ref=FORWARD_MERGE_HEAD)
+		assert result.returncode == 0, result.stdout + result.stderr
+		for path in PR7794_FRAGMENTS:
+			assert f"Folded fragment keep: kept the base branch's {path}" in result.stdout, result.stdout
+		assert result.stdout.count("(index stages: 1 3)") == 2, result.stdout
+		assert "AFTER_BLOCK" not in result.stdout, "the block must commit and exit"
+		assert "::warning::" not in result.stdout
+		assert _git(repo, "diff", "--name-only", "--diff-filter=U").stdout == ""
+		parents = _git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
+		assert len(parents) == 3
+		for path in PR7794_FRAGMENTS:
+			kept = _git(repo, "show", f"HEAD:{path}").stdout
+			assert kept == PR7794_MAIN_TEXT[path]
+			assert kept == _git(repo, "show", f"main:{path}").stdout
+		assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
