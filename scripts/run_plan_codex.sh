@@ -201,6 +201,17 @@ Rules:
   commit ID never matches the planning ref; some sandboxes have no git at
   all. Neither `git branch`, `git rev-parse` nor a "not a git repository"
   error there is evidence of a mismatch.
+- Default-branch reference: your workspace's git has no remote and no
+  network, so `origin/...` refs do not exist. When `git branch --list
+  isolated-base` shows that branch, it is the repository's default branch as
+  it was when this run started, filtered like your checkout (credential-like
+  and oversized files are left out). Read it with `git show
+  isolated-base:<path>`, `git diff isolated-base -- <path>` or `git ls-tree -r
+  --name-only isolated-base`; a file missing there may only have been filtered
+  out. When the plan restores or preserves production behaviour, read that
+  behaviour from `isolated-base` and cite its paths there. Never plan steps
+  that fetch from a remote or deepen history. When the branch is absent, plan
+  without it.
 - Before exiting, run a self-check on the plan you are about to emit.
   If the plan is implementation-ready, end with `STATUS: CLEAR` and
   `PLAN_SELF_CHECK: PASS`. If you find non-blocking concerns, emit one
@@ -313,6 +324,34 @@ if [ "${PLAN_ENGINE}" = "claude" ]; then
     PLAN_ENGINE="codex"
   fi
 fi
+
+# BEGIN plan isolated base (#7772)
+# The planner checks out the integration branch on project items, so without
+# this it cannot read production code (#7548, fun-token-multi-chain#639).
+# Fetch the default branch's tip into a private ref; codex_isolated_exec.sh's
+# seed-git adds it, filtered like the snapshot, as branch `isolated-base`.
+# A failed fetch only leaves that branch out. Defaults live here (section 8):
+# PLAN_ISOLATED_BASE_ENABLED defaults to true (only `false` turns it off) and
+# an empty PLAN_ISOLATED_BASE_BRANCH skips the fetch.
+plan_prepare_isolated_base()
+{
+  local enabled="${PLAN_ISOLATED_BASE_ENABLED:-true}" branch="${PLAN_ISOLATED_BASE_BRANCH:-}"
+  unset CODEX_ISOLATED_GIT_BASE_REF
+  if [ "${enabled}" != "false" ] && [[ "${branch}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+    && git check-ref-format --branch "${branch}" >/dev/null 2>&1; then
+    if git fetch --no-tags --depth=1 origin "+refs/heads/${branch}:refs/codex-isolated/base" >/dev/null 2>&1; then
+      export CODEX_ISOLATED_GIT_BASE_REF="refs/codex-isolated/base"
+      echo "CODEX_ISOLATION base_branch=${branch} outcome=fetched role=plan"
+    else
+      echo "::warning::CODEX_ISOLATION base_branch=${branch} outcome=fetch_failed role=plan; the sandbox git has no isolated-base branch."
+    fi
+  else
+    echo "::notice::CODEX_ISOLATION base_branch=unset_or_invalid outcome=skipped role=plan; the sandbox git has no isolated-base branch."
+  fi
+  return 0
+}
+# END plan isolated base (#7772)
+plan_prepare_isolated_base
 
 # The planner's sandbox git is a filtered snapshot on branch `isolated`
 # (scripts/codex_isolated_workspace.py seed_git), so a model that checks git

@@ -72,8 +72,11 @@ verdict, 2 unreadable input):
       terminal (and why); `holds_used` and `holds_met` count the item's
       trusted hold markers.
   validate --verdict-file <path> --decision-file <path> --repo <owner/repo>
+           [--sandbox-check]
       Check a judge verdict against the `decide` output and the hard limits,
-      and print the normalised verdict.
+      and print the normalised verdict. With --sandbox-check, instructions a
+      fix-up would run in the network-less implement sandbox are refused with
+      `sandbox_incompatible:<id>` (SANDBOX_INCOMPATIBLE_PATTERNS).
   rejection --item <n> --stop <id> --comments-file <path> --trusted-login <login>
       Find the latest trusted, unused guard rejection on the blocked item.
   protected-rejection --item <n> --comments-file <path> --trusted-login <login>
@@ -244,6 +247,46 @@ GUARD_REJECTION_HEADERS = (
 	"🚨 **Destructive-commit guard rejected this implementation run.**",
 )
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
+# Commands the implement sandbox (scripts/codex_isolated_exec.sh: no network,
+# no git remote, no GitHub token) cannot run. `validate --sandbox-check`
+# refuses verdict instructions that name one (fun-token-multi-chain#639).
+# The alternatives are disjoint (a token, or an option value, can start only
+# one of them: an unquoted value never starts with a quote), so each option run
+# parses one way and a long run such as `git -c -c -c ... status` cannot
+# backtrack exponentially; the run is therefore unbounded (`*`), since any cap
+# lets one more option hide a remote command. An option value may be quoted
+# and contain spaces.
+_GIT_OPT_VALUE = r"""(?:"[^"\n]*"|'[^'\n]*'|[^\s"'][^\s]*)"""
+_GIT_GLOBAL_OPTS = (
+	r"(?:\s+(?:-[Cc]\s+" + _GIT_OPT_VALUE
+	+ r"|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+" + _GIT_OPT_VALUE + r")"
+	+ r"|--(?!(?:git-dir|work-tree|namespace)(?![\w-]))[A-Za-z][\w-]*(?:=\S+)?"
+	+ r"|-(?![Cc](?![\w-]))[A-Za-z][\w-]*))*"
+)
+# Quoted runs are replaced by one placeholder character before a second search,
+# so an option value with an embedded quoted run (`-c user.name="A B"`) still
+# reads as one token; the replacement is linear and only adds matches.
+_QUOTED_RUN_RE = re.compile(r""""[^"\n]*"|'[^'\n]*'""")
+SANDBOX_INCOMPATIBLE_PATTERNS = (
+	# `git remote` counts only as a command (a subcommand or flag follows), so
+	# prose such as "no git remote" from the judge prompt itself is not refused.
+	# Git global options may sit before the subcommand (`git -C <dir> fetch`,
+	# `git -c k=v pull`, `git --git-dir=.git fetch`); _GIT_GLOBAL_OPTS skips them.
+	("git_remote_op", re.compile(
+		r"\bgit" + _GIT_GLOBAL_OPTS + r"\s+(fetch|pull|clone|push|ls-remote)\b"
+		r"|\bgit" + _GIT_GLOBAL_OPTS + r"\s+remote\s+(add|set-url|get-url|set-head|set-branches|update|show|prune|remove|rm|rename|-v|--verbose)\b",
+		re.IGNORECASE,
+	)),
+	("git_history_deepen", re.compile(r"--unshallow|--deepen", re.IGNORECASE)),
+	("origin_ref", re.compile(r"\borigin/[A-Za-z0-9._/-]+", re.IGNORECASE)),
+	("package_install", re.compile(
+		r"\b(npm\s+(ci|install|i)|yarn(\s+install)?|pnpm\s+(install|i)|pip3?\s+install|pipx\s+install|conda\s+install|poetry\s+install|bundle\s+install|cargo\s+fetch|go\s+mod\s+download)\b",
+		re.IGNORECASE,
+	)),
+	("http_fetch", re.compile(r"\b(curl|wget)\s", re.IGNORECASE)),
+	("gh_cli", re.compile(r"\bgh\s+(api|pr|issue|run|repo|release|workflow|label|auth|secret|search|status|gist|codespace)\b", re.IGNORECASE)),
+)
+SANDBOX_CHECKED_VERDICTS = ("retry_budget", "descope", "reissue", "accept_with_followup", "operator_step")
 
 
 class UsageError(Exception):
@@ -857,7 +900,25 @@ def rejection_snapshot(run: object, artifact: object, zip_path: str, item: int, 
 	return {"run_id": run_id, "reason": "bulk-delete", "paths": paths}
 
 
-def validate(verdict: object, decision: object, repo: str, rejection: dict | None = None, rejected: object = None) -> dict:
+def _check_sandbox_instructions(text: str) -> None:
+	"""Refuse instructions the network-less implement sandbox cannot follow."""
+	if not text:
+		return
+	candidates = (text, _QUOTED_RUN_RE.sub("Q", text))
+	for pattern_id, pattern in SANDBOX_INCOMPATIBLE_PATTERNS:
+		if any(pattern.search(candidate) for candidate in candidates):
+			raise UsageError(f"sandbox_incompatible:{pattern_id}")
+
+
+def validate(
+	verdict: object,
+	decision: object,
+	repo: str,
+	rejection: dict | None = None,
+	rejected: object = None,
+	*,
+	sandbox_check: bool = False,
+) -> dict:
 	"""Refuse anything outside the menu or the hard limits; return the normalised verdict."""
 	if not isinstance(verdict, dict) or not isinstance(decision, dict):
 		raise UsageError("verdict and decision must be JSON objects")
@@ -963,6 +1024,10 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 			verdict.get("operator_instructions"), "operator_instructions", flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX)
 		)
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
+	# Only the fix-up specification is checked: operator_instructions are
+	# written for a person and `answer` is a reply, neither runs in the sandbox.
+	if sandbox_check and name in SANDBOX_CHECKED_VERDICTS:
+		_check_sandbox_instructions(normalised.get("instructions", ""))
 	return normalised
 
 
@@ -1009,6 +1074,7 @@ def build_parser() -> argparse.ArgumentParser:
 	validate_cmd.add_argument("--decision-file", required=True)
 	validate_cmd.add_argument("--repo", required=True)
 	validate_cmd.add_argument("--rejected-deletions-file")
+	validate_cmd.add_argument("--sandbox-check", action="store_true")
 	rejection_cmd = sub.add_parser("rejection-snapshot")
 	rejection_cmd.add_argument("--run-file", required=True)
 	rejection_cmd.add_argument("--artifact-file", required=True)
@@ -1099,6 +1165,7 @@ def run(argv: list[str] | None = None) -> dict:
 			args.repo,
 			_read_json(args.rejection_file, "--rejection-file") if args.rejection_file else None,
 			_read_json(args.rejected_deletions_file, "--rejected-deletions-file") if args.rejected_deletions_file else None,
+			sandbox_check=args.sandbox_check,
 		)
 	if args.command == "rejection-snapshot":
 		try:

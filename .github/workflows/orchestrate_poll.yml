@@ -1287,6 +1287,7 @@ jobs:
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
@@ -1491,6 +1492,7 @@ jobs:
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
