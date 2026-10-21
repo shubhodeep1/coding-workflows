@@ -3758,6 +3758,22 @@ def test_sandbox_check_long_option_runs_do_not_backtrack() -> None:
 		assert time.monotonic() - start < 2, text[:40]
 
 
+def test_sandbox_check_refuses_more_than_eight_global_options() -> None:
+	for text in ("git " + "-c a=b " * 9 + "fetch origin main", "git " + "-c a=b " * 32 + "fetch"):
+		verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
+		with pytest.raises(ledger.UsageError, match="^sandbox_incompatible:git_remote_op$"):
+			ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+
+
+def test_sandbox_check_quoted_option_runs_do_not_backtrack() -> None:
+	import time
+	for text in ('git ' + '-c "a" ' * 150 + 'status', "git " + "-c 'a' " * 150 + "status"):
+		verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text[:1200]}
+		start = time.monotonic()
+		ledger.validate(verdict, SANDBOX_DECISION, "o/r", sandbox_check=True)
+		assert time.monotonic() - start < 2, text[:40]
+
+
 def test_sandbox_check_refuses_quoted_option_values_with_spaces() -> None:
 	for text in ('git -C "/repo root" fetch origin main', "git -c 'a=b c' pull"):
 		verdict = {"verdict": "retry_budget", "reason": "r", "instructions": text}
