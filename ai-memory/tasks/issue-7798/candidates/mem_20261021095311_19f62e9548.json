@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: SYNTHESIZE\nQ2: A\n\nRATIONALE:\nQ1: Option A needs a person to paste data this run cannot read. The step timings of run 39575950300 are not in the issue, the repo or the GitHub facts, and the data-provision guard rules out picking an option that only asks for data. Option C has the same problem. Instead, each step's weight can be measured in the implement sandbox, as #7690 did, with B's list as the fallback. For the target, the repo's own changelog fragments give the best estimates of headroom. Budget-watch flagged only this job in run 39575950300, so every other job finished under 15 minutes. No single job is estimated to absorb the roughly 2.5 minutes that need to move and still stay under 15 minutes, so the moved steps are split across the two jobs with the most estimated headroom.\nQ2: Keeping the preparation step and the steps that depend on it where they are is the smaller change. It avoids moving parity, guard-hook and pre-push gate steps whose PR-only preparation is tied to this job. Enough heavy steps that do not depend on it remain to move.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: synthesize\n  inputs:\n    - .github/workflows/ci.yml, job `tests-hooks-and-orchestrator` (lines 506-975). That is the steps from \"Event mirror shell tests\" to \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\".\n    - Duration estimates from the changelog fragments. The figures for the two targets are estimates, not measurements:\n      - Run 39575950300: `tests-hooks-and-orchestrator` took 15m06s of 20.\n      - `orchestrate-poll (2)` took 19m28s (#7697) before #7697 moved out \"Promote cycle and blocked-verdict unit tests\" (about 6-7 minutes) and \"Review-blocked judge label propagation contract test\". That leaves an estimated 12.5-13 minutes.\n      - `tests-release-and-log-analysis` was estimated at 12-13 minutes after #7699 sharded its promote-cycle step.\n      - `orchestrate-poll (1)` was at about 13.9 minutes (#7766), `tests-heal-plan-and-validation` at 15m26s before #7690, and `orchestrate-poll (0)` and `(3)` are unmeasured. They are therefore not the first choice.\n    - Fallback candidate steps. None of them depends on \"Prepare template-only PR live copies for parity tests\":\n      - \"Isolated agent container tests (codex_isolated_exec.sh)\" (lines 695-702)\n      - \"Prebuilt sandbox image tests\" (729-732)\n      - \"Review sandbox image build retry tests\" (734-737)\n      - \"Set up Node 22 for the claude-pool-broker Worker tests\" and \"claude-pool-broker Worker tests (vitest)\" (779-789), which stay together as a pair.\n    - Guards: tests/test_ci_job_split_contract.py (no step runs in two jobs; `lint` needs; budgets) and tests/test_ci_poll_test_sharding.py (every extra step in `orchestrate-poll` needs an `if: strategy.job-index == N` guard).\n  steps:\n    - Time each step of `tests-hooks-and-orchestrator` in the implement sandbox, running its `run:` body as written, to get relative weights. Leave out the preparation step and the steps that depend on it (Q2:A), as well as \"Merge-train and gh_helpers rate-limit tests (CLAUDE.md \u00a715)\", which has already moved twice (#7575, #7766).\n    - Treat a step that skips or errors because Docker, Node, network or PyYAML is missing in the sandbox as unmeasured. Use the fallback list for those steps.\n    - Pick the heaviest movable steps until they make up about 17% of the job's measured total, which frees about 2.5 minutes and brings the job to about 12.5 minutes.\n      - If timing yields nothing usable, move the fallback list exactly.\n    - Assign the steps so neither target receives more than about 2 minutes:\n      - First choice: `orchestrate-poll`, group 2 only. Add `if: strategy.job-index == 2` to each moved step and append them after \"Regression tests wired by the CI wiring guard (part 2)\".\n      - The rest goes to the end of `tests-release-and-log-analysis`.\n      - Default split when using the fallback list: the three Python steps (isolated agent container, prebuilt sandbox image, sandbox image build retry) go to `orchestrate-poll (2)`, and the Node 22 setup plus vitest pair goes to `tests-release-and-log-analysis`.\n    - Move each step unchanged: keep its `name:`, `run:`, `working-directory:`, `uses:`/`with:` and comments. Delete it from the source job. Do not change `timeout-minutes` or any job name, and add no job.\n    - Update tests/test_ci_poll_test_sharding.py and any step pins in tests/test_ci_job_split_contract.py or other tests that tie a moved step to its old job. Follow the #7766 and #7690 pattern: pinned to the new job, with the group guard where it applies.\n    - Add one changelog fragment, `changelog.d/<issue>-ci-hooks-job-step-move.md`, in the voice of #7766 and #7697. It lists the moved steps and their new jobs, and says the figures are estimates or sandbox weights and that the next `budget-watch` run on `main` measures the result.\n  replaces_acceptance_criterion: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\". The run's measured step timings are replaced by sandbox-measured relative weights, or by the fallback list. The \"one job with the most headroom\" becomes the two jobs with the most estimated headroom, `orchestrate-poll (2)` first, because no single job is estimated to take about 2.5 minutes and stay under the 15-minute warning line.\n  equivalence_argument: The goal is to bring `tests-hooks-and-orchestrator` back under the 75% line without timeout changes, new jobs or renamed steps. Moving the heaviest measured steps out, with each target staying under its own line by estimate, meets that goal. The recorded estimates are the best available data and match the method #7690 and #7697 used and merged. The next `budget-watch` run on `main` opens a new issue if any estimate was wrong.\n  reversibility: Each step moves unchanged and keeps its name, so a later change can move any of them again with a small diff, for example once measured timings show a better target.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None.",
+  "fingerprint": "53915c79175462438613986dc09658bde28c2f613a42c1fe5be63b6ca82f9fa6",
+  "lineage": {
+    "issue_number": 7798,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39579154286",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39579154286",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7798"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261021095311_19f62e9548",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7798,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39579154286"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #7798",
+  "timestamps": {
+    "created_at": "2026-10-21T09:53:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
