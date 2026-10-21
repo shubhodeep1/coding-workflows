@@ -13710,7 +13710,6 @@ comprehensive_cycle_metadata_json() {
 # Optional $1 names another tag (default `stable`); the pinned promotion gate
 # reads `promote-cycle-frozen` through it.
 comprehensive_stable_tag_commit() {
-  # Optional $1: another tag name (the pinned cycle reads promote-cycle-frozen).
   local tag_name="${1:-stable}"
   local ref_json object_type object_sha tag_json err_file
   err_file="$(mktemp)"
@@ -14092,7 +14091,7 @@ This verifying run's marker comment lacks \`apply-analysis-promote-sha\` / \`app
           pin_branch_tip=""
           if ! pin_branch_tip="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/promote-candidate" --jq '.object.sha // empty' 2>"${pin_branch_err}")"; then
             pin_branch_tip=""
-            if ! grep -qiE '404|not found' "${pin_branch_err}"; then
+            if ! grep -qiE '(^|[^0-9])404([^0-9]|$)|not found' "${pin_branch_err}"; then
               pin_tag_rc=2
             fi
           fi
