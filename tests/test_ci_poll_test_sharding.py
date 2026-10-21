@@ -440,7 +440,7 @@ class ReleaseValidateScriptsShardContractTest(unittest.TestCase):
 		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
 			with self.subTest(workflow=workflow_name):
 				self.assertEqual(
-					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 60
+					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 90
 				)
 
 
