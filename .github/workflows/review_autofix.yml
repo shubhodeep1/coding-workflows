@@ -418,9 +418,30 @@ jobs:
             echo "::error::Review support identity is unapproved (workflow_ref=${support_workflow_ref:-missing})."
             exit 1
           fi
+          # Runs pinned to the protected promote-candidate branch (promote
+          # cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md) take
+          # support code from its tip; a look-alike ref, an unprotected branch
+          # or a failed read fall through to protected main below.
+          promote_candidate_ref='^shubhodeep1/coding-workflows/\.github/workflows/review_autofix\.yml@refs/heads/promote-candidate$'
+          promote_candidate_sha=""
+          if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] && [[ "${support_workflow_ref}" =~ ${promote_candidate_ref} ]]; then
+            # One branches read, only on this path: no earlier gate call
+            # returns the promote-candidate tip or its protection flag.
+            promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+            promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+            if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+            else
+              promote_candidate_sha=""
+              echo "SUPPORT_REF source=promote_candidate_unprotected"
+            fi
+          fi
           if [[ "${support_workflow_ref}" =~ ${trusted_consumer_pin} ]]; then
             support_sha="${support_workflow_ref##*@}"
             support_ref="${support_sha}"
+          elif [ -n "${promote_candidate_sha}" ]; then
+            support_sha="${promote_candidate_sha}"
+            support_ref="refs/heads/promote-candidate"
           elif [[ "${support_workflow_ref}" =~ ${trusted_stable_ref} ]]; then
             # No existing gate lookup resolves the release tag. /commits/stable
             # selects the branch when both a branch and tag have that name.
@@ -493,7 +514,7 @@ jobs:
           fi
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/heads/promote-candidate|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified fingerprint cap support checkout."
             exit 1
@@ -535,7 +556,7 @@ jobs:
           fi
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/heads/promote-candidate|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-retarget-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified retarget helper checkout."
             exit 1
@@ -582,7 +603,7 @@ jobs:
           fi
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/heads/promote-candidate|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-head-gate-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified head-gate support checkout."
             exit 1
@@ -773,7 +794,7 @@ jobs:
           set -euo pipefail
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/heads/promote-candidate|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified workflow support checkout."
             exit 1
@@ -996,7 +1017,7 @@ jobs:
           set -euo pipefail
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/heads/promote-candidate|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified workflow support checkout."
             exit 1
@@ -1544,7 +1565,7 @@ jobs:
           set -euo pipefail
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/heads/promote-candidate|refs/tags/stable|[0-9a-f]{40})$ ]] ||
              [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
             echo "::error::Unverified workflow support checkout."
             exit 1
@@ -2064,7 +2085,7 @@ jobs:
           set -euo pipefail
           if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
              [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
-             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]]; then
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/heads/promote-candidate|refs/tags/stable|[0-9a-f]{40})$ ]]; then
             echo "::error::Untrusted or unavailable review workflow identity."
             exit 1
           fi

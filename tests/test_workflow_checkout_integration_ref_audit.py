@@ -55,6 +55,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"workspace-cache-maintenance.yml": "Scheduled workspace-cache pruning operates on repository cache metadata, not orchestrator issue-phase integration refs.",
 	"forward-merge-stable-to-main.yml": "Stable→main forward-merge workflow operates on repo refs (stable, main), not tracking-issue metadata.",
 	"sync-claude-live-copies.yml": "Push-to-main maintenance copies template-only .claude changes to the live copy; it reads no tracking-issue metadata.",
+	"promote-candidate-follow.yml": "Push-to-main/hourly maintenance fast-forwards the promote-candidate branch through the API from a main checkout; it reads no tracking-issue metadata.",
 	"promote-main-to-stable.yml": "Main→stable promotion workflow operates on repo refs (main, stable), not tracking-issue metadata.",
 	"auto-release-stable.yml": "Scheduled stable-branch release check operates on repo refs (stable branch vs stable tag), not tracking-issue metadata.",
 	"workflow_failure_heal.yml": "Escalation reporter checks out the repo only to read consumer wrapper release pins and dispatches upstream; it executes no orchestrator issue phase.",

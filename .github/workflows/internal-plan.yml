@@ -32,5 +32,5 @@ jobs:
           )
         )
       )
-    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@main
+    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@promote-candidate
     secrets: inherit

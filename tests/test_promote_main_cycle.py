@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -31,7 +32,58 @@ def respond(payload):
     sys.stdout.write(json.dumps(payload))
     sys.exit(0)
 if args[:1] == ["api"]:
-    path = next(a for a in args[1:] if not a.startswith("-") and a != "GET")
+    method = "GET"
+    path = None
+    rest = args[1:]
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in ("-X", "--method"):
+            method = rest[i + 1]; i += 2; continue
+        if a in ("-f", "-F", "--jq", "--input", "-H"):
+            i += 2; continue
+        if not a.startswith("-") and path is None:
+            path = a
+        i += 1
+    # Pinned mode (phase 3): promote-candidate branch and promote-cycle-frozen tag.
+    if path.endswith("/branches/promote-candidate"):
+        pin = state.get("pin_branch", "missing")
+        if pin == "missing":
+            save(); sys.stderr.write("HTTP 404: Not Found\n"); sys.exit(1)
+        if pin == "error":
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        respond({"name": "promote-candidate", "protected": pin == "protected"})
+    if path.endswith("/git/refs/tags/promote-cycle-frozen"):
+        if method == "DELETE":
+            state["tag_deletes"] = state.get("tag_deletes", 0) + 1
+            respond({})
+        state.setdefault("tag_ref_patches", []).append(args)
+        respond({})
+    if path.endswith("/git/ref/tags/promote-cycle-frozen"):
+        if state.get("pin_tag_exists"):
+            respond({"object": {"type": "tag", "sha": "8" * 40}})
+        save(); sys.stderr.write("HTTP 404: Not Found\n"); sys.exit(1)
+    if path.endswith("/git/tags") and method == "POST":
+        created = state.setdefault("tag_objects_created", [])
+        created.append(args)
+        respond({"sha": str(6 + len(created) - 1)[-1] * 40})
+    if path.endswith("/git/refs") and method == "POST":
+        state.setdefault("ref_creates", []).append(args)
+        if state.get("tag_ref_race"):
+            save(); sys.stderr.write("HTTP 422: Reference already exists\n"); sys.exit(1)
+        if state.get("tag_ref_fail"):
+            save(); sys.stderr.write("HTTP 502: Bad Gateway\n"); sys.exit(1)
+        respond({})
+    if path.endswith("/git/refs/heads/promote-candidate") and method == "PATCH":
+        state.setdefault("branch_patches", []).append(args)
+        mode = state.get("pin_branch_patch", "ok")
+        if mode == "not_ff":
+            save(); sys.stderr.write("HTTP 422: Update is not a fast forward\n"); sys.exit(1)
+        if mode == "error":
+            save(); sys.stderr.write("HTTP 403: Forbidden\n"); sys.exit(1)
+        respond({})
+    if path.endswith("/git/ref/heads/promote-candidate"):
+        respond({"object": {"type": "commit", "sha": state.get("pin_branch_tip", state["main_tip"])}})
     if path.endswith("/git/ref/heads/main"):
         respond({"object": {"type": "commit", "sha": state["main_tip"]}})
     if path.endswith("/git/ref/tags/stable"):
@@ -41,7 +93,7 @@ if args[:1] == ["api"]:
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
         respond({"object": {"type": "tag", "sha": "9" * 40}})
     if "/git/tags/" in path:
-        respond({"object": {"type": "commit", "sha": state["tag_commit"]}})
+        respond({"object": {"type": "commit", "sha": state["tag_commit"]}, "message": state.get("tag_message", "")})
     if "/compare/" in path:
         base = path.split("/compare/")[1].split("...")[0]
         entry = state.get("compares", {}).get(base)
@@ -133,7 +185,7 @@ print(json.dumps({"issue": 5, "ticked": ["pr-1"], "skipped": {}}))
 '''
 
 
-def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
+def _run(tmp: Path, state: dict, env: dict[str, str] | None = None, script: Path = SCRIPT) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	(bin_dir / "gh").write_text(MOCK_GH, encoding="utf-8")
@@ -178,7 +230,7 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[sub
 		run_env.pop(key, None)
 	if env:
 		run_env.update(env)
-	proc = subprocess.run(["bash", str(SCRIPT)], cwd=str(tmp), env=run_env, text=True, capture_output=True, timeout=120)
+	proc = subprocess.run(["bash", str(script)], cwd=str(tmp), env=run_env, text=True, capture_output=True, timeout=120)
 	final = json.loads(state_file.read_text(encoding="utf-8"))
 	final["github_output"] = output_file.read_text(encoding="utf-8")
 	final["tick_calls"] = [json.loads(line) for line in tick_args_out.read_text(encoding="utf-8").splitlines()] if tick_args_out.exists() else []
@@ -720,3 +772,197 @@ def test_successful_or_cancelled_gate_makes_no_jobs_read() -> None:
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		assert not final.get("jobs_reads")
 		assert not any("/jobs" in a for call in final["calls"] for a in call)
+
+
+# --- pinned promote cycle (phase 3) -------------------------------------------
+
+PIN_REUSABLE = (
+	"cancel_on_pr_close", "check_failure_triage", "clarify", "implement", "issue_pr_status",
+	"memory_maintenance", "orchestrate_clarify_respond", "orchestrate_poll", "orchestrate",
+	"plan", "review_autofix", "validate", "workflow_failure_heal",
+)
+PIN_ADVANCED = "4" * 40
+
+
+def _pinned_repo(tmp: Path, *, wrappers_pinned: bool = True, support_pinned: bool = True) -> Path:
+	"""A copy of the script in a fixture repo whose workflow files the pre-flight reads."""
+	repo = tmp / "repo"
+	(repo / "scripts").mkdir(parents=True)
+	workflows = repo / ".github" / "workflows"
+	workflows.mkdir(parents=True)
+	script = repo / "scripts" / "promote_main_cycle.sh"
+	script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+	(workflows / "internal-review.yml").write_text("jobs:\n  r:\n    uses: o/r/.github/workflows/review_autofix.yml@promote-candidate\n", encoding="utf-8")
+	ref = "main" if not wrappers_pinned else "promote-candidate"
+	(workflows / "internal-plan.yml").write_text(f"jobs:\n  p:\n    uses: o/r/.github/workflows/plan.yml@{ref}\n", encoding="utf-8")
+	for index, name in enumerate(PIN_REUSABLE):
+		marker = "SUPPORT_REF source=promote_candidate" if support_pinned or index else "SUPPORT_REF ref=main"
+		(workflows / f"{name}.yml").write_text(f"jobs:\n  j:\n    steps:\n      - run: echo {marker}\n", encoding="utf-8")
+	return script
+
+
+def _gate_on(branch: str, head: str) -> list:
+	run = {"id": 500, "head_branch": branch, "head_sha": head, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}
+	return [[], [dict(run, status="completed", conclusion="success")]]
+
+
+def _pinned_run(tmp: Path, state: dict, env: dict[str, str] | None = None, **repo_kwargs):
+	base = {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "pin_branch": "protected", "gate_runs_sequence": _gate_on("promote-candidate", TIP)}
+	base.update(state)
+	return _run(tmp, base, env=env, script=_pinned_repo(tmp, **repo_kwargs))
+
+
+def _assert_unpinned_dispatch(proc, final, reason: str) -> None:
+	assert f"PROMOTE_CYCLE_PIN outcome=skipped reason={reason}" in proc.stdout, proc.stdout + proc.stderr
+	assert final["dispatches"][0][:5] == ["test-and-mark-stable.yml", "--repo", "owner/repo", "--ref", "main"]
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout and "pinned=false" in proc.stdout
+	assert not final.get("ref_creates")
+
+
+def test_pin_skips_when_disabled() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"gate_runs_sequence": GATE_SUCCESS}, env={"PROMOTE_CYCLE_PIN_ENABLED": "FALSE"})
+	_assert_unpinned_dispatch(proc, final, "disabled")
+
+
+def test_pin_skips_when_a_wrapper_is_not_pinned() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"gate_runs_sequence": GATE_SUCCESS}, wrappers_pinned=False)
+	_assert_unpinned_dispatch(proc, final, "wrappers_not_pinned")
+
+
+def test_pin_skips_when_support_is_not_pinned() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"gate_runs_sequence": GATE_SUCCESS}, support_pinned=False)
+	_assert_unpinned_dispatch(proc, final, "support_not_pinned")
+
+
+def test_pin_skips_when_branch_missing_or_unprotected() -> None:
+	for pin_state, reason in (("missing", "branch_missing"), ("unprotected", "branch_unprotected"), ("error", "branch_lookup_failed")):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final, _ = _pinned_run(Path(tmp), {"pin_branch": pin_state, "gate_runs_sequence": GATE_SUCCESS})
+		_assert_unpinned_dispatch(proc, final, reason)
+
+
+def test_real_repo_without_branch_keeps_todays_path() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS})
+	assert "PROMOTE_CYCLE_PIN outcome=skipped reason=" in proc.stdout
+	assert final["dispatches"][0][4] == "main"
+
+
+def test_pinned_cycle_freezes_and_gates_the_candidate() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _pinned_run(Path(tmp), {})
+		env_lines = env_out.read_text(encoding="utf-8").splitlines()
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert f"PROMOTE_CYCLE_PIN outcome=frozen candidate={TIP}" in proc.stdout
+	tag_args = final["tag_objects_created"][0]
+	assert "tag=promote-cycle-frozen" in tag_args and f"object={TIP}" in tag_args
+	assert any(a.startswith("message=frozen_at=") and a.endswith(" cycle_run=777") for a in tag_args)
+	assert "ref=refs/tags/promote-cycle-frozen" in final["ref_creates"][0]
+	patch = final["branch_patches"][0]
+	assert f"sha={TIP}" in patch and "force=false" in patch
+	assert final["dispatches"][0] == ["test-and-mark-stable.yml", "--repo", "owner/repo", "--ref", "promote-candidate", "-f", "gate_only=true", "-f", "gate_cycle_id=777"]
+	assert "APPLY_ANALYSIS_PINNED=true" in env_lines
+	assert f"APPLY_ANALYSIS_CYCLE_BASELINE_SHA={TIP}" in env_lines
+	assert f"APPLY_ANALYSIS_SMOKE_SHA={TIP}" in env_lines
+	assert f"PROMOTE_CYCLE_DISPATCHED doc=analysis/workflow-optimization-2026-08-30.md baseline={TIP} smoke={TIP} pinned=true" in proc.stdout
+	assert final.get("tag_deletes", 0) == 0
+	assert "pinned=true" in final["github_output"]
+
+
+def test_pinned_cycle_tag_race_skips_as_cycle_in_flight() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _pinned_run(Path(tmp), {"tag_ref_race": True})
+		assert not env_out.exists()
+	assert proc.returncode == 0
+	assert "PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight tag=promote-cycle-frozen" in proc.stdout
+	assert final.get("tag_deletes", 0) == 0
+	assert not final.get("dispatches")
+
+
+def test_pinned_cycle_deletes_a_stale_tag_before_freezing() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"pin_tag_exists": True})
+	assert "PROMOTE_CYCLE_PIN outcome=stale_tag_deleted" in proc.stdout
+	assert final["tag_deletes"] == 1
+	assert "PROMOTE_CYCLE_PIN outcome=frozen" in proc.stdout
+
+
+def test_pinned_cycle_reports_the_stale_tag_age() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"pin_tag_exists": True, "tag_message": "frozen_at=1 cycle_run=5"})
+	assert re.search(r"PROMOTE_CYCLE_PIN outcome=stale_tag_deleted age=[0-9]+s", proc.stdout), proc.stdout
+	assert final["tag_deletes"] == 1
+
+
+def test_pinned_cycle_reconciles_an_advanced_branch() -> None:
+	state = {
+		"pin_branch_patch": "not_ff",
+		"pin_branch_tip": PIN_ADVANCED,
+		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), TIP: {"status": "ahead", "total_commits": 1, "files": []}},
+		"gate_runs_sequence": _gate_on("promote-candidate", PIN_ADVANCED),
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _pinned_run(Path(tmp), state)
+		env_lines = env_out.read_text(encoding="utf-8").splitlines()
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert f"PROMOTE_CYCLE_PIN outcome=candidate_advanced main_tip={TIP} candidate={PIN_ADVANCED}" in proc.stdout
+	assert f"object={PIN_ADVANCED}" in final["tag_objects_created"][1]
+	assert any("force=true" in patch for patch in final["tag_ref_patches"])
+	assert f"APPLY_ANALYSIS_SMOKE_SHA={PIN_ADVANCED}" in env_lines
+	# The dispatcher reads docs from the checkout, so it must be the candidate.
+	assert ["checkout", "--quiet", "--detach", PIN_ADVANCED] in final["git_calls"]
+
+
+def test_pinned_cycle_trap_deletes_tag_on_gate_failure() -> None:
+	seq = [[], [{"id": 501, "status": "completed", "conclusion": "failure", "head_branch": "promote-candidate", "head_sha": TIP, "display_title": "Test & Mark Stable Release [cycle:777]", "created_at": "2026-09-19T00:00:01Z"}]]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"gate_runs_sequence": seq})
+	assert proc.returncode == 1
+	assert "PROMOTE_CYCLE_FAILED reason=smoke_gate_failed run=501" in proc.stdout
+	assert final["tag_deletes"] == 1
+
+
+def test_pinned_cycle_gate_on_main_is_not_matched() -> None:
+	# The run is matched on head_branch == promote-candidate; a main run is ignored.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"gate_runs_sequence": GATE_SUCCESS})
+	assert "PROMOTE_CYCLE_FAILED reason=smoke_gate_timeout" in proc.stdout
+	assert final["tag_deletes"] == 1
+
+
+def test_pinned_cycle_head_mismatch_fails_and_releases() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _pinned_run(Path(tmp), {"gate_runs_sequence": _gate_on("promote-candidate", ADVANCED_TIP)})
+		assert not env_out.exists()
+	assert proc.returncode == 1
+	assert f"PROMOTE_CYCLE_FAILED reason=pin_head_mismatch gate_head={ADVANCED_TIP} candidate={TIP}" in proc.stdout
+	assert final["tag_deletes"] == 1
+
+
+def test_pinned_cycle_freeze_failure_runs_unpinned() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"pin_branch_patch": "error", "pin_branch_tip": "0" * 40, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), TIP: {"status": "diverged"}}, "gate_runs_sequence": GATE_SUCCESS})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_PIN outcome=skipped reason=freeze_failed detail=branch_not_fast_forward" in proc.stdout
+	assert final["tag_deletes"] == 1
+	assert final["dispatches"][0][4] == "main"
+	assert "pinned=false" in proc.stdout
+
+
+def test_pinned_cycle_tag_ref_create_failure_deletes_tag_and_runs_unpinned() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"tag_ref_fail": True, "gate_runs_sequence": GATE_SUCCESS})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_PIN outcome=skipped reason=freeze_failed detail=tag_ref_create" in proc.stdout
+	assert final["tag_deletes"] == 1
+	assert final["dispatches"][0][4] == "main"
+
+
+def test_pinned_cycle_compare_failure_is_reported_as_unavailable() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _pinned_run(Path(tmp), {"pin_branch_patch": "error", "pin_branch_tip": "0" * 40, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), TIP: {}}, "gate_runs_sequence": GATE_SUCCESS})
+	assert "PROMOTE_CYCLE_PIN outcome=skipped reason=freeze_failed detail=compare_unavailable" in proc.stdout
+	assert final["tag_deletes"] == 1
