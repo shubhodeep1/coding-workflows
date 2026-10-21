@@ -5,13 +5,36 @@
   "entry_id": "processed_command_7746_6304576943_approved",
   "issue_number": 7746,
   "metadata": {
+    "branch": "ai/issue-7746",
+    "changed_files": [
+      ".github/workflows/cancel_on_pr_close.yml",
+      ".github/workflows/check_failure_triage.yml",
+      ".github/workflows/clarify.yml",
+      ".github/workflows/implement.yml",
+      ".github/workflows/issue_pr_status.yml",
+      ".github/workflows/memory_maintenance.yml",
+      ".github/workflows/orchestrate.yml",
+      ".github/workflows/orchestrate_clarify_respond.yml",
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/plan.yml",
+      ".github/workflows/review_autofix.yml",
+      ".github/workflows/validate.yml",
+      ".github/workflows/workflow_failure_heal.yml",
+      "changelog.d/promote-candidate-support-ref.md",
+      "tests/test_workflow_support_ref_follows_pin.py"
+    ],
+    "issue_number": 7746,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7746",
+    "pr_number": 7749,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7749",
+    "run_attempt": "1",
+    "run_id": "39518887691",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39518887691"
   },
   "run_attempt": 1,
   "run_id": "39518887691",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-21T00:06:00Z",
+  "status": "completed",
+  "timestamp": "2026-10-21T00:25:22Z",
   "workflow": "implement"
 }
