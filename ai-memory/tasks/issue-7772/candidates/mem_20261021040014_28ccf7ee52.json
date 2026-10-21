@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7772,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7772\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7774\",\"pr_number\":7774,\"branch\":\"ai/issue-7772\",\"run_id\":\"39540456228\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39540456228\",\"changed_files\":[\".github/workflows/plan.yml\",\"agents.d/7772-plan-isolated-base.md\",\"changelog.d/7772-plan-isolated-base.md\",\"prompts/_templates/mode-plan.txt\",\"prompts/mode-plan.txt\",\"scripts/run_plan_codex.sh\",\"tests/test_plan_codex_step_extraction.py\"]}",
+  "fingerprint": "b21a1e9aaf179285d5b5126c773591094eac9ae4e2f9225b691124a4989a646e",
+  "lineage": {
+    "issue_number": 7772,
+    "parent_ids": [],
+    "pr_number": 7774,
+    "run_id": "39540456228",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39540456228",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7774"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261021040014_28ccf7ee52",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7772,
+    "level": "run",
+    "pr_number": 7774,
+    "run_id": "39540456228"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7772: https://github.com/shubhodeep1/coding-workflows/pull/7774",
+  "timestamps": {
+    "created_at": "2026-10-21T04:00:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
