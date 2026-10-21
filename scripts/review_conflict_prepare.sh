@@ -375,9 +375,34 @@ fi
 # On orchestrator/project-* branches a fragment-only conflict defers the
 # merge commit until the integration fingerprint check has run, exactly
 # like the manifest-only case.
+# Forward-merge heads (#7796): an auto/forward-merge-stable-* PR head is cut
+# from stable by forward-merge-stable-to-main.yml and carries the release
+# fold, which deleted every fragment, while main (the merged-in side) changed
+# one of them after the merge base.  That conflicts modify/delete the other
+# way round (index stages 1+3), and the resolver left those paths unmerged
+# on every run of PRs #7794 / #7795.  main's copy is the change the next
+# fold must publish, so on those heads keep the stage-3 copy the same way.
+# On any other head stages 1+3 mean the PR deleted a fragment main changed,
+# which still goes to the resolver.
+# Switch: CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED, defaulted here
+# (review_autofix.yml does not forward it): unset, empty or true (any case)
+# on, false off, any other value off with a warning.
 _ff_kept=0
 _ff_defer_commit=false
 if [ "${_resolver_allowlist_count}" -gt 0 ] && [ "${CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED:-true}" = "true" ]; then
+  _ff_branch_class="${TARGET_BRANCH:-${HEAD_REF:-}}"
+  _ff_forward_merge_keep=false
+  case "${_ff_branch_class}" in
+    auto/forward-merge-stable-*)
+      _ff_forward_merge_switch="$(printf '%s' "${CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED-}" | tr '[:upper:]' '[:lower:]')"
+      case "${_ff_forward_merge_switch}" in
+        ''|true) _ff_forward_merge_keep=true ;;
+        false) ;;
+        *) echo "::warning::Folded fragment keep: CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED has an unrecognised value; forward-merge 1 3 keep is off." ;;
+      esac
+      unset _ff_forward_merge_switch
+      ;;
+  esac
   while IFS= read -r _ff_path; do
     case "${_ff_path}" in
       changelog.d/*.md|agents.d/*.md) ;;
@@ -390,16 +415,32 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] && [ "${CONFLICT_FOLDED_FRAGMENT_KEE
       README.md) continue ;;
     esac
     _ff_stages="$(git ls-files -u -- "${_ff_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
-    if [ "${_ff_stages}" != "1 2 " ] || [ ! -f "${_ff_path}" ] || [ -L "${_ff_path}" ]; then
+    _ff_stage=2
+    case "${_ff_stages}" in
+      "1 2 ") _ff_stage=2 ;;
+      "1 3 ")
+        if [ "${_ff_forward_merge_keep}" = "true" ]; then
+          _ff_stage=3
+        else
+          continue
+        fi
+        ;;
+      *) continue ;;
+    esac
+    if [ ! -f "${_ff_path}" ] || [ -L "${_ff_path}" ]; then
       continue
     fi
-    if ! git show ":2:${_ff_path}" | cmp -s - "${_ff_path}"; then
-      echo "Folded fragment keep: ${_ff_path} differs from the PR's index copy; leaving it to the resolver."
+    if ! git show ":${_ff_stage}:${_ff_path}" | cmp -s - "${_ff_path}"; then
+      echo "Folded fragment keep: ${_ff_path} differs from the index stage ${_ff_stage} copy; leaving it to the resolver."
       continue
     fi
     git add -- "${_ff_path}"
     _ff_kept=$((_ff_kept + 1))
-    echo "Folded fragment keep: kept the PR's ${_ff_path}; the base branch had folded and deleted it (index stages: 1 2)."
+    if [ "${_ff_stage}" = "3" ]; then
+      echo "Folded fragment keep: kept the base branch's ${_ff_path}; the forward-merge head had folded and deleted it (index stages: 1 3)."
+    else
+      echo "Folded fragment keep: kept the PR's ${_ff_path}; the base branch had folded and deleted it (index stages: 1 2)."
+    fi
   done < "${RESOLVER_ALLOWLIST_FILE}"
 fi
 if [ "${_ff_kept}" -gt 0 ]; then
