@@ -785,3 +785,14 @@ def test_stable_branch_unrecognised_compare_status_holds_the_merge() -> None:
 	assert result["release_dispatches"] == []
 	assert result["latest_state"]["final_merge_status"] != "merged"
 	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
+
+
+def test_stable_branch_at_smoke_sha_reuses_the_smoke_compare() -> None:
+	# smoke_sha...promote_sha already returned ahead, so a stable branch at
+	# smoke_sha is a proven ancestor and needs no second compare (#7888).
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(_project_state(), compare_commits=commits, stable_branch_sha=SMOKE_SHA)
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert len(result["release_dispatches"]) == 1
+	smoke_compares = [str(call) for call in result["api_calls"] if f"compare/{SMOKE_SHA}...{PROMOTE_SHA}" in str(call)]
+	assert len(smoke_compares) == 1, smoke_compares

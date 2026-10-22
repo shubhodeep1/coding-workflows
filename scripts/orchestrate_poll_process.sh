@@ -13889,21 +13889,25 @@ comprehensive_untested_commits_json() {
   printf '%s\n' "${untested}"
 }
 
-# comprehensive_stable_branch_compare_status <promote_sha>
+# comprehensive_stable_branch_compare_status <promote_sha> [known_ancestor_sha]
 #
 # Prints "<status> <stable_branch_sha>" for the stable BRANCH (heads/stable,
 # not the tag of the same name) compared with promote_sha: "identical" when
-# the branch tip equals promote_sha (no compare call), else the compare
-# status (ahead, behind, diverged, ...). promote-main-to-stable.yml refuses a
+# the branch tip equals promote_sha (no compare call), "ahead" when it equals
+# known_ancestor_sha (a commit the caller already proved an ancestor of
+# promote_sha, so that compare read is reused), else the compare status
+# (ahead, behind, diverged, ...). promote-main-to-stable.yml refuses a
 # target the stable branch is not an ancestor of, so the gate checks this
 # before dispatching (#7888). Exit 2 when the branch read or the compare
 # failed (a missing branch included).
-# API calls (§14): 1 ref read + 1 compare only when the tip differs. The
-# smoke_sha...promote_sha compare has another base and does not run for
-# pinned cycles, and the stable tag lookup reads the tag, so neither answers
-# this.
+# API calls (§14): 1 ref read + 1 compare only when the tip differs from both
+# promote_sha and known_ancestor_sha. The unpinned gate passes smoke_sha,
+# whose smoke_sha...promote_sha compare already returned ahead/identical;
+# pinned cycles run no such compare, and the stable tag lookup reads the tag,
+# so neither answers this otherwise.
 comprehensive_stable_branch_compare_status() {
   local promote_sha="$1"
+  local known_ancestor_sha="${2:-}"
   local stable_sha compare_status
   [[ "${promote_sha}" =~ ^[0-9a-f]{40}$ ]] || return 2
   if ! stable_sha="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/git/ref/heads/stable" --jq '.object.sha // empty' 2>/dev/null)"; then
@@ -13913,6 +13917,10 @@ comprehensive_stable_branch_compare_status() {
   [[ "${stable_sha}" =~ ^[0-9a-f]{40}$ ]] || return 2
   if [ "${stable_sha}" = "${promote_sha}" ]; then
     printf 'identical %s\n' "${stable_sha}"
+    return 0
+  fi
+  if [[ "${known_ancestor_sha}" =~ ^[0-9a-f]{40}$ ]] && [ "${stable_sha}" = "${known_ancestor_sha}" ]; then
+    printf 'ahead %s\n' "${stable_sha}"
     return 0
   fi
   if ! compare_status="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/compare/${stable_sha}...${promote_sha}" --jq '.status // ""' 2>/dev/null)"; then
@@ -14079,7 +14087,7 @@ comprehensive_promotion_gate_before_final_merge() {
   if ! has_label "${TRACKING_LABELS:-[]}" "ai:comprehensive-test-pending"; then
     return 0
   fi
-  local metadata_json role promote_sha smoke_sha proving_merge_sha status now pinned
+  local metadata_json role promote_sha smoke_sha proving_merge_sha status now pinned stable_known_ancestor=""
   metadata_json="$(comprehensive_cycle_metadata_json "${COMMENTS:-[]}")"
   role="$(printf '%s' "${metadata_json}" | jq -r '.role')"
   if [ "${role}" != "verifying" ]; then
@@ -14169,6 +14177,7 @@ ${pin_release_why} Nothing is promoted. This project's final merge proceeds; the
         fi
       else
       local untested_json untested_rc
+      stable_known_ancestor=""
       set +e
       untested_json="$(comprehensive_untested_commits_json "${smoke_sha}" "${promote_sha}" "${proving_merge_sha}")"
       untested_rc=$?
@@ -14198,6 +14207,9 @@ Nothing is promoted. This project's final merge proceeds; the next daily promote
         tg_notify "Project #${TRACKING_NUM}: promotion deferred, ${untested_count} untested commit(s) on main since ${smoke_sha:0:7}. Next daily cycle re-proves." "DEBUG"
         return 0
       fi
+      # smoke_sha...promote_sha returned ahead/identical (anything else is
+      # listed as untested above), so smoke_sha is a proven ancestor.
+      stable_known_ancestor="${smoke_sha}"
       fi
       # The stable BRANCH must be an ancestor of promote_sha: the promote
       # workflow fast-forwards it and refuses anything else (#7888). Behind
@@ -14205,7 +14217,7 @@ Nothing is promoted. This project's final merge proceeds; the next daily promote
       # a failed read holds, bounded.
       local stable_cmp stable_cmp_rc stable_cmp_status stable_branch_sha
       set +e
-      stable_cmp="$(comprehensive_stable_branch_compare_status "${promote_sha}")"
+      stable_cmp="$(comprehensive_stable_branch_compare_status "${promote_sha}" "${stable_known_ancestor:-}")"
       stable_cmp_rc=$?
       set -e
       if [ "${stable_cmp_rc}" -ne 0 ]; then
