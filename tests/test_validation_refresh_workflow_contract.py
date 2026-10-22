@@ -147,7 +147,7 @@ def test_release_gate_validation_refresh_watch_covers_child_budget() -> None:
 	assert step_minutes < job_minutes, (step_minutes, job_minutes)
 
 	dispatch_steps = re.findall(
-		r"^        id: dispatch_[a-z_]+\n        timeout-minutes: (\d+)$",
+		r"^        id: dispatch_[a-z0-9_]+\n        timeout-minutes: (\d+)$",
 		job,
 		re.MULTILINE,
 	)
