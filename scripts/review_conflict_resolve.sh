@@ -3339,7 +3339,10 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   unset _rs_cleanup_artifact
 fi
 
-if [ -n "$(git status --porcelain)" ]; then
+# A merge in progress whose resolution equals HEAD can leave the worktree
+# clean; it still needs the two-parent commit below, so MERGE_HEAD opens
+# the gate too (shubhodeep1/tele-funtoken-msg-scoring#4752).
+if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
   git config user.name "codex-bot"
   git config user.email "codex@users.noreply.github.com"
   git rm -r --cached node_modules 2>/dev/null || true
@@ -3593,10 +3596,20 @@ if [ -n "$(git status --porcelain)" ]; then
   if ! verify_resolver_index_complete_or_fail; then
     exit 1
   fi
+  # An index that matches HEAD is not "nothing to do" while a merge is in
+  # progress: when every conflict resolves to the PR side (for example, a
+  # branch reused after its earlier PR was squash-merged), the merged tree
+  # equals HEAD but the base still has to be recorded as the second
+  # parent, or the PR stays dirty with the same conflict (see the PR #908
+  # note above; shubhodeep1/tele-funtoken-msg-scoring#4752).
   if git diff --cached --quiet; then
-    echo "No staged merge resolution changes remain; skipping merge-resolve commit."
-    echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
-    exit 0
+    if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+      echo "Merge resolution keeps the PR side unchanged (index matches HEAD); committing the two-parent merge so the base branch is recorded as merged."
+    else
+      echo "No staged merge resolution changes remain; skipping merge-resolve commit."
+      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+      exit 0
+    fi
   fi
 
   # ============================================================
