@@ -40,10 +40,18 @@ Rules enforced here:
   - `accept_with_followup` is never offered for a failed security pass, a
     failed validation, or an `ai:security` issue (`decide --security-issue`)
     (no waiver, no validation pass);
-  - `close` is offered and accepted only once a round cap, the 24-hour rule
-    or an exhausted menu applies (TERMINAL_REASONS), never on the model's
-    choice alone: comment text the judge reads is evidence, not a reason to
-    abandon the work (issue #6557);
+  - `close` is offered and accepted only once a round cap, the 24-hour rule,
+    an exhausted menu or INVALID_VERDICT_PARK_AFTER refused answers in a row
+    applies (TERMINAL_REASONS), never on the model's choice alone: comment
+    text the judge reads is evidence, not a reason to abandon the work
+    (issue #6557). A refused answer posts
+
+      <!-- ai:unblock-wait:v1 item=<n> reason=invalid_verdict stop=<id> fingerprint=<12 hex> -->
+
+    which is not a round; `decide` counts the trailing run of these for the
+    same stop and fingerprint (older markers without stop/fingerprint are
+    not counted) and, with `--pending-invalid-verdicts`, the refusal the
+    caller has not posted yet;
   - `wait` holds the item until a named condition the pipeline can check
     itself holds (HOLD_KINDS). It records a hold marker, not a round, so it
     uses no round and never counts toward the caps:
@@ -165,7 +173,7 @@ HOLD_STATES = ("done", "expired")
 MAX_HOLDS_PER_ITEM = 3
 # The deterministic conditions under which `decide` makes an item terminal;
 # `validate` accepts the terminal close only with one of these.
-TERMINAL_REASONS = ("item_cap", "project_cap", "still_blocked_24h", "menu_exhausted")
+TERMINAL_REASONS = ("item_cap", "project_cap", "still_blocked_24h", "menu_exhausted", "invalid_verdicts")
 GUARD_STOPS = ("scope-blocked", "destructive-blocked")
 GUARD_FOR_STOP = {"scope-blocked": "scope", "destructive-blocked": "destructive"}
 OVERRIDABLE_DESTRUCTIVE_REASONS = ("bulk-delete",)
@@ -186,6 +194,11 @@ NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed", "validate-failed
 MAX_ROUNDS_PER_ITEM = 2
 MAX_ROUNDS_PER_PROJECT = 6
 BLOCKED_AFTER_LAST_ROUND_HOURS = 24
+# Refused judge answers in a row on one block before the item is terminal
+# (`invalid_verdicts`) and parked for a person. A refused answer is not a
+# round, so without this cap no other terminal condition could ever hold and
+# the item was retried silently forever (tele-funtoken-msg-scoring#4770).
+INVALID_VERDICT_PARK_AFTER = 2
 
 SOURCE_REPO = "shubhodeep1/coding-workflows"
 FORBIDDEN_OVERRIDE_PREFIXES = (".github/workflows/", ".claude/", "scripts/")
@@ -240,6 +253,12 @@ AUTOMATION_REJECTION_RE = re.compile(
 	r"truncated=(?P<truncated>true|false) paths=(?P<paths>[A-Za-z0-9+/=]+) -->$"
 )
 REGRANT_MARKER_RE = re.compile(r"^<!-- ai:unblock-regrant:v1 item=(?P<item>[1-9][0-9]*) run=(?P<run>[0-9]+) -->$")
+# The unblock judge's own per-item markers (scripts/unblock_scan.py MARKER_PREFIXES).
+MARKER_PREFIXES_FOR_STREAK = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
+INVALID_VERDICT_MARKER_RE = re.compile(
+	r"^<!-- ai:unblock-wait:v1 item=(?P<item>[1-9][0-9]*) reason=invalid_verdict "
+	r"stop=(?P<stop>[a-z-]+) fingerprint=(?P<fp>[0-9a-f]{12}) -->$"
+)
 GUARD_REJECTION_HEADERS = (
 	"🚨 **files_touched scope guard rejected this implementation run.**",
 	"🚨 **Issue scope-lock rejected this implementation run.**",
@@ -705,6 +724,42 @@ def latest_automation_rejection(comments: object, trusted_login: str, item: int)
 	return {"status": "ok", "run": match.group("run"), "paths": cleaned}
 
 
+def invalid_verdict_streak(comments: object, trusted_login: str, item: int, stop: str, fp: str) -> int:
+	"""Refused judge answers in a row for this item, stop and fingerprint.
+
+	Walks the trusted login's comments in order and looks only at those whose
+	last non-empty line is an unblock marker for this item (`ai:unblock:v1` or
+	`ai:unblock-wait:v1`). An invalid-verdict marker for the same stop and
+	fingerprint adds one; any other unblock marker for the item (a round, a
+	hold, a fix-up wait, an invalid verdict on another block) ends the run.
+	The older invalid-verdict marker without stop and fingerprint is neither
+	counted nor a break. No API call.
+	"""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	streak = 0
+	item_prefixes = tuple(f"{prefix}item={item} " for prefix in MARKER_PREFIXES_FOR_STREAK)
+	legacy_line = f"<!-- ai:unblock-wait:v1 item={item} reason=invalid_verdict -->"
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if (user.get("login") or comment.get("author_login") or "") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines or not lines[-1].startswith(item_prefixes):
+			continue
+		last = lines[-1]
+		if last == legacy_line:
+			continue
+		match = INVALID_VERDICT_MARKER_RE.match(last)
+		if match and int(match.group("item")) == item and match.group("stop") == stop and match.group("fp") == fp:
+			streak += 1
+		else:
+			streak = 0
+	return streak
+
+
 def decide(
 	item: int,
 	stop: str,
@@ -719,6 +774,7 @@ def decide(
 	security_issue: bool = False,
 	holds: list[dict] | None = None,
 	wait_enabled: bool = True,
+	invalid_verdicts_in_row: int = 0,
 ) -> dict:
 	"""What the judge may still do for this item."""
 	if kind not in ITEM_KINDS:
@@ -795,6 +851,8 @@ def decide(
 		terminal_reason = "still_blocked_24h"
 	elif not options:
 		terminal_reason = "menu_exhausted"
+	elif invalid_verdicts_in_row >= INVALID_VERDICT_PARK_AFTER:
+		terminal_reason = "invalid_verdicts"
 	return {
 		"item": item,
 		"kind": kind,
@@ -809,7 +867,27 @@ def decide(
 		"terminal_reason": terminal_reason,
 		"holds_used": len(holds),
 		"holds_met": holds_met,
+		"invalid_verdict_streak": invalid_verdicts_in_row,
+		"invalid_verdict_park_after": INVALID_VERDICT_PARK_AFTER,
 	}
+
+
+def _strip_comment_delimiters(text: str) -> str:
+	"""Remove every `<!--` and `-->`, repeating until none is left.
+
+	Verdict text is posted in comments whose last line is a trusted
+	`<!-- ai:... -->` marker, so it must never carry a comment delimiter.
+	Removing them, instead of refusing the whole verdict, keeps an answer that
+	only quotes one, such as a changelog fragment's `<!-- changelog: fixed -->`
+	line (tele-funtoken-msg-scoring#4770). Repeating to a fixed point means a
+	removal cannot join two halves into a new delimiter (`<!<!---- ` gives
+	`<!-- ` after one pass and nothing after the next).
+	"""
+	while True:
+		stripped = text.replace("<!--", "").replace("-->", "")
+		if stripped == text:
+			return stripped
+		text = stripped
 
 
 def _clean_text(value: object, field: str, required: bool) -> str:
@@ -817,11 +895,9 @@ def _clean_text(value: object, field: str, required: bool) -> str:
 		value = ""
 	if not isinstance(value, str):
 		raise UsageError(f"verdict field {field!r} must be a string")
-	text = " ".join(value.split())
+	text = " ".join(_strip_comment_delimiters(value).split())
 	if required and not text:
 		raise UsageError(f"verdict field {field!r} must not be empty")
-	if "<!--" in text or "-->" in text:
-		raise UsageError(f"verdict field {field!r} must not contain an HTML comment delimiter")
 	return text[:MAX_TEXT]
 
 
@@ -933,7 +1009,10 @@ def validate(
 	if name == TERMINAL_VERDICT and (
 		decision.get("terminal") is not True or decision.get("terminal_reason") not in TERMINAL_REASONS
 	):
-		raise UsageError("verdict 'close' is accepted only after a round cap, the 24-hour rule or an exhausted menu")
+		raise UsageError(
+			"verdict 'close' is accepted only after a round cap, the 24-hour rule, an exhausted menu "
+			"or repeated refused answers"
+		)
 	normalised = {
 		"verdict": name,
 		"reason": _clean_text(verdict.get("reason"), "reason", True),
@@ -1069,6 +1148,7 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--rejection-file")
 	decide_cmd.add_argument("--security-issue", action="store_true")
 	decide_cmd.add_argument("--wait-disabled", action="store_true")
+	decide_cmd.add_argument("--pending-invalid-verdicts", type=int, default=0)
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
@@ -1157,6 +1237,8 @@ def run(argv: list[str] | None = None) -> dict:
 			security_issue=args.security_issue,
 			holds=parse_holds(item_comments, args.trusted_login, item),
 			wait_enabled=not args.wait_disabled,
+			invalid_verdicts_in_row=invalid_verdict_streak(item_comments, args.trusted_login, item, stop, fp)
+			+ max(0, args.pending_invalid_verdicts),
 		)
 	if args.command == "validate":
 		return validate(

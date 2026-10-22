@@ -1596,8 +1596,30 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} outcome=skip reason=invalid_verdict detail=$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" | tr ' ' '_' | cut -c1-120)"
 		gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="The unblock judge could not reach a valid verdict this time and will try again later.
 
-<!-- ai:unblock-wait:v1 item=${ITEM} reason=invalid_verdict -->" >/dev/null 2>&1 || true
-		return 0
+<!-- ai:unblock-wait:v1 item=${ITEM} reason=invalid_verdict stop=${ITEM_STOP} fingerprint=${fp} -->" >/dev/null 2>&1 || true
+		# A refused answer is not a round, so no other terminal condition can
+		# ever hold for it. Once INVALID_VERDICT_PARK_AFTER refusals in a row
+		# (this one included) hit the same block, take the ledger's terminal
+		# close, which parks the item for a person with one CRITICAL page
+		# (tele-funtoken-msg-scoring#4770 was retried silently every 6 hours).
+		if [ "${terminal}" = "true" ] \
+			|| ! jq -e '((.invalid_verdict_streak // 0) + 1) >= (.invalid_verdict_park_after // 2)' "${RUNTIME_DIR}/decision.json" >/dev/null 2>&1; then
+			return 0
+		fi
+		if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" "${decide_args[@]}" --pending-invalid-verdicts 1 > "${RUNTIME_DIR}/decision.json" \
+			|| ! jq -e '.terminal == true and .terminal_reason == "invalid_verdicts"' "${RUNTIME_DIR}/decision.json" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_park outcome=skip reason=decide_failed"
+			return 0
+		fi
+		terminal="true"
+		jq -n --arg reason "$(jq -r '"Terminal: invalid_verdicts (" + (.invalid_verdict_streak | tostring) + " refused answers in a row on this block, " + (.item_rounds | tostring) + " round(s) on this item)."' "${RUNTIME_DIR}/decision.json")" \
+			'{verdict: "close", reason: ($reason + " The unblock judge could not produce a usable verdict, so a person must decide.")}' > "${RUNTIME_DIR}/verdict_raw.json"
+		if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" validate --verdict-file "${RUNTIME_DIR}/verdict_raw.json" \
+			--decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" --rejection-file "${RUNTIME_DIR}/rejection.json" > "${RUNTIME_DIR}/verdict.json"; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_park outcome=skip reason=validate_failed"
+			return 0
+		fi
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_park outcome=terminal streak=$(jq -r '.invalid_verdict_streak' "${RUNTIME_DIR}/decision.json")"
 	fi
 	verdict_name="$(jq -r '.verdict' "${RUNTIME_DIR}/verdict.json")"
 	if [ "${untrusted_project_pr}" = "true" ] && [[ ! "${verdict_name}" =~ ^(reissue|descope|operator_step|accept_with_followup|close)$ ]]; then
