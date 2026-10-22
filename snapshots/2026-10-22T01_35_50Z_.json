@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-21T00:20:57Z",
+  "tick_at": "2026-10-22T01:35:50Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -195,11 +195,10 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "1",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
@@ -212,17 +211,16 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Sandbox-aware unblock verdicts, Implements #N PR adoption, and a default-branch reference for the planner",
-      "total_waves": 3,
+      "total_waves": 0,
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 2,
+        "in_progress": 0,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
@@ -233,7 +231,7 @@
       "project_complete": false,
       "status": "in-progress",
       "title": "[Orchestrator] Pin the daily promote cycle to one candidate commit",
-      "total_waves": 2,
+      "total_waves": 0,
       "wave_complete": false
     }
   ]
