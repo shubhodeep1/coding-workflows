@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (126)
+## Processed source docs (127)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -132,6 +132,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-22.md`
 - `analysis/workflow-optimization-2026-09-22-2.md`
 - `analysis/workflow-optimization-2026-09-22-3.md`
+- `analysis/workflow-optimization-2026-09-23.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1435,4 +1436,32 @@ Processed: 2026-10-22
 - DEAD-001 — rejected: `evaluate_phase_failure_resume` and `resolve_label_repair_evidence` are documented reserved contracts (agents.md "Label-repair contradiction policy").
 - SHELL-001 — already-implemented: `BRANCH_REBUILD_THRESHOLD_DECISION` logs the skip reason and the last rebuild time.
 - DEAD-API — no findings in the source.
+- Executive summary, pipeline flow table, per-repo breakdown and metrics appendix — non-material: evidence, not recommendations.
+### `analysis/workflow-optimization-2026-09-23.md`
+Processed: 2026-10-22
+- BUG-002 (implement failure handler reads stale labels) — applied: implement-failure-live-labels (`changelog.d/wfopt-0923-implement-failure-live-labels.md`); the `Comment on issue failure` step of `implement.yml` now reads labels live before it restores `ai:awaiting-approval`, and leaves them unchanged when the read fails.
+- Speed 1 / Reliability 3 / per-repo action 2 (run the cross-reference check first; missing `scripts/helper.sh`) — already-implemented: `scripts/check_workflow_script_refs.py` runs in the parallel `static-checks` job (#4707), and `implement.yml` mentions `scripts/helper.sh` only in a comment.
+- BUG-001 (reference validator matches comments) — already-implemented: `strip_full_line_comments` in `scripts/check_workflow_script_refs.py`.
+- SEC-001 (issue body injected into `GITHUB_ENV`) — already-implemented: the body travels only through `ISSUE_BODY_FILE`, and no fixed-delimiter write remains.
+- Speed 2 / Cost 1 / Reliability 1 (editor provider credential contract) — already-implemented: `REVIEW_EDITOR_PREFLIGHT` (`review_apply_fixes.sh --preflight`) and the review sandbox's host-side broker. `EDITOR_PROVIDER_CONTRACT` is rejected as telemetry nothing reads.
+- Reliability 2 (linked-issue metadata artifact) — rejected as obsolete: no workflow hashes `linked_issue_metadata.json` any more, and `scripts/review_autofix_step_init_runtime_workspace.sh` exports the path. `PR_METADATA_ARTIFACT` is rejected (2026-09-22-3 Reliability 5 precedent).
+- Speed 3 (reviewer stall circuit) — rejected: the breaker is opt-in (`REVIEWER_CIRCUIT_BREAKER_ENABLED`, default `0`), and the source rates the risk medium (2026-09-22-3 Cost 2 precedent).
+- Speed 4 (lazy Semble in pollers) — already-implemented: `SEMBLE_BOOTSTRAP_MODE` defaults to `lazy` in `orchestrate_poll.yml`.
+- Speed 5 and the GH API hot loop (live-log circuit) — already-implemented: the Phase 4 live-log cooldown in `test-and-mark-stable.yml`.
+- Cost 2 (risk-tiered reviewers) — already-implemented: `REVIEW_TIER_RESOLVER_ENABLED` defaults to `true`.
+- Cost 3 and the Prompt Cache recommendations — rejected (2026-09-21-3 Cost 3 precedent).
+- Cost 4 / Cost 5 (Semble value, Serena skipped probe) — non-material, or rejected as telemetry with no consumer.
+- Reliability 4 (AI-memory diagnostics) — already-implemented: `exit_code`, `duration_ms` and `stderr_category`.
+- Reliability 5 (contract-test MCP fallbacks) — rejected as reporting-only.
+- GH API audit `GH_API_CALL` and the Orchestrator Health tick markers (`ORCH_TICK_SUMMARY`, `STALL_DECISION`, `WAVE_PROGRESS`, `CONFLICT_SWEEP`, `RUN_QUEUE_TELEMETRY`) — rejected as telemetry with no consumer: `GH_API_RETRY` and `GH_PAT_BUDGET` cover retries and budget (2026-09-22-2 precedent).
+- Cancel-on-close unlinked-run event — already-implemented (2026-09-22-3).
+- SEC-002 (pin actions to SHAs) — rejected: it needs external commit SHAs that cannot be verified in this pipeline, and touches about 46 workflows.
+- API-001, API-002, API-003, API-004 — API-001 and API-003 rejected (tagged RISKY_SKIP in the source); the sleep-after-final-attempt half of API-001 is already fixed. API-002 already-implemented (one paginated clarify comment read). API-004 already-implemented (single-attempt POST creates in `gh_retry`, `gh_api_retry` and `gh_api_json_to_file`).
+- BATCH-001 — already-implemented: the GraphQL fallback in `scripts/review_collect_pr_metadata.sh` hydrates labels.
+- DUP-001, DUP-002, DUP-003, EXPR-001 — rejected: refactors with no behaviour change.
+- CONSIST-001 — partly already-implemented (`guard_block_gh` uses `gh_retry`); the Telegram helper swap is rejected as cosmetic.
+- DEAD-001 — rejected: `comprehensive-test-and-release.yml` still passes `codex_mode`.
+- DEAD-002 — rejected under the no-opportunistic-cleanup rule; sourced-script consumers are possible.
+- MERGE-001, MERGE-002, REUSE-001 — rejected (tagged NEEDS_VERIFICATION); MERGE-002 would also change the documented clear-note plus `/answer` contract.
+- MERGE-003, MERGE-004, REUSE-002 — rejected (tagged RISKY_SKIP).
 - Executive summary, pipeline flow table, per-repo breakdown and metrics appendix — non-material: evidence, not recommendations.
