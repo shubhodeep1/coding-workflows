@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Merged changes have updated both `.claude/commands/` and `workflow-templates/.claude/commands/`, and both `prompts/` and `prompts/_templates/`. When editing one of these instruction surfaces, check for a corresponding copy and keep the pair consistent if both are intended to provide the same behavior.",
+  "fingerprint": "bf6940781c59bedd20b643394d490dba470429fef30199df0aa697c15051ddbf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39707169914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39707169914",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7766",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7772",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7798",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7800",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7814",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7770",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7774",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7799",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7801",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7818"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261022015023_51b4429461",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Some operational instructions and prompts have parallel source and template copies that may need coordinated updates.",
+  "timestamps": {
+    "created_at": "2026-10-22T01:50:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
