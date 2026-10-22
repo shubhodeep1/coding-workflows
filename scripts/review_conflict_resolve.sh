@@ -3339,7 +3339,10 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   unset _rs_cleanup_artifact
 fi
 
-if [ -n "$(git status --porcelain)" ]; then
+# A merge in progress whose resolution equals HEAD can leave the worktree
+# clean; it still needs the two-parent commit below, so MERGE_HEAD opens
+# the gate too (shubhodeep1/tele-funtoken-msg-scoring#4752).
+if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
   git config user.name "codex-bot"
   git config user.email "codex@users.noreply.github.com"
   git rm -r --cached node_modules 2>/dev/null || true

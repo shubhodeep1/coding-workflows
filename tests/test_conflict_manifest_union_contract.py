@@ -388,6 +388,27 @@ def test_no_merge_in_progress_and_no_changes_still_skips_commit() -> None:
 		assert _git_in(repo, "rev-parse", "HEAD").stdout.strip() == head_before
 
 
+def test_outer_commit_gate_opens_for_clean_worktree_mid_merge() -> None:
+	text = RESOLVE.read_text(encoding="utf-8")
+	gate = next(line for line in text.splitlines() if line.startswith('if [ -n "$(git status --porcelain)" ]'))
+	assert "MERGE_HEAD" in gate
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = Path(tmp) / "repo"
+		_make_conflict_resolving_to_head(repo)
+		assert _git_in(repo, "status", "--porcelain").stdout == ""
+		script = f"""set -euo pipefail
+{gate}
+  echo GATE_OPEN
+else
+  echo GATE_CLOSED
+fi
+"""
+		result = subprocess.run(
+			["bash", "-c", script], cwd=repo, env=_scrubbed_git_env(), text=True, capture_output=True,
+		)
+		assert result.stdout.strip() == "GATE_OPEN", result.stdout + result.stderr
+
+
 def test_resolver_staging_failure_is_path_specific_and_fatal() -> None:
 	text = RESOLVE.read_text(encoding="utf-8")
 	function_text = _shell_function(text, "stage_resolver_touched_path_or_fail")
