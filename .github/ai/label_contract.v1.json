@@ -181,6 +181,10 @@
       "color": "c2e0c6",
       "description": "Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
     },
+    "ai:skip-activation-verify": {
+      "color": "c2e0c6",
+      "description": "Activation verification skips this merged PR (no verdict, no fix issue)"
+    },
     "ai:merge-queued": {
       "color": "c5def5",
       "description": "Review queued behind an older open PR that edits the same files (merge train)"
