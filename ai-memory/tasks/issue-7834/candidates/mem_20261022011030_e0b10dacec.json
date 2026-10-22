@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue improve?\nChoices:\nA. The review and autofix pipeline (`review_autofix.yml` and its scripts)\nB. The orchestrator poller and stall recovery (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nC. The clarify, plan or implement phases\nD. Documentation only (`README.md`, `agents.d/` fragments, `docs/`)\nE. Something else. Describe it in the answer, with file paths or workflow names. (RECOMMENDED)\nQ2: What does \"better\" mean for that area?\nChoices:\nA. Fix a specific bug or failure. Link the failing run, issue or PR in the answer. (RECOMMENDED)\nB. Reduce cost or run time (fewer API calls, fewer tokens, shorter CI)\nC. Improve reliability or observability (alerts, logs, retries)\nD. Add a new feature. Describe the behaviour you expect.\nQ3: How will we know the change worked?\nChoices:\nA. A specific test, check or workflow run passes. Name it in the answer. (RECOMMENDED)\nB. A metric you can measure improves (for example run time or API-call count). Give the target.\nC. Not yet decided. Close this issue and open a new one with a concrete problem statement.",
+  "fingerprint": "ed0951fad42189d4f36dbc988576674a09192f6926fafe248ce288f0ea4fc089",
+  "lineage": {
+    "issue_number": 7834,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39703631982",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39703631982",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261022011030_e0b10dacec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7834,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39703631982"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7834 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-22T01:10:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
