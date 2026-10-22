@@ -993,13 +993,19 @@ run_single_test()
 	# test runs on the host with the job's credentials scrubbed.
 	if is_synthesised_test "${test_file}"; then
 		run_synthesised_test_sandboxed "${test_file}" "${test_log}"
+		exit_code=$?
+		cat "${test_log}"
 	else
-		run_test_without_credentials "${test_file}" > "${test_log}" 2>&1
+		# Stream the test's output as it runs (tee keeps the copy the TAP
+		# counting below reads). validate_process.sh kills the run after
+		# VALIDATION_TIMEOUT minutes without new output, so printing only
+		# after the test exited killed every test that ran longer than that
+		# (tele-funtoken-msg-scoring validate runs 39725752780, 39726381586,
+		# 39736025924).
+		run_test_without_credentials "${test_file}" 2>&1 | tee "${test_log}"
+		exit_code=${PIPESTATUS[0]}
 	fi
-	exit_code=$?
 	set -e
-
-	cat "${test_log}"
 
 	ok_count="$(grep -E -c '^[[:space:]]*ok([[:space:]]+[0-9]+)?([[:space:]]|$)' "${test_log}" || true)"
 	not_ok_count="$(grep -E -c '^[[:space:]]*not ok([[:space:]]+[0-9]+)?([[:space:]]|$)' "${test_log}" || true)"

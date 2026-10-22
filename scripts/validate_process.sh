@@ -1653,13 +1653,18 @@ for test_script in "${test_scripts[@]}"; do
     # launched through VALIDATION_HARNESS_CREDENTIAL_SCRUB. The validation-refresh
     # path, which renders without validate_process.sh, applies the same check
     # in validation_refresh_runner.py before it renders.
+    # Stream the output as it runs (tee keeps the copy the TAP counting
+    # reads): the idle watchdog kills a run that prints nothing for
+    # VALIDATION_TIMEOUT minutes (mirrors scripts/validate_driver.sh).
     set +e
-    run_test_without_credentials "${test_script}" > "${test_log}" 2>&1
-    test_rc=$?
+    run_test_without_credentials "${test_script}" 2>&1 | tee "${test_log}"
+    test_rc=${PIPESTATUS[0]}
     set -e
   fi
 
-  cat "${test_log}" || true
+  if is_synthesised_test "${test_script}"; then
+    cat "${test_log}" || true
+  fi
 
   ok_count="$(grep -E -c '^ok[[:space:]]+[0-9]+' "${test_log}" || true)"
   TOTAL_TESTS=$((TOTAL_TESTS + ok_count))
