@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-22T01:00:22Z",
+  "tick_at": "2026-10-22T01:24:21Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -238,22 +238,22 @@
       "current_wave": 1,
       "integration_ahead_by": "0",
       "issue_counts": {
-        "closed": 0,
+        "closed": 2,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
         "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
-        "review_blocked": 1,
+        "review_blocked": 0,
         "skipped": 0
       },
-      "number": 7833,
-      "project_complete": false,
-      "status": "in-progress",
-      "title": "[E2E Smoke Test] Review-Blocked Simulation (run 39694107256)",
+      "number": 7838,
+      "project_complete": true,
+      "status": "failed",
+      "title": "[Orchestrator] [E2E Orchestrate Smoke 39703422828] Update smoke canary files",
       "total_waves": 1,
-      "wave_complete": false
+      "wave_complete": true
     }
   ]
 }
