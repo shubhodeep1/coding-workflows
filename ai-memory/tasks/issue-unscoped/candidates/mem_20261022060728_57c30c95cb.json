@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"prompts/mode-activation-verify.txt and prompts/_templates/mode-activation-verify.txt: one paragraph on exempt_changed_files\" \u2014 the implementation must update both files, and the contract test must verify both stay in sync.\n  expected_change_site: tests/test_activation_verify.py around `test_prompt_never_turns_exempt_files_into_gaps`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: the diff updates the paragraph in both prompt files, but the test only reads `prompts/mode-activation-verify.txt`, so a future edit dropping the paragraph from `prompts/_templates/mode-activation-verify.txt` would pass CI.\n- requirement: \"On `shubhodeep1/tele-funtoken-msg-scoring`, set the repository variable `ACTIVATION_VERIFY_EXEMPT_GLOBS` to `docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/**`.\"\n  expected_change_site: `shubhodeep1/tele-funtoken-msg-scoring` repository variable `ACTIVATION_VERIFY_EXEMPT_GLOBS`\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR changes only this repository. The default remains `docs/plans/**`, and the consumer-specific value appears only as an operator instruction. Until it is set, merges containing only `docs/game-sources/**` or `ft.games/templates/Game-pages/**` files still go to activation verification. Severity stated: MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"prompts/mode-activation-verify.txt and prompts/_templates/mode-activation-verify.txt: one paragraph on exempt_changed_files\" \u2014 the implementation must update both files, and the contract test must verify both stay in sync.\nExpected change site: tests/test_activation_verify.py around `test_prompt_never_turns_exempt_files_into_gaps`\nEvidence of absence: the diff updates the paragraph in both prompt files, but the test only reads `prompts/mode-activation-verify.txt`. A future edit dropping the paragraph from the template copy would pass CI.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"On `shubhodeep1/tele-funtoken-msg-scoring`, set the repository variable `ACTIVATION_VERIFY_EXEMPT_GLOBS` to `docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/**`.\"\nExpected change site: `shubhodeep1/tele-funtoken-msg-scoring` repository variable `ACTIVATION_VERIFY_EXEMPT_GLOBS`\nEvidence of absence: The PR changes only this repository. The default remains `docs/plans/**`; the consumer-specific value appears as an operator instruction, not as a configured variable. Until it is set, merges containing only `docs/game-sources/**` or `ft.games/templates/Game-pages/**` files are still sent to activation verification.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "63256219524881919dd0a807ea54a6aec39b875999cce76470480aceaecf478a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7867,
+    "run_id": "39729048063",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39729048063",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022060728_57c30c95cb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7867,
+    "run_id": "39729048063"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-22T06:07:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
