@@ -1973,9 +1973,15 @@ jobs:
             if [ -n "$coverage_jobs" ] && printf '%s' "$coverage_jobs" | jq -e '(.jobs | type == "array") and (.jobs | length > 0) and (.total_count == null or .total_count <= (.jobs | length))' >/dev/null 2>&1; then
               while IFS= read -r coverage_job_id; do
                 coverage_log="$(mktemp)"
-                if ! gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${coverage_job_id}/logs" > "$coverage_log"; then
+                # Live-log cooldown: a skipped fetch counts as a failed read,
+                # so the verdict stays unknown and is retried after the pause.
+                if ! live_log_fetch_allowed; then
                   coverage_failed=1
+                elif ! gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${coverage_job_id}/logs" > "$coverage_log"; then
+                  coverage_failed=1
+                  live_log_fetch_record fail
                 else
+                  live_log_fetch_record ok
                   coverage_read=$((coverage_read + 1))
                   # Match only a resolved 40-hex SHA, never the echoed shell
                   # source line containing a literal ${INITIAL_HEAD_SHA}.

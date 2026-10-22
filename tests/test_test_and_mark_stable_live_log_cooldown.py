@@ -75,10 +75,12 @@ def test_cooldown_state_initialised_before_loop() -> None:
 	assert step.index("ELAPSED=0\n") < step.index(BLOCK_START)
 
 
-def test_every_jobs_log_fetch_in_wait_loop_is_gated() -> None:
-	lines = _loop_text().splitlines()
+def test_every_jobs_log_fetch_in_wait_step_is_gated() -> None:
+	# Scan the whole step, not only the loop: the bait-coverage helper
+	# review_run_checked_out_bait() is defined before the loop.
+	lines = _step_text().splitlines()
 	fetch_indexes = [i for i, line in enumerate(lines) if JOBS_LOG_FETCH_RE.search(line)]
-	assert len(fetch_indexes) >= 2, fetch_indexes
+	assert len(fetch_indexes) >= 3, fetch_indexes
 	for idx in fetch_indexes:
 		window = "\n".join(lines[max(0, idx - 6):idx + 1])
 		assert "live_log_fetch_allowed" in window, lines[idx]
@@ -92,6 +94,16 @@ def test_success_resets_and_failure_counts() -> None:
 	ok_branch = block[block.index('if [ "$1" = "ok" ]; then'):]
 	first_lines = ok_branch.splitlines()[1:3]
 	assert any(line.strip() == "LIVE_LOG_FETCH_FAILURES=0" for line in first_lines)
+
+
+def test_bait_coverage_fetch_records_outcome() -> None:
+	step = _step_text()
+	start = step.index("review_run_checked_out_bait() {")
+	end = step.index("require_bait_review_coverage() {", start)
+	helper = step[start:end]
+	assert "live_log_fetch_allowed" in helper
+	assert helper.count("live_log_fetch_record ok") == 1
+	assert helper.count("live_log_fetch_record fail") == 1
 
 
 def test_existing_failure_line_preserved() -> None:
