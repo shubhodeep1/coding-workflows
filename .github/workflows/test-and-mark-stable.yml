@@ -5312,18 +5312,21 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # Sum of remaining in-step DEADLINEs (validation-refresh 2400s +
-    # update_workflows 600s + memory-maintenance 2400s = 5400s = 90m).
+    # Sum of remaining in-step DEADLINEs (validation-refresh 3720s +
+    # update_workflows 600s + memory-maintenance 2400s = 6720s = 112m).
+    # The validation-refresh watch covers that workflow's whole 60-minute
+    # `refresh` job budget (run 39694107256 timed out after 40m on a run
+    # that was still in_progress).
     # Add headroom for prerequisite validation, checkout, and the
     # per-phase run-soft-error-analyzer composite actions (each waits
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
     # call; log1 of run #25200117236 observed ~40s per phase, so 3
     # phases under OpenRouter latency variance can plausibly reach
-    # 6–9m), runner queueing, and step setup. Cap at 110m so a runaway
+    # 6–9m), runner queueing, and step setup. Cap at 135m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
     # still be killed within a sensible budget. Down from 360m before
     # the workflow-log-analysis split-out.
-    timeout-minutes: 110
+    timeout-minutes: 135
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -5368,7 +5371,7 @@ jobs:
       # deterministic ones whose failures still gate the release.
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
-        timeout-minutes: 42
+        timeout-minutes: 65
         run: |
           set -euo pipefail
           sleep 4
@@ -5384,18 +5387,26 @@ jobs:
           # filters runs by the pre-dispatch run-id snapshot, so a duplicate dispatch (if a 500
           # response masked a successful create) is harmless — the poll
           # picks up whichever run id was registered.
+          # The smoke run passes discovery_dry_run=true: it skips the model
+          # call and the discovery PR (up to 35m of VALIDATION_DISCOVERY_BUDGET_SECS)
+          # but still runs dedup, memory plumbing and every consumer's
+          # clone/render/lint/self-test. The completion window (measured from
+          # dispatch) must cover validation-refresh.yml's refresh job
+          # timeout-minutes (60) plus queueing; run 39694107256 gave up after
+          # 2400s on a run that was still in_progress.
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
             --display-name "validation-refresh" \
             --registration-timeout-secs 2400 \
             --registration-poll-interval-secs 5 \
-            --completion-timeout-secs 2400 \
+            --completion-timeout-secs 3720 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
             --dispatch-backoff-base-secs 2 \
             --field "branch_name=${BRANCH_NAME}" \
-            --field alert_msg_level=SILENT
+            --field alert_msg_level=SILENT \
+            --field discovery_dry_run=true
 
       - name: "Soft-error analyser (validation-refresh)"
         if: always() && steps.dispatch_validation_refresh.outputs.run_id != ''

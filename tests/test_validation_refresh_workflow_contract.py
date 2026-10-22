@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "validation-refresh.yml"
+RELEASE_GATE_PATH = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 
 
 def test_validation_refresh_workflow_has_required_triggers() -> None:
@@ -76,6 +78,81 @@ def test_validation_refresh_workflow_summarizes_and_notifies_on_failure() -> Non
 	assert "GITHUB_STEP_SUMMARY" in content
 	assert "Telegram failure notification" in content
 	assert "if: failure()" in content
+
+
+# ---------------------------------------------------------------------------
+# Release gate smoke dispatch (test-and-mark-stable.yml, orphan-workflows-test)
+# ---------------------------------------------------------------------------
+# Run 39694107256: the gate watched the dispatched validation-refresh run for
+# only 2400s while that run's own `refresh` job may take 60 minutes, so a
+# healthy, still-running refresh failed the stable release as "timed out".
+
+
+def _job_block(text: str, job: str) -> str:
+	match = re.search(rf"^  {re.escape(job)}:\n", text, re.MULTILINE)
+	assert match, f"job {job!r} not found"
+	rest = text[match.end():]
+	end = re.search(r"^  [A-Za-z0-9_-]+:\n", rest, re.MULTILINE)
+	return rest[: end.start()] if end else rest
+
+
+def _job_header_timeout(block: str) -> int:
+	match = re.search(r"^    timeout-minutes: (\d+)$", block, re.MULTILINE)
+	assert match, "job-level timeout-minutes not found"
+	return int(match.group(1))
+
+
+def _step_block(job_block: str, step_name: str) -> str:
+	marker = f"      - name: {step_name}\n"
+	start = job_block.find(marker)
+	assert start >= 0, f"step {step_name!r} not found"
+	rest = job_block[start + len(marker):]
+	end = re.search(r"^      - name:", rest, re.MULTILINE)
+	return rest[: end.start()] if end else rest
+
+
+def _release_validation_refresh_step() -> str:
+	text = RELEASE_GATE_PATH.read_text(encoding="utf-8")
+	job = _job_block(text, "orphan-workflows-test")
+	return _step_block(job, "Dispatch & watch — validation-refresh")
+
+
+def test_release_gate_validation_refresh_smoke_skips_model_discovery() -> None:
+	step = _release_validation_refresh_step()
+	assert "--field discovery_dry_run=true" in step
+
+
+def test_release_gate_validation_refresh_watch_covers_child_budget() -> None:
+	child_minutes = _job_header_timeout(
+		_job_block(WORKFLOW_PATH.read_text(encoding="utf-8"), "refresh")
+	)
+	release_text = RELEASE_GATE_PATH.read_text(encoding="utf-8")
+	job = _job_block(release_text, "orphan-workflows-test")
+	job_minutes = _job_header_timeout(job)
+	step = _step_block(job, "Dispatch & watch — validation-refresh")
+
+	watch = re.search(r"--completion-timeout-secs (\d+)", step)
+	assert watch, "--completion-timeout-secs missing"
+	watch_secs = int(watch.group(1))
+	step_timeout = re.search(r"^        timeout-minutes: (\d+)$", step, re.MULTILINE)
+	assert step_timeout, "step timeout-minutes missing"
+	step_minutes = int(step_timeout.group(1))
+
+	# The watcher's deadline counts from dispatch, so it must cover the child
+	# job's whole budget plus queueing/registration slack.
+	assert watch_secs >= child_minutes * 60 + 60, (watch_secs, child_minutes)
+	# The watcher must report before GitHub kills the step ...
+	assert watch_secs < step_minutes * 60, (watch_secs, step_minutes)
+	# ... and the step before the job.
+	assert step_minutes < job_minutes, (step_minutes, job_minutes)
+
+	dispatch_steps = re.findall(
+		r"^        id: dispatch_[a-z_]+\n        timeout-minutes: (\d+)$",
+		job,
+		re.MULTILINE,
+	)
+	assert len(dispatch_steps) >= 3, dispatch_steps
+	assert sum(int(m) for m in dispatch_steps) < job_minutes, (dispatch_steps, job_minutes)
 
 
 # ---------------------------------------------------------------------------
