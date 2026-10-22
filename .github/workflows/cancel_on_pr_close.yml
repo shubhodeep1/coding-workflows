@@ -261,6 +261,27 @@ jobs:
             unlinked_active_run_count="$(jq '[.workflow_runs[] | select(((.pull_requests // []) | length) == 0)] | length' "${active_runs_file}")"
             if [ "${unlinked_active_run_count}" -gt 0 ]; then
               echo "::warning::Scheduled close cleanup preserved ${unlinked_active_run_count} active run(s) without pull-request linkage."
+              # List up to 10 of those runs from the same snapshot (no API call).
+              # Only id, workflow path, event, status, head branch and creation
+              # time are printed, never free-text titles; every value is limited
+              # to [A-Za-z0-9._/@:+-], has "::" broken up and is capped at 200
+              # characters. A listing failure only warns (fail open).
+              unlinked_run_listing_jq='
+                def _cpr_neutralize: if test("::") then gsub("::"; ": :") | _cpr_neutralize else . end;
+                def _cpr_safe: (if . == null then "" else tostring end)
+                  | gsub("[^A-Za-z0-9._/@:+-]"; "_") | _cpr_neutralize | .[0:200];
+                [.workflow_runs[] | select(((.pull_requests // []) | length) == 0)] as $unlinked
+                | ($unlinked[0:$unlinked_run_listing_max][]
+                    | "  unlinked run id=\(.id | _cpr_safe) workflow=\((.path // "") | tostring | sub("@.*$"; "") | _cpr_safe) event=\(.event | _cpr_safe) status=\(.status | _cpr_safe) head_branch=\(.head_branch | _cpr_safe) created_at=\(.created_at | _cpr_safe)"),
+                  (if ($unlinked | length) > $unlinked_run_listing_max
+                    then "  ... \(($unlinked | length) - $unlinked_run_listing_max) more unlinked active run(s) not listed."
+                    else empty end)
+              '
+              if ! unlinked_run_listing="$(jq -r --argjson unlinked_run_listing_max 10 "${unlinked_run_listing_jq}" "${active_runs_file}" 2>/dev/null)"; then
+                echo "::warning::Scheduled close cleanup could not list the unlinked active run details."
+              elif [ -n "${unlinked_run_listing}" ]; then
+                printf '%s\n' "${unlinked_run_listing}"
+              fi
             fi
             jq -r '
               .workflow_runs[]
