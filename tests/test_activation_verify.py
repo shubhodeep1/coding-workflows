@@ -731,10 +731,6 @@ def test_operator_entry_without_a_valid_merge_commit_has_no_source_line(tmp_path
 GAME_GLOBS = "docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/**"
 
 
-def _context(tmp_path: Path) -> dict:
-	return json.loads((tmp_path / "rt" / "activation_context.json").read_text(encoding="utf-8"))
-
-
 @pytest.mark.parametrize(("files", "globs"), [
 	(["docs/plans/onboard-a.md", "docs/plans/sub/onboard-b.md"], None),
 	(["docs/plans/fixup.md"], ""),
