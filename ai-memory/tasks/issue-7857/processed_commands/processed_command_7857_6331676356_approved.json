@@ -5,13 +5,25 @@
   "entry_id": "processed_command_7857_6331676356_approved",
   "issue_number": 7857,
   "metadata": {
+    "branch": "ai/issue-7857",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/wfopt-0922-3-release-live-log-cooldown.md",
+      "tests/test_test_and_mark_stable_live_log_cooldown.py"
+    ],
+    "issue_number": 7857,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7857",
+    "pr_number": 7862,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7862",
+    "run_attempt": "1",
+    "run_id": "39714971048",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39714971048"
   },
   "run_attempt": 1,
   "run_id": "39714971048",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-22T03:11:22Z",
+  "status": "completed",
+  "timestamp": "2026-10-22T03:33:49Z",
   "workflow": "implement"
 }
