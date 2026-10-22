@@ -289,6 +289,105 @@ def test_resolver_index_guard_precedes_no_change_and_commit_paths() -> None:
 	assert guard_call < text.index(f'git commit -m "{MERGE_RESOLVE_COMMIT_MESSAGE}"', guard_call)
 
 
+def _no_change_commit_tail(text: str) -> str:
+	"""The live resolver tail: the no-change guard through the merge commit line."""
+	start = text.index("  if git diff --cached --quiet; then")
+	commit_line = f'  git commit -m "{MERGE_RESOLVE_COMMIT_MESSAGE}"'
+	end = text.index(commit_line, start) + len(commit_line)
+	return text[start:end]
+
+
+def _git_in(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["git", *args], cwd=repo, env=_scrubbed_git_env(), check=check,
+		text=True, capture_output=True,
+	)
+
+
+def _init_scratch_repo(repo: Path) -> None:
+	repo.mkdir()
+	_git_in(repo, "init", "-q", "-b", "main")
+	_git_in(repo, "config", "user.name", "Test")
+	_git_in(repo, "config", "user.email", "test@example.com")
+	_git_in(repo, "config", "commit.gpgsign", "false")
+	(repo / "app.txt").write_text("v0\n", encoding="utf-8")
+	_git_in(repo, "add", "app.txt")
+	_git_in(repo, "commit", "-q", "-m", "base")
+
+
+def _make_conflict_resolving_to_head(repo: Path) -> str:
+	"""Leave ``repo`` mid-merge on ``feat`` with a conflict whose resolution is HEAD.
+
+	Mirrors a branch reused after its PR was squash-merged
+	(shubhodeep1/tele-funtoken-msg-scoring#4752): ``main`` holds the squash
+	of the earlier work, ``feat`` holds that work plus a newer edit of the
+	same line, so the right resolution is the ``feat`` side and the merged
+	tree is byte-identical to HEAD. Returns the pre-merge HEAD tree.
+	"""
+	_init_scratch_repo(repo)
+	_git_in(repo, "checkout", "-q", "-b", "feat")
+	for version in ("v1", "v2"):
+		(repo / "app.txt").write_text(f"{version}\n", encoding="utf-8")
+		_git_in(repo, "commit", "-q", "-am", f"feat {version}")
+	_git_in(repo, "checkout", "-q", "main")
+	(repo / "app.txt").write_text("v1\n", encoding="utf-8")
+	_git_in(repo, "commit", "-q", "-am", "squash of feat v1")
+	_git_in(repo, "checkout", "-q", "feat")
+	head_tree = _git_in(repo, "rev-parse", "HEAD^{tree}").stdout.strip()
+	merge = _git_in(repo, "merge", "--no-commit", "--no-ff", "main", check=False)
+	assert merge.returncode != 0, "scratch merge must conflict"
+	(repo / "app.txt").write_text("v2\n", encoding="utf-8")
+	_git_in(repo, "add", "app.txt")
+	return head_tree
+
+
+def _run_no_change_commit_tail(repo: Path, github_env: Path) -> subprocess.CompletedProcess[str]:
+	script = f"""set -euo pipefail
+GITHUB_ENV={github_env!s}
+{_no_change_commit_tail(RESOLVE.read_text(encoding="utf-8"))}
+"""
+	return subprocess.run(
+		["bash", "-c", script], cwd=repo, env=_scrubbed_git_env(), text=True, capture_output=True,
+	)
+
+
+def test_resolution_equal_to_head_still_commits_two_parent_merge() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = Path(tmp) / "repo"
+		github_env = Path(tmp) / "github.env"
+		head_tree = _make_conflict_resolving_to_head(repo)
+		assert _git_in(repo, "diff", "--cached", "--quiet", check=False).returncode == 0
+
+		result = _run_no_change_commit_tail(repo, github_env)
+
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "skipping merge-resolve commit" not in result.stdout
+		assert "keeps the PR side unchanged" in result.stdout
+		parents = _git_in(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
+		assert len(parents) == 3, f"expected a two-parent merge commit, got {parents}"
+		assert parents[2] == _git_in(repo, "rev-parse", "main").stdout.strip()
+		assert _git_in(repo, "rev-parse", "HEAD^{tree}").stdout.strip() == head_tree
+		assert _git_in(repo, "log", "-1", "--format=%s").stdout.strip() == MERGE_RESOLVE_COMMIT_MESSAGE
+		assert _git_in(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode != 0
+		assert _git_in(repo, "merge-base", "--is-ancestor", "main", "HEAD", check=False).returncode == 0
+		assert not github_env.exists() or "CONFLICT_RESOLVED=false" not in github_env.read_text(encoding="utf-8")
+
+
+def test_no_merge_in_progress_and_no_changes_still_skips_commit() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = Path(tmp) / "repo"
+		github_env = Path(tmp) / "github.env"
+		_init_scratch_repo(repo)
+		head_before = _git_in(repo, "rev-parse", "HEAD").stdout.strip()
+
+		result = _run_no_change_commit_tail(repo, github_env)
+
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "No staged merge resolution changes remain; skipping merge-resolve commit." in result.stdout
+		assert github_env.read_text(encoding="utf-8").splitlines() == ["CONFLICT_RESOLVED=false"]
+		assert _git_in(repo, "rev-parse", "HEAD").stdout.strip() == head_before
+
+
 def test_resolver_staging_failure_is_path_specific_and_fatal() -> None:
 	text = RESOLVE.read_text(encoding="utf-8")
 	function_text = _shell_function(text, "stage_resolver_touched_path_or_fail")

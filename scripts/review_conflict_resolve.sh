@@ -3593,10 +3593,20 @@ if [ -n "$(git status --porcelain)" ]; then
   if ! verify_resolver_index_complete_or_fail; then
     exit 1
   fi
+  # An index that matches HEAD is not "nothing to do" while a merge is in
+  # progress: when every conflict resolves to the PR side (for example, a
+  # branch reused after its earlier PR was squash-merged), the merged tree
+  # equals HEAD but the base still has to be recorded as the second
+  # parent, or the PR stays dirty with the same conflict (see the PR #908
+  # note above; shubhodeep1/tele-funtoken-msg-scoring#4752).
   if git diff --cached --quiet; then
-    echo "No staged merge resolution changes remain; skipping merge-resolve commit."
-    echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
-    exit 0
+    if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+      echo "Merge resolution keeps the PR side unchanged (index matches HEAD); committing the two-parent merge so the base branch is recorded as merged."
+    else
+      echo "No staged merge resolution changes remain; skipping merge-resolve commit."
+      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+      exit 0
+    fi
   fi
 
   # ============================================================
