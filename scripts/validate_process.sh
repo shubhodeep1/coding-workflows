@@ -1632,7 +1632,9 @@ for test_script in "${test_scripts[@]}"; do
   test_log="${LOG_DIR}/${test_name}.log"
 
   echo "=== RUN ${test_name} ==="
+  test_script_is_synthesised=0
   if is_synthesised_test "${test_script}"; then
+    test_script_is_synthesised=1
     # Model-written synthesised tests run only in validate_driver.sh's
     # credential-free, network-less sandbox; this fallback runner has none,
     # so they are reported as skipped, never run on the host (finding
@@ -1653,13 +1655,28 @@ for test_script in "${test_scripts[@]}"; do
     # launched through VALIDATION_HARNESS_CREDENTIAL_SCRUB. The validation-refresh
     # path, which renders without validate_process.sh, applies the same check
     # in validation_refresh_runner.py before it renders.
+    # Stream the output as it runs (tee keeps the copy the TAP counting
+    # reads): the idle watchdog kills a run that prints nothing for
+    # VALIDATION_TIMEOUT minutes (mirrors scripts/validate_driver.sh).
     set +e
-    run_test_without_credentials "${test_script}" > "${test_log}" 2>&1
-    test_rc=$?
+    run_test_without_credentials "${test_script}" 2>&1 | tee "${test_log}"
+    # One PIPESTATUS snapshot. A failed tee leaves a partial log, so a
+    # passing test with a failed log write counts as failed.
+    test_rc=${PIPESTATUS[0]} test_tee_rc=${PIPESTATUS[1]}
+    if [ "${test_tee_rc}" -ne 0 ]; then
+      echo "::warning::validate_process: tee exited ${test_tee_rc} while writing ${test_log}; the test log may be incomplete" >&2
+      if [ "${test_rc}" -eq 0 ]; then
+        test_rc="${test_tee_rc}"
+      fi
+    fi
     set -e
   fi
 
-  cat "${test_log}" || true
+  # Decided once above: a test that deletes or rewrites itself must not
+  # flip which branch prints its log.
+  if [ "${test_script_is_synthesised}" -eq 1 ]; then
+    cat "${test_log}" || true
+  fi
 
   ok_count="$(grep -E -c '^ok[[:space:]]+[0-9]+' "${test_log}" || true)"
   TOTAL_TESTS=$((TOTAL_TESTS + ok_count))

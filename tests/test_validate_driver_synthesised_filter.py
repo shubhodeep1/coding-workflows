@@ -161,7 +161,7 @@ def test_discover_tests_excludes_only_synthesised_scripts_when_disabled() -> Non
 
 _SANDBOX_HOST_TOOLS = (
 	"bash", "sh", "env", "git", "mktemp", "cp", "chmod", "rm", "grep", "id",
-	"timeout", "cat", "touch", "dirname", "basename", "printf", "sleep", "mkdir", "head",
+	"timeout", "cat", "touch", "dirname", "basename", "printf", "sleep", "mkdir", "head", "tee",
 )
 
 _STUB_DOCKER = """#!/usr/bin/env bash
@@ -374,6 +374,8 @@ def test_non_synthesised_test_still_runs_on_host() -> None:
 		assert (workspace / "sentinel").exists()
 		assert not (workspace / "record" / "run_argv.txt").exists()
 		assert "BEHAVIOURAL_SMOKE_SANDBOX" not in result.stderr
+		# The host path streams through tee and its TAP result is counted.
+		assert "TOTALS=1/1/0" in result.stdout, result.stdout + result.stderr
 
 
 def test_synthesised_test_is_never_chosen_as_canary() -> None:
