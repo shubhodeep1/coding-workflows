@@ -1,0 +1,26 @@
+{
+  "created_at": "2026-10-22T09:27:39Z",
+  "issue_number": 7870,
+  "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7870",
+  "lineage_id": "issue-7870",
+  "memory_record_ids": [],
+  "prs": [
+    {
+      "pr_number": 7871,
+      "state": "in_progress",
+      "url": "https://github.com/shubhodeep1/coding-workflows/pull/7871"
+    }
+  ],
+  "runs": [
+    {
+      "run_attempt": 1,
+      "run_id": "39752242564",
+      "status": "in_progress",
+      "timestamp": "2026-10-22T09:27:39Z",
+      "workflow": "implement"
+    }
+  ],
+  "schema_version": "task_lineage.v1",
+  "state": "in_progress",
+  "updated_at": "2026-10-22T09:27:39Z"
+}
