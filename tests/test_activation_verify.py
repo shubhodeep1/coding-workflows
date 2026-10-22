@@ -830,6 +830,7 @@ def test_status_workflow_wires_exempt_globs_and_skip_label() -> None:
 
 
 def test_prompt_never_turns_exempt_files_into_gaps() -> None:
-	prompt = (ROOT / "prompts" / "mode-activation-verify.txt").read_text(encoding="utf-8")
-	assert "`exempt_changed_files`" in prompt
-	assert "never report a gap asking to implement, build or ship them" in prompt
+	for rel in ("prompts/mode-activation-verify.txt", "prompts/_templates/mode-activation-verify.txt"):
+		prompt = (ROOT / rel).read_text(encoding="utf-8")
+		assert "`exempt_changed_files`" in prompt, rel
+		assert "never report a gap asking to implement, build or ship them" in prompt, rel

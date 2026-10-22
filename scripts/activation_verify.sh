@@ -281,6 +281,9 @@ from functools import lru_cache
 from pathlib import PurePosixPath
 raw = os.environ.get("ACTIVATION_VERIFY_EXEMPT_GLOBS", "") or "docs/plans/**"
 patterns = [item.strip().lstrip("/") for item in raw.split(",") if item.strip().lstrip("/")]
+if not patterns:
+	# A set value such as "," names no pattern: nothing is exempt, so every file is verified.
+	print("::warning::ACTIVATION_VERIFY_EXEMPT_GLOBS names no pattern; verifying every changed file.", file=sys.stderr)
 def matches(path, pattern):
 	path_parts = PurePosixPath(path).parts
 	pattern_parts = PurePosixPath(pattern).parts
