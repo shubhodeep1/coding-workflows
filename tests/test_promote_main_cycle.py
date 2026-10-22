@@ -84,6 +84,16 @@ if args[:1] == ["api"]:
         respond({})
     if path.endswith("/git/ref/heads/promote-candidate"):
         respond({"object": {"type": "commit", "sha": state.get("pin_branch_tip", state["main_tip"])}})
+    if path.endswith("/git/ref/heads/stable"):
+        # The stable BRANCH (#7888); defaults to the stable tag's commit.
+        if state.get("stable_branch_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        seq = state.get("stable_branch_sequence")
+        if seq:
+            n = state.get("stable_branch_reads", 0)
+            state["stable_branch_reads"] = n + 1
+            respond({"object": {"type": "commit", "sha": seq[min(n, len(seq) - 1)]}})
+        respond({"object": {"type": "commit", "sha": state.get("stable_branch_sha", state["tag_commit"])}})
     if path.endswith("/git/ref/heads/main"):
         respond({"object": {"type": "commit", "sha": state["main_tip"]}})
     if path.endswith("/git/ref/tags/stable"):
@@ -965,4 +975,94 @@ def test_pinned_cycle_compare_failure_is_reported_as_unavailable() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _pinned_run(Path(tmp), {"pin_branch_patch": "error", "pin_branch_tip": "0" * 40, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), TIP: {}}, "gate_runs_sequence": GATE_SUCCESS})
 	assert "PROMOTE_CYCLE_PIN outcome=skipped reason=freeze_failed detail=compare_unavailable" in proc.stdout
+	assert final["tag_deletes"] == 1
+
+
+# --- stable branch must be an ancestor of the candidate (#7888) ---------------
+
+STABLE_BRANCH_OTHER = "7" * 40
+
+
+def _compare_bases(final: dict) -> list[str]:
+	return [c[1].split("/compare/")[1].split("...")[0] for c in final["calls"] if c[:1] == ["api"] and "/compare/" in c[1]]
+
+
+def test_stable_branch_at_the_tag_commit_needs_no_extra_compare() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
+	assert _compare_bases(final) == [TAG_COMMIT]
+	assert any(c[:1] == ["api"] and c[1].endswith("/git/ref/heads/stable") for c in final["calls"])
+
+
+def test_stable_branch_identical_to_the_tip_proceeds() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"stable_branch_sha": TIP, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
+	assert STABLE_BRANCH_OTHER not in _compare_bases(final)
+
+
+def test_stable_branch_behind_the_tip_with_another_sha_proceeds() -> None:
+	state = {
+		"stable_branch_sha": STABLE_BRANCH_OTHER,
+		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), STABLE_BRANCH_OTHER: _compare(["scripts/y.sh"])},
+		"gate_runs_sequence": GATE_SUCCESS,
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout
+	assert STABLE_BRANCH_OTHER in _compare_bases(final)
+
+
+def test_stable_branch_not_an_ancestor_skips_before_the_gate() -> None:
+	for status in ("behind", "diverged"):
+		state = {
+			"stable_branch_sha": STABLE_BRANCH_OTHER,
+			"compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), STABLE_BRANCH_OTHER: {"status": status, "total_commits": 0, "files": []}},
+			"gate_runs_sequence": GATE_SUCCESS,
+		}
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final, env_out = _run(Path(tmp), state)
+			assert not env_out.exists()
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		assert f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={STABLE_BRANCH_OTHER} head={TIP} status={status} ref=heads/stable" in proc.stdout
+		assert not final.get("dispatches")
+
+
+def test_stable_branch_lookup_failure_fails_closed() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"stable_branch_error": True, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=guard_unavailable lookup=branch:stable" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_stable_branch_checked_when_the_tag_is_missing() -> None:
+	state = {
+		"tag_missing": True,
+		"stable_branch_sha": STABLE_BRANCH_OTHER,
+		"compares": {STABLE_BRANCH_OTHER: {"status": "diverged", "total_commits": 0, "files": []}},
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state)
+	assert "PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor" in proc.stdout and "ref=heads/stable" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_pinned_cycle_checks_the_stable_branch_after_the_freeze() -> None:
+	# Step 3 sees the branch at the tag commit; by the freeze it moved sideways.
+	state = {
+		"stable_branch_sequence": [TAG_COMMIT, STABLE_BRANCH_OTHER],
+		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), STABLE_BRANCH_OTHER: {"status": "diverged", "total_commits": 0, "files": []}},
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _pinned_run(Path(tmp), state)
+		assert not env_out.exists()
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert f"PROMOTE_CYCLE_PIN outcome=frozen candidate={TIP}" in proc.stdout
+	assert f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={STABLE_BRANCH_OTHER} head={TIP} status=diverged ref=heads/stable" in proc.stdout
+	assert not final.get("dispatches")
 	assert final["tag_deletes"] == 1

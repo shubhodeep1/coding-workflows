@@ -22,6 +22,9 @@ PROVING_MERGE_SHA = "d" * 40
 HUMAN_SHA = "e" * 40
 BOT_SHA = "f" * 40
 FINAL_PR_HEAD_SHA = "9" * 40
+# The stable BRANCH tip (heads/stable), compared with promote_sha before the
+# promotion is dispatched (#7888).
+STABLE_BRANCH_SHA = "3" * 40
 
 LABEL = "ai:comprehensive-test-pending"
 
@@ -162,12 +165,13 @@ def test_proving_run_retries_when_default_branch_ref_is_unavailable() -> None:
 	assert "RETRY reason=default_branch_unavailable" in result["stdout"]
 
 
-def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None, tag_commit: str = "9" * 40, untrusted_marker: bool = False, env_overrides: dict | None = None, compare_status_by_range: dict | None = None, extra_store: dict | None = None):
+def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: dict | None = None, runs_by_file: dict | None = None, prs: list[dict] | None = None, tag_commit: str = "9" * 40, untrusted_marker: bool = False, env_overrides: dict | None = None, compare_status_by_range: dict | None = None, extra_store: dict | None = None, stable_branch_sha: str = STABLE_BRANCH_SHA, stable_status: str = "ahead"):
 	extra = {"compare_commits_detail": compare_commits, "tag_refs": {"stable": {"type": "tag", "sha": "8" * 40}}, "tag_objects": {"8" * 40: tag_commit}}
 	if commit_files:
 		extra["commit_files"] = commit_files
-	if compare_status_by_range:
-		extra["compare_status_by_range"] = compare_status_by_range
+	ranges = {f"{stable_branch_sha}...{PROMOTE_SHA}": stable_status}
+	ranges.update(compare_status_by_range or {})
+	extra["compare_status_by_range"] = ranges
 	if extra_store:
 		extra.update(extra_store)
 	if runs_by_file:
@@ -190,7 +194,8 @@ def _verifying_run(state: dict, *, compare_commits: list[dict], commit_files: di
 		],
 		issue_labels={10: ["ai:merged"]},
 		prs=prs or [_open_final_pr()],
-		existing_branches=["main", "orchestrator/project-192"],
+		existing_branches=["main", "orchestrator/project-192", "stable"],
+		branch_ref_shas={"stable": stable_branch_sha},
 		mock_store_extra=extra,
 		env_overrides=env_overrides,
 	)
@@ -518,6 +523,9 @@ def _pinned_verifying_run(
 	tag_commit: str = "9" * 40,
 	env_overrides: dict | None = None,
 	marker_shas: dict | None = None,
+	stable_branch_sha: str = STABLE_BRANCH_SHA,
+	stable_status: str = "ahead",
+	extra_store: dict | None = None,
 ):
 	tag_refs = {"stable": {"type": "tag", "sha": "8" * 40}}
 	tag_objects = {"8" * 40: tag_commit}
@@ -525,8 +533,11 @@ def _pinned_verifying_run(
 		tag_refs[PIN_TAG] = {"type": "tag", "sha": PIN_TAG_OBJECT}
 		tag_objects[PIN_TAG_OBJECT] = pin_tag_commit
 	extra = {"compare_commits_detail": compare_commits or [], "tag_refs": tag_refs, "tag_objects": tag_objects}
+	extra["compare_status_by_range"] = {f"{stable_branch_sha}...{PROMOTE_SHA}": stable_status}
 	if runs_by_file:
 		extra["workflow_runs_by_file"] = runs_by_file
+	if extra_store:
+		extra.update(extra_store)
 	shas = marker_shas if marker_shas is not None else {
 		"cycle_baseline_sha": PROMOTE_SHA,
 		"smoke_sha": PROMOTE_SHA,
@@ -541,8 +552,8 @@ def _pinned_verifying_run(
 		tracking_comments=[_trusted(_marker("verifying", pinned="true", **shas))],
 		issue_labels={10: ["ai:merged"]},
 		prs=prs or [_open_final_pr()],
-		existing_branches=["main", "orchestrator/project-192", "promote-candidate"],
-		branch_ref_shas={"promote-candidate": branch_tip},
+		existing_branches=["main", "orchestrator/project-192", "promote-candidate", "stable"],
+		branch_ref_shas={"promote-candidate": branch_tip, "stable": stable_branch_sha},
 		mock_store_extra=extra,
 		env_overrides=env_overrides,
 	)
@@ -699,4 +710,69 @@ def test_unpinned_proving_not_dispatched_leaves_the_freeze_tag_alone() -> None:
 			env_overrides={"APPLY_ANALYSIS_DISPATCHER": str(stub)},
 		)
 	assert "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED" in result["stdout"]
+	assert result.get("deleted_tags", []) == []
+
+
+# --- stable branch must be an ancestor of promote_sha (#7888) -----------------
+
+def _stable_compare_calls(result: dict) -> list[str]:
+	return [str(call) for call in result["api_calls"] if f"compare/{STABLE_BRANCH_SHA}..." in str(call) or f"compare/{PROMOTE_SHA}...{PROMOTE_SHA}" in str(call)]
+
+
+def test_stable_branch_ahead_dispatches_the_promotion() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(_project_state(), compare_commits=commits, stable_status="ahead")
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert len(result["release_dispatches"]) == 1
+	assert any(str(call).endswith("git/ref/heads/stable") for call in result["api_calls"])
+	assert len(_stable_compare_calls(result)) == 1
+
+
+def test_stable_branch_identical_dispatches_without_a_compare() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(_project_state(), compare_commits=commits, stable_branch_sha=PROMOTE_SHA)
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert len(result["release_dispatches"]) == 1
+	assert not any(f"compare/{PROMOTE_SHA}...{PROMOTE_SHA}" in str(call) for call in result["api_calls"])
+
+
+def test_stable_branch_behind_or_diverged_abandons_without_dispatch() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	for status in ("behind", "diverged"):
+		result = _verifying_run(_project_state(), compare_commits=commits, stable_status=status)
+		promotion = result["latest_state"]["comprehensive_promotion"]
+		assert promotion["status"] == "deferred", (status, promotion)
+		assert promotion["reason"] == "stable_not_ancestor"
+		assert promotion["stable_sha"] == STABLE_BRANCH_SHA
+		assert promotion["compare_status"] == status
+		assert result["release_dispatches"] == []
+		assert "COMPREHENSIVE_PROMOTION_DEFERRED tracking_issue=" in result["stdout"]
+		assert f"reason=stable_not_ancestor stable_sha={STABLE_BRANCH_SHA} promote_sha={PROMOTE_SHA} status={status}" in result["stdout"]
+		assert result["latest_state"]["final_merge_status"] == "merged"
+		assert result.get("deleted_tags", []) == []
+
+
+def test_stable_branch_read_failure_holds_the_merge() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(_project_state(), compare_commits=commits, extra_store={"fail_branch_ref_after": {"stable": 0}})
+	assert "COMPREHENSIVE_PROMOTION_HOLD" in result["stdout"]
+	assert "reason=stable_branch_compare_unavailable" in result["stdout"]
+	assert result["release_dispatches"] == []
+	assert result["latest_state"]["final_merge_status"] != "merged"
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"
+
+
+def test_pinned_stable_branch_diverged_abandons_and_releases_the_freeze() -> None:
+	result = _pinned_verifying_run(_project_state(), stable_status="diverged")
+	promotion = result["latest_state"]["comprehensive_promotion"]
+	assert promotion["status"] == "deferred"
+	assert promotion["reason"] == "stable_not_ancestor"
+	assert result["release_dispatches"] == []
+	assert result.get("deleted_tags") == [PIN_TAG]
+
+
+def test_pinned_stable_branch_ahead_dispatches() -> None:
+	result = _pinned_verifying_run(_project_state(), stable_status="ahead")
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
+	assert len(result["release_dispatches"]) == 1
 	assert result.get("deleted_tags", []) == []
