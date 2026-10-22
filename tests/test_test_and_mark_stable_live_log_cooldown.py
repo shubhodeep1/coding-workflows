@@ -250,7 +250,7 @@ def _run_harness(iterations: int, results: str) -> tuple[int, int]:
 
 def test_behaviour_schedule_always_failing() -> None:
 	if shutil.which("bash") is None:
-		return
+		raise unittest.SkipTest("bash is not installed")
 	# Fetches at ELAPSED 0,30,60 / 360,390,420 / 720,750,780 / 1080,1110,1140.
 	assert _model(40, "") == (12, 4)
 	assert _run_harness(40, "") == (12, 4)
@@ -258,7 +258,7 @@ def test_behaviour_schedule_always_failing() -> None:
 
 def test_behaviour_success_resets_counter() -> None:
 	if shutil.which("bash") is None:
-		return
+		raise unittest.SkipTest("bash is not installed")
 	results = "ffsfff"
 	expected = _model(10, results)
 	assert expected == (6, 1)
@@ -268,7 +268,7 @@ def test_behaviour_success_resets_counter() -> None:
 def test_workflow_step_parses_as_bash() -> None:
 	bash = shutil.which("bash")
 	if bash is None:
-		return
+		raise unittest.SkipTest("bash is not installed")
 	result = subprocess.run(
 		[bash, "-n"],
 		input=textwrap.dedent(_cooldown_block()),
