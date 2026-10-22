@@ -82,7 +82,7 @@ if endpoint.endswith("/comments?per_page=100") and method == "GET":
 if endpoint.endswith("/files?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_FILES") == "1":
 		sys.exit(1)
-	done(json.dumps([[{"filename": "README.md"}]]))
+	done(json.dumps([[{"filename": name} for name in json.loads(os.environ.get("FAKE_GH_FILES", '["README.md"]'))]]))
 if endpoint.startswith("search/issues?"):
 	if os.environ.get("FAKE_GH_FAIL_SEARCH") == "1":
 		sys.exit(1)
@@ -724,3 +724,109 @@ def test_operator_entry_without_a_valid_merge_commit_has_no_source_line(tmp_path
 	assert result.returncode == 0
 	entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
 	assert "source-sha" not in entry["body"]
+
+
+# Plans and raw design drops wait for an explicit order (consumer
+# tele-funtoken-msg-scoring#4726): exempt-only merges file nothing.
+GAME_GLOBS = "docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/**"
+
+
+@pytest.mark.parametrize(("files", "globs"), [
+	(["docs/plans/onboard-a.md", "docs/plans/sub/onboard-b.md"], None),
+	(["docs/plans/fixup.md"], ""),
+	(["ft.games/templates/Game-pages/boxing/index.html", "ft.games/templates/Game-pages/boxing/assets/a.png"], GAME_GLOBS),
+	(["docs/game-sources/boxing.js", "docs/plans/boxing-phase-4.md"], GAME_GLOBS),
+])
+def test_exempt_only_pr_is_skipped_without_model_comment_or_fix_issue(tmp_path: Path, files: list, globs: str | None) -> None:
+	env_extra = {"FAKE_GH_FILES": json.dumps(files)}
+	if globs is not None:
+		env_extra["ACTIVATION_VERIFY_EXEMPT_GLOBS"] = globs
+	result, state = _verify(tmp_path, DORMANT, env_extra=env_extra)
+	assert result.returncode == 0
+	assert f"ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=exempt_paths exempt_files={len(files)}\n" in result.stdout
+	assert state["comments"] == [] and state["created"] == []
+	assert not any(call[1].startswith("search/") for call in state["calls"] if len(call) > 1)
+	assert not (tmp_path / "rt" / "activation_prompt.txt").exists()
+
+
+def test_custom_globs_replace_the_default(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []},
+		env_extra={"FAKE_GH_FILES": '["docs/plans/a.md"]', "ACTIVATION_VERIFY_EXEMPT_GLOBS": "docs/game-sources/**"})
+	assert "reason=exempt_paths" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+
+
+@pytest.mark.parametrize("files", [
+	["docs/plans"],
+	["docs/plans.md"],
+	["src/docs/plans/a.md"],
+	["ft.games/templates/Game-pages-old/a.html"],
+])
+def test_near_miss_paths_are_not_exempt(tmp_path: Path, files: list) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []},
+		env_extra={"FAKE_GH_FILES": json.dumps(files), "ACTIVATION_VERIFY_EXEMPT_GLOBS": GAME_GLOBS})
+	assert "reason=exempt_paths" not in result.stdout
+	assert _context(tmp_path)["changed_files"] == files
+	assert "exempt_changed_files" not in _context(tmp_path)
+
+
+def test_mixed_pr_is_verified_on_its_other_files_only(tmp_path: Path) -> None:
+	files = ["docs/plans/boxing.md", "ft.games/templates/Game-pages/boxing/index.html", "src/games/boxing.ts"]
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FILES": json.dumps(files), "ACTIVATION_VERIFY_EXEMPT_GLOBS": GAME_GLOBS})
+	assert "reason=exempt_paths" not in result.stdout
+	context = _context(tmp_path)
+	assert context["changed_files"] == ["src/games/boxing.ts"]
+	assert context["exempt_changed_files"] == ["docs/plans/boxing.md", "ft.games/templates/Game-pages/boxing/index.html"]
+	assert "exempt_changed_files" in (tmp_path / "rt" / "activation_prompt.txt").read_text(encoding="utf-8")
+	# The verdict and the code-gap fix issue still follow, as for any code merge.
+	assert state["created"][0]["body"].startswith("<!-- ai:activation-fix:v1 source=pr-42 -->")
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
+
+
+def test_non_exempt_pr_is_verified_unchanged(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FILES": '["src/app.ts", "README.md"]'})
+	assert "ACTIVATION_VERIFY mode=pr item=42 verdict=DORMANT code_gaps=1 operator_gaps=1 outcome=posted" in result.stdout
+	context = _context(tmp_path)
+	assert context["changed_files"] == ["src/app.ts", "README.md"]
+	assert "exempt_changed_files" not in context
+	assert state["created"][0]["title"] == "Activation gaps after PR #42"
+
+
+def test_skip_label_skips_before_any_github_call(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"PR_LABELS": '["ai:implementing", "ai:skip-activation-verify"]'})
+	assert result.returncode == 0
+	assert "ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=skip_label\n" in result.stdout
+	assert state["calls"] == [] and state["comments"] == [] and state["created"] == []
+
+
+@pytest.mark.parametrize("labels", ['["ai:skip-activation-verify-x"]', '"ai:skip-activation-verify"', "not json", "[]", ""])
+def test_other_or_malformed_labels_do_not_skip(tmp_path: Path, labels: str) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []}, env_extra={"PR_LABELS": labels})
+	assert "reason=skip_label" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+
+
+def test_exempt_rules_do_not_apply_to_project_mode(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "cron", "summary": "Running.", "gaps": []}, mode="project",
+		env_extra={"TRACKING_NUM": "5", "PROJECT_TITLE": "p", "PROJECT_BODY": "b", "FINAL_PR": "", "PROJECT_FILES_JSON": '["docs/plans/a.md"]',
+			"PR_LABELS": '["ai:skip-activation-verify"]'})
+	assert "reason=exempt_paths" not in result.stdout and "reason=skip_label" not in result.stdout
+	assert state["comments"][-1]["endpoint"] == "repos/o/r/issues/5/comments"
+
+
+def test_status_workflow_wires_exempt_globs_and_skip_label() -> None:
+	workflow = yaml.safe_load(STATUS.read_text(encoding="utf-8"))
+	job = workflow["jobs"]["activation-verify"]
+	assert "!contains(github.event.pull_request.labels.*.name, 'ai:skip-activation-verify')" in job["if"]
+	verify_env = next(step for step in job["steps"] if step["name"] == "Verify activation")["env"]
+	assert verify_env["PR_LABELS"] == "${{ toJSON(github.event.pull_request.labels.*.name) }}"
+	assert verify_env["ACTIVATION_VERIFY_EXEMPT_GLOBS"] == "${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**' }}"
+	contract = json.loads((ROOT / ".github/ai/label_contract.v1.json").read_text(encoding="utf-8"))
+	assert "ai:skip-activation-verify" in contract["labels"]
+
+
+def test_prompt_never_turns_exempt_files_into_gaps() -> None:
+	for rel in ("prompts/mode-activation-verify.txt", "prompts/_templates/mode-activation-verify.txt"):
+		prompt = (ROOT / rel).read_text(encoding="utf-8")
+		assert "`exempt_changed_files`" in prompt, rel
+		assert "never report a gap asking to implement, build or ship them" in prompt, rel
