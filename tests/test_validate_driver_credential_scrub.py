@@ -94,8 +94,11 @@ def test_test_scripts_never_see_credentials(source: Path, indent: str) -> None:
 
 def test_driver_and_runtime_driver_run_tests_through_the_scrub() -> None:
 	driver = DRIVER.read_text(encoding="utf-8")
-	assert 'run_test_without_credentials "${test_file}" > "${test_log}" 2>&1' in driver
+	# The output streams through tee (tests/test_validation_streaming_output.py).
+	assert 'run_test_without_credentials "${test_file}" 2>&1 | tee "${test_log}"' in driver
 	assert 'bash "${test_file}" > "${test_log}" 2>&1' not in driver
+	assert 'bash "${test_file}" 2>&1 | tee' not in driver
 	process = PROCESS.read_text(encoding="utf-8")
-	assert 'run_test_without_credentials "${test_script}" > "${test_log}" 2>&1' in process
+	assert 'run_test_without_credentials "${test_script}" 2>&1 | tee "${test_log}"' in process
 	assert 'bash "${test_script}" > "${test_log}" 2>&1' not in process
+	assert 'bash "${test_script}" 2>&1 | tee' not in process
