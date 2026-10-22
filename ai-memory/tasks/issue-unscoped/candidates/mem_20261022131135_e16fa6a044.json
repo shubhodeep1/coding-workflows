@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:3342 | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The outer gate `if [ -n \"$(git status --porcelain)\" ]; then` ignores MERGE_HEAD, so a merge in progress with the index equal to HEAD and a clean worktree skips the new inner merge-commit guard (lines 3602-3610) and takes the else branch at 3658 (\"No conflict resolution changes to commit\").\n  WHY: Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT with confidence 2 (hardening only, not shown to be reachable), and minimax_minimax-m3 rated it MAJOR with confidence 3. The highest severity is used. The stuck-conflict symptom could return if untracked artifacts no longer keep the gate true.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Now the skip happens only when no merge is in progress. With `MERGE_HEAD` set, the script logs `Merge resolution keeps the PR side unchanged (index matches HEAD); committing the two-parent merge ...` and commits the merge.\"\n  expected_change_site: scripts/review_conflict_resolve.sh around the outer gate at line 3342 (extend it with `|| git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1`)\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The diff hunks at lines 3593-3610 change only the inner `if git diff --cached --quiet` block, the outer gate at line 3342 is unchanged, and the new test `test_resolution_equal_to_head_still_commits_two_parent_merge` runs only the tail snippet from `_no_change_commit_tail`, which bypasses the outer gate.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_conflict_resolve.sh:3342 | severity=low (reported as NIT) | confidence=2\n  PROBLEM: The outer gate `if [ -n \"$(git status --porcelain)\" ]; then`, whose else branch at line 3658 prints \"No conflict resolution changes to commit\", ignores MERGE_HEAD. A merge in progress with the index equal to HEAD and no untracked or modified entries would skip the commit and not write CONFLICT_RESOLVED.\n  WHY: The reviewer could not show this is reachable in the review job, because untracked workflow artifacts and `.ai/` files normally keep the gate true. It is hardening only. Suggested fix: `if [ -n \"$(git status --porcelain)\" ] || git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then`. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_resolve.sh:3342 (wrapping the inner guard at lines 3602-3610) | severity=high (reported as MAJOR) | confidence=3\n  PROBLEM: The fix covers only the inner no-change guard. The outer gate at line 3342 still decides whether the commit path runs. With a merge in progress and a clean worktree, `git status --porcelain` is empty, so the new MERGE_HEAD-aware check is skipped and the script falls to the else branch at lines 3657-3658.\n  WHY: The merge is never recorded as a two-parent commit, `CONFLICT_RESOLVED=true` is never written, and the poller could re-dispatch until the stuck-conflict budget is exhausted. This works today only because untracked sandbox artifacts keep the gate true.\n- TASK_GAP:\n  Requirement: \"Now the skip happens only when no merge is in progress. With `MERGE_HEAD` set, the script logs `Merge resolution keeps the PR side unchanged (index matches HEAD); committing the two-parent merge ...` and commits the merge.\"\n  Expected change site: scripts/review_conflict_resolve.sh around the outer gate at line 3342, or remove the outer gate and let the inner guard decide.\n  Evidence of absence: The diff hunks at lines 3593-3610 change only the inner `if git diff --cached --quiet` block. The outer gate at line 3342 is unchanged. The new test `test_resolution_equal_to_head_still_commits_two_parent_merge` runs only the tail snippet from `_no_change_commit_tail`, which bypasses the outer gate.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9ab7868e1b3c9bc1299a96929eaacf6e16276d7816f20cf18848e51f78d2f0fb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7887,
+    "run_id": "39782193167",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39782193167",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022131135_e16fa6a044",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7887,
+    "run_id": "39782193167"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-22T13:11:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
