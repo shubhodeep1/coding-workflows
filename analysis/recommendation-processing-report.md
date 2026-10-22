@@ -2,7 +2,7 @@
 
 Grounding note: this report folds the prior recommendation triage into one final artifact. "Actioned" is based on current repository state on this ref, not on historical intent or external GitHub issue state.
 
-## Processed source docs (125)
+## Processed source docs (126)
 The filenames below are retained for provenance. The source docs listed below are no longer present under `analysis/` on this ref because their triage now lives here.
 
 - `analysis/workflow-optimization-2026-04-21.md`
@@ -131,6 +131,7 @@ The filenames below are retained for provenance. The source docs listed below ar
 - `analysis/workflow-optimization-2026-09-21-3.md`
 - `analysis/workflow-optimization-2026-09-22.md`
 - `analysis/workflow-optimization-2026-09-22-2.md`
+- `analysis/workflow-optimization-2026-09-22-3.md`
 
 ## Downstream local issue ID recheck (repo-state only)
 | Local ID | Recommendation | Files checked | Result | Current repo evidence |
@@ -1405,3 +1406,33 @@ Processed: 2026-10-20
 - DEAD-001 — rejected for naming immutability.
 - DEAD-API — no findings in the source.
 - Executive summary, per-repo breakdown and metrics appendix — non-material: evidence, not recommendations.
+
+### `analysis/workflow-optimization-2026-09-22-3.md`
+Processed: 2026-10-22
+- Speed 5 / GH API audit (stop re-probing unavailable live logs) — applied: release-live-log-cooldown (`changelog.d/wfopt-0922-3-release-live-log-cooldown.md`); after 3 failed fetches of a job log in a row, the Phase 4 review wait in `test-and-mark-stable.yml` skips that endpoint for 300 seconds.
+- Orchestrator Health (IDs, workflow and head refs for unlinked active runs) — applied: cancel-cleanup-unlinked-runs (`changelog.d/wfopt-0922-3-cancel-cleanup-unlinked-runs.md`); scheduled close cleanup in `cancel_on_pr_close.yml` lists up to 10 preserved unlinked runs from the snapshot it already reads. `POLL_ISSUE_V1` and the per-phase poll timers are rejected as observability with no consumer (2026-09-22 precedent).
+- Speed 1 / Reliability 1 / per-repo action 1 (run static CI invariants first; broken `scripts/helper.sh` reference; `CI_PREFLIGHT_V1`) — already-implemented: #4707 split CI into parallel jobs, and `scripts/check_workflow_script_refs.py` runs in the `static-checks` job. `implement.yml` mentions `scripts/helper.sh` only in a comment describing the fixed ledger incident (2026-09-22-2 precedent). Inventory parity is pinned to share a job with the log coverage gates (`tests/test_ci_inventory_parity_order_contract.py`). The marker is rejected as telemetry nothing reads.
+- Speed 2 / Cost 1 (same-head terminal failure circuit) — already-implemented: `AUTOFIX_SKIP_TERMINAL_SAME_HEAD` (default `true`), the `review-autofix-failure:v1` identical-failure fingerprint cap and `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`.
+- Speed 3 and AI Memory Health (reuse one AI-memory checkout per run) — rejected (2026-09-16, 2026-09-18, 2026-09-20-2 and 2026-09-22-2 precedent).
+- Speed 4 (narrow the orchestrator checkout) — rejected: the poll job's repository checkout uses `fetch-depth: 0`, and `scripts/orchestrate_poll_process.sh` reads origin refs broadly (merge-tree probes, ancestry checks, integration branches). Narrowing it would need an audit of every git call, and the source itself rates the risk medium.
+- Cost 2 (open the reviewer health circuit on repeated `unknown` failures) — rejected: the circuit breaker is opt-in (`REVIEWER_CIRCUIT_BREAKER_ENABLED`, default `0`), `z-ai/glm-5.2` is no longer on the panel, and the source rates the quality risk medium (2026-09-18 and 2026-09-22-2 Cost 2 precedent).
+- Cost 3 and Prompt Cache recommendations — rejected: automatic prompt reduction risks dropping review evidence (2026-09-21-3 Cost 3 precedent). Weighted cache hit is already implemented (`compute_cache_hit_rate` in `scripts/cost_audit.py`).
+- Cost 4 (keep Semble) and Cost 5 (do not downgrade editor reasoning) — non-material: neither asks for a change.
+- Reliability 2 (editor infrastructure failure vs valid no-op; isolation preflight) — already-implemented: `REVIEW_EDITOR_PREFLIGHT` and the review sandbox with a host-side broker. `EDITOR_ATTEMPT_V1` is rejected.
+- Reliability 3 (telemetry `event_id`) — rejected as a broad cross-producer change (2026-09-22 Reliability 6 precedent). Codex usage de-duplication was applied earlier (`changelog.d/wfopt-0922-codex-usage-anchored.md`).
+- Reliability 4 (AI-memory failure recording) — partly already-implemented: fail-open record calls emit `exit_code`, `duration_ms` and `stderr_category`, and push auth failures stop early (`changelog.d/wfopt-0922-memory-push-auth.md`). The failure artifact upload is rejected.
+- Reliability 5 (metadata-integrity digest) — rejected as obsolete: no linked-issue metadata integrity digest publication exists in `scripts/` or the workflows (2026-09-22-2 Reliability 3 precedent).
+- Reliability 6 (runner termination re-dispatch, `RUNNER_TERMINATION_V1`) — rejected: orchestrator and standalone stall recovery already re-trigger implement, so an extra re-dispatch would duplicate it.
+- Reliability 7 (policy signals) — non-material.
+- AI Memory Health (85–90% budget target, explicit write reasons) — rejected (2026-09-21-3 and 2026-09-22 precedent).
+- GH API audit (`GH_API_CALL_V1`) — rejected: `GH_API_RETRY` and `GH_PAT_BUDGET` already cover retries and budget (2026-09-22-2 precedent).
+- BUG-001 — already-implemented: `scripts/resolve_integration_ref.sh` uses `gh_api_retry` and exits 75 or 2, and its callers fail closed.
+- BATCH-001, REUSE-002 — rejected: tagged NEEDS_VERIFICATION in the source.
+- BATCH-002, API-001, MERGE-001, MERGE-002, MERGE-003, REUSE-001 — rejected: tagged RISKY_SKIP in the source.
+- DUP-001, DUP-002, DUP-003 — rejected: refactors with no behaviour change. DUP-002 (`emit_context_budget_warn_for_prompt`) now has a fourth copy, in `scripts/review_consolidate.sh`.
+- EXPR-001, EXPR-002 — already-implemented: values are bound through `env:`, and `tests/test_workflow_file_size_limit.py` enforces the 21,000-character limit.
+- EXPR-003 — rejected: a refactor, with plenty of headroom left.
+- DEAD-001 — rejected: `evaluate_phase_failure_resume` and `resolve_label_repair_evidence` are documented reserved contracts (agents.md "Label-repair contradiction policy").
+- SHELL-001 — already-implemented: `BRANCH_REBUILD_THRESHOLD_DECISION` logs the skip reason and the last rebuild time.
+- DEAD-API — no findings in the source.
+- Executive summary, pipeline flow table, per-repo breakdown and metrics appendix — non-material: evidence, not recommendations.
