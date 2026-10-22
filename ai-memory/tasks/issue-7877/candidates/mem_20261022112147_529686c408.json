@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue change?\nChoices:\nA) The review/autofix pipeline (`review_autofix.yml` and the `scripts/review_*` helpers)\nB) The orchestrator poller (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nC) The clarify/plan/implement phase workflows\nD) Documentation only (README, `agents.md` fragments, `docs/`)\nE) Something else. Name the file, workflow or feature in your answer (RECOMMENDED)\nQ2: What does \"better\" mean for this change?\nChoices:\nA) Fix a specific bug or failure. Link the failing run, issue or PR (RECOMMENDED)\nB) Reduce cost or runtime (GitHub API calls, model tokens, CI minutes)\nC) Add a new capability. Describe the behaviour you expect\nD) Make the current behaviour clearer (logs, alerts, docs) without changing it\nQ3: How will we know the change is done?\nChoices:\nA) A specific failing check, test or workflow run passes. Name it (RECOMMENDED)\nB) A measurable metric improves. Give the metric and the target\nC) A described behaviour is visible in a workflow run or PR comment. Describe it",
+  "fingerprint": "18461792807d1ef6639bff859911671b2469b79afb2c9059884e467e91d3df73",
+  "lineage": {
+    "issue_number": 7877,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39769242852",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39769242852",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261022112147_529686c408",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7877,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39769242852"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7877 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-22T11:21:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
