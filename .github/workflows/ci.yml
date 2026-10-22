@@ -2392,6 +2392,7 @@ jobs:
             tests/test_static_context_symlink_guard.py \
             tests/test_summarize_unselected_runs.py \
             tests/test_test_and_mark_stable_phase7_unconflict.py \
+            tests/test_test_and_mark_stable_live_log_cooldown.py \
             tests/test_validate_lint_bounded_tail_capture.py \
             tests/test_validate_lint_external_tool_dependencies.py \
             tests/test_validate_lint_import_audit_safety.py \

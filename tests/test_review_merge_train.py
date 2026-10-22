@@ -2467,3 +2467,74 @@ def test_merge_train_conflict_aware_settings_are_wired_in_every_caller() -> None
 	for name, env in envs.items():
 		for key, value in expected.items():
 			assert env.get(key) == value, (name, key)
+
+
+def test_scheduled_cancel_sweep_lists_unlinked_runs_safely(tmp_path: Path) -> None:
+	import re
+	import shutil
+
+	workflow = (REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8")
+	assert (
+		'echo "::warning::Scheduled close cleanup preserved ${unlinked_active_run_count}'
+		' active run(s) without pull-request linkage."'
+	) in workflow
+	assert (
+		'jq -r --argjson unlinked_run_listing_max 10 "${unlinked_run_listing_jq}" "${active_runs_file}"'
+	) in workflow
+	assert "::warning::Scheduled close cleanup could not list the unlinked active run details." in workflow
+	match = re.search(r"unlinked_run_listing_jq='(.*?)'\n", workflow, re.S)
+	assert match is not None
+	program = match.group(1)
+	assert "display_title" not in program
+	assert ".name" not in program
+	assert "'" not in program
+
+	if shutil.which("jq") is None:
+		pytest.skip("jq is not installed")
+
+	hostile_branch = "x\n::error::pwned\a:::y"
+	runs: list[dict] = [
+		{"id": 9100001, "path": ".github/workflows/a.yml", "event": "pull_request", "status": "queued",
+			"head_branch": "linked-a", "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "pull_requests": [{"number": 5}]},
+		{"id": 9100002, "path": ".github/workflows/b.yml", "event": "pull_request", "status": "in_progress",
+			"head_branch": "linked-b", "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "pull_requests": [{"number": 5}]},
+		{"id": 1, "path": ".github/workflows/x.yml", "event": "pull_request", "status": "queued",
+			"head_branch": hostile_branch, "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "pull_requests": []},
+		{"id": 2, "path": ".github/workflows/x.yml", "event": "pull_request", "status": "queued",
+			"head_branch": "b" * 500, "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "pull_requests": []},
+		{"id": 3, "path": "owner/repo/.github/workflows/x.yml@refs/heads/main", "event": "pull_request",
+			"status": "in_progress", "head_branch": "feature", "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER"},
+	]
+	for index in range(4, 14):
+		runs.append({"id": index, "path": ".github/workflows/y.yml", "event": "pull_request",
+			"status": "queued", "head_branch": f"branch-{index}", "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "name": "SECRET_TITLE_MARKER", "pull_requests": []})
+	runs_file = tmp_path / "runs.json"
+	runs_file.write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+
+	result = subprocess.run(
+		["jq", "-r", "--argjson", "unlinked_run_listing_max", "10", program, str(runs_file)],
+		capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert len(lines) == 11, lines
+	assert lines[-1] == "  ... 3 more unlinked active run(s) not listed."
+	assert all(line.startswith("  unlinked run id=") for line in lines[:10])
+	assert "9100001" not in result.stdout
+	assert "9100002" not in result.stdout
+	assert "SECRET_TITLE_MARKER" not in result.stdout
+	for line in lines:
+		assert "::" not in line
+		assert all(ch == "\t" or 32 <= ord(ch) < 127 for ch in line), line
+	assert "workflow=owner/repo/.github/workflows/x.yml event=" in result.stdout
+	assert "@refs/heads/main" not in result.stdout
+	for line in lines[:10]:
+		for value in re.findall(r"=(\S*)", line):
+			assert len(value) <= 200, line
+	assert "head_branch=" + "b" * 200 + " " in result.stdout
