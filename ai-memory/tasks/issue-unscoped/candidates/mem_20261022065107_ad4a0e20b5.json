@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"On `shubhodeep1/tele-funtoken-msg-scoring`, set the repository variable `ACTIVATION_VERIFY_EXEMPT_GLOBS` to `docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/**`.\"\n  expected_change_site: Repository settings of `shubhodeep1/tele-funtoken-msg-scoring`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: No diff hunk can set a variable in another repository. The PR documents the value but does not configure it, so only `docs/plans/**` is exempt there until it is set. Severity disagreement: openai_gpt-6-luna rated it MAJOR (confidence 5). anthropic_claude-sonnet-5_5 rated it NIT (confidence 1) and dropped it as an explicit deferral. minimax_minimax-m3 and z-ai_glm-5_3-flash called it a deferred operator step, not a code gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP (reviewer dropped it as an explicit deferral to a person):\n- Requirement: \"On `shubhodeep1/tele-funtoken-msg-scoring`, set the repository variable `ACTIVATION_VERIFY_EXEMPT_GLOBS` to `docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/**`.\"\n  Expected change site: Repository settings of `shubhodeep1/tele-funtoken-msg-scoring`.\n  Evidence of absence: No diff hunk can set this, because it is a variable in another repository. The PR description lists it under \"Operator step for the consumer\". Until the variable is set, only `docs/plans/**` is exempt for that consumer.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\nHARDENING_SUGGESTIONS:\n- scripts/activation_verify.sh, `activation_split_exempt_files`: a mistyped but non-empty pattern list silently exempts nothing. Suggested fix: print the effective pattern count to stderr (`::notice::`). About 1 line changed.\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nHARDENING_SUGGESTIONS:\n- scripts/activation_verify.sh, `activation_split_exempt_files()`: a typo'd `ACTIVATION_VERIFY_EXEMPT_GLOBS` (e.g. `doc/plans/**`) silently exempts nothing. Suggested fix: log the effective pattern count on every call. About 2 lines changed.\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nTASK COMPLETENESS note: the single TASK_GAP (set `ACTIVATION_VERIFY_EXEMPT_GLOBS` on `shubhodeep1/tele-funtoken-msg-scoring`) is explicitly deferred in the PR description under \"Operator step for the consumer\". The reviewer treated it as an operator action, not a missing implementation, and did not report it as a gap.\nHARDENING_SUGGESTIONS:\n- scripts/activation_verify.sh, `activation_split_exempt_files()`, after the empty-pattern warning at lines 283-286: a typo'd pattern list matches nothing silently. Suggested fix: log the effective pattern count via `printf '::warning::...'`. About 2 lines changed.\nHARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"On shubhodeep1/tele-funtoken-msg-scoring, set the repository variable ACTIVATION_VERIFY_EXEMPT_GLOBS to docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/**.\"\n  Expected change site: Repository settings for shubhodeep1/tele-funtoken-msg-scoring.\n  Evidence of absence: The PR documents the requested value but does not configure it. The workflow defaults to docs/plans/**, so the consumer's docs/game-sources/** and ft.games/templates/Game-pages/** files remain eligible for activation verification.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nHARDENING_SUGGESTIONS: NONE\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nTASK COMPLETENESS note: setting `ACTIVATION_VERIFY_EXEMPT_GLOBS` on `shubhodeep1/tele-funtoken-msg-scoring` is an operator step documented in the PR description. The reviewer treated it as a deferred operator action, not a code gap, and did not report it as a gap.\nHARDENING_SUGGESTIONS:\n- scripts/activation_verify.sh, `activation_split_exempt_files()`, after line 284: a non-empty but non-matching pattern list is silent, but it fails open to more verification. No fix is required, because the existing empty-pattern warning covers the misconfiguration that changes behaviour. About 0 lines changed.\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c5f935efad66229cd44f3dbbc42f37fa108d6bf878a353aa94bf554464e79245",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7867,
+    "run_id": "39734136050",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39734136050",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022065107_ad4a0e20b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7867,
+    "run_id": "39734136050"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-22T06:51:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
