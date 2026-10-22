@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Several merged workflow and script changes updated targeted tests alongside the implementation. Before changing orchestration, CI, or conflict-handling behavior, look for an existing test module covering that workflow contract and extend it where appropriate.",
+  "fingerprint": "111a78fb2a803f88675423837af4c51b671f0c4efafbb0ba58c52686a2b98a88",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39707169914",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39707169914",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7766",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7772",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7798",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7800",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7814",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7770",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7774",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7799",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7801",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7818"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261022014751_c813fb73a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and script behavior is often protected by focused pytest contract or regression tests.",
+  "timestamps": {
+    "created_at": "2026-10-22T01:47:51Z",
+    "promoted_at": "2026-10-22T01:49:07Z",
+    "superseded_at": null
+  }
+}
