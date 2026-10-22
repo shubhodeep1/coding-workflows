@@ -5312,18 +5312,19 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # Sum of remaining in-step DEADLINEs (validation-refresh 2400s +
-    # update_workflows 600s + memory-maintenance 2400s = 5400s = 90m).
+    # Sum of remaining in-step DEADLINEs (validation-refresh 3600s +
+    # update_workflows 600s + memory-maintenance 2400s = 6600s = 110m).
     # Add headroom for prerequisite validation, checkout, and the
     # per-phase run-soft-error-analyzer composite actions (each waits
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
     # call; log1 of run #25200117236 observed ~40s per phase, so 3
     # phases under OpenRouter latency variance can plausibly reach
-    # 6–9m), runner queueing, and step setup. Cap at 110m so a runaway
+    # 6–9m), runner queueing, and step setup. Cap at 130m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
     # still be killed within a sensible budget. Down from 360m before
-    # the workflow-log-analysis split-out.
-    timeout-minutes: 110
+    # the workflow-log-analysis split-out; up from 110m when the
+    # validation-refresh wait went from 40m to 60m.
+    timeout-minutes: 130
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -5366,9 +5367,12 @@ jobs:
       # long tail can no longer block `validate` / `release` /
       # `sync-to-main`). The dispatches that remain here are the short,
       # deterministic ones whose failures still gate the release.
+      # The completion wait is 60m: refresh runs took 31-44m in October
+      # 2026 and the old 40m wait failed release run 39694107256 22s
+      # before the refresh run it watched succeeded.
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
-        timeout-minutes: 42
+        timeout-minutes: 62
         run: |
           set -euo pipefail
           sleep 4
@@ -5390,7 +5394,7 @@ jobs:
             --display-name "validation-refresh" \
             --registration-timeout-secs 2400 \
             --registration-poll-interval-secs 5 \
-            --completion-timeout-secs 2400 \
+            --completion-timeout-secs 3600 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
             --dispatch-backoff-base-secs 2 \
