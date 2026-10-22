@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Changes to conflict preparation or forward-merge handling have been accompanied by tests for keeping folded changelog fragments. When modifying this path, verify that conflict resolution does not silently drop fragments.",
+  "fingerprint": "d634660c75365643feafbb5415a9d074ef03f33bdf72cfce684efcfc956628e3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39840141173",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39840141173",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7857",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7865",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7870",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7872",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7888",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7862",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7866",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7871",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7875",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7889"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261022193546_4cb9b1c509",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Conflict-folding changes should preserve changelog fragments and have focused regression coverage.",
+  "timestamps": {
+    "created_at": "2026-10-22T19:35:46Z",
+    "promoted_at": "2026-10-22T19:37:50Z",
+    "superseded_at": null
+  }
+}
