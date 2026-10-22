@@ -6699,13 +6699,14 @@ jobs:
             echo "IMPLEMENT_BLOCKED_TERMINALIZED issue=${ISSUE_NUMBER} label=ai:blocked"
             exit 0
           fi
-          # Read labels live, not from the cached issue snapshot: every writer
-          # of that snapshot ("Fetch issue metadata", the approval gates) runs
-          # before "Validate phase label" swaps ai:awaiting-approval for
-          # ai:implementing, so a failure in between found no ai:implementing
-          # and left the issue stranded (BUG-002, workflow-optimization-2026-09-23).
-          # One REST GET, failure path only; no cached call in this job carries
-          # live labels. A failed or malformed read leaves the labels unchanged.
+          # Read labels live, not from the cached issue snapshot: "Fetch issue
+          # metadata" and the approval gates write it before "Validate phase
+          # label" swaps ai:awaiting-approval for ai:implementing, and only
+          # "Recheck security dependency before edits" refreshes it later, so a
+          # failure in between found no ai:implementing and left the issue
+          # stranded (BUG-002, workflow-optimization-2026-09-23). Labels can also
+          # change after that refresh. One REST GET, failure path only. A failed
+          # or malformed read leaves the labels unchanged.
           ISSUE_LABELS_JSON=""
           ISSUE_LABELS_LIVE_READ=false
           if ISSUE_LABELS_JSON="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" --jq '[.labels[].name]')" \
