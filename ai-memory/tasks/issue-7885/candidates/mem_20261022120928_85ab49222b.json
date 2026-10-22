@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The root-cause fix needs `scripts/` edits that this heal issue's frozen scope forbids. How should it proceed?\nChoices:\nA) Re-issue the work as a new issue authored by the pipeline account, with a `files_touched:` list naming exactly `scripts/orchestrate_poll_process.sh`, `scripts/promote_main_cycle.sh`, the matching test files and a `changelog.d/` fragment. Then close this heal issue as superseded by it. (RECOMMENDED)\nB) Stay inside the frozen scope. Change only `promote-main-to-stable.yml`: before the fast-forward it reports `stable_not_ancestor` with a clear error token and step output, but still exits 1 so the refusal is not weakened. Add tests. The poller and cycle precondition gap stays open.\nC) Treat the failure as a one-off caused by a concurrent stable-line release. Make no code change and close this issue with an explanation.\n**Note:** with B or C the poller can still dispatch promotions that are certain to fail, and each one would file a new heal report.\nQ2: When the `stable` branch already contains the candidate (`compare/heads/stable...<promote_sha>` reports `behind`), what should the poller's promotion gate record?\nChoices:\nA) Treat it like `diverged`: record the promotion as `deferred` with `reason: \"stable_not_ancestor\"`, post one \"Promotion abandoned\" comment, release the freeze tag and let the final merge go ahead. (RECOMMENDED)\nB) Treat it as already promoted: record it as `done`, dispatch nothing and release the freeze tag. No tag or release is created for this cycle.\n**Note:** Q2 applies only if Q1 is A.",
+  "fingerprint": "a18bd99993113c3753532c596e164a60f11c163312d623ecb51c67db3332d984",
+  "lineage": {
+    "issue_number": 7885,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39775146138",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39775146138",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261022120928_85ab49222b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7885,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39775146138"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7885 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-22T12:09:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
