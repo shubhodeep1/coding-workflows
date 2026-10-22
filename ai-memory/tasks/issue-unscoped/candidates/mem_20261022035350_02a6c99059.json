@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "For changes to CI polling or test sharding, inspect tests/test_ci_poll_test_sharding.py before adding new coverage. Multiple workflow changes in this area paired edits to .github/workflows/ci.yml with updates to this module.",
+  "fingerprint": "7aa2f08b0e4cc2f388cce8c93482b76ee76c37c17c229d6fea139ee508533f3b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39717432849",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39717432849",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7800",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7814",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7837",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7841",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7842",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7801",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7818",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7845",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7846",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7847"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261022035350_02a6c99059",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "CI polling and test-sharding behavior has a focused test module.",
+  "timestamps": {
+    "created_at": "2026-10-22T03:53:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
