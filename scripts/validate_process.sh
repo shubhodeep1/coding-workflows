@@ -1660,7 +1660,15 @@ for test_script in "${test_scripts[@]}"; do
     # VALIDATION_TIMEOUT minutes (mirrors scripts/validate_driver.sh).
     set +e
     run_test_without_credentials "${test_script}" 2>&1 | tee "${test_log}"
-    test_rc=${PIPESTATUS[0]}
+    # One PIPESTATUS snapshot. A failed tee leaves a partial log, so a
+    # passing test with a failed log write counts as failed.
+    test_rc=${PIPESTATUS[0]} test_tee_rc=${PIPESTATUS[1]}
+    if [ "${test_tee_rc}" -ne 0 ]; then
+      echo "::warning::validate_process: tee exited ${test_tee_rc} while writing ${test_log}; the test log may be incomplete" >&2
+      if [ "${test_rc}" -eq 0 ]; then
+        test_rc="${test_tee_rc}"
+      fi
+    fi
     set -e
   fi
 

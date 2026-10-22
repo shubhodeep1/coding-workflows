@@ -1006,10 +1006,14 @@ run_single_test()
 		run_test_without_credentials "${test_file}" 2>&1 | tee "${test_log}"
 		# Both values come from the same PIPESTATUS snapshot (one assignment
 		# list). A failed tee (disk full) leaves a partial log for the TAP
-		# counts below, so say so instead of hiding it.
+		# counts below, which could miss a later "not ok" from a test that
+		# exits 0, so a passing test with a failed log write fails.
 		exit_code=${PIPESTATUS[0]} tee_rc=${PIPESTATUS[1]}
 		if [ "${tee_rc}" -ne 0 ]; then
 			echo "::warning::validate_driver: tee exited ${tee_rc} while writing ${test_log}; the test log may be incomplete" >&2
+			if [ "${exit_code}" -eq 0 ]; then
+				exit_code="${tee_rc}"
+			fi
 		fi
 	fi
 	set -e
