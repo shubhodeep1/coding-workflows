@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:13918-13936 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `comprehensive_stable_branch_compare_status` returns exit code 2 on an HTTP 404 from the compare endpoint, so `comprehensive_promotion_gate_before_final_merge` holds the merge through `comprehensive_promotion_hold_or_fail` instead of deferring with `stable_not_ancestor`.\n  WHY: A branch that exists but is not an ancestor should defer promotion, not hold it. Qwen raised this only as a hardening suggestion (lines 13918-13920, \"No common ancestor\" case) with HARDENING_RISK_SCORE 1. Neither reviewer stated a severity, so medium is an assumption.\n- scripts/orchestrate_poll_process.sh:14227-14238 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The `stable_not_ancestor` deferral logs through `tg_notify` at DEBUG level, so a persistently diverged stable branch stalls promotion silently.\n  WHY: Before this change, `promote-main-to-stable.yml` failed and triggered the workflow-failure-heal intake, which alerted a maintainer. Qwen raised this only as a hardening suggestion (line 14232, change the level to \"WARNING\") with HARDENING_RISK_SCORE 1. Neither reviewer stated a severity, so medium is an assumption.\n- scripts/promote_main_cycle.sh:130,401 | severity=low | confidence=1\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: `PROMOTE_CYCLE_STABLE_BRANCH` is used directly in the API path in `resolve_stable_branch_commit` without validation.\n  WHY: A malicious or misconfigured value could cause unexpected API behavior or path traversal. Qwen raised this only as a hardening suggestion (HARDENING_RISK_SCORE 1) and gave no severity or confidence, so both are assumed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Reuse the compare read this function already does for smoke_sha...promote_sha.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh, comprehensive_promotion_gate_before_final_merge and comprehensive_stable_branch_compare_status\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `comprehensive_untested_commits_json` reads the smoke-to-promote compare (lines 13816-13821). `comprehensive_stable_branch_compare_status` independently reads stable-to-promote (lines 13905-13918). The existing result is not reused when stable_sha equals smoke_sha. All three reviewers rated this SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:13918-13936 | confidence=4\n  PROBLEM: `comprehensive_stable_branch_compare_status` returns exit code 2 on an HTTP 404 from the compare endpoint.\n  WHY: `comprehensive_promotion_gate_before_final_merge` then holds the merge via `comprehensive_promotion_hold_or_fail` instead of deferring with `stable_not_ancestor`.\n- scripts/orchestrate_poll_process.sh:14227-14238 | confidence=4\n  PROBLEM: The poller deferral logic logs at DEBUG level using `tg_notify ... \"DEBUG\"`.\n  WHY: A persistently diverged stable branch stalls promotion silently, whereas the original `promote-main-to-stable.yml` failure triggered workflow-failure-heal.\n- TASK_GAP: Requirement: \"Reuse the compare read this function already does for smoke_sha...promote_sha.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, comprehensive_promotion_gate_before_final_merge\n  Evidence of absence: `comprehensive_untested_commits_json` issues the smoke-to-promote comparison, and the new helper `comprehensive_stable_branch_compare_status` independently issues a stable-to-promote comparison. The existing result is not reused, even when `stable_sha` matches `smoke_sha`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Reuse the compare read this function already does for smoke_sha...promote_sha.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, comprehensive_promotion_gate_before_final_merge and its stable-branch comparison helper.\n  Evidence of absence: `comprehensive_untested_commits_json` reads the smoke-to-promote comparison at lines 13816-13821, but `comprehensive_stable_branch_compare_status` independently reads the stable-branch-to-promote comparison at lines 13905-13918. The existing result is not reused when the stable branch tip matches smoke_sha.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP: Requirement: \"Reuse the compare read this function already does for smoke_sha...promote_sha.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, comprehensive_promotion_gate_before_final_merge and comprehensive_stable_branch_compare_status\n  Evidence of absence: The current implementation at line 13918 issues a separate compare for stable_sha...promote_sha. When stable_sha equals smoke_sha, the compare result from `comprehensive_untested_commits_json` at line 13821 could be reused to save one API call.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- scripts/orchestrate_poll_process.sh:13918-13920 (hardening suggestion)\n  PROBLEM: A \"No common ancestor\" HTTP 404 is treated as an unreadable compare (exit 2) and holds the merge.\n  WHY: A more precise classification would return \"diverged <stable_sha>\". Suggested fix: capture gh_retry stderr and check for the \"No common ancestor\" pattern. HARDENING_RISK_SCORE: 1\n- scripts/orchestrate_poll_process.sh:14232 (hardening suggestion)\n  PROBLEM: A `stable_not_ancestor` deferral now notifies at DEBUG level.\n  WHY: Promotion stalls silently, with no heal issue and no operator alert. Suggested fix: change the level to \"WARNING\". HARDENING_RISK_SCORE: 1\n- scripts/promote_main_cycle.sh:130,401 (hardening suggestion)\n  PROBLEM: `PROMOTE_CYCLE_STABLE_BRANCH` is used directly in the API path without validation.\n  WHY: A malicious or misconfigured value could cause unexpected API behavior or path traversal. Suggested fix: validate against ^[A-Za-z0-9._/-]+$ and fall back to \"stable\". HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f44e0b16d01c9823df2a1658dfbc739df7c41f8d19a9c713970fa6133d4ae56",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7889,
+    "run_id": "39809581147",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39809581147",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022163023_ebf01bc37d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7889,
+    "run_id": "39809581147"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-22T16:30:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
