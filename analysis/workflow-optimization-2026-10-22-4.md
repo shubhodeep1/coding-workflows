@@ -555,3 +555,194 @@ TODO/FIXME/HACK/XXX markers: none found in `scripts/*.sh`, `scripts/*.py` or `.g
 | Code modularization | 9 workflows with the support-ref block plus a new parity test, 5 workflows with PAT-budget copies, `scripts/label_helpers.sh` plus 5 definers, new `scripts/review_autofix_failure_marker.sh`, new `scripts/ref_helpers.sh`, `scripts/orchestrate_lib.py` | Large |
 | Expression size reduction | `.github/workflows/review_autofix.yml`, `.github/workflows/implement.yml`, `.github/workflows/test-and-mark-stable.yml`, new `scripts/review_autofix_step_*.sh`, `tests/test_workflow_file_size_limit.py` (reporting only) | Medium |
 | Medium/Low fixes | `scripts/gh_helpers.sh`, `.github/workflows/cancel_on_pr_close.yml`, `scripts/promote_candidate_follow.sh`, `scripts/review_merge_train.sh`, `.github/workflows/promote-main-to-stable.yml`, `.github/workflows/clarify.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `.github/workflows/unblock_judge_dispatch.yml`, `scripts/promote_main_cycle.sh`, `.github/workflows/review_autofix.yml` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-22)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: every precondition is proven from the source. The calls hit the same endpoint or a strict subset of fields, with identical pagination, filters and auth. They are in the same function with no mutation in between. Error and retry behaviour is unchanged, no concurrency boundary is crossed, and the cache contract holds. The implement stage may apply these without further review.
+- **`NEEDS_VERIFICATION`**: the change looks correct, but at least one precondition can't be proven by reading the code. The listed checks must pass before anyone implements it.
+- **`RISKY_SKIP`**: listed only so it is visible. At least one hard trigger applies: a retry or backoff path, pagination, a rate-limit-sensitive path, the poller or stall-recovery code, race-defensive logic, or a change to log keys other code reads. It must not be implemented automatically.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** — `NEEDS_VERIFICATION`
+- **Files:**
+  - `scripts/promote_candidate_follow.sh:168-179` reads the freeze tag ref.
+  - `scripts/promote_candidate_follow.sh:181-184` reads the main ref.
+  - `scripts/promote_candidate_follow.sh:208-211` reads the annotated tag object.
+  - The budget comment at `:22-25`.
+- **Call count:** 3 reads per run on the common no-tag path (branch, tag ref, main), or 4 when an annotated freeze tag exists. Proposed: 2, the REST branch read at `:148` plus one GraphQL query.
+- **Endpoints:**
+  - `GET repos/{repo}/git/ref/tags/promote-cycle-frozen`
+  - `GET repos/{repo}/git/ref/heads/main`
+  - `GET repos/{repo}/git/tags/{sha}`
+  - Proposed: `POST /graphql`, `repository{ main: ref(qualifiedName:"refs/heads/main"){target{oid}} freeze: ref(qualifiedName:"refs/tags/promote-cycle-frozen"){target{__typename oid ... on Tag{message}}} }`
+- **Evidence:** all three are plain, non-paginated `follow_api` reads in straight-line code. Nothing is written between `:168` and `:211`.
+  ```bash
+  follow_api "${FOLLOW_TMP}/tag.json" "repos/${REPO}/git/ref/tags/${FOLLOW_TAG}"
+  ...
+  follow_api "${FOLLOW_TMP}/main.json" "repos/${REPO}/git/ref/heads/main"
+  ```
+  In GraphQL, a missing tag comes back as `freeze: null` instead of HTTP 404. That would also remove the healthy-path `GH_API_RETRY outcome=permanent … status=404` line, which is an alternate fix for the Deep Audit's CONSIST-003.
+- **Proposed fix:**
+  - Add a `follow_read_refs` helper in `promote_candidate_follow.sh` that issues one `gh_api_retry graphql` call.
+  - Map `freeze == null` to `TAG_EXISTS=false`. Map `__typename == "Tag"` to `TAG_TYPE=tag`, taking `TAG_MESSAGE` from the same response. Keep `MAIN_SHA` from `main.target.oid`.
+  - Leave the REST branch read alone. It supplies `protected`, and GraphQL `branchProtectionRule` may not reflect rulesets.
+  - Update the §14 budget comment at `:22-25`.
+- **Safety rationale:**
+  - The error behaviour is not identical. Today a non-404 tag-read failure fails closed (`tag_read_failed`, `:173-174`).
+  - In GraphQL, a partial `errors[]` alongside `freeze: null` must also fail closed, not read as "no tag".
+  - The change also conflicts with BUG-003, which wants the tag re-read just before the PATCH.
+- **Downstream signal:** before implementing, check three things:
+  1. A GraphQL response with `errors` set and `data.repository.freeze == null` maps to `follow_fail tag_read_failed`.
+  2. `ref(qualifiedName:)` resolves both lightweight and annotated tags, and returns `message` for `Tag` targets.
+  3. Nothing greps the `GH_API_RETRY … status=404` follower line. The report's GH API Call Audit table cites it.
+
+  Decide this together with BUG-003. If the pre-PATCH tag re-read lands, keep the REST tag read as that second read.
+
+**MERGE-002** — `RISKY_SKIP`
+- **Files:** `scripts/check_failure_triage.sh:567-575`.
+- **Call count:** 1 on the success and 404 paths. On a transient error it is 1 plus up to `GH_RETRY_MAX_ATTEMPTS`. Proposed: 1 retried call.
+- **Endpoint:** `GET repos/{repo}/git/ref/heads/{ref}`, called twice.
+- **Evidence:** a raw single attempt runs first so its stderr can be checked for a 404. On any other error, the same endpoint is called again under `gh_retry`.
+  ```bash
+  if gh api "repos/${REPO}/git/ref/heads/${integration_ref_encoded}" >/dev/null 2>"${integration_ref_err_file}"; then
+  ...
+  elif gh_retry gh api "repos/${REPO}/git/ref/heads/${integration_ref_encoded}" >/dev/null 2>&1; then
+  ```
+  `gh_api_retry` (`scripts/gh_helpers.sh:910-992`) already classifies a 404 as permanent (returns 2) and exposes `GH_API_RETRY_LAST_STATUS`. `scripts/promote_candidate_follow.sh:108-119` relies on exactly that.
+- **Proposed fix:** a single `gh_api_retry "repos/${REPO}/git/ref/heads/${integration_ref_encoded}"`. Branch on `rc == 0` for `added`, `GH_API_RETRY_LAST_STATUS == 404` for `branch_missing`, and anything else for `lookup_failed`.
+- **Safety rationale:** this replaces a hand-written retry fallback with a different retry engine. It would also add a new `GH_API_RETRY outcome=permanent` stderr line on the 404 path, a change in observable log output. And the script only stubs `gh_retry` (`:206`), not `gh_api_retry`.
+- **Downstream signal:** do not implement automatically. It saves calls only on transient errors. A human must confirm that `gh_api_retry` is always defined when `check_failure_triage.sh` runs, and that the extra `GH_API_RETRY` line is acceptable in triage logs.
+
+**MERGE-003** — `RISKY_SKIP`
+- **Files:**
+  - `scripts/review_merge_train.sh:1393` (`_mt_find_marker_comment_id "${num}" "${MT_MARKER}"`)
+  - `:1413` (`_mt_upsert_comment` with 3 arguments, which calls `_mt_find_marker_comment_id` again at `:875`)
+  - The listing helper at `:800-806`.
+- **Call count:** 2 paginated listings of the same PR's comments per released PR, plus 1 `GET` at `:879`. Proposed: 1 paginated listing that returns both markers.
+- **Endpoint:** `GET repos/{repo}/issues/{pr}/comments?per_page=100` with `--paginate`, twice.
+- **Evidence:** both listings walk the same comments endpoint for the same `num` and differ only in the jq marker filter (`MT_MARKER` vs `MT_RELEASED_MARKER`). Three mutations sit between them:
+  - the marker PATCH at `:1398`;
+  - the claim DELETE of the label at `:1406`;
+  - the dispatch at `:1410`.
+- **Proposed fix:** a `_mt_find_marker_comments <pr> <marker>...` variant that returns `marker id created_at` for every requested marker in one paginated pass. Pass the `MT_RELEASED_MARKER` id into `_mt_upsert_comment` as its 4th argument.
+- **Safety rationale:**
+  - Both calls paginate.
+  - Mutations happen between them.
+  - The release path defends against races on purpose. The comment at `:1403-1405` says "Concurrent release invocations cannot both claim it", and a stale snapshot of the released marker could post a duplicate comment.
+- **Downstream signal:** manual review only. A reviewer must show that no concurrent release run can create a `MT_RELEASED_MARKER` comment between `:1393` and `:1413`, or accept a possible duplicate "released" comment.
+
+**MERGE-004** — `RISKY_SKIP`
+- **Files:** `.github/workflows/cancel_on_pr_close.yml:155-189` (`_cpr_fetch_active_runs`), called at `:260` and `:325`.
+- **Call count:** 2 or more paginated listings per invocation. Proposed: none; do not merge.
+- **Endpoint:** `GET repos/{repo}/actions/runs?status=queued|in_progress&event=pull_request` with `--paginate`.
+- **Evidence:** the in-code comment already records why the two calls stay separate:
+  ```bash
+  # Keep the two status-filtered calls: dropping the filters can
+  # paginate through an unbounded completed-run history.
+  ```
+- **Proposed fix:** none. Recorded so later passes don't raise it again.
+- **Safety rationale:** both calls paginate, and merging them means dropping the `status` filter, which changes the page boundaries and bounds.
+- **Downstream signal:** do not implement. Any future proposal needs a single-filter "active" listing proven bounded at the REST layer.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** — `NEEDS_VERIFICATION`
+- **Files:**
+  - `scripts/check_failure_triage.sh:747-755`
+  - `.github/workflows/internal-check-failure-triage.yml:46-61`
+  - `.github/workflows/check_failure_triage.yml:32-36` (the `details_url` input) and `:595-599` / `:619-623` (the `CHECK_TRIAGE_*` env).
+- **Call count:** 2 per `workflow_run` triage that reaches the base gate. Proposed: 1 when the caller passes the workflow id, with the existing call kept as a fallback.
+- **Endpoints:**
+  - `GET repos/{repo}/actions/runs/{run_id}`, used only for `.workflow_id`.
+  - `GET repos/{repo}/actions/workflows/{workflow_id}/runs?branch=…&event=push&per_page=1`
+- **Evidence:** the script recovers the run id by regex-parsing `details_url` and then calls the API just to read one field:
+  ```bash
+  base_gate_workflow_id="$(gh_retry gh api "repos/${REPO}/actions/runs/${base_gate_run_id}" --jq '.workflow_id // ""' 2>/dev/null || true)"
+  ```
+  The caller job `triage-workflow-run` already holds `github.event.workflow_run` in its event payload; that object carries `workflow_id`. The wrapper passes only `html_url` (`:61`).
+- **Proposed fix:**
+  - Add an optional input to `check_failure_triage.yml`, for example `workflow_id` (type string, default `""`).
+  - Map it to a new env var, `CHECK_TRIAGE_WORKFLOW_ID`, in both steps.
+  - At `check_failure_triage.sh:749-751`, use it when it matches `^[0-9]+$`, otherwise fall back to the existing call.
+  - Pass `workflow_id: ${{ github.event.workflow_run.workflow_id }}` in `internal-check-failure-triage.yml:55-61`.
+- **Safety rationale:** the data crosses a reusable-workflow boundary. The wrapper calls `check_failure_triage.yml@promote-candidate` (`:54`), so a wrapper that passes the new input before `promote-candidate` declares it will fail. This is a skew risk, not a same-function merge.
+- **Downstream signal:** before implementing, check:
+  1. The input and env names are unused (grep `workflow_id` and `CHECK_TRIAGE_WORKFLOW_ID`).
+  2. The input lands in `check_failure_triage.yml` and reaches `promote-candidate` before the wrapper passes it. Ship it in two PRs, or confirm GitHub's behaviour for undeclared `with:` keys.
+  3. Consumer templates under `workflow-templates/` that call the triage workflow still work without the input, since the fallback is kept.
+  4. The `html_url` run id always equals `github.event.workflow_run.id`.
+
+**REUSE-002** — `NEEDS_VERIFICATION`
+- **Files:**
+  - `scripts/promote_candidate_follow.sh:181-184`
+  - `.github/workflows/promote-candidate-follow.yml:35-40` ("Checkout main", `ref: main`, `fetch-depth: 1`) and `:52`.
+- **Call count:** 1 per run. Proposed: 0, read from the local checkout.
+- **Endpoint:** `GET repos/{repo}/git/ref/heads/main`.
+- **Evidence:** the job checks out `main` seconds before the script reads the main tip over the API. The script runs from that checkout (`bash scripts/promote_candidate_follow.sh`). The budget comment at `:22-25` says no existing call supplies the data, but the checkout already resolved the same ref.
+- **Proposed fix:** set `MAIN_SHA="$(git rev-parse HEAD)"` when `GITHUB_REF == refs/heads/main` and the value passes `follow_valid_sha`, otherwise fall back to the existing `follow_api` read.
+- **Safety rationale:** the checkout SHA can be older than the API read. If `promote-candidate` is already ahead of it (for example `pin_freeze` moved it after an unfreeze race), the `force=false` PATCH at `:237-239` is rejected and the run exits `error reason=patch_rejected`. Today's read narrows that window but doesn't close it.
+- **Downstream signal:** before implementing:
+  1. Confirm from job logs that the checkout SHA always matches the `main.json` read across push, schedule and dispatch triggers.
+  2. Add an ancestor check (skip the PATCH when `MAIN_SHA` is an ancestor of `BRANCH_SHA`) so a stale checkout gives `current`, not `error`.
+
+  This is mutually exclusive with MERGE-001 and DEAD-API-001 for the same call; pick one.
+
+**REUSE-003** — `RISKY_SKIP`
+- **Files:**
+  - `scripts/review_merge_train.sh:958` (gate listing via `_mt_find_marker_comment`)
+  - `:993-999` (passes `queued_comment_id` as the 4th argument to `_mt_upsert_comment`)
+  - `:879` (re-fetches that comment's body)
+  - The listing helper at `:800-806`.
+- **Call count:** 1 paginated listing plus 1 `GET` per queued PR that already has a marker. Proposed: the listing alone.
+- **Endpoints:**
+  - `GET repos/{repo}/issues/{pr}/comments?per_page=100` with `--paginate`.
+  - `GET repos/{repo}/issues/comments/{id}`.
+- **Evidence:** the listing's jq filter already reads `.body` (`startswith("${marker}")`) and outputs only `id created_at`. `:879` then fetches the same comment's body again, only to skip an identical rewrite:
+  ```bash
+  existing_body="$(gh_retry gh api "repos/${MT_REPO}/issues/comments/${existing_id}" --jq '.body' 2>/dev/null || true)"
+  ```
+- **Proposed fix:** have a sibling listing helper also emit `(.body | @base64)`, and compare it in `_mt_upsert_comment` when the caller supplies it.
+- **Safety rationale:**
+  - The listing paginates.
+  - The output is parsed line by line (`sort -k2,2r … | sed -n '1p'`, `:805`), so adding a multi-line body breaks the parse unless it is encoded.
+  - The marker state feeds the race-defensive bypass and claim logic (`:965-976`, `:1403-1405`).
+- **Downstream signal:** manual review. It saves at most one GET per gate re-queue. A human must confirm that the encoded-body output keeps `_mt_find_marker_comment`'s `id created_at` contract for its existing callers (`:811`, `:939`, `:958`, `:1393`).
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001** — `NEEDS_VERIFICATION`
+- **Files:** `scripts/promote_candidate_follow.sh:181-184` (main read), `:201-229` (freeze handling), `:233` (step-4 guard) and `:255` (final emit).
+- **Call count:** 1 per run while a freeze is active, which covers the whole promote cycle, every hourly cron run and every push to main. Proposed: 0 on the `frozen` outcome.
+- **Endpoint:** `GET repos/{repo}/git/ref/heads/main`.
+- **Evidence:**
+  - `MAIN_SHA` is read for every run, but it is used only in step 2 (branch missing, `:187-198`) and step 4 (`:233-243`).
+  - When the tag is fresh and pinning is on, `ACTION=frozen` (`:226`), step 4 is skipped by `if [ "${ACTION}" != "frozen" ]`, and the final `follow_emit "${ACTION}" ${FROM_TO}` has an empty `FROM_TO`.
+  - The step-5 unprotected alert (`:246-251`) does not use `MAIN_SHA` either. So on frozen runs the call's result is validated and then never used.
+- **Proposed fix:** move `:181-184` into a lazy `follow_read_main` helper, called at the top of step 2 and inside the `ACTION != frozen` branch of step 4.
+- **Safety rationale:** this changes the error behaviour. Today a failed main read during a freeze exits 1 (`main_read_failed`). After the change, the same run exits 0 with `outcome=frozen`. The observable `PROMOTE_CANDIDATE_FOLLOW outcome=error reason=main_read_failed` line disappears on that path.
+- **Downstream signal:** before implementing:
+  1. Grep for consumers of `PROMOTE_CANDIDATE_FOLLOW outcome=error` or `reason=main_read_failed` (collector, alerts, `promote_main_cycle.sh`) and confirm none rely on it firing while frozen.
+  2. Coordinate with BUG-003's pre-PATCH tag re-read so that both changes touch step 4 in one PR.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: `RISKY_SKIP` — this is the poller's wave reconcile loop, and the REST fallback walks a paginated timeline. Before any manual review, check:
+  - that adding `body` to the 25-issue × `timelineItems(last: 50)` batch stays within GraphQL cost (inspect `rateLimit{cost}`);
+  - that the "last cross-reference" semantics of `_issue_cross_ref_pr_number_last` survive.
+- BATCH-002: `RISKY_SKIP` — in `orchestrate_poll_process.sh`, it replaces two paginated REST walks (timeline, `pulls/N/files`). Nested `files(first:100)` under timeline nodes × 25 aliases multiplies query cost, so it needs a manual cost measurement and a `hasNextPage` fallback test.
+- API-001: `NEEDS_VERIFICATION` — a per-process memo is sound. Confirm no caller of `label_helpers.sh` deletes and re-ensures the same label within one process, because the memo would then skip the re-create.
+- API-002: `NEEDS_VERIFICATION` — I agree with the direction, but the premise is unproven: `gh issue edit --remove-label` may fail only when `ai:done` is missing from the repository, not merely from the issue. Check the gh CLI behaviour before counting the first edit at `implement.yml:5627-5628` as a "guaranteed failure".
+- BATCH-003: `RISKY_SKIP` — today's per-head call (`scripts/workflow_failure_heal_pr_reconcile.sh:243`) is a single non-paginated page (`per_page=10`). A `base=<ref>` listing on a busy base such as `main` would need `--paginate`, which could cost more than the H calls it replaces and changes page semantics.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 4 | MERGE-001, REUSE-001, REUSE-002, DEAD-API-001 |
+| RISKY_SKIP | 4 | MERGE-002, MERGE-003, MERGE-004, REUSE-003 |
+
+The cross-referenced Deep Audit items are tagged in the section above and not counted here: BATCH-001, BATCH-002 and BATCH-003 are `RISKY_SKIP`; API-001 and API-002 are `NEEDS_VERIFICATION`.
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
