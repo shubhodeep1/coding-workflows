@@ -315,3 +315,326 @@ Fixes, ordered by end-to-end impact:
 **Actions taken:** read-only analysis of the supplied context plus the repo files listed in the checkpoint. No files were changed.
 **Assumptions:** the timing bunching is read as contention (inference). Midday versus evening is compared on durations only, because there was no queue-time data.
 **Missing context:** the deep-dive logs for the failed run, untruncated poller and review logs, and per-job queue times.
+## Deep Audit — Workflows & Scripts (2026-10-22)
+
+Scope and method: this pass reads the code paths behind this report's own findings: review checkout, heal-pr-reconcile, Claude capacity wait, Semble telemetry, GH_PAT budget, poller Semble, and expression and file-size headroom. It also checks those findings against the code. Findings already filed in earlier deep audits are referenced by file and ID instead of repeated: `analysis/workflow-optimization-2026-10-21.md`, `-21-2.md`, `-21-3.md` and `-21-4.md`. No files were modified.
+
+### Section 1: Bug & Correctness Sweep
+
+**BUG-001 — heal-pr-reconcile closes the heal PR and its issue on transient or infrastructure failures, not only on real conflicts**
+- **File:** `scripts/workflow_failure_heal_pr_reconcile.sh:154-195, 265-273`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:**
+  - `_retarget_heal` returns these reasons:
+    - `no_git_checkout` (154-157)
+    - `fetch_failed`, a plain `git fetch` with no retry (159-164)
+    - `worktree_failed` (176-179)
+    - `merge_conflict` for any `git merge` non-zero exit (189-193). That covers a real conflict, but also "refusing to merge unrelated histories", a lock file, or a missing object.
+  - The caller leaves only `heal_branch_moved` and `push_state_unknown` alone (265-271). Every other reason reaches `_close_heal ... "source_merged_${RETARGET_FAIL_REASON}"` (272-273).
+  - `_close_heal` closes the heal PR and closes the heal issue as `not_planned` (124, 133).
+  - So one network blip during the fetch at 159 permanently closes a valid fix.
+  - This matters more if this report's Speed #3 lands (`fetch-depth: 1` at `internal-cancel-on-pr-close.yml:50`). Today the full-history checkout supplies the merge base. Under a shallow clone, the merge at 189 may fail for history reasons and be filed as `merge_conflict` *(inference; [NEEDS VERIFICATION] of git's shallow-fetch behaviour for `refs/pull/<n>/head`)*.
+- **Recommended fix:**
+  - Classify the merge failure before choosing the reason:
+    ```bash
+    if [ -n "$(git -C "${merge_dir}" diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+    	RETARGET_FAIL_REASON="merge_conflict"
+    else
+    	RETARGET_FAIL_REASON="merge_failed"
+    fi
+    ```
+  - At 265, switch to a `case` that leaves the PR open and warns for `fetch_failed|no_git_checkout|worktree_failed|merge_failed|heal_branch_moved|push_state_unknown`.
+  - Close only for `merge_conflict|nothing_to_apply|base_branch_missing|push_rejected|base_update_failed`.
+  - Add a 3-attempt backoff (2s/4s/8s) to the two fetches at 159 and 165, mirroring the fetch loop at `review_autofix.yml:2908-2923`.
+  - Land this before (or with) any `fetch-depth` reduction.
+
+**BUG-002 — Semble query telemetry is thrown away in workflow-log-analysis, so `cost_audit.py` reports used bootstraps as "unused"**
+- **File:** `.github/workflows/workflow-log-analysis.yml:453, 1296, 1988, 2588`; `scripts/semble_helpers.sh:21-40, 387`; `scripts/cost_audit.py:879-880`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:**
+  - All four prefetch sites call `semble_query_block ... 2>/dev/null || true` inside `$(...)`.
+  - `_semble_log_event` writes every `SEMBLE_QUERY` / `SEMBLE_FALLBACK` line to **stderr** (`printf ... >&2` at 28, 34, 39). `semble_query_block` emits `SEMBLE_QUERY` at 387.
+  - So these runs never log a query line. `cost_audit.py:879-880` then sets `semble_bootstraps_unused = semble_bootstraps` whenever `semble_query_calls == 0`.
+  - This conflicts with the report's Executive Summary bullet ("3 Semble bootstraps went unused in `workflow_log_analysis` run `39601437388`") and its Cost #4 recommendation. The prompt for this deep-audit pass itself carried a populated `=== SEMBLE: Workflow Deep Audit Context ===` block, which means the query at 1988 ran and returned chunks.
+  - The same redirect also hides any runtime `SEMBLE_FALLBACK` in this workflow. That would explain part of "runtime fallbacks are 0" *(inference)*.
+- **Recommended fix:**
+  - Drop the `2>/dev/null`, matching the other callers that keep stderr: `orchestrate_poll_process.sh:955`, `review_rb_judge.sh:896`, `implement.yml:5032`.
+  - If stderr noise is a concern, filter instead: `2> >(grep -E '^SEMBLE_(QUERY|FALLBACK|BOOTSTRAP) ' >&2 || true)`.
+  - Treat the report's Cost #4 "bootstrap eagerly but never query" as a telemetry artefact until re-measured.
+
+**BUG-003 — "Checkout PR head branch" has more unannotated failure exits than the report lists**
+- **File:** `.github/workflows/review_autofix.yml:2832-2966`; `scripts/git_ref_health_check.sh:71-78, 109-114`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:** This extends the report's Reliability #1 (run `39600043919`). Beyond the paths listed there:
+  - **2836-2837:** `HEAD_REF="$(jq -r '.headRefName' "${PR_META_FILE}")"` runs under `set -euo pipefail` *before* any other check. A missing or corrupt `pr_meta.json` (written by `review_autofix_step_init_runtime_workspace.sh:45` and `review_collect_pr_metadata.sh:256`) kills the step with only jq's stderr.
+  - **2873-2874:** plain `echo "Unable to determine PR head branch"` with no `::error::`.
+  - **2894:** `git_ref_health_check.sh repair` exits 1 on an unresolved suspicious ref (74-75, stderr, no annotation) and on remaining broken refs (110-113, **stdout**, no annotation).
+  - **2964:** an unguarded `git rev-parse HEAD`.
+
+  An `ERR` trap added mid-step, as Reliability #1 sketches, would miss 2836-2837 unless it is the first statement.
+- **Recommended fix:**
+  - Put the trap on the line right after `set -euo pipefail` (2834). Set `_rcf_reason=pr_meta_unreadable` before 2836.
+  - Change 2873 to `echo "::error::Unable to determine PR head branch"`.
+  - In `git_ref_health_check.sh`, prefix the two failure messages with `::error::[git-ref-health]` and send 110 to stderr.
+  - Register the new prefix through an `agents.d/<pr>-review-checkout-fail.md` fragment (§25), as Reliability #1 already says.
+
+**BUG-004 — `_close_heal` posts "Closing without merging" before it knows the close worked**
+- **File:** `scripts/workflow_failure_heal_pr_reconcile.sh:117-127`
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:**
+  - `_comment "${heal_pr}" "${pr_detail}..."` (120-123) runs before `PATCH .../pulls/${heal_pr} state=closed` (124).
+  - If the PATCH fails, the function logs `heal_pr_close_failed` and returns (125-126). The PR stays open with a comment saying it was closed, and a later reconcile run adds a second identical comment.
+- **Recommended fix:** Swap the order: PATCH first, then comment only on success. The issue path at 129-134 already comments before closing and can stay as is, because issue closure is attempted regardless.
+
+**BUG-005 — heal-pr-reconcile fails at checkout on fork PR closes, before the script's own fork guard runs** `[NEEDS VERIFICATION]`
+- **File:** `.github/workflows/internal-cancel-on-pr-close.yml:26, 35, 45-50`; `scripts/workflow_failure_heal_pr_reconcile.sh:85-89`
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:**
+  - On `pull_request` events from forks, `secrets.GH_PAT` is empty, so `actions/checkout@v5` gets `token: ''`. *(Inference: checkout's `token` input is read as required; an empty value fails the step.)*
+  - The checkout step has no `continue-on-error`, so the job fails red.
+  - The script's `skip reason=fork_head` guard (85-89) is never reached.
+- **Recommended fix:** Add `&& github.event.pull_request.head.repo.full_name == github.repository` to the job `if:` at line 26. That moves the fork guard ahead of checkout.
+
+No new SEC findings in the files read. The raw `vars.*` written to `$GITHUB_ENV` at `orchestrate_poll.yml:753-754` is already covered by `-21.md` SEC-002. The PAT basic-auth header in git argv at `review_autofix.yml:355` is covered by `-21-3.md` SEC-001.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+**API-001 — `gh label create` on an existing label is still retried (carried forward, plus an inline variant)**
+- **File:** `scripts/gh_helpers.sh:192-195, 804-816, 1066-1069, 1099-1124`; `scripts/label_helpers.sh:175-191`; `.github/workflows/review_autofix.yml:1165-1192, 1408, 1445`
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:**
+  - **Shared helper (still unfixed):** `_is_gh_permanent_failure` (194) has no "already exists" pattern, and `_gh_cmd_is_unsafe_post` (811-814) does not list `label create`. So `gh_retry gh label create` on an existing label makes 5 attempts with 15s of sleep (1+2+4+8), before `label_helpers.sh:188` recognises "already exists". This is the same finding as `-21-3.md` API-001, which was RISKY_SKIP pending a stderr capture. The repo's own stubs already record the text: `tests/test_implement_post_codex_recovery.py:288`, `tests/test_workflow_log_analysis_failure_contract.py:217`.
+  - **New, inline variant:** the deterministic-skip-merge job defines its own `gh_retry` (1165-1187: 4 attempts, 2/4/8s) and `ensure_label_exists` (1189-1192). It calls that for `ai:review-skipped` (1408) and `ai:ready-to-merge` (1445).
+- **Calls today vs after fix:**
+  - Shared helper: 5 calls and 15s → 1 call and 0s per call.
+  - Inline variant: 4+4 = 8 calls and 28s of sleep → 2 calls per deterministic-skip run, or 0 with a cache.
+- **Recommended fix:**
+  - Add `already exists` to the `_is_gh_permanent_failure` regex. Callers that grep stderr keep working, because `gh_retry` re-emits it.
+  - In the inline job, use `gh label create --force` (idempotent, one call). Or skip `ensure_label_exists` and rely on the label POST at 1409, which creates missing labels on GitHub's side.
+  - Extend the per-process cache pattern (`_ENSURED_LABELS_CACHE`, `orchestrate_poll_process.sh:4008-4016`) into `label_helpers.sh`.
+
+**API-002 — codex-agent reads `GET /pulls/{n}` twice before the reviewers start** `[NEEDS VERIFICATION]`
+- **File:** `.github/workflows/review_autofix.yml:2229-2253` (call at 2240); `scripts/review_collect_pr_metadata.sh:231`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:**
+  - "Check PR state (defense-in-depth)" fetches the full PR object (`gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}"`) only to read labels and state.
+  - A few steps later, `review_collect_pr_metadata.sh:231` fetches the same object into `PR_PAYLOAD_FILE`.
+  - The gate job has already read it as well (`needs.gate.outputs.head_sha` / `head_ref`).
+- **Calls today vs after fix:** 2 → 1 per codex-agent job (about 86 calls a day at the report's run rate).
+- **Recommended fix:**
+  - Have the "Check PR state" step write its response to `${RUNTIME_DIR}/pr_state_probe.json` with a timestamp.
+  - Let `review_collect_pr_metadata.sh` reuse it when it is less than 120s old, the same freshness bound as `gh_review_pr_state` (`gh_helpers.sh:110`). Otherwise fall back to the live read.
+  - Verification needed: the stale-head check at `review_autofix.yml:2850` compares `PR_PAYLOAD_FILE .head.sha`, and reuse must not widen that window.
+
+**BATCH-001 — per-linked-issue label POSTs in three loops**
+- **File:** `.github/workflows/review_autofix.yml:1446-1453`; `scripts/review_autofix_step_mark_ready_to_merge.sh:77-81`; `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh:57-61`
+- **Severity:** Low
+- **Category:** `api-batching`
+- **Description:** Each loop makes one `POST /issues/{n}/labels`, or one `set_issue_phase_label_resilient` that can make several calls, per linked issue. That is N calls per run. N is usually 1–3.
+- **Calls today vs after fix:** N → 1 aliased GraphQL `addLabelsToLabelable` mutation, plus 1 label-ID lookup. That only pays off at N ≥ 3. The REST path through `set_issue_phase_label_resilient` also removes stale phase labels, which a plain add does not.
+- **Recommended fix:** Leave it as is unless N ≥ 3 shows up in the logs. If it does, follow the aliased-batch shape of `_cpr_fetch_pr_state_batches` (`cancel_on_pr_close.yml:196-256`) and keep the REST path as the fail-open fallback.
+
+The per-issue PR lookup in heal-pr-reconcile (`workflow_failure_heal_pr_reconcile.sh:239-247`) is already filed as `-21-4.md` API-006. The `promote-cycle-frozen` 404 telemetry is covered by this report's GH API section.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001 — 19 inline `gh api rate_limit` budget blocks duplicate `gh_pat_budget()`**
+- **File:**
+  - `scripts/gh_helpers.sh:31-77` (shared helper)
+  - Inline copies in `.github/workflows/review_autofix.yml` (12): 386, 736, 770, 966, 993, 1058, 1131, 1467, 1534, 1795, 1970, 5738
+  - Inline copies in other workflows (7): `clarify.yml` 82, 2335, 2422; `workflow-failure-heal-intake.yml` 146, 394; `orchestrate_poll.yml` 109; `validation-improvements-intake.yml` 47
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:**
+  - The inline blocks read `.resources.core` from the response body. `gh_pat_budget` prefers the `x-ratelimit-*` headers when `x-ratelimit-resource: core` (52-59).
+  - In clarify, heal-intake and orchestrate_poll, the *start* is inline (body) and the *end* is `gh_pat_budget` (headers). So `used_in_job` mixes two sources.
+  - Any change to the `GH_PAT_BUDGET` line format, such as the report's `GH_PAT_BUDGET_NOTE` idea, has to be made in 20 places.
+  - In the review gate job, `gh_helpers.sh` is already bootstrapped (`GH_API_RETRY_HELPERS`, 331-379) before the inline start step at 381.
+- **Recommended fix:**
+  - Owner: `scripts/gh_helpers.sh` `gh_pat_budget <start|end> <workflow> <job> <snapshot_file>`, unchanged.
+  - Replace each inline body with: `source "${GH_API_RETRY_HELPERS:-scripts/gh_helpers.sh}" 2>/dev/null && gh_pat_budget start review_autofix gate "${GH_PAT_BUDGET_FILE}" || echo 'GH_PAT_BUDGET phase=start ... used_in_job=unknown'`. This is the shape already used at `clarify.yml:2278-2283`.
+  - Keep the inline copy only for steps that run before any helper is staged (`orchestrate_poll.yml:109`, per its comment at 107-108).
+  - This also shrinks `review_autofix.yml` (§24).
+
+**DUP-002 — workflow-log-analysis repeats the Semble install/index/prefetch sequence four times**
+- **File:** `.github/workflows/workflow-log-analysis.yml`
+  - Setup steps: 357-382, 948-993, 1810-1855, 2409-2454
+  - Prefetch blocks: 446-460, 1286-1303, 1977-1999, 2577-2599
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:**
+  - Each AI-pass job runs its own `Setup uv` / `Install semble` / `Build semble index`, about 34s per bootstrap according to the report.
+  - Each job also has a near-identical prefetch block that differs only in the query file and header label.
+  - These query sites gate on `SEMBLE_INDEX_AVAILABLE == true`, so they cannot use lazy mode. The poller already defaults to lazy (`orchestrate_poll.yml:49`) and gates through `semble_should_query` (`orchestrate_poll_process.sh:944-948`).
+  - Partial overlap with `-21-2.md` DUP-001, which covers the AI-pass bodies but not the Semble steps.
+- **Recommended fix:**
+  - New `scripts/wla_semble_prefetch.sh <query_file> <header_label>`. It sources `semble_helpers.sh`, gates on `semble_should_query` with a fallback to the `SEMBLE_INDEX_AVAILABLE` check, prints the block, and keeps stderr (BUG-002).
+  - Set `SEMBLE_BOOTSTRAP_MODE: lazy` at workflow level, and gate the eager steps with `&& env.SEMBLE_BOOTSTRAP_MODE != 'lazy'`, as at `orchestrate_poll.yml:925`.
+  - Update the callers at the four prefetch sites.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+There is no `wc` in this sandbox. Sizes below are estimated from line counts and line-length histograms (`Grep` counts by length band). `tests/test_workflow_file_size_limit.py:66-98` already fails CI at 18,000 characters for any `run:` body containing `${{`, so no High-band body can exist on main. Only the Medium band (15,000–18,000) and growth risk are in play.
+
+**EXPR-001 — orchestrate_poll "Stage workflow support files" is an interpolated body in or near the Medium band** `[NEEDS VERIFICATION]`
+- **File:** `.github/workflows/orchestrate_poll.yml:605-897`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:**
+  - The ~290-line body contains three `${{ }}` expressions: 753 and 754 (`vars.PROMPT_PRELUDE_REFACTOR_ENABLED`, `vars.UNATTENDED_IDENTITY_REINJECT_ENABLED`) and 875 (`github.repository`). Because of them, the whole body counts as one expression.
+  - It includes one ~1,000-character staging list (614) and several 200–420-character lists (736, 780, 796).
+  - **Estimated size:** ~14,000–17,000 characters, leaving ~4,000–7,000 of the 21,000 limit and possibly under 1,000 before the 18,000 CI guard.
+  - Every new staged script grows line 614.
+- **Recommended fix:**
+  - Move the three values into the step's `env:` block, e.g. `PROMPT_PRELUDE_REFACTOR_ENABLED_INPUT: ${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}`.
+  - Use `${GITHUB_REPOSITORY}` at 875.
+  - With no `${{` left, the body drops out of expression scope entirely. That is cheaper than extracting a script and needs no new file.
+
+**EXPR-002 — review_autofix Telegram steps interpolate only for URLs**
+- **File:** `.github/workflows/review_autofix.yml:5041-5185` (interpolations at 5051-5052, 5111, 5162, 5184); `.github/workflows/review_autofix.yml:5187-5349` (5204-5205, 5209)
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:**
+  - Estimated ~10,000–12,000 and ~11,000–13,000 characters, so ~8,000–10,000 of headroom.
+  - The judge-decision `case` gains a branch with each new judge outcome, which keeps growing it.
+  - The only interpolations are `github.server_url`, `github.repository` and `github.run_id`.
+- **Recommended fix:** Use the default runner env vars `${GITHUB_SERVER_URL}`, `${GITHUB_REPOSITORY}` and `${GITHUB_RUN_ID}`. That removes both bodies from expression scope with no change in behaviour.
+
+**EXPR-003 — small interpolated bodies that are about to grow**
+- **File:** `.github/workflows/review_autofix.yml:2832-2966` (2888); `.github/workflows/review_autofix.yml:3951-4093` (4023)
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:**
+  - "Checkout PR head branch" is about 7,000 characters, with one `${{ github.repository }}`. The trap and reasons proposed in Reliability #1 and BUG-003 will add to it.
+  - The resolver step uses `"${{ github.repository }}"` once inside its body.
+  - Headroom is large (~14,000 characters).
+- **Recommended fix:** Replace both with `${GITHUB_REPOSITORY}` while making the BUG-003 edit.
+
+**EXPR-004 — whole-file headroom** `[NEEDS VERIFICATION]`
+- **File:** `.github/workflows/test-and-mark-stable.yml` (7,714 lines); `.github/workflows/review_autofix.yml` (5,749 lines)
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:**
+  - **Estimates from the histograms:**
+
+    | File | Lines | Estimated size | Plausible range |
+    |---|---|---|---|
+    | `test-and-mark-stable.yml` | 7,714 | ~430 KB | 260–577 KB |
+    | `review_autofix.yml` | 5,749 | ~370 KB | 232–490 KB |
+
+  - `test-and-mark-stable.yml` may sit within ~50 KB of the 480,000-byte guard (§24).
+  - No workflow is close to 800 KB. Note that §24's 512,000-byte limit, not the prompt's 1 MB, is the binding one; see `-21-2.md` CONSIST-004. Whole-file sizes are tracked in `-21-4.md` EXPR-003.
+- **Recommended fix:**
+  - Run `wc -c .github/workflows/*.yml` in the next CI log (the guard test already prints the largest file).
+  - Apply DUP-001, which removes ~12 inline blocks from `review_autofix.yml`.
+  - If `test-and-mark-stable.yml` is above 430,000 bytes, move its largest non-interpolated phase-wait bodies into `scripts/` (`-21-3.md` DUP-007).
+
+### Section 5: Cross-Cutting Concerns
+
+**CONSIST-001 — the report's capacity-wait diagnostic assumes a blocking wait that does not exist and duplicates a registered prefix**
+- **File:** `scripts/ai_engine.sh:141-149, 263-301`; `scripts/review_autofix_step_claude_capacity_wait.sh:23-38`; `agents.md:4291`; `scripts/collect_workflow_logs.py`; `scripts/cost_audit.py`
+- **Severity:** Medium
+- **Category:** `consistency`
+- **Description:**
+  - Speed #1 proposes a new `CLAUDE_POOL_CAPACITY_WAIT role= waited_ms= outcome=` line "wherever `capacity_wait` blocks (`ai_engine.sh` ~225/274)". In the code, `ai_engine_fallback` never blocks:
+    - With the wait on, it sets `AI_ENGINE_FALLBACK_EXIT=80`, logs `AI_ENGINE_CAPACITY_WAIT role= reason=` and returns (274-276, 296-300).
+    - The review step then *fails* with `AUTOFIX_FAILURE_REASON=claude_capacity` (`review_autofix_step_claude_capacity_wait.sh:35-38`).
+    - `ai_engine.sh`, `claude_engine.py`, `claude_anthropic_relay.py` and `claude_pool_token.sh` contain no `sleep` / `time.sleep`.
+  - So candidate (b) cannot stretch run duration. It shortens runs and defers them to the hourly resume pass.
+  - The prefix `AI_ENGINE_CAPACITY_WAIT` is already registered (`agents.md:4291`). Neither `collect_workflow_logs.py` nor `cost_audit.py` parses it (no matches).
+- **Recommended fix:**
+  - Drop the new prefix.
+  - Teach `cost_audit.py` to count the existing `AI_ENGINE_CAPACITY_WAIT ... outcome=deferred` lines per family.
+  - Put the contention diagnosis effort into per-job queue time. The collector currently derives duration only from `run_started_at → updated_at` (`collect_workflow_logs.py:1123-1127`), with no job-level `created_at → started_at`.
+
+**CONSIST-002 — poller Semble "silently unavailable" is lazy mode working as designed**
+- **File:** `.github/workflows/orchestrate_poll.yml:49, 96, 924-985`; `scripts/orchestrate_poll_process.sh:941-948`; `scripts/semble_helpers.sh:251-258`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:**
+  - `SEMBLE_BOOTSTRAP_MODE` defaults to `lazy` (49).
+  - "Create runtime workspace" seeds `SEMBLE_AVAILABLE=false` (96).
+  - The eager install and index steps run only when `has_work == 'true' && SEMBLE_BOOTSTRAP_MODE != 'lazy'` (925, 930, 953).
+  - Queries go through `semble_should_query`, and a failed lazy bootstrap already logs `SEMBLE_BOOTSTRAP ... state=failed` (`semble_helpers.sh:254/258`).
+  - The report's Reliability #3 fix (a poll-start `SEMBLE_FALLBACK ... reason=unavailable` when the flag is on and the binary is missing) would fire on every tick. It would turn the "0 runtime fallbacks" metric into noise.
+- **Recommended fix:** Do not emit at poll start. If visibility is wanted, emit one `SEMBLE_BOOTSTRAP mode=lazy state=not_needed` line from the poll summary when no judge query ran. Leave the fallback count to the real failure path.
+
+**CONSIST-003 — heal-pr-reconcile runs `main`'s script while its sibling job is pinned to `promote-candidate`**
+- **File:** `.github/workflows/internal-cancel-on-pr-close.yml:16, 45-54`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:**
+  - The `cancel` job calls `cancel_on_pr_close.yml@promote-candidate`, whose support ref follows the protected candidate (`cancel_on_pr_close.yml:36-53`).
+  - `heal-pr-reconcile` checks out `ref: main` and runs `scripts/workflow_failure_heal_pr_reconcile.sh` from it. That bypasses the promote-cycle pin (`docs/plans/pin-promote-cycle-to-candidate-plan.md`).
+  - The impact is contained only because the step is `continue-on-error: true`.
+- **Recommended fix:** Fetch only the script from the same ref the cancel job resolves (the `SUPPORT_REF source=promote_candidate` logic). Or move the job into `cancel_on_pr_close.yml` behind a source-repo `if:`. Combine this with the report's shallow-fetch change and BUG-001.
+
+**CONSIST-004 — heal intake fetches job logs with raw `gh api` and no retry**
+- **File:** `scripts/workflow_failure_heal_intake.sh:1205-1227`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:**
+  - The call is deliberately not wrapped in `gh_retry`, because that would buffer unredacted bytes to a temp file (comment at 1209-1210).
+  - As a result, any transient 5xx records `(job log unavailable)` (1225-1226). That removes the error signature the downstream dedup gate relies on.
+- **Recommended fix:** Wrap the existing pipeline in a 3-attempt loop with 2s/4s backoff, re-running `gh api ... | python3 "${HEAL_PY}" redact-stream > "${RAW_LOG}"` each time. Redaction still happens before the first write, and the retry contract matches `gh_helpers.sh` transient handling.
+
+**DEBT-001 — stale reviewer-scoping note and mismatched defaults**
+- **File:** `scripts/review_autofix_step_iteration_summary.sh:74`; `scripts/review_run_reviewers.sh:2320-2349`; `.github/workflows/review_autofix.yml:1896`
+- **Severity:** Low
+- **Category:** `tech-debt`
+- **Description:**
+  - The summary says `iteration_scoping=... (plumbed only on this branch; reviewer scope remains full-diff)`. But `review_run_reviewers.sh:2335-2337` scopes follow-up iterations from `LAST_RUN_CHANGED_FILES_FILE`.
+  - Defaults disagree: the workflow uses `'1'` (1896), the reviewer script `:-0` (2321) and the summary `:-1` (74).
+  - The report's Speed #2 asks whether later passes re-review unchanged files. `review_run_reviewers.sh:2346-2349` already prints `Reviewer iteration scoping: scoped.` / `full-diff (<reason>)` every run.
+- **Recommended fix:**
+  - Rewrite line 74 to report the actual `REVIEWER_SCOPE_REASON`.
+  - Align the script default with the workflow (`:-1`), or document why the script stays fail-closed at `0` (§8).
+  - Have the collector parse the existing `Reviewer iteration scoping:` line instead of adding `review_iteration=` / `changed_files=` fields.
+
+**DEAD-001 — unreachable branches and an unused required input**
+- **File:** `scripts/gh_helpers.sh:83-118`; `scripts/workflow_failure_heal_pr_reconcile.sh:62, 81`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:**
+  - `gh_review_pr_state` accepts `merged` (91, 108). REST `GET /pulls/{n}` `.state` is only `open` or `closed`, so that branch never matches.
+  - In reconcile, `HEAD_SHA` is validated as 40-hex (81) and never used afterwards. Retargeting uses `refs/pull/<n>/head` (150, 160). A missing `SOURCE_HEAD_SHA` still skips the whole reconcile as `missing_context`.
+- **Recommended fix:**
+  - Drop `merged` from the two regexes, or derive it from `.merged_at` as `review_autofix.yml:2245` does.
+  - Either use `HEAD_SHA` to confirm `refs/pull/<n>/head` matches the closed head, or remove it from the required-input guard (keep the env name per §10).
+
+**SHELL-001 — `ls | wc -l` file counting (SC2012)**
+- **File:** `.github/workflows/review_autofix.yml:5129-5130`
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:** `editor_attempts="$(ls -1 .../editor_attempt_*.err | wc -l ...)"` and `ls -1 ... | sort -V | tail -n 1` parse `ls` output. This is safe with today's file names, but it is flagged by SC2012.
+- **Recommended fix:** Use `shopt -s nullglob; attempt_files=("${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err); editor_attempts="${#attempt_files[@]}"`, then pick the last file from the sorted array.
+
+No `TODO`/`FIXME`/`HACK`/`XXX` markers exist in `scripts/*.sh`, `scripts/*.py` or `.github/workflows/*.yml`.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 7 | BUG-001, BUG-002, BUG-003, API-001, DUP-002, EXPR-001, CONSIST-001 |
+| Low | 14 | BUG-004, BUG-005, API-002, BATCH-001, DUP-001, EXPR-002, EXPR-003, EXPR-004, CONSIST-002, CONSIST-003, CONSIST-004, DEBT-001, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | None (no Critical/High findings) | Small |
+| API call optimization | `scripts/gh_helpers.sh`, `scripts/label_helpers.sh`, `.github/workflows/review_autofix.yml`, `scripts/review_collect_pr_metadata.sh` | Small |
+| Code modularization | `.github/workflows/review_autofix.yml`, `clarify.yml`, `workflow-failure-heal-intake.yml`, `orchestrate_poll.yml`, `validation-improvements-intake.yml`, `workflow-log-analysis.yml`, new `scripts/wla_semble_prefetch.sh` | Medium |
+| Expression size reduction | `.github/workflows/orchestrate_poll.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml` (if over 430 KB) | Small |
+| Medium/Low fixes | `scripts/workflow_failure_heal_pr_reconcile.sh`, `.github/workflows/internal-cancel-on-pr-close.yml`, `.github/workflows/workflow-log-analysis.yml`, `scripts/git_ref_health_check.sh`, `scripts/cost_audit.py`, `scripts/collect_workflow_logs.py`, `scripts/review_autofix_step_iteration_summary.sh`, `scripts/review_run_reviewers.sh`, `scripts/workflow_failure_heal_intake.sh`, `scripts/gh_helpers.sh`, `agents.d/` fragment | Medium |
