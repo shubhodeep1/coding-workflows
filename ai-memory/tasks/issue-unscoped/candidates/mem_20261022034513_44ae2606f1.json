@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.81,
+  "details": "When editing GitHub Actions workflows or their scripts, look for an existing behavior-specific test and update or add coverage there. Recent workflow changes paired YAML edits with focused tests for validation refresh, CI polling, and stable-marking behavior.",
+  "fingerprint": "a8af7f53585d14b2a5b8cd817590e039bd2397c3c21b2d388269caa2590b30e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39717432849",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39717432849",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7800",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7814",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7837",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7841",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7842",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7801",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7818",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7845",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7846",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7847"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261022034513_44ae2606f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes are commonly paired with focused Python contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-22T03:45:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
