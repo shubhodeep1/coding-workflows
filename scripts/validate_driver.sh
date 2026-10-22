@@ -970,6 +970,7 @@ run_single_test()
 	local test_name
 	local test_log
 	local exit_code
+	local tee_rc
 	local ok_count
 	local not_ok_count
 	local error_message
@@ -1003,7 +1004,13 @@ run_single_test()
 		# (tele-funtoken-msg-scoring validate runs 39725752780, 39726381586,
 		# 39736025924).
 		run_test_without_credentials "${test_file}" 2>&1 | tee "${test_log}"
-		exit_code=${PIPESTATUS[0]}
+		# Both values come from the same PIPESTATUS snapshot (one assignment
+		# list). A failed tee (disk full) leaves a partial log for the TAP
+		# counts below, so say so instead of hiding it.
+		exit_code=${PIPESTATUS[0]} tee_rc=${PIPESTATUS[1]}
+		if [ "${tee_rc}" -ne 0 ]; then
+			echo "::warning::validate_driver: tee exited ${tee_rc} while writing ${test_log}; the test log may be incomplete" >&2
+		fi
 	fi
 	set -e
 
