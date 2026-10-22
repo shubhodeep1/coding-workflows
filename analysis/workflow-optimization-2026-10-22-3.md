@@ -523,3 +523,170 @@ TODO/FIXME/HACK markers: grep found none in `scripts/*.sh`, `scripts/*.py` or `.
 | Code modularization | `scripts/stage_workflow_support.sh`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate.yml`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/orchestrate_clarify_respond.yml`, `scripts/gh_helpers.sh`, `scripts/comprehensive_test_and_release_gh_api.sh`, `scripts/orchestrate_poll_process.sh` | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/orchestrate_poll.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `.github/workflows/update_workflows.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/test-and-mark-stable.yml`, `scripts/comprehensive_test_and_release_gh_api.sh`, `.github/workflows/pr6576-shard-followup.yml`, `docs/scripts-pending-removal.md`, `README.md`, `agents.d/` fragment | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-22)
+
+Scope of this pass:
+- **Read in full or in part:** `scripts/review_merge_train.sh`, `scripts/workflow_failure_heal_pr_reconcile.sh`, `scripts/workflow_failure_heal_intake.sh` (provenance and run-collection paths), `scripts/orchestrate_poll_process.sh` (lines 1-230, 3155-3175, 5774-5859, 6978-7003, 23140-23280, 26440-26550, 27715-27754), `.github/workflows/orchestrate_poll.yml`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/implement.yml` (the support-ref and PR steps), `.github/workflows/test-and-mark-stable.yml:1403-1457`, `scripts/label_helpers.sh:163-197`, `tests/test_workflow_support_ref_follows_pin.py:280-460` and `tests/test_review_merge_train.py`.
+- **Already clean:** The heal intake already reuses its provenance run reads and its `/user` login (`workflow_failure_heal_intake.sh:1138-1145`, `1427-1433`, `1594-1597`). Heal reconcile matches its documented budget (`workflow_failure_heal_pr_reconcile.sh:29-32`). Neither is raised here.
+
+### Safety Tag Legend
+- `SAFE_TO_MERGE`: every precondition holds from reading the code alone. The calls are in the same function, nothing changes the data in between, failures are handled the same way, no concurrency boundary is crossed, no cache contract is broken, and no log key that something greps for changes. The implement stage may act on these without further review.
+- `NEEDS_VERIFICATION`: the fix is probably correct, but at least one precondition cannot be proven from static reading. The listed checks must pass first.
+- `RISKY_SKIP`: one or more of these applies: retry, backoff or stall-recovery loops; auth or permission probes; pagination; rate-limit probes; `orchestrate_poll_process.sh`; race-defending re-reads; or log keys other code greps for. These are listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** — `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/review_merge_train.sh:1393` (`_mt_find_marker_comment_id "${num}" "${MT_MARKER}"`)
+  - `scripts/review_merge_train.sh:1413` → `875` (`_mt_upsert_comment` called with 3 args, so it runs its own marker lookup)
+  - Both go through `_mt_find_marker_comment` at `scripts/review_merge_train.sh:800-806`.
+- **Call count:**
+  - **Current:** 2 paginated comment listings of the same PR, per released PR, in one `_mt_release` iteration.
+  - **Proposed:** 1 listing that returns both the `<!-- merge-train:queued -->` id and the `<!-- merge-train:released -->` id.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{pr}/comments?per_page=100` (`--paginate`).
+- **Evidence:** Both lookups read the same endpoint for the same PR within one loop iteration. Only the jq marker filter differs (`MT_MARKER` at line 134, `MT_RELEASED_MARKER` at line 135):
+  ```bash
+  gh_retry gh api --paginate "repos/${MT_REPO}/issues/${pr}/comments?per_page=100" \
+  	--jq ".[] | select((.user.login // \"\" | ascii_downcase) == \"${MT_AUTOMATION_LOGIN}\" and ((.body // \"\") | startswith(\"${marker}\"))) | ..."
+  ```
+  Several writes sit between the two lookups: the marker PATCH (1398), the label DELETE claim (1406) and the workflow dispatch (1410).
+- **Proposed fix:** Add a sibling helper, `_mt_find_marker_comments <pr> <marker...>`, that does one paginated scan and emits `marker id created_at` rows. In `_mt_release`, call it once at 1393 and pass the released-marker id to `_mt_upsert_comment` as its 4th argument at 1413. Do not change the output of `_mt_find_marker_comment` itself, because the gate path uses it at 939 and 958.
+- **Safety rationale:** The call implements pagination (`--paginate`), and writes happen between the two reads, so both the page-boundary and the no-intervening-mutation preconditions fail.
+- **Downstream signal:** Do not auto-implement. A reviewer must confirm three things:
+  1. The 1398 PATCH rewrites only the queue comment, never the released-marker comment.
+  2. A peer release (the poll backstop and `cancel_on_pr_close` both run `release`) cannot post a released marker between the two reads. If it can, the second listing is a deliberate de-duplication read.
+  3. `tests/test_review_merge_train.py` gets a case that pins the single listing.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** — `NEEDS_VERIFICATION`
+- **Calls involved:**
+  - `scripts/review_merge_train.sh:879` (GET of the comment by id)
+  - That comment's id was just found by the paginated listing at `scripts/review_merge_train.sh:804-805`.
+  - The listing is reached at `958` (gate) or `875` (release, via `1413`).
+- **Call count:**
+  - **Current:** listing + 1 GET (+1 PATCH when the body changed) for each upsert of an existing marker.
+  - **Proposed:** listing + 0 GET (+1 PATCH when the body changed).
+- **Endpoints:** `GET /repos/{owner}/{repo}/issues/comments/{id}`, `GET /repos/{owner}/{repo}/issues/{pr}/comments`.
+- **Evidence:** The listing already reads `.body` for every comment so it can match the marker prefix, but it outputs only `"\(.id) \(.created_at)"`. `_mt_upsert_comment` then fetches the same comment again just to compare bodies:
+  ```bash
+  existing_body="$(gh_retry gh api "repos/${MT_REPO}/issues/comments/${existing_id}" --jq '.body' 2>/dev/null || true)"
+  if [ "${existing_body}" = "${body}" ]; then
+  ```
+  On the gate path (958 → 993) the only write in between is the bypass PATCH at 967. That path returns at 971 when the PATCH succeeds, so the comment is unchanged whenever 993 runs, unless a PATCH that reported failure actually landed.
+- **Proposed fix:** There are two options.
+  - (a) Add `_mt_find_marker_comment_with_body`, which emits `id created_at <body|@base64>`. Callers that already have it pass the body to `_mt_upsert_comment` as a 5th argument, and line 879 is skipped when it is supplied.
+  - (b) Drop the compare entirely and always PATCH. That is 1 call instead of GET+PATCH (2) or GET only (1).
+- **Safety rationale:** Option (a) changes the projection of a paginated call. Option (b) changes the PATCH-skip behaviour. Neither the identical-body skip nor the GET-by-id body is asserted anywhere: `tests/test_review_merge_train.py:151` only serves a fixture for `repos/*/issues/comments/*`. So the no-intervening-mutation precondition cannot be proven.
+- **Downstream signal:** Before changing anything:
+  1. Confirm that no consumer reads the marker comment's `updated_at`. The bypass check at 841 reads only `created_at`.
+  2. Confirm that two gate runs for the same PR cannot interleave between 958 and 993 (check the review_autofix concurrency group for the gate job).
+  3. Add a test asserting no `issues/comments/{id}` GET when the body is supplied.
+
+**REUSE-002** — `NEEDS_VERIFICATION`
+- **Calls involved:**
+  - `scripts/review_merge_train.sh:1142` (`_mt_resolve_default_branch`), reached from `_mt_inflight_review_branches` at `1155`.
+  - Callers: `.github/workflows/cancel_on_pr_close.yml:424` and `.github/workflows/orchestrate_poll.yml:263`.
+- **Call count:**
+  - **Current:** 1 `GET repos/{repo}` per `release` process that reaches the active-run listing.
+  - **Proposed:** 0 when the event payload carries `.repository.default_branch`; otherwise 1.
+- **Endpoint:** `GET /repos/{owner}/{repo}`.
+- **Evidence:** The heal intake already reads the default branch from the event file at no API cost (`workflow_failure_heal_intake.sh:943-944`):
+  ```bash
+  PROVENANCE_DEFAULT_BRANCH="$(jq -r '.repository.default_branch // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+  ```
+  The `pull_request`-closed path of `cancel_on_pr_close.yml` gets a payload that includes `repository`. `implement.yml:1306` already relies on `github.event.repository.default_branch`.
+- **Proposed fix:** In `_mt_resolve_default_branch`, before the GET, set `MT_DEFAULT_BRANCH` from `GITHUB_EVENT_PATH` when the payload value matches `^[A-Za-z0-9._/-]+$`. Keep the GET as the fallback, and keep the "no fallback to main" contract stated at 1133-1136.
+- **Safety rationale:** The comment at 1132-1136 says this read is provenance for review dispatch (issue #6629). From static reading I cannot prove that `schedule` and `workflow_call` payloads carry `repository.default_branch`, so the identical-response precondition is unproven.
+- **Downstream signal:** Before changing anything:
+  1. Dump `GITHUB_EVENT_PATH` in one scheduled `orchestrate_poll`, one scheduled `cancel_on_pr_close` and one `pull_request: closed` run, and confirm `.repository.default_branch` is present.
+  2. Confirm with the #6629 owner that a value captured at event time is acceptable for provenance.
+  3. Add a test with a fake event file asserting no `repos/{repo}` GET.
+
+**REUSE-003** — `RISKY_SKIP`
+- **Calls involved:**
+  - `.github/workflows/cancel_on_pr_close.yml:167-186` (`_cpr_fetch_active_runs`: `status=queued` and `status=in_progress`, `event=pull_request`, `--paginate`)
+  - In the next step of the same job, `scripts/review_merge_train.sh:1166-1177` (`_mt_inflight_review_branches`: `requested pending queued waiting in_progress`, run twice, manual `page`/`created` paging with shift retries)
+- **Call count:**
+  - **Current:** On schedule ticks, 2 paginated listings plus the ~10-call release listing (header at `review_merge_train.sh:83-90`).
+  - **Proposed:** In theory, the release step reuses the queued/in_progress snapshot from the cancel step. In practice, see the rationale.
+- **Endpoint:** `GET /repos/{owner}/{repo}/actions/runs`.
+- **Evidence:** Both steps run in the `cancel-active-runs` job (`cancel_on_pr_close.yml:11`) and list overlapping run sets.
+- **Proposed fix:** None recommended. Recorded only to stop a future pass from proposing it.
+- **Safety rationale:**
+  - The filters differ. The cancel step uses `event=pull_request`, while the release listing needs `workflow_dispatch` review runs that are keyed by title (`review_merge_train.sh:1105-1117`).
+  - The cancel POSTs at 370 change run state between the two reads.
+  - The release listing implements manual pagination and a shift-retry loop that defends against listing races (1124-1131, 1200-1224).
+- **Downstream signal:** Must not be auto-implemented. Any change needs the merge-train owner to review the completeness contract at `review_merge_train.sh:1095-1131`.
+
+**REUSE-004** — `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/orchestrate_poll_process.sh:5820` (`resolve_active_orchestrator_context_for_issue`, paginated comments of each tracking issue; the preferred `TRACKING_NUM` comes first, 5800-5801)
+  - Called at `26513`.
+  - The main loop already fetched the same issue's comments at `23189-23196`, and the cycle-local cache contract is `COMMENTS` / `COMMENTS_FOR_TRACKING_NUM`, used at `3164`, `3404` and `3437`.
+- **Call count:**
+  - **Current:** 1 paginated listing per tracking issue scanned, including the current one.
+  - **Proposed:** 0 for the current tracking issue (read state from `STATE_FILE` or `COMMENTS`); unchanged for the others.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{n}/comments?per_page=100` (`--paginate`).
+- **Evidence:** `_tracking_comment_recent_file` at 3161-3164 already treats `COMMENTS` as authoritative when `COMMENTS_FOR_TRACKING_NUM == TRACKING_NUM`. `resolve_active_orchestrator_context_for_issue` ignores that contract.
+- **Proposed fix:** None to auto-apply. If pursued: for `tracking_num == TRACKING_NUM`, take `issue_number_map`, `waves` and `integration_branch` from `${STATE_FILE}` instead of re-reading comments.
+- **Safety rationale:**
+  - The call is inside `orchestrate_poll_process.sh` and is paginated.
+  - `post_state_comment` can run between the two reads (23222 and 27716), so cached `COMMENTS` may hold an older state chain.
+  - This is the review-blocked follow-up retarget path, which defends against integration-branch races (26527-26535).
+- **Downstream signal:** Must not be auto-implemented. It needs poller-owner review of whether `STATE_FILE` is always at least as fresh as the posted state comment at line 26513, including the `STATE_FALLBACK_USED` heal path at 23220-23224.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001** — `SAFE_TO_MERGE`
+- **Calls involved:**
+  - `scripts/review_merge_train.sh:982` (`_mt_ensure_label`, defined at `772-783`), which calls `ensure_label_exists` (`scripts/label_helpers.sh:177-181`) or, in the fallback, `gh label create` (`review_merge_train.sh:780-781`).
+- **Call count:**
+  - **Current:** 1 label-create write on every gate run that queues a PR, including PRs that already carry `ai:merge-queued`. GitHub answers already-exists with a 422 that is swallowed.
+  - **Proposed:** 0 when the PR already carries the label; 1 otherwise.
+- **Endpoint:** `POST /repos/{owner}/{repo}/labels`.
+- **Evidence:** `own_labels` comes from the open-PR listing already in memory (935). The only consumer of the label existing is the label add inside `if ! _mt_has_label "${own_labels}"` (984-991):
+  ```bash
+  _mt_ensure_label
+  queue_label_persisted="true"
+  if ! _mt_has_label "${own_labels}"; then
+  	queue_label_persisted="false"
+  	if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${MT_REPO}/issues/${pr}/labels" -f "labels[]=${MT_LABEL}" ...
+  ```
+  If a PR carries the label, the label exists in the repo, so the create can only return already-exists. Its result is never read: `ensure_label_exists ... || true` (774, 778), and the fallback is `>/dev/null 2>&1 || true` (781).
+- **Proposed fix:** In `_mt_gate`, move the `_mt_ensure_label` call from line 982 to the first line inside the `if ! _mt_has_label "${own_labels}"; then` block at 984. Change nothing else.
+- **Safety rationale:**
+  - **Same function and data:** The change stays inside `_mt_gate` and uses `own_labels`, which is already in memory. No write between 935 and 982 touches labels; the only one is the comment PATCH at 967.
+  - **Error handling:** Failures were already swallowed with `|| true`, so no caller's failure behaviour changes.
+  - **No risky call shapes:** No pagination, rate-limit probe or concurrency boundary is involved.
+  - **Log output:** The only lost output is `ensure_label_exists`'s stderr `::debug::` line on already-exists (`label_helpers.sh:191`). Its `::warning::` (195) can only fire when the label is missing, and that path still runs.
+  - **Tests:** The test fake gh exits 0 for `label` without logging it (`tests/test_review_merge_train.py:41`), so no test asserts on this call.
+- **Downstream signal:** In `scripts/review_merge_train.sh::_mt_gate`, move the `_mt_ensure_label` call (line 982) into the `if ! _mt_has_label "${own_labels}"; then` block (line 984), immediately before the label POST.
+
+### Cross-References to Deep Audit Section
+- **BATCH-001: `RISKY_SKIP`** — The cited loops are in `orchestrate_poll_process.sh`. The 27728 read is a deliberate post-change re-read (`# Re-read labels since we may have changed them`, 27727) after the review-blocked handling. A batch also changes behaviour in two ways:
+  - Failure handling: REST maps a failure to `'[]'` per issue (27728), while the proposed helper returns 1 for the whole batch.
+  - Label truncation: REST `issues/{n}/labels` returns its default page size (unpaginated), while GraphQL `labels(first: 100)` returns up to 100.
+
+  Wave-completion results could change, so this needs poller-owner review.
+- **API-001: `NEEDS_VERIFICATION`** — Net-new detail: on `schedule` the release step's `BASE_BRANCH` (`cancel_on_pr_close.yml:397`, taken from `github.event.pull_request.base.ref`) is empty, so that scan is the same global scan as the poll backstop (`orchestrate_poll.yml:263`). Gate only the `EVENT_NAME == schedule` branch (409-410). Keep the PR-close path, which is base-filtered and is what core-profile repos rely on (394).
+- **API-002: `RISKY_SKIP`** — The `branches/promote-candidate` read is a protection-flag trust probe (`jq 'if .protected == true ...'`, `orchestrate_poll.yml:138`), which is a permission-probe trigger. Net-new details:
+  - **Same-job duplicates:** Only these are mergeable: `orchestrate_poll.yml:137/533`, `orchestrate.yml:216/390`, `validate.yml:210/480`, and `implement.yml:458/763/1342`.
+  - **Implement copies:** `458` and `763` are conditional hand-off paths (`existing_pr`, `pr_not_open`) that write different env names (`DUPLICATE_NOTICE_SCRIPT_REF`, `PR_NOT_OPEN_SCRIPT_REF`), so they likely save nothing.
+  - **Cross-job pairs:** `clarify.yml:395/2363`, `plan.yml:362/3172` and `implement.yml:7009` are in the separate `heal-report` jobs (`clarify.yml:2306`, `plan.yml:3128`, `implement.yml:6961`) and cannot share `GITHUB_ENV`.
+  - **Test contract:** `tests/test_workflow_support_ref_follows_pin.py:381,387` asserts that each resolve step writes exactly one `GITHUB_ENV` value and makes exactly one branches call. A BUG-003-style reuse branch needs new test coverage.
+  - **Trust:** Reusing `SCRIPT_REF` from `GITHUB_ENV` trusts that no step in between rewrote it.
+- **API-003: `RISKY_SKIP`** — Lines 44 and 157 are `rate_limit` probes that gate a budget of at least 500, inside `orchestrate_poll_process.sh`. The issue GET at 55 is a deliberate live re-read (it checks `.state == "open"` and that the label is still present, 56-57) and must not be replaced with listing data. The two listings also request different `--json` fields (`number` vs `number,labels`, 47 and 163).
+- **API-004: `RISKY_SKIP`** — The calls sit inside the `while true` poll loop (`test-and-mark-stable.yml:1403`), on top of `gh_api_safe`'s rate-limit backoff. The `CUR_STATE` string (1454) drives the inactivity timer (1457), so any change in the shape of the merged response resets the timeout.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 1 | DEAD-API-001 |
+| NEEDS_VERIFICATION | 3 | REUSE-001, REUSE-002, API-001 (cross-ref) |
+| RISKY_SKIP | 7 | MERGE-001, REUSE-003, REUSE-004, BATCH-001 (cross-ref), API-002 (cross-ref), API-003 (cross-ref), API-004 (cross-ref) |
+
+### Implement-Stage Handoff
+- DEAD-API-001: in `scripts/review_merge_train.sh::_mt_gate`, move `_mt_ensure_label` (line 982) inside the `if ! _mt_has_label "${own_labels}"; then` block (line 984). This saves one label-create write on every gate run that re-queues a PR that is already queued.
