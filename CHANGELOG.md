@@ -297,6 +297,22 @@ The orchestrator poller (`orchestrate_poll.yml`) in `shubhodeep1/coding-workflow
 
 What this means for operators: the report arrives in the `TG_ADMIN_CHAT_ID` chat with no setup. Set `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` to move it or `CLAUDE_POOL_DAILY_USAGE_ENABLED=false` to stop it. Consumer repos are not affected.
 
+- **A PR body line `Implements #N` now links a person's PR to an orchestrator item issue.** Before, the poller accepted a PR as an item's implementation PR only when its head branch was `ai/issue-<n>` or its body closed the issue, so a person who finished a blocked item and wrote `Refs #N` saw the PR rejected as `not_implementation_pr` and the item stayed `ai:blocked` (fun-token-multi-chain#639, PR #667).
+
+`_pr_json_is_issue_implementation_pr` in `scripts/orchestrate_poll_process.sh` now also accepts a body line `Implements #N`, `Implements <owner>/<repo>#N` or `Implements https://github.com/<owner>/<repo>/issues/N` for this repository and this exact issue number, when the PR's base is the default branch or an `orchestrator/project-<n>` branch. `Implements` is not a closing keyword, so it never auto-closes a tracking issue. A bare `Refs #N` is still rejected, which keeps the #3817 protection against adopting a PR that only mentions the issue. Each marker decision logs `LINKED_PR_IMPLEMENTS_MARKER`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| New GitHub API calls | 0 (the default branch comes from the memoized `_review_run_default_branch`) |
+| Accepted bases | default branch, `orchestrator/project-<n>` |
+| Kill switch | `ORCH_IMPLEMENTS_MARKER_ENABLED=false` (default `true`, wired in `orchestrate_poll.yml`) |
+
+What this means for operators: when you finish an orchestrator item yourself, put `Implements #N` in the PR body and the poller picks the PR up after it merges. Set the repository variable `ORCH_IMPLEMENTS_MARKER_ENABLED` to `false` to turn the rule off; items already closed through it stay closed.
+
+### For contributors
+
+The CLAUDE.md §19 bullet that documents the convention for interactive sessions could not be written by the pipeline; the exact text is recorded as a pending operator step in `agents.d/7765-implements-marker.md` (`IMPLEMENTS_MARKER_CLAUDE_MD_UNSET_OPERATOR_STEP`).
+
 ### For contributors
 
 `claude_engine.py pool-usage` builds the text. `tg_send_report_msg` in `scripts/tg_helpers.sh` sends without a level prefix or threshold, honouring `SILENT` only. The report runs in its own job so probing the pool never changes the poll job's Claude credential or capacity-wait state. The broker already allows `orchestrate_poll.yml`, so no Worker redeploy is needed. Tests: `tests/test_claude_pool_daily_usage.py`.
@@ -1470,6 +1486,42 @@ What this means for operators: a SUPERSEDED message needs no action; follow the 
 The implement step "Run Codex implementation" now fetches the default branch's tip into a private ref (`refs/codex-isolated/base`, depth 1). `scripts/codex_isolated_workspace.py seed-git` adds it to the sandbox git as branch `isolated-base`, filtered exactly like the checkout: credential-like and oversized files are left out and their objects are never packed. It also becomes the parent of the `isolated` HEAD commit, so `git diff isolated-base` shows the branch's changes, and `prompts/mode-implement.txt` tells the agent to use `git show isolated-base:<path>`. If the fetch fails, the run logs a warning and continues without that branch.
 
 What this means for operators: nothing to set. A project issue that blocks on "no pre-project commit exists" can be re-run (`/approved`) once this reaches `@stable`.
+
+- **The planner can now read the default branch as `isolated-base`.** On orchestrator items the planner checks out the integration branch, so it could not see the production code a plan has to restore or keep working.
+
+`scripts/run_plan_codex.sh` fetches the default branch's tip (one depth-1 `git fetch`, no GitHub API call) into `refs/codex-isolated/base` and exports `CODEX_ISOLATED_GIT_BASE_REF`, the same mechanism implement uses since #7548. The sandbox gets the branch filtered like the checkout, and the planner prompt says how to read it. A failed fetch only leaves the branch out. Set the repository variable `PLAN_ISOLATED_BASE_ENABLED=false` to turn it off.
+
+- **Five test steps moved out of the CI job `tests-hooks-and-orchestrator`.** That job took 15m06s of its 20-minute timeout on `main` (run 39575950300, budget-watch issue #7798). A job that reaches its timeout turns CI red even when the code is fine. The steps run unchanged and keep their names, once per CI run:
+
+  | Step | New job |
+  |---|---|
+  | `Isolated agent container tests (codex_isolated_exec.sh)` | `orchestrate-poll (2)` |
+  | `Prebuilt sandbox image tests` | `orchestrate-poll (2)` |
+  | `Review sandbox image build retry tests` | `orchestrate-poll (2)` |
+  | `Set up Node 22 for the claude-pool-broker Worker tests` | `tests-release-and-log-analysis` |
+  | `claude-pool-broker Worker tests (vitest)` | `tests-release-and-log-analysis` |
+
+  The three steps in the `orchestrate-poll` matrix carry `if: strategy.job-index == 2`, so they run in group 2 only. The Node setup still runs right before the vitest step. The run's step timings could not be read, and the implement sandbox could not time every candidate (no network for `npm ci`), so these are the plan's fallback list, chosen by estimated cost. The two target jobs were estimated at about 12.5-13 minutes (`orchestrate-poll (2)` after #7697) and 12-13 minutes (`tests-release-and-log-analysis` after #7699). None of these durations has been measured; the next `budget-watch` run on `main` checks every job.
+
+  No job was added or renamed, no `timeout-minutes` changed, and the `CI / lint` check works as before. A failure in one of these tests now shows up under the check-run `orchestrate-poll (2)` or `tests-release-and-log-analysis`. Operators have nothing to do.
+
+- **The daily promote cycle now promotes exactly the commit its smoke gate tested.** Before, commits merged into `main` while a cycle ran usually deferred the promotion, because the verifying run promoted whatever `main` had become and every unproven commit since the smoke gate blocked it.
+
+When the `promote-candidate` branch exists and is protected and every internal wrapper and reusable workflow follows it, the cycle freezes that branch at the candidate with the annotated tag `promote-cycle-frozen`, runs the smoke gate on the branch, and the verifying run promotes that candidate. Commits merged into `main` meanwhile, the proving and verifying merges included, ride the next cycle. The tag is deleted on every terminal state, so the follower moves the branch back to `main`. If any prerequisite is missing the cycle runs as before (`PROMOTE_CYCLE_PIN outcome=skipped`). `PROMOTE_CYCLE_PIN_ENABLED=false` turns pinning off and abandons a pinned cycle's promotion (`COMPREHENSIVE_PROMOTION_PIN_RELEASED`). Refs #7745.
+
+- **Internal runs now call their reusable workflows from the `promote-candidate` branch instead of `main`.** The 13 `.github/workflows/internal-*.yml` wrappers use `@promote-candidate`. A new workflow, `promote-candidate-follow.yml`, keeps that branch at the `main` tip: it runs on every push to `main`, hourly at 17 past and on dispatch, fast-forwards the branch with `force=false`, and creates it when it is missing. This prepares the daily promote cycle to freeze one candidate commit while a cycle is in flight (Phase 2 of `docs/plans/pin-promote-cycle-to-candidate-plan.md`).
+
+While the tag `promote-cycle-frozen` exists the follower leaves the branch alone. A freeze older than `PROMOTE_CYCLE_FREEZE_MAX_SECS` (default `172800`, two days) is deleted with a CRITICAL alert, and `PROMOTE_CYCLE_PIN_ENABLED=false` ignores the tag. Nothing creates that tag yet, so with no freeze every internal run executes the same commit as `main`, at most one follower run behind. A rejected fast-forward fails the run and never rewinds the branch. Every run logs one `PROMOTE_CANDIDATE_FOLLOW outcome=...` line.
+
+The Claude pool broker now accepts `refs/heads/promote-candidate` for this repository only, and only when the signed workflow commit is an ancestor of `main` or `stable`.
+
+What this means for operators: add a `promote-candidate` ruleset (no deletion, no force-push, updates only from the pipeline account); until it exists the follower sends one CRITICAL alert per UTC day. Redeploy the `claude-pool-broker` Worker once this change is on `main`, because Claude roles in this repository fail closed until then. Consumer repositories are unaffected.
+
+- **Pipeline runs here can take their support scripts from the protected `promote-candidate` branch.** This is phase 1 of `docs/plans/pin-promote-cycle-to-candidate-plan.md` (Refs #7745). It prepares the daily main-to-stable promote cycle, which will pin every pipeline run in this repository to one candidate commit.
+
+In this repository, 13 reusable workflows now check their own job `workflow_ref`. When it is exactly `<file>.yml@refs/heads/promote-candidate`, they read the branch once (`GET branches/promote-candidate`). They use its tip as the support ref only when GitHub reports the branch protected and the tip is a full commit SHA, and they log `SUPPORT_REF source=promote_candidate sha=<sha>`. An unprotected branch, a failed read, or a look-alike ref (`promote-candidate-x`, `promote-candidate/x`, another file's name) keeps today's source and logs `SUPPORT_REF source=promote_candidate_unprotected`. The workflows are `cancel_on_pr_close`, `check_failure_triage`, `clarify`, `implement`, `issue_pr_status`, `memory_maintenance`, `orchestrate`, `orchestrate_clarify_respond`, `orchestrate_poll`, `plan`, `review_autofix`, `validate` and `workflow_failure_heal`. `review_autofix.yml` jobs also accept `refs/heads/promote-candidate` as a review support ref. In `validate.yml` the integration resolver and the support-files fetch follow the branch; the gh-retry bootstrap still uses `main`, because it must stay identical across workflows.
+
+What this means for you: nothing changes yet. The `internal-*.yml` wrappers still call these workflows at `@main`, so every run logs the same support ref as before. Consumer `@<sha>` and `@stable` pins are not affected.
 
 ### For contributors
 
@@ -3133,6 +3185,122 @@ Without the relay, every Claude run from the poller stopped with `CODEX_ISOLATIO
 | Consumer runs seen failing | fun-token-multi-chain 39563863015, 39564851636, 39565576987; tele-funtoken-msg-scoring 39562537641, 39563450320, 39565021848 |
 
 What this means for consumer repos: after the next `@stable` sync, blocked security passes run on Claude on the next poller tick, and the refused-fallback warnings stop. No variable change is needed.
+
+- **`HEAL_SYNCED_SECURITY_LINE_BUCKET` now has a maximum of 1,000,000, so an oversized bucket no longer breaks every synced-file security report.** Before, a bucket above about 2,000,000 made every finding group fail to load in `scripts/workflow_failure_heal.py` ("invalid group bucket"), so the `workflow-failure-heal-intake.yml` run logged `issue_compose_failed` and opened no issue.
+
+The bucket is clamped to 1,000,000, the largest line a finding may name, the same way values below `1` already count as `1`. Buckets up to that value keep their fingerprints. The consumer-side warning in `scripts/security_audit_upstream_report.sh` for a failed dispatch also no longer says "the next audit retries": incremental audits report a synced file again only after a sync changes it, so the warning now says the report is not retried.
+
+What this means for operators: a bucket set too high now behaves like the maximum instead of silently stopping synced-file security issues, and a failed report is described accurately.
+
+- **Synced-file security reports now skip retired files by name and accept common category spellings.** A finding on a file listed in the release's or the current `workflow-templates/retired_files.txt` is skipped with `WORKFLOW_HEAL skip reason=retired_file` instead of failing every time at `skip reason=scope_unresolved` with a Telegram WARNING. Categories such as `A01: Broken Access Control`, `A03 Injection` or `STRIDE: Tampering` are no longer dropped.
+
+Before, retired files passed the managed-path check in `scripts/workflow_failure_heal_intake.sh` but mapped to no source path in coding-workflows, so no heal issue could ever open for them and each report raised a warning. The consumer's own `@stable` sync deletes byte-identical retired files, so the intake now skips them before the budget decision and the skip does not raise the alert level. `normalize_synced_security_category` in `scripts/workflow_failure_heal.py` now accepts `A01`..`A10` with or without the `:2021` year, an optional `STRIDE:` prefix, and the first term of a slash-separated list. It still rejects other OWASP years written after the code, such as `A01:2017`, whose numbering differs (a CVE year later in the name does not count), and it still publishes only the canonical name.
+
+What this means for operators: synced-file security alerts no longer fire for retired files, and findings the audit labels in a slightly different format reach coding-workflows instead of being counted as `dropped`.
+
+- **The unblock judge no longer sends the implementer instructions it cannot follow.** A verdict whose instructions need network access, a git remote or a package install is refused, and the judge is asked once more with the reason.
+
+In fun-token-multi-chain#639, round 2 of the unblock judge chose `retry_budget` with instructions to fetch `origin/main`, compare against a merge base and reinstall packages. The implementer runs in a container with no network and no git remote, so the retry failed the same way and the item used up its rounds.
+
+- `prompts/mode-judge-unblock.txt` now has an "Implementer environment" paragraph: no network, no remote, no `origin/*` refs, no GitHub token or `gh`, dependencies already installed, and the default branch readable as `git show isolated-base:<path>`.
+- `scripts/unblock_ledger.py validate --sandbox-check` refuses the `instructions` of `retry_budget`, `descope`, `reissue`, `accept_with_followup` and `operator_step` verdicts that name a remote git command, a history deepen, an `origin/` ref, a package install, `curl` / `wget` or a `gh` command (`sandbox_incompatible:<id>`). `operator_instructions` and `answer` are not checked. Without the flag the output is unchanged.
+- `scripts/unblock_judge.sh` passes the flag and, on the first such refusal, asks the model once more with the reason, reusing the run log and pull request diff it already read. It logs `UNBLOCK_JUDGE ... op=instruction_sandbox_check outcome=reasked|refused_after_reask reason=<id>`. A second refusal ends in the existing `invalid_verdict` wait marker, and the scan tries again later.
+
+What this means for operators: the check is on by default. Set the repository variable `UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED=false` to turn it off. The patterns are broad (`yarn.lock` and prose such as `origin/destination` match), so a verdict that only mentions such words is re-asked once; if both answers are refused, the item waits for the next scan.
+
+- **Attempt logs and the implement failure comment now name the engine that ran.** A Claude run no longer appears as "Codex" in the clarify, clarify-respond, plan, implement and orchestrate logs.
+
+Claude is the default engine for these roles, but every retry loop still printed "Codex …" for each attempt. On shubhodeep1/tele-funtoken-msg-scoring#4687 the clarify log read `Codex clarify attempt 1/3 (engine claude)...` for a run that used Claude throughout. Each loop now prints the engine actually in use, for example `Claude clarify attempt 1/3...` and `Claude planning succeeded on attempt 1 (…)`. When Claude is unavailable and the run falls back to Codex part-way through an attempt, the remaining lines say "Codex". The implement failure comment posted on the source issue follows the same rule: its heading reads `## Claude implement diagnostics` or `## Codex implement diagnostics`, and its reason reads `Claude implement failed after 5 attempts`, `Claude bailed …` and so on.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Retry loops renamed | 5 (`clarify.yml`, `orchestrate_clarify_respond.yml`, `scripts/run_plan_codex.sh`, `implement.yml`, `orchestrate.yml`) |
+| Step names changed | 0 (`Run Codex implementation`, `Run Codex planning` and the rest keep their names) |
+
+What this means for operators: read the engine from the attempt line instead of the `AI_ENGINE_SELECTED` line. Anything that searched logs or issue comments for the literal text `Codex implement failed`, `Codex bailed` or `Codex planning attempt` should match `(Claude|Codex)` instead. No workflow or script in this repository matched on that text. Workflow failure heal fingerprints are unchanged: `normalize_error_line()` in `scripts/workflow_failure_heal.py` maps a leading `Claude` in the renamed attempt-loop error lines (and `last_status=claude`) back to `codex`, and leaves other lines such as `Claude pool at capacity` unchanged, so a failure keeps one fingerprint whichever engine ran.
+
+### For contributors
+
+`implement.yml` gets the name from `implement_engine_display_name()`. That function reads `AI_ENGINE_RESOLVED_IMPLEMENT` and the `claude-implement.unavailable` marker that `scripts/codex_thread_reuse.sh` writes on fallback. It is refreshed at the start of each attempt and after the editor call. On the heal route, a fallback caused by missing engine support files writes no marker, so it is still logged as Claude. In `orchestrate.yml`, the `last_status` value in the final error line now starts with the lowercase engine (`claude exit 1`, `codex timeout 124`).
+
+- **The review conflict step now resolves a folded changelog or agents fragment on a forward-merge PR, instead of failing every run.** On an `auto/forward-merge-stable-*` head it keeps `main`'s copy of a top-level `changelog.d/*.md` or `agents.d/*.md` file that the release fold deleted on the head side.
+
+The forward-merge branch is cut from `stable` and carries the release fold, which deletes every fragment, while `main` had changed some of them since. Merging `main` gave a modify/delete conflict with index stages 1 and 3, a shape the folded-fragment keep (#7130) did not accept, and the model resolver left those paths unmerged. PRs #7794 and #7795 failed on every review run that way (heal #7796). `scripts/review_conflict_prepare.sh` now stages `main`'s copy for that shape, but only on forward-merge heads; on any other head stages 1 and 3 mean the PR itself deleted the fragment, and the conflict still goes to the resolver. `CONFLICT_FORWARD_MERGE_FRAGMENT_KEEP_ENABLED=false` turns the new path off.
+
+- **The AI Orchestrate Poller can run its Claude roles again.** Its "Stage workflow support files" step now copies `claude_anthropic_relay.py` next to `codex_isolated_exec.sh`.
+
+Without the relay, every Claude run from the poller stopped with `CODEX_ISOLATION unavailable engine=claude reason=support_missing`. Under `AI_ENGINE_FALLBACK_POLICY=capacity` that meant the orchestrator security pass failed closed with `SECURITY_PASS_FAILED reason=engine_unavailable`, and each poller run sent a Telegram warning: `refused Claude fallback (non-capacity) … SECURITY_AUDIT:isolation_unavailable`. This happened even when the Claude pool had free accounts. `orchestrate.yml` had the same gap, fixed in #6908.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Workflow changed | `.github/workflows/orchestrate_poll.yml` |
+| Consumer runs seen failing | fun-token-multi-chain 39563863015, 39564851636, 39565576987; tele-funtoken-msg-scoring 39562537641, 39563450320, 39565021848 |
+
+What this means for consumer repos: after the next `@stable` sync, blocked security passes run on Claude on the next poller tick, and the refused-fallback warnings stop. No variable change is needed.
+
+### For contributors
+
+`tests/test_codex_agent_isolation_contract.py::test_orchestrate_poll_stages_every_claude_isolation_support_file` reads the Claude support files from `codex_isolated_exec.sh` and fails if the poller's required loop does not stage all of them.
+
+- **A regression test now covers the exact conflict that stopped PR #7794.** One merge on a forward-merge head leaves an `agents.d` fragment and a `changelog.d` fragment at index stages 1 and 3, and the test checks that both keep `main`'s copy and the merge commits without the model resolver.
+
+The fix itself landed with heal #7796 in `scripts/review_conflict_prepare.sh` and is unchanged; the earlier test covered only one `changelog.d` fragment (Refs #7802).
+
+- **The orchestrator poll's security pass runs on the Claude engine again.** `orchestrate_poll.yml` now stages `scripts/claude_anthropic_relay.py` next to `codex_isolated_exec.sh`.
+
+Since #6891, `codex_isolated_exec.sh` refuses `engine=claude` runs unless `claude_anthropic_relay.py` sits next to it. The poll's "Stage workflow support files" step copied the helper without the relay, so in consumer repos every project security pass logged `CODEX_ISOLATION unavailable engine=claude reason=support_missing`, the codex fallback was refused (`AI_ENGINE_FALLBACK_REFUSED role=SECURITY_AUDIT reason=isolation_unavailable`), and the pass ended with `SECURITY_PASS_FAILED reason=engine_unavailable`. Tracking projects could not complete. The other reusable workflows already staged the relay.
+
+What this means for consumer repos: after the next `@stable` sync, the security pass on Claude projects runs instead of failing on every poll, and those projects can complete.
+
+### For contributors
+
+`tests/test_codex_agent_isolation_contract.py` now reads both `required_support` lists from `codex_isolated_exec.sh` and fails if any workflow step that stages the helper leaves out a file on either list.
+
+- **Claude replies in the exact format a role prompt asks for.** `unattended_system_instructions.md` §16 no longer asks for a summary, assumptions and missing-context notes when a role prompt fixes a machine-readable reply such as "one JSON array and nothing else".
+
+The orchestrator security pass on Claude replied `[]` and then a written summary of what it checked. `scripts/security_audit.sh` rejects that as `malformed_output`, because a `[]` followed by prose never counts as a clean audit. The pass then failed with `SECURITY_PASS_FAILED reason=engine_unavailable` and the poller sent a `refused Claude fallback (non-capacity)` warning. The cause was §16 telling every result to include those report sections, which contradicts the audit prompt. The parser is unchanged and stays strict.
+
+| The numbers that matter | Value |
+| --- | --- |
+| File changed | `unattended_system_instructions.md` §16 |
+| First run seen | fun-token-multi-chain poller run 39619619223, tracking issue 579 |
+
+What this means for consumer repos: once this release syncs, security passes that Claude finds clean are accepted instead of failing as `malformed_output`, and any other role whose prompt asks for JSON only gets a parseable reply.
+
+### For contributors
+
+`tests/test_security_audit_prompt_policy.py::test_system_instructions_let_json_only_prompt_override_report_sections` pins both the audit prompt's JSON-only line and the §16 rule.
+
+- **AI Validate can get a Claude credential again.** The "Stage trusted Claude engine actions" step in `validate.yml` now copies `scripts/claude_pool_token.sh` and `scripts/claude_engine.py` next to the `claude-pool-token` action it stages.
+
+The action runs that script from three folders above itself. Validation copied only the action folders, so the credential step failed with exit 127 (`CLAUDE_POOL available=false reason=script_failed`) and every Claude diagnosis and self-heal call ended with `no_credential`. Under `AI_ENGINE_FALLBACK_POLICY=capacity` codex did not run either, so the diagnosis failed all three attempts and the project was sent a CRITICAL "validation failed after 2 recovery attempt(s)" alert.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Workflow changed | `.github/workflows/validate.yml` |
+| Runs seen failing | tele-funtoken-msg-scoring validate runs 39669571530 (tracking 3928) and 39677334128 (tracking 4038) |
+
+What this means for consumer repos: after the next `@stable` sync, AI Validate runs its diagnosis and self-heal on Claude when the pool has an account, and those projects can be validated again.
+
+### For contributors
+
+`tests/test_claude_engine_utility_roles.py::test_validate_stages_the_script_the_pool_token_action_runs` runs the real staging step and resolves the script path the way `main.js` does.
+
+- **The stable release gate no longer fails while its validation-refresh check is still running.** The `Dispatch & watch — validation-refresh` step of `test-and-mark-stable.yml` now dispatches the smoke run with `discovery_dry_run=true` and waits as long as the dispatched job may run.
+
+Release run 39694107256 gave up after 40 minutes on a validation-refresh run that was still `in_progress`. The gate waited 2400 s, but the refresh job's own budget is 60 minutes, and the smoke run also spent up to 35 minutes on real model discovery before the 13 consumer self-tests started. The smoke run now skips only the model call and the discovery pull request; dedup, memory plumbing and every consumer's clone, render, lint and self-test still run. The nightly refresh still runs real discovery.
+
+| The numbers that matter | Before | After |
+| --- | --- | --- |
+| Watch window (`--completion-timeout-secs`) | 2400 s | 3720 s |
+| Step `timeout-minutes` | 42 | 65 |
+| `orphan-workflows-test` job `timeout-minutes` | 110 | 135 |
+
+What this means for consumer repos: nothing changes for consumers; a healthy validation-refresh run no longer blocks the release that delivers their next sync.
+
+### For contributors
+
+`tests/test_validation_refresh_workflow_contract.py` now checks that the smoke dispatch passes `discovery_dry_run=true`, that the watch window covers `validation-refresh.yml`'s `refresh` job budget plus a minute, and that watcher < step < job, with the dispatch steps' timeouts summing below the job's.
 
 ### For contributors
 
