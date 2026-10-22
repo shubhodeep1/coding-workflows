@@ -106,6 +106,70 @@ def test_bait_coverage_fetch_records_outcome() -> None:
 	assert helper.count("live_log_fetch_record fail") == 1
 
 
+def test_cooldown_skip_is_not_a_bait_coverage_strike() -> None:
+	step = _step_text()
+	start = step.index("review_run_checked_out_bait() {")
+	end = step.index("require_bait_review_coverage() {", start)
+	helper = step[start:end]
+	assert 'coverage_reason="live_log_cooldown"' in helper
+	assert "BAIT_REVIEW_COOLDOWN_SKIP=1" in helper
+	assert (
+		'elif [ "$RUN_STATUS" = "completed" ] && [ "${BAIT_REVIEW_COOLDOWN_SKIP:-0}" != "1" ]; then'
+		in step
+	)
+
+
+def _bait_functions() -> str:
+	step = _step_text()
+	start = step.index("          review_run_checked_out_bait() {")
+	end = step.index("          # Give the review workflow a moment to start")
+	return textwrap.dedent(step[start:end])
+
+
+def _run_bait_harness(polls: int, cooldown_until: int) -> tuple[str, str]:
+	bash = shutil.which("bash")
+	assert bash is not None
+	harness = (
+		"set -euo pipefail\n"
+		"ELAPSED=0\n"
+		f"{textwrap.dedent(_cooldown_block())}\n"
+		f"LIVE_LOG_COOLDOWN_UNTIL={cooldown_until}\n"
+		"gh_api_safe_quiet_print() {\n"
+		'  case "$1" in\n'
+		"    */jobs\\?per_page=10) printf '%s' '{\"total_count\":1,\"jobs\":[{\"id\":7,\"status\":\"completed\",\"conclusion\":\"success\"}]}' ;;\n"
+		"    */logs) return 1 ;;\n"
+		"    *) return 1 ;;\n"
+		"  esac\n"
+		"}\n"
+		"sleep() { :; }\n"
+		"TEST_REPO=o/r BAIT_SHA=$(printf 'b%.0s' $(seq 40)) PIN_SHA=x RUN_ID=42\n"
+		"RUN_STATUS=completed JOBS_JSON='' POLL_INTERVAL=10 NOW=0 LAST_ACTIVITY=0 PREV_STATE=''\n"
+		"REVIEW_RUN='{\"head_sha\":\"old\"}'\n"
+		"BAIT_UNCOVERED_RUN_IDS=''\n"
+		"declare -A BAIT_REVIEW_COVERAGE_CACHE=()\n"
+		"declare -A BAIT_REVIEW_UNKNOWN_COUNTS=()\n"
+		f"{_bait_functions()}\n"
+		f"for _ in $(seq {polls}); do require_bait_review_coverage || true; done\n"
+		'echo "UNCOVERED=${BAIT_UNCOVERED_RUN_IDS}"\n'
+	)
+	result = subprocess.run([bash, "-c", harness], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	return result.stdout, result.stderr
+
+
+def test_bait_coverage_cooldown_skip_does_not_exclude_run() -> None:
+	if shutil.which("bash") is None or shutil.which("jq") is None:
+		return
+	# Cooldown active for all 5 polls (ELAPSED 0..40 < 1000): no strike.
+	out, _ = _run_bait_harness(5, 1000)
+	assert "reason=live_log_cooldown" in out
+	assert "UNCOVERED=\n" in out
+	# No cooldown: three real failed reads still exclude the run.
+	out, _ = _run_bait_harness(3, 0)
+	assert "reason=logs_unavailable" in out
+	assert "UNCOVERED=42\n" in out
+
+
 def test_existing_failure_line_preserved() -> None:
 	assert FAILURE_LINE in _loop_text()
 

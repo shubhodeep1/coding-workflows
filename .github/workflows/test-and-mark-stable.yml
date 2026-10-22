@@ -1955,7 +1955,8 @@ jobs:
             local coverage_run_id="$1" coverage_jobs="" coverage_job_id=""
             local coverage_log="" coverage_checked="" coverage_status="" coverage_display="none"
             local coverage_verdict="unknown" coverage_reason="jobs_unavailable"
-            local coverage_read=0 coverage_failed=0
+            local coverage_read=0 coverage_failed=0 coverage_cooldown=0
+            BAIT_REVIEW_COOLDOWN_SKIP=0
             if ! [[ "$coverage_run_id" =~ ^[0-9]+$ ]]; then
               BAIT_REVIEW_VERDICT="unknown"
               echo "E2E_BAIT_REVIEW_COVERAGE run=invalid verdict=unknown checked_out=none reason=invalid_run_id"
@@ -1973,10 +1974,12 @@ jobs:
             if [ -n "$coverage_jobs" ] && printf '%s' "$coverage_jobs" | jq -e '(.jobs | type == "array") and (.jobs | length > 0) and (.total_count == null or .total_count <= (.jobs | length))' >/dev/null 2>&1; then
               while IFS= read -r coverage_job_id; do
                 coverage_log="$(mktemp)"
-                # Live-log cooldown: a skipped fetch counts as a failed read,
-                # so the verdict stays unknown and is retried after the pause.
+                # Live-log cooldown: a skipped fetch leaves the verdict unknown
+                # (reason=live_log_cooldown) and is not a strike, so the log is
+                # read again after the pause.
                 if ! live_log_fetch_allowed; then
                   coverage_failed=1
+                  coverage_cooldown=1
                 elif ! gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${coverage_job_id}/logs" > "$coverage_log"; then
                   coverage_failed=1
                   live_log_fetch_record fail
@@ -2001,6 +2004,9 @@ jobs:
                     *) coverage_reason="compare_unavailable" ;;
                   esac
                 fi
+              elif [ "$coverage_cooldown" -eq 1 ]; then
+                coverage_reason="live_log_cooldown"
+                BAIT_REVIEW_COOLDOWN_SKIP=1
               elif [ "$coverage_failed" -eq 1 ] || [ "$coverage_read" -eq 0 ]; then
                 coverage_reason="logs_unavailable"
               elif [ "$RUN_STATUS" = "completed" ]; then
@@ -2033,7 +2039,8 @@ jobs:
               BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
               LAST_ACTIVITY=$NOW
               PREV_STATE=""
-            elif [ "$RUN_STATUS" = "completed" ]; then
+            elif [ "$RUN_STATUS" = "completed" ] && [ "${BAIT_REVIEW_COOLDOWN_SKIP:-0}" != "1" ]; then
+              # A live-log cooldown skip is not a strike: no log was read.
               # A completed run outranks the queued bait-head run in the
               # selector, so persistently unverifiable coverage must not pin
               # Phase 4 to it. Exclude it (never accept it) after 3 unknowns.
