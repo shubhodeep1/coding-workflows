@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -159,7 +160,8 @@ def _run_bait_harness(polls: int, cooldown_until: int) -> tuple[str, str]:
 
 def test_bait_coverage_cooldown_skip_does_not_exclude_run() -> None:
 	if shutil.which("bash") is None or shutil.which("jq") is None:
-		return
+		# Reported as skipped (not passed): this is the only end-to-end check.
+		raise unittest.SkipTest("bash or jq is not installed")
 	# Cooldown active for all 5 polls (ELAPSED 0..40 < 1000): no strike.
 	out, _ = _run_bait_harness(5, 1000)
 	assert "reason=live_log_cooldown" in out
@@ -279,9 +281,13 @@ def test_workflow_step_parses_as_bash() -> None:
 
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	skipped = 0
 	for test in tests:
-		test()
-	print(f"{len(tests)} passed")
+		try:
+			test()
+		except unittest.SkipTest:
+			skipped += 1
+	print(f"{len(tests) - skipped} passed, {skipped} skipped")
 	return 0
 
 
