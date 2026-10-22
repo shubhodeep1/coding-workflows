@@ -82,7 +82,8 @@ def test_drivers_stream_test_output_through_tee() -> None:
 	process = PROCESS.read_text(encoding="utf-8")
 	assert 'run_test_without_credentials "${test_script}" 2>&1 | tee "${test_log}"' in process
 	assert "test_rc=${PIPESTATUS[0]}" in process
-	assert 'if is_synthesised_test "${test_script}"; then\n    cat "${test_log}" || true\n  fi' in process
+	assert 'test_script_is_synthesised=1' in process
+	assert 'if [ "${test_script_is_synthesised}" -eq 1 ]; then\n    cat "${test_log}" || true\n  fi' in process
 
 
 @pytest.mark.parametrize("source", [DRIVER, PROCESS], ids=["validate_driver", "runtime_driver_heredoc"])

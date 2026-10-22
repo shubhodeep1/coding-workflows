@@ -1632,7 +1632,9 @@ for test_script in "${test_scripts[@]}"; do
   test_log="${LOG_DIR}/${test_name}.log"
 
   echo "=== RUN ${test_name} ==="
+  test_script_is_synthesised=0
   if is_synthesised_test "${test_script}"; then
+    test_script_is_synthesised=1
     # Model-written synthesised tests run only in validate_driver.sh's
     # credential-free, network-less sandbox; this fallback runner has none,
     # so they are reported as skipped, never run on the host (finding
@@ -1662,7 +1664,9 @@ for test_script in "${test_scripts[@]}"; do
     set -e
   fi
 
-  if is_synthesised_test "${test_script}"; then
+  # Decided once above: a test that deletes or rewrites itself must not
+  # flip which branch prints its log.
+  if [ "${test_script_is_synthesised}" -eq 1 ]; then
     cat "${test_log}" || true
   fi
 
