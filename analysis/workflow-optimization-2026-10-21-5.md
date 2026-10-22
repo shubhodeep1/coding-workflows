@@ -638,3 +638,128 @@ No `TODO`/`FIXME`/`HACK`/`XXX` markers exist in `scripts/*.sh`, `scripts/*.py` o
 | Code modularization | `.github/workflows/review_autofix.yml`, `clarify.yml`, `workflow-failure-heal-intake.yml`, `orchestrate_poll.yml`, `validation-improvements-intake.yml`, `workflow-log-analysis.yml`, new `scripts/wla_semble_prefetch.sh` | Medium |
 | Expression size reduction | `.github/workflows/orchestrate_poll.yml`, `.github/workflows/review_autofix.yml`, `.github/workflows/test-and-mark-stable.yml` (if over 430 KB) | Small |
 | Medium/Low fixes | `scripts/workflow_failure_heal_pr_reconcile.sh`, `.github/workflows/internal-cancel-on-pr-close.yml`, `.github/workflows/workflow-log-analysis.yml`, `scripts/git_ref_health_check.sh`, `scripts/cost_audit.py`, `scripts/collect_workflow_logs.py`, `scripts/review_autofix_step_iteration_summary.sh`, `scripts/review_run_reviewers.sh`, `scripts/workflow_failure_heal_intake.sh`, `scripts/gh_helpers.sh`, `agents.d/` fragment | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-22)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means every merge precondition was confirmed by reading the code: same endpoint or a strict field subset, same pagination, filters and auth, same function or step, no mutation in between, unchanged error and retry handling, no concurrency boundary crossed, and any cache contract kept. The implement stage may act on these without further review. `NEEDS_VERIFICATION` means the change looks correct, but at least one precondition could not be proven from static reading; the listed checks must pass before anyone implements it. `RISKY_SKIP` means a hard trigger applies (retry or poll loop, pagination, stall-recovery or race-defense path, auth or identity flow, or a change to log keys). These are listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001 — The review-blocked judge reads `GET /pulls/{n}` and then runs a GraphQL query that returns the same base ref** — `RISKY_SKIP`
+- **Files and lines:**
+  - `scripts/review_rb_judge.sh:1071-1073` (REST PR read)
+  - `scripts/review_rb_judge.sh:1114-1122` (GraphQL linked issues plus `baseRefName`)
+  - `scripts/review_rb_judge.sh:1139` (title/body fallback)
+  - Later re-reads: `:1927`, `:2228` (inside the mergeable poll loop), `:2345`, `:2762` (a second poll loop)
+- **Endpoints:** `GET /repos/{owner}/{repo}/pulls/{n}`; `POST /graphql` (`pullRequest{baseRefName closingIssuesReferences{…}}`)
+- **Current call count:** 2 at judge entry (1071 + 1114). On the merge path, add 1 (1927) and 1–6 (the 2228 loop, `PR_MERGEABLE_POLL_ATTEMPTS` default 6).
+- **Proposed call count:** 1 at entry, by folding `state`, `merged`, `isDraft`, `title`, `body` and `headRefOid` into the 1114 GraphQL query. Every later re-read stays as it is.
+- **Evidence:** the base ref is fetched twice. The GraphQL call selects `baseRefName`, and its fallback reads the REST payload already in memory:
+  ```bash
+  _pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+  ...
+  PR_BASE_REF="$(printf '%s' "${RB_LINKED_ISSUES_GRAPHQL_JSON}" | jq -r '.data.repository.pullRequest.baseRefName // ""' 2>/dev/null || true)"
+  if [ -z "${PR_BASE_REF}" ]; then
+  	PR_BASE_REF="$(printf '%s\n' "${_pr_meta}" | jq -r '.base.ref // ""' 2>/dev/null || true)"
+  ```
+- **Proposed fix (not authorized):** extend the 1118 query with the PR scalar fields and derive `_pr_state`, `_pr_merged` and `_pr_draft` from it. Keep the REST read only as a fallback when the GraphQL call fails.
+- **Safety rationale:** this is a stall-recovery judge. The two calls fail differently: REST `_safe_gh_jq` falls back to `'{}'`, GraphQL to `|| true`. `_pr_meta` gates the `RB_JUDGE_DRAFT_SKIP` log key (1099). The later re-reads (1927, 2228, 2762) defend against merges and pushes that land during the LLM judge call.
+- **Downstream signal:** do not auto-implement. A human must confirm that collapsing the REST and GraphQL failure modes cannot turn a REST-only outage into a silent "not draft / open" decision. The draft-skip and merge-guard tests must also be updated alongside the change.
+
+**MERGE-002 — codex-agent reads the PR's issue comments up to three more times after `Collect PR metadata` cached them** — `RISKY_SKIP`
+- **Files and lines:**
+  - `scripts/review_collect_pr_metadata.sh:235-236` (paginated, written to `PR_ISSUE_COMMENTS_FILE`)
+  - `scripts/review_rb_judge_security_pass.sh:210-212` (`--paginate --slurp`)
+  - `scripts/pr_checks_lib.sh:997-999` (`_pr_base_sync_count`, reached from `_pr_base_fresh_for_merge` at `:1147` on the overlap path)
+  - Gate job's clipped copy: `scripts/review_autofix_step_evaluate_gate.sh:343-347`
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{n}/comments?per_page=100` (paginated)
+- **Current call count:** P pages at metadata collection, plus P in the RB security hold, plus P per overlap-path freshness check. Up to 2 freshness checks per merge attempt: `review_autofix.yml:1356/1367`, `review_rb_judge.sh:2258/2271`.
+- **Proposed call count:** unchanged (recommended). The theoretical minimum is P, reusing `PR_ISSUE_COMMENTS_FILE`.
+- **Evidence:** the precedent for reuse already exists. The single-issue security gate reads the cached file instead of calling the API (`review_single_issue_security_pass.sh:320`: `local pr_json="${PR_PAYLOAD_FILE:-}" comments="${PR_ISSUE_COMMENTS_FILE:-}"`). The other two readers fetch live, and `pr_checks_lib.sh:987-990` documents that choice.
+- **Safety rationale:** every re-read is paginated. Each looks for markers that may have been posted after the 235 snapshot: `ai:single-issue-security-pass-blocked:v1` and `ai:merge-base-sync:v1`, the latter written by the update-branch path in the same run. These are race-defense reads.
+- **Downstream signal:** do not auto-implement. Reuse would need an append-on-POST cache layer that every comment writer in the job invalidates. That design needs manual review of every comment-posting step between 2655 and 4413.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001 — Heal intake reads `/user` again for `HEAL_TRUSTED_AUTHOR` after `PROVENANCE_LOGIN` already holds the same identity** — `NEEDS_VERIFICATION`
+- **Files and lines:**
+  - `scripts/workflow_failure_heal_intake.sh:952-955` (first `/user` read)
+  - `scripts/workflow_failure_heal_intake.sh:1427-1434` (second read)
+  - Existing reuse precedent: `scripts/workflow_failure_heal_intake.sh:1593-1598`
+- **Endpoint:** `GET /user`
+- **Current call count:** 2 per `autofix_failure` intake with a numeric `SOURCE_GEN`. For `phase_failure` the second read is already skipped, because `PHASE_COMMENT_AUTHOR="${PROVENANCE_LOGIN}"` at 1267.
+- **Proposed call count:** 1.
+- **Evidence:** both reads are at script top level, use the same `GH_TOKEN` (the only `GH_TOKEN` unsets are in sub-process `env -u` at 2114/2122), and have no mutation between them. Scope recovery already does this reuse:
+  ```bash
+  recovery_login="${PROVENANCE_LOGIN:-}"
+  [ -n "${recovery_login}" ] || recovery_login="${HEAL_TRUSTED_AUTHOR:-}"
+  ```
+  The 1431-1432 comment ("the only other /user read is for self-repo phase reports") is wrong: line 953 also reads `/user` for `autofix_failure`.
+- **Proposed fix:** before the live read at 1433, add `[ -n "${HEAL_TRUSTED_AUTHOR}" ] || HEAL_TRUSTED_AUTHOR="${PROVENANCE_LOGIN:-}"`. Keep the live `gh_retry gh api --method GET user` as the fallback when the variable is still empty, and correct the comment.
+- **Safety rationale:** endpoint, auth and scope match, and the fail-open fallback is kept. It is not `SAFE_TO_MERGE` for two reasons. The two reads use different jq filters (`--jq .login` at 954 versus `.login // empty` at 1433), so error or null output could differ. And the value feeds a trusted-author budget gate (`--trusted-author`, 1443).
+- **Downstream signal:** verify three things before implementing:
+  1. A `/user` failure under `gh_retry` at 954 can never leave `PROVENANCE_LOGIN` set to a non-login string such as `null` or an error body. If it can, normalise it with `.login // empty` first.
+  2. `SOURCE_GEN` can be numeric when `SOURCE_KIND=autofix_failure`.
+  3. The heal-intake tests that stub `user` still pass with one fewer stub hit.
+
+**REUSE-002 — Up to 5 `GET /user` reads in review jobs although the gate already exports the token's login** — `NEEDS_VERIFICATION`
+- **Files and lines:**
+  - Producer: `scripts/review_autofix_step_evaluate_gate.sh:334` → `:1371` (`fingerprint_cap_marker_author_login`) → `.github/workflows/review_autofix.yml:328` (job output)
+  - Existing consumers of that output: `review_autofix.yml:1521` (fingerprint-cap-block) and `review_autofix.yml:5686` (`AUTOFIX_STREAK_AUTHOR_LOGIN`)
+  - Live re-reads:
+    - `scripts/review_merge_train.sh:792` (gate step at `review_autofix.yml:3250`)
+    - `scripts/review_conflict_prepare.sh:1122/1124` (integration-sync only)
+    - `scripts/review_single_issue_security_pass.sh:370` (gate mode, step `review_autofix.yml:4172`)
+    - `scripts/review_rb_judge_security_pass.sh:210`
+    - `scripts/pr_checks_lib.sh:997` (per overlap-path freshness check; also sourced by deterministic-skip-merge at `review_autofix.yml:1220`)
+- **Endpoint:** `GET /user`
+- **Current call count:** 1 in the gate, plus 0–5 or more in codex-agent and deterministic-skip-merge, depending on which features fire.
+- **Proposed call count:** 1 (the gate's read) whenever the gate output is non-empty. Each consumer keeps its live read as the fallback.
+- **Evidence:** the comments behind these live reads are out of date:
+  ```bash
+  # The gate job also probes /user, but its identity is not exported to this job.
+  SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+  ```
+  `pr_checks_lib.sh:989-990` makes the same claim ("the review gate's own comments read happens in another job and cannot be shared"). Lines 328 and 5686 show the login *is* exported and already used in codex-agent.
+- **Proposed fix:** expose `needs.gate.outputs.fingerprint_cap_marker_author_login` to the consuming steps under a new, collision-checked env name (§10). In each script, prefer that env value when it matches the existing login regex (`^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$`), and otherwise fall back to the current live read. Do not change `_mt_resolve_automation_login`'s caller contract.
+- **Safety rationale:** this crosses the gate → codex-agent job boundary (sequential `needs`, not parallel). The gate fills the login only when `gate_fetch_marker_comments` actually ran (call sites at 411, 621, 657, 841, 1218 and 1294 are all conditional). Token sources differ: the gate uses `secrets.GH_PAT` (616), while the security pass uses `secrets.GH_PAT || github.token` (4187). The value also authenticates trusted markers, which makes it a trust-boundary input.
+- **Downstream signal:** verify three things:
+  1. With `GH_PAT` unset, the gate output is empty, so every consumer keeps its live read and `SECURITY_PASS_AUTHOR_LOGIN_FALLBACK` path.
+  2. No consumer runs under a token other than `secrets.GH_PAT` when the gate output is non-empty. Check the `GH_TOKEN` of the steps at 3250, 3910/3951, 4172 and 4324, and of the deterministic-skip-merge step at 1140.
+  3. `pr_checks_lib.sh` keeps its live read for non-review callers.
+
+**REUSE-003 — `_pr_base_fresh_for_merge` re-reads the paginated `pulls/{n}/files` list after a required-checks wait on the same bound head** — `RISKY_SKIP`
+- **Files and lines:**
+  - Call pairs: `review_autofix.yml:1356` and `1367`; `review_autofix.yml:1319` and `1330`; `scripts/review_rb_judge.sh:2258` and `2271`
+  - Each goes through `scripts/pr_checks_lib.sh:1139` → `_pr_base_freshness` → `:884`
+  - The same list is also read at `scripts/review_autofix_step_evaluate_gate.sh:718` (gate job) and `scripts/review_rb_judge.sh:3288`
+- **Endpoints:** `GET /repos/{owner}/{repo}/pulls/{n}/files?per_page=100` (paginated); `GET /compare/{head}...{base}` (must stay live)
+- **Current call count:** 2 × P pages per merge attempt when the base moved (the second only when `PR_CHECKS_WAIT_WAITED_S > 0` and `0 < ahead_by`, with fewer than 300 base files).
+- **Proposed call count:** P, by caching keyed on `head_sha`. The compare call is still re-read.
+- **Evidence:** both calls receive the same `head_sha` (`PR_HEAD_SHA` or `RB_JUDGED_HEAD_SHA`), and the merge is bound with `--match-head-commit`, so the PR-side path list is expected to be the same.
+- **Safety rationale:** the call is paginated (`--paginate --slurp`, plus a 3,000-file cap check at 907). It sits on a merge race-defense path that deliberately re-validates after a wait of up to 45 minutes. A base retarget during the wait can change the PR-side diff.
+- **Downstream signal:** do not auto-implement. A human needs to confirm whether a retarget (`retarget_merged_base.sh`) during the wait can change `pulls/{n}/files` for an unchanged head, and must review the page-boundary and cap semantics before introducing any per-head cache.
+
+### Dead Calls (DEAD-API-###)
+No findings. Checked and rejected:
+- `review_autofix_step_mark_ready_to_merge.sh:62`, `review_autofix_step_mark_review_blocked_workflow_failure.sh:43` and `review_autofix.yml:4485`: live PR-text reads that fire only when `PR_META_FILE` is blank or missing. They are guarded fallbacks, not dead code.
+- `workflow_failure_heal_intake.sh:2237`: branch-existence probe whose exit code is consumed.
+- `workflow_failure_heal_intake.sh:1141-1145` and `1164-1167`: already reuse the provenance and bind snapshots.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — confirmed `_is_gh_permanent_failure` (`gh_helpers.sh:194`) has no `already exists` pattern. Adding one changes retry classification for every `gh_retry` caller. In the inline variant, `gh label create --force` would overwrite a label's color and description, which is an observable change. Keep it pending the stderr capture that `-21-3.md` asked for.
+- API-002: NEEDS_VERIFICATION — new detail: between the probe (`review_autofix.yml:2240`) and `review_collect_pr_metadata.sh:231` run OS-dependency install (2366), workspace cache restore (2440) and the Semble install and index build (2500-2575, ~34s per bootstrap). A 120s freshness bound will often miss. The probe is a defense-in-depth liveness check and must stay live, so only collect-metadata may reuse it, never the reverse. The gate's `pr_labels` (`evaluate_gate.sh:110`) is not exported and would not save a call anyway, because state still needs the live read.
+- BATCH-001: NEEDS_VERIFICATION — agree with leaving it unchanged. `set_issue_phase_label_resilient` also strips stale phase labels, which a GraphQL `addLabelsToLabelable` batch does not. Confirm from logs that N ≥ 3 before considering it.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 3 | MERGE-001, MERGE-002, REUSE-003 |
+
+The counts cover only findings new in this pass. The Deep Audit IDs are tagged in the cross-reference list above: API-001 RISKY_SKIP, API-002 NEEDS_VERIFICATION, BATCH-001 NEEDS_VERIFICATION.
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
