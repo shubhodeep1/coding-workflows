@@ -541,3 +541,228 @@ Correction: the Low row lists 22 IDs, so the count should read 22, not 21 (37 fi
 | Code modularization | 9 reusable workflows (DUP-001), `scripts/gh_helpers.sh`, `scripts/emit_event.sh`, `scripts/review_merge_train.sh`, `.github/workflows/review_autofix_sweep.yml`, `scripts/review_autofix_step_evaluate_gate.sh`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/implement.yml`, plus ~49 files carrying fallback stubs | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, new `scripts/release_gate_*.sh`, `tests/test_workflow_file_size_limit.py` | Medium |
 | Medium/Low fixes | `scripts/dispatch_and_watch_workflow_run.sh`, `scripts/promote_candidate_follow.sh`, `.github/workflows/internal-cancel-on-pr-close.yml`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/sync_ai_labels.yml`, `.github/workflows/pr6576-shard-followup.yml`, `scripts/review_apply_fixes.sh`, `scripts/orchestrate_poll_process.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-22)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the merged calls hit the same endpoint with identical parameters, in the same function or step, under an identical guard and with no mutation between them. They also share retry and error handling, and the merge crosses no concurrency boundary, so the implement stage may apply the one-line directive as written. `NEEDS_VERIFICATION` means the merge looks correct but at least one of those conditions cannot be proven by reading the code. The listed verification steps must pass before anyone implements it. `RISKY_SKIP` findings are listed so they stay visible. They touch a retry, polling or race-defence path, pagination, a fail-closed safety read, `orchestrate_poll_process.sh`, or log keys that other tooling counts. They must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** · `NEEDS_VERIFICATION`
+- **Files/lines:** `.github/workflows/test-and-mark-stable.yml:891-892` and `:917-918`, in the step "Phase 1: Wait for clarify to complete" (`id: wait-clarify`, lines 800-937). The consolidated pattern already exists in Phase 2 at `:1086-1089`.
+- **Current calls:** 3 per poll iteration (issue, comments, comments), every `POLL_INTERVAL: 10` seconds (`:584`). **Proposed calls:** 2 per iteration.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{n}/comments`, called twice in the same iteration. The second call is `GET /repos/{owner}/{repo}/issues/{n}`, which stays.
+- **Evidence:** both calls run in the same loop iteration, and the step writes nothing in between.
+  ```bash
+  COMMENT_COUNT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+    --jq 'length' || echo "0")
+  ...
+  LAST_BOT_COMMENT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=5&direction=desc" \
+    --jq '[.[] | select(.user.login == "github-actions[bot]")] | .[0].body // ""' || echo "")
+  ```
+  Phase 2 already reads comments once and derives several fields from that one response:
+  ```bash
+  COMMENTS_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100&direction=desc" || echo "[]")
+  COMMENT_COUNT=$(echo "${COMMENTS_JSON}" | jq 'length' 2>/dev/null || echo "0")
+  ```
+- **Proposed fix:** in `wait-clarify`, replace the reads at lines 891 and 917 with one `COMMENTS_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100&direction=desc" || echo "[]")`. Then derive `COMMENT_COUNT` from it with `jq 'length'`, and `LAST_BOT_COMMENT` with the existing bot-comment filter applied to the same JSON.
+- **Safety rationale:** the two calls use different parameters (`per_page` defaults to 30 against `per_page=5&direction=desc`), so the SAFE_TO_MERGE condition of identical pagination fails. `COMMENT_COUNT` currently cannot go above 30. `LAST_BOT_COMMENT`'s `.[0]` would read a 100-item window instead of a 5-item window, which can change whether the `clarification_needed` exit at `:919-924` fires.
+- **Downstream signal (verification):**
+  1. Confirm whether `direction=desc` is honoured by `GET /repos/{o}/{r}/issues/{n}/comments`. This decides whether `.[0]` is the newest or the oldest bot comment, both today and after the merge. Adjust the filter (`last` vs `.[0]`) so the merged read selects the same comment the 5-item read selects today.
+  2. Confirm that letting `COMMENT_COUNT` go above 30 only affects the `CUR_STATE` activity signal (`:894`), which Phase 2 already accepts.
+
+**MERGE-002** · `NEEDS_VERIFICATION`
+- **Files/lines:** `.github/workflows/test-and-mark-stable.yml:1409-1410` (open PR by head), `:1429-1430` (issue labels) and `:1451-1452` (branch head commit), in step "Phase 3b: Wait for PR creation" (lines 1261-1551).
+- **Current calls:** 5 per 10 s iteration: those three reads plus `:1433` `actions/runs` and the conditional `:1446` `runs/{id}/jobs`. Over a roughly 15-minute implement phase (implement p95 934 s in the report) that is about 90 iterations, so about 450 calls. **Proposed calls:** 3 per iteration (1 GraphQL + `:1433` + `:1446`), about 180 fewer calls per gate run.
+- **Endpoints:**
+  - `GET /repos/{o}/{r}/pulls?state=open&head={owner}:ai/issue-{n}&per_page=1`
+  - `GET /repos/{o}/{r}/issues/{n}`
+  - `GET /repos/{o}/{r}/commits?sha=ai/issue-{n}&per_page=1`
+  - proposed replacement: `POST /graphql`
+- **Evidence:** the three reads cover one issue and its conventional branch, in the same iteration, with no writes between them.
+  ```bash
+  PR_NUMBER=$(gh_api_safe_print "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
+  LABELS=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+  COMMIT_COUNT=$(gh_api_safe_print "repos/${TEST_REPO}/commits?sha=${IMPL_BRANCH}&per_page=1" \
+    --jq '.[0].sha // ""' || echo "")
+  ```
+  `COMMIT_COUNT` is actually the head SHA. All three fit in one query:
+  `repository{issue(number:N){labels(first:100){nodes{name}}} ref(qualifiedName:"refs/heads/ai/issue-N"){target{oid} associatedPullRequests(states:OPEN,first:1){nodes{number}}}}`.
+- **Proposed fix:** add one aliased GraphQL read at the top of the Phase 3b loop, following the alias pattern of `_fetch_linked_pr_status_graphql` in `scripts/orchestrate_poll_process.sh`, and derive `PR_NUMBER`, `LABELS` and `COMMIT_COUNT` from it. Keep `:1498` `PR_RECHECK` as it is: it is a deliberate re-read after `sleep`.
+- **Safety rationale:** error handling changes. `gh_api_safe_call_is_read` (`scripts/comprehensive_test_and_release_gh_api.sh:46-48`) classifies any call with `-f` as a write, so `gh api graphql -f query=…` loses the 5xx/transient retries (`:137-149`) that the three REST GETs get today. `PR_NUMBER` is also the step's success exit (`:1418-1425`).
+- **Downstream signal (verification):**
+  1. Confirm that `Ref.associatedPullRequests(states:OPEN)` returns the same PR as `pulls?head=owner:branch&state=open`.
+  2. Decide how a missing ref maps. GraphQL returns `ref: null`. Today `commits?sha=<missing>` fails, and through non-quiet `gh_api_safe_print` it leaves `::error::` text in `COMMIT_COUNT` (the BUG-001 family). The `CUR_STATE` change detection at `:1454-1464` must be re-checked against the new values.
+  3. Either add a GraphQL-safe read path to `gh_api_safe`, or accept losing transient retries.
+  4. Confirm that the test issue never has more than 100 labels.
+
+**MERGE-003** · `NEEDS_VERIFICATION`
+- **Files/lines:** `.github/workflows/test-and-mark-stable.yml:5930-5931` (issue labels) and `:5943-5944` (comments), in job `clarify-rejects-unsolvable-test` (starts `:5831`). The loop sleeps 15 s (`:5988`).
+- **Current calls:** 2 per iteration. **Proposed calls:** 1 GraphQL per iteration.
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}` and `GET /repos/{o}/{r}/issues/{n}/comments?per_page=20`, to be replaced by `POST /graphql`.
+- **Evidence:**
+  ```bash
+  LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
+    --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+  ...
+  BODY=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=20" \
+    --jq '[.[] | select(.user.type == "Bot" or (.user.login | endswith("[bot]"))) | .body] | join("\n")' 2>/dev/null || echo "")
+  ```
+  Both calls are raw `gh api … || echo ""` with no retry, so moving them to GraphQL does not lose any retry behaviour (unlike MERGE-002).
+- **Proposed fix:** use one `issue(number:N){labels(first:100){nodes{name}} comments(first:20){nodes{author{__typename login} body}}}` read, and derive `LABELS` and `BODY` from it.
+- **Safety rationale:** the bot filter cannot be carried over byte-for-byte. GraphQL `author.login` for the Actions bot is `github-actions`, without the `[bot]` suffix, so `endswith("[bot]")` must become `author.__typename == "Bot"`. That is an exact-semantics question static reading cannot settle.
+- **Downstream signal (verification):**
+  1. Check a captured response to confirm that `comments(first:20)` returns the same window, in the same oldest-first order, as REST `per_page=20`.
+  2. Confirm that `__typename == "Bot"` matches exactly the set the REST `user.type == "Bot" or login endswith "[bot]"` filter matches today.
+
+**MERGE-004** · `RISKY_SKIP`
+- **Files/lines:** `.github/workflows/test-and-mark-stable.yml:1605-1614` (the `HEAD_A`/`HEAD_B` stability loop) and `:1635-1637` (`PR_META`), in the bait-injection step.
+- **Current calls:** at least 3 `GET pulls/{n}` (2 per stability attempt + 1). **Proposed calls:** 2 (reuse the final `HEAD_B` response as `PR_META`).
+- **Endpoint:** `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** `PR_META=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" …)` runs right after the loop's last `HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' …)`, with no sleep in between. A full-JSON `HEAD_B` read could supply `.state`, `.merged`, `.merged_at` and `.closed_at`.
+- **Proposed fix (manual only):** store the full `HEAD_B` JSON, derive `HEAD_B` from it, and use it as `PR_META` when the loop exits on a stable head.
+- **Safety rationale:** the call sits inside a 5-attempt retry loop whose purpose is race protection against the implement push ("Race protection … Verify the PR head SHA is stable across two reads ≥3s apart", `:1597-1604`). Both are mandatory `RISKY_SKIP` triggers.
+- **Downstream signal (risky skip):** do not auto-implement. A human must confirm that the closed/merged guard at `:1638` may use data captured inside the stability loop rather than a separate read. The saving is 1 call per gate run.
+
+**MERGE-005** · `RISKY_SKIP`
+- **Files/lines:** `scripts/promote_candidate_follow.sh:148` (`branches/promote-candidate`), `:168` (`git/ref/tags/promote-cycle-frozen`) and `:181` (`git/ref/heads/main`). The per-run budget is documented in the header at `:22-25`.
+- **Current calls:** 3 reads per run (plus 1 when the tag is annotated). **Proposed calls:** 1 GraphQL (`repository{a:ref(qualifiedName:"refs/heads/promote-candidate"){target{oid}} b:ref(qualifiedName:"refs/tags/promote-cycle-frozen"){target{__typename oid}} c:ref(qualifiedName:"refs/heads/main"){target{oid}}}`).
+- **Endpoints:** `GET /repos/{o}/{r}/branches/{b}` and `GET /repos/{o}/{r}/git/ref/{ref}` (×2), to be replaced by `POST /graphql`.
+- **Evidence:** all three reads run back to back in step 1 (`:145-184`) with no write between them. The report already observes 27 runs/day, each with one expected 404 on the tag read.
+- **Proposed fix (manual only):** as above. `protected` (`:158-162`) has no direct GraphQL equivalent, so the branch REST read may still be needed.
+- **Safety rationale:**
+  - The tag read is fail-closed by design: "Fail closed: an unreadable tag could be a frozen cycle" (`:173-174`).
+  - It is the TOCTOU-sensitive read in BUG-004.
+  - Its 404 handling depends on `GH_API_RETRY_LAST_STATUS` (`:116-119`).
+  - Dropping the REST reads would remove the `GH_API_RETRY outcome=permanent` lines that the log-analysis report counts ("GH API summary").
+  - Each of these is a `RISKY_SKIP` trigger.
+- **Downstream signal (risky skip):** do not auto-implement. Changing this needs a manual review of how the freeze gate behaves when GraphQL returns `null` instead of 404, plus coordination with the log-analysis collector that counts `GH_API_RETRY outcome=permanent`.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** · `SAFE_TO_MERGE`
+- **Files/lines:** `.github/workflows/test-and-mark-stable.yml:2420` and `:2463-2464`, in step "Phase 4: Wait for review & autofix" (wait-review loop, lines 1821-2552).
+- **Current calls:** 2 `GET runs/{id}/jobs?per_page=10` per iteration whenever the branch is taken. **Proposed calls:** 1.
+- **Endpoint:** `GET /repos/{o}/{r}/actions/runs/{run_id}/jobs?per_page=10`, the same URL in both places.
+- **Evidence:** both calls sit behind identical guards: `[ "$RUN_ID" != "unknown" ]` (`:2412` and `:2458`) and the else branch of `[ -n "${JOBS_JSON:-}" ]` (`:2413` and `:2460`). Neither `RUN_ID` nor `JOBS_JSON` is reassigned between them; lines 2430-2457 only read the PR head and PR comments.
+  ```bash
+  JOBS_STEP_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
+  ...
+  JOB_ID_FOR_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
+    --jq '([.jobs[] | select(.name | test("(^| / )codex-agent( \\([^)]*\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' || echo "")
+  ```
+  The `JOBS_JSON` branch at `:2461` already applies this exact filter to a cached response, with local `jq`. Line 2231 carries the comment "Fetch jobs once and reuse for failed-steps check, current step, and log size". The second read breaks that stated intent.
+- **Proposed fix:** at `:2463-2464`, replace the API call with `JOB_ID_FOR_SIZE=$(echo "$JOBS_STEP_JSON" | jq -r '<filter copied verbatim from :2461>' 2>/dev/null || echo "")`.
+- **Safety rationale:** the SAFE_TO_MERGE conditions all hold:
+  - same endpoint, query string and helper (`gh_api_safe_quiet_print`, so the same retry and quiet behaviour);
+  - same step and iteration, with byte-identical guards and no intervening mutation;
+  - a failure gives `""` in both forms, so `JOB_ID_FOR_SIZE=""` and `LOG_SIZE=0` either way;
+  - no parallel job reads these variables;
+  - `JOBS_STEP_JSON` is always assigned in any iteration where `:2463` would run.
+- **Downstream signal (directive):** in `test-and-mark-stable.yml` wait-review, reuse `$JOBS_STEP_JSON` (fetched at `:2420`) at `:2463-2464` with the `:2461` jq filter, and change nothing else. In particular, do not add a per-iteration reset of `JOBS_JSON` in the same change. It is assigned only at `:2231` and never cleared, which is a separate stale-data behaviour for the Deep Audit to judge.
+
+**REUSE-002** · `NEEDS_VERIFICATION`
+- **Files/lines:** `.github/workflows/review_autofix_sweep.yml:285-290` (default-branch read) and `:228-237` (paginated open-PR listing). The value is used at `:350` and `:378-379`. The cron is `*/30 * * * *` (`:80`).
+- **Current calls:** 1 `GET /repos/{o}/{r}` per tick with at least one candidate (up to 48/day). **Proposed calls:** 0.
+- **Endpoints:** `GET /repos/{o}/{r}`, which is redundant with `GET /repos/{o}/{r}/pulls?state=open` (paginated).
+- **Evidence:** REST pull-request list items include `base.repo`, which is the full repository object and carries `default_branch`. The sweep's jq projection discards it:
+  ```bash
+  | jq -s '(add // []) | map(select(.draft == false) | {
+    number,
+    head_ref: .head.ref,
+  ```
+  Then it immediately re-reads the same value:
+  ```bash
+  sweep_default_branch="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}" --jq .default_branch 2>/dev/null || true)"
+  ```
+  Both calls use the same token (`READ_TOKEN`). The read is only reached when `total > 0` (`:273-276`), so at least one listed PR is always there to supply the field.
+- **Proposed fix:** add `default_branch: (.base.repo.default_branch // "")` to the projection at `:230-237`. Set `sweep_default_branch` from the first element, keep the existing regex and `null` validation at `:286` with its fail-closed `AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable` exit, and delete the `:285` call.
+- **Safety rationale:** the value is a provenance gate (#6629, `:278-284`) whose comment says "no fallback: a failed read skips every dispatch". The target call is paginated, though this change does not touch its pages. Whether `base.repo.default_branch` is present in every list item cannot be proven by reading the code.
+- **Downstream signal (verification):**
+  1. Capture one `pulls?state=open` response and confirm that `base.repo.default_branch` is populated and equal to `repos/{repo}.default_branch`.
+  2. Confirm that `tests/` fixtures for the sweep include `base.repo`, and add it where they don't.
+  3. Keep the fail-closed exit unchanged.
+
+**REUSE-003** · `NEEDS_VERIFICATION`
+- **Files/lines:** `.github/actions/run-soft-error-analyzer/action.yml:105` (`FINAL_STATUS` re-read) against the poll read at `:92`. This adds to Deep Audit API-006.
+- **Current calls:** 1 extra `GET actions/runs/{id}` per phase whose wait deadline expires. **Proposed calls:** 0 extra.
+- **Endpoint:** `GET /repos/{o}/{r}/actions/runs/{id}`.
+- **Evidence:** the in-loop `STATUS` read at `:92` (raw `gh api … 2>/dev/null || echo ""`) is at most about 5 s old when the deadline check at `:104` runs. `FINAL_STATUS` re-reads the same endpoint, with the same raw no-retry form, only to choose whether to print the `::warning::` at `:107`. A grep shows that warning text appears only in this file.
+- **Proposed fix:**
+  - set `STATUS=""` before the inner loop at `:91`;
+  - replace `:105` with `FINAL_STATUS="${STATUS:-unknown}"`.
+- **Safety rationale:** without the reset, `STATUS` is unset under `set -u` when `WAIT_SECS=0`, and it would carry over from the previous phase. Run status changes over time (the inner loop sleeps 5 s), so the reused value can be up to one poll interval older. That breaks the "no state change between calls" condition.
+- **Downstream signal (verification):**
+  1. Confirm that no caller depends on the warning being suppressed when a run completes in the final ≤5 s window.
+  2. Confirm that no caller passes `wait_for_completion_secs: 0`, or that the `STATUS=""` reset is included.
+  3. If API-006's `known_completed` input lands first, re-evaluate: this call may then be unreachable on most paths.
+
+**REUSE-004** · `NEEDS_VERIFICATION`
+- **Files/lines:** `.github/workflows/test-and-mark-stable.yml:2209` (`PIN_HEAD_NOW`, on the cancelled-run branch) and `:2443-2444` (`PR_HEAD_SHA`), in the Phase 4 wait-review loop.
+- **Current calls:** 2 `GET pulls/{n}` in an iteration where the review run concluded `cancelled` and the head did not advance. **Proposed calls:** 1.
+- **Endpoint:** `GET /repos/{o}/{r}/pulls/{n}`, both with `--jq '.head.sha // ""'` via `gh_api_safe_quiet_print`.
+- **Evidence:** when `PIN_HEAD_NOW` equals `PIN_SHA`, the `continue` at `:2221` is skipped. Control then falls through the closing `fi`s at `:2222-2224` to `:2443` in the same iteration, which re-reads the same field.
+- **Proposed fix:** add an iteration-scoped flag (for example `PIN_HEAD_NOW_ITER=""`, reset at the top of the loop next to `:2171-2174`). Set it at `:2209`, and use it at `:2443` when it is non-empty.
+- **Safety rationale:** `PIN_HEAD_NOW` is never reset between iterations, so a naive reuse would feed a stale head into `CUR_STATE`. Making it safe needs a new reset point, which static reading cannot prove harmless to the pin-advance logic.
+- **Downstream signal (verification):**
+  1. Confirm that the new reset does not change the `:2210-2213` 40-hex validation exit.
+  2. Confirm that `PR_HEAD_SHA` is only an activity signal on this path.
+  3. Expected impact is low, because the path is rare (a cancel with no head advance).
+
+**REUSE-005** · `RISKY_SKIP`
+- **Files/lines:** `scripts/orchestrate_poll_process.sh:4741-4757` (`_subissue_closing_pr_number`, tier 2). The timeline enrichment it ignores is at `scripts/gh_helpers.sh:1814-1821`.
+- **Current calls:** 1 timeline read plus 1 `GET pulls/{n}` per cross-referenced PR, including PRs that are not merged. **Proposed calls:** 1 timeline read plus 1 `GET pulls/{n}` per *merged* cross-referenced PR.
+- **Endpoints:** GraphQL `issue.timelineItems`, plus `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** `_issue_cross_ref_pr_numbers_unique` (`:4451-4466`) projects the timeline down to PR numbers only. The loop then fetches every PR and skips the ones not merged:
+  ```bash
+  pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}" 2>/dev/null)" || return 0
+  printf '%s' "${pr_json}" | jq -e '(.merged_at // null) != null' >/dev/null 2>&1 || continue
+  ```
+  The GraphQL timeline already carries `merged`/`merged_at` for each source PR.
+- **Proposed fix (manual only):** add a sibling helper that returns `{number, merged}` from the timeline JSON, and pre-filter to merged PRs before the per-PR body fetch. Do not change `_issue_cross_ref_pr_numbers_unique`'s output: it has callers at `:4543`, `:4742`, `:9262`, `:19056` and `:25477`.
+- **Safety rationale:** the code is inside `orchestrate_poll_process.sh`, which is a mandatory `RISKY_SKIP` trigger. The REST timeline fallback may report `lookup_failed` without a reliable merged flag. The `|| return 0` on fetch failure is load-bearing, because it skips fingerprint capture.
+- **Downstream signal (risky skip):** do not auto-implement. A manual review must confirm that the REST-fallback timeline shape gives a trustworthy `merged` value. Otherwise unknown entries must still get the per-PR fetch. This is the same root pattern as Deep Audit API-001.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001** · `RISKY_SKIP`
+- **Files/lines:** `.github/workflows/test-and-mark-stable.yml:6173-6176`, in job `e2e-alt-model-test` (starts `:6042`), step `id: wait`. The loop sleeps 20 s (`:6191`) with a 4500 s deadline (`:6167`).
+- **Current calls:** 1 `POST issues/{n}/comments` (`/approved`) on every 20 s iteration for as long as `ai:awaiting-approval` remains. **Proposed calls:** 1 per approval cycle.
+- **Endpoint:** `POST /repos/{o}/{r}/issues/{n}/comments`. Each comment also fans out `issue_comment` workflow runs; the report already notes 4–8 runs per comment event.
+- **Evidence:** every POST after the first has no consumed result (`>/dev/null 2>&1 || true`) and adds no new state until the implement workflow swaps the label:
+  ```bash
+  if echo "${LABELS}" | grep -q 'ai:awaiting-approval'; then
+    gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+      -f body="/approved" >/dev/null 2>&1 || true
+  fi
+  ```
+  The main e2e job posts `/approved` exactly once (`:1253-1259`).
+- **Proposed fix (manual only):** post once and record the time. Re-post only if `ai:awaiting-approval` is still present after a bounded interval, for example 120 s.
+- **Safety rationale:** with `|| true` swallowing failures, re-posting on every iteration is this job's only retry for a dropped or ignored approval. The call is effectively inside a retry loop, which is a mandatory `RISKY_SKIP` trigger.
+- **Downstream signal (risky skip):** do not auto-implement. A human must choose the re-post interval and confirm that a single `/approved` reliably triggers implement on the alt-model path, without the repeated posts acting as an accidental retry.
+
+Sweep note: other reads with discarded output, for example `scripts/workflow_failure_heal_intake.sh:2237` (`_branch_exists`) and `test-and-mark-stable.yml:683`, are existence or permission probes whose exit code is used. They are not dead.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — the change is in `orchestrate_poll_process.sh` and merges a paginated `pulls/N/files` call. Net-new detail: `_issue_cross_ref_pr_numbers_unique` (`:4451-4466`) is shared by 5 callers, so the state reuse needs a new sibling helper rather than an output change, and the early return at `:9288-9290` must keep reading the REST state whenever the timeline came from the REST fallback.
+- API-002: NEEDS_VERIFICATION — the two scans run in separate workflows (crossing a concurrency boundary). Detecting whether a repo has the poll wrapper needs a §8-defaulted signal. Removing the scheduled scan also removes the `Scheduled cleanup is running the global merge-train release scan` log line (`cancel_on_pr_close.yml:389`).
+- API-003: NEEDS_VERIFICATION — the gh CLI's "already exists" stderr text must be confirmed. Net-new detail:
+  - A per-process cache would be lost when callers run `set_issue_phase_label_resilient` inside `$(...)`; this is the same trap documented at `scripts/review_merge_train.sh:205-212`.
+  - Alternate fix: do the issue-labels GET (`label_helpers.sh:223`) first and skip `ensure_label_exists` when `_cur` already contains the target, but keep it on the GET-failure POST-fallback path.
+- API-004: RISKY_SKIP — it changes classification inside retry loops (`gh_api_json_to_file`, `curl_gh_api`), which is a mandatory trigger even though the direction (fewer retries) is correct.
+- API-005: NEEDS_VERIFICATION — removal is gated on the registry preflights (`docs/scripts-pending-removal.md:212-220`). The call is paginated.
+- API-006: NEEDS_VERIFICATION — it needs a new composite input with a default, wired at every caller. See REUSE-003 for the additional deadline-path re-read.
+- API-007: NEEDS_VERIFICATION — a GraphQL batch must fall back to per-issue REST so the `heal_pr_lookup_failed` per-issue log (`workflow_failure_heal_pr_reconcile.sh:245`) and the `continue` semantics stay the same. `associatedPullRequests` returns `headRefOid`, not `head.sha`, so the lower-casing at `:251` must be re-applied.
+
+### Summary Counts
+
+These counts cover this pass's findings only; the Deep Audit IDs are tagged in the cross-references above.
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 6 | MERGE-001, MERGE-002, MERGE-003, REUSE-002, REUSE-003, REUSE-004 |
+| RISKY_SKIP | 4 | MERGE-004, MERGE-005, REUSE-005, DEAD-API-001 |
+
+### Implement-Stage Handoff
+- REUSE-001: in the `test-and-mark-stable.yml` Phase 4 wait-review loop, reuse `$JOBS_STEP_JSON` (fetched at `:2420`) for `JOB_ID_FOR_SIZE` at `:2463-2464`, using the jq filter from `:2461`. Do not combine this with any change to how `JOBS_JSON` is reset.
