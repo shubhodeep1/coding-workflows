@@ -3219,6 +3219,22 @@ Claude is the default engine for these roles, but every retry loop still printed
 
 What this means for operators: read the engine from the attempt line instead of the `AI_ENGINE_SELECTED` line. Anything that searched logs or issue comments for the literal text `Codex implement failed`, `Codex bailed` or `Codex planning attempt` should match `(Claude|Codex)` instead. No workflow or script in this repository matched on that text. Workflow failure heal fingerprints are unchanged: `normalize_error_line()` in `scripts/workflow_failure_heal.py` maps a leading `Claude` in the renamed attempt-loop error lines (and `last_status=claude`) back to `codex`, and leaves other lines such as `Claude pool at capacity` unchanged, so a failure keeps one fingerprint whichever engine ran.
 
+- **Runtime validation no longer kills a long test step that is still working.** Each validation test script's output now reaches `validation.log` while it runs, and the `python-mongo-repo-checks` and `node-runtime` families echo every `custom_tests` command's output as `# ` TAP comments as it runs.
+
+The validation idle watchdog stops a run after `validation_timeout` minutes (default 15) in which `validation.log` does not grow. `scripts/validate_driver.sh` printed a test script's output only after the script exited, and the repo-checks families sent each command's output only to `logs/repo_check_<n>.log`. A `custom_tests` step that ran a full `pip install` and `pytest` suite for more than 15 minutes was therefore killed mid-run, and the log showed nothing after the last quick check. New `# repo check <n> started/finished (exit=...)` lines with timestamps show where the time goes. Command output stays a TAP comment, so a line such as `ok 1` printed by a command never counts as a result.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Idle timeout (`validation_timeout`) | 15 minutes, unchanged |
+| Families changed | `python-mongo-repo-checks`, `node-runtime` |
+| Runs seen killed mid-step | tele-funtoken-msg-scoring 39725752780, 39726381586, 39736025924 |
+
+What this means for consumer repos: after the next `@stable` sync, validation counts a long install or test suite as idle only when it is actually silent, and the log shows each custom test command's output as it runs.
+
+### For contributors
+
+`tests/test_validation_streaming_output.py` renders both families' `40_repo_checks.sh` and runs it against a fake `docker`, and runs the driver's tee pipeline with a slow probe.
+
 ### For contributors
 
 `implement.yml` gets the name from `implement_engine_display_name()`. That function reads `AI_ENGINE_RESOLVED_IMPLEMENT` and the `claude-implement.unavailable` marker that `scripts/codex_thread_reuse.sh` writes on fallback. It is refreshed at the start of each attempt and after the editor call. On the heal route, a fallback caused by missing engine support files writes no marker, so it is still logged as Claude. In `orchestrate.yml`, the `last_status` value in the final error line now starts with the lowercase engine (`claude exit 1`, `codex timeout 124`).
