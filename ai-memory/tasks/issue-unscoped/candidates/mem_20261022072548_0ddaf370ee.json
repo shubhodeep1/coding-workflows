@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_live_log_cooldown.py:252-271 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: Three tests (`test_behaviour_schedule_always_failing` at 252-253, `test_behaviour_success_resets_counter` at 260-261, `test_workflow_step_parses_as_bash` at 270-271) still `return` silently when `bash` is absent, while `test_bait_coverage_cooldown_skip_does_not_exclude_run` was changed to raise `unittest.SkipTest`.\n  WHY: On a runner without `bash`, pytest reports these tests as passed with no assertion run, so a regression in `live_log_fetch_allowed`/`live_log_fetch_record` could ship green; reviewers rated it NIT (a consistency gap, since CI runners have `bash`).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_test_and_mark_stable_live_log_cooldown.py (`test_behaviour_schedule_always_failing`, `test_behaviour_success_resets_counter`, `test_workflow_step_parses_as_bash`) | severity=NIT | confidence=2\n  PROBLEM: These three tests still `return` silently without `bash`, while the bait-coverage test raises `unittest.SkipTest`.\n  WHY: Without `bash` they are reported as passed with no assertion run. `bash` is present on CI runners, so this is a cosmetic inconsistency.\n- HARDENING: replace each `return` with `raise unittest.SkipTest(\"bash is not installed\")` (3 lines), risk score 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_test_and_mark_stable_live_log_cooldown.py:252-253, 260-261, 270-271 | severity=NIT | confidence=3\n  PROBLEM: The last run changed one tool-availability guard (line 164) to `raise unittest.SkipTest` but left the other three returning silently.\n  WHY: `ci.yml:2395` runs the file under pytest, so a bare `return` counts as a pass with no assertions. Impact is small because `bash` is present on the runners.\n- HARDENING: replace each `return` with `raise unittest.SkipTest(\"bash is not installed\")` (3 lines).\n- HARDENING: tests/test_test_and_mark_stable_live_log_cooldown.py main(), lines 285-290: print the skipped test name and reason in the `except unittest.SkipTest` handler (2 lines).\n- Risk score 1.\n- Checked and not reported: `LOG_SIZE` reset, SkipTest convention, task completeness.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_test_and_mark_stable_live_log_cooldown.py:252-253, 260-261, 270-271 | severity=NIT | confidence=3\n  PROBLEM: Three tests still `return` silently when `bash` is absent, while `test_bait_coverage_cooldown_skip_does_not_exclude_run` (lines 162-164) raises `unittest.SkipTest`.\n  WHY: Without `bash`, pytest reports these as passed with no assertion run, so a regression could ship green.\n- HARDENING: tests/test_test_and_mark_stable_live_log_cooldown.py main(), lines 282-291: print `skipped: <test_name>` in the handler (4 lines), risk score 1.\n- HARDENING: .github/workflows/test-and-mark-stable.yml `live_log_fetch_record`, cooldown message (~1921): add `until_elapsed=${LIVE_LOG_COOLDOWN_UNTIL} elapsed=${ELAPSED}` to the `\u23f8 Live-log fetch failed ...` line (1 line), risk score 1.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_test_and_mark_stable_live_log_cooldown.py:251-253, 259-261, 268-271 (vs 161-164) | severity=NIT | confidence=3\n  PROBLEM: Only one of the four tool-availability guards was converted to `raise unittest.SkipTest(...)`. The other three still `return` silently when `bash` is absent.\n  WHY: Without `bash` (or `jq`), the three tests are reported as passed with no assertion run, so a regression could ship green.\n- HARDENING: tests/test_test_and_mark_stable_live_log_cooldown.py main(), lines 282-291: print the skipped test name in the `except unittest.SkipTest` handler (2 lines), risk score 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "986ad2f65f4b5168c5571d057038ddde2fa0efb695028aa9cd0b3fcc843d2a3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7859,
+    "run_id": "39737521638",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39737521638",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261022072548_0ddaf370ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7859,
+    "run_id": "39737521638"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-22T07:25:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
