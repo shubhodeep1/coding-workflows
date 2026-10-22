@@ -1066,3 +1066,15 @@ def test_pinned_cycle_checks_the_stable_branch_after_the_freeze() -> None:
 	assert f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={STABLE_BRANCH_OTHER} head={TIP} status=diverged ref=heads/stable" in proc.stdout
 	assert not final.get("dispatches")
 	assert final["tag_deletes"] == 1
+
+
+def test_stable_branch_compare_keeps_the_tag_change_log() -> None:
+	state = {
+		"stable_branch_sha": STABLE_BRANCH_OTHER,
+		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), STABLE_BRANCH_OTHER: _compare(["scripts/y.sh"])},
+		"gate_runs_sequence": GATE_SUCCESS,
+	}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, _final, _ = _run(Path(tmp), state)
+	assert "  scripts/x.sh" in proc.stdout
+	assert "  scripts/y.sh" not in proc.stdout

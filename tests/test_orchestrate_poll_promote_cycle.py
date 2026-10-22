@@ -776,3 +776,12 @@ def test_pinned_stable_branch_ahead_dispatches() -> None:
 	assert result["latest_state"]["comprehensive_promotion"]["status"] == "dispatched"
 	assert len(result["release_dispatches"]) == 1
 	assert result.get("deleted_tags", []) == []
+
+
+def test_stable_branch_unrecognised_compare_status_holds_the_merge() -> None:
+	commits = [_commit(PROVING_MERGE_SHA, "Apply analysis recommendations (#400)", "shubhodeep1")]
+	result = _verifying_run(_project_state(), compare_commits=commits, stable_status="unexpected")
+	assert "reason=stable_branch_compare_unavailable" in result["stdout"]
+	assert result["release_dispatches"] == []
+	assert result["latest_state"]["final_merge_status"] != "merged"
+	assert result["latest_state"]["comprehensive_promotion"]["status"] == "pending"

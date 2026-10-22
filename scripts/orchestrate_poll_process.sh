@@ -13919,8 +13919,13 @@ comprehensive_stable_branch_compare_status() {
     return 2
   fi
   compare_status="$(printf '%s' "${compare_status}" | tr -d '[:space:]')"
-  [[ "${compare_status}" =~ ^[a-z_]*$ ]] || compare_status="unknown"
-  printf '%s %s\n' "${compare_status:-unknown}" "${stable_sha}"
+  # Only a documented status proves anything; anything else is an
+  # unreadable compare and takes the bounded hold (exit 2).
+  case "${compare_status}" in
+    ahead|behind|diverged|identical) ;;
+    *) return 2 ;;
+  esac
+  printf '%s %s\n' "${compare_status}" "${stable_sha}"
   return 0
 }
 

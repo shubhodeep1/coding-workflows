@@ -420,7 +420,7 @@ require_stable_branch_ancestor()
 {
 	local head="$1"
 	local known_base="${2:-}"
-	local branch_sha rc
+	local branch_sha rc saved_out saved_status
 	set +e
 	branch_sha="$(resolve_stable_branch_commit)"
 	rc=$?
@@ -434,6 +434,9 @@ require_stable_branch_ancestor()
 	if [ -n "${known_base}" ] && [ "${branch_sha}" = "${known_base}" ]; then
 		return 0
 	fi
+	# code_changes_between overwrites the tag-compare globals the caller logs.
+	saved_out="${CODE_CHANGES_OUT}"
+	saved_status="${CODE_CHANGES_STATUS:-}"
 	set +e
 	code_changes_between "${branch_sha}" "${head}"
 	rc=$?
@@ -444,6 +447,8 @@ require_stable_branch_ancestor()
 	if [ "${rc}" -ne 0 ]; then
 		skip_cycle guard_unavailable "compare=${branch_sha}...${head}"
 	fi
+	CODE_CHANGES_OUT="${saved_out}"
+	CODE_CHANGES_STATUS="${saved_status}"
 	return 0
 }
 
