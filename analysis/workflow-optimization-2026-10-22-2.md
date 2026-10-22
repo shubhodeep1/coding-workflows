@@ -552,3 +552,132 @@ Other MCP servers observed: none.
 | Code modularization | `.github/workflows/{validate,implement,review_autofix,workflow-log-analysis,forward-merge-stable-to-main,validation-refresh,update_workflows,check_failure_triage,issue_pr_status,test-and-mark-stable}.yml`, `scripts/{workspace_init,semble_helpers,tg_helpers,implement_handle_guard_block}.sh`, new `.github/actions/semble-bootstrap`, new `scripts/git_retry_helpers.sh` | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/review_autofix.yml` | Medium |
 | Medium/Low fixes | `.github/workflows/{forward-merge-stable-to-main,validation-improvements-intake,validation-refresh,implement,workflow-log-analysis}.yml`, `scripts/{semble_helpers,tg_helpers,gh_helpers,release_tag_preflight,workflow_failure_heal_intake,orchestrate_poll_process}.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-22)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: static reading proves every precondition. Same endpoint and auth token, same function or step, no mutation in between, unchanged error and retry behaviour, no concurrency boundary crossed. For dead calls, the call is skipped under exactly the condition where its result is already thrown away. The implement stage may act on it directly.
+- **`NEEDS_VERIFICATION`**: the change looks correct, but something cannot be proven by reading the code alone. A named check must pass first.
+- **`RISKY_SKIP`**: at least one hard trigger applies: a retry or poll loop, pagination, a rate-limit or backoff gate, `orchestrate_poll_process.sh`, a race guard, or log keys that other code greps for. It is listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** · `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/validate_process.sh:3522-3526` reads the tracking issue body (top-level "Assemble context").
+  - `scripts/validate_process.sh:4851-4861` reads the same issue's state (the tracker-open guard before a fix-up issue is created).
+- **Current → proposed:** 2 → 1 per validation run that fails on a tracking project.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}`, both times.
+- **Evidence:** the same object is read twice and only `.state` is new.
+  ```bash
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}" --jq '.body // ""' > "${PROJECT_SPEC_FILE}"
+  ```
+  ```bash
+  # Tracker-open guard: never open a fix-up against a closed tracker.
+  # Fail-open on API failure (empty state) so a transient blip does
+  # not block legitimate fix-up creation.
+  TRACKER_STATE="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_RAW}" --jq '.state' 2>/dev/null | tr -d '[:space:]' || true)"
+  ```
+- **Proposed fix (not authorized):** at :3523, keep the whole issue JSON, write `.body` to `PROJECT_SPEC_FILE`, and keep `.state` in a new variable. At :4854, read that variable.
+- **Safety rationale:** the :4854 read is a deliberate live guard against the tracker closing during a long validation run. The two reads also handle errors differently: :3523 has no `|| true`, while :4854 fails open. They also use different variables (`TRACKING_ISSUE_NUM` vs `TRACKING_ISSUE_RAW`). Merging them turns a race guard into a stale read.
+- **Downstream signal:** do not auto-implement. A maintainer must decide whether a stale state is acceptable for the fix-up guard. As it stands, the duplicate read is the intended design.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** · `RISKY_SKIP`
+- **Calls involved:**
+  - `.github/workflows/implement.yml:6547-6561`: step "Capture post-Codex validation errors" (`id: capture_post_codex_validation_errors`). It writes `failed_step_name` to `$GITHUB_OUTPUT` at :6561.
+  - `scripts/implement_diagnose_post_codex_failure.sh:257-281`: called by step "Diagnose post-Codex failure and create fix-up issues" (`implement.yml:6607-6658`).
+- **Current → proposed:** 2–6 calls (each loop makes 1–3 attempts) → 1–3 per failed implement run, when the first step produced a name.
+- **Endpoint:** `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100`, both times.
+- **Evidence:**
+  - Both steps have the same `if:` condition (`implement.yml:6512` and `:6608`), so they always run together.
+  - The script's `FAILED_STEP_JOBS_JSON` is used only at :260-265. Only `FAILED_STEP_NAME` survives.
+  - The workflow already exposes the same value as `steps.capture_post_codex_validation_errors.outputs.failed_step_name`, but the diagnose step's `env:` (:6610-6624) does not pass it in.
+- **Proposed fix (not authorized):**
+  - Pass `CAPTURED_FAILED_STEP_NAME: ${{ steps.capture_post_codex_validation_errors.outputs.failed_step_name }}` into the diagnose step.
+  - In the script, skip the loop when that value is non-empty.
+- **Safety rationale:**
+  - Both calls sit inside 3-attempt race-window retry loops (`implement.yml:6538-6546` documents the jobs-API finalisation race).
+  - The selectors differ. The capture step matches `failure`, and `cancelled`/`in_progress` only when `job.status == cancelled` (:6554-6557). The script matches `failure|cancelled|timed_out|action_required` (:265-275).
+  - The later read can also see more finalised data. Reusing the earlier result could change the step name that diagnose prompts, Semble queries (:452-534) and issue comments (:825-930) use.
+- **Downstream signal:** do not auto-implement. Manual review must first:
+  - align the two selectors into one predicate;
+  - confirm the capture step's early exit at :6534-6536 (empty `RUNTIME_DIR`) cannot leave an empty output that hides a real failure;
+  - add a test covering a `timed_out` job.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001** · `SAFE_TO_MERGE`
+- **Call:** `.github/workflows/forward-merge-stable-to-main.yml:493-504`, step "Telegram alert — hard failure" (:459-515).
+- **Current → proposed:**
+  - Today: 1 call per hard-failed run.
+  - After the fix: 0 when `ALERT_MSG_LEVEL` is above DEBUG (the default is `WARNING`, :464) or Telegram is not configured.
+  - Still 1 when `ALERT_MSG_LEVEL=DEBUG`.
+- **Endpoint:** `GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs`, as raw `curl`.
+- **Evidence:**
+  - `failing_step` is used only to build `msg` (:507-509). It is never logged or written to an output.
+  - The message is sent at DEBUG (:515: `tg_send_msg "${msg}" "DEBUG"`).
+  - `tg_send_msg` returns before sending when `_tg_should_send` fails or Telegram is not configured (`scripts/tg_helpers.sh:113-122`). `_tg_should_send` compares against `${ALERT_MSG_LEVEL:-WARNING}` (:86-90).
+  - So with the default `ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}`, the API result is always thrown away.
+- **Proposed fix:** insert this right after `source scripts/tg_helpers.sh` (:484) and before `failing_step=""` (:493).
+  ```bash
+            # §14: skip the jobs lookup when tg_send_msg would drop this DEBUG alert anyway.
+            if { type _tg_should_send >/dev/null 2>&1 && ! _tg_should_send "DEBUG"; } \
+              || [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
+              echo "Hard-failure Telegram alert suppressed at ALERT_MSG_LEVEL=${ALERT_MSG_LEVEL:-WARNING}; skipping jobs lookup."
+              exit 0
+            fi
+  ```
+  If this lands with Deep Audit CONSIST-004 (moving this `curl` to `gh_retry gh api`), add this gate first, so that the retrying call is gated too.
+- **Safety rationale:**
+  - The skip condition uses the same test that `tg_send_msg` applies before sending (`tg_helpers.sh:113-122`), so nothing observable changes. The step already fails open (`|| echo ''`) and has no log keys.
+  - If `_tg_should_send` is missing, the guard falls through to today's behaviour.
+- **Downstream signal:** add the guard block above to the "Telegram alert — hard failure" step of `forward-merge-stable-to-main.yml`, between `source scripts/tg_helpers.sh` and `failing_step=""`.
+
+**DEAD-API-002** · `SAFE_TO_MERGE`
+- **Call:** `.github/workflows/orchestrate_poll.yml:2018-2032`, step "Notify Telegram on job failure" (:1990-2040).
+- **Current → proposed:** 1 call per failed poll job → 0 when the ERROR alert would be dropped. That happens on:
+  - smoke-fixture-only cycles;
+  - `ALERT_MSG_LEVEL=CRITICAL` or `SILENT`;
+  - repos without Telegram secrets.
+- **Endpoint:** `GET /repos/{owner}/{repo}/actions/runs/{run_id}/attempts/{attempt_number}/jobs`, as raw `curl`.
+- **Evidence:**
+  - `failing_step` is used only in `msg` (:2034-2038), which is sent at ERROR (:2040).
+  - The step's env is `ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}` (:1995).
+  - `orchestrate_poll.yml:413-417` sets `ALERT_MSG_LEVEL=SILENT` when every tracking issue is a test-and-mark-stable smoke fixture. Under SILENT, `tg_send_msg` drops the alert (`tg_helpers.sh:58-67, 83-91`), yet the jobs call at :2023-2026 still runs.
+- **Proposed fix:** the same guard as DEAD-API-001, with `"ERROR"` in place of `"DEBUG"`. Insert it after `source scripts/tg_helpers.sh` (:2013) and before `failing_step=""` (:2021). Check the file with `wc -c` afterwards (§24).
+- **Safety rationale:**
+  - This is the `if: failure()` alert step of the poll workflow. It is not in `orchestrate_poll_process.sh`, not in a retry or poll loop, and not a race guard.
+  - The skip condition uses the same test `tg_send_msg` applies before sending, and the call already fails open.
+- **Downstream signal:** add the DEAD-API-001 guard block with level `"ERROR"` to the "Notify Telegram on job failure" step of `orchestrate_poll.yml`, between `source scripts/tg_helpers.sh` and `failing_step=""`.
+
+### Cross-References to Deep Audit Section
+- API-001: SAFE_TO_MERGE — agreed.
+  - Same `GET /user`, same `GH_TOKEN` (the script never reassigns it), same step, no mutation in between.
+  - The proposed `${PHASE_COMMENT_AUTHOR:-${PROVENANCE_LOGIN:-}}` keeps the live fallback, so a failed :954 read still triggers :1433.
+  - Net-new detail: `tests/test_workflow_failure_heal.py:6216` asserts exactly one `/user` call on the consumer-repo phase path. That path never sets `PROVENANCE_LOGIN` (:953), so the test stays green.
+  - Also update the §14 comment at :1431-1432, and add a self-repo phase-failure test asserting a single `/user` call.
+- API-002 (this report): RISKY_SKIP — the revert POST at `orchestrate_poll_process.sh:29221-29227` is in the orchestrator's budgeted auto-recovery path (:29210) inside `orchestrate_poll_process.sh`. Net-new detail: its git fallback also re-reads `pulls/{n}` for `merge_commit_sha` (:29230), so removing the dead POST still leaves 1 call per revert.
+- API-003: RISKY_SKIP — the calls sit inside the TMS wait-clarify poll loop, behind the `RATE_LIMIT_BACKOFF` skip (`test-and-mark-stable.yml:887-889`).
+  - Net-new detail: `COMMENT_COUNT` at :891-892 counts only the first page (GitHub's default `per_page` is 30), so it stops changing past 30 comments.
+  - Moving to `per_page=100` changes the `CUR_STATE` string (:894) and so the inactivity-timer reset. Pair it with BUG-005 under manual review.
+- BATCH-001: RISKY_SKIP — it is inside `orchestrate_poll_process.sh` and uses `--paginate`. Net-new details for whoever reviews it:
+  - The loop also makes a second per-issue paginated call, `issues/{n}/events` at :20534.
+  - `latch_idx` is a positional `to_entries` index into the full ascending history, reused at :20553 to find release markers after the latch. A `comments(last:100)` window changes what that index means.
+  - The trust filter tests `user.login` against `\[bot\]$` (:20516, :20556). GraphQL `author.login` for Bot actors has no `[bot]` suffix *(to verify)*, so a naive port would drop bot-authored latches.
+  - The `STAGED_SUPPORT_LATCH_*` log keys (:20484, :20501, :20509, :20531, :20535, :20550) must stay as they are.
+- API-007 (`analysis/workflow-optimization-2026-10-22.md`): NEEDS_VERIFICATION — the per-heal-issue `GET pulls?head=…` at `workflow_failure_heal_pr_reconcile.sh:243` runs only after the `noop reason=no_heal_issue` exit at :103-106, which was hit in all 3 observed closes. Confirm that more than one heal issue per source PR actually occurs before batching it.
+- API-002 (`analysis/workflow-optimization-2026-10-22.md`, `cancel_on_pr_close.yml` listing): RISKY_SKIP — both listing calls use `--paginate` (`cancel_on_pr_close.yml:167-186`), and the comment at :165-166 explicitly keeps two status-filtered calls to bound pagination.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 3 | DEAD-API-001, DEAD-API-002, API-001 (cross-ref) |
+| NEEDS_VERIFICATION | 1 | API-007 (cross-ref, earlier report) |
+| RISKY_SKIP | 6 | MERGE-001, REUSE-001, API-002 (cross-ref, this report), API-003 (cross-ref), BATCH-001 (cross-ref), API-002 (cross-ref, earlier report) |
+
+### Implement-Stage Handoff
+- **API-001**: in `scripts/workflow_failure_heal_intake.sh:1429-1434`, fall back to `PROVENANCE_LOGIN` before the live `GET /user`. This saves 1 call per self-repo phase-failure intake with lineage, the most frequent of the three.
+- **DEAD-API-001**: gate the Jobs API lookup in the `forward-merge-stable-to-main.yml` "Telegram alert — hard failure" step on the same DEBUG check `tg_send_msg` uses. The call is dead at the default WARNING level.
+- **DEAD-API-002**: gate the Jobs API lookup in the `orchestrate_poll.yml` "Notify Telegram on job failure" step on the same ERROR check `tg_send_msg` uses. The call is dead on SILENT smoke cycles and in repos without Telegram.
