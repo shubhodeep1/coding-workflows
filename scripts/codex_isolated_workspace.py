@@ -820,6 +820,7 @@ def handoff_nested_deps(stage, work, listing):
 			continue
 		parts = PurePosixPath(path).parts
 		if not readonly_allowed(path) or not parts or len(parts) > MAX_NESTED_NODE_DEPTH \
+			or PurePosixPath(path).is_absolute() \
 			or any(part.startswith(".") or part == "node_modules" for part in parts):
 			log(f"handoff-nested-deps skipped={index} reason=unsafe_path")
 			continue
