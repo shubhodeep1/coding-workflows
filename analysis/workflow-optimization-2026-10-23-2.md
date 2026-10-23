@@ -747,3 +747,155 @@ fi
 | Code modularization | `.github/workflows/workflow-log-analysis.yml` plus a new `scripts/workflow_log_analysis_pass.sh` and a local composite action, 12 workflows carrying the support-ref step, `scripts/gh_helpers.sh`, `scripts/label_helpers.sh` and its 14 ad-hoc callers, `scripts/comprehensive_test_and_release_gh_api.sh` | Large |
 | Expression size reduction | `.github/workflows/workflow-log-analysis.yml`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml` | Small |
 | Medium/Low fixes | `.github/workflows/cancel_on_pr_close.yml`, `scripts/promote_candidate_follow.sh`, `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `.github/workflows/unblock_judge_dispatch.yml`, `scripts/promote_main_cycle.sh`, 8 workflows with the dead `GH_API_RETRY_HELPERS` source, `scripts/check_external_branch_advance.sh`, `scripts/implement_handle_guard_block.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-23)
+
+### Safety Tag Legend
+- `SAFE_TO_MERGE`: the calls hit the same endpoint (or a strict subset of its fields) with the same filters, pagination and token, in the same function or step, with no mutation in between. Merging them changes no error handling, crosses no concurrency boundary and keeps every documented cache contract. The implement stage may act on these directly.
+- `NEEDS_VERIFICATION`: the saving looks real, but reading the code alone cannot prove one or more of those conditions. Each such finding lists the checks that must pass first.
+- `RISKY_SKIP`: the call sits in a retry, backoff or poll loop, an identity or permission check, a paginated listing, a rate-limit-sensitive path, or code that defends against races. These are listed so they are visible, but must not be changed automatically.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001 — The auto-close lint makes one `gh issue view` call per referenced issue; one aliased GraphQL query per repository would do**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Calls involved:**
+  - `scripts/lint_pr_body_auto_close.py:143-178` (`_fetch_issue_labels_gh`)
+  - the loop in `lint()` at `scripts/lint_pr_body_auto_close.py:257-268`
+  - invoked from `.github/workflows/lint-pr-body-auto-close.yml:100-115`
+- **Current call count:** N, the number of distinct `(repo, issue)` pairs referenced by auto-close keywords in the PR body plus every commit message.
+- **Proposed call count:** ⌈N/50⌉ per distinct referenced repository. Usually 1.
+- **Endpoints:** `gh issue view --json labels`, which is GraphQL `repository.issue.labels`, once per issue → one aliased GraphQL query, `repository(owner,name){ i<N>: issueOrPullRequest(number:N){ ... on Issue{labels(first:100){nodes{name}}} ... on PullRequest{labels(first:100){nodes{name}}} } }`.
+- **Evidence:** the cache only removes repeats of the same issue. Distinct issues still cost one subprocess and one API call each:
+  ```python
+  # Cache per-(repo, issue) lookups so a body with multiple references to the
+  # same issue makes one gh call, not N (CLAUDE.md §15).
+  issue_label_cache: dict[tuple[str, int], list[str]] = {}
+  ...
+  		labels = label_lookup(lookup_repo, issue)
+  ```
+  Since the workflow started linting every commit message for PRs into the default branch (`lint-pr-body-auto-close.yml:71-98`), N grows with the commit count.
+- **Proposed fix:**
+  - Add a batch pre-fetch, `_fetch_issue_labels_gh_batch(repo, numbers) -> dict[int, list[str] | None]`, modelled on the aliased-query pattern of `_fetch_candidate_issue_details_graphql` in `scripts/orchestrate_poll_process.sh`.
+  - Call it once per `lookup_repo` before the loop in `lint()` and seed `issue_label_cache` from it.
+  - Keep `label_lookup` as the per-issue fallback for any alias that is missing or errored, so the injectable test hook at `:239-246` keeps working.
+- **Safety rationale:** failure semantics change. Today one failed lookup is one `None` (exit 2 unless `--fail-open-on-lookup-error`). A GraphQL batch can return partial `errors` together with `data`, so the error-to-caller mapping is not provably identical, which breaks the "same error-handling semantics" condition.
+- **Downstream signal (verification steps):**
+  1. Confirm what `gh issue view <n>` returns today when `<n>` is a pull request number, and make sure the batch's `issueOrPullRequest` handling reproduces it exactly.
+  2. Confirm that a per-alias GraphQL error (for example, an inaccessible cross-repo issue) maps to `None` for that issue only, and that the lint's exit code stays 2 in that case.
+  3. Confirm that `labels(first:100)` matches what `gh issue view --json labels` returns for issues with more than 100 labels, or accept and document the bound.
+
+**MERGE-002 — The candidate follower's three REST reads could be one GraphQL query, but the reads guard the freeze tag**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/promote_candidate_follow.sh:148` (`repos/${REPO}/branches/promote-candidate`)
+  - `scripts/promote_candidate_follow.sh:168` (`repos/${REPO}/git/ref/tags/promote-cycle-frozen`)
+  - `scripts/promote_candidate_follow.sh:181` (`repos/${REPO}/git/ref/heads/main`)
+  - plus the conditional annotated-tag read at `:210` (`repos/${REPO}/git/tags/${TAG_OBJECT_SHA}`)
+- **Current call count:** 3 reads per run, 4 when an annotated tag exists (budget documented at `:22-25`).
+- **Proposed call count:** 1 GraphQL query: `ref(qualifiedName:"refs/heads/promote-candidate"){target{oid}}`, `ref(qualifiedName:"refs/tags/promote-cycle-frozen"){target{__typename oid ... on Tag{message}}}`, `ref(qualifiedName:"refs/heads/main"){target{oid}}`.
+- **Evidence:** all three reads run back to back in step 1 (`:145-184`). Only scalar fields are used: `commit sha` and `protected` (`:156-161`), `object type/sha` (`:177-178`) and `object sha` (`:183`).
+- **Proposed fix:** none for automatic implementation. The data shape is mergeable, but see the rationale.
+- **Safety rationale:** this code defends against an upstream race (the promote-cycle freeze). It fails closed on a REST 404 versus other statuses via `follow_is_not_found` and `GH_API_RETRY_LAST_STATUS` (`:116-119`, `:173-174`); GraphQL reports a missing ref as `null`, not 404. The REST `branches/<b>.protected` flag has no verified GraphQL equivalent that also covers rulesets. The finding also runs against Deep Audit BUG-004, which adds a second tag read right before the PATCH.
+- **Downstream signal:** do not auto-implement. A human must first decide BUG-004 (the tag re-read before the PATCH), then confirm a ruleset-aware GraphQL substitute for `protected`, then confirm that `null` versus error handling keeps the fail-closed `tag_read_failed` path.
+
+**MERGE-003 — `plan_split_dispatch.sh` lists the issue's comments up to three times**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/plan_split_dispatch.sh:102-105` (dedupe pre-check)
+  - `:231-232` (only when posting the marker fails)
+  - `:251-252` (reservation re-read after the marker POST)
+  - all three are `GET repos/${REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100 --paginate`
+- **Current call count:** 2 paginated listings on the success path, 2 on the marker-failure path.
+- **Proposed call count:** none proposed.
+- **Evidence:** the pre-check projects `{login, body}`; the later reads project `{id, login, body}`. The pre-check could carry `id` too, but the later reads exist to see comments posted after the pre-check:
+  ```bash
+  # The marker is the reservation: two plan runs racing past the check above
+  # both post one, and only the run whose marker is the first since the last
+  # release marker dispatches.
+  ```
+  (`:247-250`).
+- **Safety rationale:** the calls are paginated, and the second read is an explicit defence against a concurrent plan run, made after a write (the marker POST at `:222`). Merging it with the pre-check would remove that race protection.
+- **Downstream signal:** do not auto-implement. Only a human may widen the `:102` projection to include `id`, for log parity. The two post-write reads must stay as they are.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001 — `plan_split_dispatch.sh` reads the repository to get `default_branch`, which plan.yml already has from the event payload**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Calls involved:**
+  - `scripts/plan_split_dispatch.sh:127-128` (`GET repos/${REPO}` with `--jq '.default_branch // ""'`), consumed only at `:272` (`gh workflow run "${wrapper}" --ref "${default_branch}"`)
+  - caller: `.github/workflows/plan.yml:2829-2836` ("Auto-approve clear plan" step, env at `:2593-2603`)
+- **Current call count:** 1 per plan split.
+- **Proposed call count:** 0 when the event payload has the field; 1 as a fallback.
+- **Endpoint:** `GET /repos/{owner}/{repo}`.
+- **Evidence:**
+  - plan.yml already uses the payload value in other steps: `PLAN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}` (`plan.yml:922`), and `ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}` (`:313`, `:321`, `:1336`).
+  - The library wrapper `internal-plan.yml` triggers only on `issue_comment` (`internal-plan.yml:4`), whose payload carries `repository`.
+  - The repository already has this exact pattern: `update_workflows.yml:1341-1344` (`BASE="${DEFAULT_BRANCH:-}"`, with the API read only when it is empty).
+- **Proposed fix:**
+  - Add `PLAN_SPLIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}` to the Auto-approve step's `env:` (`plan.yml:2593-2603`). Put it in `env:`, not the `run:` body, so the expression-size guard noted at `:2601-2602` still holds.
+  - In `plan_split_dispatch.sh:127`, use `default_branch="${PLAN_SPLIT_DEFAULT_BRANCH:-}"` and call the existing `gh_retry gh api "repos/${REPO}"` read only when it is empty or fails the `^[A-Za-z0-9._/-]+$` check. This gives the new variable a default in the helper itself (§8).
+- **Safety rationale:** the endpoint differs (event payload versus REST), so the "same endpoint" condition is not met, and plan.yml is a reusable workflow whose consumer callers may use event types this pass did not read.
+- **Downstream signal (verification steps):**
+  1. List every caller of `plan.yml` (`internal-plan.yml`, the consumer templates under `workflow-templates/`, and any `workflow_dispatch` path). Confirm each event type carries `github.event.repository.default_branch`; the API fallback covers any that do not.
+  2. Confirm with `wc -c` that the edit keeps `plan.yml` well under the 480,000-byte guard (§24).
+  3. Confirm `tests/` has no contract test that pins the PLAN_SPLIT API budget.
+
+**REUSE-002 — The plan job reads the pipeline login (`gh api user`) up to three times**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `.github/workflows/plan.yml:995` ("Close superseded CI-repair issue" step, `GH_TOKEN: secrets.GH_PAT` at `:917`)
+  - `.github/workflows/plan.yml:2757` or `:2792` (`plan_gate_login` in "Auto-approve clear plan", the same `secrets.GH_PAT` at `:2594`)
+  - `scripts/plan_split_dispatch.sh:98` (`pipeline_login`, called from the same Auto-approve step at `plan.yml:2833-2836`)
+- **Current call count:** 1–3 per plan run, depending on which branches run.
+- **Proposed call count:** 1–2. Passing `plan_gate_login` into the script's environment in the same shell would save the `:98` read whenever `:2757` or `:2792` already resolved it.
+- **Endpoint:** `GET /user`.
+- **Evidence:** all three reads use the same token and return the same immutable login. `plan_split_dispatch.sh` is launched as a child of the shell that may already hold `plan_gate_login` (`plan.yml:2833-2836`).
+- **Safety rationale:** this is an identity check that binds trust. `:98` decides which account's marker comments count for dedupe (`:106-111`), and `:995` "binds trust to the pipeline account". Reusing across steps through `GITHUB_ENV` would also cross the model-run step ("Run Codex planning", `plan.yml:1664`), which could write to that file.
+- **Downstream signal:** do not auto-implement. If pursued, limit it to the same-step path (a `PLAN_SPLIT_PIPELINE_LOGIN="${plan_gate_login}"` prefix on the `bash scripts/plan_split_dispatch.sh` invocation, with `:98` as the fallback). A security reviewer must confirm that nothing between `:2757`/`:2792` and `:2836` can change `plan_gate_login`. Never pass the login through `GITHUB_ENV`.
+
+**REUSE-003 — The CI-cancelled rerun helper lists open PRs again after the sweep step already did**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `.github/workflows/review_autofix_sweep.yml:228-239` (paginated `GET repos/${REPOSITORY}/pulls?state=open`, written to `${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json`)
+  - `scripts/ci_cancelled_rerun.py:117-145` (`current_pr_heads`: `gh api --paginate --slurp repos/{repo}/pulls?state=open&per_page=100`), run by the same job at `review_autofix_sweep.yml:590-598`
+- **Current call count:** 2 paginated listings of the same endpoint per sweep tick.
+- **Proposed call count:** none proposed. The refresh is deliberate.
+- **Evidence:** the helper explains why it re-lists:
+  ```python
+  # The sweep's earlier /pulls listing predates review dispatch; its
+  # review-run cache has no live PR heads. Refresh once for all PRs,
+  # not per PR; a failed/partial page cannot authorize a rerun.
+  ```
+- **Safety rationale:** the listing is paginated, deliberately fresh, and gates an Actions write (`rerun-failed-jobs` at `:168`). A stale head could authorize a rerun on a superseded SHA. Several steps run between the two reads, including review dispatches and the backfill.
+- **Downstream signal:** do not auto-implement. Keep both reads. A human could reconsider only if the two steps were merged so that no dispatch happens between the reads, and that is out of scope here.
+
+Audited and already compliant (no finding):
+- The backfill passes its login to the autofix reporter through `AUTOFIX_FAILURE_MARKER_AUTHOR="${LOGIN}"` (`scripts/workflow_failure_heal_non_retryable_backfill.sh:404`), and the reporter uses it before its own `gh api user` fallback (`scripts/workflow_failure_heal_autofix_report.sh:216-228`).
+- The default-branch read is memoised per process in `scripts/review_merge_train.sh:1137-1149` (`MT_DEFAULT_BRANCH`) and per shell in `scripts/gh_helpers.sh:1910-1931` (`_autofix_review_default_branch_prime`).
+- The second `gh api user` in `scripts/workflow_failure_heal_report.sh:210` runs only when the shared read at `:172` returned nothing.
+
+### Dead Calls (DEAD-API-###)
+
+No findings. In every call this pass read, the result is used later (for example, `protected` at `promote_candidate_follow.sh:158-162` feeds `follow_emit`, and `default_branch` at `plan_split_dispatch.sh:127` feeds `:272`). No dead call could be proven from static reading.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — the fix replaces `repos/{repo}` with a field from another endpoint (`pulls[].base.repo.default_branch`), so the same-endpoint condition fails. The call guards #6629 provenance with "no fallback" (`review_autofix_sweep.yml:278-290`). Two things to confirm: the projection must read the field before the `draft == false` filter or document that an all-draft tick exits at `:273` first; and the event payload is not a safe substitute, since `:147` already falls back with `|| github.ref_name` on scheduled ticks.
+- BATCH-001: RISKY_SKIP — the listings are paginated and defend against the #3895 pending-run duplicate-dispatch race (`:322-330`, plus `group_by(.id)` across sequential status fetches at `:399-402`). A repo-wide listing also changes how many pages are read during bursts.
+- API-002: RISKY_SKIP — the fix changes the retry loop itself (`gh_helpers.sh:1271-1335`, `:1350-1403`). A human must check each caller's 404 handling, for example `_report_auth_reject issue_not_found` at `workflow_failure_heal_intake.sh:496`, and the `tg_helpers.sh` GETs.
+- BATCH-002: NEEDS_VERIFICATION — GraphQL `pullRequests(headRefName:)` does not scope to the head owner the way the REST `head=<owner>:ai/issue-<n>` filter does (`workflow_failure_heal_pr_reconcile.sh:239-247`). The batch must also select `headRepositoryOwner{login}` and filter on it, or fork PRs with the same branch name will match.
+- BATCH-003: NEEDS_VERIFICATION — agree; GraphQL `Commit.author.user` versus REST `.author.login` attribution for squash and bot commits must be confirmed first.
+- BATCH-004: RISKY_SKIP — this is a poll loop with a rate-limit backoff guard (`test-and-mark-stable.yml:1078-1117`). BUG-001 must land first, and the change needs a human-reviewed release-gate run.
+- API-003: NEEDS_VERIFICATION — this is a schedule-frequency change, not a merge. The listings are paginated (`cancel_on_pr_close.yml:167-186`), and a merge-train release latency of up to 15 minutes needs owner sign-off. Coordinate with BUG-003's group split.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-001, REUSE-001 |
+| RISKY_SKIP | 4 | MERGE-002, MERGE-003, REUSE-002, REUSE-003 |
+
+Counts cover only the findings raised in this pass. The Deep Audit items reviewed above are tagged under Cross-References: API-001, BATCH-002, BATCH-003 and API-003 as NEEDS_VERIFICATION; BATCH-001, API-002 and BATCH-004 as RISKY_SKIP.
+
+### Implement-Stage Handoff
+No SAFE_TO_MERGE findings in this pass.
