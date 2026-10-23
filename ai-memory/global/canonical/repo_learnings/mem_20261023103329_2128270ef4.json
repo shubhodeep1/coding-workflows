@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "For changes to scripts or workflow behavior, merged PRs frequently include a changelog fragment together with tests targeting the affected component. Follow this pattern when planning user-visible or operational changes, unless the work is documentation-only.",
+  "fingerprint": "e3f3f085c69e9a19d51b2aadf6e1aa15e425a1335f2a906513a4be6bb6c09c9d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39937599444",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39937599444",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7914",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7915",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7926",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7928",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7929",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7919",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7920",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7933",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7937",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7938"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261023103329_2128270ef4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Behavioral changes commonly include a `changelog.d/` fragment and focused tests.",
+  "timestamps": {
+    "created_at": "2026-10-23T10:33:29Z",
+    "promoted_at": "2026-10-23T10:35:35Z",
+    "superseded_at": null
+  }
+}
