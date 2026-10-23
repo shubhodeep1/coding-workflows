@@ -4627,6 +4627,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           AUTOFIX_BOT_LOGIN: ${{ vars.AUTOFIX_BOT_LOGIN }}
           LOCAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
+          AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED: ${{ vars.AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           export LANG=C
@@ -4707,6 +4708,18 @@ jobs:
           max_push_attempts=3
           push_attempt=1
           push_backoff=2
+          # Transient failures (GitHub 5xx, `remote rejected ... (failed)`,
+          # network drops) get their own bounded counter: at most 2 retries
+          # with 5s/10s backoff. Before each retry the remote tip is read with
+          # `git ls-remote`; when it already equals HEAD the push landed.
+          # Repository-rule / protected-branch rejections are never retried.
+          # This path also never uses --force / --force-with-lease and never
+          # rebases; a remote that advanced meanwhile is handled by the
+          # non-fast-forward merge path in the loop below. Kill switch:
+          # AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED=false (any case).
+          push_transient_enabled="${AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED:-true}"
+          push_transient_max=2
+          push_transient_retry=0
           push_stderr_file="$(mktemp)"
           trap 'rm -f "${push_stderr_file}"' EXIT
           while :; do
@@ -4723,7 +4736,45 @@ jobs:
               echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
               break
             fi
+            if grep -qiE 'GH006|GH013|protected branch|push declined|repository rule' "${push_stderr_file}"; then
+              echo "::error::git push failed (exit ${push_exit}) for a reason other than [rejected] (fetch first/non-fast-forward); not retrying."
+              exit "${push_exit}"
+            fi
             if ! grep -qE '\[rejected\].*\((fetch first|non-fast-forward)\)' "${push_stderr_file}"; then
+              push_transient_class=""
+              if [ "${push_transient_enabled,,}" != "false" ]; then
+                if grep -qiE 'Internal Server Error|The requested URL returned error: 5[0-9][0-9]|HTTP 5[0-9][0-9]' "${push_stderr_file}"; then
+                  push_transient_class="server_error"
+                elif grep -qiE 'remote rejected.*\(failed\)' "${push_stderr_file}"; then
+                  push_transient_class="remote_rejected_failed"
+                elif grep -qiE 'RPC failed|unexpected disconnect|early EOF|Connection reset|Could not resolve host|Operation timed out' "${push_stderr_file}"; then
+                  push_transient_class="network"
+                fi
+              fi
+              if [ -n "${push_transient_class}" ]; then
+                if [ "${push_transient_retry}" -ge "${push_transient_max}" ]; then
+                  echo "AUTOFIX_PUSH_TRANSIENT_RETRY pr=${PR_NUMBER:-unknown} attempt=${push_transient_retry}/${push_transient_max} class=${push_transient_class} outcome=gave_up"
+                  echo "::error::git push failed (exit ${push_exit}) with a transient error after ${push_transient_max} retries; giving up."
+                  exit "${push_exit}"
+                fi
+                push_transient_retry=$((push_transient_retry + 1))
+                sleep "$((5 * push_transient_retry))"
+                local_head="$(git rev-parse HEAD)"
+                if ls_out="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" 2>/dev/null)"; then
+                  remote_tip="${ls_out%%[[:space:]]*}"
+                else
+                  remote_tip=""
+                fi
+                if [ -n "${remote_tip}" ] && [ "${remote_tip}" = "${local_head}" ]; then
+                  echo "AUTOFIX_PUSH_TRANSIENT_RETRY pr=${PR_NUMBER:-unknown} attempt=${push_transient_retry}/${push_transient_max} class=${push_transient_class} outcome=landed"
+                  echo "Push complete."
+                  echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
+                  break
+                fi
+                echo "AUTOFIX_PUSH_TRANSIENT_RETRY pr=${PR_NUMBER:-unknown} attempt=${push_transient_retry}/${push_transient_max} class=${push_transient_class} outcome=retry"
+                : > "${push_stderr_file}"
+                continue
+              fi
               echo "::error::git push failed (exit ${push_exit}) for a reason other than [rejected] (fetch first/non-fast-forward); not retrying."
               exit "${push_exit}"
             fi
