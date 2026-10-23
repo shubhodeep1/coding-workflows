@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:15092-15095 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The two `capture(...)` calls in `validation_harness_marker()` lack jq's `?` operator, so a non-matching trailing line aborts the whole jq program.\n  WHY: The pipeline's own comments from the route login do not end in the owner marker, so the lookup always fails and the hold stores `local:<16hex>` with `support: null` and `Harness pin: unknown`. The reviewer rated this MAJOR; the ledger maps that to high.\n- scripts/orchestrate_poll_process.sh:15047-15072 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Every failure path in `validation_harness_pin()` returns 1 silently, and the caller at 15234-15237 substitutes `unknown`.\n  WHY: Nothing in the log distinguishes a missing wrapper from an unfetched ref. The reviewer rated this NIT; the ledger maps that to low.\n- scripts/orchestrate_poll_process.sh:15141-15142 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A failed append to the unblock-scan skip file only logs a warning. While the file is empty, `run_unblock_scan` skips the filter (20600-20608).\n  WHY: The newly held project can still be selected for the unblock judge on the same tick. The reviewer rated this MAJOR; the ledger maps that to high. The anthropic, minimax and qwen reviewers explicitly declined to carry this finding forward.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:15092-15095 | severity=MAJOR | confidence=4\n  PROBLEM: The two `capture(...)` calls in `validation_harness_marker()` lack jq's `?` operator, so a non-matching trailing line aborts the whole jq program.\n  WHY: The comment list includes the pipeline's own comments from the route login, so the owner-marker branch is dead in production. The hold always stores `local:<16hex>` and `support: null`, and shows `Harness pin: unknown`.\n- scripts/orchestrate_poll_process.sh:15047-15072 | severity=NIT | confidence=4\n  PROBLEM: Every failure path in `validation_harness_pin()` returns 1 silently, and the caller at 15234-15237 substitutes `unknown`.\n  WHY: Nothing in the log distinguishes a missing wrapper from an unfetched ref.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:15141-15142 | severity=MAJOR | confidence=4\n  PROBLEM: A failed append to the unblock-scan skip file only logs a warning. While the file is empty, `run_unblock_scan` skips the filter (20600-20608).\n  WHY: The newly held project's failure labels stay in the search results, so it can still be selected for the unblock judge on the same tick.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0f7a960a69aa9c25c81c4ee9caef4e8acbc71478a8577410a111b6a2f135f933",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7919,
+    "run_id": "39905840070",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39905840070",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023062636_3083c03ad6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7919,
+    "run_id": "39905840070"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T06:26:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
