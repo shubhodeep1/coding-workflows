@@ -200,8 +200,9 @@ ensure_label_exists() {
 #
 # Always returns 0. Callers that need to know whether the label landed read
 # SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME afterwards (issue #7099):
-# `applied` (PUT or POST fallback succeeded), `failed` (final POST failed) or
-# `skipped` (missing arguments / repo).
+# `applied` (the target POST, or the POST fallback, succeeded), `failed` (the
+# POST failed) or `skipped` (missing arguments / repo). The helper only POSTs
+# the target and DELETEs stale phase labels; it never PUTs the full set.
 set_issue_phase_label_resilient() {
 	SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME=""
 	local issue_number="${1:-}"
@@ -236,9 +237,21 @@ set_issue_phase_label_resilient() {
 	fi
 
 	_cur="${_cur:-[]}"
-	local _new=""
-	if ! _new="$(printf '%s' "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" --arg t "${target_label}" \
-		'(. - $p) + [$t] | unique' 2>/dev/null)"; then
+	# BUG-001: this helper used to PUT the whole computed label set
+	# ((current - phase labels) + target). Any label added between the GET
+	# above and that PUT (ai:orchestrator-managed, force-review,
+	# ai:needs-human, ai:merge-queued, ...) was silently removed by the stale
+	# replacement payload. The swap is now additive: POST the target first, so
+	# the issue is never without a phase label, then DELETE each stale phase
+	# label from the GET snapshot one at a time. Non-phase labels are never
+	# touched. API cost: 1 GET + 1 POST + one DELETE per stale phase label
+	# (usually 1), instead of 1 GET + 1 PUT. A phase label added concurrently
+	# between the GET and the DELETEs can remain; the existing label repair
+	# (scripts/ai_labels.py repair-labels / reconcile_managed_issue_labels)
+	# reconciles it.
+	local _stale=""
+	if ! _stale="$(printf '%s' "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" --arg t "${target_label}" \
+		'[.[] | select(. as $l | $p | index($l) != null) | select(. != $t)] | unique' 2>/dev/null)"; then
 		echo "::warning::set_issue_phase_label_resilient: failed to compute new labels for #${issue_number} — falling back to POST add." >&2
 		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 			-f "labels[]=${target_label}" >/dev/null 2>&1; then
@@ -250,20 +263,30 @@ set_issue_phase_label_resilient() {
 		return 0
 	fi
 
-	if printf '{"labels":%s}' "${_new}" | \
-		gh_retry gh api -X PUT "repos/${repo}/issues/${issue_number}/labels" \
-			--input - >/dev/null 2>&1; then
-		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
+	if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		-f "labels[]=${target_label}" >/dev/null 2>&1; then
+		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
+		echo "::warning::set_issue_phase_label_resilient: POST add failed for #${issue_number}." >&2
 		return 0
 	fi
+	SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
 
-	echo "::warning::set_issue_phase_label_resilient: PUT labels failed for #${issue_number} — falling back to POST add." >&2
-	if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-		-f "labels[]=${target_label}" >/dev/null 2>&1; then
-		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
-	else
-		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
-		echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
-	fi
+	local _stale_name="" _stale_enc="" _del_err=""
+	while IFS= read -r _stale_name; do
+		[ -n "${_stale_name}" ] || continue
+		if ! _stale_enc="$(jq -rn --arg l "${_stale_name}" '$l|@uri' 2>/dev/null)" || [ -z "${_stale_enc}" ]; then
+			echo "::warning::set_issue_phase_label_resilient: could not remove stale phase label '${_stale_name}' from #${issue_number}." >&2
+			continue
+		fi
+		if _del_err="$(GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE \
+			"repos/${repo}/issues/${issue_number}/labels/${_stale_enc}" 2>&1 >/dev/null)"; then
+			continue
+		fi
+		# A 404 means the label is already gone (removed concurrently).
+		if printf '%s' "${_del_err}" | grep -Eq 'HTTP 404|Not Found'; then
+			continue
+		fi
+		echo "::warning::set_issue_phase_label_resilient: could not remove stale phase label '${_stale_name}' from #${issue_number}." >&2
+	done < <(printf '%s' "${_stale}" | jq -r '.[]' 2>/dev/null || true)
 	return 0
 }
