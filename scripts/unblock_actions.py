@@ -526,7 +526,8 @@ def _instruction_paths(text: object, repo: str = "") -> list[str]:
 			continue
 		if token not in found:
 			found.append(token)
-		if len(found) >= HARNESS_MAX_PATH_TOKENS:
+		# One past the cap, so a caller can tell "exactly the cap" from "more were dropped".
+		if len(found) > HARNESS_MAX_PATH_TOKENS:
 			break
 	return found
 
@@ -555,6 +556,8 @@ def _harness_route(verdict: dict, ctx: dict, env: object = None) -> dict:
 	support_dir = str(env.get("SUPPORT_DIR", "") or "")
 	target_dir = str(env.get("TARGET_DIR", "") or "")
 	tokens = _instruction_paths(verdict.get("instructions"), ctx["repo"])
+	truncated = len(tokens) > HARNESS_MAX_PATH_TOKENS
+	tokens = tokens[:HARNESS_MAX_PATH_TOKENS]
 	if tokens and support_dir and target_dir and os.path.isdir(support_dir) and os.path.isdir(target_dir):
 		ownership = _load_ownership()
 		if ownership is not None:
@@ -569,8 +572,8 @@ def _harness_route(verdict: dict, ctx: dict, env: object = None) -> dict:
 				# A failed managed-path read included: partial data could misroute.
 				print("warning: unblock target_repo backstop failed; using the verdict field only", file=sys.stderr)
 				harness_paths, project_paths, unlisted_project = [], [], False
-	# A token list at the cap may have dropped later paths, so it never proves harness-only.
-	if len(tokens) >= HARNESS_MAX_PATH_TOKENS:
+	# A token list past the cap dropped later paths, so it never proves harness-only.
+	if truncated:
 		unlisted_project = True
 	route.update(harness_paths=list(harness_paths), project_paths=list(project_paths))
 	if field == "harness":
@@ -613,9 +616,19 @@ def _heal_report_op(ctx: dict, verdict: dict, route: dict) -> dict:
 def _harness_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
 	"""A harness-owned verdict: no fix-up here, a heal report instead; the item stays blocked."""
 	item = ctx["item"]
+	heal = _heal_report_op(ctx, verdict, route)
+	# The heal intake rejects a report without an accepted label (HEAL_REPORT_LABELS),
+	# so say so and page a person instead of claiming a report is on its way.
+	sendable = bool(heal["label"])
+	status = (
+		" A workflow-failure heal report is being sent, and the item stays blocked until the harness fix ships."
+		if sendable else
+		" No workflow-failure heal report could be sent because this item has no escalation label the heal intake accepts;"
+		" a person must file the harness change. The item stays blocked until the harness fix ships."
+	)
 	lines = [
 		f"The unblock judge found this work belongs in `{HARNESS_REPO}` (the shared workflow harness), so no fix-up was filed here."
-		" A workflow-failure heal report is being sent, and the item stays blocked until the harness fix ships.",
+		+ status,
 	]
 	if verdict.get("instructions"):
 		lines += ["", f"Change needed in the harness: {_one_line(verdict['instructions'])}"]
@@ -623,7 +636,7 @@ def _harness_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
 	if shown:
 		lines += ["", "Harness paths: " + ", ".join(f"`{path}`" for path in shown)]
 	lines += ["", f"Why: {_one_line(verdict.get('reason', ''))}"]
-	ops: list[dict] = [{"op": "comment", "issue": item, "body": "\n".join(lines)}, _heal_report_op(ctx, verdict, route)]
+	ops: list[dict] = [{"op": "comment", "issue": item, "body": "\n".join(lines)}, heal]
 	fp = verdict.get("fingerprint")
 	if ctx["kind"] == "project" and isinstance(fp, str) and HARNESS_HOLD_FP_RE.match(fp):
 		ops.append({
@@ -633,7 +646,10 @@ def _harness_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
 			"body": f"Unblock judge: harness-owned failure on #{item}; hold requested until the harness fix ships.\n\n"
 			f"{HARNESS_HOLD_MARKER_PREFIX} item={item} fingerprint={fp} -->",
 		})
-	ops.append({"op": "telegram", "level": "DEBUG", "text": f"Unblock judge routed #{item} ({ctx['stop']}) to a harness heal report; no fix-up filed."})
+	if sendable:
+		ops.append({"op": "telegram", "level": "DEBUG", "text": f"Unblock judge routed #{item} ({ctx['stop']}) to a harness heal report; no fix-up filed."})
+	else:
+		ops.append({"op": "telegram", "level": "WARNING", "text": f"Unblock judge found #{item} ({ctx['stop']}) harness-owned, but it has no escalation label for a heal report; a person must file the harness change."})
 	return ops
 
 

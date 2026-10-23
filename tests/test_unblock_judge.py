@@ -4355,3 +4355,17 @@ def test_backstop_token_cap_never_routes_harness_only(harness_env) -> None:
 	paths = " ".join(f"validation/t{n}.sh" for n in range(actions.HARNESS_MAX_PATH_TOKENS)) + " src/app.py"
 	route = actions._harness_route(_verdict("descope", target_repo="consumer", instructions=paths), _ctx())
 	assert len(route["harness_paths"]) == actions.HARNESS_MAX_PATH_TOKENS and route["mode"] == "mixed"
+
+
+def test_harness_ops_without_accepted_label_warn_instead_of_claiming_a_report(harness_env) -> None:
+	ops = actions.plan(_verdict("retry_budget", instructions="x", target_repo="harness"), _ctx(labels=["ai:blocked"]))
+	assert [op["op"] for op in ops] == ["comment", "heal_report", "telegram"]
+	assert ops[1]["label"] == ""
+	assert "No workflow-failure heal report could be sent" in ops[0]["body"] and "is being sent" not in ops[0]["body"]
+	assert ops[2]["level"] == "WARNING"
+
+
+def test_backstop_exactly_at_the_token_cap_routes_harness_only(harness_env) -> None:
+	paths = " ".join(f"validation/t{n}.sh" for n in range(actions.HARNESS_MAX_PATH_TOKENS))
+	route = actions._harness_route(_verdict("descope", target_repo="consumer", instructions=paths), _ctx())
+	assert len(route["harness_paths"]) == actions.HARNESS_MAX_PATH_TOKENS and route["mode"] == "harness"
