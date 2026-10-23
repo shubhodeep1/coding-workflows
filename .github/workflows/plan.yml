@@ -2866,11 +2866,12 @@ jobs:
                   if [ "${plan_gate_reason:-}" = "plan_files_outside_files_touched" ]; then
                     echo "The plan changes files outside the issue's \`files_touched\` list, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason}\`)."
                     echo "Plan files outside \`files_touched\`: \`${plan_gate_paths:-none}\`"
+                    echo "A maintainer adds these paths to the issue's \`files_touched\` list or asks for a narrower plan, then replies \`/approved\`. \`/approved\` alone does not help: the implement-time \`files_touched\` guard would still refuse these files."
                   else
                     echo "The plan lists automation paths, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason:-plan_gate_error}\`)."
                     echo "Protected paths without an exact grant: \`${plan_gate_paths:-none}\`"
+                    echo "A maintainer can review the plan and reply \`/approved\`."
                   fi
-                  echo "A maintainer can review the plan and reply \`/approved\`."
                 } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
                 # One deduplicated hold comment plus a WARNING, so a held plan
                 # reaches a human. Failures only warn; a hold never approves.
