@@ -589,10 +589,23 @@ def test_retry_state_persists_over_rest_not_graphql() -> None:
 	persist = persist[: persist.index("\n}\n")]
 	assert "gh_retry gh pr edit" not in persist
 	assert "gh_retry gh issue edit" not in persist
-	assert 'gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${_body_payload}"' in persist
-	assert 'gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:resolver-escalated"' in persist
+	assert 'gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -F "body=@${_body_file}"' in persist
+	assert 'GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:resolver-escalated"' in persist
 	assert persist.index("Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1") < persist.index("_sync_local_pr_body_from_file")
 	assert 'RESOLVER_CONFLICT_PATH_REPORT_FILE="${conflict_path_report}"' in body
+
+
+def test_non_retryable_escalation_keeps_failure_marker() -> None:
+	# RESOLVER_ESCALATED=true skips the review-autofix-failure:v1 marker the
+	# gate's identical-failure cap counts; a first-failure non-retryable
+	# escalation must not export it.
+	body = _resolve_script_text()
+	persist = body[body.index("_persist_resolver_retry_state_from_current_failure()"):]
+	persist = persist[: persist.index("\n}\n")]
+	assert ".retry_state.non_retryable // false" in persist
+	guarded = persist.split('if [ "${_escalated_env}" = "true" ]; then\n    echo "RESOLVER_ESCALATED=true"', 1)
+	assert len(guarded) == 2
+	assert '[ "${_comment_present}" = "true" ] && [ "${_escalated_env}" = "true" ]' in persist
 
 
 def main() -> int:

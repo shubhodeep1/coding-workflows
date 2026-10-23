@@ -558,12 +558,13 @@ if [ "${_ai_enabled}" = "true" ] && [ "${_resolver_allowlist_count}" -gt 0 ] \
       fi
     fi
     if [ "${_ai_action}" = "delete" ]; then
-      git rm -q -- "${_ai_path}" || { echo "::error::.ai asset take-base failed path=${_ai_path}"; exit 1; }
+      git rm -q -- "${_ai_path}" || { echo "::error::.ai asset take-base failed path=${_ai_path}"; rm -rf -- "${_ai_dir}"; exit 1; }
     else
-      git checkout MERGE_HEAD -- "${_ai_path}" || { echo "::error::.ai asset take-base failed path=${_ai_path}"; exit 1; }
+      git checkout MERGE_HEAD -- "${_ai_path}" || { echo "::error::.ai asset take-base failed path=${_ai_path}"; rm -rf -- "${_ai_dir}"; exit 1; }
     fi
     if [ -n "$(git ls-files -u -- "${_ai_path}" 2>/dev/null || echo error)" ]; then
       echo "::error::.ai asset take-base left ${_ai_path} unmerged; refusing to dispatch resolver."
+      rm -rf -- "${_ai_dir}"
       exit 1
     fi
     printf '%s\n' "${_ai_path}" >> "${AI_ASSET_TAKE_BASE_PATHS_FILE}"

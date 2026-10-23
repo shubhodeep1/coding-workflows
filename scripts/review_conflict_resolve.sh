@@ -2379,19 +2379,13 @@ _persist_resolver_retry_state_from_current_failure()
     rm -f "${_body_file}"
     return 0
   fi
-  # REST, not `gh pr edit`: gh pr edit is GraphQL-backed and also reads
-  # org/project metadata, so a GH_PAT without read:org failed every write
-  # (tele-funtoken-msg-scoring PR #3933, 5/5 runs) and escalation never fired.
-  # Same single write as before (CLAUDE.md §15).
-  local _body_payload
-  _body_payload="$(mktemp)"
-  if ! jq -n --rawfile body "${_body_file}" '{body: $body}' > "${_body_payload}" \
-    || ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${_body_payload}" >/dev/null; then
+  # REST pulls endpoint (issue #7931, PR #3933): the GraphQL-backed CLI edit
+  # needs read:org and failed every write. Same single write (CLAUDE.md §15).
+  if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -F "body=@${_body_file}" >/dev/null; then
     echo "::warning::Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1 to PR #${PR_NUMBER}; skipping escalation side effects so poller state does not drift from GitHub."
-    rm -f "${_body_file}" "${_body_payload}"
+    rm -f "${_body_file}"
     return 0
   fi
-  rm -f "${_body_payload}"
   _sync_local_pr_body_from_file "${_body_file}"
   rm -f "${_body_file}"
 
@@ -2408,7 +2402,17 @@ _persist_resolver_retry_state_from_current_failure()
     return 0
   fi
 
-  echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
+  # A first-failure non-retryable escalation keeps the run's ordinary failure
+  # comment: RESOLVER_ESCALATED=true would skip the review-autofix-failure:v1
+  # marker, and the review gate's identical-failure cap counts those markers
+  # to stop re-dispatch on this head. Threshold escalations keep suppressing.
+  local _escalated_env=true
+  if [ "$(jq -r '.retry_state.non_retryable // false' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo false)" = "true" ]; then
+    _escalated_env=false
+  fi
+  if [ "${_escalated_env}" = "true" ]; then
+    echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
+  fi
 
   if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh" ]; then
     # shellcheck source=/dev/null
@@ -2417,8 +2421,9 @@ _persist_resolver_retry_state_from_current_failure()
   if type ensure_label_exists >/dev/null 2>&1; then
     ensure_label_exists "ai:resolver-escalated" "${GITHUB_REPOSITORY}" || true
   fi
-  # REST for the same reason as the body write above (gh issue edit is GraphQL).
-  gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:resolver-escalated" >/dev/null 2>&1 \
+  # REST for the same reason as the body write above. Adding a label is
+  # idempotent, so keep the full retry budget.
+  GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:resolver-escalated" >/dev/null 2>&1 \
     || echo "::warning::Failed to apply ai:resolver-escalated to PR #${PR_NUMBER}."
 
   local _comment_id _comment_file _comment_payload _comment_present=false
@@ -2446,7 +2451,7 @@ _persist_resolver_retry_state_from_current_failure()
   fi
   rm -f "${_comment_file}"
 
-  if [ "${_comment_present}" = "true" ]; then
+  if [ "${_comment_present}" = "true" ] && [ "${_escalated_env}" = "true" ]; then
     echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
   fi
 }

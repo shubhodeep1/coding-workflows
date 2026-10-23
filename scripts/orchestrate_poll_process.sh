@@ -10597,7 +10597,7 @@ invoke_judge_for_integration_conflict() {
       [.[]? | select((.user.login // "") == $login)
         | select((.body // "") | type == "string" and startswith("## Integration conflict diagnosis\n"))
         | select((.body // "") | contains($pr))] | last | .body // ""
-      | gsub("<!--[^>]*-->"; "") | .[0:3000]' 2>/dev/null || true)"
+      | gsub("<!--[^>]*-->"; "") | gsub("`"; "'"'"'") | .[0:3000]' 2>/dev/null || true)"
   fi
   local judge_semble_query_file
   local judge_semble_prefetch=""
@@ -12633,7 +12633,8 @@ _integration_retry_state_failure_detail() {
 # _integration_conflict_park_if_stuck <final_pr> <head_sha> <retry_state_json>
 #
 # Called only when the retry state's head_sha equals the final PR's current
-# head (and the state is not escalated: the escalated path runs first). When
+# head, either from the escalated path (after the branch rebuild declined) or
+# for a state that is not escalated. When
 # the newest resolver failure on that head is non-retryable (non_retryable,
 # or an isolation reason the sandbox always refuses) or the identical-failure
 # count reached INTEGRATION_CONFLICT_PARK_GATE_CAP (the review gate's cap
@@ -12795,6 +12796,12 @@ heal_integration_branch_conflict() {
         fi
         if [ -n "${BRANCH_REBUILD_ESCALATED_ERROR:-}" ]; then
           echo "  [integration-heal] ${BRANCH_REBUILD_ESCALATED_ERROR}" >&2
+        fi
+        # The resolver escalates a non-retryable failure on its first run, so
+        # the park (one tracking comment + WARNING naming the reason) is
+        # reached here once the branch rebuild declined, not only below.
+        if _integration_conflict_park_if_stuck "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_state}"; then
+          return 0
         fi
         echo "  [integration-heal] Resolver escape threshold already tripped for final PR #${final_pr} at head ${final_pr_head_sha}; skipping redispatch until the PR head changes."
         local resolver_retry_escalated_detail=""

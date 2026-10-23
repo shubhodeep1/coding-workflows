@@ -183,3 +183,22 @@ printf '%s' "${{judge_prior_diagnosis}}"
 	assert "Final PR #3933: first" in result.stdout
 	assert "injected" not in result.stdout and "other pr" not in result.stdout
 	assert "<!--" not in result.stdout
+
+
+def test_escalated_branch_parks_after_rebuild_declines() -> None:
+	# A non-retryable failure escalates on its first run, so the escalated
+	# branch must reach the park (comment + WARNING) once the rebuild declines.
+	text = _poller_text()
+	heal = _function(text, "heal_integration_branch_conflict")
+	branch_start = heal.index('if [ "${resolver_retry_escalated}" = "true" ] && [ "${resolver_retry_head_sha}" = "${final_pr_head_sha}" ]; then')
+	branch = heal[branch_start:heal.index("\n      fi\n", branch_start)]
+	rebuild = branch.index("_attempt_branch_rebuild_after_escalation")
+	park = branch.index('_integration_conflict_park_if_stuck "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_state}"')
+	generic = branch.index("Resolver escape threshold already tripped")
+	assert rebuild < park < generic
+
+
+def test_prior_diagnosis_cannot_close_its_fence() -> None:
+	text = _poller_text()
+	judge = _function(text, "invoke_judge_for_integration_conflict")
+	assert 'gsub("`"; "' in judge
