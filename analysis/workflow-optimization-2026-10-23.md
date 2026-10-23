@@ -758,3 +758,98 @@ I also read selected step bodies in `implement.yml`, `test-and-mark-stable.yml`,
 | Code modularization | about 16 (new `.github/actions/gh-api-retry-bootstrap/action.yml`, 12 workflows using the bootstrap or resolver, `label_helpers.sh`, `review_rb_judge.sh`, `tg_helpers.sh`) | Large |
 | Expression size reduction | 3 (`test-and-mark-stable.yml`, `implement.yml`, `tests/test_workflow_file_size_limit.py`) | Small |
 | Medium/Low fixes | about 12 (`implement.yml`, `cancel_on_pr_close.yml`, `validate.yml`, `sync_ai_labels.yml`, `review_autofix.yml`, `internal-cancel-on-pr-close.yml`, `gh_helpers.sh`, `orchestrate_poll_process.sh`, plus the 7 resolver workflows in BUG-005) | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-23)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE`: every precondition holds and the implement stage may act without further review. The calls must hit the same endpoint or a strict subset of its fields, with the same pagination, filters and auth. They must sit in the same function or step with no change to state in between. Error handling, the concurrency boundary and the cycle-cache contract must stay the same. `NEEDS_VERIFICATION`: the change looks correct, but static reading cannot prove every precondition. The listed checks must pass before anyone implements it. `RISKY_SKIP`: the change touches at least one hard trigger and must not be auto-implemented. The triggers are a retry, backoff or stall-recovery path; an authentication or identity probe; pagination; a rate-limit-sensitive poll; `orchestrate_poll_process.sh` or other code that defends against races; or log keys that other tools grep for. These findings are listed only so they are visible. All findings follow CLAUDE.md §15 (GitHub API Call Hygiene, `CLAUDE.md:439`).
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: fold the token's own login into the GraphQL issue read already made on the heal-plan gate path**
+- **Safety tag:** `RISKY_SKIP`
+- **Files and lines:** `.github/workflows/plan.yml:2757` (GET `/user`) and `.github/workflows/plan.yml:2758-2760` (GraphQL `repository.issue`). Both are in the same `&&` chain in the `plan_gate_heal` branch (`plan.yml:2752-2771`).
+- **Call count:** 2 per heal-issue plan approval today; 1 after the change. The `else` branch's `/user` read at `plan.yml:2792` cannot run in the same pass and is unaffected.
+- **Endpoints:** REST `GET /user`; GraphQL `POST /graphql` (`repository{issue{body lastEditedAt author{login} labels}}`).
+- **Evidence:**
+  ```bash
+  if plan_gate_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" && [ -n "${plan_gate_login}" ] \
+    && plan_gate_heal_verified="$(gh_retry gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}' ...
+  ```
+  The login is passed into `workflow_failure_heal.py heal-scope verify` as `pipeline_login` (`plan.yml:2759`), and that check compares it with `author_login`. Adding `viewer{login}` to the same query would return the login in the existing call.
+- **Proposed fix (only if a reviewer approves it):** Add `viewer{login}` to the query at `plan.yml:2758`. Build `pipeline_login` from `.data.viewer.login`, and keep the empty-login check so the gate still holds on an empty value.
+- **Safety rationale:** The `/user` read is an identity probe that feeds an authorisation decision (does the heal scope match the pipeline author?), so it is a hard trigger. GraphQL `viewer` and REST `/user` also behave differently for non-PAT tokens: `/user` fails for installation tokens, which makes today's gate fail closed, while `viewer` returns a bot login. The failure mode would change.
+- **Downstream signal:** Do not auto-implement. A human must confirm the step's `GH_TOKEN` can only be `secrets.GH_PAT` (no `|| github.token` fallback). They must also confirm that `heal-scope verify` handles a `[bot]` login the same way. Only then can this be re-tagged.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: hop 1 of the no-op ancestor walk re-reads the current issue's body, which is already on disk**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files and lines:**
+  - The re-fetch: `.github/workflows/implement.yml:5547`, the first pass of the loop at `5546-5559`, where `current="${ISSUE_NUMBER}"` (5545).
+  - The data already present: `implement.yml:201-204` (initial GET, body written to `${RUNTIME_DIR}/issue_body.txt`), `295` (`ISSUE_BODY_FILE` exported to the job env), `997-1000` and `2052-2061,2081` (rewritten from the validated `ISSUE_META_FILE`).
+- **Call count:** Today a first no-op on an issue that is not a re-issue costs 1 call just to find there is no `Re-issued from #N` parent. A full walk at the default `threshold=2` costs 4 calls plus comment pages; the step's own comment at 5537 says "up to 2 * threshold calls". After the change those become 0 and 3 plus pages. That is 2×threshold−1 in general, and 1 call less in every case.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}`
+- **Evidence:**
+  ```bash
+  current="${ISSUE_NUMBER}"
+  for hop in $(seq 1 "${threshold}"); do
+    parent_body="$(gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+  ```
+  On hop 1, `current` is `ISSUE_NUMBER`. The job already holds that issue's body in `ISSUE_BODY_FILE`. "Fetch issue metadata" (`2056-2059`) fails the job if the metadata does not match `ISSUE_NUMBER`. The no-op step's token is the same `secrets.GH_PAT` (`5398`, same as `2034`). `RUNTIME_DIR` still exists at this step: the step reads `${RUNTIME_DIR}/codex_success_noop.flag` at 5428, and `rm -rf "${RUNTIME_DIR}"` only runs at 6957. `implement.yml` has no `-X PATCH .../issues/` and no `gh issue edit --body`.
+- **Proposed fix:** Before the loop, if `[ -s "${ISSUE_BODY_FILE:-}" ]`, read the hop-1 body from that file into a new local (for example `noop_chain_cached_body`, which has no other use in the step). Make the live `gh_retry gh api` call only when the file is missing or empty, or for hops 2 and later. Leave the `--paginate` comments read at 5551-5552 alone. This complements Deep Audit API-002 and does not replace it.
+- **Safety rationale:** The auth scope matches and the hop loop is not a retry loop. The calls are in different steps, though, and the snapshot is from job start, so "no state change in between" cannot be proved statically.
+- **Downstream signal:** Before implementing:
+  1. Grep every script `implement.yml` invokes between "Fetch issue metadata" (2031) and "Handle no-op implementation" (5395), for example `files_touched_scope_guard.py` and `implement_handle_guard_block.sh`, for writes to the issue body (`-X PATCH` on `issues/{n}`, `gh issue edit --body`). Expect none.
+  2. Confirm that the empty files written by the invalid-metadata paths (`972`, `991`) fail the `-s` test and fall back to the live call. They must not be read as "no parent".
+
+**REUSE-002: two GETs of `pulls/{n}` in the codex-agent job before the reviewers run**
+- **Safety tag:** `RISKY_SKIP`
+- **Files and lines:**
+  - `.github/workflows/review_autofix.yml:2240` ("Check PR state (defense-in-depth)", `2229-2253`)
+  - `scripts/review_collect_pr_metadata.sh:231`, called from "Collect PR metadata" at `review_autofix.yml:2655-2662`
+- **Call count:** 2 per review run today; 1 if merged. A third read at `review_autofix.yml:5360` runs only on failure and is excluded, because it is a deliberate fresh state check at failure time.
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{pull_number}`. Both steps use `GH_TOKEN: secrets.GH_PAT` (`2233`, `2657`).
+- **Evidence:** None of the steps between them (`2255`-`2601`: installs, workspace init, Semble, memory record) changes the PR. However, the second read's `head.sha` feeds an explicit stale-head guard:
+  ```bash
+  # Live PR metadata may already point at a newer, unreviewed head.
+  review_metadata_sha="$(jq -r '.head.sha // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || true)"
+  ```
+  (`review_autofix.yml:2840,2850-2857`). The error handling also differs. Line 2240 fails open (`|| echo 'null'`, and a missing state is treated as "open"). Line 231 is fatal under `set -euo pipefail` (`review_collect_pr_metadata.sh:31`).
+- **Proposed fix:** None recommended. Reusing the 2240 snapshot would give the stale-head comparison a payload taken several minutes, and an install phase, earlier. The early read cannot be dropped either: it gates `PR_CLOSED` and `AI_ENGINE_LABELS` before the costly installs, and "Resolve AI engine" (`2266`) runs before metadata collection.
+- **Safety rationale:** This code explicitly defends against an upstream race (a newer head pushed during the run), and merging would also change the fail-open versus fatal semantics. Both are hard triggers.
+- **Downstream signal:** Do not auto-implement. Any reuse needs a design review showing the stale-head guard at 2850-2857 still compares against a live head read.
+
+**REUSE-003: the job reads the token's own login up to 3 times in separate steps**
+- **Safety tag:** `RISKY_SKIP`
+- **Files and lines:** `.github/workflows/implement.yml:850` (PR-not-open hand-off path only), `implement.yml:2086` (every non-skipped run), `implement.yml:2418` (only when a `override=bulk_delete` marker is present, `2415-2417`).
+- **Call count:** 1–3 per implement run today (typically 1); 1 after the change.
+- **Endpoint:** `GET /user`
+- **Evidence:** The comment at `implement.yml:2083-2085` already records that the later bulk-delete identity read is conditional. `clarify.yml:816-818` shows the in-step reuse pattern (`if [ -z "${_rel_login:-}" ]; then ... gh api user`). Carrying the login across steps would require `GITHUB_ENV`.
+- **Proposed fix:** None recommended (see the rationale).
+- **Safety rationale:** These are identity probes feeding trust decisions: `--pipeline-login` for the automation-path grant at 2094, and marker author matching at 2423-2429. The same step warns that issue text can inject into `GITHUB_ENV` (`2105-2107`, "TRUST BOUNDARY (#6504)"). Moving the trusted identity into `GITHUB_ENV` would widen that surface. Error handling also differs: 850 uses `gh_retry`, while 2086 and 2418 make a single raw `gh api` call.
+- **Downstream signal:** Do not auto-implement. A security reviewer must first confirm that no step after 2086 can write a `PIPELINE_LOGIN`-style key into `GITHUB_ENV` from untrusted input. Even then, the saving is at most 2 conditional calls.
+
+### Dead Calls (DEAD-API-###)
+No findings. Excluded after review:
+- `check-failure-triage-historical.yml:123` discards the job-log body (`> /dev/null`), but it does use the exit status and the 404/410 classification (`124-130`), so the call is not dead. In this window every run exited at `:80` (`already_filed`) before reaching it. The Deep Audit Section 2 note and Speed item 1 (remove the workflow) cover it.
+- `test-and-mark-stable.yml:1575`, `:3487` and `:3514` probe a label (GET) before creating it (POST). In the common case the label already exists. Replacing GET-then-POST with a POST that is allowed to 422 (the `ensure_label_exists` pattern, `scripts/label_helpers.sh:163-197`) costs the same number of primary-quota calls and turns a read into a failed write. There is no net gain, so it is not raised.
+- `scripts/check_failure_triage.sh:567-571` makes a second read of `git/ref/heads/{ref}` only after a non-404 error. That is a deliberate retry split, not a duplicate.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — The code is in `orchestrate_poll_process.sh`, which is a hard trigger. Net-new detail: the second call (13042) runs only on the "false and confident" reset path (12998→13034), and `post_state_comment` (13033) and `integration_branch_exists` (13037) run between the two calls. Any skip must keep `SYNC_SUPERSEDED_REASON`, `SYNC_SUPERSEDED_AFFECTED_PATHS_JSON` and `SYNC_SUPERSEDED_CONFLICT_PATHS_JSON` from the first call, because 13046-13048 read them.
+- BATCH-001: RISKY_SKIP — Poller path, and the per-PR `pulls/{n}/files` read is paginated. Swapping it for GraphQL `files(first:100)` changes page-boundary semantics.
+- BATCH-002: RISKY_SKIP — The tag read is a fail-closed guard against a frozen promote cycle (`scripts/promote_candidate_follow.sh:173-174`). It keys on `GH_API_RETRY_LAST_STATUS=404` (`:118`), so a GraphQL `null` or a partial error would need to map to `tag_read_failed`. The change would also remove the `GH_API_RETRY outcome=permanent … tags/promote-cycle-frozen` lines that the report's GH API table counts.
+- API-002: RISKY_SKIP — The comments read is `--paginate` (`implement.yml:5551`), and `comments(last:100)` would miss markers beyond 100 comments. REUSE-001 is the subset that does not touch pagination.
+- API-003: RISKY_SKIP — This is a polling loop with a rate-limit backoff skip that depends on an empty `PR_NUMBER` (`test-and-mark-stable.yml:1412-1416`). Moving to GraphQL changes the rate-limit bucket and that signal. The read at 1498 is a deliberate re-check after `sleep` (comment at `1495-1496`) and must stay.
+- API-004: NEEDS_VERIFICATION — It does not reduce calls and may add retries. Verify that `gh_retry --idempotent` accepts `-X POST` (`gh_helpers.sh:1065-1069`, as the Deep Audit cites) and that a 409 for an already-completed run is treated as permanent, so retries are not wasted.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, API-004 |
+| RISKY_SKIP | 8 | MERGE-001, REUSE-002, REUSE-003, API-001, BATCH-001, BATCH-002, API-002, API-003 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass. REUSE-001 is the best candidate for the next pass once its two checks pass (expected outcome: no writes to the issue body; empty files fall back to the live call).
