@@ -5,13 +5,34 @@
   "entry_id": "processed_command_7991_6369860796_approved",
   "issue_number": 7991,
   "metadata": {
+    "branch": "ai/issue-7991",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "agents.d/7991-test-and-mark-stable-step-scripts.md",
+      "changelog.d/7991-test-and-mark-stable-step-scripts.md",
+      "docs/INVENTORY.md",
+      "scripts/stable_e2e_step_verify_bait_removed.sh",
+      "scripts/stable_e2e_step_wait_review.sh",
+      "tests/review_autofix_step_scripts.py",
+      "tests/test_review_autofix_editor_noop_cascade_contract.py",
+      "tests/test_test_and_mark_stable_live_log_cooldown.py",
+      "tests/test_test_and_mark_stable_phantom_review_run_filter.py",
+      "tests/test_test_and_mark_stable_review_blocked_budget.py",
+      "tests/test_test_and_mark_stable_step_scripts_contract.py"
+    ],
+    "issue_number": 7991,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7991",
+    "pr_number": 8001,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8001",
+    "run_attempt": "1",
+    "run_id": "39988502531",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39988502531"
   },
   "run_attempt": 1,
   "run_id": "39988502531",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-23T16:46:28Z",
+  "status": "completed",
+  "timestamp": "2026-10-23T17:12:31Z",
   "workflow": "implement"
 }
