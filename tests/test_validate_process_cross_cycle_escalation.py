@@ -14,7 +14,14 @@ not runtime behavior, so they stay fast and deterministic.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
+import textwrap
+import unittest
 from pathlib import Path
 
 
@@ -261,10 +268,219 @@ def test_judge_prompts_treat_harness_errors_as_infrastructure() -> None:
 			"judge prompt must distinguish harness failures from application regressions"
 		)
 
+# ---------------------------------------------------------------------------
+# Project #7913 p4: VALIDATION_CYCLE derived from the newest trusted
+# "Runtime validation dispatched" tracking comment when it is unset.
+# ---------------------------------------------------------------------------
+
+class SkipTest(unittest.SkipTest):
+	pass
+
+
+DISPATCH_HEADER = "## \U0001f9ea Runtime validation dispatched"
+PIPELINE_LOGIN = "pipeline-bot"
+
+CYCLE_STUBS = textwrap.dedent(
+	"""\
+	gh_retry() { "$@"; }
+	gh() {
+		printf '%s\\n' "$*" >> "${GH_LOG}"
+		case "$*" in
+			"api user"*) printf '%s\\n' "${STUB_LOGIN:-}" ;;
+			*comments*) cat "${STUB_COMMENTS_FILE:-/dev/null}" ;;
+		esac
+	}
+	is_tracking_run() { [ "${TRACKING_ISSUE_NUM}" -gt 0 ]; }
+	compact_validation_summary_value() { printf '%s' "$1" | tr '\\r\\n' '  '; }
+	"""
+)
+
+
+def _need_tools() -> None:
+	if not shutil.which("jq") or not shutil.which("bash"):
+		raise SkipTest("jq or bash is not installed")
+
+
+def _extract(pattern: str, what: str) -> str:
+	match = re.search(pattern, _validate_process_text(), re.DOTALL | re.MULTILINE)
+	if not match:
+		raise AssertionError(f"{what} not found in validate_process.sh")
+	return match.group(0)
+
+
+def _owner_block() -> str:
+	return _extract(
+		r"^# BEGIN validation owner routing \(project #7913 p1c\)\n.*?^# END validation owner routing\n",
+		"owner routing block",
+	)
+
+
+def _cycle_block() -> str:
+	return _extract(
+		r"^# BEGIN validation cycle derivation \(project #7913 p4\)\n.*?^# END validation cycle derivation\n",
+		"cycle derivation block",
+	)
+
+
+def _escalation_block() -> str:
+	return _extract(
+		r'^if \[ "\$\{DIAG_STATUS\}" = "needs_fixes" \] \\\n.*?^fi\n',
+		"cross-cycle escalation block",
+	)
+
+
+def _dispatch_item(login: str, cycle_line: str) -> str:
+	body = f"{DISPATCH_HEADER}\n\n{cycle_line}\n- Workflow: `ai-validate.yml`"
+	return json.dumps({"login": login, "body": body})
+
+
+def _run_cycle(items: list[str], env: dict[str, str] | None = None, after: str = "") -> tuple[subprocess.CompletedProcess, str]:
+	root = Path(tempfile.mkdtemp(prefix="cycle-derivation-"))
+	try:
+		runtime = root / "runtime"
+		runtime.mkdir()
+		comments = root / "comments.jsonl"
+		comments.write_text("".join(item + "\n" for item in items), encoding="utf-8")
+		gh_log = root / "gh.log"
+		gh_log.write_text("", encoding="utf-8")
+		full_env = {
+			"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+			"HOME": str(root),
+			"RUNTIME_DIR": str(runtime),
+			"GITHUB_REPOSITORY": "acme/widgets",
+			"TRACKING_ISSUE_NUM": "7",
+			"GH_LOG": str(gh_log),
+			"STUB_LOGIN": PIPELINE_LOGIN,
+			"STUB_COMMENTS_FILE": str(comments),
+			"VALIDATION_CYCLE": "1",
+			"VALIDATION_CYCLE_EXPLICIT": "false",
+			"VALIDATION_CYCLE_INVALID_ENV": "false",
+		}
+		full_env.update(env or {})
+		script = root / "run.sh"
+		script.write_text(
+			"set -euo pipefail\n" + CYCLE_STUBS + _owner_block() + _cycle_block()
+			+ 'echo "RESULT_CYCLE=${VALIDATION_CYCLE}"\n' + after,
+			encoding="utf-8",
+		)
+		proc = subprocess.run(["bash", str(script)], env=full_env, capture_output=True, text=True, timeout=120)
+		return proc, gh_log.read_text(encoding="utf-8")
+	finally:
+		shutil.rmtree(root, ignore_errors=True)
+
+
+def _result_cycle(proc: subprocess.CompletedProcess) -> str:
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	for line in proc.stdout.splitlines():
+		if line.startswith("RESULT_CYCLE="):
+			return line.split("=", 1)[1]
+	raise AssertionError("no RESULT_CYCLE line: " + proc.stdout)
+
+
+def test_cycle_derivation_defaulting_records_explicit_before_default() -> None:
+	text = _validate_process_text()
+	explicit = text.find('VALIDATION_CYCLE_EXPLICIT="true"')
+	default = text.find('VALIDATION_CYCLE="${VALIDATION_CYCLE:-1}"')
+	assert explicit != -1 and default != -1
+	assert explicit < default, "explicit-value flag must be recorded before the :-1 default"
+
+
+def test_cycle_derivation_runs_before_prior_comments_fetch() -> None:
+	text = _validate_process_text()
+	call = text.find("\nvalidation_cycle_resolve || true\n")
+	owner_end = text.find("# END validation owner routing\n")
+	prior = text.find('PRIOR_COMMENTS="$(gh_retry gh api')
+	assert call != -1 and owner_end != -1 and prior != -1
+	assert owner_end < call < prior
+
+
+def test_cycle_derived_from_trusted_dispatch_comment() -> None:
+	_need_tools()
+	proc, _ = _run_cycle([_dispatch_item(PIPELINE_LOGIN, "- Cycle: 2"), _dispatch_item(PIPELINE_LOGIN, "- Cycle: 3")])
+	assert _result_cycle(proc) == "3"
+	assert "VALIDATION_CYCLE_SOURCE source=dispatch_comment cycle=3" in proc.stdout
+
+
+def test_explicit_cycle_env_wins_without_comment_read() -> None:
+	_need_tools()
+	proc, gh_log = _run_cycle(
+		[_dispatch_item(PIPELINE_LOGIN, "- Cycle: 3")],
+		env={"VALIDATION_CYCLE": "5", "VALIDATION_CYCLE_EXPLICIT": "true"},
+	)
+	assert _result_cycle(proc) == "5"
+	assert "VALIDATION_CYCLE_SOURCE source=env cycle=5" in proc.stdout
+	assert "comments" not in gh_log and "api user" not in gh_log, gh_log
+
+
+def test_invalid_explicit_cycle_is_not_derived() -> None:
+	_need_tools()
+	proc, gh_log = _run_cycle(
+		[_dispatch_item(PIPELINE_LOGIN, "- Cycle: 3")],
+		env={"VALIDATION_CYCLE": "1", "VALIDATION_CYCLE_EXPLICIT": "true", "VALIDATION_CYCLE_INVALID_ENV": "true"},
+	)
+	assert _result_cycle(proc) == "1"
+	assert "source=default cycle=1 reason=invalid_env" in proc.stdout
+	assert "comments" not in gh_log
+
+
+def test_untrusted_dispatch_comments_are_ignored() -> None:
+	_need_tools()
+	proc, _ = _run_cycle([_dispatch_item(PIPELINE_LOGIN, "- Cycle: 2"), _dispatch_item("outsider", "- Cycle: 9")])
+	assert _result_cycle(proc) == "2"
+	assert "source=dispatch_comment cycle=2" in proc.stdout
+
+	proc, _ = _run_cycle([_dispatch_item("outsider", "- Cycle: 9")])
+	assert _result_cycle(proc) == "1"
+	assert "source=default cycle=1 reason=no_dispatch_comment" in proc.stdout
+
+
+def test_malformed_cycle_line_falls_back_to_one() -> None:
+	_need_tools()
+	for bad in ("- Cycle: abc", "- Cycle: 0", "- Cycle: 9999999"):
+		proc, _ = _run_cycle([_dispatch_item(PIPELINE_LOGIN, "- Cycle: 4"), _dispatch_item(PIPELINE_LOGIN, bad)])
+		assert _result_cycle(proc) == "1", bad
+		assert "source=default cycle=1 reason=malformed_cycle" in proc.stdout, bad
+
+
+def test_cycle_login_unavailable_falls_back_to_one() -> None:
+	_need_tools()
+	proc, _ = _run_cycle([_dispatch_item(PIPELINE_LOGIN, "- Cycle: 3")], env={"STUB_LOGIN": ""})
+	assert _result_cycle(proc) == "1"
+	assert "source=default cycle=1 reason=login_unavailable" in proc.stdout
+
+
+def test_cycle_not_tracking_run_makes_no_api_call() -> None:
+	_need_tools()
+	proc, gh_log = _run_cycle([_dispatch_item(PIPELINE_LOGIN, "- Cycle: 3")], env={"TRACKING_ISSUE_NUM": "0"})
+	assert _result_cycle(proc) == "1"
+	assert "reason=not_tracking_run" in proc.stdout
+	assert gh_log == ""
+
+
+def test_escalation_fires_at_derived_cycle_three() -> None:
+	_need_tools()
+	after = textwrap.dedent(
+		"""\
+		DIAG_STATUS="needs_fixes"
+		FAILURE_FINGERPRINT="abc"
+		PRIOR_FINGERPRINT_HITS=0
+		ESCALATED_FROM_NEEDS_FIXES=false
+		PRIOR_COMMENTS='<!-- validation-failure-fingerprint: abc cycle: 1 -->
+		<!-- validation-failure-fingerprint: abc cycle: 2 -->'
+		"""
+	) + _escalation_block() + 'echo "RESULT_STATUS=${DIAG_STATUS} ESCALATED=${ESCALATED_FROM_NEEDS_FIXES}"\n'
+	proc, _ = _run_cycle([_dispatch_item(PIPELINE_LOGIN, "- Cycle: 3")], after=after)
+	assert _result_cycle(proc) == "3"
+	assert "RESULT_STATUS=harness_error ESCALATED=true" in proc.stdout, proc.stdout
+	assert "Cross-cycle escalation" in proc.stdout
+
+
 def main() -> int:
 	failed = 0
 	for name in sorted(n for n in globals() if n.startswith("test_")):
 		try: globals()[name]()
+		except SkipTest as exc:
+			print(f"  SKIP  {name}: {exc}")
 		except Exception as exc:
 			print(f"  FAIL  {name}: {exc}")
 			failed += 1

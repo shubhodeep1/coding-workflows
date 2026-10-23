@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **Validation now knows which cycle it is on, so the cross-cycle escalation can fire.** When `VALIDATION_CYCLE` is not set, `scripts/validate_process.sh` takes the cycle from the newest "Runtime validation dispatched" comment on the tracking issue.
+
+Neither `validate.yml` nor the consumer `ai-validate.yml` wrapper passes `VALIDATION_CYCLE`, so every run counted as cycle 1 and the escalation from repeated `needs_fixes` to `harness_error`, which needs cycle 3, never ran. The script now reads the `- Cycle: <N>` line of the newest dispatch comment written by the pipeline account. Comments by anyone else are ignored, and a missing or malformed line, a failed read or a run without a tracking issue keeps cycle 1. An explicit `VALIDATION_CYCLE` still wins. Each run logs `VALIDATION_CYCLE_SOURCE source=env|dispatch_comment|default cycle=<N>`. Refs #7913.
