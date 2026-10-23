@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The orphans, orchestrate, validate-fx, negative and alt-model icons on that line now show each job's result (`\u2298` when skipped) instead of a fixed `\u2713`.\"\n  expected_change_site: tests/test_apply_analysis_on_main.py, test_release_gate_only_mode_contract\n  confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: tests/test_apply_analysis_on_main.py has no assertions about the `_result_icon` helper, the supplemental job icon variables (ORPHANS, ORCHESTRATE_DECOMPOSE, VALIDATE_STANDALONE, CLARIFY_REJECTS, ALT_MODEL), or the summary line that uses them. Reviewer severity: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP:\n  Requirement: \"The orphans, orchestrate, validate-fx, negative and alt-model icons on that line now show each job's result (`\u2298` when skipped) instead of a fixed `\u2713`.\"\n  Expected change site: tests/test_apply_analysis_on_main.py, test_release_gate_only_mode_contract\n  Evidence of absence: tests/test_apply_analysis_on_main.py has no assertions about the `_result_icon` helper, the supplemental job icon variables (ORPHANS, ORCHESTRATE_DECOMPOSE, VALIDATE_STANDALONE, CLARIFY_REJECTS, ALT_MODEL), or the summary line that uses them.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "6b740c3eae9ac5f0d41e799d727e0d24e53f8e78703a5835332a73b62afc76c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7977,
+    "run_id": "40000188209",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40000188209",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023184641_bd2a824b16",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7977,
+    "run_id": "40000188209"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T18:46:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
