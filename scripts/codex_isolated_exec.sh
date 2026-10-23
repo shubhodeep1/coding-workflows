@@ -406,6 +406,20 @@ if [ "${action}" = prepare ]; then
 						pnpm) npx --yes pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true ;;
 						npm-install) npm install --ignore-scripts 2>&1 || install_failed=true ;;
 					esac
+					# Nested Node projects with their own lockfile (stage-deps writes
+					# "<n> <mode> <dir>" lines; only STAGE/nested/<n> is installed here).
+					if [ -f .codex-deps/nested ]; then
+						while read -r nested_idx nested_mode nested_dir; do
+							case "${nested_idx}" in ""|*[!0-9]*) continue ;; esac
+							[ -d "nested/${nested_idx}" ] && [ ! -L "nested/${nested_idx}" ] || continue
+							echo "CODEX_ISOLATION deps nested_node index=${nested_idx} mode=${nested_mode}"
+							case "${nested_mode}" in
+								npm-ci) (cd "nested/${nested_idx}" && npm ci --ignore-scripts) 2>&1 || install_failed=true ;;
+								yarn) (cd "nested/${nested_idx}" && npx --yes yarn install --frozen-lockfile --ignore-scripts) 2>&1 || install_failed=true ;;
+								pnpm) (cd "nested/${nested_idx}" && npx --yes pnpm install --frozen-lockfile --ignore-scripts) 2>&1 || install_failed=true ;;
+							esac
+						done < .codex-deps/nested
+					fi
 					case "$(cat .codex-deps/python)" in
 						requirements) pip install -r .codex-deps/requirements.txt 2>&1 || install_failed=true ;;
 						both) pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
@@ -424,6 +438,7 @@ if [ "${action}" = prepare ]; then
 			elif [ -e "${stage}/node_modules" ] || [ -L "${stage}/node_modules" ]; then
 				echo "::warning::CODEX_ISOLATION node_modules hand-off skipped" >&2
 			fi
+			workspace_py handoff-nested "${stage}" "${root}/work" || echo "::warning::CODEX_ISOLATION nested node_modules hand-off failed" >&2
 			if [ -f "${stage}/.codex-deps/source-install" ]; then
 				# Editable builds may write into the disposable copy. prep-finalize
 				# restores snapshotted files and quarantines new build output before

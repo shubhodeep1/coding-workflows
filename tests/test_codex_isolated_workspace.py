@@ -879,3 +879,83 @@ def test_isolated_runner_and_implement_step_pass_the_default_branch_base():
 	assert "git show isolated-base:<path>" in inline
 	assert "`git diff HEAD` shows the edits from this run that you have not" in inline
 	assert "`git log isolated-base..HEAD`." in inline
+
+
+def _nested_project(work, rel, lock="package-lock.json"):
+	project = work / rel
+	project.mkdir(parents=True, exist_ok=True)
+	(project / "package.json").write_text('{"name":"nested"}')
+	if lock:
+		(project / lock).write_text("{}\n")
+	(project / "index.ts").write_text("not source for the networked container\n")
+	return project
+
+
+def test_stage_deps_stages_nested_node_projects_with_lockfiles(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	(work / "requirements.txt").write_text("requests==2.32.3\n")
+	_nested_project(work, "cloudflare/worker")
+	_nested_project(work, "proxy", lock="yarn.lock")
+	_nested_project(work, "nolock", lock=None)  # no lockfile: not installed
+	_nested_project(work, "tools/node_modules/pkg")  # dependency tree: skipped
+	_nested_project(work, "web/dist/app")  # build output: skipped
+	_nested_project(work, ".hidden/app")  # dot directory: skipped
+	_nested_project(work, "a/b/c/d/e")  # deeper than MAX_NESTED_NODE_DEPTH
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	assert "stage-deps node=none python=requirements nested_node=2" in proc.stderr
+	assert (stage / ".codex-deps" / "nested").read_text() == "0 npm-ci cloudflare/worker\n1 yarn proxy\n"
+	assert tree(stage / "nested") == ["0/package-lock.json", "0/package.json", "1/package.json", "1/yarn.lock"]
+
+
+def test_stage_deps_nested_skips_installed_and_symlinked_projects(repo, tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	(_nested_project(work, "installed") / "node_modules").mkdir()
+	(work / "linked").symlink_to(_nested_project(tmp_path / "outside", "pkg"))
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	assert "nested_node=0" in proc.stderr
+	assert not (stage / ".codex-deps" / "nested").exists()
+	assert not (stage / "nested").exists()
+
+
+def test_stage_deps_caps_nested_node_projects(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	for index in range(10):
+		_nested_project(work, f"pkg{index}")
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	assert "nested_node_skipped=2 reason=project_limit" in proc.stderr
+	assert len((stage / ".codex-deps" / "nested").read_text().splitlines()) == 8
+
+
+def test_handoff_nested_moves_node_modules_and_refuses_unsafe_targets(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	_nested_project(work, "cloudflare/worker")
+	_nested_project(work, "taken")
+	(work / "taken" / "node_modules").mkdir()
+	(tmp_path / "elsewhere").mkdir()
+	(work / "linkdir").symlink_to(tmp_path / "elsewhere")
+	stage = tmp_path / "stage"
+	(stage / ".codex-deps").mkdir(parents=True)
+	(stage / ".codex-deps" / "nested").write_text(
+		"0 npm-ci cloudflare/worker\n1 npm-ci taken\n2 npm-ci linkdir\n3 npm-ci ../escape\n4 npm-ci missing\n")
+	for index in range(5):
+		(stage / "nested" / str(index) / "node_modules" / "pkg").mkdir(parents=True)
+	proc = run("handoff-nested", stage, work)
+	assert "handoff-nested moved=1 skipped=4" in proc.stderr
+	assert (work / "cloudflare" / "worker" / "node_modules" / "pkg").is_dir()
+	assert not (work / "taken" / "node_modules" / "pkg").exists()
+	assert not (tmp_path / "elsewhere" / "node_modules").exists()
+	assert not (tmp_path / "escape").exists()
+
+
+def test_handoff_nested_without_list_is_a_no_op(tmp_path):
+	(tmp_path / "stage").mkdir()
+	(tmp_path / "work").mkdir()
+	proc = run("handoff-nested", tmp_path / "stage", tmp_path / "work")
+	assert "handoff-nested" not in proc.stderr
