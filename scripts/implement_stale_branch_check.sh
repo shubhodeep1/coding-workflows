@@ -45,9 +45,11 @@ if ! [[ "${stale_branch_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 	exit 1
 fi
 
-# Retry transient errors through gh_retry when implement.yml staged
-# gh_helpers.sh beside this copy; otherwise use one raw call. At most two
-# attempts, so rate-limit waits cannot stall the push step (failure = keep).
+# Use gh_retry (stderr handling, rate-limit breaker) when implement.yml staged
+# gh_helpers.sh beside this copy; otherwise one raw call. Exactly one attempt:
+# with GH_RETRY_MAX_ATTEMPTS=1 gh_retry never sleeps for a rate-limit reset
+# (it only waits before a further attempt), so the push step cannot stall,
+# and any failure already means keep.
 STALE_BRANCH_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"
 # shellcheck disable=SC1090
 if ! { [ -f "${STALE_BRANCH_GH_HELPERS_FILE}" ] && source "${STALE_BRANCH_GH_HELPERS_FILE}" && declare -F gh_retry >/dev/null; }; then
@@ -59,7 +61,7 @@ fi
 
 stale_branch_owner="${stale_branch_repo%%/*}"
 stale_branch_rc=0
-stale_branch_count="$(GH_RETRY_MAX_ATTEMPTS=2 gh_retry gh api "repos/${stale_branch_repo}/pulls?state=open&head=${stale_branch_owner}:${stale_branch_name}&per_page=1" --jq 'if type == "array" then length else -1 end')" || stale_branch_rc=$?
+stale_branch_count="$(GH_RETRY_MAX_ATTEMPTS=1 gh_retry gh api "repos/${stale_branch_repo}/pulls?state=open&head=${stale_branch_owner}:${stale_branch_name}&per_page=1" --jq 'if type == "array" then length else -1 end')" || stale_branch_rc=$?
 if [ "${stale_branch_rc}" -ne 0 ]; then
 	stale_branch_log keep api_unavailable "rc=${stale_branch_rc}"
 	exit 1

@@ -61,7 +61,7 @@ def _install_fake_gh(tmp: Path) -> tuple[Path, Path]:
 
 
 def _staged_helper_dir(tmp: Path) -> Path:
-	"""A run dir holding only the helper, as implement.yml stages it (no gh_helpers.sh: one raw call)."""
+	"""A run dir holding only the helper (implement.yml also stages gh_helpers.sh; without it the helper makes one raw call)."""
 	run_dir = tmp / "staged_support_run" / "scripts"
 	run_dir.mkdir(parents=True)
 	shutil.copy2(HELPER, run_dir / HELPER.name)
