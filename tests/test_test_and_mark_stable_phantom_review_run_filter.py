@@ -21,7 +21,12 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -54,7 +59,8 @@ REAL_REVIEW_RUN = {
 
 
 def _workflow_text() -> str:
-	return TEST_AND_MARK_STABLE.read_text(encoding="utf-8")
+	# Phase 4 body lives in scripts/stable_e2e_step_wait_review.sh (#7991).
+	return expanded_test_and_mark_stable_text()
 
 
 def _pinned_filter() -> str:

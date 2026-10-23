@@ -41,7 +41,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from review_autofix_step_scripts import expanded_review_autofix_text, expanded_test_and_mark_stable_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -72,7 +72,8 @@ def _review_autofix_text() -> str:
 
 
 def _test_and_mark_stable_text() -> str:
-	return TEST_AND_MARK_STABLE.read_text(encoding="utf-8")
+	# Phase 4 / 4b bodies live in scripts/stable_e2e_step_*.sh (#7991).
+	return expanded_test_and_mark_stable_text()
 
 
 def _step_block(text: str, step_name: str) -> str:

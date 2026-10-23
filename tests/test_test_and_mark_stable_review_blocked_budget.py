@@ -7,10 +7,15 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
 from runpy import run_path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -20,7 +25,8 @@ extract_refs = run_path(str(REPO_ROOT / "scripts" / "check_workflow_script_refs.
 
 
 def _read_workflow() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# Phase 4 / 4b bodies live in scripts/stable_e2e_step_*.sh (#7991).
+	return expanded_test_and_mark_stable_text()
 
 
 def _slice_between(text: str, start_marker: str, end_marker: str) -> str:
