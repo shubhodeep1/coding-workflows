@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal_queue.py:106-115 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: test_position_cli pins ticket timestamps to a fixed NOW (2026-10-23 12:00 UTC) but the CLI evaluates the lease against the real wall clock with the default 10,800 s lease, so the holder ticket goes stale and the CLI returns `go` instead of `wait` (assertion at line 114).\n  WHY: CI failed at about 15:29 UTC (run 39974885207), turning tests-heal-plan-and-validation and the CI / lint aggregate red and blocking merge; severity disagreement: MAJOR (sonnet, luna) vs BLOCKER (gemini, minimax, qwen), so the highest is used.\n- scripts/workflow_failure_heal_intake.sh:2554-2557 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The comment says a deterministic `transient` (gen > 1) means an earlier heal merged a fix and the failure came back, but gen is raised by any prior closed heal issue with the same fingerprint (scripts/workflow_failure_heal.py:4998-5001).\n  WHY: Behaviour is correct, but the comment misleads maintainers; reviewers suggest \"an earlier heal issue with this harness fingerprint was closed and the failure came back\". Severity is NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal_queue.py:106-114 | severity=MAJOR | confidence=5\n  PROBLEM: test_position_cli uses ticket timestamps from the fixed NOW (line 32), but `_cmd_heal_queue` (scripts/workflow_failure_heal.py:6474-6490) passes no `now`, so the real clock and the default 10,800 s lease apply. The lease check at line 5950 marks the holder stale.\n  WHY: CI at about 15:29 UTC (run 39974885207) returns `go`, so `assert 'go' == 'wait'` fails and blocks CI / lint and auto-merge. Suggested fix: pass `--lease-seconds 999999999` or use real-time-relative created_at.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal_queue.py:114 | severity=BLOCKER | confidence=5\n  PROBLEM: test_position_cli fails because it uses a hardcoded timestamp that has become stale relative to the CI wall clock.\n  WHY: The ticket is evaluated as stale (more than 10,800 s past created_at), so the CLI returns go instead of wait, failing the test and blocking merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal_queue.py:106-114 (NOW at line 32, `_ticket` at 39-41, `base` argv at 112) | severity=BLOCKER | confidence=5\n  PROBLEM: The CLI test pins ticket timestamps to a fixed NOW, but `heal_queue_position` uses `now = now or _utc_now()` (scripts/workflow_failure_heal.py:5936) with lease default 10,800 s (scripts/workflow_failure_heal.py:5882). The CLI exposes only `--lease-seconds` (scripts/workflow_failure_heal.py:7185), never `--now`. The holder ticket goes stale after 2026-10-23T14:59:55Z.\n  WHY: CI run 39974885207 failed at 2026-10-23T15:29:08Z with `AssertionError: assert ('go' == 'wait')` at line 114, so CI / lint is red. The file is inherited from the integration branch but tests/** is in files_touched. Fix: add `\"--lease-seconds\", \"999999999\"` to `base`.\n- scripts/workflow_failure_heal_intake.sh:2554-2557 | severity=NIT | confidence=4\n  PROBLEM: The comment says a deterministic `transient` means an earlier heal merged a fix, but gen is raised by any prior closed heal issue with the same fp (scripts/workflow_failure_heal.py:4911-4913, 4998-5001; is_deterministic_failure at 5054-5069 tests only gen > 1).\n  WHY: Behaviour is correct, but the comment could make a maintainer misread a generation-2 report. Reword to \"an earlier heal issue with this harness fingerprint was closed and the failure came back\".\n- HARDENING (scripts/workflow_failure_heal_intake.sh, `_validation_route_post`, lines 1121-1123): when `grep -v` fails with rc 2 the original body is kept, so a marker-looking line could survive into the posted comment. Fix: truncate the body to the marker alone on `route_grep_rc -ge 2` (about 3 lines).\n- HARDENING (scripts/workflow_failure_heal_intake.sh, `_validation_route_exit`, lines 1159-1163): an exit with no recorded skip reason and rc 0 leaves the marker reason as `unspecified`. Fix: derive the reason from the last recorded skip reason (about 4 lines).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_workflow_failure_heal_queue.py:106-115 | severity=MAJOR | confidence=5\n  PROBLEM: test_position_cli uses ticket timestamps based on the fixed NOW at line 32, but its CLI invocation omits `--now` and `--lease-seconds`.\n  WHY: The CLI uses the real UTC clock and the default 10,800 s lease. At the reported CI run (15:29 UTC) the ticket was stale, so the CLI returned `go` instead of `wait`, failing tests-heal-plan-and-validation and leaving the lint aggregate incomplete.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_failure_heal_queue.py:106-116 | severity=BLOCKER | confidence=5\n  PROBLEM: test_position_cli uses the fixed NOW (line 32) for ticket creation, but `_cmd_heal_queue` (line 6489) passes no `now` to `heal_queue_position`, which uses the real clock via `_utc_now()` (line 5936). With the 10,800 s lease, tickets are stale once the real clock is more than 3 hours past NOW.\n  WHY: CI ran at 15:29:08 UTC, 3 h 29 min after NOW, so the CLI returned `go` and `assert ('go' == 'wait')` failed at line 114, failing tests-heal-plan-and-validation and lint. The test is pre-existing from the integration branch merge (orchestrator/project-7913 into ai/issue-7951), not in the PR diff. Fix: use real-time created_at or add a `--now` flag.\n- scripts/workflow_failure_heal_intake.sh:2554-2557 | severity=NIT | confidence=4\n  PROBLEM: The comment says gen > 1 means an earlier heal merged a fix, but scripts/workflow_failure_heal.py:4998-5001 raises gen for any prior closed heal issue with the same fingerprint.\n  WHY: Behaviour is correct, so only the comment is inaccurate. The editor documented this as intentional. Suggested wording: \"an earlier heal issue with this harness fingerprint was closed and the failure came back\".\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "be1c0a24677aeb488baa6f91386d20dd7d109c95a51ec55026b8857a6e2e2488",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7958,
+    "run_id": "39974697841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39974697841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023160339_867b08f4df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7958,
+    "run_id": "39974697841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T16:03:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
