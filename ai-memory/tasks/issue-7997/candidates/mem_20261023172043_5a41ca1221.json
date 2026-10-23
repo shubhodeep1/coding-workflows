@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning output follows.\n\n## Plan: fix the time-of-day dependence in `test_position_cli`\n\n**What is broken.** `tests/test_workflow_failure_heal_queue.py::test_position_cli` builds its two queue tickets with `_ticket()`. That helper sets `created_at` from a fixed constant, `NOW = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)` (line 32). The test then runs `workflow_failure_heal.py heal-queue position` as a separate process and passes it no time. That command measures ticket age against the real clock and uses the default lease of `HEAL_INTAKE_QUEUE_LEASE_SECONDS` = 10800 seconds (3 hours). The CI shard ran at about 16:09 UTC. By then the holder ticket was about 15,000 seconds old, so the command counted it as stale and answered `go`, while the test expected `wait`. This failure will repeat on every run from now on.\n\n**Fix.** Change only the test. The queue logic and the lease stay as they are. `test_position_cli` should build its tickets from the real clock, as the existing `_live_ticket()` helper (line 243) already does.\n\n**Conflict note.** The workspace snapshot of `scripts/workflow_failure_heal.py` has no `heal-queue` command or `heal_queue_*` functions. A grep for `heal-queue` and `def heal_queue` matched nothing, but the CI run on head `423558e` did run them. So I could not confirm whether `heal-queue position` accepts a `--now` option. The plan does not depend on that option.\n\n## Files likely to change\n\n- `tests/test_workflow_failure_heal_queue.py`\n\n## Functions or modules to implement\n\n- `_ticket(...)` in `tests/test_workflow_failure_heal_queue.py`: add a keyword-only parameter `now: datetime | None = None`. Set `created_at` to `_iso((now or NOW) - timedelta(seconds=age_seconds))`. All existing callers still get `NOW`, so the in-process tests keep using the fixed clock.\n- `test_position_cli(...)`: compute `real_now = datetime.now(timezone.utc)` once, then build the tickets as `_ticket(10, 101, age_seconds=5, now=real_now)` and `_ticket(20, 200, age_seconds=1, now=real_now)`. The ticket ids, run ids, nesting (`[[...], [...]]`), runs file and every assertion stay the same:\n  - The first call still expects `status == \"wait\"` with holder run `101`.\n  - The second call, with `--runs-json` marking run 101 `completed`, still expects `go` with `stale == [10]`.\n  - The `heal-queue ticket` call is unchanged; it does not depend on time.\n- Do not add or use a `--now` CLI option.\n\n## Data structures affected\n\n- None in production code. Only the `created_at` values of the test fixture change.\n\n## API or interface changes\n\n- None. The test helper `_ticket` gains one optional keyword argument with a default, so every existing call works as before.\n\n## Decisions\n\n### D1 \u2014 Real-clock fixture timestamps for the CLI test\n\n- **Chosen:** add an optional `now` parameter to `_ticket` and pass `datetime.now(timezone.utc)` from `test_position_cli`. This follows the existing `_live_ticket()` pattern.\n- **Alternatives considered:**\n  - Pass `--now` to the `heal-queue position` command. Its existence is not visible in this snapshot, so this is unverified.\n  - Pass a very large lease to the command.\n  - Raise or remove the default lease.\n  - Skip the test.\n- **Why:** this is the smallest change. It needs no assumption about a CLI flag I could not read, and it keeps the lease protection that stops dead runs from holding the queue. The ticket ages of 1 to 5 seconds stay far below the 3-hour lease whenever the test runs.\n\n## Security considerations\n\n- No trust boundary, endpoint, authorization or external input changes. The change is limited to test fixtures.\n- Abuse cases: none. Leaving the lease and the queue logic alone keeps the existing guard against stale tickets blocking the queue.\n- No money handling is involved.\n\n## Potential risks or edge cases\n\n- **Clock skew.** The tickets are created at most 5 seconds before the subprocess runs. Even a slow CI runner adds only seconds, nowhere near the 10800-second lease.\n- **Negative ages.** Using the real clock means ticket creation times are always in the past, so ages are never negative. That was a latent problem with the fixed `NOW` before 12:00 UTC on 2026-10-23.\n- **An unexpected default lease.** If the command's default lease were shorter than about 10 seconds, `wait` could still fail. The README and `scripts/workflow_failure_heal_queue.sh:40` document 10800, so this is unlikely.\n- **Exact timestamps.** No assertion compares exact `created_at` values, so changing the fixture times does not affect the checks.\n\n## Testing considerations\n\n- Run `python3 -m pytest tests/test_workflow_failure_heal_queue.py -q` with `PYTHONDONTWRITEBYTECODE=1`. All tests should pass, including `test_position_cli`.\n- The in-process tests that use `_position()` with `now=NOW` should behave the same as before.\n- The file is already wired into CI in the `tests-heal-plan-and-validation` job, so no CI wiring change is needed.\n- No changelog fragment is needed: the change is test-only and alters no behaviour. If a reviewer asks for one, add a one-line `changelog.d/7997-heal-queue-cli-test-clock.md`.\n\nScope-mode: Hold Scope\nReuse-audit: extends _ticket\nScope-mode justification: The triage found a test-only defect: the fixture uses a fixed clock while the command it calls uses the real clock. The smallest complete fix reuses the existing `_ticket` helper with an optional `now` argument and copies the real-clock pattern `_live_ticket()` already uses. Widening scope to the queue logic or the lease would risk correctness, which comes first under \u00a76 (Security > Correctness & safety > Backward compatibility), for no gain. Narrowing scope is not applicable.\n\n## Pre-execution self-check\n\n- The plan touches only the failing test.\n- No production code or lease change is planned.\n- Every existing assertion is kept.\n- Nothing depends on a CLI option this run could not read.\n\nPLAN_SELF_CHECK: WARNING: the `heal-queue` command code is not in the snapshot of `scripts/workflow_failure_heal.py`; the default 10800-second lease and real-clock behaviour come from README.md, `scripts/workflow_failure_heal_queue.sh` and the observed CI result.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "41aa20a83d1d1cb5af38ca721c0907a165befd0dab4cff0c3addc7654572a7d3",
+  "lineage": {
+    "issue_number": 7997,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39992408193",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39992408193",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7997"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261023172043_5a41ca1221",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7997,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39992408193"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7997",
+  "timestamps": {
+    "created_at": "2026-10-23T17:20:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
