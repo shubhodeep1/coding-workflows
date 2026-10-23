@@ -298,6 +298,12 @@ def test_owner_marker_format_and_support_source() -> None:
 		assert f"support={SUPPORT_SHA}" in last and "run=4242" in last and "stage=canary reason=canary_failed" in last
 		from_git = sb.run(body)
 		assert f"support={stage_head}" in from_git.stdout.splitlines()[-1], from_git.stdout
+		# validate.yml exports GIT_DIR / GIT_WORK_TREE for the consumer checkout;
+		# the marker must still record the support checkout's HEAD.
+		subprocess.run(["git", "init", "-q", str(sb.consumer)], check=True)
+		subprocess.run(["git", "-C", str(sb.consumer), "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "consumer"], check=True)
+		consumer_git = sb.run(body, GIT_DIR=str(sb.consumer / ".git"), GIT_WORK_TREE=str(sb.consumer))
+		assert f"support={stage_head}" in consumer_git.stdout.splitlines()[-1], consumer_git.stdout
 		bad_run = sb.run(body, VALIDATE_SUPPORT_SHA=SUPPORT_SHA, GITHUB_RUN_ID="12a")
 		assert "validation-harness-owner" not in bad_run.stdout
 		shutil.rmtree(sb.stage / ".git")

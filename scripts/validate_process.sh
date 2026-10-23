@@ -2327,7 +2327,13 @@ validation_owner_signature()
       fi
     fi
     if [ -z "${signature}" ] && [ -n "${fallback}" ]; then
-      signature="$(compact_validation_summary_value "${fallback}" | python3 -I -B "${helper}" redact-stream 2>/dev/null | head -n 1 | cut -c1-200 || true)"
+      # Normalise the fallback text through error-signature like a log tail,
+      # so one failure keeps one fingerprint whether or not its log exists.
+      compact_validation_summary_value "${fallback}" | python3 -I -B "${helper}" redact-stream > "${tail_file}" 2>/dev/null || : > "${tail_file}"
+      if [ -s "${tail_file}" ]; then
+        signature="$(python3 -I -B "${helper}" error-signature --log-file "${tail_file}" 2>/dev/null | head -n 1 | cut -c1-200 || true)"
+        [ -n "${signature}" ] || signature="$(head -n 1 "${tail_file}" 2>/dev/null | cut -c1-200 || true)"
+      fi
     fi
   fi
   printf '%s\n' "${signature}" > "${out}" 2>/dev/null || true
@@ -2479,7 +2485,9 @@ validation_owner_comment_marker()
   if [[ "${VALIDATE_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
     support="${VALIDATE_SUPPORT_SHA}"
   elif [ -n "${VALIDATE_HELPER_STAGE_DIR:-}" ]; then
-    support="$(git -C "${VALIDATE_HELPER_STAGE_DIR}" rev-parse HEAD 2>/dev/null || true)"
+    # validate.yml exports GIT_DIR / GIT_WORK_TREE for the consumer checkout,
+    # which would override -C; drop them so HEAD is the support checkout's.
+    support="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${VALIDATE_HELPER_STAGE_DIR}" rev-parse HEAD 2>/dev/null || true)"
   fi
   [[ "${support}" =~ ^[0-9a-f]{40}$ ]] || return 0
   printf '\n\n<!-- validation-harness-owner:v1 fp=%s stage=%s reason=%s support=%s run=%s -->' \
@@ -4468,7 +4476,8 @@ case "${renderer_exit}" in
 		;;
 	10)
 		local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Create the required manifest to proceed with template-based validation."
-		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation."
+		validation_owner_fixed generate_failed "${local_failure_summary}"
+		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation.$(validation_owner_comment_marker)"
 		set_tracking_phase_label "ai:validation-failed"
 		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
 		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
@@ -5452,7 +5461,7 @@ case "${DIAG_STATUS}" in
       write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
       tg_notify "Validation cross-cycle escalation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: same fix-up proposal failed $((PRIOR_FINGERPRINT_HITS + 1)) times." "ERROR"
     else
-      HARNESS_FIXES="$(jq -r '.harness_fixes // "Validation harness needs correction."' "${DIAGNOSE_RESULT_FILE}")"
+      HARNESS_FIXES="$(jq -r '(.harness_fixes // "") | if . == "" then "Validation harness needs correction." else . end' "${DIAGNOSE_RESULT_FILE}")"
       failure_summary="Validation harness error: ${HARNESS_FIXES}"
 
       post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}${HARNESS_RUN_REFERENCE}$(validation_owner_comment_marker)"
