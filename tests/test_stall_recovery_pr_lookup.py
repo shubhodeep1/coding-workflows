@@ -630,6 +630,23 @@ if args and args[0] == "api":
 	sys.exit(proc.returncode)
 
 if len(args) >= 2 and args[0] == "pr" and args[1] == "create":
+	# Optional call counter: with MOCK_GH_PR_CREATE_COUNTER_FILE set, every
+	# call is counted, and MOCK_GH_PR_CREATE_FAIL_TIMES=<n> makes calls after
+	# the n-th succeed with MOCK_GH_PR_CREATE_SUCCESS_STDOUT.
+	counter_file = os.environ.get("MOCK_GH_PR_CREATE_COUNTER_FILE", "")
+	if counter_file:
+		try:
+			with open(counter_file, encoding="utf-8") as fh:
+				calls = int(fh.read().strip() or "0")
+		except FileNotFoundError:
+			calls = 0
+		calls += 1
+		with open(counter_file, "w", encoding="utf-8") as fh:
+			fh.write(str(calls))
+		fail_times = os.environ.get("MOCK_GH_PR_CREATE_FAIL_TIMES", "")
+		if fail_times and calls > int(fail_times):
+			sys.stdout.write(os.environ.get("MOCK_GH_PR_CREATE_SUCCESS_STDOUT", ""))
+			sys.exit(0)
 	stdout_text = os.environ.get("MOCK_GH_PR_CREATE_STDOUT", "")
 	stderr_text = os.environ.get("MOCK_GH_PR_CREATE_STDERR", "")
 	if stdout_text:
@@ -1181,13 +1198,21 @@ def _run_create_pr_recovery(
 	*,
 	recovery_pulls: list[dict] | None = None,
 	gh_pr_create_stderr: str = "PR exists for head branch",
+	pr_create_fail_times: int | None = None,
+	pr_create_success_stdout: str = "",
 ) -> tuple[subprocess.CompletedProcess, str]:
 	"""Extract and execute the "Create Pull Request" step under a stubbed
 	`gh` that forces `gh pr create` to fail (to enter the recovery path)
 	and replays the supplied timeline and open-PR inventory responses.
+	`pr_create_fail_times=<n>` lets calls after the n-th succeed with
+	`pr_create_success_stdout`. Every `gh pr create` call is counted in
+	`<tmp>/pr_create_calls`; `sleep` is stubbed out so retries are instant.
 	Returns (proc, github_output_contents)."""
 	bin_dir = tmp / "bin"
 	_install_timeline_gh_stub(bin_dir)
+	sleep_stub = bin_dir / "sleep"
+	sleep_stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	sleep_stub.chmod(0o755)
 
 	# The step references `${{ github.repository }}` in two places
 	# (gh pr create --repo and the timeline URL). Render to a literal.
@@ -1228,6 +1253,10 @@ def _run_create_pr_recovery(
 	env["MOCK_GH_PULLS_JSON"] = json.dumps(recovery_pulls or [])
 	env["MOCK_GH_PR_CREATE_EXIT_CODE"] = "1"
 	env["MOCK_GH_PR_CREATE_STDERR"] = gh_pr_create_stderr
+	env["MOCK_GH_PR_CREATE_COUNTER_FILE"] = str(tmp / "pr_create_calls")
+	if pr_create_fail_times is not None:
+		env["MOCK_GH_PR_CREATE_FAIL_TIMES"] = str(pr_create_fail_times)
+		env["MOCK_GH_PR_CREATE_SUCCESS_STDOUT"] = pr_create_success_stdout
 
 	proc = subprocess.run(
 		["bash", str(script_path)],
@@ -1416,6 +1445,92 @@ def test_create_pr_recovery_picks_first_open_pr_when_multiple_present():
 		# Exactly one pr_url line — broaden-selection regression guard.
 		pr_url_lines = [ln for ln in gh_out.splitlines() if ln.startswith("pr_url=")]
 		assert len(pr_url_lines) == 1, pr_url_lines
+
+
+_GRAPHQL_TRANSIENT_STDERR = (
+	"pull request create failed: GraphQL: Something went wrong while executing "
+	"your query on 2026-10-23T10:31:26Z. Please include "
+	"`3402:44388:25AC187:7A4532A:6ADB377E` when reporting this issue.\n"
+)
+
+
+def _pr_create_calls(tmp: Path) -> int:
+	return int((tmp / "pr_create_calls").read_text(encoding="utf-8").strip() or "0")
+
+
+def test_create_pr_retries_transient_graphql_error_then_succeeds():
+	"""Release run 39926633796: `gh pr create` hit GitHub's transient
+	"Something went wrong while executing your query" error, no PR existed,
+	and the run failed. The step must retry the create and report the URL
+	of the PR the retry opened."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, gh_out = _run_create_pr_recovery(
+			tmp,
+			"7956",
+			[],
+			gh_pr_create_stderr=_GRAPHQL_TRANSIENT_STDERR,
+			pr_create_fail_times=2,
+			pr_create_success_stdout="https://github.com/owner/repo/pull/8000\n",
+		)
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert _pr_create_calls(tmp) == 3
+		assert "pr_url=https://github.com/owner/repo/pull/8000" in gh_out, gh_out
+		assert proc.stdout.count("outcome=retry reason=transient") == 2, proc.stdout
+		assert "outcome=give_up" not in proc.stdout, proc.stdout
+
+
+def test_create_pr_gives_up_after_bounded_transient_retries():
+	"""A transient error that never clears stops after three attempts and
+	fails the step instead of looping."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, gh_out = _run_create_pr_recovery(
+			tmp, "7956", [], gh_pr_create_stderr="HTTP 502: Bad Gateway (https://api.github.com/graphql)\n"
+		)
+		assert proc.returncode == 1, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert _pr_create_calls(tmp) == 3
+		assert "pr_url=" not in gh_out, gh_out
+		assert "attempt=3/3 outcome=give_up reason=no_existing_pr" in proc.stdout, proc.stdout
+
+
+def test_create_pr_does_not_retry_non_transient_error():
+	"""A deterministic error (here: nothing to merge) fails on the first
+	attempt; retrying it would only add delay."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, gh_out = _run_create_pr_recovery(
+			tmp,
+			"7956",
+			[],
+			gh_pr_create_stderr=(
+				"pull request create failed: GraphQL: No commits between main and "
+				"ai/issue-7956 (createPullRequest)\n"
+			),
+		)
+		assert proc.returncode == 1, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert _pr_create_calls(tmp) == 1
+		assert "outcome=retry" not in proc.stdout, proc.stdout
+		assert "attempt=1/3 outcome=give_up" in proc.stdout, proc.stdout
+
+
+def test_create_pr_transient_error_reuses_pr_that_landed_instead_of_retrying():
+	"""If the create actually landed despite the transient error, the
+	recovery lookup finds the PR on the head branch and reuses it; the
+	step must not call `gh pr create` again."""
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		proc, gh_out = _run_create_pr_recovery(
+			tmp,
+			"7956",
+			[],
+			recovery_pulls=[_open_pr_with_body(8000, "Closes #7956", head_ref="ai/issue-7956")],
+			gh_pr_create_stderr=_GRAPHQL_TRANSIENT_STDERR,
+		)
+		assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+		assert _pr_create_calls(tmp) == 1
+		assert "pr_url=https://github.com/owner/repo/pull/8000" in gh_out, gh_out
+		assert "outcome=retry" not in proc.stdout, proc.stdout
 
 
 def test_implement_workflow_does_not_use_buggy_search_form():
