@@ -598,10 +598,13 @@ def test_implement_terminal_check_ignores_other_titles_and_skipped_runs() -> Non
 
 
 def test_implement_terminal_check_treats_unreadable_and_malformed_pages_as_unknown() -> None:
-	first_page = [_run(1000 + i, name="Internal: AI Implement", title=ALT_TITLE) for i in range(100)]
+	# A matching completed run on page 1 stops the progress counter there, so
+	# the terminal walk itself must reach the bad page 2 and fail closed.
+	first_page = [_run(778, name="Internal: AI Implement", conclusion="failure")] + [_run(1000 + i, name="Internal: AI Implement", title=ALT_TITLE) for i in range(99)]
 	for second_page, failed_page in (([], 2), (None, None), ([_run(777, name="Internal: AI Implement", conclusion="failure", status="bad_status")], None), ([_run(777, name="Internal: AI Implement", conclusion="failure") | {"id": "777"}], None), ([_run(777, name="Internal: AI Implement", conclusion="\n::error::injected")], None)):
-		rc, outputs, _calls, log = _run_phase_step("wait-implement", [first_page, second_page], terminal=True, failed_page=failed_page)
+		rc, outputs, calls, log = _run_phase_step("wait-implement", [first_page, second_page], terminal=True, failed_page=failed_page)
 		assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+		assert any("&page=2&" in path for path in _run_pages_requested(calls)), calls
 
 
 def test_implement_terminal_check_treats_full_tenth_page_as_unknown() -> None:
@@ -644,11 +647,12 @@ def test_implement_progress_counter_finds_issue_run_behind_full_noise_page() -> 
 
 def test_implement_progress_counter_ignores_other_issue_runs() -> None:
 	pages = [[_run(601, name="Internal: AI Implement", title=ALT_TITLE, conclusion="failure")]]
-	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, terminal_timeout="2")
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
 	assert "impl_runs: 0 total" in log, log
-	# Only the counter's page-1 read; the terminal walk never runs.
-	assert len(_run_pages_requested(calls)) == 1, _run_pages_requested(calls)
+	# Only the counter's page-1 read on each of the two polls; the terminal walk never runs.
+	assert len(_run_pages_requested(calls)) == 2, _run_pages_requested(calls)
+	assert all("&page=1&" in path for path in _run_pages_requested(calls)), _run_pages_requested(calls)
 
 
 def test_implement_progress_counter_logs_return_to_awaiting_approval() -> None:

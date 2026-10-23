@@ -1446,6 +1446,9 @@ jobs:
           }
 
           IMPL_PREV_LABELS=""
+          # The counter can read up to SCOPED_RUN_LOOKUP_MAX_PAGES pages, so it
+          # re-reads at most every 30s and the last counts are reused in between.
+          IMPL_PROGRESS_NEXT_READ=0
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
@@ -1476,8 +1479,11 @@ jobs:
               --jq '[.labels[].name] | join(",")' || echo "")
 
             # Count this issue's Implement runs across pages (issue #7968).
-            if ! scoped_implement_progress_counts; then
-              IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"
+            if [ "$NOW" -ge "$IMPL_PROGRESS_NEXT_READ" ]; then
+              IMPL_PROGRESS_NEXT_READ=$((NOW + 30))
+              if ! scoped_implement_progress_counts; then
+                IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"
+              fi
             fi
 
             # Name the run when the issue goes back to awaiting approval, so a
@@ -1485,7 +1491,10 @@ jobs:
             if [[ ",${IMPL_PREV_LABELS}," == *",ai:implementing,"* ]] && [[ ",${LABELS}," == *",ai:awaiting-approval,"* ]] && [[ ",${LABELS}," != *",ai:implementing,"* ]]; then
               echo "  ↩ Issue #${ISSUE_NUMBER} returned to ai:awaiting-approval — latest scoped Implement run: id=${IMPL_RUN_ID_LATEST:-unknown} status=${IMPL_RUN_STATUS} conclusion=${IMPL_RUN_CONCLUSION_LATEST}"
             fi
-            IMPL_PREV_LABELS="$LABELS"
+            # A failed label read returns "" and must not erase the last observation.
+            if [ -n "$LABELS" ]; then
+              IMPL_PREV_LABELS="$LABELS"
+            fi
 
             # ── Adaptive signals: step name + commit count ──
             IMPL_STEP_NAME=""
