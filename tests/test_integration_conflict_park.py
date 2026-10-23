@@ -202,3 +202,35 @@ def test_prior_diagnosis_cannot_close_its_fence() -> None:
 	text = _poller_text()
 	judge = _function(text, "invoke_judge_for_integration_conflict")
 	assert 'gsub("`"; "' in judge
+
+
+def test_park_keeps_branch_rebuild_refusal_reason() -> None:
+	result, state, _log = _run_park_with_note("Branch rebuild for 'x' was skipped because branch protection metadata could not be loaded.")
+	assert "outcome=parked" in result.stdout
+	assert state["integration_sync_last_error"].endswith("; branch rebuild: Branch rebuild for 'x' was skipped because branch protection metadata could not be loaded.")
+	text = _poller_text()
+	assert 'INTEGRATION_PARK_REBUILD_NOTE="${BRANCH_REBUILD_ESCALATED_ERROR:-}" _integration_conflict_park_if_stuck' in text
+
+
+def _run_park_with_note(note: str) -> tuple[subprocess.CompletedProcess[str], dict, str]:
+	text = _poller_text()
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		state_file = tmp / "state.json"
+		state_file.write_text("{}", encoding="utf-8")
+		retry_json = json.dumps(_host_only_state())
+		program = f"""set -euo pipefail
+STATE_FILE={state_file!s}
+TRACKING_NUM=3928
+INTEGRATION_CONFLICT_PARK_ENABLED=true
+INTEGRATION_CONFLICT_PARK_GATE_CAP=3
+post_state_comment() {{ :; }}
+post_tracking_comment() {{ :; }}
+tg_notify() {{ :; }}
+{_function(text, "_integration_retry_state_failure_detail")}
+{_function(text, "_integration_conflict_park_if_stuck")}
+INTEGRATION_PARK_REBUILD_NOTE={json.dumps(note)} _integration_conflict_park_if_stuck 3933 {HEAD} '{retry_json}'
+"""
+		result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
+		new_state = json.loads(state_file.read_text(encoding="utf-8"))
+	return result, new_state, ""

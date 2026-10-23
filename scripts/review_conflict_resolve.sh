@@ -2405,9 +2405,13 @@ _persist_resolver_retry_state_from_current_failure()
   # A first-failure non-retryable escalation keeps the run's ordinary failure
   # comment: RESOLVER_ESCALATED=true would skip the review-autofix-failure:v1
   # marker, and the review gate's identical-failure cap counts those markers
-  # to stop re-dispatch on this head. Threshold escalations keep suppressing.
-  local _escalated_env=true
-  if [ "$(jq -r '.retry_state.non_retryable // false' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo false)" = "true" ]; then
+  # to stop re-dispatch on this head. Threshold escalations keep suppressing,
+  # including every escalation while RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED
+  # is off (same switch parsing as the retry-state builder).
+  local _escalated_env=true _non_retryable_switch
+  _non_retryable_switch="$(printf '%s' "${RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  if { [ -z "${_non_retryable_switch}" ] || [ "${_non_retryable_switch}" = "true" ]; } \
+     && [ "$(jq -r '.retry_state.non_retryable // false' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo false)" = "true" ]; then
     _escalated_env=false
   fi
   if [ "${_escalated_env}" = "true" ]; then

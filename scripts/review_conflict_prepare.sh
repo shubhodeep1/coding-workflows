@@ -1439,6 +1439,19 @@ if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; the
     echo "::error::${_det_commit_label:-Manifest union-merge}: unhandled reason=integration_sync detail=fingerprint_unverified; the integration fingerprint check could not run on the merged tree, refusing to commit the ${_det_commit_scope:-manifest-only} resolution of ${_det_commit_path:-${MANIFEST_UNION_PATH}}."
     exit 1
   fi
+  # A .ai asset take-base whose merged tree fails a fingerprint is not
+  # committed: the violating paths (already added to the resolver allowlist
+  # above) go to the resolver, which refuses a taken .ai/ path as host-only
+  # and records the retry state that escalates the head.  Failing here
+  # instead would leave no retry state, so neither escalation nor the
+  # poller's park could ever engage.
+  if [ "${_det_commit_scope:-}" = ".ai-asset-only" ] && [ "${_ff_defer_commit}" != "true" ] \
+     && [ -n "${FP_VIOLATED_FILES_LIST}" ] && [ "${_mu_remaining_unmerged}" -eq 0 ]; then
+    echo "::warning::.ai asset take-base: the merged tree fails merged sub-issue fingerprints; handing the violating path(s) to the resolver instead of committing."
+    _mu_defer_commit=false
+  fi
+fi
+if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; then
   if [ -n "${FP_VIOLATED_FILES_LIST}" ] || [ "${_mu_remaining_unmerged}" -ne 0 ]; then
     echo "::error::${_det_commit_label:-Manifest union-merge}: unhandled reason=integration_sync detail=fingerprint_violations; auto-merged files fail merged sub-issue fingerprints (or unmerged paths remain), refusing to commit the ${_det_commit_scope:-manifest-only} resolution of ${_det_commit_path:-${MANIFEST_UNION_PATH}}."
     exit 1

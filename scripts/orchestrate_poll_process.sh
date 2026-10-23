@@ -12674,6 +12674,11 @@ _integration_conflict_park_if_stuck() {
   else
     park_err="resolver failed identically ${park_count} time(s) on final PR #${final_pr} at head ${head_sha}, so the review gate's identical-failure cap stops new runs (${park_detail:-no detail}); no resolver or judge dispatch until the PR head changes"
   fi
+  # Set only by the escalated call site: keep the branch rebuild's refusal
+  # reason in the persisted error and the tracking comment.
+  if [ -n "${INTEGRATION_PARK_REBUILD_NOTE:-}" ]; then
+    park_err="${park_err}; branch rebuild: ${INTEGRATION_PARK_REBUILD_NOTE}"
+  fi
   prev_status="$(jq -r '.integration_sync_status // ""' "${STATE_FILE}" 2>/dev/null || true)"
   prev_err="$(jq -r '.integration_sync_last_error // ""' "${STATE_FILE}" 2>/dev/null || true)"
   if [ "${prev_status}" = "escalated" ] && [ "${prev_err}" = "${park_err}" ]; then
@@ -12800,7 +12805,7 @@ heal_integration_branch_conflict() {
         # The resolver escalates a non-retryable failure on its first run, so
         # the park (one tracking comment + WARNING naming the reason) is
         # reached here once the branch rebuild declined, not only below.
-        if _integration_conflict_park_if_stuck "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_state}"; then
+        if INTEGRATION_PARK_REBUILD_NOTE="${BRANCH_REBUILD_ESCALATED_ERROR:-}" _integration_conflict_park_if_stuck "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_state}"; then
           return 0
         fi
         echo "  [integration-heal] Resolver escape threshold already tripped for final PR #${final_pr} at head ${final_pr_head_sha}; skipping redispatch until the PR head changes."

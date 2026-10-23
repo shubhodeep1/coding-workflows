@@ -255,6 +255,8 @@ def test_kill_switch_leaves_conflict_fail_closed() -> None:
 
 
 def test_fingerprint_violation_blocks_the_deferred_commit() -> None:
+	# The take-base is not committed; the violating path goes to the resolver
+	# (which records retry state) instead of failing the prepare step.
 	with tempfile.TemporaryDirectory() as tmp_name:
 		tmp = Path(tmp_name)
 		repo = tmp / "repo"
@@ -263,11 +265,29 @@ def test_fingerprint_violation_blocks_the_deferred_commit() -> None:
 		fingerprints = {"1500": {"issue": 1500, "pr": 1501, "must_contain": [{"file": "other.txt", "regex": "^never$"}], "must_not_contain": []}}
 		result, runtime_dir, gh_log = _run(repo, tmp, fingerprints=fingerprints)
 		out = result.stdout + result.stderr
-		assert result.returncode == 1, out
-		assert ".ai asset take-base: unhandled reason=integration_sync" in out
+		assert result.returncode == 0, out
+		assert "handing the violating path(s) to the resolver" in out
+		assert "REGION_FELL_THROUGH" in out
 		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "ours"
+		assert "other.txt" in (runtime_dir / "resolver_unmerged_allowlist.txt").read_text(encoding="utf-8").split()
 		assert not gh_log.exists()
 		assert not (runtime_dir / "ai_asset_take_base_comment.md.posted").exists()
+
+
+def test_fingerprint_on_taken_file_goes_back_to_resolver() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_make_conflict(repo)
+		fingerprints = {"1500": {"issue": 1500, "pr": 1501, "must_contain": [{"file": VALIDATE, "regex": "timeout=120"}], "must_not_contain": []}}
+		result, runtime_dir, gh_log = _run(repo, tmp, fingerprints=fingerprints)
+		out = result.stdout + result.stderr
+		assert result.returncode == 0, out
+		assert "REGION_FELL_THROUGH" in out
+		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "ours"
+		assert VALIDATE in (runtime_dir / "resolver_unmerged_allowlist.txt").read_text(encoding="utf-8").split()
+		assert not gh_log.exists()
 
 
 def test_symlinked_base_copy_is_refused() -> None:

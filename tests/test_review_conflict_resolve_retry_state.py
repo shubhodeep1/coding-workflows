@@ -606,6 +606,9 @@ def test_non_retryable_escalation_keeps_failure_marker() -> None:
 	guarded = persist.split('if [ "${_escalated_env}" = "true" ]; then\n    echo "RESOLVER_ESCALATED=true"', 1)
 	assert len(guarded) == 2
 	assert '[ "${_comment_present}" = "true" ] && [ "${_escalated_env}" = "true" ]' in persist
+	# With RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED=false only threshold
+	# escalations happen, and those keep exporting RESOLVER_ESCALATED=true.
+	assert '"${RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED-true}"' in persist
 
 
 def main() -> int:
