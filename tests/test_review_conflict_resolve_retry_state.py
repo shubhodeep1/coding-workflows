@@ -396,6 +396,60 @@ def test_resolve_script_uses_single_escalation_marker_literal_source() -> None:
 	assert body.count(marker) == 1
 
 
+def _persist_retry_state_function_text() -> str:
+	body = _resolve_script_text()
+	start = body.index("_persist_resolver_retry_state_from_current_failure()")
+	# End at the function's own closing brace (first column-0 "}"), not at the
+	# next function header, so unrelated top-level code is not checked.
+	end = body.index("\n}\n", start) + 2
+	return body[start:end]
+
+
+def test_retry_state_body_write_uses_rest_patch_on_pulls_endpoint() -> None:
+	# Issue #7931: `gh pr edit` goes through GraphQL and needs read:org; the
+	# retry-state body write must use the REST pulls endpoint instead.
+	fn = _persist_retry_state_function_text()
+	patch_call = (
+		'gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" '
+		'-F "body=@${_body_file}" >/dev/null'
+	)
+	assert patch_call in fn
+	assert not re.search(r"gh\s+pr\s+edit", fn)
+	assert "pr edit" not in fn
+	assert "--body-file" not in fn
+	warning = "::warning::Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1"
+	sync_call = '_sync_local_pr_body_from_file "${_body_file}"'
+	assert fn.index(patch_call) < fn.index(warning) < fn.index(sync_call)
+
+
+def test_retry_state_patch_keeps_gh_retry_attempts() -> None:
+	import shutil
+	import subprocess
+
+	if shutil.which("bash") is None:
+		import pytest
+
+		pytest.skip("bash unavailable")
+	helpers = REPO_ROOT / "scripts" / "gh_helpers.sh"
+	proc = subprocess.run(
+		[
+			"bash",
+			"-c",
+			'source "$1"; _gh_cmd_is_unsafe_post gh api -X PATCH repos/o/r/pulls/1 -F body=@/tmp/x',
+			"_",
+			str(helpers),
+		],
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	# Exit 1 means "retryable"; any other non-zero (e.g. 127) means the helper
+	# could not be sourced or was renamed, which must not pass silently.
+	assert proc.returncode == 1, (
+		f"PATCH must keep full gh_retry attempts (rc={proc.returncode}, stderr={proc.stderr[:200]})"
+	)
+
+
 def test_retry_state_artifact_treats_missing_baseline_as_regressed(tmp_path: Path) -> None:
 	_seed_repo_files(tmp_path)
 	artifact = _build_artifact(

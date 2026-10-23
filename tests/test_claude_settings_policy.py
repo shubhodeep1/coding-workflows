@@ -45,6 +45,16 @@ def _render(**kwargs) -> dict:
 	return ce.render_settings(TEMPLATE.read_text(encoding="utf-8"), **options)
 
 
+def test_web_search_adds_an_allow_rule_only_to_the_read_profile() -> None:
+	assert _render(profile="read")["permissions"]["allow"] == ["Read", "Grep", "Glob"]
+	assert _render(profile="read", web_search=True)["permissions"]["allow"] == ["Read", "Grep", "Glob", "WebSearch"]
+	# write runs in bypassPermissions: no allow list, and the deny rules stay.
+	write = _render(profile="write", web_search=True)
+	assert write["permissions"]["allow"] == []
+	assert write["permissions"]["deny"] == _render(profile="write")["permissions"]["deny"]
+	assert not any("WebFetch" in rule for rule in _render(profile="read", web_search=True)["permissions"]["allow"])
+
+
 def test_template_is_json_with_placeholders() -> None:
 	text = TEMPLATE.read_text(encoding="utf-8")
 	json.loads(text)

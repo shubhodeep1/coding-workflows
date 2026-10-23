@@ -235,7 +235,18 @@ if [ "${engine}" = claude ]; then
 	probe_model="$(_ai_engine_py config --key probe_model)"
 	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${engine_role}" instructions_missing; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
-	_ai_engine_py settings --checkout /source --out "${run_root}/claude-settings.json" --profile read --guard-hook /guard.py || { ai_engine_fallback "${engine_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	# Provider-side web search (claude_engine.json `web_search`, default on);
+	# a failed read leaves it off and the relay refuses the tool as before.
+	clarify_web_search="$(_ai_engine_py config --key web_search 2>/dev/null || echo false)"
+	clarify_claude_tools="Read,Grep,Glob"
+	clarify_settings_args=(settings --checkout /source --out "${run_root}/claude-settings.json" --profile read --guard-hook /guard.py)
+	clarify_relay_args=()
+	if [ "${clarify_web_search}" = true ]; then
+		clarify_claude_tools+=",WebSearch"
+		clarify_settings_args+=(--web-search)
+		clarify_relay_args+=(--allow-web-search)
+	fi
+	_ai_engine_py "${clarify_settings_args[@]}" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	chmod 0644 "${run_root}/claude-settings.json"
 	mapfile -t claude_accounts < <(ai_engine_accounts)
 	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" "$(ai_engine_no_account_reason)"; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
@@ -248,7 +259,7 @@ if [ "${engine}" = claude ]; then
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
-			python3 -I -B "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" &
+			python3 -I -B "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" ${clarify_relay_args[@]+"${clarify_relay_args[@]}"} &
 		broker_pid=$!
 		for _ in $(seq 1 50); do
 			[ -S "${run_root}/socket/provider.sock" ] && break
@@ -280,6 +291,7 @@ if [ "${engine}" = claude ]; then
 			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder \
 			--env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 --env DISABLE_AUTOUPDATER=1 \
 			--env "CLAUDE_MODEL=${claude_model}" --env "CLAUDE_EFFORT=${claude_effort}" \
+			--env "CLAUDE_TOOLS=${clarify_claude_tools}" \
 			--env "CLARIFY_ISOLATION_TIMEOUT_SECS=${isolation_timeout}" \
 			--workdir /source "${image}" /bin/bash -c '
 				set -euo pipefail
@@ -294,7 +306,7 @@ if [ "${engine}" = claude ]; then
 						--setting-sources "" --settings /settings.json \
 						--strict-mcp-config --disable-slash-commands \
 						--exclude-dynamic-system-prompt-sections \
-						--tools Read,Grep,Glob --permission-mode dontAsk \
+						--tools "${CLAUDE_TOOLS}" --permission-mode dontAsk \
 						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
 				else
 					claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
@@ -302,7 +314,7 @@ if [ "${engine}" = claude ]; then
 						--setting-sources "" --settings /settings.json \
 						--strict-mcp-config --disable-slash-commands \
 						--exclude-dynamic-system-prompt-sections \
-						--tools Read,Grep,Glob --permission-mode dontAsk \
+						--tools "${CLAUDE_TOOLS}" --permission-mode dontAsk \
 						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
 				fi
 			' || run_rc=$?

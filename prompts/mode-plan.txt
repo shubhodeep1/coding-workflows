@@ -171,8 +171,8 @@ Rules:
 - Prefer repo-local context first. Web search is available only when this
   run has a web tool: Codex runs do (the `web_search` tool is enabled by
   the codex config — `scripts/write_codex_config.sh` defaults
-  `--web-search live`). Claude-engine runs have no web search or web
-  fetch; their system instructions say so. When a web tool is available,
+  `--web-search live`). Claude-engine runs have web search only when their
+  system instructions say the `WebSearch` tool is available, and never web fetch. When a web tool is available,
   use it for public 3rd-party API docs, library reference, RFCs, and
   similar publicly-readable resources. Do NOT use it for
   private/auth-walled resources or anything requiring a credential.
