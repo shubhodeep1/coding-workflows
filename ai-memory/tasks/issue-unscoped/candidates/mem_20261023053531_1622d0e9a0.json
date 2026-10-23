@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:18396-18400 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The batching-contract comment lists \"invalid input\" as a total-failure case costing 1 failed GraphQL call plus the legacy REST calls. The code returns 1 before any API call, and the next sentence in the comment says so.\n  WHY: Nothing fails at runtime, but the comment misstates the per-tick API budget. All four reviewers rated it NIT, so low is the closest level on the ledger's scale.\n- tests/test_orchestrate_poll_process.py:26989-27031 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The four new standalone pipeline-label tests have no `shutil.which(\"jq\")` skip guard.\n  WHY: On a host without jq the tests could fail instead of skipping. Both reviewers rated it NIT, and they gave confidence 5 and 4. Other reviewers disagreed: anthropic_claude-sonnet-5_5 dropped it as not a runtime defect, and minimax_minimax-m3 found that `_make_poller_sandbox` already skips when jq is missing (lines 3112-3113).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:18396-18400 | severity=NIT | confidence=4\n  PROBLEM: The comment says \"invalid input\" costs one failed GraphQL call plus seven REST calls. In fact an unusable label list returns 1 before any API call, and an invalid `GITHUB_REPOSITORY` returns the all-labels fallback object without a GraphQL call. The next sentence in the comment contradicts it.\n  WHY: Nothing fails at runtime. A reader working out the per-tick API budget would be misled, and the caller's fallback is correct either way.\n- Hardening: reword the clause at line 18397 to \"invalid GITHUB_REPOSITORY\" and drop the invalid label list case. Estimated change is 1 line, HARDENING_RISK_SCORE 0.\n- Other sections reported NONE, including task completeness.\n- The reviewer checked a missing-jq-guard finding on the four new tests (around lines 26989-27031), did not carry it forward, and did not report it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:18397 | severity=NIT | confidence=5\n  PROBLEM: The contract comment wrongly claims that invalid input costs \"1 failed GraphQL call\".\n  WHY: On invalid input the helper returns at line 18419 without calling the GraphQL API.\n- tests/test_orchestrate_poll_process.py:26989, 27003, 27016, 27024 | severity=NIT | confidence=5\n  PROBLEM: The new tests have no guard that jq is available.\n  WHY: In local environments without jq they fail with runtime errors instead of skipping cleanly.\n- Hardening 1: update the comment at line 18397 to describe the invalid-input case correctly (no API call, REST fallback). Estimated change is 1 line, HARDENING_RISK_SCORE 0.\n- Hardening 2: add a jq skip guard to the new tests using `pytest.importorskip(\"jq\")`. Estimated change is 1-2 lines per test, HARDENING_RISK_SCORE 1.\n- Other sections reported NONE, including task completeness.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:18396-18400 | severity=NIT | confidence=5\n  PROBLEM: The comment makes two mutually exclusive claims about the same input case. Line 18397 lists \"invalid input\" as a total failure costing a failed GraphQL call plus the REST calls. Lines 18399-18400 say an unusable label list returns 1 with no API call. The `return 1` at lines 18418-18420 happens before any `gh_retry` call.\n  WHY: Nothing executes incorrectly. The comment misleads anyone auditing the API budget and breaks the \u00a714 batching-contract requirement.\n- The reviewer checked and rejected the missing-jq-guard finding: `_make_poller_sandbox` raises `unittest.SkipTest` at tests/test_orchestrate_poll_process.py:3112-3113 when jq is missing.\n- The reviewer confirmed the fix is correct: the only call site (line 20856) handles the `return 1` through the REST fallback at lines 20857-20864.\n- The reviewer checked every deliverable in issue #7929 against the diff and found them all present. Task completeness reported NONE and hardening reported NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:18396-18400 | severity=NIT | confidence=5\n  PROBLEM: The comment lists \"invalid input\" as a total-failure case costing a failed GraphQL call plus the REST calls, but the code at lines 18418-18420 returns 1 with no API call. The comment contradicts itself at lines 18396-18398 versus 18399-18400.\n  WHY: Nothing breaks at runtime because the caller falls back correctly. Anyone auditing the per-tick API budget from the comment would be misled.\n- tests/test_orchestrate_poll_process.py:26989-27031 | severity=NIT | confidence=4\n  PROBLEM: The four new tests lack a `shutil.which(\"jq\")` guard. Eight other jq-dependent tests in the module have one (lines 448, 3109, 17229, 21045, 25257, 25583, 26308, 26528).\n  WHY: On a host without jq the poller exits at its first jq call and the assertions fail instead of skipping. CI runners ship jq, so this only affects local development.\n- Other sections reported NONE, including task completeness.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7cbf80438697dacb28576d364fdd5535a26c47fb4ae69132920ef7f3f6a3e642",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7938,
+    "run_id": "39902580535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39902580535",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023053531_1622d0e9a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7938,
+    "run_id": "39902580535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T05:35:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
