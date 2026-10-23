@@ -25,10 +25,12 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # item 1 `## Files likely to change` (241 -> 245 lines).
 # Issue #7772 added the 11-line "Default-branch reference" rule about the
 # `isolated-base` sandbox branch (245 -> 256 lines).
+# PR #7908 reworded the two-line Claude web-search sentence to defer to the
+# system note's `WebSearch` tool (256 lines, 16_693 -> 16_738 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"0008cf9d9af4dbc012ad0552f2c2126d352b8cce6566845c37ad9a4044163383"
+	"11a210281a239e3d35105ddbf79b2d8ca6f90c4461919cf667644dbec9ce24de"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 16_693
+PRE_EXTRACTION_PROMPT_BYTES = 16_738
 PRE_EXTRACTION_PROMPT_LINES = 256
 
 
