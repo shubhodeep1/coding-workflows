@@ -1176,6 +1176,7 @@ jobs:
             tests/test_review_parse_consolidator.py \
             tests/test_review_pipeline_integration.py \
             tests/test_review_rb_judge_reissue_baseline.py \
+            tests/test_review_sandbox_hidden_build_dirs.py \
             tests/test_review_sandbox_install_timeout.py \
             tests/test_review_static_context_readme.py \
             tests/test_semble_helpers.py \
