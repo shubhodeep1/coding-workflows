@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:2611-2614 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: validation_owner_split_mixed skips the harness-owned issue split when the diagnosis holds more than 50 fix issues, so harness-owned issues stay in the consumer fix-up list.\n  WHY: Severity is the highest of the two reviewers' MAJOR ratings. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 examined the same guard and rejected it as a deliberate, tested \"keep today's path\" fallback. Their reasoning is that the guard fires only when truncated is true AND fix_issues exceeds 50, and that issues past the classifier's cap were never classified.\n- scripts/validate_process.sh:2650-2653 (with 2350-2368) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The escalated_repeat call to validation_owner_fixed passes no fallback text, so the signature can fall back to the shared \"no-error-lines\" sentinel and give every escalated failure one fingerprint across consumers.\n  WHY: A single bounce could then suppress harness reports for unrelated escalated failures. The reviewer rated it NIT because the path is unreachable until VALIDATION_CYCLE is derived (it is >= 3 only at line 5295).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nNotes: The reviewer rejected a pass-1 finding at `scripts/validate_process.sh:2611-2614` because the guard is deliberate and tested. It judged the last-run changes (warn-once sentinel, no memoization on failed jq parse) correct.\nHARDENING_SUGGESTIONS:\n- tests/test_validate_process_owner_routing.py, `test_diagnose_prompts_document_the_optional_fields`: the `subprocess.run` call inherits the ambient environment, so SEMBLE_PREFETCH or WORKFLOW_EDIT_RESTRICTION set in a developer shell can break the render. Suggested fix: pass an `env` with those variables removed (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validate_process.sh:2611-2614 | severity=MAJOR | confidence=4\n  PROBLEM: The harness-owned issue split is skipped when the diagnosis fix-issues list contains more than 50 issues.\n  WHY: Skipping the split sends harness-owned issues down the consumer fix-up path, where they should not go.\n- TASK_GAP (reported as NIT, confidence 5):\n  Requirement: Add optional `files` and `harness_files` fields to the diagnose prompt.\n  Expected change site: prompts/_templates/mode-validate-diagnose.txt, prompts/mode-validate-diagnose.txt, prompts/contracts/mode-validate-diagnose.yml\n  Evidence of absence: The fields were added to the files. Requirement met.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validate_process.sh:2650-2653 (with 2350-2368) | severity=NIT | confidence=3\n  PROBLEM: The escalated_repeat call to validation_owner_fixed passes no fallback text, so the signature can fall back to the shared \"no-error-lines\" sentinel and share one fingerprint across consumers.\n  WHY: One bounce can suppress harness reports for unrelated escalated failures. The path is currently unreachable because VALIDATION_CYCLE >= 3 only at line 5295, and neither validate.yml nor workflow-templates/ai-validate.yml sets VALIDATION_CYCLE.\nHARDENING_SUGGESTIONS:\n- scripts/validate_process.sh, validation_owner_enabled, lines 2224-2229: if RUNTIME_DIR is unset, the warn-once sentinel lands in a shared path and an earlier run's file can suppress the invalid_switch warning. Suggested fix: consult the sentinel only when RUNTIME_DIR is set (about 2 lines). HARDENING_RISK_SCORE: 1\nNotes: The reviewer found no problems in the last-run changes to the warn-once sentinel and the jq-failure handling in validation_owner_load_bounced (2307-2318). It judged task completeness against plan Phase 1 satisfied. It did not adopt openai/gpt-6-luna's finding on 2611-2614.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validate_process.sh:2611-2614 (needs_fixes path at 5317-5337) | severity=MAJOR | confidence=5\n  PROBLEM: When the classifier reports a mixed diagnosis with more than 50 fix issues, the guard skips the split and leaves the whole original list unchanged.\n  WHY: The known harness-owned issues are then included in the consumer fix-up instead of only project-owned ones.\nHARDENING_SUGGESTIONS: NONE (HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1230883a8ba178b0010d7a4f6f4d7021960a20300b5e86aab079ed5452af88d6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7959,
+    "run_id": "39962883372",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39962883372",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023141618_4d76e8dc07",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7959,
+    "run_id": "39962883372"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T14:16:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
