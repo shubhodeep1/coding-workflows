@@ -1096,6 +1096,10 @@ _validation_route_post()
 		log "warn validation_route_already_posted source=${SOURCE_LABEL}"
 		return 0
 	fi
+	if ! [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+		log "warn validation_route_issue_invalid source=${SOURCE_LABEL}"
+		return 0
+	fi
 	route_outcome="$(_validation_route_outcome)"
 	if [ "${route_outcome}" = "opened" ]; then
 		route_issue="${NEW_ISSUE_URL:-}"
@@ -1978,8 +1982,10 @@ case "${ACTION}" in
 		OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence.md"
 		python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" > "${OCCURRENCE_FILE}"
 		if gh_retry gh api "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F body=@"${OCCURRENCE_FILE}" >/dev/null 2>&1; then
+			DUPLICATE_OCCURRENCE_STATE="posted"
 			log "duplicate existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} source=${SOURCE_LABEL} match=${DUPLICATE_MATCH}"
 		else
+			DUPLICATE_OCCURRENCE_STATE="failed"
 			log "warn duplicate_comment_failed existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
 		fi
 		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${DUPLICATE_MATCH}" = "fingerprint" ] && [ "${EXISTING}" = "${ISSUE_NUMBER}" ] && [ "${EXISTING_REPO}" = "${SOURCE_REPO}" ]; then
@@ -1997,7 +2003,11 @@ case "${ACTION}" in
 			VALIDATION_ROUTE_ISSUE="${EXISTING}"
 			{
 				echo "<!-- workflow-failure-heal:outcome -->"
-				echo "Workflow failure heal: this runtime-validation failure matches open heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}}; it was recorded there as another occurrence."
+				if [ "${DUPLICATE_OCCURRENCE_STATE}" = "posted" ]; then
+					echo "Workflow failure heal: this runtime-validation failure matches open heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}}; it was recorded there as another occurrence."
+				else
+					echo "Workflow failure heal: this runtime-validation failure matches open heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}}, but recording the occurrence there failed."
+				fi
 				echo
 				echo "Heal intake run: ${RUN_URL}"
 			} > "${RUNTIME_DIR}/validation_route_comment.md"
@@ -3009,7 +3019,7 @@ if [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ] && [ -z "${NEW_ISSUE_URL}" ]; th
 	if [ "${REPORT_AUTH}" = "reconstructed" ]; then
 		# A scan replay is not a new occurrence (#7333).
 		RECOVERY_OCCURRENCE_STATE="skipped_reconstructed"
-	elif python3 "${HEAL_PY}" compose-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${RECOVERY_OCCURRENCE_FILE}" \
+	elif python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" > "${RECOVERY_OCCURRENCE_FILE}" \
 		&& gh_retry gh api "repos/${HEAL_SCOPE_RECOVERY_REPO}/issues/${HEAL_SCOPE_RECOVERY_ISSUE}/comments" -F body=@"${RECOVERY_OCCURRENCE_FILE}" >/dev/null 2>&1; then
 		RECOVERY_OCCURRENCE_STATE="posted"
 	fi
