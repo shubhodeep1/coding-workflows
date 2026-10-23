@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:7714-7718 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `e2e_ok` logic requires `SKIP_E2E=true` AND `DRY_RUN!=true` for a skipped e2e job, so other skipped e2e cases are reported as failures and dry-run releases with `skip_e2e=true` fall through to the release-FAILED branch.\n  WHY: Reported as SEVERITY: MAJOR, which maps to high here. Two other reviewers (anthropic_claude-sonnet-5_5 and qwen_qwen3_7-plus) rejected this finding. They cite the `e2e-smoke-test` condition `!inputs.skip_e2e && !inputs.dry_run` (workflow line 572), under which the job is skipped only for `skip_e2e` or `dry_run`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:7714-7718 | severity=high | confidence=4\n  PROBLEM: The `e2e_ok` logic requires `SKIP_E2E=true` AND `DRY_RUN!=true` for a skipped e2e job, so other skipped e2e cases are reported as failures and dry-run releases with `skip_e2e=true` fall through to the release-FAILED branch.\n  WHY: Reported as SEVERITY: MAJOR, which maps to high here. `e2e_ok` stays false in those cases, so the notification reports a failure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "320ad7d9261602fae49646d0ba4e7a6f9ebd053f72b0fbb293b84e3385b82110",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7977,
+    "run_id": "40006312967",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40006312967",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023191527_c82741200a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7977,
+    "run_id": "40006312967"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T19:15:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
