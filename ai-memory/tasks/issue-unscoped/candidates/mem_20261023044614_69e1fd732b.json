@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_conflict_resolve_retry_state.py:444 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The assertion `assert proc.returncode != 0` in test_retry_state_patch_keeps_gh_retry_attempts accepts any non-zero exit, not the specific exit 1 that `_gh_api_args_unsafe_post` returns for PATCH (`scripts/gh_helpers.sh:722-724`), so a sourcing failure or helper rename (exit 127) also passes.\n  WHY: This is the only guard that the new PATCH keeps its gh_retry attempts, and it degrades to a no-op on regression; all reviewers rated it NIT.\n- tests/test_review_conflict_resolve_retry_state.py:429-430 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The bare `return` in `if shutil.which(\"bash\") is None: return` skips the test silently instead of marking it skipped.\n  WHY: A missing-bash environment reports a pass without checking anything; `pytest.skip` would report it correctly. Confidence ranged 3-4 across reviewers (qwen 3).\n- tests/test_review_conflict_resolve_retry_state.py:399-419 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_persist_retry_state_function_text` slices from `_persist_resolver_retry_state_from_current_failure()` (`scripts/review_conflict_resolve.sh:2253`) to the next function header at `scripts/review_conflict_resolve.sh:2438`, not to the closing brace at line 2381, so the extracted region is about 184 lines.\n  WHY: The function-scoped `gh pr edit` and `--body-file` absence assertions run over unrelated code, so a later unrelated addition could fail the test with a misleading message.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_conflict_resolve_retry_state.py:test_retry_state_patch_keeps_gh_retry_attempts (assert line, early `if shutil.which(\"bash\") is None: return`) | severity=low (NIT) | confidence=4\n  PROBLEM: `_gh_cmd_is_unsafe_post` returns exactly 1 for PATCH (`scripts/gh_helpers.sh:722-724`), but the assertion accepts any non-zero exit, so a failed `source` or a renamed helper (exit 127) also passes. The bare `return` when bash is missing skips silently.\n  WHY: This is the only guard that the new PATCH keeps its retries, so the suite stays green while the guard checks nothing.\n- HARDENING_SUGGESTIONS: assert `proc.returncode == 1` and `\"command not found\" not in proc.stderr`; use `pytest.skip` instead of the bare `return` (about 3 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_conflict_resolve_retry_state.py:444 (with lines 429-430) | severity=low (NIT) | confidence=5\n  PROBLEM: The assertion accepts any non-zero exit. The property under test is exit 1 from `_gh_api_args_unsafe_post` (`scripts/gh_helpers.sh:722-724`, reached from `_gh_cmd_is_unsafe_post` at `scripts/gh_helpers.sh:804-816`). A failed source or a renamed helper exits 127 and still passes. The early `return` at line 430 turns a missing bash into a silent pass.\n  WHY: If gh_retry classifies this PATCH as an unsafe POST (max_attempts=1 at `scripts/gh_helpers.sh:1067-1069`), or a sourcing or rename regression lands, the test stays green and the retry contract loses its only guard.\n- tests/test_review_conflict_resolve_retry_state.py:399-405 (consumed by lines 417-419) | severity=low (NIT) | confidence=4\n  PROBLEM: The slice starts at the `_persist_resolver_retry_state_from_current_failure()` header (`scripts/review_conflict_resolve.sh:2253`) and ends at `_resolver_mirror_paired_live_copies()` at `scripts/review_conflict_resolve.sh:2438`, not at the function's closing brace at `scripts/review_conflict_resolve.sh:2381`. The region is about 184 lines and includes the sandbox-pairing block (lines 2382-2437).\n  WHY: The `gh pr edit` and `--body-file` absence assertions are named as function-scoped but run over a wider region, so a later unrelated addition could fail the test with a misleading message.\n- HARDENING_SUGGESTIONS: replace with `assert proc.returncode == 1, f\"PATCH must keep full gh_retry attempts (rc={proc.returncode}, stderr={proc.stderr[:200]})\"`, call `pytest.skip(\"bash unavailable\")` inside the `shutil.which(\"bash\") is None` branch, and optionally add a positive control for POST (about 3 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_conflict_resolve_retry_state.py:444 | severity=low (NIT) | confidence=4\n  PROBLEM: `assert proc.returncode != 0` accepts any nonzero exit, not the expected exit code for a retryable PATCH.\n  WHY: If sourcing `gh_helpers.sh` fails or `_gh_cmd_is_unsafe_post` is renamed, bash exits nonzero and the test still passes without verifying the retry classification.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_conflict_resolve_retry_state.py:444 (test_retry_state_patch_keeps_gh_retry_attempts) | severity=low (NIT) | confidence=4\n  PROBLEM: The assertion accepts any non-zero exit, not the specific exit 1 that `_gh_api_args_unsafe_post` returns for PATCH (`scripts/gh_helpers.sh:722-723`). If `source \"$1\"` fails or `_gh_cmd_is_unsafe_post` is renamed, bash exits 127 and the test still passes.\n  WHY: This is the only guard that the new PATCH keeps its retries, and it becomes a no-op on any sourcing regression.\n- tests/test_review_conflict_resolve_retry_state.py:429-430 | severity=low (NIT) | confidence=3\n  PROBLEM: The bare `return` when bash is missing skips the test silently instead of marking it skipped.\n  WHY: On a system without bash the test passes without checking anything; `pytest.skip(\"bash not available\")` would report it correctly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ad577478b7d18b7a21c774dc1aff7720039458b92913bffd3e34991fef91679e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7936,
+    "run_id": "39895143801",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39895143801",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023044614_69e1fd732b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7936,
+    "run_id": "39895143801"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T04:46:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
