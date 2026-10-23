@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal_queue.py:106-120 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: test_position_cli pins ticket timestamps to a fixed NOW (2026-10-23T12:00Z), but the `heal-queue position` CLI uses the real current time, so the ticket is treated as stale and the CLI returns \"go\" where the test asserts \"wait\".\n  WHY: The failure depends on wall-clock time (the 10,800 s lease has expired), so it blocks CI (`tests-heal-plan-and-validation`, `lint`) and re-running won't clear it. Severity disagreement: sonnet-5_5 rated it MAJOR and gemini rated it BLOCKER, so the highest is used. Sonnet-5_5 also notes the failure is pre-existing and outside this PR's scope.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal_queue.py:test_position_cli (lines ~106-114); fixed NOW constant at line 32; `_ticket(10, 101, age_seconds=5)` | severity=MAJOR | confidence=5\n  PROBLEM: The test builds ticket timestamps relative to a fixed NOW (2026-10-23T12:00Z), but the `heal-queue position` CLI is not given that time. It falls back to the real current time, so the ticket outlives the 10,800 s lease and is treated as stale. The CLI returns \"go\" where the test asserts \"wait\".\n  WHY: The CI log shows `assert 'go' == 'wait'` at line 114, which fails `tests-heal-plan-and-validation` and the aggregate `lint` check. The failure depends on wall-clock time, not on the PR diff, so re-running CI will not clear it. This PR only changes tests/e2e_smoke_canary.txt, so the failure is pre-existing and outside the issue's stated scope (\"No other file is changed\").\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal_queue.py:106-120 | severity=BLOCKER | confidence=5\n  PROBLEM: The test `test_position_cli` fails because it relies on the real system time instead of the mocked timestamp for ticket lease validation.\n  WHY: The test pins ticket timestamps to a fixed `NOW` (2026-10-23T12:00Z) but the CLI logic in `heal-queue position` (scripts/workflow_failure_heal.py) fetches the current system time. As the CI run occurred past 16:00 UTC (exceeding the 10,800s default lease), the ticket expired prematurely, causing the test to assert 'wait' while receiving 'go'. This blocks the pipeline.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2e2a1e7d6e4a506410d3753a74da97d0c21ea75c686ba4a4929ca0457d7fd3f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7990,
+    "run_id": "39991589039",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39991589039",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023174814_c1cc9fddc6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7990,
+    "run_id": "39991589039"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T17:48:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
