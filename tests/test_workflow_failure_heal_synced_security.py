@@ -315,9 +315,10 @@ def _git(cwd: Path, *args: str) -> None:
 class _Release:
 	"""setup_git hook for base._run_intake: a release commit and a signed identity."""
 
-	def __init__(self, payload: dict, *, identity: bool = True, workflow_file: str = "security-audit.yml", ref_sha: str | None = None, consumers: tuple[str, ...] = (CONSUMER_A, CONSUMER_B), retired: tuple[str, ...] = ()) -> None:
+	def __init__(self, payload: dict, *, identity: bool = True, workflow_file: str = "security-audit.yml", ref_sha: str | None = None, consumers: tuple[str, ...] = (CONSUMER_A, CONSUMER_B), retired: tuple[str, ...] = (), retired_at_head: tuple[str, ...] = ()) -> None:
 		self.payload = payload
 		self.retired = retired
+		self.retired_at_head = retired_at_head
 		self.identity = identity
 		self.workflow_file = workflow_file
 		self.ref_sha = ref_sha
@@ -343,12 +344,27 @@ class _Release:
 		if self.retired:
 			(work / "workflow-templates" / "retired_files.txt").write_text(
 				"# Consumer files retired from the sync.\n" + "".join(f"{path} {'a' * 64}\n" for path in self.retired), encoding="utf-8")
+		# Files the release still ships as .claude/ templates (so they are
+		# managed paths of the consumer's pin) and a later commit retires.
+		for path in self.retired_at_head:
+			template = work / "workflow-templates" / path
+			template.parent.mkdir(parents=True, exist_ok=True)
+			template.write_text("# shipped by the release\n", encoding="utf-8")
 		_git(work, "init", "-q", "-b", "main")
 		_git(work, "config", "user.name", "test")
 		_git(work, "config", "user.email", "test@example.invalid")
 		_git(work, "add", "workflow-templates")
 		_git(work, "commit", "-qm", "release")
 		sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True).stdout.strip()
+		if self.retired_at_head:
+			# After the consumer's pin, HEAD stops shipping the files and lists
+			# them as retired; the release commit has no retired list.
+			for path in self.retired_at_head:
+				_git(work, "rm", "-q", f"workflow-templates/{path}")
+			(work / "workflow-templates" / "retired_files.txt").write_text(
+				"# Consumer files retired from the sync.\n" + "".join(f"{path} {'b' * 64}\n" for path in self.retired_at_head), encoding="utf-8")
+			_git(work, "add", "workflow-templates")
+			_git(work, "commit", "-qm", "retire after the release")
 		self.payload["wrapper_sha"] = sha
 		claims = base._id_claims(
 			now=int(time.time()),
@@ -489,6 +505,24 @@ def test_intake_retired_skip_leaves_live_findings_in_the_same_report() -> None:
 	result, state = _intake(payload, extra_env=SCOPE_GUARD_ON, retired=(RETIRED,))
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert f"skip reason=retired_file file={RETIRED} " in result.stdout
+	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=2 opened=1 occurrences=0 skipped=1" in result.stdout
+	assert len(state.get("issues_created", [])) == 1
+
+
+RETIRED_AFTER_PIN = ".claude/commands/retired-after-pin.md"
+
+
+def test_intake_skips_findings_on_files_retired_only_at_head() -> None:
+	"""A file the consumer's release still ships but a later commit retired is
+	a managed path of the pin, yet HEAD has no source for it any more. Only
+	HEAD's retired_files.txt lists it, so the skip must come from that list
+	(the release commit carries none)."""
+	payload = _payload(findings=[_finding(file=RETIRED_AFTER_PIN, finding_id="after-pin"), _finding(line=30, finding_id="live")])
+	result, state = _intake(payload, extra_env=SCOPE_GUARD_ON, retired_at_head=(RETIRED_AFTER_PIN,))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "report_auth=rejected" not in result.stdout
+	assert f"skip reason=retired_file file={RETIRED_AFTER_PIN} " in result.stdout
+	assert "scope_unresolved" not in result.stdout
 	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=2 opened=1 occurrences=0 skipped=1" in result.stdout
 	assert len(state.get("issues_created", [])) == 1
 
