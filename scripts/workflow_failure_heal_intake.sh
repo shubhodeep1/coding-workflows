@@ -109,7 +109,8 @@
 #                                         OIDC identity; default "false" (transition mode: they
 #                                         are accepted after the binding checks). A report that
 #                                         carries an identity is always verified (issue #6559).
-#   WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS  max age of the identity's iat (default 3600)
+#   WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS  max age of the identity's iat (default 3600), plus
+#                                         HEAL_INTAKE_QUEUE_WAITED_SECONDS (set by the queue step)
 #   WORKFLOW_HEAL_REPORT_ORIGIN           repository_dispatch | workflow_run | workflow_dispatch |
 #                                         recovery_scan (default GITHUB_EVENT_NAME, else
 #                                         repository_dispatch). recovery_scan is set only by
@@ -243,6 +244,10 @@ MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
 MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
 LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
+# Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
+# does not count against the report: the age limit applies at arrival.
+QUEUE_WAITED_SECONDS="$(_positive_or_default "${HEAL_INTAKE_QUEUE_WAITED_SECONDS:-}" 0)"
+REPORT_MAX_AGE=$((REPORT_MAX_AGE + QUEUE_WAITED_SECONDS))
 REQUIRE_REPORT_AUTH="${WORKFLOW_HEAL_REQUIRE_REPORT_AUTH:-false}"
 case "${REQUIRE_REPORT_AUTH,,}" in
 	true|false) REQUIRE_REPORT_AUTH="${REQUIRE_REPORT_AUTH,,}" ;;
