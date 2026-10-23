@@ -146,6 +146,8 @@ def test_unreadable_config_falls_back_to_defaults(tmp_path: Path) -> None:
 		({"probe_model": "Haiku!"}, "probe_model"),
 		({"default_effort": "extreme"}, "default_effort"),
 		({"hide_claude_md": "yes"}, "hide_claude_md"),
+		({"web_search": "yes"}, "web_search"),
+		({"web_search": 1}, "web_search"),
 		({"utility_roles": ["NOT_A_ROLE"]}, "utility_roles"),
 		({"role_defaults": {"PLAN": {"engine": "gpt"}}}, "role_defaults.PLAN.engine"),
 		({"role_defaults": {"PLAN": {"claude_model": "gpt-5"}}}, "role_defaults.PLAN.claude_model"),
@@ -158,6 +160,17 @@ def test_invalid_config_values_keep_their_default(raw: dict, key: str) -> None:
 	assert key in invalid
 	assert config["cli_version"] == ce.DEFAULT_CONFIG["cli_version"]
 	assert config["role_defaults"]["PLAN"] == ce.DEFAULT_CONFIG["role_defaults"]["PLAN"]
+
+
+def test_web_search_defaults_on_and_can_be_turned_off(tmp_path: Path) -> None:
+	assert ce.DEFAULT_CONFIG["web_search"] is True
+	assert ce.normalize_config({})[0]["web_search"] is True
+	config, invalid = ce.normalize_config({"web_search": False})
+	assert invalid == [] and config["web_search"] is False
+	# An invalid value keeps the default, like every other key.
+	assert ce.normalize_config({"web_search": "off"})[0]["web_search"] is True
+	checked_in, invalid = ce.load_config(ce.SCRIPT_DIR.parent / ".github" / "ai" / "claude_engine.json")
+	assert invalid == [] and checked_in["web_search"] is True
 
 
 def test_role_defaults_merge_per_field() -> None:
