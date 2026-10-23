@@ -5302,7 +5302,16 @@ jobs:
   release:
     needs: [source, resolve-version, validate]
     # gate_only runs stop here: every test job above ran, nothing is tagged.
-    if: ${{ success() && !inputs.gate_only }}
+    # Explicit result checks, not success(): GitHub reports success() as false
+    # when any ancestor job was skipped, so with skip_e2e=true (every live e2e
+    # job skipped) a success() gate skipped release even though validate
+    # passed, and nothing was tagged (run 39955031510, 2026-10-23).
+    if: >-
+      !cancelled() &&
+      !inputs.gate_only &&
+      needs.source.result == 'success' &&
+      needs.resolve-version.result == 'success' &&
+      needs.validate.result == 'success'
     runs-on: ubuntu-latest
     # 50, not 10: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
     # (default 30 minutes) for a pending `CI / lint` run, and the tag-push
@@ -6060,7 +6069,10 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   sync-to-main:
     needs: [release]
+    # !cancelled(): without a status function GitHub applies success(), which
+    # is false whenever an ancestor (a skip_e2e e2e job) was skipped.
     if: >-
+      !cancelled() &&
       !inputs.dry_run &&
       !inputs.gate_only &&
       needs.release.result == 'success' &&
@@ -6316,6 +6328,8 @@ jobs:
         if: always()
         env:
           GATE_ONLY: ${{ inputs.gate_only }}
+          SKIP_E2E: ${{ inputs.skip_e2e }}
+          DRY_RUN: ${{ inputs.dry_run }}
           RELEASE_ENABLED: ${{ needs.release.outputs.release_enabled }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -6375,7 +6389,17 @@ jobs:
           if [ "$RELEASE" = "success" ] || { [ "$GATE_ONLY" = "true" ] && [ "$RELEASE" = "skipped" ]; }; then
             release_ok=true
           fi
-          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$release_ok" = "true" ] && [ "$all_supplemental_ok" = "true" ]; then
+          # skip_e2e (not dry_run) skips the smoke test on purpose; the release
+          # still published, so a skipped e2e must not report FAILED (#7977).
+          e2e_ok=false
+          E2E_ICON="✓"
+          if [ "$E2E" = "success" ]; then
+            e2e_ok=true
+          elif [ "$E2E" = "skipped" ] && [ "${SKIP_E2E:-}" = "true" ] && [ "${DRY_RUN:-}" != "true" ]; then
+            e2e_ok=true
+            E2E_ICON="⊘"
+          fi
+          if [ "$e2e_ok" = "true" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$release_ok" = "true" ] && [ "$all_supplemental_ok" = "true" ]; then
             if [ "$GATE_ONLY" = "true" ]; then
               MSG="Release gate ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
               RELEASE_ICON="⊘"
@@ -6386,7 +6410,9 @@ jobs:
               MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
               RELEASE_ICON="✓"
             fi
-            MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
+            # Supplemental jobs are skipped on skip_e2e runs; show ⊘, not ✓.
+            _result_icon() { case "$1" in success) echo "✓" ;; skipped) echo "⊘" ;; "") echo "-" ;; *) echo "✗" ;; esac; }
+            MSG+=$'\n'"e2e ${E2E_ICON} scripts ✓ orphans $(_result_icon "$ORPHANS") orchestrate $(_result_icon "$ORCHESTRATE_DECOMPOSE") validate-fx $(_result_icon "$VALIDATE_STANDALONE") negative $(_result_icon "$CLARIFY_REJECTS") alt-model $(_result_icon "$ALT_MODEL") release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
           else
             MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
             # A newer release run cancels this run's e2e-smoke-test through the
