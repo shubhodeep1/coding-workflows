@@ -586,3 +586,176 @@ The per-item writes are necessary and are not findings: sweep dispatch (`review_
 | Code modularization | 10 workflows carrying "Resolve workflow support ref" plus `tests/test_workflow_support_ref_follows_pin.py`; `.github/workflows/implement.yml`, `review_autofix.yml`, `workflow-log-analysis.yml`; `scripts/tg_helpers.sh`, `scripts/label_helpers.sh` | Large |
 | Expression size reduction | `tests/test_workflow_file_size_limit.py`, `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, `.github/workflows/plan.yml` | Small |
 | Medium/Low fixes | `.github/workflows/cancel_on_pr_close.yml`, `review_autofix_sweep.yml`, `lint-pr-body-auto-close.yml`, `integration-pr-readiness.yml`, `review_rb_judge_dispatch.yml`, `unblock_judge_dispatch.yml`, the DEAD-001 workflows; `scripts/tg_helpers.sh`, `scripts/comprehensive_test_and_release_gh_api.sh`, `scripts/implement_diagnose_post_codex_failure.sh`, `scripts/label_helpers.sh`, `scripts/gh_helpers.sh`; `prompts/mode-workflow-audit.txt`, `prompts/_templates/mode-workflow-audit.txt`; `docs/scripts-pending-removal.md` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-23)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: the implement stage may apply the fix without further review. Every precondition must hold: same endpoint or strict field subset, identical pagination, filters and auth, the same function or step with no mutation in between, unchanged error and retry behaviour, no concurrency boundary crossed, and existing cache contracts kept.
+- **`NEEDS_VERIFICATION`**: the fix looks correct, but static reading cannot prove every precondition. The verification steps listed must be done first.
+- **`RISKY_SKIP`**: shown for visibility only and must not be auto-implemented. The call is in a call-site retry, backoff or stall-recovery loop, an auth or probe flow, manual or `--paginate` pagination, a rate-limit-sensitive path, `orchestrate_poll_process.sh`, or a path that explicitly guards against races. Or the change would alter grepped log keys.
+- **How "retry loop" is read here:** it means a loop at the call site. Wrapping a call in the shared `gh_retry` / `gh_api_safe` transport does not by itself make it `RISKY_SKIP`.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: Phase 1 reads the same issue's comments twice per poll tick**
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `.github/workflows/test-and-mark-stable.yml:913-971` (the Phase 1 `wait-clarify` loop). Calls at `:925-926` and `:951-952`.
+- **Call count:** currently 2 comment reads per non-terminal tick, plus the labels GET at `:917`, so 3 per tick. Proposed: 1 comment read, so 2 per tick.
+- **Endpoint:** `GET /repos/{o}/{r}/issues/{n}/comments`, called twice with different paging.
+- **Evidence:**
+  ```bash
+  COMMENT_COUNT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+    --jq 'length' || echo "0")
+  ...
+  LAST_BOT_COMMENT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=5&direction=desc" \
+    --jq '[.[] | select(.user.login == "github-actions[bot]")] | .[0].body // ""' || echo "")
+  ```
+  - The per-issue comment listing accepts only `since`, `per_page` and `page`, and always returns comments in ascending ID order ([GitHub Docs: issue comments](https://docs.github.com/en/rest/issues/comments)). `direction=desc` is ignored.
+  - So the second call actually checks the **oldest** 5 comments, and the first counts at most 30 (the default page size).
+  - A single `?per_page=100` read contains both: `.[0:30] | length` for the count, and `.[0:5] | [bot] | .[0].body` for the comment check.
+- **Proposed fix:** one `comments?per_page=100` read per tick, saved to a local variable, with both projections taken from it using those exact slices so current behaviour is kept. Leave the `:941-948` success exit before the comment check unchanged.
+- **Safety rationale:**
+  - Both reads go through `gh_api_safe`, whose rate-limit sleep sets `RATE_LIMIT_BACKOFF` (`scripts/comprehensive_test_and_release_gh_api.sh:121-134`). The loop branches on that value (`:920-923`), so this is a rate-limit-sensitive polling path.
+  - Pagination differs between the two calls (default 30 vs `per_page=5`).
+  - Merging also links the two fallbacks: `"0"` for the count and `""` for the comment would then always fail together.
+- **Downstream signal:** do not auto-implement. A human must first decide whether the oldest-5 behaviour is intended or is a bug, which is outside this pass. Fixing it to read the newest comments would change when `clarification_needed` fires. Only after that decision should the reads be merged, and the inactivity-timer reset should be confirmed on a failed read.
+
+**MERGE-002: two back-to-back `rate_limit` probes in reclarify sweep-only mode**
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh:44` (`replay_failed_reclarify_commands`), `:157` (`detect_unrouted_blocked_comments`) and `:209-212`, which call them one after the other when `RECLARIFY_REQUEUE_SWEEP_ONLY=true` (set at `.github/workflows/orchestrate_poll.yml:904`).
+- **Call count:** currently 2 `rate_limit` GETs per sweep-only tick. Proposed: 1, by passing the first reading to the second function.
+- **Endpoint:** `GET /rate_limit`
+- **Evidence:**
+  ```bash
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || return 0
+  ...
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || budget=""
+  ```
+  - GitHub documents that calling `GET /rate_limit` does not count against the REST rate limit ([GitHub Docs: rate limit](https://docs.github.com/en/rest/rate-limit/rate-limit)). Merging saves one round trip and no quota.
+- **Proposed fix:** none recommended. If changed anyway, the second check would have to stay as a fresh read, because the first function's comment GETs and POSTs use up budget in between.
+- **Safety rationale:** both triggers apply: these are rate-limit probes, and the code is in `orchestrate_poll_process.sh`.
+- **Downstream signal:** do not implement. Merging saves no quota, and a reading taken before `replay_failed_reclarify_commands` spends budget would weaken the `-lt 500` guard at `:158`.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: the post-merge job repeats the gate's `closingIssuesReferences` query when the gate's answer was a confirmed empty list**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:**
+  - Gate: `scripts/review_autofix_step_evaluate_gate.sh:187-207` and outputs at `:1361-1363`.
+  - Gate job outputs: `.github/workflows/review_autofix.yml:317-319`.
+  - Re-fetch: `.github/workflows/review_autofix.yml:850-869`, in the `post-merge-validate-dispatch` job (`:750-763`).
+- **Call count:** currently 2 identical GraphQL calls per merged PR with no closing refs (one in the gate, one in the dispatch job). Proposed: 1. The re-fetch stays when the gate's lookup failed.
+- **Endpoint:** `POST /graphql`, `pullRequest(number){closingIssuesReferences(first:50){nodes{number labels(first:100){nodes{name}}}}}`. The query string at `evaluate_gate.sh:194` and `review_autofix.yml:860` is the same.
+- **Evidence:**
+  - The gate sets `post_merge_linked_issues_cache_known="true"` (`:198`) but never outputs it. The dispatch job sees `[]` and cannot tell "confirmed empty" from "lookup failed":
+    ```bash
+    issue_nodes_json="$(normalize_post_merge_issue_nodes_json "${POST_MERGE_LINKED_ISSUES_JSON:-[]}")"
+    ...
+    if [ "${issue_nodes_json}" = "[]" ]; then
+      if issue_nodes_json_live="$(gh_retry gh api graphql \
+    ```
+  - The job-level skip `post_merge_validate_context_definitely_empty` (`:756`) also requires an empty title and body (`evaluate_gate.sh:202-205`). As the 2026-10-17-3 report noted, PR titles are never empty, so that skip in practice never fires, and the re-fetch runs on every such merged PR.
+  - The gate comment at `:183-186` states the intent: "reuse the already fetched PR text and linked-issue labels before any live fallback".
+- **Proposed fix:** carried over from `analysis/workflow-optimization-2026-10-17-3.md` and still not implemented; the gate emits no such output today (`:1361-1363`).
+  - Emit `post_merge_linked_issues_known=${post_merge_linked_issues_cache_known}` from the gate. The name was checked and is unused in code.
+  - Add it to the gate job's `outputs:` next to `:319`, and pass it as env next to `:763`.
+  - Guard `:855` with `&& [ "${POST_MERGE_LINKED_ISSUES_KNOWN:-}" != "true" ]`.
+  - The `:874` REST title/body read is then only reached when the gate's lookup failed, so leave it in place.
+- **Safety rationale:**
+  - The two calls are in different jobs (`gate` → `needs.gate.outputs`), so "same function / step" fails.
+  - Their retry behaviour differs: one bare attempt in the gate (`evaluate_gate.sh:190`, raw `gh api graphql`) vs the inline `gh_retry` in the dispatch job.
+  - What makes it safe if verified: both use `secrets.GH_PAT` (`:616`, `:758`), the jobs run one after the other (no parallel dependency), and a missing output fails open to the live call.
+- **Downstream signal:** before implementing:
+  1. Confirm with `rg -n 'post_merge_linked_issues_known'` that the name is still unused in `scripts/` and `.github/`.
+  2. Confirm that `closingIssuesReferences` on a merged PR cannot change between the two jobs, or accept that edge case explicitly.
+  3. Per §8, check that an older staged gate helper without the new output leaves the env empty, so the job falls back to the live query.
+  4. Add a test in the existing review_autofix gate-output tests that covers a known-empty list and a failed lookup.
+
+**REUSE-002: the Phase 3b exit walks the run list again for an ID the progress counter already holds**
+- **Safety tag:** `RISKY_SKIP`
+- **Files:**
+  - `.github/workflows/test-and-mark-stable.yml:1501-1504` (exit when the PR is found) → `capture_run_id` (`:1399-1421`) → `find_latest_scoped_run_field` (`scripts/comprehensive_test_and_release_gh_api.sh:218-265`).
+  - The cached value comes from `scoped_implement_progress_counts` (`test-and-mark-stable.yml:1445-1480`), which sets `IMPL_RUN_ID_LATEST`.
+- **Call count:** currently 1–10 page GETs × up to 5 attempts, once per release run. Proposed: 0 when the cached ID is set.
+- **Endpoint:** `GET /repos/{o}/{r}/actions/runs?per_page=100&page=N&created=>T`
+- **Evidence:** both select `name` matching `Implement` (case-insensitive), `display_title == $title`, `conclusion != "skipped"`, then `sort_by(.created_at) | last`. Both stop at the first page with a match.
+- **Proposed fix:** none recommended. A variant would use `IMPL_RUN_ID_LATEST` only when it was read in the current tick.
+- **Safety rationale:**
+  - `capture_run_id` is a 5-attempt retry loop over manual page iteration.
+  - The cached ID can be up to about 30s plus `POLL_INTERVAL` old, because the counter runs after the PR check (`:1525-1530`). A newer Implement run would be missed, which is exactly the failure that issues #4723 and #7968 guard against.
+- **Downstream signal:** do not implement. The saving (at most about 10 GETs per release) does not justify the risk of recording the wrong run ID for deep verification.
+
+**REUSE-003: `ci_cancelled_rerun.py` lists open PRs again even though the sweep already wrote a snapshot**
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/ci_cancelled_rerun.py:117-145` (`current_pr_heads`), called at `:317`. The sweep snapshot is written at `.github/workflows/review_autofix_sweep.yml:228-239` and passed via `CI_CANCELLED_PR_SNAPSHOT` (`:597`).
+- **Call count:** currently 1 paginated listing in the sweep + 1 paginated listing in the helper. Proposed: 1.
+- **Endpoint:** `GET /repos/{o}/{r}/pulls?state=open&per_page=100` (both use `--paginate`).
+- **Evidence:** the in-code comment explains the second listing on purpose:
+  ```python
+  # The sweep's earlier /pulls listing predates review dispatch; its
+  # review-run cache has no live PR heads. Refresh once for all PRs,
+  ```
+  The result feeds the `superseded_head` guard (`:328-330`) before a `rerun-failed-jobs` POST.
+- **Proposed fix:** none.
+- **Safety rationale:** both calls paginate, and the second is an explicit time-of-check/time-of-use guard before a write.
+- **Downstream signal:** do not implement. Removing it would allow a rerun on a head that was superseded during the dispatch loop.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001: the collector's jobs page loop always makes one extra request that returns an empty page**
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/collect_workflow_logs.py:710-728` (`list_jobs_for_run`), endpoint built at `:701-703`, called at `:2168-2174`. This extends the existing report's "GH API Call Audit" table row, which has no finding ID.
+- **Call count:** currently pages + 1 per failed or cancelled run. Proposed: pages. That is about 16 calls fewer per collection in this window.
+- **Endpoint:** `GET /repos/{o}/{r}/actions/runs/{id}/jobs?filter=all&per_page=P&page=N`
+- **Evidence:**
+  ```python
+  page_jobs = payload.get("jobs") or []
+  if not page_jobs:
+      break
+  jobs.extend(page_jobs)
+  ```
+  The trailing empty page is used only to end the loop and contributes no data.
+- **Proposed fix (net-new detail):**
+  - Stop after `extend` when `len(page_jobs) < per_page`.
+  - Also stop when `isinstance(payload.get("total_count"), int) and payload["total_count"] > 0 and len(jobs) >= payload["total_count"]`.
+  - Do not stop on `total_count` when it is missing or 0, or the loop would end after page 1.
+  - `filter=all` (`:702`) counts every attempt in `total_count`, so the two stop conditions agree.
+- **Safety rationale:** this is manual `page`/`per_page` iteration, which the rules always treat as `RISKY_SKIP`. The actual risk is low.
+- **Downstream signal:** this needs a human-reviewed change with a unit test covering an exact-multiple page (for example 100 jobs with `per_page=100`), a short last page, and a payload with no `total_count`. It should not be auto-applied.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: `RISKY_SKIP`
+  - Every Phase 3b read goes through `gh_api_safe`, whose rate-limit backoff the loop gates on (`test-and-mark-stable.yml:1495-1499`).
+  - Net-new: I counted 3 GETs per tick in Phase 1 (`:917`, `:925`, `:951`) and 3 in Phase 2 (`:1112`, `:1120`, `:1136`).
+  - The `PR_RECHECK` at `:1595` is a deliberate post-sleep race recheck and must stay separate.
+  - A GraphQL batch moves the cost to the separate GraphQL points budget. Check first that `gh_api_safe`'s `grep -qi "rate limit"` still catches GraphQL rate-limit errors.
+- API-001: `RISKY_SKIP`
+  - The function is in `orchestrate_poll_process.sh`. Its header (`:37-41`) explicitly budgets "one comments listing and live issue read per queued issue" and says "The marker is data, not authorization", so the live GET at `:55` is the intended race guard.
+  - Only the "move it after `:73`" variant is worth a manual review.
+- BATCH-002: `RISKY_SKIP`
+  - These are paginated listings. The per-workflow endpoint provides the 404-means-workflow-absent signal (`review_autofix_sweep.yml:331-347`), which a repo-level `actions/runs` listing cannot.
+  - The snapshot also guards against the PR #3895 duplicate-dispatch race (`:322-330`).
+- API-002: `NEEDS_VERIFICATION`
+  - The sweep is cron-driven (`:79-80`). The `|| github.ref_name` fallback at `:147` suggests `github.event.repository.default_branch` may be missing on `schedule` payloads, in which case the fix saves about 0 calls on the main trigger.
+  - It is also the #6629 provenance gate, which by design does not fall back (`:278-284`).
+  - Verify the payload contents on a schedule run before changing anything.
+- API-003: `RISKY_SKIP`
+  - The function is in `orchestrate_poll_process.sh`. Rows are checked only once (`security_pass_followups_merge_checked`, `:7933-7937`), so N is small.
+  - A failure is isolated to one row (`:7949-7951`). A 50-alias batch failure would postpone every row.
+- API-004: `RISKY_SKIP` — changes retry/backoff classification and the single-attempt rule for POSTs (#6634) in shared transports. This needs manual review of every `curl_gh_api` caller.
+- BATCH-003: `NEEDS_VERIFICATION`
+  - These calls are writes, not reads. The "Dependency Notes" comment is referenced by `tests/test_implement_post_codex_recovery.py`.
+  - Check whether that test, and any parser of the fix-up issue body's "Orchestrator metadata" block (`implement_diagnose_post_codex_failure.sh:816-827`), tolerate notes in the body, and handle forward `depends_on` references.
+
+### Summary Counts
+
+The counts cover this pass's new findings and the Deep Audit Section 2 cross-references.
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | REUSE-001, API-002, BATCH-003 |
+| RISKY_SKIP | 10 | MERGE-001, MERGE-002, REUSE-002, REUSE-003, DEAD-API-001, BATCH-001, API-001, BATCH-002, API-003, API-004 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
+- The best next candidate is REUSE-001, once its four verification steps are done. It saves 1 GraphQL call per merged PR that has no closing refs.
