@@ -1538,6 +1538,19 @@ Their failures log under `JUDGE_ISOLATION` / `RB_JUDGE_ISOLATION`, not
 Codex agents" → "Poller judges"); a fix to one isolation stack does not cover
 the other.
 
+The review sandbox's copy of the repository leaves out every `dist`, `build`
+and `coverage` directory, committed or not. So that an agent does not take a
+committed build output it cannot see for a missing one (a judge filed a fix
+issue to "restore" a committed `dist/` in tele-funtoken-msg-scoring #4770),
+`review_untrusted_workspace.py snapshot` records the committed ones it hid,
+directory names and file counts only, and `review_untrusted_sandbox.sh` adds a
+"Directories left out of this sandbox copy" note to every prompt it runs (at
+most 40 directories; plain-ASCII paths only; paths under dot directories,
+other than `.github/actions` and `.github/workflows`, or under `node_modules`
+are not listed). The snapshot logs the count as
+`REVIEW_ISOLATION_SNAPSHOT hidden_build_dirs=<n>`. The directories stay out of
+the copy, so nothing new can be edited or written back.
+
 The merged-PR guard (`.claude/hooks/pr_merge_status_guard.py`) is excluded
 from the review sandbox because it runs on the host with credentials, so
 review autofix cannot repair a CI failure in that hook (as it did in #6481).
