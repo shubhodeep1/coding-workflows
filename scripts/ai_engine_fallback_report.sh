@@ -54,7 +54,9 @@
 #   WORKFLOW_HEAL_UPSTREAM_REPO      dispatch target (default shubhodeep1/coding-workflows)
 #   WORKFLOW_HEAL_PY                 workflow_failure_heal.py (default: beside this script)
 #   GH_TOKEN                         token able to dispatch to the upstream repo
-#   GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_SERVER_URL   the reporting run
+#   GITHUB_REPOSITORY, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_SERVER_URL   the reporting
+#                                    run; the payload's reporter_run names it so the intake
+#                                    can scope the heal issue to it
 #   REPORT_WORKFLOW_NAME             caller workflow name (default GITHUB_WORKFLOW)
 #   REPORT_WRAPPER_SHA               coding-workflows commit of the support scripts
 #   RUNTIME_DIR                      scratch dir (default RUNNER_TEMP)
@@ -329,7 +331,7 @@ for entry in "${pairs[@]}"; do
 	dispatch_file="${REPORT_DIR}/dispatch-${role}-${reason}.json"
 	error_file="${REPORT_DIR}/error.txt"
 	if ! python3 "${HEAL_PY}" build-engine-fallback-payload --repo "${REPO}" --role "${role}" --reason "${reason}" \
-		--workflow-name "${WORKFLOW_NAME}" --run-id "${RUN_ID}" --wrapper-sha "${WRAPPER_SHA}" \
+		--workflow-name "${WORKFLOW_NAME}" --run-id "${RUN_ID}" --run-attempt "${GITHUB_RUN_ATTEMPT:-}" --wrapper-sha "${WRAPPER_SHA}" \
 		--reporter-run-url "${REPORTER_RUN_URL}" --records-file "${RECORDS_FILE}" > "${payload_file}" 2> "${error_file}" \
 		|| ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${payload_file}" > "${dispatch_file}" 2>> "${error_file}"; then
 		log "skip_dispatch reason=payload_build_failed role=${role} fallback_reason=${reason} detail=$(head -c 200 "${error_file}" | tr '\n' ' ')"

@@ -70,6 +70,7 @@ record = {
 	"argv": argv,
 	"stdin": sys.stdin.read(),
 	"token": token,
+	"relay_web_search": os.environ.get("FAKE_RELAY_WEB_SEARCH", ""),
 	"container_token": os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""),
 	"base_url": os.environ.get("ANTHROPIC_BASE_URL", ""),
 	"cwd": os.getcwd(),
@@ -327,8 +328,22 @@ def test_claude_instructions_say_the_run_has_no_web_tools(sandbox: dict, tmp_pat
 	assert combined != source and combined.parent == sandbox["runner_temp"]
 	text = combined.read_text(encoding="utf-8")
 	assert text.startswith("Trusted instructions\n")
-	assert "## Engine capabilities" in text and "Web search and web fetch are not available" in text
+	# claude_engine.json `web_search` is on by default: the note names the
+	# WebSearch tool the run gets and still rules out web fetch.
+	assert "## Engine capabilities" in text and "The `WebSearch` tool is available" in text
+	assert "Web fetch is not available" in text
+	assert "Web search and web fetch are not available" not in text
 	assert source.read_text(encoding="utf-8") == "Trusted instructions\n"
+
+
+def test_claude_instructions_say_no_web_tools_when_web_search_is_off(sandbox: dict, tmp_path: Path) -> None:
+	source = tmp_path / "trusted_instructions.md"
+	source.write_text("Trusted instructions\n", encoding="utf-8")
+	result = _bash(sandbox, "_ai_engine_instructions_file", SUPPORT_INSTRUCTIONS_FILE=str(source), SUPPORT_ROOT_DIR=str(_web_search_off_support(sandbox)))
+	assert result.returncode == 0, result.stderr
+	text = Path(result.stdout.strip()).read_text(encoding="utf-8")
+	assert "Web search and web fetch are not available" in text
+	assert "WebSearch` tool is available" not in text
 
 
 def test_claude_instructions_fall_back_to_the_original_when_the_copy_fails(sandbox: dict, tmp_path: Path) -> None:
@@ -407,7 +422,7 @@ def test_write_role_command_line(sandbox: dict) -> None:
 		"--system-prompt-file": "/support/instructions.md",
 		"--settings": "/support/settings.json",
 		"--setting-sources": "",
-		"--tools": "Read,Grep,Glob,Bash,Edit,Write",
+		"--tools": "Read,Grep,Glob,Bash,Edit,Write,WebSearch",
 		"--permission-mode": "bypassPermissions",
 		"--output-format": "stream-json",
 	}
@@ -448,11 +463,12 @@ def test_read_role_command_line(sandbox: dict) -> None:
 	result = _claude_run(sandbox, "SECURITY_AUDIT", AI_ENGINE_MODEL_HINT="claude-sonnet-5-5", AI_ENGINE_READ_ONLY="false")
 	assert _rc(result) == 0, result.stderr
 	argv = _calls(sandbox)[0]["argv"]
-	assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob"
+	assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob,WebSearch"
 	assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
 	assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+	assert _calls(sandbox)[0]["relay_web_search"] == "1"
 	policy = json.loads(_calls(sandbox)[0]["settings"])
-	assert policy["permissions"]["allow"] == ["Read", "Grep", "Glob"]
+	assert policy["permissions"]["allow"] == ["Read", "Grep", "Glob", "WebSearch"]
 	assert policy["permissions"]["deny"]
 	assert policy["hooks"]["PreToolUse"][0]["matcher"] == "Bash"
 	# A read profile gets the read-only snapshot (answer Q17 A).
@@ -461,9 +477,9 @@ def test_read_role_command_line(sandbox: dict) -> None:
 
 
 @pytest.mark.parametrize("value, tools, mode", [
-	("true", "Read,Grep,Glob", "dontAsk"),
-	("false", "Read,Grep,Glob,Bash,Edit,Write", "bypassPermissions"),
-	("yes", "Read,Grep,Glob,Bash,Edit,Write", "bypassPermissions"),
+	("true", "Read,Grep,Glob,WebSearch", "dontAsk"),
+	("false", "Read,Grep,Glob,Bash,Edit,Write,WebSearch", "bypassPermissions"),
+	("yes", "Read,Grep,Glob,Bash,Edit,Write,WebSearch", "bypassPermissions"),
 ])
 def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools: str, mode: str) -> None:
 	_accounts(sandbox, A="TOK_OK")
@@ -471,6 +487,36 @@ def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools:
 	assert _rc(result) == 0, result.stderr
 	argv = _calls(sandbox)[0]["argv"]
 	assert (argv[argv.index("--tools") + 1], argv[argv.index("--permission-mode") + 1]) == (tools, mode)
+
+
+def _web_search_off_support(sandbox: dict) -> Path:
+	support = sandbox["tmp"] / "support"
+	(support / ".github" / "ai").mkdir(parents=True)
+	(support / ".github" / "ai" / "claude_engine.json").write_text('{"web_search": false}', encoding="utf-8")
+	return support
+
+
+@pytest.mark.parametrize("role,read_only,tools,allow", [
+	("IMPLEMENT", "false", "Read,Grep,Glob,Bash,Edit,Write", []),
+	("SECURITY_AUDIT", "true", "Read,Grep,Glob", ["Read", "Grep", "Glob"]),
+])
+def test_web_search_switch_off_removes_the_tool_and_the_relay_flag(sandbox: dict, role: str, read_only: str, tools: str, allow: list) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, role, AI_ENGINE_READ_ONLY=read_only, SUPPORT_ROOT_DIR=str(_web_search_off_support(sandbox)))
+	assert _rc(result) == 0, result.stderr
+	call = _calls(sandbox)[0]
+	assert call["argv"][call["argv"].index("--tools") + 1] == tools
+	assert call["relay_web_search"] == "0"
+	assert json.loads(call["settings"])["permissions"]["allow"] == allow
+
+
+def test_web_search_reaches_the_relay_not_the_container_network(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, "IMPLEMENT", AI_ENGINE_EFFORT_HINT="none")
+	assert _rc(result) == 0, result.stderr
+	assert _calls(sandbox)[0]["relay_web_search"] == "1"
+	run = docker_runs(sandbox["bin"].parent / "fake-docker.jsonl")[-1]
+	assert run["argv"][run["argv"].index("--network") + 1] == "none"
 
 
 @pytest.mark.parametrize("role", ["REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "RB_JUDGE", "CONFLICT_RESOLVER"])
@@ -1044,6 +1090,22 @@ def test_sandbox_claude_branches_exit_with_the_policy_code(path: str) -> None:
 	assert "ai_engine_no_account_reason" in text
 	assert "all_usage_limit" in text
 	assert "::error::AI_ENGINE_FALLBACK_REFUSED role=" in text
+
+
+@pytest.mark.parametrize("path,prefix", [("scripts/clarify_isolated_run.sh", "clarify"), ("scripts/review_untrusted_sandbox.sh", "review")])
+def test_sandbox_claude_branches_follow_the_web_search_switch(path: str, prefix: str) -> None:
+	# Every Claude launch path honours claude_engine.json `web_search` the way
+	# claude_run does: the tool, the read-profile allow rule and the relay
+	# flag move together, and the container keeps --network none.
+	text = (REPO_ROOT / path).read_text(encoding="utf-8")
+	assert f'{prefix}_web_search="$(_ai_engine_py config --key web_search 2>/dev/null || echo false)"' in text
+	assert "+=(--web-search)" in text
+	assert f"{prefix}_relay_args+=(--allow-web-search)" in text
+	assert f'${{{prefix}_relay_args[@]+"${{{prefix}_relay_args[@]}}"}} &' in text
+	assert ",WebSearch" in text
+	assert "--network none" in text
+	# The flag only ever reaches the host broker, never the container.
+	assert all(f"{prefix}_relay_args+=" in line for line in text.splitlines() if "--allow-web-search" in line)
 
 
 def test_pool_token_step_writes_the_reason_file() -> None:

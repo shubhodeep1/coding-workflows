@@ -315,9 +315,13 @@ def _git(cwd: Path, *args: str) -> None:
 class _Release:
 	"""setup_git hook for base._run_intake: a release commit and a signed identity."""
 
-	def __init__(self, payload: dict, *, identity: bool = True, workflow_file: str = "security-audit.yml", ref_sha: str | None = None, consumers: tuple[str, ...] = (CONSUMER_A, CONSUMER_B), retired: tuple[str, ...] = ()) -> None:
+	def __init__(self, payload: dict, *, identity: bool = True, workflow_file: str = "security-audit.yml", ref_sha: str | None = None, consumers: tuple[str, ...] = (CONSUMER_A, CONSUMER_B), retired: tuple[str, ...] = (), retired_at_head: tuple[str, ...] = (), unretired_at_head: tuple[str, ...] = (), dropped_at_head: tuple[str, ...] = (), groups_without_file: bool = False) -> None:
 		self.payload = payload
 		self.retired = retired
+		self.retired_at_head = retired_at_head
+		self.unretired_at_head = unretired_at_head
+		self.dropped_at_head = dropped_at_head
+		self.groups_without_file = groups_without_file
 		self.identity = identity
 		self.workflow_file = workflow_file
 		self.ref_sha = ref_sha
@@ -343,12 +347,58 @@ class _Release:
 		if self.retired:
 			(work / "workflow-templates" / "retired_files.txt").write_text(
 				"# Consumer files retired from the sync.\n" + "".join(f"{path} {'a' * 64}\n" for path in self.retired), encoding="utf-8")
+		# Files the release still ships as .claude/ templates (so they are
+		# managed paths of the consumer's pin) and a later commit retires.
+		for path in (*self.retired_at_head, *self.dropped_at_head):
+			template = work / "workflow-templates" / path
+			template.parent.mkdir(parents=True, exist_ok=True)
+			template.write_text("# shipped by the release\n", encoding="utf-8")
 		_git(work, "init", "-q", "-b", "main")
 		_git(work, "config", "user.name", "test")
 		_git(work, "config", "user.email", "test@example.invalid")
 		_git(work, "add", "workflow-templates")
 		_git(work, "commit", "-qm", "release")
 		sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True).stdout.strip()
+		if self.retired_at_head:
+			# After the consumer's pin, HEAD stops shipping the files and lists
+			# them as retired; the release commit has no retired list.
+			for path in self.retired_at_head:
+				_git(work, "rm", "-q", f"workflow-templates/{path}")
+			(work / "workflow-templates" / "retired_files.txt").write_text(
+				"# Consumer files retired from the sync.\n" + "".join(f"{path} {'b' * 64}\n" for path in self.retired_at_head), encoding="utf-8")
+			_git(work, "add", "workflow-templates")
+			_git(work, "commit", "-qm", "retire after the release")
+		if self.dropped_at_head:
+			# After the consumer's pin, HEAD stops shipping the files without
+			# listing them as retired, so the finding has no source at HEAD.
+			for path in self.dropped_at_head:
+				_git(work, "rm", "-q", f"workflow-templates/{path}")
+			_git(work, "commit", "-qm", "drop after the release")
+		if self.groups_without_file:
+			# Stand-in heal library: groups come back without a `file`, which
+			# validation never lets through, to reach the defensive guard.
+			(work / "scripts" / "heal_groups_without_file.py").write_text(
+				"import json, os, subprocess, sys\n"
+				"real = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'workflow_failure_heal.py')\n"
+				"proc = subprocess.run([sys.executable, real, *sys.argv[1:]], stdout=subprocess.PIPE)\n"
+				"out = proc.stdout\n"
+				"if proc.returncode == 0 and sys.argv[1:2] == ['synced-security-groups']:\n"
+				"\tgroups = json.loads(out)\n"
+				"\tfor group in groups:\n"
+				"\t\tgroup.pop('file', None)\n"
+				"\tout = json.dumps(groups).encode()\n"
+				"sys.stdout.buffer.write(out)\n"
+				"sys.exit(proc.returncode)\n", encoding="utf-8")
+		if self.unretired_at_head:
+			# After the consumer's pin, HEAD ships the files again as .claude/
+			# templates and drops the retired list, so only the release lists them.
+			for path in self.unretired_at_head:
+				template = work / "workflow-templates" / path
+				template.parent.mkdir(parents=True, exist_ok=True)
+				template.write_text("# shipped again after the release\n", encoding="utf-8")
+			_git(work, "rm", "-q", "workflow-templates/retired_files.txt")
+			_git(work, "add", "workflow-templates")
+			_git(work, "commit", "-qm", "un-retire after the release")
 		self.payload["wrapper_sha"] = sha
 		claims = base._id_claims(
 			now=int(time.time()),
@@ -491,6 +541,73 @@ def test_intake_retired_skip_leaves_live_findings_in_the_same_report() -> None:
 	assert f"skip reason=retired_file file={RETIRED} " in result.stdout
 	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=2 opened=1 occurrences=0 skipped=1" in result.stdout
 	assert len(state.get("issues_created", [])) == 1
+
+
+RETIRED_AFTER_PIN = ".claude/commands/retired-after-pin.md"
+
+
+def test_intake_skips_findings_on_files_retired_only_at_head() -> None:
+	"""A file the consumer's release still ships but a later commit retired is
+	a managed path of the pin, yet HEAD has no source for it any more. Only
+	HEAD's retired_files.txt lists it, so the skip must come from that list
+	(the release commit carries none)."""
+	payload = _payload(findings=[_finding(file=RETIRED_AFTER_PIN, finding_id="after-pin"), _finding(line=30, finding_id="live")])
+	result, state = _intake(payload, extra_env=SCOPE_GUARD_ON, retired_at_head=(RETIRED_AFTER_PIN,))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "report_auth=rejected" not in result.stdout
+	assert f"skip reason=retired_file file={RETIRED_AFTER_PIN} " in result.stdout
+	assert "scope_unresolved" not in result.stdout
+	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=2 opened=1 occurrences=0 skipped=1" in result.stdout
+	assert len(state.get("issues_created", [])) == 1
+
+
+RETIRED_IN_RELEASE = ".claude/commands/retired-in-release.md"
+
+
+def test_intake_skips_findings_on_files_retired_only_in_the_release() -> None:
+	"""The release lists the file as retired, but HEAD ships it again and has
+	no retired list. The release's list alone still skips the finding (owner
+	decision: a file retired at the consumer's pin is skipped even when HEAD
+	un-retires it; the consumer's next sync replaces it anyway). HEAD has a
+	source for the file, so without the release list the finding would open
+	an issue."""
+	payload = _payload(findings=[_finding(file=RETIRED_IN_RELEASE, finding_id="in-release"), _finding(line=30, finding_id="live")])
+	result, state = _intake(payload, extra_env=SCOPE_GUARD_ON, retired=(RETIRED_IN_RELEASE,), unretired_at_head=(RETIRED_IN_RELEASE,))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "report_auth=rejected" not in result.stdout
+	assert f"skip reason=retired_file file={RETIRED_IN_RELEASE} " in result.stdout
+	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=2 opened=1 occurrences=0 skipped=1" in result.stdout
+	assert len(state.get("issues_created", [])) == 1
+
+
+DROPPED_AT_HEAD = ".claude/commands/dropped-at-head.md"
+
+
+def test_intake_scope_unresolved_logs_the_marker_status() -> None:
+	"""A managed path of the pin whose source HEAD no longer ships (and does
+	not list as retired) renders no scope marker. check-marker then prints
+	status=missing and exits non-zero; the log must carry that status alone,
+	not a second fallback value glued on (`missingunknown`)."""
+	payload = _payload(findings=[_finding(file=DROPPED_AT_HEAD, finding_id="dropped")])
+	result, state = _intake(payload, extra_env=SCOPE_GUARD_ON, dropped_at_head=(DROPPED_AT_HEAD,))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "report_auth=rejected" not in result.stdout
+	lines = [line for line in result.stdout.splitlines() if "skip reason=scope_unresolved" in line]
+	assert len(lines) == 1, result.stdout
+	assert " status=missing source=" in lines[0], lines[0]
+	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=1 opened=0 occurrences=0 skipped=1" in result.stdout
+	assert not _api_writes(state)
+
+
+def test_intake_skips_a_group_without_a_file() -> None:
+	"""Defensive guard: a group with no `file` (validation never produces one)
+	is skipped with `warn empty_group_file` and opens nothing."""
+	result, state = _intake(_payload(), extra_env={**SCOPE_GUARD_ON, "WORKFLOW_HEAL_PY": "scripts/heal_groups_without_file.py"}, groups_without_file=True)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "warn empty_group_file fp=" in result.stdout
+	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=1 opened=0 occurrences=0 skipped=1" in result.stdout
+	assert not _api_writes(state)
+
 
 def test_intake_rejects_self_repo_and_unregistered_consumers() -> None:
 	result, state = _intake(_payload(repo="shubhodeep1/unknown-consumer"), extra_env=SCOPE_GUARD_ON)

@@ -8,6 +8,7 @@
   "utility_model": "claude-sonnet-5-5",
   "default_effort": "high",
   "hide_claude_md": false,
+  "web_search": true,
   "utility_roles": [
     "LOG_SUMMARY",
     "RETRO",
