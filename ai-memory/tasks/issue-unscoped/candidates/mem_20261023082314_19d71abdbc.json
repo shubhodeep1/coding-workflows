@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "For user- or workflow-facing behavior changes, check the repository's changelog fragment convention and add a focused fragment when appropriate; many merged workflow and script changes included one. The convention is not universal, as documentation-only and some test-data changes did not include fragments.",
+  "fingerprint": "8c5b918fabaff43777632f2d304546300b083892f88f5cdb7e09fa1847ea4e46",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39922043783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39922043783",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7914",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7927",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7928",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7929",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7931",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7920",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7932",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7936",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7937",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7938"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261023082314_19d71abdbc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Behavioral changes commonly include a `changelog.d/` fragment.",
+  "timestamps": {
+    "created_at": "2026-10-23T08:23:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
