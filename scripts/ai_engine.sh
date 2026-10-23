@@ -394,13 +394,23 @@ AI_ENGINE_CLAUDE_NO_WEB_NOTE='## Engine capabilities
 
 This run uses the Claude engine. Web search and web fetch are not available here; do not try them, even where a task prompt or these instructions say web search is available (that text is written for Codex runs). Take facts from outside the repository, such as a release tag'"'"'s commit SHA, a package version or an API endpoint, only from the task text and the repository. Use a fact the task states as verified as given. When a fact the task depends on is not there, do not guess it: ask for it only where this phase allows questions, otherwise emit `BLOCKED: <short reason>` or the phase'"'"'s structured result.'
 
+# The note used instead of AI_ENGINE_CLAUDE_NO_WEB_NOTE while claude_engine.json
+# `web_search` is on (the default): the run has the provider WebSearch tool,
+# which the host relay admits with --allow-web-search, but still no web fetch.
+AI_ENGINE_CLAUDE_WEB_SEARCH_NOTE='## Engine capabilities
+
+This run uses the Claude engine. The `WebSearch` tool is available: use it for public third-party documentation, library references, RFCs and similar public sources, never for private or auth-walled resources. This holds even where a task prompt says Claude-engine runs have no web search (that text predates the tool). Web fetch is not available, and this container has no network of its own, so do not try to download pages or packages. A fact the task states as verified is used as given. When a fact the task depends on is in neither the task text, the repository nor a search result from an official source, do not guess it: ask for it only where this phase allows questions, otherwise emit `BLOCKED: <short reason>` or the phase'"'"'s structured result.'
+
 _ai_engine_json_field()
 {
 	python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
 }
 
 # The system instructions a Claude run gets: the trusted
-# unattended_system_instructions.md plus a note that the run has no web tools.
+# unattended_system_instructions.md plus a note on the run's web tools:
+# AI_ENGINE_CLAUDE_WEB_SEARCH_NOTE while claude_engine.json `web_search` is on,
+# else AI_ENGINE_CLAUDE_NO_WEB_NOTE (also when the config cannot be read, as in
+# claude_run, so the note always matches the tool list and the relay flag).
 # The relay refuses provider web_search/web_fetch (claude_anthropic_relay.py,
 # #6494), while the shared prompts were written for Codex, which has
 # `--web-search live`; a planner told it can search blocked on a tag SHA it
@@ -408,7 +418,10 @@ _ai_engine_json_field()
 # failed copy prints the original, so the run still starts.
 _ai_engine_instructions_file()
 {
-	local candidate combined
+	local candidate combined web_note="${AI_ENGINE_CLAUDE_NO_WEB_NOTE}"
+	if [ "$(_ai_engine_py config --key web_search 2>/dev/null || echo false)" = "true" ]; then
+		web_note="${AI_ENGINE_CLAUDE_WEB_SEARCH_NOTE}"
+	fi
 	for candidate in \
 		"${SUPPORT_INSTRUCTIONS_FILE:-}" \
 		"${SUPPORT_ROOT_DIR:+${SUPPORT_ROOT_DIR}/unattended_system_instructions.md}" \
@@ -416,7 +429,7 @@ _ai_engine_instructions_file()
 		"${_AI_ENGINE_DIR}/../unattended_system_instructions.md"; do
 		if [ -n "${candidate}" ] && [ -f "${candidate}" ]; then
 			if combined="$(mktemp "${RUNNER_TEMP:-/tmp}/claude-instructions-XXXXXXXX.md" 2>/dev/null)" \
-				&& { cat -- "${candidate}" && printf '\n\n%s\n' "${AI_ENGINE_CLAUDE_NO_WEB_NOTE}"; } > "${combined}" 2>/dev/null; then
+				&& { cat -- "${candidate}" && printf '\n\n%s\n' "${web_note}"; } > "${combined}" 2>/dev/null; then
 				printf '%s\n' "${combined}"
 			else
 				[ -z "${combined:-}" ] || rm -f -- "${combined}"

@@ -328,8 +328,22 @@ def test_claude_instructions_say_the_run_has_no_web_tools(sandbox: dict, tmp_pat
 	assert combined != source and combined.parent == sandbox["runner_temp"]
 	text = combined.read_text(encoding="utf-8")
 	assert text.startswith("Trusted instructions\n")
-	assert "## Engine capabilities" in text and "Web search and web fetch are not available" in text
+	# claude_engine.json `web_search` is on by default: the note names the
+	# WebSearch tool the run gets and still rules out web fetch.
+	assert "## Engine capabilities" in text and "The `WebSearch` tool is available" in text
+	assert "Web fetch is not available" in text
+	assert "Web search and web fetch are not available" not in text
 	assert source.read_text(encoding="utf-8") == "Trusted instructions\n"
+
+
+def test_claude_instructions_say_no_web_tools_when_web_search_is_off(sandbox: dict, tmp_path: Path) -> None:
+	source = tmp_path / "trusted_instructions.md"
+	source.write_text("Trusted instructions\n", encoding="utf-8")
+	result = _bash(sandbox, "_ai_engine_instructions_file", SUPPORT_INSTRUCTIONS_FILE=str(source), SUPPORT_ROOT_DIR=str(_web_search_off_support(sandbox)))
+	assert result.returncode == 0, result.stderr
+	text = Path(result.stdout.strip()).read_text(encoding="utf-8")
+	assert "Web search and web fetch are not available" in text
+	assert "WebSearch` tool is available" not in text
 
 
 def test_claude_instructions_fall_back_to_the_original_when_the_copy_fails(sandbox: dict, tmp_path: Path) -> None:

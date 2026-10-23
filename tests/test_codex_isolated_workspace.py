@@ -516,6 +516,27 @@ def test_handoff_nested_deps_moves_only_into_listed_safe_projects(tmp_path):
 	assert "handoff-nested-deps moved=0" in missing_list.stderr
 
 
+def test_handoff_nested_deps_never_follows_a_swapped_stage_directory(tmp_path):
+	# The install container can write the stage: a nested/<n> directory it
+	# replaced with a symlink to a directory outside the stage is not followed.
+	work = tmp_path / "work"
+	work.mkdir()
+	_node_project(work, "swapped")
+	_node_project(work, "not-installed")
+	outside = tmp_path / "outside"
+	(outside / "node_modules").mkdir(parents=True)
+	nested = tmp_path / "stage" / ".codex-deps" / "nested"
+	nested.mkdir(parents=True)
+	(nested / "0").symlink_to(outside, target_is_directory=True)
+	listing = tmp_path / "list.json"
+	listing.write_text(json.dumps([{"index": 0, "path": "swapped"}, {"index": 1, "path": "not-installed"}]))
+	proc = run("handoff-nested-deps", tmp_path / "stage", work, listing)
+	assert (outside / "node_modules").is_dir() and not (work / "swapped" / "node_modules").exists()
+	assert "skipped=0 reason=unsafe_source" in proc.stderr
+	assert "skipped=1 reason=install_missing" in proc.stderr
+	assert "handoff-nested-deps moved=0" in proc.stderr
+
+
 @pytest.mark.parametrize("bad_kind", ["symlink", "oversized"])
 def test_stage_deps_skips_unsafe_manifests(repo, tmp_path, bad_kind):
 	work = tmp_path / "work"

@@ -109,18 +109,19 @@ def _is_allowed_web_search_tool(tool: dict) -> bool:
 		return False
 	if not set(tool) <= WEB_SEARCH_TOOL_KEYS:
 		return False
+	# The CLI always sends max_uses; requiring it keeps the bound relay-enforced.
 	max_uses = tool.get("max_uses")
-	if max_uses is not None and (type(max_uses) is not int or not 1 <= max_uses <= WEB_SEARCH_MAX_USES):
+	if type(max_uses) is not int or not 1 <= max_uses <= WEB_SEARCH_MAX_USES:
 		return False
 	for key in ("allowed_domains", "blocked_domains"):
 		domains = tool.get(key)
 		if domains is None:
 			continue
 		if not isinstance(domains, list) or len(domains) > WEB_SEARCH_MAX_DOMAINS \
-			or not all(isinstance(domain, str) and WEB_SEARCH_DOMAIN_RE.match(domain) for domain in domains):
+			or not all(isinstance(domain, str) and WEB_SEARCH_DOMAIN_RE.fullmatch(domain) for domain in domains):
 			return False
 	profile = tool.get("search_profile")
-	if profile is not None and not (isinstance(profile, str) and WEB_SEARCH_PROFILE_RE.match(profile)):
+	if profile is not None and not (isinstance(profile, str) and WEB_SEARCH_PROFILE_RE.fullmatch(profile)):
 		return False
 	return True
 

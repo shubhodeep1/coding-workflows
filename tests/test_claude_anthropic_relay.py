@@ -682,7 +682,6 @@ def test_web_search_stays_refused_without_the_broker_flag(chain) -> None:
 	CLI_WEB_SEARCH_TOOL,
 	dict(CLI_WEB_SEARCH_TOOL, allowed_domains=["docs.npmjs.com", "*.cloudflare.com"]),
 	dict(CLI_WEB_SEARCH_TOOL, blocked_domains=["example.com"], search_profile="fast"),
-	{"type": "web_search_20250305", "name": "web_search"},
 ))
 def test_web_search_in_the_cli_shape_is_forwarded_with_the_flag(chain, tool: dict) -> None:
 	chain["broker"].allow_web_search = True
@@ -705,6 +704,10 @@ def test_web_search_in_the_cli_shape_is_forwarded_with_the_flag(chain, tool: dic
 	dict(CLI_WEB_SEARCH_TOOL, allowed_domains=["bad domain"]),
 	dict(CLI_WEB_SEARCH_TOOL, allowed_domains=["a.com"] * 101),
 	dict(CLI_WEB_SEARCH_TOOL, search_profile="Fast; drop"),
+	# No max_uses: the relay would forward a search with no enforced bound.
+	{"type": "web_search_20250305", "name": "web_search"},
+	dict(CLI_WEB_SEARCH_TOOL, allowed_domains=["a.com\n"]),
+	dict(CLI_WEB_SEARCH_TOOL, search_profile="fast\n"),
 ))
 def test_only_the_cli_web_search_shape_passes_with_the_flag(chain, tool: dict) -> None:
 	chain["broker"].allow_web_search = True

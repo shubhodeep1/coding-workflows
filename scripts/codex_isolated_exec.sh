@@ -417,16 +417,6 @@ if [ "${action}" = prepare ]; then
 						pnpm) npx --yes pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true ;;
 						npm-install) npm install --ignore-scripts 2>&1 || install_failed=true ;;
 					esac
-					# Subdirectory projects (stage-deps: package.json plus a lockfile
-					# only), each installed in its own staged directory.
-					for nested_dir in .codex-deps/nested/*/; do
-						[ -f "${nested_dir}mode" ] || continue
-						case "$(cat "${nested_dir}mode")" in
-							npm-ci) (cd "${nested_dir}" && npm ci --ignore-scripts 2>&1) || install_failed=true ;;
-							yarn) (cd "${nested_dir}" && npx --yes yarn install --frozen-lockfile --ignore-scripts 2>&1) || install_failed=true ;;
-							pnpm) (cd "${nested_dir}" && npx --yes pnpm install --frozen-lockfile --ignore-scripts 2>&1) || install_failed=true ;;
-						esac
-					done
 					case "$(cat .codex-deps/python)" in
 						requirements) pip install -r .codex-deps/requirements.txt 2>&1 || install_failed=true ;;
 						both) pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
@@ -437,6 +427,17 @@ if [ "${action}" = prepare ]; then
 					if [ -f .codex-deps/want-pytest ] && ! python3 -c "import pytest" >/dev/null 2>&1; then
 						pip install pytest 2>&1 || true
 					fi
+					# Subdirectory projects (stage-deps: package.json plus a lockfile
+					# only), each installed in its own staged directory, after the root and Python
+					# installs so they cannot use up the shared container budget first.
+					for nested_dir in .codex-deps/nested/*/; do
+						[ -f "${nested_dir}mode" ] || continue
+						case "$(cat "${nested_dir}mode")" in
+							npm-ci) (cd "${nested_dir}" && npm ci --ignore-scripts 2>&1) || install_failed=true ;;
+							yarn) (cd "${nested_dir}" && npx --yes yarn install --frozen-lockfile --ignore-scripts 2>&1) || install_failed=true ;;
+							pnpm) (cd "${nested_dir}" && npx --yes pnpm install --frozen-lockfile --ignore-scripts 2>&1) || install_failed=true ;;
+						esac
+					done
 					[ "${install_failed}" = false ] || echo "::warning::Some project dependencies could not be installed in the isolated dependency phase; the agent marks validations it cannot run as UNVERIFIED."
 				' >&2 || echo "::warning::CODEX_ISOLATION dependency phase failed; the agent runs without preinstalled dependencies." >&2
 			stop_deps_broker

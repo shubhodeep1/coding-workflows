@@ -759,6 +759,7 @@ def stage_nested_node(work, stage):
 	for path in projects:
 		package = deps_manifest(work, f"{path}/package.json")
 		if package is None:
+			log("stage-deps nested_skipped=manifest")
 			continue
 		lock_name, lock_data, mode = "", None, ""
 		for name, selected_mode in NESTED_NODE_LOCKS:
@@ -767,6 +768,7 @@ def stage_nested_node(work, stage):
 				lock_name, mode = name, selected_mode
 				break
 		if lock_data is None:
+			log("stage-deps nested_skipped=manifest")
 			continue
 		target = meta / "nested" / str(len(listed))
 		target.mkdir(parents=True)
@@ -797,8 +799,18 @@ def handoff_nested_deps(stage, work, listing):
 			log("handoff-nested-deps skipped=entry reason=malformed")
 			continue
 		index, path = entry["index"], entry["path"]
-		source = stage / ".codex-deps" / "nested" / str(index) / "node_modules"
+		# The install container can write every stage directory, so no parent
+		# of the source may be a symlink (walk_no_follow lstat-checks them).
+		try:
+			source = walk_no_follow(stage, f".codex-deps/nested/{index}/node_modules")
+		except FileNotFoundError:
+			log(f"handoff-nested-deps skipped={index} reason=install_missing")
+			continue
+		except (NotADirectoryError, Rejected):
+			log(f"handoff-nested-deps skipped={index} reason=unsafe_source")
+			continue
 		if source.is_symlink() or not source.is_dir():
+			log(f"handoff-nested-deps skipped={index} reason=install_missing")
 			continue
 		parts = PurePosixPath(path).parts
 		if not readonly_allowed(path) or not parts or len(parts) > MAX_NESTED_NODE_DEPTH \
@@ -819,7 +831,11 @@ def handoff_nested_deps(stage, work, listing):
 		if target.exists() or target.is_symlink():
 			log(f"handoff-nested-deps skipped={index} reason=present")
 			continue
-		os.rename(source, target)
+		try:
+			os.rename(source, target)
+		except OSError as exc:
+			log(f"handoff-nested-deps skipped={index} reason=rename_failed errno={exc.errno}")
+			continue
 		moved += 1
 	log(f"handoff-nested-deps moved={moved}")
 

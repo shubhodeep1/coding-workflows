@@ -2752,7 +2752,7 @@ attempts of that role in the same job.
 
 | Piece | What it does |
 |---|---|
-| `.github/ai/claude_engine.json` | Pinned CLI version (`cli_version`), deployed token broker URL, OIDC audience, usage gate (`0.95`), probe model, and per-role `engine` / `claude_model` / `profile` defaults. Read only from the trusted support checkout; a missing file means every role on codex. |
+| `.github/ai/claude_engine.json` | Pinned CLI version (`cli_version`), deployed token broker URL, OIDC audience, usage gate (`0.95`), probe model, the provider web search switch (`web_search`, default `true`), and per-role `engine` / `claude_model` / `profile` defaults. Read only from the trusted support checkout; a missing file means every role on codex. |
 | `scripts/ai_engine.sh` | Sourced by call sites. `ai_engine_for_role <ROLE>` prints `codex` or `claude` and logs `AI_ENGINE_SELECTED role= engine= model= effort= source=`. `claude_run <ROLE> <prompt> <out> <workdir> [session_id]` runs the CLI and writes the final answer to `<out>`, the file the codex path writes. |
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
@@ -2817,8 +2817,12 @@ never rewritten.
 `Read`, `Grep`, `Glob` and no shell in `dontAsk` mode. `AI_ENGINE_READ_ONLY=true`
 narrows any role to that profile and never widens a read role; `AI_ENGINE_INCLUDE_PATHS` (newline-separated, default empty) mounts trusted runtime paths read-only in the container, as codex's `--include` does; every other
 role runs `bypassPermissions`, where the P5 deny
-rules still apply, with the tools `Read`, `Grep`, `Glob`, `Bash`, `Edit`,
-`Write`, `WebFetch` and `WebSearch` (the review editor's sandbox included).
+rules still apply, with the tools `Read`, `Grep`, `Glob`, `Bash`, `Edit` and
+`Write` (the review editor's sandbox included). While `claude_engine.json`
+`web_search` is on (the default), every profile also gets `WebSearch`, which
+the host relay admits only in the pinned CLI's provider-search shape
+(`--allow-web-search`); the container keeps `--network none`, and no profile
+has `WebFetch`. Set `web_search` to `false` to turn Claude's search off.
 The CLI's `default` tool set is not used: it loads about 35 tools, and their
 descriptions alone push a no-op start-up past the 25,000-token context gate
 in `claude-engine-smoke.yml`.

@@ -12,8 +12,8 @@ Rules:
   endpoint or signature), write the value into the issue body and say how
   it was verified (for example, quote the source that states it, such as
   `git ls-remote` output given in the request).
-  Claude-engine planners have no web search or web fetch and cannot look it
-  up. When you cannot verify a value, say so in the body instead of
+  Claude-engine planners have no web fetch, and web search only when
+  their system instructions say the `WebSearch` tool is available. When you cannot verify a value, say so in the body instead of
   writing a guessed one.
 - One concern per issue. A single issue should be implementable within a
   single PR touching at most ~10 files.

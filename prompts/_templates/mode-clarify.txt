@@ -28,8 +28,8 @@ Rules:
 - Web search is available only when this run has a web tool: Codex runs
   do (the `web_search` tool is enabled by the codex config —
   `scripts/write_codex_config.sh` defaults `--web-search live`).
-  Claude-engine runs have no web search or web fetch; their system
-  instructions say so. If external APIs/services are involved and a web
+  Claude-engine runs have web search only when their system instructions say the `WebSearch` tool
+  is available, and never web fetch. If external APIs/services are involved and a web
   tool is available, fetch their official public docs, verify the source
   is the official vendor/library or relevant standards publisher, and
   incorporate the concrete endpoints, signature scheme, and payload
