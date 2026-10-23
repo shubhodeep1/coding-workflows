@@ -352,7 +352,15 @@ def test_release_gate_only_mode_contract() -> None:
 	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_only"]["default"] is False
 	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_cycle_id"]["default"] == ""
 	assert "[cycle:{0}]" in gate["run-name"]
-	assert gate["jobs"]["release"]["if"] == "${{ success() && !inputs.gate_only }}"
+	release_if = gate["jobs"]["release"]["if"]
+	assert "!inputs.gate_only" in release_if
+	# skip_e2e skips every live e2e job; success() would then be false for
+	# release even though validate passed, so the gate checks results directly.
+	assert "success()" not in release_if
+	assert release_if.startswith("!cancelled() &&")
+	for needed in ("source", "resolve-version", "validate"):
+		assert f"needs.{needed}.result == 'success'" in release_if
+	assert gate["jobs"]["sync-to-main"]["if"].startswith("!cancelled() &&")
 	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
 	source_run = gate["jobs"]["source"]["steps"][0]["run"]
 	assert gate["jobs"]["source"]["steps"][0]["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"

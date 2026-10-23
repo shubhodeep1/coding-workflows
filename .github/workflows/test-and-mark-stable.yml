@@ -6571,7 +6571,16 @@ jobs:
   release:
     needs: [source, resolve-version, validate]
     # gate_only runs stop here: every test job above ran, nothing is tagged.
-    if: ${{ success() && !inputs.gate_only }}
+    # Explicit result checks, not success(): GitHub reports success() as false
+    # when any ancestor job was skipped, so with skip_e2e=true (every live e2e
+    # job skipped) a success() gate skipped release even though validate
+    # passed, and nothing was tagged (run 39955031510, 2026-10-23).
+    if: >-
+      !cancelled() &&
+      !inputs.gate_only &&
+      needs.source.result == 'success' &&
+      needs.resolve-version.result == 'success' &&
+      needs.validate.result == 'success'
     runs-on: ubuntu-latest
     # 50, not 10: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
     # (default 30 minutes) for a pending `CI / lint` run, and the tag-push
@@ -7329,7 +7338,10 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   sync-to-main:
     needs: [release]
+    # !cancelled(): without a status function GitHub applies success(), which
+    # is false whenever an ancestor (a skip_e2e e2e job) was skipped.
     if: >-
+      !cancelled() &&
       !inputs.dry_run &&
       !inputs.gate_only &&
       needs.release.result == 'success' &&
