@@ -395,6 +395,18 @@ if [ "${action}" = seed ]; then
 	exit $?
 fi
 
+# Tell the agent which committed build-output directories (dist/, build/,
+# coverage/) the snapshot left out, so a judge does not read their absence as
+# "missing from the branch" (tele-funtoken-msg-scoring #4770). Names only,
+# written by review_untrusted_workspace.py snapshot; advisory and fail-open.
+review_append_hidden_build_note()
+{
+	local review_hidden_build_note
+	review_hidden_build_note="$(PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" hidden-note "${root}/baseline.json" 2>/dev/null || true)"
+	[ -n "${review_hidden_build_note}" ] || return 0
+	printf '\n\n%s\n' "${review_hidden_build_note}" >> "${root}/prompt" || true
+}
+
 [ "$#" -ge 6 ] && [ "$#" -le 9 ] || exit 2
 prompt="$2"
 output="$3"
@@ -482,6 +494,7 @@ if [ "${engine}" = claude ]; then
 		claude_source_mount+=',readonly'
 	fi
 	install -m 0600 "${prompt}" "${root}/prompt"
+	review_append_hidden_build_note
 	image="$(< "${root}/image")"
 	[[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo '::error::Invalid review image ID' >&2; exit 1; }
 	container="review-editor-$$"
@@ -649,6 +662,7 @@ then
 	exit 1
 fi
 install -m 0600 "${prompt}" "${root}/prompt"
+review_append_hidden_build_note
 image="$(< "${root}/image")"
 [[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo '::error::Invalid review image ID' >&2; exit 1; }
 container="review-editor-$$"

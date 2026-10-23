@@ -159,6 +159,75 @@ def admitted_commands_path(manifest):
 	return manifest.with_name(manifest.name + ".admitted_commands.json")
 
 
+# Build-output directory names in EXCLUDED that a repository may still commit
+# (a static site's dist/, for example). snapshot leaves them out of the
+# sandbox copy; it records which committed ones it hid so the prompt can say
+# so, and a judge does not read their absence as "missing from the branch"
+# (tele-funtoken-msg-scoring #4770).
+HIDDEN_BUILD_OUTPUT_DIRS = frozenset({"dist", "build", "coverage"})
+MAX_HIDDEN_BUILD_NOTE_DIRS = 40
+
+
+def hidden_build_dirs_path(manifest):
+	return manifest.with_name(manifest.name + ".hidden_build_dirs.json")
+
+
+def hidden_build_output_dirs(tracked):
+	"""Map each committed build-output directory the snapshot hides to its file count.
+
+	Names only: a directory is reported when its path is plain ASCII and no
+	component above the build directory is itself hidden for another reason
+	(a dot directory, node_modules, a secret-like name). File contents are never read.
+	"""
+	counts = {}
+	for name in tracked:
+		if not re.fullmatch(r"[A-Za-z0-9._/-]+", name):
+			continue
+		parts = PurePosixPath(name).parts
+		if any(part in (".", "..") for part in parts):
+			continue
+		index = next((i for i, part in enumerate(parts[:-1]) if part.lower() in HIDDEN_BUILD_OUTPUT_DIRS), None)
+		if index is None:
+			continue
+		prefix = parts[:index + 1]
+		if any(part.startswith(".") or "secret" in part.lower() or "credential" in part.lower()
+			or (part.lower() in EXCLUDED and part.lower() not in HIDDEN_BUILD_OUTPUT_DIRS) for part in prefix):
+			continue
+		key = "/".join(prefix)
+		counts[key] = counts.get(key, 0) + 1
+	return counts
+
+
+def hidden_build_note(manifest):
+	"""Return the prompt note for hidden committed build-output directories, or ""."""
+	try:
+		data = json.loads(hidden_build_dirs_path(manifest).read_text(encoding="utf-8"))
+	except (OSError, ValueError, UnicodeError):
+		return ""
+	if not isinstance(data, dict):
+		return ""
+	entries = sorted((key, value) for key, value in data.items()
+		if isinstance(key, str) and re.fullmatch(r"[A-Za-z0-9._/-]+", key) and isinstance(value, int) and value > 0)
+	if not entries:
+		return ""
+	lines = [
+		"## Directories left out of this sandbox copy",
+		"",
+		"This sandbox's copy of the repository leaves out every `dist`, `build` and `coverage` directory, even committed ones. "
+		"These directories are committed at this commit but are not visible to you here:",
+		"",
+	]
+	lines += [f"- `{key}/` ({value} committed file{'s' if value != 1 else ''})" for key, value in entries[:MAX_HIDDEN_BUILD_NOTE_DIRS]]
+	if len(entries) > MAX_HIDDEN_BUILD_NOTE_DIRS:
+		lines.append(f"- ...and {len(entries) - MAX_HIDDEN_BUILD_NOTE_DIRS} more")
+	lines += [
+		"",
+		"Their absence from your copy is not evidence that they are missing from the branch. "
+		"Do not report them as missing and do not create work to restore or rebuild them on that basis.",
+	]
+	return "\n".join(lines)
+
+
 def synthetic_git_config_path(manifest):
 	return manifest.with_name(manifest.name + ".git_config.sha256")
 
@@ -284,8 +353,12 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 		if not host_git_dir.is_dir():
 			raise ValueError("host git dir missing")
 		git += ["--git-dir", str(host_git_dir), "--work-tree", str(host)]
-	for cmd in (git + ["ls-files", "-z"], git + ["ls-files", "--others", "--exclude-standard", "-z"]):
-		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p)
+	tracked = set()
+	for is_tracked, cmd in ((True, git + ["ls-files", "-z"]), (False, git + ["ls-files", "--others", "--exclude-standard", "-z"])):
+		listed = {p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p}
+		if is_tracked:
+			tracked = listed
+		paths.update(listed)
 	# The PR worktree can add twins before snapshot; only names present in the
 	# verified workflow-support checkout may authorize a command for this run.
 	trusted_checkout = os.environ.get("GITHUB_WORKSPACE")
@@ -323,6 +396,11 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 		# A count only: paths are PR-controlled and stay out of workflow logs.
 		print(f"REVIEW_ISOLATION_SNAPSHOT oversized_skipped={oversized} max_file_bytes={MAX_FILE}", file=sys.stderr)
 	admitted_commands_path(manifest).write_text(json.dumps(sorted(commands)), encoding="utf-8")
+	hidden_dirs = hidden_build_output_dirs(tracked)
+	hidden_build_dirs_path(manifest).write_text(json.dumps(hidden_dirs, sort_keys=True), encoding="utf-8")
+	if hidden_dirs:
+		# A count only: paths are PR-controlled and stay out of workflow logs.
+		print(f"REVIEW_ISOLATION_SNAPSHOT hidden_build_dirs={len(hidden_dirs)}", file=sys.stderr)
 	manifest.write_text(json.dumps(baseline), encoding="utf-8")
 	# A local, unauthenticated Git database supports editor diff commands.
 	# It is synthetic, and is never copied back to the host.
@@ -814,6 +892,16 @@ def main():
 		except Exception:  # noqa: BLE001 - never print file content or paths
 			print("paired live copy mirror failed", file=sys.stderr)
 			raise SystemExit(1) from None
+		return
+	if sys.argv[1:2] == ["hidden-note"]:
+		if len(sys.argv) != 3:
+			raise SystemExit(2)
+		try:
+			note = hidden_build_note(Path(sys.argv[2]))
+		except Exception:  # noqa: BLE001 - the note is advisory; never fail the run
+			note = ""
+		if note:
+			print(note)
 		return
 	# check-paths takes an optional fourth argument: the rejection report.
 	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) in (4, 5):
