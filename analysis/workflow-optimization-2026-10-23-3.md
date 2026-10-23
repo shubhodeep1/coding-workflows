@@ -664,3 +664,160 @@ SHELL-001 (Low) brings the total to 33 findings.
 | Code modularization | 13 workflows holding the support-ref block, `scripts/gh_helpers.sh`, `scripts/label_helpers.sh`, `scripts/tg_helpers.sh`, `.github/workflows/review_autofix.yml`, `.github/workflows/implement.yml` | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, `.github/workflows/plan.yml`, `.github/workflows/review_autofix.yml` | Medium |
 | Medium/Low fixes | `.github/workflows/integration-pr-readiness.yml`, `.github/workflows/lint-pr-body-auto-close.yml`, `scripts/check_integration_pr_readiness.py`, `.github/workflows/review_autofix.yml`, `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/internal-cancel-on-pr-close.yml`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/pr6576-shard-followup.yml`, `scripts/review_collect_pr_metadata.sh`, `scripts/review_merge_train.sh`, `.github/workflows/clarify.yml` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-23)
+
+Scope: this pass extends the Deep Audit's `### Section 2` rather than repeating it. Every file and line cited below was read in this pass. This pass found nothing that is safe to auto-implement, and it disagrees with some Section 2 claims (see Cross-References).
+
+### Safety Tag Legend
+
+- **`SAFE_TO_MERGE`**: the calls hit the same endpoint (or a strict subset of its fields), with the same filters, pagination and token. They sit in the same function or step, with no change to the data between them, and merging them keeps error and retry behaviour unchanged. The implement stage may act on these without further review.
+- **`NEEDS_VERIFICATION`**: the change looks worthwhile, but at least one of those conditions cannot be proven by reading the code. Someone must complete the listed checks before implementing it.
+- **`RISKY_SKIP`**: at least one blocking condition applies: pagination, a retry or polling loop, an identity or authentication check, a rate-limit probe, `orchestrate_poll_process.sh`, race-defence code, or log keys that other code depends on. These are listed so they are visible, but must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001** — `RISKY_SKIP`
+  - **Files:**
+    - `scripts/review_enable_auto_merge.sh:91-109` (`reviewed_head_is_current_for_labels`, the call at `:100`)
+    - `scripts/review_enable_auto_merge.sh:154-170` (labels read at `:155`)
+    - `scripts/review_enable_auto_merge.sh:207-228` (PR metadata read at `:221`)
+  - **Endpoints:** `GET repos/{r}/issues/{n}/labels?per_page=100` (paginated), `GET repos/{r}/pulls/{n}`, and `GET repos/{r}/pulls/{n}` again reading only `.head.sha`.
+  - **Call count:** 2 now on the normal auto-merge path (labels pages ≥1, plus the PR read at `:221`), and 2 on the e2e-label path (`:155` plus `:100`). Proposed: 1, a single PR read whose `.labels[].name` replaces `:155` and whose `.head.sha` replaces `:100`.
+  - **Evidence:** the PR read at `:221` already returns the PR object, including labels and `head.sha`:
+    ```
+    if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' 2>"${_label_err_file}")"; then
+    ...
+    if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+    ```
+    The comment at `:98-99` explains that `:100` exists only because "the full PR-metadata call below is unreachable on these intentional early-exit paths". Moving the read at `:221` above `:155` would make it reachable there.
+  - **Proposed fix:** fetch `_ORCH_PR_META_JSON` once, before the e2e guard. Read the labels from `.labels[].name` and pass its `.head.sha` into `reviewed_head_is_current_for_labels`. Keep `_mt`-style fail-closed `exit 0` handling on that single read.
+  - **Safety rationale:** two blockers apply.
+    - `:155` uses `--paginate`. The comment at `:144-153` records an incident (Copilot review #3 on PR #1823) where a label on page 2 was dropped and auto-merge raced the e2e gate.
+    - This is a fail-closed merge-authorization guard, and reordering changes which `::warning::` text fires on API failure.
+  - **Downstream signal:** do not auto-implement. Manual review must first confirm, against GitHub REST documentation and a live PR with more than 30 labels, that the `labels` array in `GET /pulls/{n}` is never truncated. It must also confirm that no log scraper keys on the two distinct failure warnings.
+
+- **MERGE-002** — `NEEDS_VERIFICATION`
+  - **Files:** `.github/workflows/review_autofix.yml:910-949`, job `post-merge-validate-dispatch`, per-issue read at `:914`. The issue list is built at `:903`.
+  - **Endpoint:** `gh issue view <n> --json labels`, once per linked issue whose labels are unknown.
+  - **Call count:** N now (one per issue with `labels_known != true`). Proposed: ceil(N/25) aliased GraphQL `issue(number:){labels(first:100){nodes{name}}}` calls, made before the loop.
+  - **Evidence:**
+    - The per-issue read happens only on the PR body/title fallback path. `:903` builds the nodes with `labels: null`, which makes `labels_known=false`.
+    - The common path already reuses the gate's cached labels (`POST_MERGE_LINKED_ISSUES_JSON`, `:850`), or one live `closingIssuesReferences` read that includes labels (`:856-862`).
+    - The loop interleaves `gh workflow run` (`:937`) and `gh issue edit --remove-label` (`:946`), but each mutation only touches the issue currently being processed.
+  - **Proposed fix:** before the loop, run one aliased query in the pattern of `_fetch_blocked_issue_routing_graphql` (`scripts/orchestrate_poll_process.sh:115-142`) or `_fetch_candidate_issue_details_graphql`, for every number with `labels_known=false`. Fill in `has_validate_label`, and fall back to the per-issue `gh issue view` only for numbers missing from the response.
+  - **Safety rationale:** the endpoint and token are the same and the mutations are per-issue. However, the partial-failure behaviour changes: today one failed read marks only that issue `validation_label_unknown`, while a failed batch would mark all of them. N is usually 1, so the saving is small.
+  - **Downstream signal (verification steps):**
+    1. Check workflow logs for "Found linked issues via PR body/title fallback" with more than 1 issue, to confirm N > 1 actually happens.
+    2. Specify the per-issue fallback for aliases missing from a successful batch, so failure semantics stay per-issue.
+    3. Confirm the `labels(first:100)` cap matches how `gh issue view --json labels` behaves.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001** — `NEEDS_VERIFICATION`
+  - **Files:**
+    - `.github/workflows/review_autofix.yml:2229-2253` ("Check PR state (defense-in-depth)", read at `:2240`)
+    - `scripts/review_collect_pr_metadata.sh:231`, called from the "Collect PR metadata" step at `review_autofix.yml:2655-2662`
+    - Both are in the `codex-agent` job.
+  - **Endpoint:** `GET repos/{r}/pulls/{n}`, the full object both times.
+  - **Call count:** 2 per codex-agent run now; proposed 1. The gate's read at `scripts/review_autofix_step_evaluate_gate.sh:87-88` is in a separate job and stays.
+  - **Evidence:**
+    ```
+    pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo 'null')"
+    ...
+    gh_retry "${PR_PAYLOAD_FILE}" api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+    ```
+    `:2240` uses `.labels` and `.state`/`.merged_at`; `PR_PAYLOAD_FILE` is a superset. Neither this job nor any step between `:2255` and `:2653` changes the PR. Those steps cover engine resolution, CLI installs, Semble, the memory run-start event and static context.
+  - **Proposed fix:** have `:2240` save its raw response and a capture epoch (for example `${RUNNER_TEMP}/pr_state_snapshot.json`, plus `PR_STATE_SNAPSHOT_EPOCH` in `GITHUB_ENV`; check both names for collisions first, per §10). `review_collect_pr_metadata.sh` would copy that snapshot into `PR_PAYLOAD_FILE` only when it is valid JSON and younger than a bounded age, and otherwise keep the current fail-closed read.
+  - **Safety rationale:** same endpoint and token, no intervening change by this job. But the two calls handle errors differently: `:2240` fails open to `null` and assumes the PR is open, while the collect script fails closed under `set -euo pipefail`. There is also an unbounded time gap during which the PR head or labels can move.
+  - **Downstream signal (verification steps):**
+    1. From the codex-agent step timings in run logs, measure the p50 gap between the end of "Check PR state" and the start of "Collect PR metadata". If it is usually above the age bound, the saving never happens: close this as won't-fix.
+    2. Make sure the reuse never resets the file's mtime. `scripts/review_run_reviewers.sh:457-460` treats `PR_PAYLOAD_FILE` mtime ≤120s as proof of freshness, so writing an old snapshot with a new mtime would skip its live state check at `:464`.
+    3. Audit every `PR_PAYLOAD_FILE` consumer that reads `.head.sha`/`.head.ref`/`.labels`: `review_conflict_resolve.sh:2035`, `review_rb_judge.sh:1228`, `review_autofix_step_detect_smoke_test.sh:50`. Each must tolerate a snapshot as old as the bound.
+
+- **REUSE-002** — `RISKY_SKIP`
+  - **Files:** `scripts/review_autofix_step_evaluate_gate.sh:326-352` (`gate_fetch_marker_comments`, call at `:343-346`, `gate` job) and `scripts/review_collect_pr_metadata.sh:235-236` (`codex-agent` job).
+  - **Endpoint:** `GET repos/{r}/issues/{n}/comments` (paginated, per_page=100), called twice per PR review run.
+  - **Call count:** current 2 paginated walks; proposed 1 at most.
+  - **Evidence:** both walk the same comment list. The gate's copy is filtered to marker-bearing comments and clips other bodies to the first and last 2,000 characters, so it is not a superset of what `PR_ISSUE_COMMENTS_FILE` needs for `PR_ALL_COMMENTS_CONTEXT_FILE` (`:439-458`).
+  - **Proposed fix:** none recommended. A merge would require the gate to keep every comment unclipped and pass it to codex-agent as an artifact.
+  - **Safety rationale:** several blockers apply. The read is paginated, it crosses a job boundary that runs under the gate's own concurrency group (`review_autofix.yml:297-299`), and the gate's copy is a lossy subset.
+  - **Downstream signal:** do not implement. Revisit only if an artifact hand-off from gate to codex-agent already exists for other data.
+
+- **REUSE-003** — `RISKY_SKIP`
+  - **Files:**
+    - `scripts/review_single_issue_security_pass.sh:369-373` (gate mode) and `:614-618` (report mode)
+    - Existing gate output: `scripts/review_autofix_step_evaluate_gate.sh:1371` → `review_autofix.yml:328` (`fingerprint_cap_marker_author_login`)
+  - **Endpoint:** `GET /user`.
+  - **Call count:** 1 per security-pass mode invocation now; proposed 0 when the gate value is present.
+  - **Evidence:** the in-code comment is inaccurate:
+    ```
+    # The gate job also probes /user, but its identity is not exported to this job.
+    SECURITY_PASS_AUTHOR_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+    ```
+    The gate does export it (`echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}"`), and other jobs already consume it: `review_autofix.yml:1521` (`FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN`) and `:5686` (`AUTOFIX_STREAK_AUTHOR_LOGIN`).
+  - **Proposed fix:** if approved, pass `needs.gate.outputs.fingerprint_cap_marker_author_login` into the security-pass step env (`review_autofix.yml:4186-4198`) under a new, collision-checked name. Use it only when it is non-empty and `secrets.GH_PAT` is set; otherwise keep the live `/user` read.
+  - **Safety rationale:** this is an identity read that authenticates marker comments, which is an authentication-flow blocker. The token scopes also differ: the gate's evaluate step uses `secrets.GH_PAT` only (`:616`), while the security pass uses `secrets.GH_PAT || github.token` (`:4187`) with a `github-actions[bot]` fallback (`:4197`). And the gate fills `gate_marker_author_login` lazily (`:328-340`), so it can be empty.
+  - **Downstream signal:** do not auto-implement. Manual review must confirm that both identities are always the same token, and decide whether a value reused across jobs is acceptable as authentication. At minimum, correct the inaccurate comment at `:369`.
+
+- **REUSE-004** — `RISKY_SKIP`
+  - **Files:** `.github/workflows/implement.yml:2083-2086` ("Fetch issue metadata", step at `:2031`, `GH_TOKEN: secrets.GH_PAT` at `:2034`) and `:2415-2422` ("Unblock judge bulk-delete override", step at `:2401`, `GH_TOKEN: secrets.GH_PAT` at `:2412`). Both are in the `implement` job.
+  - **Endpoint:** `GET /user`.
+  - **Call count:** 2 now when an override marker is present; proposed 1.
+  - **Evidence:** the comment at `:2083-2085` rules out reuse only in one direction ("the later bulk-delete override identity read runs only conditionally; it cannot supply this grant's pipeline identity"). The other direction, where the later step reuses the earlier `pipeline_login`, is not addressed. The token is the same and the job is the same.
+  - **Proposed fix:** have `:2086` export the login through `GITHUB_ENV` under a new, collision-checked name. `:2418` would use it when non-empty and keep its live read as a fallback.
+  - **Safety rationale:** the identity authenticates a destructive-guard override marker (`:2423-2429`), which is an authentication-flow blocker. `:2086` also uses an unretried `gh api user` that can return empty. The saving is 1 call, and only on runs that carry the marker.
+  - **Downstream signal:** do not auto-implement. It needs a security review of whether an identity value passed between steps through `GITHUB_ENV` (which later steps can write to) is acceptable for authorizing a bulk-delete override.
+
+- **REUSE-005** — `RISKY_SKIP`
+  - **File:** `.github/workflows/test-and-mark-stable.yml:1597-1614` (PR-head stability loop in the e2e smoke test).
+  - **Endpoint:** `GET repos/{TEST_REPO}/pulls/{n}`, reading `.head.sha`.
+  - **Call count:** up to 10 now (5 attempts × 2); proposed up to 6, by reusing attempt n's `HEAD_B` as attempt n+1's `HEAD_A`.
+  - **Evidence:**
+    ```
+    HEAD_A=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+    sleep 3
+    HEAD_B=$(gh api "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null || echo "")
+    ```
+  - **Proposed fix:** none to auto-apply.
+  - **Safety rationale:** this is a polling loop that defends against a race. The comment at `:1597-1604` describes the stale-blob 409 race it guards against, and it sits on the stable-release gate's critical path.
+  - **Downstream signal:** do not auto-implement. Any change needs a stable-gate maintainer to confirm the "two reads ≥3s apart" invariant still holds.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+Candidates reviewed and rejected:
+- `scripts/review_rb_judge.sh:1139` runs only when `_pr_meta` (`:1071`) has no title or body.
+- `review_autofix.yml:4485`, `scripts/review_autofix_step_mark_ready_to_merge.sh:62` and `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh:43` run only when `PR_META_FILE` yields empty text.
+- Collect-step fetches on the rare `PR_CLOSED=true` path are still read by steps not gated on `PR_CLOSED`, for example `review_autofix.yml:2674`.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP (disputed). `PR_META_FILE` is already built locally from `PR_PAYLOAD_FILE` (`review_collect_pr_metadata.sh:250-256`) with no API call. The REST read at `:231` must stay for consumers that need the REST shape: `review_autofix_step_detect_smoke_test.sh:15-16,50`, `review_run_reviewers.sh:457-460`, `review_conflict_resolve.sh:2035,2241-2244`, `review_rb_judge.sh:1228` and `review_single_issue_security_pass.sh:320`. Folding PR fields into the GraphQL query at `:284` therefore saves 0 calls, and the "→2" variant would change paginated comment reads.
+- BATCH-001: RISKY_SKIP. `_mt_pr_files_into` is paginated (`review_merge_train.sh:222`). The prefetch it would merge into, `_mt_pr_meta_prefetch`, runs only after Phase A has used the file lists to pick candidates (`:387`), so there is no earlier batch to fold files into. Failure semantics also differ: a files-read failure returns 1 (`:340-342`), while a prefetch failure fails open and keeps every blocker (`:526-532`).
+- BATCH-002: RISKY_SKIP. The code is in `orchestrate_poll_process.sh`, and the live issue read at `:55-57` is part of the replay authorization contract documented at `:37-41`. Net-new detail: the call count also includes the `gh api user` read at `:51`, so it is 3 + 2N, not 2 + 2N.
+- BATCH-003: RISKY_SKIP. The comments read is paginated (`implement.yml:5554`, `--paginate`), and swapping it for `comments(last:100)` changes page semantics in a re-issue-loop guard (the #1292 incident, `:5536-5539`).
+- API-002: RISKY_SKIP. The proposed `pulls?base=` listing would need pagination when the base is the default branch with more than 100 open PRs. It would also remove the `skip reason=unrelated_base` log line (`workflow_failure_heal_pr_reconcile.sh:254`). The loop rarely runs anyway, because the no-op exit at `:103-105` fires first.
+- API-003: RISKY_SKIP (disputed). The three steps can never all run in one job.
+  - `:438` requires `existing_pr`, and `:555-561` then sets `SKIP_IMPLEMENT=true`.
+  - `:741` requires `refctx.pr_not_open`, which is set together with `SKIP_IMPLEMENT=true` (`:711-712`). `refctx` itself only runs when `SKIP_IMPLEMENT != 'true'` (`:563-565`).
+  - `:1322` requires `SKIP_IMPLEMENT != 'true'`.
+
+  So at most one runs, and the current count is already ≤1. The `SUPPORT_REF` log lines are also covered by `tests/test_workflow_support_ref_follows_pin.py` (`:749-750`).
+- API-004: RISKY_SKIP.
+  - `plan.yml:2664` is a duplicate-check read that must see the plan comment posted after `:714` (`is_plan`/`max_by(event_key)` at `:2668-2672`), and it is paginated.
+  - The duplicate `rate_limit` reads are rate-limit probes inside `orchestrate_poll_process.sh` (`:44`, `:157`).
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | MERGE-002, REUSE-001 |
+| RISKY_SKIP | 5 | MERGE-001, REUSE-002, REUSE-003, REUSE-004, REUSE-005 |
+
+These counts cover net-new findings only. All 7 cross-referenced Deep Audit findings are tagged RISKY_SKIP above.
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
