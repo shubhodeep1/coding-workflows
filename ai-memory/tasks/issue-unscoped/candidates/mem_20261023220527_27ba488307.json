@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:2031-2037 | severity=major | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The ceiling guard in review_phase_deadline_extension_allowed reserves only POLL_INTERVAL, so a poll admitted just before the ceiling can overrun it through gh API retry backoff and request time.\n  WHY: The overrun consumes time reserved for later release phases. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT (confidence 2, rare, bounded, small against the reserves); the others rated it MAJOR. The highest severity is used.\n- .github/workflows/test-and-mark-stable.yml:review_phase_deadline_extension_allowed() | severity=major | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The extension logic bypasses the inactivity and current-step duration guards for review runs in queued, pending, waiting or requested states.\n  WHY: A run stuck in a non-active state could keep Phase 4 extended up to the ceiling instead of ending on inactivity. anthropic_claude-sonnet-5_5 examined this and rejected it, because such runs have no steps or activity to measure and the ceiling still bounds the wait.\n- .github/workflows/test-and-mark-stable.yml:review_phase_deadline_extension_allowed() NOW check | severity=major | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The [[ \"$now\" =~ ^[0-9]+$ ]] check does not cover NOW being empty or non-numeric, and the function then returns 1.\n  WHY: A bad NOW would end Phase 4 early. anthropic_claude-sonnet-5_5 examined this and rejected it, because NOW is assigned from date +%s just before the check.\n- .github/workflows/test-and-mark-stable.yml:~2010-2050, ~2231-2250 | severity=nit | confidence=3\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: When the extension is granted through REVIEW_PHASE_HANDOFF_PENDING, RUN_ID and RUN_STATUS still describe the dropped run, so the E2E_REVIEW_DEADLINE_EXTENDED log line names the wrong run.\n  WHY: The log line is misleading to anyone grepping it. The wait logic and the ceiling are unaffected.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:2031-2037 | severity=nit | confidence=2\n  PROBLEM: The ceiling guard reserves only POLL_INTERVAL (10 s), but the poll that follows makes gh_api_safe_quiet_print calls that can retry. A poll admitted just before the ceiling can overrun it.\n  WHY: This only matters if a rate-limit or transient failure hits in the last seconds before the ceiling. The overrun is small next to the ceiling reserves, the 300-minute job timeout still holds, and a later poll is rechecked against the ceiling.\n(Three pass-1 findings from other reviewers were checked and rejected: the queued/pending bypass of idle and step-age checks, NOW not being an integer, and a stale handoff flag.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:review_phase_deadline_extension_allowed() | severity=major | confidence=4\n  PROBLEM: The deadline extension logic bypasses the inactivity and current-step duration limits for review runs in queued, pending, waiting or requested states.\n  WHY: A run that stays in a non-active state indefinitely lets Phase 4 extend to the ceiling instead of ending on inactivity.\n- .github/workflows/test-and-mark-stable.yml:review_phase_deadline_extension_allowed() ceiling guard | severity=major | confidence=3\n  PROBLEM: The ceiling guard accounts only for POLL_INTERVAL, not for the poll's request time and rate-limit retries.\n  WHY: An API request admitted near the ceiling can spend up to 210 seconds in retries plus request time, pushing Phase 4 past the total wall-clock budget.\n- .github/workflows/test-and-mark-stable.yml:review_phase_deadline_extension_allowed() NOW check | severity=major | confidence=4\n  PROBLEM: [[ \"$now\" =~ ^[0-9]+$ ]] does not account for NOW being empty or non-numeric because of a misconfigured environment.\n  WHY: If NOW is not a valid integer, the function returns 1 early and Phase 4 may time out prematurely.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:~2010-2050, ~2231-2250 | severity=nit | confidence=3\n  PROBLEM: When the extension is granted through REVIEW_PHASE_HANDOFF_PENDING, RUN_ID and RUN_STATUS still describe the dropped run, so the E2E_REVIEW_DEADLINE_EXTENDED log line names the dropped run instead of its successor.\n  WHY: The log attribution is misleading, but the wait logic and the ceiling are unaffected.\n- .github/workflows/test-and-mark-stable.yml:review_phase_deadline_extension_allowed (~line 2014) and the following gh pr view / gh run list calls | severity=major | confidence=3\n  PROBLEM: The ceiling guard reserves only POLL_INTERVAL, not the time the poll itself takes. An iteration admitted at CEILING - POLL_INTERVAL can run past the ceiling.\n  WHY: The overrun consumes the reserve held for Phase 4b, Phase 6, Phase 7 and finalization. The hardening suggestion adds a fixed API-call budget of about 300 s to the margin (about 6 lines, hardening risk score 3).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:2031-2036 and 2378; retry logic in scripts/comprehensive_test_and_release_gh_api.sh:121-147 | severity=major | confidence=4\n  PROBLEM: The ceiling check accounts for POLL_INTERVAL but not the time spent fetching and processing the poll. The review-run API request can retry rate-limit failures with 30-, 60- and 120-second waits.\n  WHY: A poll admitted shortly before the ceiling can spend more than its 10 s interval in retries, so Phase 4 continues past the ceiling and consumes time reserved for later release phases.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml:~2028-2062, 2233-2236 | severity=nit | confidence=3\n  PROBLEM: When the extension is granted through REVIEW_PHASE_HANDOFF_PENDING=1, RUN_ID and RUN_STATUS still describe the dropped run, so the E2E_REVIEW_DEADLINE_EXTENDED log line names the wrong run.\n  WHY: The log is misleading for debugging, but the behaviour is correct.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "51c1b09b387f098d6749253677273c3278a908614f596adbfa3caecbef5ca95f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8009,
+    "run_id": "40028552964",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40028552964",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023220527_27ba488307",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8009,
+    "run_id": "40028552964"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T22:05:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
