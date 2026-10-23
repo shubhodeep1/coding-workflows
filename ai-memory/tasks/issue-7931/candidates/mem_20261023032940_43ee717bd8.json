@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":7931,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/7931\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/7936\",\"pr_number\":7936,\"branch\":\"ai/issue-7931\",\"run_id\":\"39893196073\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/39893196073\",\"changed_files\":[\"changelog.d/7931-resolver-retry-state-rest-patch.md\",\"scripts/review_conflict_resolve.sh\",\"tests/test_review_conflict_resolve_retry_state.py\"]}",
+  "fingerprint": "a0636a248f3d93ec78c38db9638ce7a264491fc6f2d0f62f234eedb66114948c",
+  "lineage": {
+    "issue_number": 7931,
+    "parent_ids": [],
+    "pr_number": 7936,
+    "run_id": "39893196073",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39893196073",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/7936"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261023032940_43ee717bd8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7931,
+    "level": "run",
+    "pr_number": 7936,
+    "run_id": "39893196073"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #7931: https://github.com/shubhodeep1/coding-workflows/pull/7936",
+  "timestamps": {
+    "created_at": "2026-10-23T03:29:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
