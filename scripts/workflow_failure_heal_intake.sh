@@ -65,6 +65,24 @@
 #      model runs and routes a token the ownership does not back, or any token
 #      while WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false, as
 #      workflow-defect.
+#      A `validation_failure` report (a consumer's runtime validation failed
+#      in the harness this repository ships; plan
+#      docs/plans/validation-failure-harness-routing-plan.md, Phase 1) never
+#      opens an issue in the source repository:
+#        workflow-defect, inconclusive -> issue here (`opened`)
+#        open heal issue with the same fingerprint -> occurrence (`duplicate`)
+#        already-fixed (verified)      -> no issue (`already-fixed`)
+#        consumer-app-defect, consumer-config, transient, pr-self-inflicted,
+#        base-self-inflicted           -> no issue in either repo (`bounced`)
+#        budget, lineage cap, switch or scope-guard stop -> `skipped`
+#      Once its provenance is verified, every outcome ends in exactly one
+#      comment on the consumer tracking issue whose last line is
+#      `<!-- workflow-failure-heal:validation-route:v1 fp= outcome= issue= classification= run= -->`.
+#      §15 API audit for this kind: one run GET and one jobs GET (provenance,
+#      reused by the log collection), the job log reads, the self-repo heal
+#      issue list only (dedup is per fingerprint across consumers, so the
+#      source repository's list is not read), one comment POST on the
+#      tracking issue, and on a duplicate one occurrence POST.
 #
 # The opened issue is a normal issue, so the existing clarify -> plan ->
 # implement -> review pipeline picks it up. This script never pushes code.
@@ -638,6 +656,7 @@ _heal_report_claimed_no_runs()
 
 _heal_skip_scope_unavailable()
 {
+	VALIDATION_ROUTE_SKIP_REASON="scope_unavailable_no_runs"
 	log "skip reason=scope_unavailable_no_runs stage=$1 fp=${FP} classification=${CLASSIFICATION} source=${SOURCE_LABEL}"
 	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 		echo "Workflow failure heal filed no issue for ${SOURCE_LABEL}: the report names no failed run, so no heal scope can be set." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
@@ -667,6 +686,7 @@ _heal_intake_scope_guard_permits_create()
 	if ! _heal_intake_scope_guard_is_on && [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ]; then
 		log "scope_guard outcome=recovery_only repo=${scope_guard_repo} issue=${HEAL_SCOPE_RECOVERY_ISSUE} fp=${FP} source=${SOURCE_LABEL}"
 	elif ! _heal_intake_scope_guard_is_on; then
+		VALIDATION_ROUTE_SKIP_REASON="scope_guard_disabled"
 		log "skip reason=scope_guard_disabled repo=${scope_guard_repo} labels=${scope_guard_labels} target_branch=${scope_guard_target_branch:-default} target_branch_source=${TARGET_BRANCH_SOURCE:-none} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
 		if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 			echo "Workflow failure heal composed a heal issue for ${SOURCE_LABEL} but did not create it: HEAL_INTAKE_SCOPE_GUARD_ENABLED is off." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
@@ -693,6 +713,7 @@ _heal_intake_scope_guard_permits_create()
 	scope_guard_status="$(printf '%s' "${scope_guard_status:-unavailable}" | tr -cd 'a-z_' | head -c 40)"
 	[ -n "${scope_guard_status}" ] || scope_guard_status="unavailable"
 	echo "::error::WORKFLOW_HEAL error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}" >&2
+	VALIDATION_ROUTE_SKIP_REASON="scope_marker_unverified"
 	log "error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
 	tg_send_msg "Workflow failure heal refused to open an issue in ${scope_guard_repo} for ${SOURCE_LABEL}: the scope marker could not be verified (${scope_guard_status})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 	return 1
@@ -1014,6 +1035,175 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	log "provenance_verified source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=$(jq '.run_refs | length' "${PAYLOAD_FILE}")"
 fi
 
+# --- Runtime validation failures: routing marker -----------------------------
+#
+# A validation_failure report (plan docs/plans/validation-failure-harness-routing-plan.md,
+# Phase 1) ends, once its provenance is verified, in exactly one comment on
+# the consumer tracking issue whose last line is the routing marker below.
+# _validation_route_post writes that comment; _comment_on_source calls it for
+# this kind, the duplicate and bounce paths call it directly, and the EXIT
+# trap armed below posts `outcome=skipped` for every other exit (budget,
+# lineage cap, scope guard, capacity wait, intake error). Nothing is posted
+# before provenance is verified: ISSUE_NUMBER is untrusted until then.
+VALIDATION_ROUTE_ARMED=false
+VALIDATION_ROUTE_POSTED=false
+VALIDATION_ROUTE_OUTCOME=""
+VALIDATION_ROUTE_ISSUE=""
+VALIDATION_ROUTE_SKIP_REASON=""
+VALIDATION_ROUTE_RUN_ID=""
+VALIDATION_ROUTE_FP=""
+
+# Prints the marker; every field is re-checked here. Returns 1 (nothing
+# printed) when the fingerprint or run id is not well formed.
+_validation_route_marker()
+{
+	local marker_outcome="$1" marker_issue="$2" marker_classification="$3"
+	if ! [[ "${VALIDATION_ROUTE_FP}" =~ ^[0-9a-f]{64}$ ]] || ! [[ "${VALIDATION_ROUTE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+		return 1
+	fi
+	case "${marker_outcome}" in
+		opened|duplicate|already-fixed|bounced|skipped) ;;
+		*) return 1 ;;
+	esac
+	[[ "${marker_issue}" =~ ^[1-9][0-9]*$ ]] || marker_issue="none"
+	[[ "${marker_classification}" =~ ^[a-z-]{1,40}$ ]] || marker_classification="none"
+	printf '<!-- workflow-failure-heal:validation-route:v1 fp=%s outcome=%s issue=%s classification=%s run=%s -->\n' \
+		"${VALIDATION_ROUTE_FP}" "${marker_outcome}" "${marker_issue}" "${marker_classification}" "${VALIDATION_ROUTE_RUN_ID}"
+}
+
+# The outcome of this run: an explicit one, else `opened` once a heal issue
+# exists, `already-fixed` for a verified already-fixed verdict, else `skipped`.
+_validation_route_outcome()
+{
+	if [ -n "${VALIDATION_ROUTE_OUTCOME}" ]; then
+		printf '%s' "${VALIDATION_ROUTE_OUTCOME}"
+	elif [ -n "${NEW_ISSUE_URL:-}" ]; then
+		printf 'opened'
+	elif [ "${CLASSIFICATION:-}" = "already-fixed" ]; then
+		printf 'already-fixed'
+	else
+		printf 'skipped'
+	fi
+}
+
+# Posts body_file plus the marker as one comment on the tracking issue. Posts
+# at most once per run: POSTED is set before the POST, so a failed POST is not
+# retried as a second comment.
+_validation_route_post()
+{
+	local route_body="$1" route_outcome route_issue="" route_classification route_marker route_state="failed"
+	if [ "${VALIDATION_ROUTE_POSTED}" = "true" ]; then
+		log "warn validation_route_already_posted source=${SOURCE_LABEL}"
+		return 0
+	fi
+	route_outcome="$(_validation_route_outcome)"
+	if [ "${route_outcome}" = "opened" ]; then
+		route_issue="${NEW_ISSUE_URL:-}"
+		route_issue="${route_issue%%[[:space:]]*}"
+		route_issue="${route_issue##*/}"
+	elif [ "${route_outcome}" = "duplicate" ]; then
+		route_issue="${VALIDATION_ROUTE_ISSUE}"
+	fi
+	[[ "${route_issue}" =~ ^[1-9][0-9]*$ ]] || route_issue="none"
+	route_classification="${CLASSIFICATION:-none}"
+	if ! route_marker="$(_validation_route_marker "${route_outcome}" "${route_issue}" "${route_classification}")"; then
+		log "warn validation_route_marker_invalid source=${SOURCE_LABEL} outcome=${route_outcome}"
+		return 0
+	fi
+	[[ "${route_classification}" =~ ^[a-z-]{1,40}$ ]] || route_classification="none"
+	VALIDATION_ROUTE_POSTED=true
+	{ echo; echo "${route_marker}"; } >> "${route_body}"
+	if gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${route_body}" >/dev/null 2>&1; then
+		route_state="posted"
+	fi
+	log "received kind=validation_failure outcome=${route_outcome} fp=${VALIDATION_ROUTE_FP} issue=${route_issue} classification=${route_classification} comment=${route_state} source=${SOURCE_LABEL}"
+}
+
+# EXIT trap: an exit that posted no routing comment yet posts `skipped`
+# (with the reason the exit path recorded) and keeps the exit code.
+_validation_route_exit()
+{
+	local route_rc=$?
+	trap - EXIT
+	set +e
+	if [ "${VALIDATION_ROUTE_ARMED}" = "true" ] && [ "${VALIDATION_ROUTE_POSTED}" != "true" ]; then
+		local route_reason="${VALIDATION_ROUTE_SKIP_REASON}"
+		if [ -z "${route_reason}" ]; then
+			if [ "${route_rc}" -ne 0 ]; then route_reason="intake_error"; else route_reason="unspecified"; fi
+		fi
+		route_reason="$(printf '%s' "${route_reason}" | tr -cd 'a-z0-9_' | head -c 60)"
+		local route_body="${RUNTIME_DIR}/validation_route_comment.md"
+		{
+			echo "<!-- workflow-failure-heal:outcome -->"
+			echo "Workflow failure heal did not file this runtime-validation report (\`${route_reason:-unspecified}\`)."
+			echo
+			echo "Heal intake run: ${RUN_URL}"
+		} > "${route_body}"
+		VALIDATION_ROUTE_OUTCOME="skipped"
+		_validation_route_post "${route_body}"
+	fi
+	exit "${route_rc}"
+}
+
+# --- Runtime validation failures: provenance (before any log read) ------------
+#
+# verify-phase-provenance checks a validation_failure report against GitHub's
+# own run and jobs: same repository, a dispatched run of the consumer's
+# validation wrapper, failed (or still running with a failed job other than
+# the reporter), and `[tracking:<issue>]` in its title. No comment is read.
+# §15 API audit: claim binding and the generic provenance gate read no run for
+# this kind, so this is one run GET and one jobs GET; the log collection
+# below reuses both. Every failure rejects the report (fail closed, WARNING).
+if [ "${SOURCE_KIND}" = "validation_failure" ]; then
+	PROVENANCE_DIR="${RUNTIME_DIR}/provenance"
+	mkdir -p "${PROVENANCE_DIR}"
+	VALIDATION_RUN_ID="$(_pf '.run_refs[0].run_id // ""')"
+	VALIDATION_PROVENANCE_FILE="${RUNTIME_DIR}/validation_provenance.json"
+	if ! [[ "${VALIDATION_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+		printf '{"verified":false,"reason":"run_id_invalid"}\n' > "${VALIDATION_PROVENANCE_FILE}"
+	else
+		VALIDATION_RUN_FILE="${PROVENANCE_DIR}/run-${VALIDATION_RUN_ID}.json"
+		VALIDATION_JOBS_FILE="${JOBS_DIR}/${VALIDATION_RUN_ID}.json"
+		if ! gh_api_json_to_file "${VALIDATION_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${VALIDATION_RUN_ID}" 2>/dev/null \
+			|| ! jq -e 'type == "object"' "${VALIDATION_RUN_FILE}" >/dev/null 2>&1; then
+			rm -f "${VALIDATION_RUN_FILE}"
+		fi
+		if ! gh_api_json_to_file "${VALIDATION_JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${VALIDATION_RUN_ID}/jobs" -F per_page=100 2>/dev/null \
+			|| ! jq -e '.jobs | type == "array"' "${VALIDATION_JOBS_FILE}" >/dev/null 2>&1; then
+			rm -f "${VALIDATION_JOBS_FILE}"
+		fi
+		if ! python3 "${HEAL_PY}" verify-phase-provenance --payload-json "${PAYLOAD_FILE}" \
+			--run-json "${VALIDATION_RUN_FILE}" --jobs-json "${VALIDATION_JOBS_FILE}" \
+			--comments-json "" --self-repo "${SELF_REPO}" --comment-author "" > "${VALIDATION_PROVENANCE_FILE}" 2>/dev/null \
+			|| ! jq -e 'type == "object" and (.verified | type == "boolean") and (.reason | type == "string")' "${VALIDATION_PROVENANCE_FILE}" >/dev/null 2>&1; then
+			printf '{"verified":false,"reason":"verifier_error"}\n' > "${VALIDATION_PROVENANCE_FILE}"
+		fi
+	fi
+	if ! jq -e '.verified == true and .reason == "ok"' "${VALIDATION_PROVENANCE_FILE}" >/dev/null 2>&1; then
+		VALIDATION_PROVENANCE_REASON="$(jq -r '.reason' "${VALIDATION_PROVENANCE_FILE}" | tr -cd 'a-z0-9_' | head -c 60)"
+		log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${VALIDATION_RUN_ID:-none} reason=${VALIDATION_PROVENANCE_REASON}"
+		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=${VALIDATION_PROVENANCE_REASON}"
+		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${VALIDATION_PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		exit 0
+	fi
+	# The reporter dispatches from the validate run itself, so the run is
+	# normally still in progress; verify-run below accepts only this run so.
+	if [ "$(jq -r '.status // ""' "${VALIDATION_RUN_FILE}")" != "completed" ]; then
+		PENDING_CURRENT_RUN="${VALIDATION_RUN_ID}"
+	fi
+	log "provenance_verified source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=1"
+	# The fingerprint comes from validated payload fields only (no log), so it
+	# is known before any exit the trap may report.
+	VALIDATION_SIGNATURE_FILE="${RUNTIME_DIR}/validation_signature.txt"
+	_pf '.validation_signature // ""' > "${VALIDATION_SIGNATURE_FILE}"
+	VALIDATION_ROUTE_FP="$(python3 "${HEAL_PY}" validation-failure-fingerprint --stage "$(_pf '.validation_stage // ""')" \
+		--reason "$(_pf '.validation_reason // ""')" --signature-file "${VALIDATION_SIGNATURE_FILE}" --source-repo "${SOURCE_REPO}" 2>/dev/null || true)"
+	[[ "${VALIDATION_ROUTE_FP}" =~ ^[0-9a-f]{64}$ ]] || { log "warn validation_fingerprint_helper_failed source=${SOURCE_LABEL}"; VALIDATION_ROUTE_FP=""; }
+	VALIDATION_ROUTE_RUN_ID="${VALIDATION_RUN_ID}"
+	VALIDATION_ROUTE_ARMED=true
+	trap '_validation_route_exit' EXIT
+fi
+
 # --- Non-retryable review/autofix failures (after provenance) --------------
 #
 # A verified autofix_failure whose reason is in NON_RETRYABLE_FAILURE_REASONS
@@ -1187,7 +1377,7 @@ while IFS=$'\t' read -r run_id run_url; do
 		cp "${JOBS_DIR}/${run_id}.json" "${JOBS_FILE}"
 	elif ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
 		log "warn jobs_fetch_failed source=${SOURCE_REPO} run=${run_id}"
-		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
+		if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ "${RUN_COUNT}" -eq 1 ]; then
 			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
 			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
 			exit 0
@@ -1196,14 +1386,14 @@ while IFS=$'\t' read -r run_id run_url; do
 	fi
 	if ! jq -e '.jobs | type == "array"' "${JOBS_FILE}" >/dev/null 2>&1; then
 		log "warn jobs_fetch_invalid source=${SOURCE_REPO} run=${run_id}"
-		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
+		if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ "${RUN_COUNT}" -eq 1 ]; then
 			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
 			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
 			exit 0
 		fi
 		continue
 	fi
-	if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] \
+	if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ "${RUN_COUNT}" -eq 1 ] \
 		&& ! jq -e 'any(.jobs[]; (.conclusion == "failure" or .conclusion == "timed_out")
 			and (.name | type == "string") and .name != "heal-report"
 			and (.name | endswith("/ heal-report") | not))' "${JOBS_FILE}" >/dev/null 2>&1; then
@@ -1257,7 +1447,7 @@ while IFS=$'\t' read -r run_id run_url; do
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${SELECTED_JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
 
-if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -n "${PENDING_CURRENT_RUN}" ] \
+if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ -n "${PENDING_CURRENT_RUN}" ] \
 	&& ! jq -e --arg run_id "${PENDING_CURRENT_RUN}" 'any(.[]; .run_id == $run_id)' "${SUMMARIES_FILE}" >/dev/null 2>&1; then
 	log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${PENDING_CURRENT_RUN} reason=current_run_no_failed_job"
 	log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
@@ -1359,6 +1549,18 @@ if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 	FIRST_WORKFLOW_NAME="ai-engine-fallback"
 	FIRST_FAILING_STEP="${ENGINE_ROLE}"
 	SIGNATURE="${ENGINE_REASON}"
+elif [ "${SOURCE_KIND}" = "validation_failure" ]; then
+	# A harness-owned runtime validation failure: one heal issue per stage,
+	# reason and normalised error signature, across consumers (Q14). The
+	# values were validated by validate-payload (fixed vocabulary plus the
+	# neutralised signature); the job logs still go to the model below. These
+	# three inputs give the same hash as `validation-failure-fingerprint`.
+	VALIDATION_STAGE="$(_pf '.validation_stage // ""')"
+	VALIDATION_REASON="$(_pf '.validation_reason // ""')"
+	VALIDATION_SIGNATURE="$(_pf '.validation_signature // ""')"
+	FIRST_WORKFLOW_NAME="validation-harness"
+	FIRST_FAILING_STEP="${VALIDATION_STAGE}:${VALIDATION_REASON}"
+	SIGNATURE="${VALIDATION_SIGNATURE}"
 elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	# The review job's log ends the same way for every failure class
 	# ("Process completed with exit code 1"), so the reporter's own reason and
@@ -1402,6 +1604,16 @@ else
 	SIGNATURE="label:${LABEL:-unknown}|source:${SOURCE_REPO}#${ISSUE_NUMBER:-none}"
 fi
 FP="$(python3 "${HEAL_PY}" fingerprint --workflow-name "${FIRST_WORKFLOW_NAME}" --failing-step "${FIRST_FAILING_STEP}" --signature "${SIGNATURE}")"
+if [ "${SOURCE_KIND}" = "validation_failure" ]; then
+	# The helper's value (computed after provenance) is authoritative; it has
+	# the same formula, so a mismatch means the payload changed underneath.
+	if [ -n "${VALIDATION_ROUTE_FP}" ]; then
+		[ "${VALIDATION_ROUTE_FP}" = "${FP}" ] || log "warn validation_fingerprint_mismatch generic=${FP} helper=${VALIDATION_ROUTE_FP}"
+		FP="${VALIDATION_ROUTE_FP}"
+	else
+		VALIDATION_ROUTE_FP="${FP}"
+	fi
+fi
 log "fingerprint fp=${FP} workflow=${FIRST_WORKFLOW_NAME} step=${FIRST_FAILING_STEP:-none} runs=${SUMMARY_COUNT}"
 if [ "${REPORT_AUTH}" = "reconstructed" ] && [ "${FP}" != "${RECOVERY_SCAN_EXPECTED_FP}" ]; then
 	log "heal_scope_recovery outcome=skip reason=fingerprint_mismatch issue=${RECOVERY_SCAN_EXPECTED_ISSUE} fp=${FP} expected_fp=${RECOVERY_SCAN_EXPECTED_FP}"
@@ -1431,8 +1643,11 @@ if ! _heal_fetch_issue_list "${SELF_REPO}" "${SELF_ISSUES_FILE}"; then
 fi
 # The upstream list cannot see consumer-owned heal issues. Fetch the source
 # repository once so deduplication, lineage, and volume budgets cover both
-# repositories that can own the issue produced by this intake.
-if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
+# repositories that can own the issue produced by this intake. A
+# validation_failure report never files in the source repository and is
+# deduplicated per fingerprint across consumers (Q14), so its source list is
+# not read.
+if [ "${SOURCE_REPO}" != "${SELF_REPO}" ] && [ "${SOURCE_KIND}" != "validation_failure" ]; then
 	if ! _heal_fetch_issue_list "${SOURCE_REPO}" "${SOURCE_ISSUES_FILE}"; then
 		_heal_issue_list_failed_deferred_exit
 		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
@@ -1500,7 +1715,8 @@ _heal_reissue_lookup()
 	[ "$(jq -r '.lineage_source // "none"' "${DECISION_FILE}")" != "none" ] || return 0
 	local reissues_file="${RUNTIME_DIR}/heal_reissues.json" reissue_decision="${RUNTIME_DIR}/decision_reissue.json"
 	local reissue_repo reissue_part reissue_index=0 reissue_repos=("${SELF_REPO}")
-	[ "${SOURCE_REPO}" = "${SELF_REPO}" ] || reissue_repos+=("${SOURCE_REPO}")
+	# A validation_failure heal issue lives only in this repository.
+	[ "${SOURCE_REPO}" = "${SELF_REPO}" ] || [ "${SOURCE_KIND}" = "validation_failure" ] || reissue_repos+=("${SOURCE_REPO}")
 	local reissue_parts=()
 	for reissue_repo in "${reissue_repos[@]}"; do
 		reissue_part="${RUNTIME_DIR}/heal_reissues_${reissue_index}.json"
@@ -1747,6 +1963,17 @@ case "${ACTION}" in
 			tg_send_msg "Workflow failure heal: heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}} failed its own ${FAILURE_REASON%_failed} run with the failure it was filed for, so the pipeline cannot fix it; a human should look at this."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 			exit 0
 		fi
+		if [ "${SOURCE_KIND}" = "validation_failure" ]; then
+			VALIDATION_ROUTE_OUTCOME="duplicate"
+			VALIDATION_ROUTE_ISSUE="${EXISTING}"
+			{
+				echo "<!-- workflow-failure-heal:outcome -->"
+				echo "Workflow failure heal: this runtime-validation failure matches open heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}}; it was recorded there as another occurrence."
+				echo
+				echo "Heal intake run: ${RUN_URL}"
+			} > "${RUNTIME_DIR}/validation_route_comment.md"
+			_validation_route_post "${RUNTIME_DIR}/validation_route_comment.md"
+		fi
 		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} matches open heal issue ${EXISTING_URL:-#${EXISTING}} (recorded as another occurrence)." "DEBUG" >/dev/null 2>&1 || true
 		exit 0
 		;;
@@ -1757,19 +1984,21 @@ case "${ACTION}" in
 		if [[ "${PRIOR_ISSUE}" =~ ^[0-9]+$ ]]; then
 			ensure_label_exists "${ESCALATED_LABEL}" "${PRIOR_REPO}" || true
 			gh_retry gh issue edit "${PRIOR_ISSUE}" --repo "${PRIOR_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${PRIOR_ISSUE} repo=${PRIOR_REPO}"
-		elif [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && [ -n "${SOURCE_REPO}" ]; then
+		elif [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && [ -n "${SOURCE_REPO}" ] && [ "${SOURCE_KIND}" != "validation_failure" ]; then
 			# No prior heal issue to mark: label the failure report itself so
 			# the unblock scan (replace-claude-sessions plan Phase 7) picks the
 			# stopped chain up instead of it ending in a Telegram alert only.
 			ensure_label_exists "${ESCALATED_LABEL}" "${SOURCE_REPO}" || true
 			gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${ISSUE_NUMBER} repo=${SOURCE_REPO}"
 		fi
+		VALIDATION_ROUTE_SKIP_REASON="lineage_cap"
 		log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} fp=${FP} source=${SOURCE_LABEL} prior_issue=${PRIOR_ISSUE:-none} prior_repo=${PRIOR_REPO}"
 		tg_send_msg "Workflow failure heal hit the lineage cap (generation ${GEN} > ${MAX_DEPTH}) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}'). The auto-heal chain has been stopped; a human should look at this."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 		exit 0
 		;;
 	budget_exhausted)
 		REASON="$(jq -r '.reason // "budget"' "${DECISION_FILE}")"
+		VALIDATION_ROUTE_SKIP_REASON="budget_exhausted"
 		log "skip reason=budget_exhausted detail=${REASON} open=$(jq -r '.open_count' "${DECISION_FILE}") today=$(jq -r '.today_count' "${DECISION_FILE}") source=${SOURCE_LABEL}"
 		tg_send_msg "Workflow failure heal budget exhausted (${REASON}); report from ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}') was NOT filed. Close or resolve open ${HEAL_LABEL} issues to resume."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 		exit 0
@@ -2077,6 +2306,11 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "Failure reason: ${FAILURE_REASON}"
 		echo "Consecutive failed ${FAILURE_REASON%_failed} runs on this issue: ${FAILURE_STREAK:-1}"
 		echo "Issue labels: $(_pf '.labels | join(", ")')"
+	elif [ "${SOURCE_KIND}" = "validation_failure" ]; then
+		echo "Failed runtime validation run for tracking issue #${ISSUE_NUMBER}, owned by the validation harness this repository ships"
+		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
+		echo "Validation stage: ${VALIDATION_STAGE:-unknown}  reason: ${VALIDATION_REASON:-unknown}"
+		echo "Error signature (normalised, UNTRUSTED): ${VALIDATION_SIGNATURE:-none}"
 	elif [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 		echo "Refused AI engine fallback: role $(_pf '.engine_role') reason $(_pf '.engine_reason') (Claude unavailable for a non-capacity reason; the role failed instead of running codex)"
 		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
@@ -2195,6 +2429,7 @@ if command -v codex >/dev/null 2>&1; then
 	elif [ "${heal_model_rc}" -eq 80 ]; then
 		# Claude capacity wait (issue #7370): no codex diagnosis and no issue
 		# filed; the run is recorded for the capacity-resume pass to re-run.
+		VALIDATION_ROUTE_SKIP_REASON="claude_capacity_wait"
 		log "skip reason=claude_capacity_wait"
 		exit 0
 	else
@@ -2271,6 +2506,36 @@ if [ "${CLASSIFICATION}" = "transient" ] \
 	} > "${DIAG_FILE}.tmp" && mv "${DIAG_FILE}.tmp" "${DIAG_FILE}"
 fi
 
+# A validation_failure report never opens an issue in the source repository,
+# and a verdict that the failure is not a harness defect opens none here
+# either: it is bounced back to the consumer with the diagnosis. This runs
+# before the self-inflicted remap below, which would turn pr-/base-self-inflicted
+# into workflow-defect (an issue here); the consumer-app-defect route below
+# would open an issue in the consumer.
+if [ "${SOURCE_KIND}" = "validation_failure" ]; then
+	case "${CLASSIFICATION}" in
+		consumer-app-defect|consumer-config|transient|pr-self-inflicted|base-self-inflicted)
+			VALIDATION_ROUTE_OUTCOME="bounced"
+			{
+				echo "<!-- workflow-failure-heal:outcome -->"
+				echo "Workflow failure heal classified this runtime-validation failure as \`${CLASSIFICATION}\` (not a harness defect); no heal issue was opened in either repository."
+				echo
+				echo "<details><summary>Automated diagnosis</summary>"
+				echo
+				cat "${DIAG_FILE}"
+				echo
+				echo "</details>"
+				echo
+				echo "Heal intake run: ${RUN_URL}"
+			} > "${RUNTIME_DIR}/validation_route_comment.md"
+			_validation_route_post "${RUNTIME_DIR}/validation_route_comment.md"
+			log "no_issue classification=${CLASSIFICATION} kind=validation_failure outcome=bounced source=${SOURCE_LABEL} fp=${FP}"
+			tg_send_msg "Workflow failure heal: runtime-validation failure from ${SOURCE_LABEL} classified as ${CLASSIFICATION} (not a harness defect); bounced to the consumer, no issue opened."$'\n'"Run: ${RUN_URL}" "DEBUG" >/dev/null 2>&1 || true
+			exit 0
+			;;
+	esac
+fi
+
 # A self-inflicted token is routed as such only when the ownership computed
 # above backs it (a crash file in the PR or base diff, or, with no crash file,
 # pipeline files the PR changes); otherwise (routing disabled, consumer report,
@@ -2319,6 +2584,11 @@ _comment_on_source()
 {
 	local body_file="$1"
 	[ -n "${ISSUE_NUMBER}" ] || return 0
+	if [ "${VALIDATION_ROUTE_ARMED}" = "true" ]; then
+		# validation_failure: the one routing comment, marker last.
+		_validation_route_post "${body_file}"
+		return 0
+	fi
 	if [ "${REPORT_AUTH}" = "reconstructed" ]; then
 		# A recovery-scan replay never posts on the source PR (#7333).
 		log "source_comment=skipped_reconstructed source=${SOURCE_LABEL}"
@@ -2444,6 +2714,7 @@ _open_issue()
 					if _heal_report_claimed_no_runs; then
 						_heal_skip_scope_unavailable marker_guard
 					fi
+					VALIDATION_ROUTE_SKIP_REASON="scope_marker_unresolved"
 					log "skip reason=scope_marker_unresolved fp=${FP} classification=${CLASSIFICATION} status=${scope_check_status} source=${SOURCE_LABEL}"
 					tg_send_msg "Workflow failure heal refused to file an issue without a valid intake-authored scope marker (intake defect, status ${scope_check_status}) for ${SOURCE_LABEL} (classification ${CLASSIFICATION}, fingerprint ${FP})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
 					return 1
