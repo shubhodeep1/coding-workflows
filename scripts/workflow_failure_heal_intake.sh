@@ -2551,6 +2551,12 @@ fi
 # before the self-inflicted remap below, which would turn pr-/base-self-inflicted
 # into workflow-defect (an issue here); the consumer-app-defect route below
 # would open an issue in the consumer.
+# It also runs after the deterministic remap above, on purpose: a
+# `transient` verdict for a deterministic failure (gen > 1: an earlier heal
+# of this harness fingerprint merged a fix and the failure came back) is
+# already `inconclusive` here and opens a heal issue (`opened`), not a bounce.
+# A re-run cannot clear such a failure, so bouncing it would hide a harness
+# regression (PR #4443). Only a first-generation `transient` is bounced.
 if [ "${SOURCE_KIND:-}" = "validation_failure" ]; then
 	case "${CLASSIFICATION}" in
 		consumer-app-defect|consumer-config|transient|pr-self-inflicted|base-self-inflicted)
