@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:2555-2557 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The new comment says `gen > 1` means an earlier heal merged a fix and the failure returned, but the budget logic also advances the generation for any closed same-fingerprint heal issue without checking that a fix merged (`scripts/workflow_failure_heal.py:4911-4914`).\n  WHY: After a prior same-fingerprint issue is closed for another reason, a `transient` classification is still remapped to `inconclusive` and routed as `opened`, so the comment misdescribes runtime behavior; the reviewer labelled it a NIT, which is mapped here to low. Another reviewer (minimax_minimax-m3) judged the comment accurate.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh:2555-2557 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The new comment says `gen > 1` means an earlier heal merged a fix and the failure returned. The budget logic also advances the generation for any closed same-fingerprint heal issue, without checking that a fix merged (`scripts/workflow_failure_heal.py:4911-4914`).\n  WHY: After a prior same-fingerprint issue is closed for another reason, a `transient` classification is still remapped to `inconclusive` and routed as `opened`. The comment gives maintainers an inaccurate explanation of that runtime behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d3874cbd85b5707069d2df9fcaeb2065bd459de35bef06e0a050d68f298b0dce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7958,
+    "run_id": "39966722202",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39966722202",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023145134_df402af0b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7958,
+    "run_id": "39966722202"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T14:51:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
