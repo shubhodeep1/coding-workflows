@@ -1630,6 +1630,7 @@ ${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
 		if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" "${decide_args[@]}" --pending-invalid-verdicts 1 > "${RUNTIME_DIR}/decision.json" \
 			|| ! jq -e '.terminal == true and .terminal_reason == "invalid_verdicts"' "${RUNTIME_DIR}/decision.json" >/dev/null 2>&1; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_park outcome=skip reason=decide_failed"
+			[ "${invalid_record_rc}" -ne 0 ] && unblock_tg WARNING "Unblock judge could not record a refused answer on #${ITEM} (${ITEM_STOP}) and could not park it for a person (decide_failed); it will be retried, but refused answers are not counted until the write succeeds."
 			return 0
 		fi
 		terminal="true"
@@ -1638,6 +1639,7 @@ ${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
 		if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" validate --verdict-file "${RUNTIME_DIR}/verdict_raw.json" \
 			--decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" --rejection-file "${RUNTIME_DIR}/rejection.json" > "${RUNTIME_DIR}/verdict.json"; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_park outcome=skip reason=validate_failed"
+			[ "${invalid_record_rc}" -ne 0 ] && unblock_tg WARNING "Unblock judge could not record a refused answer on #${ITEM} (${ITEM_STOP}) and could not park it for a person (validate_failed); it will be retried, but refused answers are not counted until the write succeeds."
 			return 0
 		fi
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_park outcome=terminal streak=$(jq -r '.invalid_verdict_streak' "${RUNTIME_DIR}/decision.json")"
