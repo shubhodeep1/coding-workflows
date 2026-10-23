@@ -574,8 +574,7 @@ _resolver_fail_closed()
     echo "AUTOFIX_FAILURE_REASON=conflict_resolver_$1" >> "${GITHUB_ENV}" || true
   fi
   if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
-    RESOLVER_ISOLATION_FAILURE_REASON="$1" RESOLVER_CONFLICT_PATH_REPORT_FILE="${RESOLVER_CONFLICT_PATH_REPORT_FILE:-}" \
-      _persist_resolver_retry_state_from_current_failure || true
+    RESOLVER_CONFLICT_PATH_REPORT_FILE="${RESOLVER_CONFLICT_PATH_REPORT_FILE:-}" RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
   fi
   emit_conflict_resolver_substate "Failed" "${attempt:-0}"
   if [ -n "${tmp_output:-}" ]; then rm -f -- "${tmp_output}"; fi
