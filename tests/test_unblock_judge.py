@@ -4297,3 +4297,38 @@ def test_unblock_prompts_carry_target_repo() -> None:
 		text = (ROOT / rel).read_text(encoding="utf-8")
 		assert '"target_repo": "consumer" | "harness"' in text
 		assert "`target_repo` (`consumer` | `harness`) is required for" in text
+
+
+def test_backstop_counts_unlisted_paths_as_project_owned(harness_env) -> None:
+	verdict = _verdict("descope", stop="validation-failed", target_repo="consumer", instructions="Fix validation/x.sh and /tmp/consumer/src/app.py")
+	route = actions._harness_route(verdict, _ctx(stop="validation-failed"))
+	assert route["mode"] == "mixed" and route["harness_paths"] == ["validation/x.sh"] and route["project_paths"] == []
+
+
+def test_backstop_sees_extensionless_harness_files(harness_env) -> None:
+	assert actions._instruction_paths("update Makefile and scripts/Dockerfile, not Makefiles") == ["Makefile", "scripts/Dockerfile"]
+	support = Path(os.environ["SUPPORT_DIR"])
+	(support / "Makefile").write_text("all:\n", encoding="utf-8")
+	route = actions._harness_route(_verdict("descope", target_repo="consumer", instructions="update Makefile"), _ctx())
+	assert route["mode"] == "harness" and route["harness_paths"] == ["Makefile"]
+
+
+def test_managed_paths_failure_skips_the_backstop(harness_env, capsys) -> None:
+	ownership = actions._load_ownership()
+
+	def boom(*_args):
+		raise ValueError("no list")
+
+	harness_env.setattr(ownership, "load_validation_managed_paths", boom)
+	verdict = _verdict("descope", target_repo="consumer", instructions="fix validation/x.sh")
+	assert actions._harness_route(verdict, _ctx())["mode"] == "consumer"
+	assert "verdict field only" in capsys.readouterr().err
+
+
+def test_harness_verdict_wins_over_protected_handoff(harness_env) -> None:
+	ops = actions.plan(_verdict("descope", instructions="fix it", target_repo="harness"), _ctx(protected_rejection=PROTECTED))
+	assert [op["op"] for op in ops] == ["comment", "heal_report", "telegram"]
+	consumer = actions.plan(_verdict("descope", instructions="drop the cache"), _ctx(protected_rejection=PROTECTED))
+	assert not any(op["op"] == "heal_report" for op in consumer)
+	mixed = actions.plan(_verdict("descope", instructions="edit src/app.py and validation/x.sh"), _ctx(protected_rejection=PROTECTED))
+	assert mixed[-1]["op"] == "heal_report" and mixed[:-1] == actions._protected_handoff_ops(_ctx(protected_rejection=PROTECTED), _verdict("descope", instructions="edit src/app.py and validation/x.sh"))

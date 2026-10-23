@@ -168,6 +168,8 @@ HARNESS_PATH_TOKEN_RE = re.compile(r"[^\s`'\"<>()\[\]{},;]+")
 HARNESS_PATH_EXT_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,7}$")
 HARNESS_BARE_FILE_RE = re.compile(r"^[A-Za-z0-9_.-]+\.(?:md|py|sh|yml|yaml|json|toml|txt|js|ts|mjs|cjs)$")
 HARNESS_PATH_PREFIXES = (".github/", ".claude/", "validation/", "workflow-templates/")
+# Well-known file names without an extension, accepted bare or as a last segment.
+HARNESS_EXTENSIONLESS_NAMES = frozenset(("Makefile", "Dockerfile", "Pipfile", "Procfile", "Gemfile", "LICENSE", "CODEOWNERS"))
 HARNESS_MAX_PATH_TOKENS = 50
 HARNESS_SHOWN_PATHS = 20
 HARNESS_HOLD_FP_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -503,10 +505,11 @@ def _instruction_paths(text: object, repo: str = "") -> list[str]:
 		token = re.sub(r":[0-9]+(?::[0-9]+)?$", "", token)
 		if not token or token.lower() in skip:
 			continue
+		last = token.rsplit("/", 1)[-1]
 		if "/" in token:
-			if not (HARNESS_PATH_EXT_RE.search(token.rsplit("/", 1)[-1]) or token.startswith(HARNESS_PATH_PREFIXES)):
+			if not (HARNESS_PATH_EXT_RE.search(last) or last in HARNESS_EXTENSIONLESS_NAMES or token.startswith(HARNESS_PATH_PREFIXES)):
 				continue
-		elif not HARNESS_BARE_FILE_RE.match(token):
+		elif not (HARNESS_BARE_FILE_RE.match(token) or token in HARNESS_EXTENSIONLESS_NAMES):
 			continue
 		if token not in found:
 			found.append(token)
@@ -533,6 +536,9 @@ def _harness_route(verdict: dict, ctx: dict, env: object = None) -> dict:
 		field = "consumer"
 	harness_paths: list[str] = []
 	project_paths: list[str] = []
+	# A token the classifier drops as not repo-relative (an absolute path, a
+	# `..` segment) still names a project-side file: it blocks a harness-only route.
+	unlisted_project = False
 	support_dir = str(env.get("SUPPORT_DIR", "") or "")
 	target_dir = str(env.get("TARGET_DIR", "") or "")
 	tokens = _instruction_paths(verdict.get("instructions"), ctx["repo"])
@@ -541,22 +547,21 @@ def _harness_route(verdict: dict, ctx: dict, env: object = None) -> dict:
 		if ownership is not None:
 			try:
 				managed = ownership.load_validation_managed_paths(support_dir, "HEAD")
-			except ValueError:
-				print("warning: unblock target_repo backstop could not read the managed paths; treating none as managed", file=sys.stderr)
-				managed = frozenset()
-			try:
 				harness_paths, project_paths = ownership.classify_validation_paths(
 					tokens, consumer_root=target_dir, support_root=support_dir, managed_paths=managed
 				)
+				normalize = getattr(ownership, "_normalize_validation_path", None)
+				unlisted_project = callable(normalize) and any(normalize(token) is None for token in tokens)
 			except Exception:
+				# A failed managed-path read included: partial data could misroute.
 				print("warning: unblock target_repo backstop failed; using the verdict field only", file=sys.stderr)
-				harness_paths, project_paths = [], []
+				harness_paths, project_paths, unlisted_project = [], [], False
 	route.update(harness_paths=list(harness_paths), project_paths=list(project_paths))
 	if field == "harness":
 		route.update(mode="harness", reason="target_repo")
-	elif harness_paths and not project_paths:
+	elif harness_paths and not project_paths and not unlisted_project:
 		route.update(mode="harness", reason="backstop")
-	elif harness_paths and project_paths:
+	elif harness_paths:
 		route.update(mode="mixed", reason="mixed_harness_part")
 	else:
 		route.update(mode="consumer", reason="target_repo")
@@ -585,7 +590,7 @@ def _harness_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
 	item = ctx["item"]
 	lines = [
 		f"The unblock judge found this work belongs in `{HARNESS_REPO}` (the shared workflow harness), so no fix-up was filed here."
-		" A workflow-failure heal report was sent, and the item stays blocked until the harness fix ships.",
+		" A workflow-failure heal report is being sent, and the item stays blocked until the harness fix ships.",
 	]
 	if verdict.get("instructions"):
 		lines += ["", f"Change needed in the harness: {_one_line(verdict['instructions'])}"]
@@ -849,11 +854,16 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		return []
 	if ctx["kind"] == "pr" and not ctx["pr_trusted"] and name in ("reissue", "descope", "operator_step", "accept_with_followup"):
 		return _untrusted_pr_ops(ctx, name)
-	if name in PROTECTED_HANDOFF_VERDICTS and ctx.get("protected_rejection"):
-		return _protected_handoff_ops(ctx, verdict)
 	route = _harness_route(verdict, ctx)
+	# Harness-owned work goes to a heal report before the protected-path
+	# operator handoff, which would ask for the change in this repository.
 	if route["mode"] == "harness":
 		return _harness_ops(ctx, verdict, route)
+	if name in PROTECTED_HANDOFF_VERDICTS and ctx.get("protected_rejection"):
+		handoff = _protected_handoff_ops(ctx, verdict)
+		if route["mode"] == "mixed":
+			handoff.append(_heal_report_op(ctx, verdict, route))
+		return handoff
 	if name == "retry_budget":
 		ops += [{"op": "comment", "issue": item, "body": f"Next attempt, per the unblock judge: {verdict['instructions']}"}]
 		ops += reset_ops(ctx, verdict["instructions"])
