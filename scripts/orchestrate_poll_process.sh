@@ -2453,6 +2453,48 @@ else
   VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED="false"
 fi
 
+# Validation harness hold (Refs #7913, docs/plans/validation-failure-harness-routing-plan.md
+# Phase 2). A validation run that fails with raw_status=harness_error parks the
+# project in a hold instead of paging a person, until a harness fix ships in the
+# pinned workflow or `/revalidate` resumes it. Each value falls back to its
+# default with a warning that never prints the value.
+#   VALIDATION_HARNESS_HEAL_ENABLED        unset/empty/true -> true, false -> false
+#   VALIDATION_HARNESS_HOLD_MAX_DAYS       1-365 (default 14)
+#   VALIDATION_HARNESS_MAX_RESUMES_PER_FP  0-100 (default 2; 0 never holds)
+#   VALIDATION_HARNESS_MAX_RESUMES         0-100 (default 4)
+#   VALIDATION_HARNESS_ROUTE_LOGIN         login trusted for harness markers
+#                                          (empty: the GH_PAT login)
+case "$(printf '%s' "${VALIDATION_HARNESS_HEAL_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+  ""|true) VALIDATION_HARNESS_HEAL_ENABLED="true" ;;
+  false) VALIDATION_HARNESS_HEAL_ENABLED="false" ;;
+  *)
+    echo "::warning::VALIDATION_HARNESS_HOLD config=VALIDATION_HARNESS_HEAL_ENABLED outcome=default reason=invalid_value"
+    VALIDATION_HARNESS_HEAL_ENABLED="true"
+    ;;
+esac
+_validation_harness_int_config() {
+  local vh_name="$1" vh_default="$2" vh_min="$3" vh_max="$4" vh_value
+  vh_value="${!vh_name:-}"
+  if [ -z "${vh_value}" ]; then
+    vh_value="${vh_default}"
+  elif ! [[ "${vh_value}" =~ ^[0-9]{1,4}$ ]] || [ "$((10#${vh_value}))" -lt "${vh_min}" ] || [ "$((10#${vh_value}))" -gt "${vh_max}" ]; then
+    echo "::warning::VALIDATION_HARNESS_HOLD config=${vh_name} outcome=default reason=invalid_value"
+    vh_value="${vh_default}"
+  else
+    vh_value="$((10#${vh_value}))"
+  fi
+  printf -v "${vh_name}" '%s' "${vh_value}"
+}
+_validation_harness_int_config VALIDATION_HARNESS_HOLD_MAX_DAYS 14 1 365
+_validation_harness_int_config VALIDATION_HARNESS_MAX_RESUMES_PER_FP 2 0 100
+_validation_harness_int_config VALIDATION_HARNESS_MAX_RESUMES 4 0 100
+VALIDATION_HARNESS_ROUTE_LOGIN="${VALIDATION_HARNESS_ROUTE_LOGIN:-}"
+if [ -n "${VALIDATION_HARNESS_ROUTE_LOGIN}" ] \
+  && ! [[ "${VALIDATION_HARNESS_ROUTE_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$ ]]; then
+  echo "::warning::VALIDATION_HARNESS_HOLD config=VALIDATION_HARNESS_ROUTE_LOGIN outcome=default reason=invalid_value"
+  VALIDATION_HARNESS_ROUTE_LOGIN=""
+fi
+
 # Put the failure labels back after an aborted stale-pin recovery (#7138).
 # Restores ai:validation-failed and ai:harness-broken, plus the legacy
 # ai:validate-failed only when the issue carried it before (the label may not
@@ -3681,6 +3723,11 @@ update_completion_status_comment() {
       return 1
       ;;
   esac
+
+  # Validation harness hold (Refs #7913): name what the project waits for.
+  if [ "${status}" = "failed" ] && [[ "${body_markdown}" != *"Waiting for harness fix"* ]] && validation_harness_hold_active; then
+    body_markdown+=$'\n\n'"$(validation_harness_hold_status_line)"
+  fi
 
   full_body="${marker}"$'\n'"<!-- status:${status} -->"$'\n'"${body_markdown}"
   body_hash="$(printf '%s' "${full_body}" | sha256sum | awk '{print $1}')"
@@ -14958,6 +15005,181 @@ dispatch_validation_if_needed() {
   return 1
 }
 
+# --- Validation harness hold helpers (Refs #7913, plan Phase 2) ---
+# None of these makes a GitHub API call of its own: markers come from the
+# already fetched COMMENTS, the pin from a local `git show`, and the route
+# login from VALIDATION_HARNESS_ROUTE_LOGIN or the memoized GH_PAT login.
+
+# Login whose harness markers are trusted; prints nothing when unknown (then
+# every marker is untrusted). Call it once in the current shell before using
+# it inside $(...) so unblock_trusted_login's memoized value is reused.
+validation_harness_route_login() {
+  if [ -n "${VALIDATION_HARNESS_ROUTE_LOGIN:-}" ]; then
+    printf '%s' "${VALIDATION_HARNESS_ROUTE_LOGIN}"
+    return 0
+  fi
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN:-}" ] && [ "${UNBLOCK_TRUSTED_LOGIN_STATE:-unset}" = "unset" ]; then
+    unblock_trusted_login >/dev/null 2>&1 || true
+  fi
+  printf '%s' "${UNBLOCK_TRUSTED_LOGIN:-}"
+}
+
+# The consumer default branch's validate.yml pin (40 hex), read locally from
+# origin/<default>:.github/workflows/<VALIDATE_WORKFLOW_NAME>. Memoized per
+# poller process in _VALIDATION_HARNESS_PIN_STATE / _VALIDATION_HARNESS_PIN_VALUE.
+# Returns 1 (caller uses `unknown`) unless exactly one distinct pin is found.
+_VALIDATION_HARNESS_PIN_STATE=""
+_VALIDATION_HARNESS_PIN_VALUE=""
+validation_harness_pin() {
+  local vhp_branch="" vhp_wf vhp_pins vhp_count
+  if [ "${_VALIDATION_HARNESS_PIN_STATE}" = "ok" ]; then
+    printf '%s' "${_VALIDATION_HARNESS_PIN_VALUE}"
+    return 0
+  fi
+  if [ "${_VALIDATION_HARNESS_PIN_STATE}" = "failed" ]; then
+    return 1
+  fi
+  _VALIDATION_HARNESS_PIN_STATE="failed"
+  _VALIDATION_HARNESS_PIN_VALUE=""
+  if [ -n "${CWS_DEFAULT_BRANCH:-}" ]; then
+    vhp_branch="${CWS_DEFAULT_BRANCH}"
+  elif [ "${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}" = "ok" ] && [ -n "${_REVIEW_RUN_DEFAULT_BRANCH:-}" ]; then
+    vhp_branch="${_REVIEW_RUN_DEFAULT_BRANCH}"
+  else
+    vhp_branch="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+    vhp_branch="${vhp_branch#origin/}"
+  fi
+  # actions/checkout creates no origin/HEAD, and the sources above are often
+  # still empty when mark_validation_failed runs. Fall back to the runner's
+  # event payload, then to the ref of a scheduled run (always the default
+  # branch). Both are local reads; no API call.
+  if [ -z "${vhp_branch}" ] && [ -f "${GITHUB_EVENT_PATH:-}" ]; then
+    vhp_branch="$(jq -r '.repository.default_branch // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+  fi
+  if [ -z "${vhp_branch}" ] && [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
+    vhp_branch="${GITHUB_REF_NAME:-}"
+  fi
+  if ! [[ "${vhp_branch}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    echo "VALIDATION_HARNESS_HOLD outcome=pin_unresolved reason=branch_unresolved" >&2
+    return 1
+  fi
+  vhp_wf="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
+  if ! [[ "${vhp_wf}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+    echo "VALIDATION_HARNESS_HOLD outcome=pin_unresolved reason=workflow_name_invalid" >&2
+    return 1
+  fi
+  vhp_pins="$(git show "origin/${vhp_branch}:.github/workflows/${vhp_wf}" 2>/dev/null \
+    | grep -oE 'shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@[0-9a-f]{40}' \
+    | sed -E 's/.*@//' | sort -u || true)"
+  vhp_count="$(printf '%s' "${vhp_pins}" | grep -c . || true)"
+  if [ "${vhp_count}" != "1" ] || ! [[ "${vhp_pins}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "VALIDATION_HARNESS_HOLD outcome=pin_unresolved workflow=${vhp_wf} pins=${vhp_count:-0}" >&2
+    return 1
+  fi
+  _VALIDATION_HARNESS_PIN_STATE="ok"
+  _VALIDATION_HARNESS_PIN_VALUE="${vhp_pins}"
+  printf '%s' "${vhp_pins}"
+}
+
+# validation_harness_marker owner <run_id> | route <fp>
+# Newest trusted marker (route login, marker on the comment's last non-empty
+# line) from COMMENTS, printed as compact JSON; prints nothing when absent.
+validation_harness_marker() {
+  local vhm_kind="$1" vhm_key="$2" vhm_login
+  vhm_login="$(validation_harness_route_login)"
+  if [ -z "${vhm_login}" ] || [ -z "${vhm_key}" ]; then
+    return 0
+  fi
+  case "${vhm_kind}" in
+    owner) [[ "${vhm_key}" =~ ^[0-9]+$ ]] || return 0 ;;
+    route) [[ "${vhm_key}" =~ ^[0-9a-f]{64}$ ]] || return 0 ;;
+    *) return 0 ;;
+  esac
+  printf '%s' "${COMMENTS:-[]}" | jq -c --arg login "${vhm_login}" --arg kind "${vhm_kind}" --arg key "${vhm_key}" '
+    (if type == "array" then . else [] end)
+    | [ .[]
+        | select(type == "object" and ((.user.login // "") == $login))
+        | . as $c
+        | ((.body // "") | split("\n") | map(sub("\\s+$"; "")) | map(select(length > 0)) | last // "") as $last
+        | (if $kind == "owner" then
+             ($last | capture("^<!-- validation-harness-owner:v1 fp=(?<fp>[0-9a-f]{64}) stage=(?<stage>[a-z_]+) reason=(?<reason>[a-z_]+) support=(?<support>[0-9a-f]{40}) run=(?<run>[0-9]+) -->$")?)
+             | select(.run == $key)
+           else
+             ($last | capture("^<!-- workflow-failure-heal:validation-route:v1 fp=(?<fp>[0-9a-f]{64}) outcome=(?<outcome>opened|duplicate|already-fixed|bounced|skipped) issue=(?<issue>[0-9]+|none) classification=(?<classification>[a-z-]+) run=(?<run>[0-9]+) -->$")?)
+             | select(.fp == $key)
+           end)
+        | {m: ., created_at: ($c.created_at // ""), id: (($c.id // 0) | tonumber? // 0)}
+      ]
+    | sort_by(.created_at, .id)
+    | last
+    | if . == null then empty else .m end
+  ' 2>/dev/null || echo "::warning::VALIDATION_HARNESS_HOLD outcome=marker_lookup_failed kind=${vhm_kind}" >&2
+}
+
+# local:<16 hex> fingerprint of a harness failure reason when no trusted owner
+# marker exists. Digits are collapsed so run ids and URLs do not change it.
+validation_harness_local_fp() {
+  local vhl_norm
+  vhl_norm="$(validation_reason_one_line "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[0-9]+/N/g; s/[[:space:]]+/ /g')"
+  printf 'local:%s' "$(printf '%s' "${vhl_norm}" | sha256sum | cut -c1-16)"
+}
+
+# 0 only while the switch is on, the project is failed and a hold is recorded.
+validation_harness_hold_active() {
+  [ "${VALIDATION_HARNESS_HEAL_ENABLED:-true}" != "false" ] || return 1
+  [ -f "${STATE_FILE:-/dev/null}" ] || return 1
+  jq -e '(.status == "failed") and ((.validation_harness_hold | type) == "object") and (.validation_last_raw_status == "harness_error")' "${STATE_FILE}" >/dev/null 2>&1
+}
+
+# Completion-status line for an active hold.
+validation_harness_hold_status_line() {
+  local vhs_issue vhs_support
+  vhs_issue="$(jq -r '(.validation_harness_hold.heal_issue // "") | tostring' "${STATE_FILE}" 2>/dev/null || echo '')"
+  vhs_support="$(jq -r '(.validation_harness_hold.support // "") | tostring' "${STATE_FILE}" 2>/dev/null || echo '')"
+  if [[ "${vhs_issue}" =~ ^[0-9]+$ ]]; then
+    printf 'Waiting for harness fix [shubhodeep1/coding-workflows#%s](https://github.com/shubhodeep1/coding-workflows/issues/%s)' "${vhs_issue}" "${vhs_issue}"
+  else
+    [[ "${vhs_support}" =~ ^[0-9a-f]{40}$ ]] || vhs_support="unknown"
+    printf 'Waiting for harness fix `%s`' "${vhs_support}"
+  fi
+}
+
+# Labels, comment, completion status and alert of a project that entered the
+# harness hold. The state field was already written by mark_validation_failed.
+_validation_harness_hold_finish() {
+  local vhf_reason="$1" vhf_fp="$2" vhf_support="$3"
+  # Keep the project out of this tick's unblock scan too: the per-project
+  # loop only records holds that were already active when the tick started.
+  if [ -n "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE:-}" ]; then
+    echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}" 2>/dev/null \
+      || echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=unblock_skip_write_failed"
+  fi
+  set_tracking_phase_label "ai:validation-failed"
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
+  ensure_label_exists "ai:harness-broken" >/dev/null 2>&1 || true
+  post_tracking_comment "## ⏸ Runtime validation waiting for a harness fix
+
+${vhf_reason}
+
+The latest validation run reported \`raw_status=harness_error\`. The project stays failed with \`ai:validation-failed\` and \`ai:harness-broken\`, and recovery counters were left unchanged. Validation resumes once a harness fix ships in the pinned workflow; \`/revalidate\` resumes it now.
+
+- Fingerprint: \`${vhf_fp}\`
+- Harness pin: \`${vhf_support}\`
+
+<!-- validation-harness-hold:v1 fp=${vhf_fp} support=${vhf_support} -->"
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:harness-broken" >/dev/null 2>&1 || true
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  update_completion_status_comment "failed" \
+    "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"Runtime validation hit a harness defect (\`raw_status=harness_error\`) and is waiting for a harness fix. Recovery counters were left unchanged; \`/revalidate\` resumes validation now." \
+    || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
+  tg_cleanup_msgs "${TRACKING_NUM}"
+  tg_notify "Project #${TRACKING_NUM} validation hit a harness error and is waiting for a harness fix (fp=${vhf_fp}, pin=${vhf_support}). /revalidate resumes it now." "WARNING"
+  echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=held fp=${vhf_fp} pin=${vhf_support} heal_issue=none"
+}
+
 mark_validation_failed() {
   local reason="$1"
   local _tracking_labels
@@ -15007,9 +15229,65 @@ mark_validation_failed() {
       .judge_last_fingerprint = "" |
       .judge_fingerprint_repeat_count = 0
     ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    # Validation harness hold (Refs #7913): under the resume caps the project
+    # waits for a harness fix instead of paging a person. The hold field rides
+    # the state comment posted below; switch off or caps reached keep the
+    # existing park path unchanged.
+    local harness_hold_entered="false" harness_hold_fp="" harness_hold_support="unknown"
+    if [ "${VALIDATION_HARNESS_HEAL_ENABLED:-true}" != "false" ]; then
+      local harness_hold_run_id="" harness_hold_owner="" harness_hold_by_fp="0" harness_hold_total="0"
+      validation_harness_route_login >/dev/null
+      harness_hold_run_id="$(jq -r '(.validation_last_run_id // "") | tostring' "${STATE_FILE}" 2>/dev/null || echo '')"
+      if [[ "${harness_hold_run_id}" =~ ^[0-9]+$ ]]; then
+        harness_hold_owner="$(validation_harness_marker owner "${harness_hold_run_id}")"
+      fi
+      harness_hold_fp="$(printf '%s' "${harness_hold_owner}" | jq -r '.fp // ""' 2>/dev/null || echo '')"
+      [[ "${harness_hold_fp}" =~ ^[0-9a-f]{64}$ ]] || harness_hold_fp="$(validation_harness_local_fp "${reason}")"
+      harness_hold_support="$(printf '%s' "${harness_hold_owner}" | jq -r '.support // ""' 2>/dev/null || echo '')"
+      if ! [[ "${harness_hold_support}" =~ ^[0-9a-f]{40}$ ]]; then
+        validation_harness_pin >/dev/null || true
+        harness_hold_support="${_VALIDATION_HARNESS_PIN_VALUE:-}"
+        [[ "${harness_hold_support}" =~ ^[0-9a-f]{40}$ ]] || harness_hold_support="unknown"
+      fi
+      harness_hold_by_fp="$(jq -r --arg fp "${harness_hold_fp}" '(.validation_harness_resumes.by_fp[$fp] // 0) | tostring' "${STATE_FILE}" 2>/dev/null || echo 0)"
+      harness_hold_total="$(jq -r '(.validation_harness_resumes.total // 0) | tostring' "${STATE_FILE}" 2>/dev/null || echo 0)"
+      [[ "${harness_hold_by_fp}" =~ ^[0-9]{1,9}$ ]] || harness_hold_by_fp="0"
+      [[ "${harness_hold_total}" =~ ^[0-9]{1,9}$ ]] || harness_hold_total="0"
+      if [ "$((10#${harness_hold_by_fp}))" -lt "${VALIDATION_HARNESS_MAX_RESUMES_PER_FP:-2}" ] \
+        && [ "$((10#${harness_hold_total}))" -lt "${VALIDATION_HARNESS_MAX_RESUMES:-4}" ]; then
+        jq --arg fp "${harness_hold_fp}" --arg support "${harness_hold_support}" \
+          --arg since "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg reason "${harness_reason_one_line:0:500}" '
+          .validation_harness_hold = {
+            fp: $fp,
+            support: (if $support == "unknown" then null else $support end),
+            heal_issue: null,
+            outcome: null,
+            since: $since,
+            reason: $reason
+          }
+        ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" \
+          && harness_hold_entered="true"
+        if [ "${harness_hold_entered}" != "true" ]; then
+          rm -f "${STATE_FILE}.tmp"
+          echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed"
+        fi
+      else
+        echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=capped fp=${harness_hold_fp} pin=${harness_hold_support} heal_issue=none"
+        if jq -e 'has("validation_harness_hold")' "${STATE_FILE}" >/dev/null 2>&1; then
+          if ! { jq 'del(.validation_harness_hold)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+            rm -f "${STATE_FILE}.tmp"
+            echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=hold_clear_failed"
+          fi
+        fi
+      fi
+    fi
     post_state_comment || true
     _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
     handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
+    if [ "${harness_hold_entered}" = "true" ]; then
+      _validation_harness_hold_finish "${reason}" "${harness_hold_fp}" "${harness_hold_support}"
+      return 0
+    fi
     set_tracking_phase_label "ai:validation-failed"
     needs_human_park_project "validation_failed"
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
@@ -19614,6 +19892,11 @@ _stall_check_triage_resolution_gate() {
 # written by the per-project loop and read by run_unblock_scan. No API call.
 UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.XXXXXX" 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.txt")"
 : > "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+# Tracking issues held for a harness fix this tick (Refs #7913), one per line,
+# written by the per-project loop. run_unblock_scan drops them from its search
+# results, because the hold keeps block labels the search matches. No API call.
+VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_harness_hold.XXXXXX" 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/unblock_harness_hold.txt")"
+: > "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}" 2>/dev/null || true
 # unblock_trusted_login and its cache are defined above the state extractor.
 
 # Per project, before any command handler. Returns 10 only when the
@@ -20325,6 +20608,19 @@ run_unblock_scan() {
     return 0
   fi
   printf '%s' "${search_items}" > "${work_dir}/search.json"
+  # Projects held for a harness fix (Refs #7913) keep ai:validation-failed and
+  # ai:harness-broken, which the search matches; drop them before selection.
+  if [ -s "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE:-}" ]; then
+    local _scan_harness_held
+    _scan_harness_held="$(sort -u "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}" 2>/dev/null | jq -R 'select(test("^[0-9]+$")) | tonumber' | jq -cs '.' 2>/dev/null || echo '[]')"
+    if ! jq -c --argjson held "${_scan_harness_held:-[]}" '[.[]? | select(.number as $n | any($held[]; . == $n) | not)]' \
+      "${work_dir}/search.json" > "${work_dir}/search_harness_unheld.json" 2>/dev/null \
+      || ! mv -f "${work_dir}/search_harness_unheld.json" "${work_dir}/search.json"; then
+      rm -f "${work_dir}/search_harness_unheld.json"
+      echo "UNBLOCK_SCAN outcome=skip reason=harness_hold_filter_failed"
+      return 0
+    fi
+  fi
   sort -u "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null | jq -R 'select(test("^[0-9]+$")) | tonumber' | jq -s '.' > "${work_dir}/failed_projects.json" 2>/dev/null \
     || echo '[]' > "${work_dir}/failed_projects.json"
   numbers_json="$(jq -c --slurpfile failed "${work_dir}/failed_projects.json" '
@@ -23456,7 +23752,15 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   if [ "${unblock_hook_rc}" -eq 10 ]; then
     continue
   fi
-  if [ "${PROJECT_STATUS}" = "failed" ]; then
+  # A project held for a harness fix (Refs #7913) is not offered to the
+  # unblock judge; the hold resumes or ends it.
+  VALIDATION_HARNESS_HOLD_SKIP_UNBLOCK="false"
+  if [ "${PROJECT_STATUS}" = "failed" ] && validation_harness_hold_active; then
+    VALIDATION_HARNESS_HOLD_SKIP_UNBLOCK="true"
+    echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}" 2>/dev/null || true
+    echo "UNBLOCK_SCAN item=${TRACKING_NUM} kind=project outcome=skip reason=harness_hold"
+  fi
+  if [ "${PROJECT_STATUS}" = "failed" ] && [ "${VALIDATION_HARNESS_HOLD_SKIP_UNBLOCK}" != "true" ]; then
     echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
   fi
 	if [ "${ENABLE_SECURITY_PASS}" != "true" ] \
@@ -24735,6 +25039,7 @@ Already processed /revalidate from @${REVALIDATE_COMMENT_ACTOR} at ${REVALIDATE_
          .validation_completed_cycle = null |
          del(.validation_failure_reason) |
          del(.validation_failure_class) |
+         del(.validation_harness_hold) |
          del(.validation_last_raw_status)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       post_state_comment || true
@@ -24879,6 +25184,7 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
          .validation_stale_pin_recovered_ref = $recovered_ref |
          del(.validation_failure_reason) |
          del(.validation_failure_class) |
+         del(.validation_harness_hold) |
          del(.validation_last_raw_status)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       # A failed rewrite would leave the failed state without the guard flag.
