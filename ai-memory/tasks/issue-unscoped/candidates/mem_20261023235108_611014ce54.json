@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/8004-phase4-review-deadline-extension.md:2 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog says the existing inactivity timeout (`REVIEW_TIMEOUT`) defaults to 30 minutes, but the workflow default is 60 minutes (`.github/workflows/test-and-mark-stable.yml:588`, `scripts/stable_e2e_step_wait_review.sh:27`).\n  WHY: Operators will expect Phase 4 to end after 30 idle minutes when it actually waits 60. Severity disagreement: google_gemini-3_1-flash-lite rated it MAJOR, which is mapped to high. The other five reviewers rated it NIT (low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/8004-phase4-review-deadline-extension.md:2 | severity=NIT | confidence=5\n  PROBLEM: The stated default of 30 minutes for `REVIEW_TIMEOUT` is wrong. `.github/workflows/test-and-mark-stable.yml:588` falls back to 60, and 30 is the `PHASE_TIMEOUT` default.\n  WHY: Nothing breaks at runtime. `scripts/stable_e2e_step_wait_review.sh:27` sets `INACTIVITY_LIMIT=$((REVIEW_TIMEOUT * 60))`, so Phase 4 ends after 60 idle minutes while the release note says 30.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/8004-phase4-review-deadline-extension.md:2 | severity=MAJOR | confidence=5\n  PROBLEM: The changelog incorrectly states the default inactivity timeout (REVIEW_TIMEOUT) is 30 minutes.\n  WHY: The actual default in .github/workflows/test-and-mark-stable.yml is 60 minutes, and /scripts/stable_e2e_step_wait_review.sh relies on it. The mismatch misleads operators about when the phase times out.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/8004-phase4-review-deadline-extension.md:2 | severity=NIT | confidence=5\n  PROBLEM: The release note says `REVIEW_TIMEOUT` is 30 minutes by default, but the `review_timeout` input has `default: 60` (`.github/workflows/test-and-mark-stable.yml:100`) and the job-env fallback at line 588 is 60. The 30-minute figure matches only `PHASE_TIMEOUT` (line 586).\n  WHY: `scripts/stable_e2e_step_wait_review.sh:27` sets `INACTIVITY_LIMIT=$((REVIEW_TIMEOUT * 60))`, which waits 60 minutes by default, so the note understates the window by half.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/8004-phase4-review-deadline-extension.md:2 | severity=NIT | confidence=5\n  PROBLEM: The documented default is incorrect. The workflow sets `REVIEW_TIMEOUT` to 60 minutes by default (`.github/workflows/test-and-mark-stable.yml:82-100, 588`).\n  WHY: It misleads readers about when an inactive review run times out. The actual default inactivity limit is 60 minutes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/8004-phase4-review-deadline-extension.md:2 | severity=NIT | confidence=5\n  PROBLEM: The changelog says \"REVIEW_TIMEOUT, 30 minutes by default\", but the actual default is 60 minutes (`.github/workflows/test-and-mark-stable.yml:82-100`, line 588).\n  WHY: `scripts/stable_e2e_step_wait_review.sh:27` sets `INACTIVITY_LIMIT=$((REVIEW_TIMEOUT * 60))`, so a queued run with no activity waits 60 minutes before Phase 4 ends. Operators will expect the wrong timeout.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/8004-phase4-review-deadline-extension.md:2 | severity=NIT | confidence=5\n  PROBLEM: The stated default is wrong. `.github/workflows/test-and-mark-stable.yml:100` declares `review_timeout` with `default: 60`, and line 588 resolves to 60. The 30 figure is `PHASE_TIMEOUT`'s default. The inline comment at test-and-mark-stable.yml:1765 saying \"(30m)\" is a pre-existing stale comment the PR does not touch.\n  WHY: There is no runtime failure. Operators reading the folded CHANGELOG.md would expect Phase 4 to end after 30 idle minutes when the shipped default is 60.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0e62ed4afaf76d2d7e9e01033c9f2827c325e880a860c46de868e0b6af781af5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8027,
+    "run_id": "40040069356",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40040069356",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023235108_611014ce54",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8027,
+    "run_id": "40040069356"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T23:51:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
