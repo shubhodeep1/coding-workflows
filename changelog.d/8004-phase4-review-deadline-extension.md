@@ -20,4 +20,4 @@ What this means for consumer repos: nothing. This only changes the release gate 
 
 ### For contributors
 
-The extension logic sits between `# BEGIN/END phase4 review deadline extension (#8004)` in `.github/workflows/test-and-mark-stable.yml`. Tests: new cases in `tests/test_test_and_mark_stable_review_blocked_budget.py` run that block with a fixed clock.
+The extension logic sits between `# BEGIN/END phase4 review deadline extension (#8004)` in `scripts/stable_e2e_step_wait_review.sh`, the Phase 4 step body that `.github/workflows/test-and-mark-stable.yml` sources (#7991). Tests: new cases in `tests/test_test_and_mark_stable_review_blocked_budget.py` run that block with a fixed clock.
