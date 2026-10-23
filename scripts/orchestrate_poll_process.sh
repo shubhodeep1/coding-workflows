@@ -15061,6 +15061,7 @@ validation_harness_pin() {
     | sed -E 's/.*@//' | sort -u || true)"
   vhp_count="$(printf '%s' "${vhp_pins}" | grep -c . || true)"
   if [ "${vhp_count}" != "1" ] || ! [[ "${vhp_pins}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "VALIDATION_HARNESS_HOLD outcome=pin_unresolved workflow=${vhp_wf} pins=${vhp_count:-0}" >&2
     return 1
   fi
   _VALIDATION_HARNESS_PIN_STATE="ok"
@@ -15089,10 +15090,10 @@ validation_harness_marker() {
         | . as $c
         | ((.body // "") | split("\n") | map(sub("\\s+$"; "")) | map(select(length > 0)) | last // "") as $last
         | (if $kind == "owner" then
-             ($last | capture("^<!-- validation-harness-owner:v1 fp=(?<fp>[0-9a-f]{64}) stage=(?<stage>[a-z_]+) reason=(?<reason>[a-z_]+) support=(?<support>[0-9a-f]{40}) run=(?<run>[0-9]+) -->$"))
+             ($last | capture("^<!-- validation-harness-owner:v1 fp=(?<fp>[0-9a-f]{64}) stage=(?<stage>[a-z_]+) reason=(?<reason>[a-z_]+) support=(?<support>[0-9a-f]{40}) run=(?<run>[0-9]+) -->$")?)
              | select(.run == $key)
            else
-             ($last | capture("^<!-- workflow-failure-heal:validation-route:v1 fp=(?<fp>[0-9a-f]{64}) outcome=(?<outcome>opened|duplicate|already-fixed|bounced|skipped) issue=(?<issue>[0-9]+|none) classification=(?<classification>[a-z-]+) run=(?<run>[0-9]+) -->$"))
+             ($last | capture("^<!-- workflow-failure-heal:validation-route:v1 fp=(?<fp>[0-9a-f]{64}) outcome=(?<outcome>opened|duplicate|already-fixed|bounced|skipped) issue=(?<issue>[0-9]+|none) classification=(?<classification>[a-z-]+) run=(?<run>[0-9]+) -->$")?)
              | select(.fp == $key)
            end)
         | {m: ., created_at: ($c.created_at // ""), id: (($c.id // 0) | tonumber? // 0)}
