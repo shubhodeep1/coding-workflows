@@ -1886,11 +1886,14 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # Expression values reach the script only through env (never run: source).
+          SUPPORT_REF_REPOSITORY: ${{ github.repository }}
+          SUPPORT_REF_HEAD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
-          if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            promote_candidate_support_ref="${{ github.sha }}"
+          if [ "${SUPPORT_REF_REPOSITORY:-}" = "${wf_source}" ]; then
+            promote_candidate_support_ref="${SUPPORT_REF_HEAD_SHA:-}"
             promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
             # Pipeline runs of this repository pinned to the protected promote-candidate
             # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)

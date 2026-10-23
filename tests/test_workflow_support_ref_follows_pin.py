@@ -597,13 +597,29 @@ def test_validate_heal_report_support_ref_follows_the_pin(tmp_path: Path) -> Non
 		(SUPPORT_REPO, f"{reusable}@{PIN}", "1" * 40),
 		(SUPPORT_REPO, f"{reusable}@refs/heads/main", "1" * 40),
 	)
+	assert step["env"]["SUPPORT_REF_REPOSITORY"] == "${{ github.repository }}"
+	assert step["env"]["SUPPORT_REF_HEAD_SHA"] == "${{ github.sha }}"
+	assert "${{" not in step["run"]
 	for repository, workflow_ref, expected in cases:
-		values = _run(step, repository, workflow_ref, tmp_path)
+		result, values, _outputs, _calls = _run_script(
+			step["run"],
+			tmp_path,
+			{
+				"SUPPORT_REF_REPOSITORY": repository,
+				"SUPPORT_REF_HEAD_SHA": GITHUB_SHA,
+				"SUPPORT_REF_WORKFLOW_JOB_JSON": json.dumps({"workflow_ref": workflow_ref}),
+			},
+		)
+		assert result.returncode == 0, result.stderr
 		assert values == {"SCRIPT_REF": expected}, (repository, workflow_ref, values)
 	result, values, _outputs, calls = _run_script(
-		_substitute(step["run"], SUPPORT_REPO),
+		step["run"],
 		tmp_path,
-		{"SUPPORT_REF_WORKFLOW_JOB_JSON": json.dumps({"workflow_ref": _ref("validate.yml", "refs/heads/promote-candidate")})},
+		{
+			"SUPPORT_REF_REPOSITORY": SUPPORT_REPO,
+			"SUPPORT_REF_HEAD_SHA": GITHUB_SHA,
+			"SUPPORT_REF_WORKFLOW_JOB_JSON": json.dumps({"workflow_ref": _ref("validate.yml", "refs/heads/promote-candidate")}),
+		},
 	)
 	assert result.returncode == 0, result.stderr
 	assert values == {"SCRIPT_REF": PC_TIP} and len(calls) == 1

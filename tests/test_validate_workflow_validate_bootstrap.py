@@ -1375,13 +1375,6 @@ def _block_run_script(block: str) -> str:
 	return textwrap.dedent(block.split("        run: |\n", 1)[1])
 
 
-def _top_level_section(name: str) -> str:
-	wf = _workflow_text()
-	start = wf.index(f"\n{name}:\n")
-	end = wf.index("\n\n", start + 1)
-	return wf[start:end]
-
-
 HARNESS_STEP_OUTPUTS = ("failure_owner", "harness_report", "harness_stage", "harness_reason", "harness_fp")
 EXISTING_OUTPUTS = ("status", "raw_status", "summary", "failure_summary", "status_file", "metadata_file")
 
