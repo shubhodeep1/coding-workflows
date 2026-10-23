@@ -6098,7 +6098,20 @@ jobs:
             fi
           fi
 
-          if ! gh pr create "${PR_CREATE_ARGS[@]}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
+          # A transient GitHub error on `gh pr create` (GraphQL "Something
+          # went wrong while executing your query", a 5xx, a dropped
+          # connection) used to fail the run after the branch was pushed:
+          # release run 39926633796's implement run 39937572634 lost its PR
+          # this way, and the follow-up run then tripped over the pushed
+          # branch. gh_retry deliberately makes one attempt for creates
+          # (#6634), so retry here instead, and only after the recovery
+          # lookup below has shown no PR landed on the head branch. GitHub
+          # allows one open PR per head and base, so a repeat create can
+          # never open a second PR.
+          pr_create_attempt=1
+          pr_create_max_attempts=3
+          pr_create_transient_re='Something went wrong while executing your query|HTTP 50[0-4]|50[0-4] (Bad Gateway|Service Unavailable|Gateway Time-?out|Internal Server Error)|i/o timeout|timed out|timeout awaiting|TLS handshake timeout|connection reset|connection refused|unexpected EOF|(^|[^[:alnum:]_])EOF([^[:alnum:]_]|$)'
+          while ! gh pr create "${PR_CREATE_ARGS[@]}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; do
             echo "PR creation failed. This may indicate a PR was created by another process during execution."
             if [ -s "${RUNTIME_DIR}/created_pr_url.err" ]; then
               cat "${RUNTIME_DIR}/created_pr_url.err"
@@ -6168,8 +6181,18 @@ jobs:
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+            if [ "${pr_create_attempt}" -lt "${pr_create_max_attempts}" ] \
+              && grep -qiE "${pr_create_transient_re}" "${RUNTIME_DIR}/created_pr_url.err" 2>/dev/null; then
+              pr_create_wait_secs=$(( pr_create_attempt * 10 ))
+              echo "IMPLEMENT_PR_CREATE issue=${ISSUE_NUMBER} head=${TARGET_BRANCH} attempt=${pr_create_attempt}/${pr_create_max_attempts} outcome=retry reason=transient wait_secs=${pr_create_wait_secs}"
+              echo "::warning::gh pr create hit a transient GitHub error and no PR exists on ${TARGET_BRANCH}; retrying in ${pr_create_wait_secs}s (attempt ${pr_create_attempt}/${pr_create_max_attempts})."
+              sleep "${pr_create_wait_secs}"
+              pr_create_attempt=$(( pr_create_attempt + 1 ))
+              continue
+            fi
+            echo "IMPLEMENT_PR_CREATE issue=${ISSUE_NUMBER} head=${TARGET_BRANCH} attempt=${pr_create_attempt}/${pr_create_max_attempts} outcome=give_up reason=no_existing_pr"
             exit 1
-          fi
+          done
 
           PR_URL="$(grep -Eo 'https://github\.com/[^[:space:]]+/pull/[0-9]+' "${RUNTIME_DIR}/created_pr_url.txt" | head -n 1 || true)"
           if [ -z "${PR_URL}" ]; then
