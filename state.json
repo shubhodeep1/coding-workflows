@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-23T16:54:21Z",
+  "tick_at": "2026-10-23T17:07:25Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -276,13 +276,13 @@
     },
     {
       "current_wave": 2,
-      "integration_ahead_by": "28",
+      "integration_ahead_by": "29",
       "issue_counts": {
         "closed": 0,
-        "done": 2,
+        "done": 1,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 2,
+        "merged": 3,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -317,13 +317,13 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "5",
+      "integration_ahead_by": "6",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 1,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -331,10 +331,10 @@
       },
       "number": 7973,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Apply workflow-optimization-2026-09-23-3 recommendations (verified subset)",
       "total_waves": 4,
-      "wave_complete": false
+      "wave_complete": true
     }
   ]
 }
