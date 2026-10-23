@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal_queue.py:106-114 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash, qwen_qwen3_7-plus]\n  PROBLEM: test_position_cli builds tickets relative to a fixed NOW (2026-10-23 12:00Z) but the CLI (scripts/workflow_failure_heal.py:5842-5844) judges them against the real clock with a 10,800s lease, so after about 15:00Z the CLI returns \"go\" instead of \"wait\" and the assertion at line 114 fails.\n  WHY: The failure depends on the time of day and fails tests-heal-plan-and-validation and the aggregate lint check on every later run. It is outside this PR's one-line change. Reviewers rated it MAJOR. Qwen only called it a flaky pre-existing test and gave no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal_queue.py:114 (test_position_cli) | severity=MAJOR | confidence=5\n  PROBLEM: The test uses a fixed timestamp (2026-10-23 12:00Z), but the CLI judges tickets against the real clock with a 10,800s lease, so after about 15:00Z it returns \"go\" where the test expects \"wait\".\n  WHY: The failure depends on the time of day and breaks tests-heal-plan-and-validation and the lint check. It is unrelated to the PR's one-line change. The reviewer proposed fixing it separately, for example with a `now` argument or a `--now` option.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal_queue.py:114 | severity=MAJOR | confidence=5\n  PROBLEM: The test relies on a fixed NOW (2026-10-23 12:00Z) while the implementation uses `_utc_now()` (real clock) with a 10,800s lease.\n  WHY: The ticket expires at 15:00Z, so a CI run at 16:09Z sees it as stale and returns \"go\" instead of \"wait\", failing `waiting[\"status\"] == \"wait\"` at line 114.\n- TASK_GAP: Requirement: \"Rewrite tests/e2e_smoke_canary_b.txt ... `status: ok` and `decompose-run: 39969947939`.\" | Expected change site: tests/e2e_smoke_canary_b.txt | Evidence of absence: The diff fully meets the requirement, so no gap was identified. | SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_workflow_failure_heal_queue.py:32,106-114 (test_position_cli); scripts/workflow_failure_heal.py:5842-5844 | severity=MAJOR | confidence=5\n  PROBLEM: The CLI test creates tickets relative to a fixed NOW of 2026-10-23 12:00 UTC but runs the CLI without a fixed clock, so ticket age is judged against the real time.\n  WHY: Once the ticket is older than the 10,800s lease on the real clock, the CLI returns `go` instead of `wait` and the assertion at line 114 fails. The CI log shows this at 16:09 UTC. It is outside the PR diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_failure_heal_queue.py (test_position_cli)\n  PROBLEM: The reviewer called this a pre-existing flaky test: it uses a fixed timestamp (2026-10-23 12:00Z) but evaluates against real time with a 10,800s lease, so it fails after 3 hours.\n  WHY: It is outside the PR's scope and changed files. The PR's own change to tests/e2e_smoke_canary_b.txt is correct.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_workflow_failure_heal_queue.py:32-45,106-114 (test_position_cli); scripts/workflow_failure_heal.py:5842-5844 | severity=MAJOR | confidence=5\n  PROBLEM: test_position_cli writes tickets relative to the fixed NOW, but `_cmd_heal_queue` calls `heal_queue_position` without a `now` argument, so the real current time is used with HEAL_QUEUE_DEFAULT_LEASE_SECONDS = 10_800 (scripts/workflow_failure_heal.py:5302).\n  WHY: More than 3 hours after 12:00Z, ticket 10 counts as stale and the CLI returns \"go\" instead of \"wait\". CI run 39981466818 (job 120509557305) failed at about 16:09Z with `assert ('go' == 'wait' ...)` at line 114, which also fails CI / lint. The reviewer suggested a `--now` option (parser at scripts/workflow_failure_heal.py:6505) or generating ticket times from the real clock. The fix is outside this PR's scope.\n- TASK_GAP: Requirement: \"rewrite tests/e2e_smoke_canary_b.txt ... `status: ok` / `decompose-run: 39969947939`\"; \"No other file is changed.\" | Expected change site: tests/e2e_smoke_canary_b.txt | Evidence of absence: Not absent. The diff meets all three acceptance criteria, so there is no gap. | SEVERITY: NIT | ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c59ee251b69d983c64c7ce1681b710f609a96ee26544ac2d09e47e6f93e1f37d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7989,
+    "run_id": "39981466939",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39981466939",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023165100_a381550d78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7989,
+    "run_id": "39981466939"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T16:51:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
