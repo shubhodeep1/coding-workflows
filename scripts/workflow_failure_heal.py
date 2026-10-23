@@ -81,7 +81,7 @@ MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 # project validations fail on it.
 SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure")
 
 # A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
 # non-capacity reason and the role failed instead of running codex. The report
@@ -93,6 +93,86 @@ ENGINE_FALLBACK_CAPACITY_REASONS: tuple[str, ...] = ("all_gated", "all_usage_lim
 _ENGINE_ROLE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
 _ENGINE_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
 ENGINE_FALLBACK_MAX_RECORDS = 20
+
+# A failed runtime-validation run whose failure belongs to the harness this
+# repository ships, not to the consumer's code (plan
+# docs/plans/validation-failure-harness-routing-plan.md, Phase 1).
+# classify_validation_owner() decides the owner; a harness-owned failure (or
+# the harness part of a mixed one) is reported as a `validation_failure`
+# payload built from fixed vocabulary plus one neutralised, capped error
+# signature, so no other consumer-written text reaches the public heal issue.
+VALIDATION_STAGES: tuple[str, ...] = ("generate", "preflight", "sandbox", "canary", "run", "diagnose", "engine")
+VALIDATION_REASONS: tuple[str, ...] = (
+	"sandbox_unavailable",
+	"preflight_failed",
+	"canary_failed",
+	"generate_failed",
+	"engine_unavailable",
+	"diagnosis_harness",
+	"owner_paths",
+	"mixed_harness_part",
+	"escalated_repeat",
+)
+# Classifier output only (owner `none`): the harness fingerprint was already
+# bounced back to the consumer. Never valid in a payload.
+VALIDATION_BOUNCED_REASON = "bounced_repeat"
+# Each reason belongs to exactly one stage, so one failure never splits into
+# several fingerprints.
+VALIDATION_REASON_STAGES: dict[str, str] = {
+	"sandbox_unavailable": "sandbox",
+	"preflight_failed": "preflight",
+	"canary_failed": "canary",
+	"generate_failed": "generate",
+	"engine_unavailable": "engine",
+	"diagnosis_harness": "diagnose",
+	"owner_paths": "diagnose",
+	"mixed_harness_part": "diagnose",
+	"escalated_repeat": "run",
+}
+# Layer 0: reasons the validate run decides without the diagnosis.
+VALIDATION_FIXED_REASONS: tuple[str, ...] = (
+	"sandbox_unavailable",
+	"preflight_failed",
+	"canary_failed",
+	"generate_failed",
+	"engine_unavailable",
+	"escalated_repeat",
+)
+VALIDATION_OWNERS: tuple[str, ...] = ("harness", "project", "mixed", "none")
+VALIDATION_FAILURE_REASON = "validation_harness"
+VALIDATION_FAILURE_WORKFLOW_NAME = "AI Validate"
+VALIDATION_FAILURE_FINGERPRINT_WORKFLOW = "validation-harness"
+VALIDATION_SIGNATURE_CHAR_LIMIT = 200
+# Upper bound on the raw signature a payload may carry (DoS bound before
+# normalisation; the normalised signature is capped at 200 characters).
+VALIDATION_SIGNATURE_INPUT_LIMIT = 4000
+VALIDATION_FAILURE_PAYLOAD_KEYS = frozenset({
+	"schema_version",
+	"source_repo",
+	"source_kind",
+	"issue_number",
+	"run_refs",
+	"wrapper_sha",
+	"validation_stage",
+	"validation_reason",
+	"validation_signature",
+	"failure_reason",
+	"failure_streak",
+	"workflow_name",
+	"reporter_run_url",
+	"reported_at",
+})
+# The consumer validation wrapper (and this repository's internal one).
+VALIDATION_WRAPPER_WORKFLOW_FILES: tuple[str, ...] = ("ai-validate.yml", "internal-validate.yml")
+# The poller dispatches every project validation run.
+VALIDATION_REPORT_RUN_EVENTS: tuple[str, ...] = ("workflow_dispatch",)
+VALIDATION_HARNESS_PATH_PREFIX = "validation/"
+VALIDATION_MAX_FIX_ISSUES = 50
+VALIDATION_MAX_FILES_PER_ISSUE = 50
+VALIDATION_MAX_PATHS = 200
+VALIDATION_MANAGED_PATHS_TIMEOUT_SECONDS = 120
+_VALIDATION_COMMIT_RE = re.compile(r"^([0-9a-f]{40}|HEAD)$")
+_VALIDATION_HEX_RUN_RE = re.compile(r"\b[0-9a-fA-F]{7,64}\b")
 
 # A consumer security audit finding on an unmodified file the @stable sync
 # manages (plan docs/plans/synced-file-security-findings-heal-intake-plan.md,
@@ -325,12 +405,14 @@ REPORT_IDENTITY_WORKFLOW_BY_KIND = {
 	"phase_failure": ("clarify.yml", "plan.yml", "implement.yml"),
 	# The consumer's security audit run (reusable security-audit.yml).
 	"synced_security_finding": ("security-audit.yml",),
+	# The consumer's runtime validation run (reusable validate.yml).
+	"validation_failure": ("validate.yml",),
 }
 # Kinds whose run_refs the intake's provenance gate already binds to the
 # source repository (run repository, workflow path, failure, issue/PR link);
 # claim binding leaves their runs to that gate so its current-run ordering and
 # successful-review-job fallback stay intact.
-PROVENANCE_BOUND_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
+PROVENANCE_BOUND_KINDS = ("phase_failure", "autofix_failure", "workflow_run", "validation_failure")
 FAILED_JOB_CONCLUSIONS = ("failure", "timed_out", "cancelled")
 SIGNATURE_LINE_LIMIT = 5
 # Ownership facts carried by an autofix_failure report (self-repo routing).
@@ -638,8 +720,65 @@ def phase_report_workflow_paths(phase: str, *, source_repo: str, self_repo: str)
 	return paths
 
 
+def validation_report_workflow_paths(*, source_repo: str, self_repo: str) -> tuple[str, ...]:
+	"""Workflow paths a validation_failure report's run may have."""
+	paths = (f".github/workflows/{VALIDATION_WRAPPER_WORKFLOW_FILES[0]}",)
+	if isinstance(source_repo, str) and isinstance(self_repo, str) and source_repo.casefold() == self_repo.casefold():
+		paths += (f".github/workflows/{VALIDATION_WRAPPER_WORKFLOW_FILES[1]}",)
+	return paths
+
+
+def _verify_validation_report_provenance(payload: dict[str, Any], *, run: Any, jobs: Any, self_repo: str) -> dict[str, Any]:
+	"""Check a validation_failure report's run against GitHub-read evidence.
+
+	The run must belong to the source repository, be a dispatched run of the
+	consumer's validation wrapper, have failed (or still be running with a
+	failed job other than the reporter's), and carry ``[tracking:<issue>]``.
+	"""
+	refs = payload.get("run_refs")
+	run_id = refs[0].get("run_id") if isinstance(refs, list) and refs and isinstance(refs[0], dict) else None
+	run_id = str(run_id) if _positive_int(run_id) is not None else ""
+	def decision(verified: bool, why: str) -> dict[str, Any]:
+		return {"verified": verified, "reason": why, "run_id": run_id}
+
+	issue_number = _positive_int(payload.get("issue_number"))
+	if payload.get("failure_reason") != VALIDATION_FAILURE_REASON or not run_id or issue_number is None:
+		return decision(False, "not_validation_report")
+	if not isinstance(run, dict):
+		return decision(False, "run_unavailable")
+	if str(run.get("id")) != run_id:
+		return decision(False, "run_id_mismatch")
+	source_repo = payload.get("source_repo")
+	repository = run.get("repository")
+	if not isinstance(source_repo, str) or not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str) or repository["full_name"].casefold() != source_repo.casefold():
+		return decision(False, "repo_mismatch")
+	if run.get("event") not in VALIDATION_REPORT_RUN_EVENTS:
+		return decision(False, "event_mismatch")
+	path = run.get("path")
+	if not isinstance(path, str) or path.split("@", 1)[0] not in validation_report_workflow_paths(source_repo=source_repo, self_repo=self_repo):
+		return decision(False, "workflow_path_mismatch")
+	if run.get("status") == "completed" and run.get("conclusion") not in ("failure", "timed_out"):
+		return decision(False, "run_not_failed")
+	if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
+		return decision(False, "jobs_unavailable")
+	if not any(
+		isinstance(job, dict) and job.get("conclusion") in ("failure", "timed_out")
+		and isinstance(job.get("name"), str) and job["name"] != PHASE_REPORT_REPORTER_JOB
+		and not job["name"].endswith("/ " + PHASE_REPORT_REPORTER_JOB)
+		for job in jobs["jobs"]
+	):
+		return decision(False, "no_failed_validation_job")
+	title_match = _TRACKING_RUN_TITLE_RE.search(single_line(run.get("display_title"), 500))
+	if not title_match or int(title_match.group(1)) != issue_number:
+		return decision(False, "tracking_title_mismatch")
+	return decision(True, "ok")
+
+
 def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comments: Any, self_repo: str, trusted_author: str | None) -> dict[str, Any]:
 	"""Check GitHub-read evidence before acting on an untrusted phase report."""
+	if isinstance(payload, dict) and payload.get("source_kind") == "validation_failure":
+		# Validation reports carry no linking comment; comments are ignored.
+		return _verify_validation_report_provenance(payload, run=run, jobs=jobs, self_repo=self_repo)
 	refs = payload.get("run_refs") if isinstance(payload, dict) else None
 	reason = payload.get("failure_reason") if isinstance(payload, dict) else None
 	run_id = refs[0].get("run_id") if isinstance(refs, list) and refs and isinstance(refs[0], dict) else None
@@ -1262,6 +1401,347 @@ def build_engine_fallback_payload(
 	}
 
 
+# ---------------------------------------------------------------------------
+# Runtime validation failures (validation_failure)
+# ---------------------------------------------------------------------------
+
+
+def load_validation_managed_paths(support_root: str, commit: str) -> frozenset[str]:
+	"""Paths the @stable sync owns at ``commit`` of the support checkout.
+
+	Runs the ``build_sync_manifest.py`` next to this module (the verified
+	support copy, never one from the consumer tree) as ``python3 -I -B ...
+	managed-paths``. It reads git objects only, with no network access.
+	Raises ``ValueError`` on a bad argument, a missing helper, a timeout or a
+	non-zero exit: an empty list would classify every wrapper as
+	consumer-owned, so the caller keeps today's behaviour instead.
+	"""
+	if not isinstance(commit, str) or not _VALIDATION_COMMIT_RE.match(commit):
+		raise ValueError("support commit must be a full lower-case commit SHA or HEAD")
+	if not isinstance(support_root, str) or not support_root or not os.path.isdir(support_root):
+		raise ValueError("support root must be an existing directory")
+	helper = Path(__file__).resolve().with_name("build_sync_manifest.py")
+	if not helper.is_file():
+		raise ValueError("build_sync_manifest.py is missing next to workflow_failure_heal.py")
+	command = [sys.executable, "-I", "-B", str(helper), "managed-paths", "--repo-root", str(Path(support_root).resolve()), "--commit", commit]
+	try:
+		result = subprocess.run(command, capture_output=True, text=True, timeout=VALIDATION_MANAGED_PATHS_TIMEOUT_SECONDS, check=False)
+	except (OSError, subprocess.TimeoutExpired) as exc:
+		raise ValueError("managed-path lookup failed") from exc
+	if result.returncode != 0:
+		raise ValueError("managed-path lookup failed")
+	return frozenset(line.strip() for line in result.stdout.splitlines() if is_valid_repo_path(line.strip()))
+
+
+def _normalize_validation_path(path: Any) -> str | None:
+	"""A repo-relative path from a diagnosis, or ``None`` when it is not one."""
+	if not isinstance(path, str):
+		return None
+	text = path.strip()
+	while text.startswith("./"):
+		text = text[2:]
+	return text if is_valid_repo_path(text) else None
+
+
+def _lexists_without_following(root: str, relative: str) -> bool | None:
+	"""Whether ``root/relative`` exists, following no symlink on the way.
+
+	``None`` means a parent directory is a symlink (or cannot be read), so the
+	answer is unknown. Nothing is ever read from the path.
+	"""
+	if not root:
+		return False
+	current = root
+	parts = relative.split("/")
+	for index, part in enumerate(parts):
+		current = os.path.join(current, part)
+		try:
+			info = os.lstat(current)
+		except FileNotFoundError:
+			return False
+		except OSError:
+			return None
+		if index < len(parts) - 1 and not stat.S_ISDIR(info.st_mode):
+			return None if stat.S_ISLNK(info.st_mode) else False
+	return True
+
+
+def validation_path_owner(path: Any, *, consumer_root: str, support_root: str, managed_paths: Iterable[str]) -> str:
+	"""Return ``harness`` or ``project`` for one path a validation diagnosis names.
+
+	Public helper: scripts/unblock_actions.py (Phase 3 of
+	docs/plans/validation-failure-harness-routing-plan.md) imports it, so the
+	name and rules are stable. A path is ``harness`` when it is under
+	``validation/``, is a path the @stable sync manages (``managed_paths``,
+	see ``load_validation_managed_paths``), or is absent from the consumer
+	checkout but present in the support checkout. Anything else is
+	``project``: a consumer path the sync does not manage, a new path absent
+	from both, and every invalid path (absolute, ``..``, odd characters).
+	Only existence is checked; no symlink is followed and no file is read.
+	"""
+	normalized = _normalize_validation_path(path)
+	if normalized is None:
+		return "project"
+	if normalized == VALIDATION_HARNESS_PATH_PREFIX.rstrip("/") or normalized.startswith(VALIDATION_HARNESS_PATH_PREFIX):
+		return "harness"
+	if normalized in frozenset(managed_paths or ()):
+		return "harness"
+	in_consumer = _lexists_without_following(consumer_root, normalized)
+	if in_consumer is False and _lexists_without_following(support_root, normalized) is True:
+		return "harness"
+	return "project"
+
+
+def classify_validation_paths(paths: Iterable[Any], *, consumer_root: str, support_root: str, managed_paths: Iterable[str]) -> tuple[list[str], list[str]]:
+	"""Split paths into ``(harness_paths, project_paths)``.
+
+	De-duplicated, order kept, each list capped at VALIDATION_MAX_PATHS.
+	Invalid paths count as project-owned but are not listed.
+	"""
+	managed = frozenset(managed_paths or ())
+	harness: list[str] = []
+	project: list[str] = []
+	for raw in paths:
+		normalized = _normalize_validation_path(raw)
+		if normalized is None:
+			continue
+		owner = validation_path_owner(normalized, consumer_root=consumer_root, support_root=support_root, managed_paths=managed)
+		bucket = harness if owner == "harness" else project
+		if normalized not in bucket and len(bucket) < VALIDATION_MAX_PATHS:
+			bucket.append(normalized)
+	return harness, project
+
+
+def _normalize_validation_signature_once(text: str, source_repo: str | None) -> str:
+	text = redact_secrets(sanitize_text(text))
+	text = " ".join(text.split())
+	if isinstance(source_repo, str) and source_repo:
+		text = re.sub(re.escape(source_repo), "<repo>", text, flags=re.IGNORECASE)
+	text = _VALIDATION_HEX_RUN_RE.sub("<sha>", text)
+	text = neutralize_untrusted_routing(text)[0]
+	text = text.replace("`", "'")
+	return text[:VALIDATION_SIGNATURE_CHAR_LIMIT].rstrip()
+
+
+def normalize_validation_signature(signature: Any, *, source_repo: str | None = None) -> str:
+	"""One-line, redacted, routing-neutralised error signature of at most 200 characters.
+
+	The repository name becomes ``<repo>`` and every hex run of 7-64
+	characters becomes ``<sha>``, so the same harness failure gets the same
+	fingerprint in every consumer and at every commit (Q14). Idempotent: the
+	intake recomputes the fingerprint from the normalised payload.
+	"""
+	text = "" if signature is None else str(signature)
+	for _ in range(5):
+		updated = _normalize_validation_signature_once(text, source_repo)
+		if updated == text:
+			break
+		text = updated
+	return text or "no-error-lines"
+
+
+def validation_failure_fingerprint(stage: str, reason: str, signature: Any, *, source_repo: str | None = None) -> str:
+	"""Dedup fingerprint of a harness-owned validation failure (no repo, no SHA)."""
+	if stage not in VALIDATION_STAGES:
+		raise ValueError("validation stage must be one of " + ", ".join(VALIDATION_STAGES))
+	if reason not in VALIDATION_REASONS:
+		raise ValueError("validation reason must be one of " + ", ".join(VALIDATION_REASONS))
+	return fingerprint(VALIDATION_FAILURE_FINGERPRINT_WORKFLOW, f"{stage}:{reason}", normalize_validation_signature(signature, source_repo=source_repo))
+
+
+def _validation_fix_issues(diagnosis: dict[str, Any]) -> list[dict[str, Any]]:
+	raw = diagnosis.get("fix_issues")
+	if not isinstance(raw, list):
+		return []
+	return [issue for issue in raw if isinstance(issue, dict)][:VALIDATION_MAX_FIX_ISSUES]
+
+
+def _validation_harness_files(diagnosis: dict[str, Any]) -> list[str]:
+	raw = diagnosis.get("harness_files")
+	if not isinstance(raw, list):
+		return []
+	return [path for path in raw if isinstance(path, str)][:VALIDATION_MAX_FILES_PER_ISSUE]
+
+
+def _validation_issue_files(issue: dict[str, Any]) -> list[Any]:
+	raw = issue.get("files")
+	return list(raw[:VALIDATION_MAX_FILES_PER_ISSUE]) if isinstance(raw, list) else []
+
+
+def validation_diagnosis_has_paths(diagnosis: Any) -> bool:
+	"""Whether classifying ``diagnosis`` needs the managed-path list."""
+	if not isinstance(diagnosis, dict):
+		return False
+	if _validation_harness_files(diagnosis):
+		return True
+	return any(_validation_issue_files(issue) for issue in _validation_fix_issues(diagnosis))
+
+
+def classify_validation_owner(
+	diagnosis: Any,
+	*,
+	consumer_root: str,
+	support_root: str,
+	managed_paths: Iterable[str],
+	raw_status: str | None,
+	fixed_reason: str | None = None,
+	fixed_stage: str | None = None,
+	bounced_fingerprints: Iterable[str] = (),
+	signature: Any = "",
+	source_repo: str | None = None,
+) -> dict[str, Any]:
+	"""Decide who owns a failed validation run (plan "Ownership decision").
+
+	Returns ``{owner, reason, stage, fingerprint, harness_paths,
+	project_paths, project_fix_ids}`` with owner ``harness``, ``project``,
+	``mixed`` or ``none`` (``none`` keeps today's path). Layer 0: a
+	``fixed_reason`` the validate run decided itself is harness-owned and the
+	diagnosis is not read. Layer 1: a ``harness_error`` diagnosis is
+	``diagnosis_harness``; for ``needs_fixes`` each fix issue is harness-owned
+	when it lists files and all of them are harness paths, else
+	project-owned; all harness is ``owner_paths``, all project (and no harness
+	path anywhere) is ``project``, anything else is ``mixed``. A diagnosis
+	whose fix issues carry no ``files`` key stays ``project`` as today; an
+	empty ``fix_issues`` is never ``project``. A fingerprint in
+	``bounced_fingerprints`` turns the owner into ``none`` with reason
+	``bounced_repeat``. ``project_fix_ids`` names the project-owned fix
+	issues (their ``id``, or ``index-<n>`` without one) for the mixed split.
+	"""
+	managed = frozenset(managed_paths or ())
+	bounced = {str(value).strip().lower() for value in bounced_fingerprints or () if isinstance(value, str) and _FP_HEX_RE.match(value.strip().lower())}
+	result: dict[str, Any] = {"owner": "none", "reason": "", "stage": "", "fingerprint": "", "harness_paths": [], "project_paths": [], "project_fix_ids": []}
+
+	def add_paths(paths: Iterable[Any]) -> tuple[list[str], list[str]]:
+		harness, project = classify_validation_paths(paths, consumer_root=consumer_root, support_root=support_root, managed_paths=managed)
+		for key, values in (("harness_paths", harness), ("project_paths", project)):
+			for value in values:
+				if value not in result[key] and len(result[key]) < VALIDATION_MAX_PATHS:
+					result[key].append(value)
+		return harness, project
+
+	if fixed_reason:
+		if fixed_reason not in VALIDATION_FIXED_REASONS:
+			raise ValueError("fixed validation reason must be one of " + ", ".join(VALIDATION_FIXED_REASONS))
+		expected_stage = VALIDATION_REASON_STAGES[fixed_reason]
+		if fixed_stage and fixed_stage != expected_stage:
+			raise ValueError(f"fixed validation reason {fixed_reason} belongs to stage {expected_stage}")
+		result.update({"owner": "harness", "reason": fixed_reason, "stage": expected_stage})
+	elif fixed_stage:
+		raise ValueError("a fixed validation stage needs a fixed reason")
+	else:
+		if isinstance(diagnosis, (str, bytes)):
+			try:
+				diagnosis = json.loads(diagnosis)
+			except ValueError:
+				diagnosis = None
+		if isinstance(diagnosis, dict):
+			status = diagnosis.get("status")
+			fix_issues = _validation_fix_issues(diagnosis)
+			harness_files = _validation_harness_files(diagnosis)
+			if status == "harness_error":
+				add_paths(harness_files)
+				for issue in fix_issues:
+					add_paths(_validation_issue_files(issue))
+				result.update({"owner": "harness", "reason": "diagnosis_harness", "stage": "diagnose"})
+			elif status == "needs_fixes":
+				add_paths(harness_files)
+				if not fix_issues:
+					# Nothing to file in the consumer: never project-owned.
+					if raw_status == "harness_error":
+						result.update({"owner": "harness", "reason": "diagnosis_harness", "stage": "diagnose"})
+				elif not any("files" in issue for issue in fix_issues):
+					result["owner"] = "project"
+					result["project_fix_ids"] = [_validation_fix_id(issue, index) for index, issue in enumerate(fix_issues)]
+				else:
+					harness_issues = 0
+					project_ids: list[str] = []
+					for index, issue in enumerate(fix_issues):
+						files = _validation_issue_files(issue)
+						owners = [validation_path_owner(path, consumer_root=consumer_root, support_root=support_root, managed_paths=managed) for path in files]
+						add_paths(files)
+						if files and all(owner == "harness" for owner in owners):
+							harness_issues += 1
+						else:
+							project_ids.append(_validation_fix_id(issue, index))
+					result["project_fix_ids"] = project_ids
+					if not project_ids:
+						result.update({"owner": "harness", "reason": "owner_paths", "stage": "diagnose"})
+					elif harness_issues == 0 and not result["harness_paths"]:
+						result["owner"] = "project"
+					else:
+						result.update({"owner": "mixed", "reason": "mixed_harness_part", "stage": "diagnose"})
+
+	if result["owner"] in ("harness", "mixed"):
+		result["fingerprint"] = validation_failure_fingerprint(result["stage"], result["reason"], signature, source_repo=source_repo)
+		if result["fingerprint"] in bounced:
+			result["owner"] = "none"
+			result["reason"] = VALIDATION_BOUNCED_REASON
+	return result
+
+
+def _validation_fix_id(issue: dict[str, Any], index: int) -> str:
+	token = safe_token(issue.get("id"), 80) if issue.get("id") is not None else ""
+	return token or f"index-{index}"
+
+
+def _validation_failure_title(stage: Any, reason: Any) -> str:
+	return f"Workflow heal: runtime validation harness failure ({safe_token(stage, 40)}/{safe_token(reason, 40)})"
+
+
+def build_validation_failure_payload(
+	*,
+	repo: str,
+	issue_number: Any,
+	run_id: Any,
+	wrapper_sha: str,
+	stage: str,
+	reason: str,
+	signature: Any,
+	workflow_name: str | None,
+	reporter_run_url: str | None,
+	now: datetime | None = None,
+) -> dict[str, Any]:
+	"""Build the dispatch payload for a harness-owned validation failure.
+
+	Exactly the VALIDATION_FAILURE_PAYLOAD_KEYS fields: the failed run is the
+	only run reference, and the error signature is normalised (no repo name,
+	no SHA, at most 200 characters).
+	"""
+	now = now or _utc_now()
+	if not is_valid_repo_slug(repo):
+		raise ValueError("repo must be an owner/name slug")
+	issue = _positive_int(issue_number)
+	run_number = _positive_int(run_id)
+	if issue is None:
+		raise ValueError("issue_number must be a positive integer")
+	if run_number is None:
+		raise ValueError("run_id must be a positive integer")
+	if not is_valid_sha(wrapper_sha):
+		raise ValueError("wrapper_sha must be a full lower-case commit SHA")
+	if stage not in VALIDATION_STAGES:
+		raise ValueError("validation stage must be one of " + ", ".join(VALIDATION_STAGES))
+	if reason not in VALIDATION_REASONS:
+		raise ValueError("validation reason must be one of " + ", ".join(VALIDATION_REASONS))
+	if VALIDATION_REASON_STAGES[reason] != stage:
+		raise ValueError(f"validation reason {reason} belongs to stage {VALIDATION_REASON_STAGES[reason]}")
+	return {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "validation_failure",
+		"issue_number": issue,
+		"run_refs": [{"repo": repo, "run_id": str(run_number), "url": f"https://github.com/{repo}/actions/runs/{run_number}"}],
+		"wrapper_sha": wrapper_sha,
+		"validation_stage": stage,
+		"validation_reason": reason,
+		"validation_signature": normalize_validation_signature(signature, source_repo=repo),
+		"failure_reason": VALIDATION_FAILURE_REASON,
+		"failure_streak": 1,
+		"workflow_name": single_line(workflow_name, 200) or VALIDATION_FAILURE_WORKFLOW_NAME,
+		"reporter_run_url": sanitize_text(reporter_run_url, 300) or f"https://github.com/{repo}/actions/runs/{run_number}",
+		"reported_at": _iso(now),
+	}
+
+
 def _normalize_script_ref(value: Any) -> str | None:
 	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
 	ref = str(value or "").strip()
@@ -1499,6 +1979,37 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		failure_reason = SYNCED_SECURITY_FAILURE_REASON
 		failure_streak = 1
 		failure_fingerprint = None
+	elif kind == "validation_failure":
+		extra_keys = sorted(key for key in payload if key not in VALIDATION_FAILURE_PAYLOAD_KEYS)
+		if extra_keys:
+			raise ValueError("validation_failure reports carry no other fields: " + ", ".join(safe_token(key, 40) or "?" for key in extra_keys[:5]))
+		if issue_number is None:
+			raise ValueError("issue_number (the tracking issue) is required for validation_failure reports")
+		raw_refs = payload.get("run_refs")
+		if not isinstance(raw_refs, list) or len(raw_refs) != 1:
+			raise ValueError("validation_failure reports carry exactly one run reference")
+		raw_release = payload.get("wrapper_sha")
+		if not (isinstance(raw_release, str) and is_valid_sha(raw_release.lower())):
+			raise ValueError("wrapper_sha (the consumer's release SHA) is required for validation_failure reports")
+		validation_stage = payload.get("validation_stage")
+		validation_reason = payload.get("validation_reason")
+		if not isinstance(validation_stage, str) or validation_stage not in VALIDATION_STAGES:
+			raise ValueError("validation_stage must be one of " + ", ".join(VALIDATION_STAGES))
+		if not isinstance(validation_reason, str) or validation_reason not in VALIDATION_REASONS:
+			raise ValueError("validation_reason must be one of " + ", ".join(VALIDATION_REASONS))
+		if VALIDATION_REASON_STAGES[validation_reason] != validation_stage:
+			raise ValueError(f"validation_reason {validation_reason} belongs to stage {VALIDATION_REASON_STAGES[validation_reason]}")
+		if payload.get("failure_reason") is not None and payload.get("failure_reason") != VALIDATION_FAILURE_REASON:
+			raise ValueError(f"failure_reason must be {VALIDATION_FAILURE_REASON} for validation_failure reports")
+		raw_signature = payload.get("validation_signature")
+		if not isinstance(raw_signature, str):
+			raise ValueError("validation_signature must be a string")
+		if len(raw_signature) > VALIDATION_SIGNATURE_INPUT_LIMIT:
+			raise ValueError(f"validation_signature is longer than {VALIDATION_SIGNATURE_INPUT_LIMIT} characters")
+		label = None
+		failure_reason = VALIDATION_FAILURE_REASON
+		failure_streak = 1
+		failure_fingerprint = None
 	elif kind == "phase_failure":
 		if issue_number is None:
 			raise ValueError("issue_number is required for phase_failure reports")
@@ -1531,6 +2042,8 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	head_branch = head_branch if is_valid_branch(head_branch) else None
 	if kind == "phase_failure" and not run_refs:
 		raise ValueError("phase_failure reports need the failed run reference")
+	if kind == "validation_failure" and len(run_refs) != 1:
+		raise ValueError("validation_failure reports need the failed run in source_repo")
 	if kind == "workflow_run":
 		if not run_refs:
 			raise ValueError("workflow_run reports need the failed run reference")
@@ -1606,6 +2119,26 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			"failure_evidence": "",
 			"reported_at": _iso(_utc_now()),
 			"findings": validate_synced_security_findings(payload.get("findings")),
+		})
+	if kind == "validation_failure":
+		# Only fixed vocabulary plus the neutralised signature reaches the
+		# public heal issue: no reporter title, label, excerpt or branch text.
+		normalized.update({
+			"issue_title": _validation_failure_title(payload["validation_stage"], payload["validation_reason"]),
+			"issue_url": None,
+			"labels": [],
+			"source_gen": None,
+			"source_root": None,
+			"issue_excerpt": "",
+			"comments_excerpt": "",
+			"workflow_name": VALIDATION_FAILURE_WORKFLOW_NAME,
+			"head_branch": None,
+			"head_sha": None,
+			"conclusion": "failure",
+			"failure_evidence": "",
+			"validation_stage": payload["validation_stage"],
+			"validation_reason": payload["validation_reason"],
+			"validation_signature": normalize_validation_signature(payload["validation_signature"], source_repo=repo),
 		})
 	if label == _SCOPE_AUTHOR_LABEL and kind != "workflow_run":
 		normalized["issue_author_login"] = _scope_author_login(payload.get("issue_author_login"))
@@ -4422,6 +4955,11 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 			phase = str(payload.get("failure_reason") or "").removesuffix("_failed") or "pipeline"
 			lines.append(f"- **Failure reason:** `{payload.get('failure_reason')}`")
 			lines.append(f"- **Consecutive failed {phase} runs on this issue:** {payload.get('failure_streak') or 1}")
+		elif kind == "validation_failure":
+			signature = neutralize_untrusted_routing(single_line(payload.get("validation_signature"), VALIDATION_SIGNATURE_CHAR_LIMIT))[0].replace("`", "'")
+			lines.append(f"- **Validation stage:** `{safe_token(payload.get('validation_stage'), 40)}`")
+			lines.append(f"- **Validation reason:** `{safe_token(payload.get('validation_reason'), 40)}`")
+			lines.append(f"- **Normalised error signature:** `{signature or 'no-error-lines'}`")
 		else:
 			lines.append(f"- **Escalation label:** `{payload.get('label')}`")
 	if kind == "engine_fallback":
@@ -4455,6 +4993,8 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 		streak = payload.get("failure_streak") or 1
 		return f"Workflow heal: {name or 'review/autofix'} failed {streak}x for {target} ({payload.get('failure_reason')})"
+	if payload.get("source_kind") == "validation_failure":
+		return _validation_failure_title(payload.get("validation_stage"), payload.get("validation_reason"))
 	if payload.get("source_kind") == "engine_fallback":
 		return f"Workflow heal: AI engine fallback refused for {payload.get('engine_role')} ({payload.get('engine_reason')})"
 	if payload.get("source_kind") == "phase_failure":
@@ -5299,6 +5839,73 @@ def _cmd_engine_fallback_fingerprint(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _read_bounded_text(path: str | None, limit: int = 65_536) -> str:
+	"""The first ``limit`` bytes of a file as text; a missing path is empty."""
+	if not path:
+		return ""
+	try:
+		with open(path, "rb") as handle:
+			data = handle.read(limit)
+	except OSError:
+		return ""
+	return data.decode("utf-8", errors="replace")
+
+
+def _cmd_classify_validation_owner(args: argparse.Namespace) -> int:
+	diagnosis = None
+	if args.diagnosis_json:
+		try:
+			diagnosis = _load_json_file(args.diagnosis_json)
+		except (OSError, ValueError):
+			diagnosis = None
+	managed: frozenset[str] = frozenset()
+	if not args.fixed_reason and validation_diagnosis_has_paths(diagnosis):
+		if args.managed_paths_file:
+			try:
+				text = Path(args.managed_paths_file).read_text(encoding="utf-8", errors="replace")
+			except OSError as exc:
+				raise ValueError("managed paths file is unreadable") from exc
+			managed = frozenset(line.strip() for line in text.splitlines() if is_valid_repo_path(line.strip()))
+		else:
+			managed = load_validation_managed_paths(args.support_root, args.support_commit)
+	bounced = [line.strip() for line in _read_bounded_text(args.bounced_fingerprints_file).splitlines() if line.strip()]
+	_write_json(classify_validation_owner(
+		diagnosis,
+		consumer_root=args.consumer_root,
+		support_root=args.support_root,
+		managed_paths=managed,
+		raw_status=args.raw_status or None,
+		fixed_reason=args.fixed_reason or None,
+		fixed_stage=args.fixed_stage or None,
+		bounced_fingerprints=bounced,
+		signature=_read_bounded_text(args.signature_file),
+		source_repo=args.source_repo or None,
+	))
+	return 0
+
+
+def _cmd_build_validation_payload(args: argparse.Namespace) -> int:
+	payload = build_validation_failure_payload(
+		repo=args.repo,
+		issue_number=args.issue_number,
+		run_id=args.run_id,
+		wrapper_sha=args.wrapper_sha,
+		stage=args.stage,
+		reason=args.reason,
+		signature=_read_bounded_text(args.signature_file),
+		workflow_name=args.workflow_name or None,
+		reporter_run_url=args.reporter_run_url or None,
+	)
+	validate_payload(payload)
+	_write_json(payload)
+	return 0
+
+
+def _cmd_validation_failure_fingerprint(args: argparse.Namespace) -> int:
+	print(validation_failure_fingerprint(args.stage, args.reason, _read_bounded_text(args.signature_file), source_repo=args.source_repo or None))
+	return 0
+
+
 def _read_path_list(path: str | None) -> list[str]:
 	"""One repo-relative path per line; a missing or unreadable file is an empty list."""
 	if not path:
@@ -6099,6 +6706,39 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--role", required=True)
 	p.add_argument("--reason", required=True)
 	p.set_defaults(func=_cmd_engine_fallback_fingerprint)
+
+	p = sub.add_parser("classify-validation-owner", help="Print who owns a failed runtime validation run (harness, project, mixed or none)")
+	p.add_argument("--diagnosis-json", default="", help="validation diagnosis JSON (missing or unreadable: no diagnosis)")
+	p.add_argument("--consumer-root", required=True)
+	p.add_argument("--support-root", default="")
+	p.add_argument("--support-commit", default="HEAD")
+	p.add_argument("--raw-status", default="")
+	p.add_argument("--fixed-reason", default="")
+	p.add_argument("--fixed-stage", default="")
+	p.add_argument("--bounced-fingerprints-file", default="")
+	p.add_argument("--signature-file", default="")
+	p.add_argument("--source-repo", default="")
+	p.add_argument("--managed-paths-file", default="", help="managed paths, one per line (default: build_sync_manifest.py managed-paths)")
+	p.set_defaults(func=_cmd_classify_validation_owner)
+
+	p = sub.add_parser("build-validation-payload", help="Print the dispatch payload for a harness-owned runtime validation failure")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--issue-number", required=True)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--wrapper-sha", required=True)
+	p.add_argument("--stage", required=True)
+	p.add_argument("--reason", required=True)
+	p.add_argument("--signature-file", default="")
+	p.add_argument("--workflow-name", default="")
+	p.add_argument("--reporter-run-url", default="")
+	p.set_defaults(func=_cmd_build_validation_payload)
+
+	p = sub.add_parser("validation-failure-fingerprint", help="Print the dedup fingerprint of a harness-owned validation failure (stage, reason, signature)")
+	p.add_argument("--stage", required=True)
+	p.add_argument("--reason", required=True)
+	p.add_argument("--signature-file", default="")
+	p.add_argument("--source-repo", default="")
+	p.set_defaults(func=_cmd_validation_failure_fingerprint)
 
 	p = sub.add_parser("synced-security-fingerprint", help="Print the dedup fingerprint of a synced-file security finding (path, category, line bucket)")
 	p.add_argument("--file", required=True)
