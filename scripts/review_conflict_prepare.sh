@@ -590,6 +590,9 @@ if [ "${_ai_enabled}" = "true" ] && [ "${_resolver_allowlist_count}" -gt 0 ] \
       printf '%s\n\n' "### Validation config merge conflicts resolved with \`${BASE_BRANCH}\`'s version"
       printf '%s\n' "The merge with \`origin/${BASE_BRANCH}\` conflicted on \`.ai/\` validation config, which the sandboxed conflict resolver may never edit. Each path below took the \`${BASE_BRANCH}\` branch's version (log key \`CONFLICT_RESOLVER_AI_ASSET_TAKE_BASE\`). The integration branch's changes to them, shown below, were dropped; re-apply any that are still needed in a follow-up change."
       head -c 61440 "${_ai_dir}/sections.md"
+      if [ "$(wc -c < "${_ai_dir}/sections.md" | tr -d '[:space:]')" -gt 61440 ]; then
+        printf '\n\n%s\n' "(dropped diff omitted: comment size budget reached; the text above may end mid-diff)"
+      fi
     } > "${AI_ASSET_TAKE_BASE_COMMENT_FILE}"
     git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
     _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
@@ -1444,8 +1447,11 @@ if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; the
   # above) go to the resolver, which refuses a taken .ai/ path as host-only
   # and records the retry state that escalates the head.  Failing here
   # instead would leave no retry state, so neither escalation nor the
-  # poller's park could ever engage.
-  if [ "${_det_commit_scope:-}" = ".ai-asset-only" ] && [ "${_ff_defer_commit}" != "true" ] \
+  # poller's park could ever engage.  _ai_resolved also covers a take-base
+  # whose commit the manifest union-merge deferred first (both .ai/ files
+  # conflicted), which leaves _det_commit_scope unset.
+  if { [ "${_det_commit_scope:-}" = ".ai-asset-only" ] || [ "${_ai_resolved:-false}" = "true" ]; } \
+     && [ "${_ff_defer_commit}" != "true" ] \
      && [ -n "${FP_VIOLATED_FILES_LIST}" ] && [ "${_mu_remaining_unmerged}" -eq 0 ]; then
     echo "::warning::.ai asset take-base: the merged tree fails merged sub-issue fingerprints; handing the violating path(s) to the resolver instead of committing."
     _mu_defer_commit=false
