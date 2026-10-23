@@ -36,8 +36,8 @@ def _iso(value: datetime) -> str:
 	return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _ticket(comment_id: int, run_id: int, *, attempt: int = 1, job: str = "intake", login: str = LOGIN, age_seconds: int = 60, now: datetime | None = None) -> dict:
-	return {"id": comment_id, "user": {"login": login}, "created_at": _iso((now or NOW) - timedelta(seconds=age_seconds)),
+def _ticket(comment_id: int, run_id: int, *, attempt: int = 1, job: str = "intake", login: str = LOGIN, age_seconds: int = 60, base: datetime | None = None) -> dict:
+	return {"id": comment_id, "user": {"login": login}, "created_at": _iso((base or NOW) - timedelta(seconds=age_seconds)),
 		"body": heal.render_heal_queue_ticket(run_id, attempt, job)}
 
 
@@ -105,9 +105,12 @@ def test_lost_ticket() -> None:
 
 def test_position_cli(tmp_path: Path) -> None:
 	comments = tmp_path / "comments.json"
-	# The CLI measures ticket age against the real clock, so the fixture must too.
-	real_now = datetime.now(timezone.utc)
-	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5, now=real_now)], [_ticket(20, 200, age_seconds=1, now=real_now)]]), encoding="utf-8")
+	# The CLI measures ticket age with the real UTC clock and the default
+	# HEAL_QUEUE_DEFAULT_LEASE_SECONDS (10800 s), so tickets dated from the fixed
+	# NOW went stale about 3 hours after it and the `wait` assertion failed
+	# (#7998, CI run 39983078779). Date them from the same real clock.
+	cli_now = datetime.now(timezone.utc)
+	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5, base=cli_now)], [_ticket(20, 200, age_seconds=1, base=cli_now)]]), encoding="utf-8")
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
