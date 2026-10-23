@@ -2822,13 +2822,17 @@ validation_cycle_resolve()
   # explicit VALIDATION_CYCLE; the identity read above is memoized and shared
   # with the owner routing block.
   if ! items="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" --paginate \
-    --jq '.[] | select(((.body // "") | split("\n")[0] | sub("\r$"; "")) == "## 🧪 Runtime validation dispatched") | {login: (.user.login // ""), body: (.body // "")} | @json' 2>/dev/null)"; then
+    --jq '.[] | select(((.body // "") | split("\n")[0] | sub("\r$"; "")) == "## 🧪 Runtime validation dispatched") | {login: (.user.login // ""), updated_at: (.updated_at // ""), body: (.body // "")} | @json' 2>/dev/null)"; then
     echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=comments_unavailable"
     return 0
   fi
+  # post_tracking_comment edits a repeated dispatch comment in place (after a
+  # /revalidate reset the id stays, updated_at moves), so the newest edit wins;
+  # sort_by is stable, so equal timestamps keep the creation order.
   if ! status="$(printf '%s\n' "${items}" | jq -Rrn --arg login "${login}" '
       [inputs | select(length > 0) | (try fromjson catch null)
-        | select(type == "object" and (.login // "") == $login)] as $trusted
+        | select(type == "object" and (.login // "") == $login)]
+      | sort_by(.updated_at // "" | tostring) as $trusted
       | if ($trusted | length) == 0 then "none"
         else ($trusted[-1].body // "" | tostring | split("\n")
           | map(sub("[[:space:]]+$"; "")) | map(select(test("^- Cycle: [0-9]+$")))
@@ -2851,6 +2855,8 @@ validation_cycle_resolve()
     return 0
   fi
   VALIDATION_CYCLE="${cycle}"
+  # A self-heal re-exec inherits the derived cycle instead of reading again.
+  export VALIDATION_CYCLE
   echo "VALIDATION_CYCLE_SOURCE source=dispatch_comment cycle=${VALIDATION_CYCLE}"
   return 0
 }
@@ -4557,8 +4563,18 @@ PRIOR_FAILURE_CONTEXT_FILE="${RUNTIME_DIR}/prior_validation_failures.txt"
 
 if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
 	echo "Cycle ${VALIDATION_CYCLE}: fetching prior validation failure context from tracking issue #${TRACKING_ISSUE_NUM}."
-  PRIOR_COMMENTS="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" \
-    --paginate --jq '[.[] | select(.body | test("Runtime validation"))] | .[-3:] | .[].body' 2>/dev/null || true)"
+  # Project #7913 p4: one read feeds both the LLM context (last three
+  # "Runtime validation" comments) and the cross-cycle escalation, which needs
+  # the fingerprint markers of cycles N-1 and N-2. Each cycle posts at least
+  # two matching comments (dispatch + result), so the cycle N-2 marker is
+  # older than the last three; PRIOR_FINGERPRINT_MARKERS keeps every marker.
+  PRIOR_RUNTIME_COMMENTS_JSONL="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" \
+    --paginate --jq '.[] | select((.body // "") | test("Runtime validation")) | (.body // "") | @json' 2>/dev/null || true)"
+  PRIOR_COMMENTS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
+    | jq -Rrn '[inputs | select(length > 0) | (try fromjson catch null) | strings] | .[-3:] | .[]' 2>/dev/null || true)"
+  PRIOR_FINGERPRINT_MARKERS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
+    | jq -Rrn '[inputs | select(length > 0) | (try fromjson catch null) | strings] | .[]' 2>/dev/null \
+    | grep -oE '<!-- validation-failure-fingerprint: [0-9a-f]+ cycle: [0-9]+ -->' || true)"
   if [ -n "${PRIOR_COMMENTS}" ]; then
     {
       echo "IMPORTANT — PREVIOUS VALIDATION CYCLE FAILURES (cycle $((VALIDATION_CYCLE - 1))):"
@@ -5377,15 +5393,15 @@ fi
 if [ "${DIAG_STATUS}" = "needs_fixes" ] \
 	&& [ -n "${FAILURE_FINGERPRINT}" ] \
 	&& [ "${VALIDATION_CYCLE}" -ge 3 ] \
-	&& [ -n "${PRIOR_COMMENTS:-}" ]; then
+	&& [ -n "${PRIOR_COMMENTS:-}${PRIOR_FINGERPRINT_MARKERS:-}" ]; then
 	PREV_CYCLE_1="$((VALIDATION_CYCLE - 1))"
 	PREV_CYCLE_2="$((VALIDATION_CYCLE - 2))"
 	HIT_PREV_CYCLE_1=0
 	HIT_PREV_CYCLE_2=0
-	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" <<< "${PRIOR_COMMENTS:-}" 2>/dev/null; then
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" <<< "${PRIOR_COMMENTS:-}"$'\n'"${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
 		HIT_PREV_CYCLE_1=1
 	fi
-	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" <<< "${PRIOR_COMMENTS:-}" 2>/dev/null; then
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" <<< "${PRIOR_COMMENTS:-}"$'\n'"${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
 		HIT_PREV_CYCLE_2=1
 	fi
 	PRIOR_FINGERPRINT_HITS="$((HIT_PREV_CYCLE_1 + HIT_PREV_CYCLE_2))"

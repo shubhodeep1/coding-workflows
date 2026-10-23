@@ -156,7 +156,7 @@ def test_prior_fingerprint_scan_uses_existing_prior_comments_fetch() -> None:
 	text = _validate_process_text()
 	# The PRIOR_COMMENTS variable must be defined before the escalation block
 	# (which relies on it), and the escalation block must read from it.
-	prior_comments_def = text.find('PRIOR_COMMENTS="$(gh_retry gh api')
+	prior_comments_def = text.find('PRIOR_RUNTIME_COMMENTS_JSONL="$(gh_retry gh api')
 	escalation_read = text.find('<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle:')
 	assert prior_comments_def != -1, (
 		"expected PRIOR_COMMENTS fetch to exist (validate_process.sh:~1678)"
@@ -389,7 +389,7 @@ def test_cycle_derivation_runs_before_prior_comments_fetch() -> None:
 	text = _validate_process_text()
 	call = text.find("\nvalidation_cycle_resolve || true\n")
 	owner_end = text.find("# END validation owner routing\n")
-	prior = text.find('PRIOR_COMMENTS="$(gh_retry gh api')
+	prior = text.find('PRIOR_RUNTIME_COMMENTS_JSONL="$(gh_retry gh api')
 	assert call != -1 and owner_end != -1 and prior != -1
 	assert owner_end < call < prior
 	# tests/test_validate_process_template_mode.py extracts everything from
@@ -478,6 +478,98 @@ def test_escalation_fires_at_derived_cycle_three() -> None:
 	assert _result_cycle(proc) == "3"
 	assert "RESULT_STATUS=harness_error ESCALATED=true" in proc.stdout, proc.stdout
 	assert "Cross-cycle escalation" in proc.stdout
+
+
+
+def test_cycle_uses_most_recently_updated_dispatch_comment() -> None:
+	"""A /revalidate reset re-posts "Cycle: 1"; post_tracking_comment edits the
+	older identical comment in place (same id, newer updated_at)."""
+	_need_tools()
+	old_cycle_one = json.loads(_dispatch_item(PIPELINE_LOGIN, "- Cycle: 1"))
+	old_cycle_one["updated_at"] = "2026-10-20T12:00:00Z"
+	cycle_three = json.loads(_dispatch_item(PIPELINE_LOGIN, "- Cycle: 3"))
+	cycle_three["updated_at"] = "2026-10-19T12:00:00Z"
+	proc, _ = _run_cycle([json.dumps(old_cycle_one), json.dumps(cycle_three)])
+	assert _result_cycle(proc) == "1"
+	assert "source=dispatch_comment cycle=1" in proc.stdout
+
+
+def _prior_fetch_block() -> str:
+	return _extract(
+		r'^if \[ "\$\{VALIDATION_CYCLE\}" -gt 1 \] && is_tracking_run; then\n.*?^fi\n',
+		"prior-cycle comments fetch block",
+	)
+
+
+PAGE_STUBS = textwrap.dedent(
+	"""\
+	gh_retry() { "$@"; }
+	gh() {
+		local expr="" prev=""
+		for arg in "$@"; do
+			if [ "${prev}" = "--jq" ]; then expr="${arg}"; fi
+			prev="${arg}"
+		done
+		jq -r "${expr}" "${STUB_PAGE_FILE}"
+	}
+	is_tracking_run() { [ "${TRACKING_ISSUE_NUM}" -gt 0 ]; }
+	"""
+)
+
+
+def test_escalation_fires_through_production_prior_comments_fetch() -> None:
+	"""Cycle 3 sees five "Runtime validation" comments (dispatch + result per
+	cycle); the cycle-1 marker is older than the last three, yet escalation
+	must still fire through the real fetch."""
+	_need_tools()
+	fp = "0123456789abcdef"
+	page = [
+		{"user": {"login": PIPELINE_LOGIN}, "body": f"{DISPATCH_HEADER}\n\n- Cycle: 1"},
+		{"user": {"login": PIPELINE_LOGIN}, "body": f"## \U0001f9ea Runtime validation found fixable issues\n\nx\n<!-- validation-failure-fingerprint: {fp} cycle: 1 -->"},
+		{"user": {"login": PIPELINE_LOGIN}, "body": f"{DISPATCH_HEADER}\n\n- Cycle: 2"},
+		{"user": {"login": PIPELINE_LOGIN}, "body": f"## \U0001f9ea Runtime validation found fixable issues\n\ny\n<!-- validation-failure-fingerprint: {fp} cycle: 2 -->"},
+		{"user": {"login": PIPELINE_LOGIN}, "body": f"{DISPATCH_HEADER}\n\n- Cycle: 3"},
+	]
+	root = Path(tempfile.mkdtemp(prefix="prior-fetch-"))
+	try:
+		page_file = root / "page.json"
+		page_file.write_text(json.dumps(page), encoding="utf-8")
+		env = {
+			"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+			"HOME": str(root),
+			"GITHUB_REPOSITORY": "acme/widgets",
+			"TRACKING_ISSUE_NUM": "7",
+			"VALIDATION_CYCLE": "3",
+			"STUB_PAGE_FILE": str(page_file),
+			"PRIOR_FAILURE_CONTEXT_FILE": str(root / "ctx.txt"),
+			"PRIOR_RESULT_JSON_FILE": str(root / "prior.json"),
+			"PRIOR_CONTAINER_LOGS_FILE": str(root / "logs.txt"),
+		}
+		script = root / "run.sh"
+		script.write_text(
+			"set -euo pipefail\n" + PAGE_STUBS + _prior_fetch_block()
+			+ textwrap.dedent(
+				f"""\
+				DIAG_STATUS="needs_fixes"
+				FAILURE_FINGERPRINT="{fp}"
+				PRIOR_FINGERPRINT_HITS=0
+				ESCALATED_FROM_NEEDS_FIXES=false
+				"""
+			)
+			+ _escalation_block()
+			+ 'echo "RESULT_STATUS=${DIAG_STATUS} ESCALATED=${ESCALATED_FROM_NEEDS_FIXES}"\n'
+			+ 'printf "%s\\n" "${PRIOR_COMMENTS}" > "' + str(root / "prior_comments.txt") + '"\n',
+			encoding="utf-8",
+		)
+		proc = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=120)
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		assert "RESULT_STATUS=harness_error ESCALATED=true" in proc.stdout, proc.stdout
+		prior = (root / "prior_comments.txt").read_text(encoding="utf-8")
+		# The LLM context still carries only the last three matching comments.
+		assert "cycle: 1 -->" not in prior, prior
+		assert "cycle: 2 -->" in prior and "- Cycle: 3" in prior, prior
+	finally:
+		shutil.rmtree(root, ignore_errors=True)
 
 
 def main() -> int:
