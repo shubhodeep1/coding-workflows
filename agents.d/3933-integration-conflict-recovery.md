@@ -6,6 +6,6 @@
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `CONFLICT_RESOLVER_AI_ASSET_TAKE_BASE` (`scripts/review_conflict_prepare.sh`: `pr= path= outcome=taken base= stages=` or `outcome=skip reason=unsafe_path|stage_shape|base_not_regular`)
-- `INTEGRATION_CONFLICT_PARKED` (`scripts/orchestrate_poll_process.sh` `_integration_conflict_park_if_stuck`: `tracking_issue= pr= head= reason=non_retryable|gate_cap count= outcome=parked|unchanged`)
+- `INTEGRATION_CONFLICT_PARKED` (`scripts/orchestrate_poll_process.sh` `_integration_conflict_park_if_stuck`: `tracking_issue= pr= head= reason=non_retryable|gate_cap count= outcome=parked|unchanged|write_failed`; `write_failed` skips dispatch and notifications for the tick)
 LOG_PREFIX.name=CONFLICT_RESOLVER_AI_ASSET_TAKE_BASE
 LOG_PREFIX.name=INTEGRATION_CONFLICT_PARKED

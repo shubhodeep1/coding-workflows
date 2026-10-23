@@ -12685,10 +12685,17 @@ _integration_conflict_park_if_stuck() {
     echo "INTEGRATION_CONFLICT_PARKED tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} head=${head_sha} reason=${park_reason} count=${park_count} outcome=unchanged"
     return 0
   fi
-  jq --arg err "${park_err}" \
-    '.integration_sync_status = "escalated" |
-     .integration_sync_last_error = $err' \
-    "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  # Notify only after the parked state is on disk: a failed write would
+  # otherwise repost the comment and WARNING on every tick. Dispatch is
+  # still skipped this tick (return 0); the next tick retries the write.
+  if ! { jq --arg err "${park_err}" \
+      '.integration_sync_status = "escalated" |
+       .integration_sync_last_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+    rm -f -- "${STATE_FILE}.tmp" 2>/dev/null || true
+    echo "::warning::INTEGRATION_CONFLICT_PARKED tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} head=${head_sha} reason=${park_reason} count=${park_count} outcome=write_failed"
+    return 0
+  fi
   post_state_comment || true
   post_tracking_comment "## ⏸️ Integration conflict parked
 

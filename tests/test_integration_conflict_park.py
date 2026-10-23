@@ -234,3 +234,31 @@ INTEGRATION_PARK_REBUILD_NOTE={json.dumps(note)} _integration_conflict_park_if_s
 		result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
 		new_state = json.loads(state_file.read_text(encoding="utf-8"))
 	return result, new_state, ""
+
+
+def test_failed_state_write_skips_notifications() -> None:
+	# A failed jq/mv write must not post the tracking comment or WARNING,
+	# or the same park would be announced again on every tick.
+	text = _poller_text()
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		state_file = tmp / "missing" / "state.json"
+		calls = tmp / "calls.log"
+		retry_json = json.dumps(_host_only_state())
+		program = f"""set -euo pipefail
+STATE_FILE={state_file!s}
+TRACKING_NUM=3928
+INTEGRATION_CONFLICT_PARK_ENABLED=true
+INTEGRATION_CONFLICT_PARK_GATE_CAP=3
+post_state_comment() {{ echo state >> {calls!s}; }}
+post_tracking_comment() {{ echo tracking >> {calls!s}; }}
+tg_notify() {{ echo tg >> {calls!s}; }}
+{_function(text, "_integration_retry_state_failure_detail")}
+{_function(text, "_integration_conflict_park_if_stuck")}
+if _integration_conflict_park_if_stuck 3933 {HEAD} '{retry_json}'; then echo PARKED; else echo NOT_PARKED; fi
+"""
+		result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		assert "outcome=write_failed" in result.stdout
+		assert "PARKED" in result.stdout and "NOT_PARKED" not in result.stdout
+		assert not calls.exists()
