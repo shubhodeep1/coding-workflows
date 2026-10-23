@@ -21,7 +21,7 @@
 # caller keeps its rebase fallback:
 #   reason=not_issue_branch    <branch> is not ai/issue-<N>
 #   reason=invalid_repo        <owner/repo> is malformed
-#   reason=open_pr             an open PR uses the branch (count=<n>)
+#   reason=open_pr             an open PR uses the branch (count=1: one page of one PR is read)
 #   reason=api_unavailable     the lookup failed (rc=<n>)
 #   reason=malformed_response  the lookup did not return a count
 # GitHub API calls: exactly one per invocation for an ai/issue-<N> branch,
@@ -46,7 +46,8 @@ if ! [[ "${stale_branch_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 fi
 
 # Retry transient errors through gh_retry when implement.yml staged
-# gh_helpers.sh beside this copy; otherwise use one raw call.
+# gh_helpers.sh beside this copy; otherwise use one raw call. At most two
+# attempts, so rate-limit waits cannot stall the push step (failure = keep).
 STALE_BRANCH_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"
 # shellcheck disable=SC1090
 if ! { [ -f "${STALE_BRANCH_GH_HELPERS_FILE}" ] && source "${STALE_BRANCH_GH_HELPERS_FILE}" && declare -F gh_retry >/dev/null; }; then
@@ -58,7 +59,7 @@ fi
 
 stale_branch_owner="${stale_branch_repo%%/*}"
 stale_branch_rc=0
-stale_branch_count="$(gh_retry gh api "repos/${stale_branch_repo}/pulls?state=open&head=${stale_branch_owner}:${stale_branch_name}&per_page=1" --jq 'if type == "array" then length else -1 end')" || stale_branch_rc=$?
+stale_branch_count="$(GH_RETRY_MAX_ATTEMPTS=2 gh_retry gh api "repos/${stale_branch_repo}/pulls?state=open&head=${stale_branch_owner}:${stale_branch_name}&per_page=1" --jq 'if type == "array" then length else -1 end')" || stale_branch_rc=$?
 if [ "${stale_branch_rc}" -ne 0 ]; then
 	stale_branch_log keep api_unavailable "rc=${stale_branch_rc}"
 	exit 1

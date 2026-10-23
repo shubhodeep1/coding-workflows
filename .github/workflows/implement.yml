@@ -6293,9 +6293,10 @@ jobs:
           fi
 
           if [ ! -s "${CHANGED_FILES_FILE}" ]; then
-            # -m --first-parent: HEAD may be the two-parent supersede merge,
-            # whose default combined diff lists no files.
-            git show -m --first-parent --name-only --pretty='' HEAD > "${CHANGED_FILES_FILE}" || true
+            # HEAD may be the two-parent supersede merge, whose tree equals its
+            # first parent's (empty first-parent diff), so list the newest
+            # non-merge commit on the first-parent chain: this run's commit.
+            git show --name-only --pretty='' "$(git rev-list --first-parent --no-merges -n 1 HEAD)" > "${CHANGED_FILES_FILE}" || true
           fi
 
           CHANGED_FILES_JSON="$(jq -R -s -c 'split("\n") | map(select(length > 0))' "${CHANGED_FILES_FILE}")"

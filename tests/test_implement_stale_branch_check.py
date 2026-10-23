@@ -253,6 +253,13 @@ def _assert_push_replaces_leftover_branch(depth: int) -> None:
 		added = [line for line in pr_diff.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))]
 		assert added == ["+phase 2"], f"PR diff must show only this run's work: {added}"
 		assert _git(remote, "merge-tree", "--write-tree", "main", tip), "merging the base must stay clean"
+		# implement.yml's changed-files fallback must list this run's file even
+		# though HEAD is now the two-parent supersede merge.
+		workspace = scenario["workspace"]
+		fallback_commit = _git(workspace, "rev-list", "--first-parent", "--no-merges", "-n", "1", "HEAD")
+		assert fallback_commit == scenario["fresh"], output
+		assert _git(workspace, "show", "--name-only", "--pretty=", fallback_commit) == "app.txt"
+		assert "git rev-list --first-parent --no-merges -n 1 HEAD" in IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
 
 
 def test_push_falls_back_to_rebase_when_superseding_push_is_rejected() -> None:
