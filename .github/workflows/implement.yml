@@ -5732,8 +5732,8 @@ jobs:
                 if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
                   if [ -z "${stale_branch_decision}" ] && [[ "${TARGET_BRANCH}" =~ ^ai/issue-[0-9]+$ ]]; then
                     stale_branch_decision="keep"
-                    if [ ! -f "${stale_branch_helper}" ]; then
-                      echo "::warning::implement_stale_branch_check.sh is not staged; keeping the rebase fallback for ${TARGET_BRANCH}."
+                    if [ ! -f "${stale_branch_helper}" ] || [ -L "${stale_branch_helper}" ]; then
+                      echo "::warning::implement_stale_branch_check.sh is not staged as a regular file; keeping the rebase fallback for ${TARGET_BRANCH}."
                     elif bash "${stale_branch_helper}" "${GITHUB_REPOSITORY}" "${TARGET_BRANCH}"; then
                       stale_branch_decision="replace"
                     fi
@@ -5752,7 +5752,7 @@ jobs:
                     # --allow-unrelated-histories: the workspace is a depth-1
                     # checkout, so the leftover branch shares no merge base with
                     # HEAD's grafted root; -s ours never needs one.
-                    if git merge --quiet --no-edit -s ours --allow-unrelated-histories \
+                    if git merge --no-edit -s ours --allow-unrelated-histories \
                          -m "Supersede leftover ${TARGET_BRANCH} (no open PR); keep this run's tree" \
                          "${STALE_REMOTE_SHA}" \
                        && [ "$(git rev-parse "HEAD^{tree}")" = "${STALE_FRESH_TREE}" ] \
