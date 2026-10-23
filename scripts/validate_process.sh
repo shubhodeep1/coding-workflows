@@ -2284,7 +2284,7 @@ validation_owner_load_bounced()
   # the cycle is above 1. A bounce marker counts only from the pipeline login,
   # so this one memoized paginated read keeps {login, body} of the comments
   # that carry it. At most one call (plus pages) per run.
-  if ! comments="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" --paginate \
+  if ! comments="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" --paginate \
     --jq '.[] | select((.body // "") | contains("validation-harness-bounce:v1")) | {login: (.user.login // ""), body: (.body // "")} | @json' 2>/dev/null)"; then
     echo "::warning::VALIDATION_OWNER outcome=fail_open reason=comments_unavailable (bounce markers not read)." >&2
     return 0
@@ -2332,7 +2332,11 @@ validation_owner_signature()
       compact_validation_summary_value "${fallback}" | python3 -I -B "${helper}" redact-stream > "${tail_file}" 2>/dev/null || : > "${tail_file}"
       if [ -s "${tail_file}" ]; then
         signature="$(python3 -I -B "${helper}" error-signature --log-file "${tail_file}" 2>/dev/null | head -n 1 | cut -c1-200 || true)"
-        [ -n "${signature}" ] || signature="$(head -n 1 "${tail_file}" 2>/dev/null | cut -c1-200 || true)"
+        # error-signature prints "no-error-lines" when nothing matches; use the
+        # redacted first line then, so distinct summaries keep distinct prints.
+        if [ -z "${signature}" ] || [ "${signature}" = "no-error-lines" ]; then
+          signature="$(head -n 1 "${tail_file}" 2>/dev/null | cut -c1-200 || true)"
+        fi
       fi
     fi
   fi
@@ -2574,7 +2578,11 @@ validation_owner_split_mixed()
   local owner_json unsplit tmp ids_json expected kept
   owner_json="$(validation_owner_runtime_file validation_owner.json)"
   unsplit="$(validation_owner_runtime_file validation_diagnosis_unsplit.json)"
-  if [ "$(jq -r '.truncated // false' "${owner_json}" 2>/dev/null || echo true)" != "false" ]; then
+  # A fix issue whose files list is past the cap already counts as
+  # project-owned, so only a fix_issues list past the classifier's cap (50;
+  # the issues after it are unclassified) skips the split.
+  if [ "$(jq -r '.truncated // false' "${owner_json}" 2>/dev/null || echo true)" != "false" ] \
+    && [ "$(jq -r 'if (.fix_issues | type) == "array" then (.fix_issues | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 51)" -gt 50 ]; then
     echo "::warning::VALIDATION_OWNER outcome=split_skipped reason=truncated (all fix issues kept)." >&2
     return 0
   fi
@@ -5461,7 +5469,11 @@ case "${DIAG_STATUS}" in
       write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
       tg_notify "Validation cross-cycle escalation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: same fix-up proposal failed $((PRIOR_FINGERPRINT_HITS + 1)) times." "ERROR"
     else
-      HARNESS_FIXES="$(jq -r '(.harness_fixes // "") | if . == "" then "Validation harness needs correction." else . end' "${DIAGNOSE_RESULT_FILE}")"
+      if validation_owner_enabled; then
+        HARNESS_FIXES="$(jq -r '(.harness_fixes // "") | if . == "" then "Validation harness needs correction." else . end' "${DIAGNOSE_RESULT_FILE}")"
+      else
+        HARNESS_FIXES="$(jq -r '.harness_fixes // "Validation harness needs correction."' "${DIAGNOSE_RESULT_FILE}")"
+      fi
       failure_summary="Validation harness error: ${HARNESS_FIXES}"
 
       post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}${HARNESS_RUN_REFERENCE}$(validation_owner_comment_marker)"

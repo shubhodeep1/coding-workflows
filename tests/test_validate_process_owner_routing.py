@@ -244,7 +244,7 @@ def test_bounce_markers_trust_only_the_pipeline_login() -> None:
 		bounced = (sb.runtime / "validation_harness_bounced_fps.txt").read_text(encoding="utf-8").split()
 		assert bounced == [FP_A], (bounced, result.stderr)
 		gh_calls = sb.gh_log.read_text(encoding="utf-8")
-		assert "api user" in gh_calls and "repos/acme/widgets/issues/7/comments --paginate" in gh_calls
+		assert "api user" in gh_calls and "repos/acme/widgets/issues/7/comments?per_page=100 --paginate" in gh_calls
 
 		# Memoized: a second load (self-heal re-exec) makes no API call.
 		sb.gh_log.unlink()
@@ -436,6 +436,59 @@ def test_signature_uses_the_stage_log_and_is_capped() -> None:
 		assert "ERROR boom" in tail
 		calls = [a[0] for a in sb.argv()]
 		assert calls == ["redact-stream", "error-signature"], calls
+	finally:
+		sb.cleanup()
+
+
+def test_fallback_signature_ignores_the_no_error_lines_sentinel() -> None:
+	sb = _sandbox()
+	try:
+		sb.run('validation_owner_signature generate "Template mode requires the renderer"\n', STUB_SIGNATURE="no-error-lines")
+		signature = (sb.runtime / "validation_harness_signature.txt").read_text(encoding="utf-8").strip()
+		assert signature == "Template mode requires the renderer", signature
+	finally:
+		sb.cleanup()
+
+
+def test_mixed_split_runs_when_only_a_files_list_was_truncated() -> None:
+	_need_jq()
+	sb = _sandbox()
+	try:
+		issues = [{"id": "a", "files": ["src/x.py"] * 60}, {"id": "b", "files": ["validation/x.sh"]}]
+		sb.diagnosis.write_text(json.dumps({"status": "needs_fixes", "fix_issues": issues}), encoding="utf-8")
+		sb.classify_result(owner="mixed", reason="mixed_harness_part", stage="diagnose", fingerprint=FP_A, project_fix_ids=["a"], truncated=True)
+		result = sb.run("DIAG_STATUS=needs_fixes\nvalidation_owner_route_diagnosis\n")
+		kept = json.loads(sb.diagnosis.read_text(encoding="utf-8"))["fix_issues"]
+		assert [i["id"] for i in kept] == ["a"], (kept, result.stderr)
+		# A fix_issues list past the classifier's cap still skips the split.
+		many = [{"id": f"i{n}"} for n in range(51)]
+		sb.diagnosis.write_text(json.dumps({"status": "needs_fixes", "fix_issues": many}), encoding="utf-8")
+		result = sb.run("DIAG_STATUS=needs_fixes\nvalidation_owner_route_diagnosis\n")
+		assert len(json.loads(sb.diagnosis.read_text(encoding="utf-8"))["fix_issues"]) == 51
+		assert "reason=truncated" in result.stderr, result.stderr
+	finally:
+		sb.cleanup()
+
+
+def test_real_classifier_reads_the_files_fields() -> None:
+	_need_jq()
+	sb = _sandbox("real")
+	try:
+		(sb.consumer / "src").mkdir()
+		(sb.consumer / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+		issues = [{"id": "h", "title": "h", "files": ["validation/tests/10_x.sh"]}, {"id": "p", "title": "p", "files": ["src/app.py"]}]
+		sb.diagnosis.write_text(json.dumps({"status": "needs_fixes", "fix_issues": issues, "harness_files": ["validation/tests/10_x.sh"]}), encoding="utf-8")
+		# The fake support checkout is not a git repo; an empty managed-paths
+		# list stands in for `managed-paths --commit HEAD`.
+		managed = sb.root / "managed_paths.txt"
+		managed.write_text("", encoding="utf-8")
+		result = sb.run(
+			"DIAG_STATUS=needs_fixes\nvalidation_owner_route_diagnosis\necho \"DIAG=${DIAG_STATUS} OWNER=${VALIDATION_OWNER_OWNER}\"\n",
+			VALIDATION_OWNER_MANAGED_PATHS_FILE=str(managed),
+		)
+		assert "DIAG=needs_fixes OWNER=mixed" in result.stdout, result.stdout + result.stderr
+		kept = json.loads(sb.diagnosis.read_text(encoding="utf-8"))["fix_issues"]
+		assert [i["id"] for i in kept] == ["p"], kept
 	finally:
 		sb.cleanup()
 
