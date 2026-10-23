@@ -856,6 +856,9 @@ def _run_poller(
 	enable_clean_wave_judge_skip: str = "true",
 	judge_repeat_fingerprint_max: str = "2",
 	mock_gh_issue_list_label_filter: bool = False,
+	mock_pipeline_label_graphql: bool = False,
+	pipeline_label_graphql_has_next: list[str] | None = None,
+	fail_pipeline_label_graphql: bool = False,
 	fail_needs_human_issue_list: bool = False,
 	compare_ahead_by: int = 0,
 	compare_ahead_by_sequence: list[int] | None = None,
@@ -1415,6 +1418,10 @@ esac
 			"actions_runs_status": int(actions_runs_status),
 			"actions_runs_status_sequence": list(actions_runs_status_sequence),
 			"mock_gh_issue_list_label_filter": bool(mock_gh_issue_list_label_filter),
+			"mock_pipeline_label_graphql": bool(mock_pipeline_label_graphql),
+			"pipeline_label_graphql_has_next": list(pipeline_label_graphql_has_next or []),
+			"fail_pipeline_label_graphql": bool(fail_pipeline_label_graphql),
+			"pipeline_label_graphql_calls": 0,
 			"fail_needs_human_issue_list": bool(fail_needs_human_issue_list),
 			"compare_ahead_by": int(compare_ahead_by),
 			"compare_ahead_by_sequence": list(compare_ahead_by_sequence),
@@ -2049,6 +2056,9 @@ if args[0] == 'api':
 		)
 		if is_candidate_details_batch:
 			store['candidate_details_graphql_calls'] = int(store.get('candidate_details_graphql_calls', 0)) + 1
+			store.setdefault('candidate_details_requested', []).extend(
+				int(n) for _alias, n in re.findall(r'i(\d+)\s*:\s*issue\(number:\s*(\d+)\)', query)
+			)
 		# Classify the query so tests can count wave-label-batch attempts
 		# independently of unrelated GraphQL callers (standalone-stall
 		# marker search, candidate details batch). The wave label batch
@@ -2067,6 +2077,41 @@ if args[0] == 'api':
 		if mode == 'error':
 			print('graphql failed', file=sys.stderr)
 			sys.exit(1)
+		# Standalone stall recovery's pipeline-label batch
+		# (_fetch_standalone_pipeline_label_issues_graphql). Opt-in only:
+		# without the flag the query falls through to the generic answer,
+		# every alias is missing and the poller takes the REST fallback for
+		# all seven labels, exactly as before the batch existed.
+		pls_aliases = re.findall(
+			r'\bl(\d+)\s*:\s*issues\(states:\s*\[OPEN\],\s*labels:\s*\[("(?:[^"\\]|\\.)*")\]',
+			query,
+		)
+		if pls_aliases and store.get('mock_pipeline_label_graphql') is True:
+			store['pipeline_label_graphql_calls'] = int(store.get('pipeline_label_graphql_calls', 0)) + 1
+			save()
+			if store.get('fail_pipeline_label_graphql'):
+				print('pipeline label graphql failed', file=sys.stderr)
+				sys.exit(1)
+			has_next = set(store.get('pipeline_label_graphql_has_next', []) or [])
+			pls_repo = {}
+			for pls_alias, pls_label_json in pls_aliases:
+				pls_label = json.loads(pls_label_json)
+				pls_nodes = []
+				for inum, idata in store.get('issues', {}).items():
+					if idata.get('closed'):
+						continue
+					if pls_label not in (idata.get('labels', []) or []):
+						continue
+					try:
+						pls_nodes.append({'number': int(inum)})
+					except (TypeError, ValueError):
+						continue
+				pls_repo['l' + pls_alias] = {
+					'pageInfo': {'hasNextPage': pls_label in has_next},
+					'nodes': pls_nodes,
+				}
+			print(json.dumps({'data': {'repository': pls_repo}}))
+			sys.exit(0)
 		aliases = []
 		for alias, issue_num in re.findall(r'i(\d+)\s*:\s*issue\(number:\s*(\d+)\)', query):
 			aliases.append((int(alias), int(issue_num)))
@@ -27609,6 +27654,89 @@ def test_v2_extract_skip_status_skips_non_string_status():
 		skipped = subprocess.run(["python3", script, "extract", "--comments-json", str(comments_json), "--skip-status", "failed"], capture_output=True, text=True, timeout=30)
 	assert skipped.returncode == 0, skipped.stderr
 	assert json.loads(skipped.stdout)["status"] == "validating"
+
+
+_STANDALONE_PIPELINE_LABELS = (
+	"ai:clarification",
+	"ai:planning",
+	"ai:awaiting-approval",
+	"ai:implementing",
+	"ai:done",
+	"ai:ready-to-merge",
+	"ai:review-blocked",
+)
+
+
+def _run_standalone_label_batch_tick(**kwargs) -> dict:
+	# Standalone stall recovery only (no tracking project), with a mix of
+	# pipeline-labelled, closed and non-pipeline issues.
+	return _run_poller(
+		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={
+			10: ["ai:merged"],
+			501: ["ai:awaiting-approval"],
+			502: ["ai:done"],
+			503: ["ai:planning"],
+			504: ["ai:done"],
+			505: ["ai:merged"],
+		},
+		issue_closed={504: True},
+		mock_gh_issue_list_label_filter=True,
+		tracking_issues_override=[],
+		env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true"},
+		**kwargs,
+	)
+
+
+def _stall_listing_labels(result: dict) -> list[str]:
+	# Only standalone stall recovery lists labels with `--json number`; the
+	# close-merged and orphan sweeps ask for other fields.
+	return [c.get("label") for c in result.get("issue_list_calls", []) if c.get("json") == "number"]
+
+
+def test_standalone_pipeline_labels_listed_with_one_graphql_batch() -> None:
+	batched = _run_standalone_label_batch_tick(mock_pipeline_label_graphql=True)
+	log = batched["stdout"] + batched["stderr"]
+	assert batched["pipeline_label_graphql_calls"] == 1, log
+	assert _stall_listing_labels(batched) == [], log
+	requested = set(batched.get("candidate_details_requested", []))
+	assert {501, 502, 503} <= requested, log
+	assert not ({504, 505} & requested), log
+	assert "label GraphQL batch fell back to REST" not in log
+
+	legacy = _run_standalone_label_batch_tick(mock_pipeline_label_graphql=True, fail_pipeline_label_graphql=True)
+	assert set(legacy.get("candidate_details_requested", [])) == requested, legacy["stdout"] + legacy["stderr"]
+
+
+def test_standalone_pipeline_label_batch_overflow_lists_only_that_label() -> None:
+	result = _run_standalone_label_batch_tick(
+		mock_pipeline_label_graphql=True, pipeline_label_graphql_has_next=["ai:done"],
+	)
+	log = result["stdout"] + result["stderr"]
+	assert result["pipeline_label_graphql_calls"] == 1, log
+	assert _stall_listing_labels(result) == ["ai:done"], log
+	requested = set(result.get("candidate_details_requested", []))
+	assert {501, 502, 503} <= requested, log
+	assert not ({504, 505} & requested), log
+	assert "label GraphQL batch fell back to REST for: ai:done" in log
+
+
+def test_standalone_pipeline_label_batch_failure_falls_back_to_all_rest_calls() -> None:
+	result = _run_standalone_label_batch_tick(mock_pipeline_label_graphql=True, fail_pipeline_label_graphql=True)
+	log = result["stdout"] + result["stderr"]
+	assert result["pipeline_label_graphql_calls"] == 1, log
+	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
+	assert "::notice::Standalone stall recovery: label GraphQL batch fell back to REST for:" in log
+
+
+def test_standalone_pipeline_label_batch_unrecognised_answer_keeps_rest_path() -> None:
+	# Without the opt-in fake the GraphQL answer has no aliases, so every label
+	# takes the unchanged REST listing, as before the batch existed.
+	result = _run_standalone_label_batch_tick()
+	log = result["stdout"] + result["stderr"]
+	assert result["pipeline_label_graphql_calls"] == 0, log
+	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
+	assert {501, 502, 503} <= set(result.get("candidate_details_requested", [])), log
 
 
 if __name__ == "__main__":
