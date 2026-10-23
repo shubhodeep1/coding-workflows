@@ -3211,6 +3211,9 @@ jobs:
           # run_attempt would relabel this attempt's failure diagnostics as
           # a BLOCKED verdict the model never gave.
           rm -f "${RUNTIME_DIR}/codex_blocked.flag"
+          # And the latch marker "Telegram failure notification" reads: a stale
+          # one would page a WARNING for a latch this attempt never applied.
+          rm -f "${RUNTIME_DIR}/implement_blocked_latched.flag"
           CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"
           git status --porcelain -uall | filter_runtime_status_noise > "${CODEX_PRE_BASELINE}" 2>/dev/null || : > "${CODEX_PRE_BASELINE}"
           codex_pre_baseline_lines="$(wc -l < "${CODEX_PRE_BASELINE}" | tr -d ' ')"
@@ -6688,6 +6691,9 @@ jobs:
               echo "::error::Failed to apply the ai:blocked latch to issue ${ISSUE_NUMBER}; refusing to report terminalization."
               exit 1
             fi
+            # Read by "Telegram failure notification": the latch is set, so a
+            # person is needed now and the alert goes out at WARNING.
+            : > "${RUNTIME_DIR}/implement_blocked_latched.flag"
             BLOCKED_COMMENT="$(printf '%s\n\n%s\n\n%s\n%s\n\n%s' \
               "Implementation blocked: human input required." \
               "Reason: ${BLOCKED_REASON}" \
@@ -6747,7 +6753,19 @@ jobs:
           source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          if [ "${{ job.status }}" = "cancelled" ]; then
+          IMPLEMENT_FAILURE_TG_LEVEL="DEBUG"
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/implement_blocked_latched.flag" ] \
+            && [ -f "${RUNTIME_DIR}/codex_blocked.flag" ]; then
+            # A deliberate BLOCKED verdict parked the issue in ai:blocked:
+            # nothing retries it and a person must act, so page at WARNING.
+            # At DEBUG it was dropped under the default ALERT_MSG_LEVEL and
+            # nobody heard (tele-funtoken-msg-scoring#4770).
+            IMPLEMENT_FAILURE_TG_LEVEL="WARNING"
+            BLOCKED_REASON="$(head -n 1 "${RUNTIME_DIR}/codex_blocked.flag" | cut -c1-600)"
+            MSG="Implementation blocked on issue #${ISSUE_NUMBER}: human input required"
+            MSG+=$'\n'
+            MSG+="Reason: ${BLOCKED_REASON}"
+          elif [ "${{ job.status }}" = "cancelled" ]; then
             MSG="AI implementation workflow cancelled/timed out for issue #${ISSUE_NUMBER}"
           else
             MSG="AI implementation workflow failed for issue #${ISSUE_NUMBER}"
@@ -6757,9 +6775,9 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_phase_failure >/dev/null 2>&1; then
-            # DEBUG: the heal-report job and the unblock judge pick this up
-            # and page when a person is needed.
-            tg_send_phase_failure implement "${MSG}" "DEBUG" "${ISSUE_NUMBER}"
+            # DEBUG for other failures: the heal-report job and the unblock
+            # judge pick those up and page when a person is needed.
+            tg_send_phase_failure implement "${MSG}" "${IMPLEMENT_FAILURE_TG_LEVEL}" "${ISSUE_NUMBER}"
           else
             echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
           fi
