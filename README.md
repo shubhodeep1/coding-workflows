@@ -452,7 +452,7 @@ reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"). 
 automatically triages newly opened issues only when the original author is a GitHub `User` with
 `author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR`, or the exact `github-actions[bot]`
 identity with type `Bot`. Issues labelled `ai:orchestrator-tracking`, `ai:security-audit`,
-`ai:retro`, `ai:operator-step`, `ai:provider-outage`, `ai:consumer-health`, or `ai:scheduled-validation-failed` remain excluded. A trusted maintainer can start clarification
+`ai:retro`, `ai:operator-step`, `ai:provider-outage`, `ai:consumer-health`, `ai:scheduled-validation-failed`, or `ai:heal-intake-queue` remain excluded. A trusted maintainer can start clarification
 on an outside issue with
 `/reclarify` and continue planning with `/answer`, but must explicitly post `/approved` after
 reviewing the plan: an outside author's issue is never auto-approved. The `/reclarify` route accepts

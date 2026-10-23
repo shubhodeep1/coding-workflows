@@ -365,8 +365,8 @@ def test_workflow_uses_per_run_groups_and_queue_steps() -> None:
 def test_intake_does_not_count_queue_time_against_the_report() -> None:
 	intake = (SCRIPTS_DIR / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
 	assert 'QUEUE_WAITED_SECONDS="$(_positive_or_default "${HEAL_INTAKE_QUEUE_WAITED_SECONDS:-}" 0)"' in intake
-	assert "REPORT_MAX_AGE=$((REPORT_MAX_AGE + QUEUE_WAITED_SECONDS))" in intake
-	assert intake.index("REPORT_MAX_AGE=$((REPORT_MAX_AGE + QUEUE_WAITED_SECONDS))") < intake.index("--max-age \"${REPORT_MAX_AGE}\"")
+	assert "REPORT_MAX_AGE=$((10#${REPORT_MAX_AGE} + 10#${QUEUE_WAITED_SECONDS}))" in intake
+	assert intake.index("REPORT_MAX_AGE=$((10#${REPORT_MAX_AGE} + 10#${QUEUE_WAITED_SECONDS}))") < intake.index("--max-age \"${REPORT_MAX_AGE}\"")
 
 
 def test_queue_script_is_staged_from_the_trusted_checkout() -> None:

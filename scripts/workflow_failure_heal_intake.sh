@@ -248,7 +248,8 @@ REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
 QUEUE_WAITED_SECONDS="$(_positive_or_default "${HEAL_INTAKE_QUEUE_WAITED_SECONDS:-}" 0)"
-REPORT_MAX_AGE=$((REPORT_MAX_AGE + QUEUE_WAITED_SECONDS))
+# 10#: a digit string with a leading zero ("0900") must not be read as octal.
+REPORT_MAX_AGE=$((10#${REPORT_MAX_AGE} + 10#${QUEUE_WAITED_SECONDS}))
 REQUIRE_REPORT_AUTH="${WORKFLOW_HEAL_REQUIRE_REPORT_AUTH:-false}"
 case "${REQUIRE_REPORT_AUTH,,}" in
 	true|false) REQUIRE_REPORT_AUTH="${REQUIRE_REPORT_AUTH,,}" ;;
