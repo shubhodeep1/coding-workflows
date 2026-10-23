@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:2537-2576 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: A `validation_failure` classified `transient` is remapped to `inconclusive` by the deterministic remap (lines 2537-2546, gen > 1) before the validation bounce `case` (2554-2575/2576) runs, so it opens a heal issue instead of bouncing.\n  WHY: The issue's mapping requires `transient` -> `bounced`; the existing test uses gen=1 and does not cover this. Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT (confidence 2, existing generic policy, not a defect); openai_gpt-6-luna and qwen_qwen3_7-plus rated MAJOR; HIGHEST used.\n- scripts/workflow_failure_heal_intake.sh:1095-1102 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_validation_route_post` uses `grep -v` to strip every line containing `workflow-failure-heal:validation-route` from the comment body, not only the routing marker.\n  WHY: Model-written diagnosis text containing that string would also be removed. Severity was not stated by the reviewer; medium is a placeholder.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh:2537-2546 (remap), 2554-2575 (bounce case) | severity=NIT | confidence=2\n  PROBLEM: A `validation_failure` diagnosed `transient` is remapped to `inconclusive` when `is_deterministic_failure` is true (gen > 1). It then falls through to `opened` with `classification=inconclusive`.\n  WHY: The reviewer verified the behaviour but judged it the existing generic policy from PR #4443, matching the issue's `inconclusive -> opened` row, so not a defect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:2554-2575 | confidence=4\n  PROBLEM: A deterministic `validation_failure` classified `transient` might be reclassified as `inconclusive` before the validation routing case checks it, bypassing the bounce.\n  WHY: The bounce block does not trigger after the reclassification, so unnecessary heal issues may be created instead of bouncing to the consumer.\n- scripts/workflow_failure_heal_intake.sh:1095-1102 | confidence=4\n  PROBLEM: `_validation_route_post` uses `grep -v` to remove the routing marker from the comment body before appending a new one.\n  WHY: It removes all lines containing the marker string, including any in model-written diagnosis text, not just the last one.\n- Hardening: scripts/workflow_failure_heal_intake.sh line 1097, `grep -v` is too aggressive. Suggested fix: use `sed -i '/workflow-failure-heal:validation-route/d'` if removing all is intended, or a more precise match. Estimated lines changed: 3. HARDENING_RISK_SCORE: 3\n- TASK COMPLETENESS / INTENT GAPS: (No task gaps reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_intake.sh:2537-2546 vs 2554-2576 | confidence=4\n  PROBLEM: The validation bounce `case` includes `transient` but runs after the deterministic remap. The remap overwrites `CLASSIFICATION` to `inconclusive`, so the run falls through to `_open_issue`.\n  WHY: `is_deterministic_failure` (`scripts/workflow_failure_heal.py:5054-5069`) is true when gen > 1, and `budget_decision` sets gen = prior_gen + 1 (`scripts/workflow_failure_heal.py:4998-5004`). The validation fingerprint is repository-independent (`scripts/workflow_failure_heal.py:1581`), so a second consumer's report is normally gen 2 and opens an issue instead of bouncing. `test_intake_validation_failure_bounces_non_harness_verdicts` passes only because its fixture has gen 1. Suggested fix: move the bounce block above line 2537, or add `[ \"${SOURCE_KIND}\" != \"validation_failure\" ]` to the remap condition.\n- Hardening: scripts/workflow_failure_heal_intake.sh, `_validation_route_post` `ISSUE_NUMBER` guard (around line 1099). The guard returns 0 without setting `VALIDATION_ROUTE_POSTED`, so the EXIT trap re-enters and logs `warn validation_route_issue_invalid` twice. Cosmetic. Fix: set `VALIDATION_ROUTE_POSTED=true` with the `return 0`. Estimated lines changed: 1.\n- Hardening: scripts/workflow_failure_heal_intake.sh, `DUPLICATE_OCCURRENCE_STATE` assignments (around lines 1985-1988). The variable is written on every kind's duplicate path but only read in the `validation_failure` branch. No runtime failure; the fix is optional. Estimated lines changed: 1. HARDENING_RISK_SCORE: 1\n- TASK COMPLETENESS / INTENT GAPS: NONE\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh:2537-2545, 2554-2556; scripts/workflow_failure_heal.py:5054-5068 | severity=MAJOR | confidence=5\n  PROBLEM: A `validation_failure` classified `transient` is remapped to `inconclusive` when its generation is greater than 1, before the validation-specific bounce mapping runs.\n  WHY: `is-deterministic` returns true for gen > 1 and the remapped `inconclusive` does not match the bounce case, so a heal issue is opened in coding-workflows. This violates the required `transient -> bounced` outcome.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_intake.sh:2537-2546 and 2554-2576 | severity=MAJOR | confidence=4\n  PROBLEM: A model-classified `transient` `validation_failure` is remapped to `inconclusive` at lines 2537-2546 when `is-deterministic` returns true (gen > 1). The bounce block only matches `transient`, so the failure falls through and opens a heal issue.\n  WHY: The issue's outcome mapping requires `transient` -> `bounced`. `test_intake_validation_failure_bounces_non_harness_verdicts` does not cover this because it uses an empty `heal_issues` list (gen=1).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d47b97af962ec0890037981e05d3dac5a83f24e5e412e87ccea3a117643fdae5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7958,
+    "run_id": "39962482298",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39962482298",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023140407_1a80b44bbb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7958,
+    "run_id": "39962482298"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T14:04:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
