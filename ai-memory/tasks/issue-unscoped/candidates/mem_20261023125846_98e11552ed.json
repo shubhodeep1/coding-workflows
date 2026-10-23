@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:2323-2329 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: validation_owner_signature() keeps the literal `no-error-lines` sentinel from `error-signature` in the log-tail branch, so the `[ -z \"${signature}\" ]` guard is false and the fallback text is never used. The last run fixed the sentinel only in the fallback branch.\n  WHY: Every sandbox-stage failure, and any stage whose log has no error-shaped line, gets the same fingerprint. One bounce marker then suppresses harness reports for unrelated failures. Reviewers rated this MAJOR; the severity is mapped to high.\n- scripts/validate_process.sh:2212-2222 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: validation_owner_enabled() treats any value other than \"\"/true as OFF. The poller (scripts/orchestrate_poll_process.sh:2467-2473) treats invalid values as ON. gemini additionally says `1` is not recognised as truthy.\n  WHY: With a malformed or `1` value, validate skips owner routing while the poller still holds for a harness fix. Severity disagreement: gemini MAJOR, the other three NIT; the highest (MAJOR, mapped to high) is used.\n- scripts/validate_process.sh:2294-2296 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: validation_owner_load_bounced() creates an empty `validation_harness_bounced_fps.txt` before the login and comment reads. The early-return existence guard then memoizes an empty bounce set after a transient `gh api` failure.\n  WHY: The bounce guard stays silently inactive for the rest of the run, so an already-bounced fingerprint is reported again as a fresh harness failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/validate_process.sh:validation_owner_signature() log-tail branch | severity=MAJOR | confidence=5\n  PROBLEM: The `no-error-lines` sentinel is fixed only in the fallback branch. The log-tail branch keeps it, so the fallback text is never used.\n  WHY: Every sandbox-stage failure gets the same fingerprint (`sandbox:sandbox_unavailable:no-error-lines`). Bounce markers then match unrelated failures. The new test passes only because it runs with no log file.\n- scripts/validate_process.sh:validation_owner_enabled() | severity=NIT | confidence=3\n  PROBLEM: A value that is neither true nor false turns owner routing off, while the poller (scripts/orchestrate_poll_process.sh lines 2467-2473) treats it as ON.\n  WHY: Needs a misconfigured variable. The outcome is inconsistent between validate and the poller.\n- HARDENING: validation_owner_classify() discards the classifier's stderr (`2>/dev/null`). Suggested fix: redirect it to a runtime file and include its first line in the `fail_open` warning (about 3 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validate_process.sh:2212-2216 | severity=MAJOR | confidence=4\n  PROBLEM: validation_owner_enabled() does not interpret all truthy values of VALIDATION_HARNESS_HEAL_ENABLED. It checks only 'true' or empty.\n  WHY: Setting the variable to `1` silently disables owner routing, which is inconsistent with the shell truthiness checks used elsewhere.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validate_process.sh:2323-2328 (log-tail branch; the fallback-branch guard is at 2335-2339) | severity=MAJOR | confidence=5\n  PROBLEM: The `no-error-lines` guard covers only the fallback branch. The log-tail branch at line 2326 assigns `signature` without sanitizing the sentinel, so the `[ -z \"${signature}\" ]` guard at line 2329 is false.\n  WHY: `error_signature()` returns the literal \"no-error-lines\" (scripts/workflow_failure_heal.py:2861), and the sandbox status file matches none of `_SIGNATURE_PATTERNS` (workflow_failure_heal.py:529-534). All sandbox failures then share one fingerprint. One bounce marker rewrites later sandbox failures to `bounced_repeat` (lines 1740-1742) and suppresses their reports. `validation_owner_ruled_out_block` collapses the same way.\n- scripts/validate_process.sh:2294-2296 | severity=NIT | confidence=4\n  PROBLEM: validation_owner_load_bounced() creates the file empty before the reads. The failure paths `return 0` with it on disk, so the early-return existence guard memoizes an empty bounce set.\n  WHY: A transient `gh api` failure disables the bounce guard for the rest of the run. Creating the file only after the jq parse succeeds fixes this.\n- scripts/validate_process.sh:2213-2222 | severity=NIT | confidence=3\n  PROBLEM: validation_owner_enabled() resolves a non-boolean value to OFF. The poller (scripts/orchestrate_poll_process.sh:2461-2472) resolves it to ON.\n  WHY: With `maybe`, the poller holds for a fingerprint that validate never writes. Mirroring the poller's `*) -> true` shape would make both follow one contract.\n- HARDENING 1: validation_owner_classify() discards classifier stderr, which hides real failures. Suggested fix: add `2>>\"${out}.err\"` and append the first line to the warning (about 2 lines).\n- HARDENING 2: validation_owner_load_bounced() memoizes a failed read. Suggested fix: drop the pre-read truncation and write the file only in the final jq step (about 1 line).\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validate_process.sh:2323-2329 (validation_owner_signature) | severity=MAJOR | confidence=5\n  PROBLEM: The log-based signature path keeps the literal `no-error-lines` result. The fallback summary is used only when `signature` is empty.\n  WHY: For a nonempty log without recognized error lines, distinct failures with the same stage and reason get the same fingerprint. A bounce marker for one can suppress reporting another.\n- scripts/validate_process.sh:2212-2222 and scripts/orchestrate_poll_process.sh:2467-2472 | severity=NIT | confidence=4\n  PROBLEM: validate treats an invalid `VALIDATION_HARNESS_HEAL_ENABLED` as off, while the poller normalizes it to on.\n  WHY: validate omits owner markers and fields while the poller still applies the harness hold. The poller uses its local fallback fingerprint.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "650d3f81825854de08e5a293e5d01f360ec24da0c92dc99cb4707b7218c91296",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7959,
+    "run_id": "39953598224",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39953598224",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023125846_98e11552ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7959,
+    "run_id": "39953598224"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T12:58:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
