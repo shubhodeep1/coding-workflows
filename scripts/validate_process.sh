@@ -2190,7 +2190,8 @@ write_result_files()
 # (VALIDATE_HELPER_STAGE_DIR), never from the consumer checkout. A missing
 # helper or a failed call fails open to the behaviour before this block.
 # VALIDATION_HARNESS_HEAL_ENABLED (default true): unset, empty or true (any
-# letter case) is on, false is off, anything else is off with a warning. Off,
+# letter case) is on, false (any letter case) is off, and any other value
+# warns once and stays on, like the poller's validation harness hold. Off,
 # nothing below runs and the run behaves exactly as before.
 # raw_status values are unchanged; ownership is the separate failure_owner
 # field of the status and metadata files.
@@ -2218,10 +2219,15 @@ validation_owner_enabled()
   # Same contract as the poller's validation harness hold
   # (scripts/orchestrate_poll_process.sh): an invalid value warns and stays on,
   # so validate writes the owner markers the poller's hold waits for.
-  if [ "${VALIDATION_OWNER_SWITCH_WARNED}" != "1" ]; then
+  # The warned state is also kept in a RUNTIME_DIR sentinel, because a first
+  # call inside $(...) cannot set VALIDATION_OWNER_SWITCH_WARNED for the parent.
+  local warned_file
+  warned_file="$(validation_owner_runtime_file validation_owner_switch_warned)"
+  if [ "${VALIDATION_OWNER_SWITCH_WARNED}" != "1" ] && [ ! -e "${warned_file}" ]; then
     echo "::warning::VALIDATION_OWNER outcome=default reason=invalid_switch (VALIDATION_HARNESS_HEAL_ENABLED must be true or false; owner routing stays on)." >&2
-    VALIDATION_OWNER_SWITCH_WARNED="1"
+    : > "${warned_file}" 2>/dev/null || true
   fi
+  VALIDATION_OWNER_SWITCH_WARNED="1"
   return 0
 }
 
@@ -2298,13 +2304,18 @@ validation_owner_load_bounced()
     echo "::warning::VALIDATION_OWNER outcome=fail_open reason=comments_unavailable (bounce markers not read)." >&2
     return 0
   fi
-  printf '%s\n' "${comments}" | jq -r --arg login "${login}" '
+  if ! printf '%s\n' "${comments}" | jq -r --arg login "${login}" '
     select(type == "object" and .login == $login)
     | (.body // "") | split("\n")
     | map(sub("\\s+$"; "")) | map(select(length > 0))
     | (last // "")
     | (capture("^<!-- validation-harness-bounce:v1 fp=(?<fp>[0-9a-f]{64})( [^>]*)? -->$")? // empty)
-    | .fp' 2>/dev/null | sort -u > "${out}" 2>/dev/null || : > "${out}"
+    | .fp' 2>/dev/null | sort -u > "${out}" 2>/dev/null; then
+    # A failed parse is not memoized, so the next call reads the markers again.
+    : > "${out}" 2>/dev/null || true
+    echo "::warning::VALIDATION_OWNER outcome=fail_open reason=comments_unparsed (bounce markers not read)." >&2
+    return 0
+  fi
   : > "${loaded}" 2>/dev/null || true
 }
 

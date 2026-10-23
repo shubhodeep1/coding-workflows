@@ -411,6 +411,19 @@ def test_invalid_switch_warns_and_stays_on_like_the_poller() -> None:
 			sb.cleanup()
 
 
+def test_invalid_switch_warns_once_across_command_substitutions() -> None:
+	sb = _sandbox()
+	try:
+		result = sb.run(
+			'm="$(validation_owner_ruled_out_block)"\nvalidation_owner_enabled && echo ON\nm="$(validation_owner_comment_marker)"\n',
+			VALIDATION_HARNESS_HEAL_ENABLED="maybe",
+		)
+		assert "ON" in result.stdout, result.stdout + result.stderr
+		assert result.stderr.count("reason=invalid_switch") == 1, result.stderr
+	finally:
+		sb.cleanup()
+
+
 def test_failed_bounce_read_is_retried_not_memoized() -> None:
 	_need_jq()
 	sb = _sandbox()
