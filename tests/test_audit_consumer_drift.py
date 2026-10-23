@@ -845,14 +845,14 @@ def test_core_profile_skips_out_of_profile_wrappers() -> None:
 		result, output, executor = _run_profile_audit(
 			templates_dir,
 			[
-				_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": " Core "})),
+				_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "core"})),
 				_listing_call("octo/demo", ["ai-clarify.yml"]),
 				_content_call("octo/demo", "ai-clarify.yml", "name: AI Clarify\n"),
 			],
 		)
 		assert result.outcome == "drift"
 		assert _missing_files(result) == {"ai-plan.yml"}
-		assert "profile=core" in output.splitlines()[0]
+		assert "profile=core manifest=loaded" in output.splitlines()[0]
 		for name in ("ai-orchestrate.yml", "ai-security-audit.yml", "review_rb_judge_dispatch.yml"):
 			assert (
 				f"DRIFT_SCAN_SKIP repository=octo/demo file={name} reason=not_in_profile profile=core"
@@ -902,6 +902,10 @@ def test_unknown_profile_keeps_previous_behaviour() -> None:
 		_variables_call("octo/demo", stderr="gh: Forbidden (HTTP 403)", returncode=1),
 		_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "bogus"})),
 		_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "../../core"})),
+		# update_workflows.yml uses the raw value, so padded or mis-cased values
+		# break its sync; the audit must not resolve them to a profile.
+		_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": " Core "})),
+		_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "core\n"})),
 		_variables_call("octo/demo", stdout="not json"),
 		_variables_call("octo/demo", stdout=json.dumps(["core"])),
 	):
@@ -912,7 +916,7 @@ def test_unknown_profile_keeps_previous_behaviour() -> None:
 				[variable_call, _listing_call("octo/demo", [])],
 			)
 			assert _missing_files(result) == set(PROFILE_TEMPLATE_BODIES)
-			assert "profile=unknown" in output.splitlines()[0]
+			assert "profile=unknown manifest=disabled" in output.splitlines()[0]
 			assert "DRIFT_SCAN_SKIP" not in output
 
 
@@ -928,7 +932,7 @@ def test_transient_profile_failure_is_retried() -> None:
 			],
 		)
 		start_lines = [line for line in output.splitlines() if line.startswith("DRIFT_SCAN_START ")]
-		assert start_lines and start_lines[0].endswith("profile=core")
+		assert start_lines and start_lines[0].endswith("profile=core manifest=loaded")
 		assert "DRIFT_SCAN_RETRY" in output
 		assert _missing_files(result) == {"ai-clarify.yml", "ai-plan.yml"}
 
@@ -962,6 +966,7 @@ def test_missing_profile_manifest_disables_skipping() -> None:
 			],
 		)
 		assert _missing_files(result) == set(PROFILE_TEMPLATE_BODIES)
+		assert "profile=core manifest=missing" in output.splitlines()[0]
 		assert "DRIFT_SCAN_SKIP" not in output
 
 

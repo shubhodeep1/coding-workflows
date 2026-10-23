@@ -219,23 +219,9 @@ def _load_profile_manifest_names(templates_dir: Path) -> set[str]:
 	A missing or unreadable manifest yields an empty set (fail open), so the
 	audit keeps its glob-only behaviour.
 	"""
-	manifest_path = templates_dir / "profiles" / "full.txt"
-	try:
-		manifest_text = manifest_path.read_text(encoding="utf-8")
-	except (OSError, UnicodeDecodeError):
-		return set()
-
-	names: set[str] = set()
-	for raw_line in manifest_text.splitlines():
-		name = raw_line.strip()
-		if not name or name.startswith("#"):
-			continue
-		if "/" in name or "\\" in name or name in {".", ".."}:
-			continue
-		if not PROFILE_MANIFEST_NAME_RE.match(name):
-			continue
-		names.add(name)
-	return names
+	# Shares one parser with the per-profile loader so the filters cannot drift.
+	names = _load_named_profile_manifest_names(templates_dir, "full")
+	return names if names is not None else set()
 
 
 def _load_named_profile_manifest_names(templates_dir: Path, profile: str) -> set[str] | None:
@@ -571,10 +557,12 @@ class ConsumerDriftAuditor:
 			if proc.returncode == 0:
 				payload = json.loads(proc.stdout or "")
 				value = payload.get("value") if isinstance(payload, dict) else None
-				if isinstance(value, str):
-					normalized = value.strip().lower()
-					if normalized in WORKFLOW_PROFILE_NAMES:
-						profile = normalized
+				# Exact match only: update_workflows.yml uses the raw value as
+				# the manifest file name, so a padded or mis-cased value (" Core ")
+				# breaks the consumer's sync. Resolving it to "unknown" audits
+				# every template, so such a consumer reports more drift, never less.
+				if isinstance(value, str) and value in WORKFLOW_PROFILE_NAMES:
+					profile = value
 			elif _is_not_found_response(proc.stdout, proc.stderr):
 				profile = DEFAULT_WORKFLOW_PROFILE
 		except (CommandFailure, json.JSONDecodeError, ValueError):
@@ -606,13 +594,19 @@ class ConsumerDriftAuditor:
 
 	def audit_repository(self, repository: str) -> RepoAuditResult:
 		profile = self.fetch_workflow_profile(repository)
-		print(
-			f"DRIFT_SCAN_START repository={repository} templates={len(self.expected_templates)} "
-			f"profile={profile}"
-		)
 		profile_names: set[str] | None = None
 		if self.profile_manifests is not None and profile != UNKNOWN_WORKFLOW_PROFILE:
 			profile_names = self.profile_manifests.get(profile)
+		if profile_names is not None:
+			manifest_state = "loaded"
+		elif self.profile_manifests is None or profile == UNKNOWN_WORKFLOW_PROFILE:
+			manifest_state = "disabled"
+		else:
+			manifest_state = "missing"
+		print(
+			f"DRIFT_SCAN_START repository={repository} templates={len(self.expected_templates)} "
+			f"profile={profile} manifest={manifest_state}"
+		)
 		try:
 			available_files = self.fetch_workflow_directory_listing(repository)
 			drift_items: list[DriftItem] = []
