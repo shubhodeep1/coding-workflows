@@ -8607,6 +8607,241 @@ def test_plain_runner_can_call_every_test() -> None:
 				)
 
 
+_PUSH_FAKE_GIT = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GIT_ARGV_LOG"], "a", encoding="utf-8") as fh:
+	fh.write(json.dumps(args) + "\n")
+cmd = args[0] if args else ""
+if cmd == "push":
+	state_path = os.environ["FAKE_GIT_PUSH_STATE"]
+	with open(state_path, encoding="utf-8") as fh:
+		state = json.load(fh)
+	idx = min(state["count"], len(state["pushes"]) - 1)
+	entry = state["pushes"][idx]
+	state["count"] += 1
+	with open(state_path, "w", encoding="utf-8") as fh:
+		json.dump(state, fh)
+	sys.stderr.write(entry["out"])
+	sys.exit(entry["rc"])
+if cmd == "rev-parse":
+	print(os.environ["FAKE_GIT_HEAD"])
+	sys.exit(0)
+if cmd == "ls-remote":
+	tip = os.environ.get("FAKE_GIT_LS_REMOTE", "")
+	if "," in tip:
+		seq_path = os.environ["FAKE_GIT_LS_REMOTE_COUNT"]
+		try:
+			with open(seq_path, encoding="utf-8") as fh:
+				n = int(fh.read().strip() or "0")
+		except FileNotFoundError:
+			n = 0
+		with open(seq_path, "w", encoding="utf-8") as fh:
+			fh.write(str(n + 1))
+		seq = tip.split(",")
+		tip = seq[min(n, len(seq) - 1)]
+	if tip == "FAIL":
+		sys.stderr.write("fatal: unable to access remote\n")
+		sys.exit(128)
+	print(tip + "\trefs/heads/" + os.environ.get("TARGET_BRANCH", ""))
+	sys.exit(0)
+sys.exit(0)
+'''
+
+_PUSH_HEAD_SHA = "a" * 40
+
+
+def _run_push_pending_commits_step(
+	tmp_path: Path,
+	pushes: list[tuple[int, str]],
+	*,
+	ls_remote: str = "b" * 40,
+	enabled: str | None = None,
+) -> dict[str, object]:
+	script = _step_run_script("Push all pending commits")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	fake_git = bin_dir / "git"
+	fake_git.write_text(_PUSH_FAKE_GIT, encoding="utf-8")
+	fake_git.chmod(0o755)
+	sleep_log = tmp_path / "sleep.log"
+	fake_sleep = bin_dir / "sleep"
+	fake_sleep.write_text(f'#!/usr/bin/env bash\necho "$1" >> "{sleep_log}"\n', encoding="utf-8")
+	fake_sleep.chmod(0o755)
+	support_dir = tmp_path / "support"
+	support_dir.mkdir()
+	state = tmp_path / "push_state.json"
+	state.write_text(json.dumps({"count": 0, "pushes": [{"rc": rc, "out": out} for rc, out in pushes]}), encoding="utf-8")
+	argv_log = tmp_path / "git_argv.log"
+	argv_log.write_text("", encoding="utf-8")
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	script_path = tmp_path / "push_step.sh"
+	script_path.write_text(script, encoding="utf-8")
+	env = {
+		"PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+		"HOME": str(tmp_path),
+		"GITHUB_ENV": str(github_env),
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"TARGET_BRANCH": "ai/issue-1",
+		"PR_NUMBER": "7",
+		"GITHUB_REPOSITORY": "o/r",
+		"GH_TOKEN": "secret-token",
+		"LOCAL_HEAD_SHA": _PUSH_HEAD_SHA,
+		"FAKE_GIT_ARGV_LOG": str(argv_log),
+		"FAKE_GIT_PUSH_STATE": str(state),
+		"FAKE_GIT_HEAD": _PUSH_HEAD_SHA,
+		"FAKE_GIT_LS_REMOTE": ls_remote,
+		"FAKE_GIT_LS_REMOTE_COUNT": str(tmp_path / "ls_remote_count"),
+	}
+	if enabled is not None:
+		env["AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED"] = enabled
+	result = subprocess.run(["bash", str(script_path)], env=env, capture_output=True, text=True, timeout=60, check=False)
+	git_calls = [json.loads(line) for line in argv_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+	push_calls = [call for call in git_calls if call and call[0] == "push"]
+	for call in push_calls:
+		assert not any(arg.startswith("--force") for arg in call), call
+	assert not any(call and call[0] == "rebase" for call in git_calls)
+	assert "secret-token" not in result.stdout + result.stderr
+	return {
+		"returncode": result.returncode,
+		"output": result.stdout + result.stderr,
+		"stdout": result.stdout,
+		"pushes": len(push_calls),
+		"git_calls": git_calls,
+		"github_env": github_env.read_text(encoding="utf-8"),
+		"sleeps": sleep_log.read_text(encoding="utf-8").split() if sleep_log.exists() else [],
+	}
+
+
+def test_push_pending_commits_transient_retry_contract() -> None:
+	block = _step_block("Push all pending commits")
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED: ${{ vars.AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED || 'true' }}" in block
+	assert 'push_transient_enabled="${AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED:-true}"' in block
+	assert '"${push_transient_enabled,,}" != "false"' in block
+	assert "push_transient_max=2" in block
+	assert 'sleep "$((5 * push_transient_retry))"' in block
+	protected = "grep -qiE 'GH006|GH013|protected branch|push declined|repository rule'"
+	server = "grep -qiE 'Internal Server Error|The requested URL returned error: 5[0-9][0-9]|HTTP 5[0-9][0-9]'"
+	rejected_failed = "grep -qiE 'remote rejected.*\\(failed\\)'"
+	network = "grep -qiE 'RPC failed|unexpected disconnect|early EOF|Connection reset|Could not resolve host|Operation timed out'"
+	for needle in (protected, server, rejected_failed, network):
+		assert needle in block, needle
+	assert block.index(protected) < block.index(server) < block.index(rejected_failed) < block.index(network)
+	assert 'git ls-remote origin "refs/heads/${TARGET_BRANCH}" 2>/dev/null' in block
+	assert 'local_head="$(git rev-parse HEAD)"' in block
+	for outcome in ("retry", "landed", "gave_up"):
+		assert (
+			"AUTOFIX_PUSH_TRANSIENT_RETRY pr=${PR_NUMBER:-unknown} attempt=${push_transient_retry}/${push_transient_max} "
+			f"class=${{push_transient_class}} outcome={outcome}"
+		) in block
+	# Existing non-fast-forward merge path is unchanged.
+	assert "grep -qE '\\[rejected\\].*\\((fetch first|non-fast-forward)\\)'" in block
+	assert "max_push_attempts=3" in block
+	assert 'git merge --no-edit --no-ff "origin/${TARGET_BRANCH}"' in block
+	script = _step_run_script("Push all pending commits")
+	for line in script.splitlines():
+		if line.strip().startswith("#"):
+			continue
+		assert "--force" not in line, line
+		assert "git rebase" not in line, line
+
+
+def test_push_pending_commits_transient_retry_succeeds_after_server_error(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, "remote: Internal Server Error\nfatal: unable to access\n"), (0, "")],
+	)
+	assert result["returncode"] == 0, result["output"]
+	assert result["pushes"] == 2
+	assert "AUTOFIX_EDITS_PUSHED=true" in str(result["github_env"])
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=1/2 class=server_error outcome=retry" in str(result["stdout"])
+	assert result["sleeps"] == ["5"]
+
+
+def test_push_pending_commits_transient_retry_detects_landed_push(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(128, "error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502\n")],
+		ls_remote=_PUSH_HEAD_SHA,
+	)
+	assert result["returncode"] == 0, result["output"]
+	assert result["pushes"] == 1
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=1/2 class=server_error outcome=landed" in str(result["stdout"])
+	assert "Push complete." in str(result["stdout"])
+	assert "AUTOFIX_EDITS_PUSHED=true" in str(result["github_env"])
+
+
+def test_push_pending_commits_transient_retry_gives_up_after_two(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, " ! [remote rejected] HEAD -> ai/issue-1 (failed)\nerror: failed to push some refs\n")],
+		ls_remote="FAIL",
+	)
+	assert result["returncode"] != 0
+	assert result["pushes"] == 3
+	output = str(result["stdout"])
+	assert "class=remote_rejected_failed outcome=retry" in output
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=2/2 class=remote_rejected_failed outcome=gave_up" in output
+	assert result["sleeps"] == ["5", "10"]
+	assert "AUTOFIX_EDITS_PUSHED=true" not in str(result["github_env"])
+
+
+def test_push_pending_commits_transient_retry_final_landed_check(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, "remote: Internal Server Error\n")],
+		ls_remote=f"FAIL,{'b' * 40},{_PUSH_HEAD_SHA}",
+	)
+	assert result["returncode"] == 0, result["output"]
+	assert result["pushes"] == 3
+	output = str(result["stdout"])
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=2/2 class=server_error outcome=landed" in output
+	assert "outcome=gave_up" not in output
+	assert "AUTOFIX_EDITS_PUSHED=true" in str(result["github_env"])
+	assert result["sleeps"] == ["5", "10"]
+
+
+def test_push_pending_commits_protected_rejection_is_never_retried(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, " ! [remote rejected] HEAD -> ai/issue-1 (GH006: Protected branch update failed (failed)\n"), (0, "")],
+	)
+	assert result["returncode"] != 0
+	assert result["pushes"] == 1
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY" not in str(result["output"])
+	assert "for a reason other than [rejected]" in str(result["output"])
+
+
+def test_push_pending_commits_transient_retry_kill_switch(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, "remote: Internal Server Error\n"), (0, "")],
+		enabled="FALSE",
+	)
+	assert result["returncode"] == 1
+	assert result["pushes"] == 1
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY" not in str(result["output"])
+	assert "for a reason other than [rejected]" in str(result["output"])
+
+
+def test_push_pending_commits_transient_retry_hands_advanced_remote_to_merge_path(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[
+			(1, "fatal: the remote end hung up unexpectedly\nfatal: early EOF\n"),
+			(1, " ! [rejected]        HEAD -> ai/issue-1 (fetch first)\n"),
+			(0, ""),
+		],
+	)
+	assert result["returncode"] == 0, result["output"]
+	assert result["pushes"] == 3
+	assert "class=network outcome=retry" in str(result["stdout"])
+	git_calls = result["git_calls"]
+	assert any(call[:1] == ["merge"] for call in git_calls)  # type: ignore[union-attr]
+	assert "AUTOFIX_EDITS_PUSHED=true" in str(result["github_env"])
+
+
 def main() -> int:
 	"""Run every ``test_*`` function, as pytest would.
 
