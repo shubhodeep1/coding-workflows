@@ -35,7 +35,7 @@ import re
 import stat
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -85,14 +85,34 @@ SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "pha
 
 # A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
 # non-capacity reason and the role failed instead of running codex. The report
-# comes from scripts/ai_engine_fallback_report.sh; it carries no run reference
-# (no log is read) and is keyed on the role and reason only, so every repo and
-# run that hits the same refusal joins one heal issue.
+# comes from scripts/ai_engine_fallback_report.sh; it carries no run_refs (no
+# log is read) and is keyed on the role and reason only, so every repo and run
+# that hits the same refusal joins one heal issue. It may name the reporting
+# run in ``reporter_run`` ({run_id, run_attempt}); the intake verifies that run
+# with one REST read and uses it, with ENGINE_FALLBACK_SCOPE_PATHS, as the heal
+# scope. Without one the intake skips the report as scope_unavailable_no_runs.
 ENGINE_FALLBACK_FAILURE_REASON = "engine_fallback_refused"
 ENGINE_FALLBACK_CAPACITY_REASONS: tuple[str, ...] = ("all_gated", "all_usage_limit")
 _ENGINE_ROLE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
 _ENGINE_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
 ENGINE_FALLBACK_MAX_RECORDS = 20
+# The heal scope of an engine_fallback issue: the engine support code that
+# decides, runs or reports a Claude fallback. Fixed, so neither the report nor
+# the diagnosis can widen it; each path is kept only when it exists at the
+# scope commit (render_heal_scope_marker).
+ENGINE_FALLBACK_SCOPE_PATHS: tuple[str, ...] = (
+	"scripts/ai_engine.sh",
+	"scripts/claude_engine.py",
+	"scripts/codex_isolated_exec.sh",
+	"scripts/clarify_isolated_run.sh",
+	"scripts/review_untrusted_sandbox.sh",
+	"scripts/ai_engine_fallback_report.sh",
+	".github/actions/install-claude/action.yml",
+	".github/actions/claude-pool-token/action.yml",
+)
+_ENGINE_REPORTER_RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
+_ENGINE_REPORTER_RUN_ATTEMPT_RE = re.compile(r"^[1-9][0-9]{0,3}$")
+ENGINE_REPORTER_RUN_CLOCK_SKEW_SECONDS = 300
 
 # A consumer security audit finding on an unmodified file the @stable sync
 # manages (plan docs/plans/synced-file-security-findings-heal-intake-plan.md,
@@ -1207,12 +1227,15 @@ def build_engine_fallback_payload(
 	reporter_run_url: str | None,
 	records: Iterable[str],
 	now: datetime | None = None,
+	run_attempt: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a refused (non-capacity) AI engine fallback.
 
 	``run_refs`` stays empty: the evidence is the fixed-vocabulary fallback
 	records of the reporting job, never a log, so no untrusted text reaches
-	the heal prompt and no run provenance is needed.
+	the heal prompt. ``reporter_run`` names the reporting run and attempt
+	(``GITHUB_RUN_ID`` / ``GITHUB_RUN_ATTEMPT``, attempt 1 when unset); the
+	intake verifies it before using it as the heal scope's run.
 	"""
 	now = now or _utc_now()
 	if not _ENGINE_ROLE_RE.match(role or ""):
@@ -1257,8 +1280,72 @@ def build_engine_fallback_payload(
 		"failure_streak": 1,
 		"engine_role": role,
 		"engine_reason": reason,
+		"reporter_run": _engine_reporter_run({"run_id": str(run_number), "run_attempt": str(_positive_int(run_attempt) or 1)}) if run_number else None,
 		"reporter_run_url": sanitize_text(reporter_run_url, 300) or (f"https://github.com/{repo}/actions/runs/{run_number}" if run_number else None),
 		"reported_at": _iso(now),
+	}
+
+
+def _engine_reporter_run(value: Any) -> dict[str, str] | None:
+	"""A well-formed ``{run_id, run_attempt}`` engine reporter run, else None.
+
+	Malformed values are dropped, never fatal: the report then takes the
+	run-less path it took before the field existed.
+	"""
+	if not isinstance(value, dict):
+		return None
+	run_id = value.get("run_id")
+	run_attempt = value.get("run_attempt")
+	run_id = str(run_id) if isinstance(run_id, (int, str)) and not isinstance(run_id, bool) else ""
+	run_attempt = str(run_attempt) if isinstance(run_attempt, (int, str)) and not isinstance(run_attempt, bool) else ""
+	if not _ENGINE_REPORTER_RUN_ID_RE.match(run_id) or not _ENGINE_REPORTER_RUN_ATTEMPT_RE.match(run_attempt):
+		return None
+	return {"run_id": run_id, "run_attempt": run_attempt}
+
+
+def verify_engine_reporter_run(payload: dict[str, Any], run: Any, *, max_age: int, now: datetime | None = None) -> dict[str, Any]:
+	"""Bind an engine_fallback report's ``reporter_run`` to GitHub's run object.
+
+	``run`` is the ``GET repos/<source_repo>/actions/runs/<run_id>`` response
+	(``{}`` when the read failed). The run must be in ``source_repo``, be a run
+	of the reported workflow (``name`` == ``workflow_name``), have reached the
+	claimed attempt, and be current: still queued or running, or finished no
+	more than ``max_age`` seconds ago. Returns ``{"ok", "reason"}`` plus, when
+	ok, ``run_ref`` (``owner/repo:N``, the scope marker's run form) and
+	``scope_paths`` (ENGINE_FALLBACK_SCOPE_PATHS).
+	"""
+	now = now or _utc_now()
+	if not isinstance(payload, dict) or payload.get("source_kind") != "engine_fallback":
+		return {"ok": False, "reason": "not_engine_fallback"}
+	claimed = _engine_reporter_run(payload.get("reporter_run"))
+	if claimed is None:
+		return {"ok": False, "reason": "no_reporter_run"}
+	if not isinstance(run, dict) or not run:
+		return {"ok": False, "reason": "run_unavailable"}
+	if str(run.get("id")) != claimed["run_id"]:
+		return {"ok": False, "reason": "run_id_mismatch"}
+	repository = run.get("repository") if isinstance(run.get("repository"), dict) else {}
+	source_repo = str(payload.get("source_repo") or "")
+	if str(repository.get("full_name") or "").lower() != source_repo.lower() or not source_repo:
+		return {"ok": False, "reason": "run_not_in_source_repo"}
+	if not payload.get("workflow_name") or single_line(run.get("name"), 200) != payload.get("workflow_name"):
+		return {"ok": False, "reason": "workflow_name_mismatch"}
+	attempt = _positive_int(run.get("run_attempt"))
+	if attempt is None or attempt < int(claimed["run_attempt"]):
+		return {"ok": False, "reason": "run_attempt_mismatch"}
+	# A queued or running run is current (the reporter is its last step). Every
+	# other status (completed, waiting, pending, requested) must have been
+	# updated recently, so an old run cannot be replayed.
+	if run.get("status") not in ("queued", "in_progress"):
+		finished = _parse_iso(run.get("updated_at"))
+		if finished is None or (now - finished).total_seconds() > max_age or finished > now + timedelta(seconds=ENGINE_REPORTER_RUN_CLOCK_SKEW_SECONDS):
+			return {"ok": False, "reason": "run_stale"}
+	return {
+		"ok": True,
+		"reason": "verified",
+		"run_ref": f"{source_repo}:{claimed['run_id']}",
+		"run_attempt": claimed["run_attempt"],
+		"scope_paths": list(ENGINE_FALLBACK_SCOPE_PATHS),
 	}
 
 
@@ -1587,7 +1674,8 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
 	if kind == "engine_fallback":
-		normalized.update({"engine_role": payload["engine_role"], "engine_reason": payload["engine_reason"]})
+		normalized.update({"engine_role": payload["engine_role"], "engine_reason": payload["engine_reason"],
+			"reporter_run": _engine_reporter_run(payload.get("reporter_run"))})
 	if kind == "synced_security_finding":
 		# Only validated fields: no title, excerpt, label, branch or conclusion
 		# text from the report reaches the public issue (Q245).
@@ -4427,6 +4515,9 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 	if kind == "engine_fallback":
 		lines.append(f"- **Engine role:** `{payload.get('engine_role')}`")
 		lines.append(f"- **Refused fallback reason:** `{payload.get('engine_reason')}` (non-capacity; AI_ENGINE_FALLBACK_POLICY=capacity)")
+		reporter_run = _engine_reporter_run(payload.get("reporter_run"))
+		if reporter_run:
+			lines.append(f"- **Reporting run:** https://github.com/{payload['source_repo']}/actions/runs/{reporter_run['run_id']}/attempts/{reporter_run['run_attempt']}")
 	if payload.get("workflow_name"):
 		lines.append(f"- **Failed workflow:** `{neutralize_untrusted_routing(single_line(payload['workflow_name']))[0]}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
 	if payload.get("head_branch"):
@@ -5286,10 +5377,22 @@ def _cmd_build_engine_fallback_payload(args: argparse.Namespace) -> int:
 		wrapper_sha=args.wrapper_sha or None,
 		reporter_run_url=args.reporter_run_url or None,
 		records=[line for line in records if f"\t{args.role}\t{args.reason}\t" in line],
+		run_attempt=args.run_attempt or None,
 	)
 	validate_payload(payload)
 	_write_json(payload)
 	return 0
+
+
+def _cmd_verify_engine_reporter_run(args: argparse.Namespace) -> int:
+	payload = _load_json_file(args.payload_json)
+	try:
+		run = _load_json_file(args.run_json) if args.run_json else {}
+	except (OSError, ValueError):
+		run = {}
+	result = verify_engine_reporter_run(payload, run, max_age=max(1, int(args.max_age)))
+	_write_json(result)
+	return 0 if result["ok"] else 1
 
 
 def _cmd_engine_fallback_fingerprint(args: argparse.Namespace) -> int:
@@ -6093,7 +6196,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--wrapper-sha", default="")
 	p.add_argument("--reporter-run-url", default="")
 	p.add_argument("--records-file", default="")
+	p.add_argument("--run-attempt", default="", help="GITHUB_RUN_ATTEMPT of the reporting run (default 1)")
 	p.set_defaults(func=_cmd_build_engine_fallback_payload)
+
+	p = sub.add_parser("verify-engine-reporter-run", help="Bind an engine_fallback report's reporter_run to the fetched run object; exit 1 when it does not bind")
+	p.add_argument("--payload-json", required=True, help="the validated payload")
+	p.add_argument("--run-json", default="", help="GET repos/<source_repo>/actions/runs/<run_id> response")
+	p.add_argument("--max-age", default=str(DEFAULT_REPORT_MAX_AGE_SECONDS), help="max seconds since a finished run ended")
+	p.set_defaults(func=_cmd_verify_engine_reporter_run)
 
 	p = sub.add_parser("engine-fallback-fingerprint", help="Print the dedup fingerprint of a refused AI engine fallback (role, reason)")
 	p.add_argument("--role", required=True)
