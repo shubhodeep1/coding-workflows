@@ -15307,7 +15307,8 @@ def _run_harness_hold_poller(state: dict | None = None, *, comments: list | None
 		state=state,
 		enable_validation="true",
 		max_validate_cycles="3",
-		tracking_labels=["ai:validating"],
+		# The verdict label is what routes the poller into mark_validation_failed.
+		tracking_labels=["ai:validation-failed"],
 		tracking_comments=comments or [],
 		validation_workflow_runs=_harness_failed_run(),
 		capture_telegram_calls=True,
@@ -26521,7 +26522,17 @@ def test_needs_human_digest_terminal_paths_call_the_helper():
 	for reason, count in NEEDS_HUMAN_TERMINAL_CALLS.items():
 		assert script.count(f'needs_human_park_project "{reason}"') == count, reason
 	lines = script.splitlines()
+	# The validation harness hold (Refs #7913) waits for a harness fix instead
+	# of parking, so its helper is the one exemption from the adjacency rule.
+	hold_start = lines.index("_validation_harness_hold_finish() {")
+	hold_end = lines.index("}", hold_start)
+	assert any(
+		l.strip() == 'set_tracking_phase_label "ai:validation-failed"' for l in lines[hold_start:hold_end]
+	)
+	assert not any("needs_human_park_project" in l for l in lines[hold_start:hold_end])
 	for idx, line in enumerate(lines):
+		if hold_start <= idx < hold_end:
+			continue
 		if line.strip() in ('set_tracking_phase_label "ai:security-pass-failed"', 'set_tracking_phase_label "ai:validation-failed"'):
 			assert lines[idx + 1].strip().startswith("needs_human_park_project "), idx
 	assert 'NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"' in script

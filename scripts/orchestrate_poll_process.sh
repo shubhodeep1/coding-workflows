@@ -15115,7 +15115,7 @@ validation_harness_local_fp() {
 validation_harness_hold_active() {
   [ "${VALIDATION_HARNESS_HEAL_ENABLED:-true}" != "false" ] || return 1
   [ -f "${STATE_FILE:-/dev/null}" ] || return 1
-  jq -e '(.status == "failed") and ((.validation_harness_hold | type) == "object")' "${STATE_FILE}" >/dev/null 2>&1
+  jq -e '(.status == "failed") and ((.validation_harness_hold | type) == "object") and (.validation_last_raw_status == "harness_error")' "${STATE_FILE}" >/dev/null 2>&1
 }
 
 # Completion-status line for an active hold.
