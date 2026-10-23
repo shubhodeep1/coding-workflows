@@ -8989,3 +8989,14 @@ def test_phase_report_validate_skips_cleanly() -> None:
 				assert expected in result.stdout, (flags, result.stdout)
 				state = _state(state_file)
 				assert "dispatches" not in state and "calls" not in state, flags
+
+
+def test_intake_compose_payload_keys_match_validation_failure_keys() -> None:
+	# _compose_payload_file limits the compose payload to the keys the
+	# validation_failure validator accepts; keep its jq list in step.
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	body = text.split("_compose_payload_file()\n{", 1)[1].split("\n}\n", 1)[0]
+	match = re.search(r"jq '\{([^}]*)\}", body)
+	assert match, body
+	keys = {key.strip() for key in match.group(1).split(",")}
+	assert keys == set(heal.VALIDATION_FAILURE_PAYLOAD_KEYS)

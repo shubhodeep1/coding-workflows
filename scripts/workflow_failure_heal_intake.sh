@@ -1112,11 +1112,33 @@ _validation_route_post()
 	fi
 	[[ "${route_classification}" =~ ^[a-z-]{1,40}$ ]] || route_classification="none"
 	VALIDATION_ROUTE_POSTED=true
+	# The body may quote model-written diagnosis text; drop any line that
+	# looks like a routing marker so only the marker appended below remains.
+	local route_grep_rc=0
+	grep -v 'workflow-failure-heal:validation-route' "${route_body}" > "${route_body}.tmp" 2>/dev/null || route_grep_rc=$?
+	if [ "${route_grep_rc}" -le 1 ]; then mv "${route_body}.tmp" "${route_body}"; else rm -f "${route_body}.tmp"; fi
 	{ echo; echo "${route_marker}"; } >> "${route_body}"
 	if gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${route_body}" >/dev/null 2>&1; then
 		route_state="posted"
 	fi
 	log "received kind=validation_failure outcome=${route_outcome} fp=${VALIDATION_ROUTE_FP} issue=${route_issue} classification=${route_classification} comment=${route_state} source=${SOURCE_LABEL}"
+}
+
+# compose-issue and compose-occurrence re-validate their payload, and a
+# validation_failure report carries only VALIDATION_FAILURE_PAYLOAD_KEYS
+# (scripts/workflow_failure_heal.py), while PAYLOAD_FILE holds the normalized
+# report with the common fields added. Prints the file to compose from: a copy
+# of PAYLOAD_FILE limited to those keys for this kind, PAYLOAD_FILE otherwise.
+_compose_payload_file()
+{
+	if [ "${SOURCE_KIND:-}" != "validation_failure" ]; then
+		printf '%s' "${PAYLOAD_FILE}"
+		return 0
+	fi
+	local compose_file="${RUNTIME_DIR}/payload_compose.json"
+	jq '{schema_version, source_repo, source_kind, issue_number, run_refs, wrapper_sha, validation_stage, validation_reason, validation_signature, failure_reason, failure_streak, workflow_name, reporter_run_url, reported_at}
+		| with_entries(select(.value != null))' "${PAYLOAD_FILE}" > "${compose_file}" || return 1
+	printf '%s' "${compose_file}"
 }
 
 # EXIT trap: an exit that posted no routing comment yet posts `skipped`
@@ -1947,7 +1969,7 @@ case "${ACTION}" in
 		[ -n "${EXISTING_REPO}" ] || EXISTING_REPO="${SELF_REPO}"
 		DUPLICATE_MATCH="$(jq -r '.match // "fingerprint"' "${DECISION_FILE}")"
 		OCCURRENCE_FILE="${RUNTIME_DIR}/occurrence.md"
-		python3 "${HEAL_PY}" compose-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${OCCURRENCE_FILE}"
+		python3 "${HEAL_PY}" compose-occurrence --payload-json "$(_compose_payload_file)" --intake-run-url "${RUN_URL}" > "${OCCURRENCE_FILE}"
 		if gh_retry gh api "repos/${EXISTING_REPO}/issues/${EXISTING}/comments" -F body=@"${OCCURRENCE_FILE}" >/dev/null 2>&1; then
 			log "duplicate existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} source=${SOURCE_LABEL} match=${DUPLICATE_MATCH}"
 		else
@@ -2512,7 +2534,7 @@ fi
 # before the self-inflicted remap below, which would turn pr-/base-self-inflicted
 # into workflow-defect (an issue here); the consumer-app-defect route below
 # would open an issue in the consumer.
-if [ "${SOURCE_KIND}" = "validation_failure" ]; then
+if [ "${SOURCE_KIND:-}" = "validation_failure" ]; then
 	case "${CLASSIFICATION}" in
 		consumer-app-defect|consumer-config|transient|pr-self-inflicted|base-self-inflicted)
 			VALIDATION_ROUTE_OUTCOME="bounced"
@@ -2723,8 +2745,10 @@ _open_issue()
 		esac
 	fi
 	rm -f "${title_file}" "${body_file}"
+	local compose_payload_file
+	compose_payload_file="$(_compose_payload_file)" || compose_payload_file="${PAYLOAD_FILE}"
 	if ! python3 "${HEAL_PY}" compose-issue \
-		--payload-json "${PAYLOAD_FILE}" \
+		--payload-json "${compose_payload_file}" \
 		--diagnosis-file "${DIAG_FILE}" \
 		--run-summaries-json "${SUMMARIES_FILE}" \
 		--fingerprint "${FP}" \
