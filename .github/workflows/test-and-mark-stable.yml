@@ -1340,7 +1340,7 @@ jobs:
           # was skipped (plan auto-approved directly to ai:implementing).
           IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"
 
-          # The first-page metrics below are only progress signals. A terminal
+          # The progress-counter metrics below are only progress signals. A terminal
           # decision needs every page of this issue's runs (not other issues'
           # Implement runs). A full tenth page or an unreadable page is unknown.
           SCOPED_IMPL_ACTIVE_ID=""
@@ -1434,6 +1434,55 @@ jobs:
             exit 1
           }
 
+          # Progress counter (issue #7968). Counts only THIS issue's non-skipped
+          # Implement runs, with the selection and validation rules of
+          # scoped_implement_runs_complete, walking pages of the created=>
+          # window up to SCOPED_RUN_LOOKUP_MAX_PAGES and stopping at the first
+          # page with a match or a short page. Run 39926633796 read one
+          # unscoped 50-run page, never saw its Implement run, and timed out
+          # instead of reporting implement_failed. An unreadable or malformed
+          # page leaves the totals at 0 / unknown, as the old fallback did.
+          scoped_implement_progress_counts() {
+            local progress_page=1
+            local progress_json=""
+            local progress_summary=""
+            local progress_count=0
+            local progress_page_matches=0
+            local progress_matches="[]"
+            IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"
+            while [ "$progress_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
+              progress_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${progress_page}&created=>${IMPL_CREATED_AFTER}") || return 1
+              progress_summary=$(printf '%s' "$progress_json" | jq -sce --arg title "$ISSUE_TITLE" '
+                if length != 1 or (.[0].workflow_runs | type) != "array" or (.[0].workflow_runs | length) > 100 then error("invalid runs page") else .[0].workflow_runs end
+                | {count: length, matches: [.[] | select((.name | type) == "string" and (.name | test("Implement"; "i"))) | select(.display_title == $title) | select(.conclusion != "skipped")]}
+                | if all(.matches[]; (.id | type == "number" and . > 0 and floor == .) and
+                    (.status | type == "string" and IN("queued", "in_progress", "completed", "requested", "waiting", "pending")) and
+                    (if .status == "completed" then (.conclusion | IN("success", "failure", "cancelled", "timed_out", "action_required", "neutral", "stale", "startup_failure")) else .conclusion == null end))
+                  then . else error("invalid matching Implement run") end
+              ' 2>/dev/null) || return 1
+              progress_count=$(printf '%s' "$progress_summary" | jq -r '.count') || return 1
+              progress_page_matches=$(printf '%s' "$progress_summary" | jq -r '.matches | length') || return 1
+              if [ "$progress_page_matches" -gt 0 ]; then
+                progress_matches=$(printf '%s' "$progress_summary" | jq -c '.matches') || return 1
+                break
+              fi
+              if [ "$progress_count" -lt 100 ]; then
+                break
+              fi
+              progress_page=$((progress_page + 1))
+            done
+            IMPL_RUN_TOTAL=$(printf '%s' "$progress_matches" | jq -r 'length') || IMPL_RUN_TOTAL="0"
+            IMPL_RUN_IN_PROGRESS=$(printf '%s' "$progress_matches" | jq -r '[.[] | select(.status != "completed")] | length') || IMPL_RUN_IN_PROGRESS="0"
+            IMPL_RUN_STATUS=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .status // "unknown"') || IMPL_RUN_STATUS="unknown"
+            IMPL_RUN_ID_LATEST=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .id // empty') || IMPL_RUN_ID_LATEST=""
+            IMPL_RUN_CONCLUSION_LATEST=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .conclusion // "unknown"') || IMPL_RUN_CONCLUSION_LATEST="unknown"
+            return 0
+          }
+
+          IMPL_PREV_LABELS=""
+          # The counter can read up to SCOPED_RUN_LOOKUP_MAX_PAGES pages, so it
+          # re-reads at most every 30s and the last counts are reused in between.
+          IMPL_PROGRESS_NEXT_READ=0
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
@@ -1463,15 +1512,29 @@ jobs:
             LABELS=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' || echo "")
 
-            # Fetch all implement runs once and extract metrics from the response
-            IMPL_RUNS_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${IMPL_CREATED_AFTER}" || echo "")
-            if [ -n "$IMPL_RUNS_JSON" ]; then
-              IMPL_RUN_TOTAL=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | length' 2>/dev/null || echo "0")
-              IMPL_RUN_IN_PROGRESS=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped") | select(.status != "completed")] | length' 2>/dev/null || echo "0")
-              IMPL_RUN_STATUS=$(echo "$IMPL_RUNS_JSON" | jq -r '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
-              IMPL_RUN_ID_LATEST=$(echo "$IMPL_RUNS_JSON" | jq -r '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
-            else
-              IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""
+            # Name the run when the issue goes back to awaiting approval, so a
+            # skipped or failed implement run is visible in this log.
+            IMPL_RETURNED_TO_APPROVAL=false
+            if [[ ",${IMPL_PREV_LABELS}," == *",ai:implementing,"* ]] && [[ ",${LABELS}," == *",ai:awaiting-approval,"* ]] && [[ ",${LABELS}," != *",ai:implementing,"* ]]; then
+              IMPL_RETURNED_TO_APPROVAL=true
+            fi
+
+            # Count this issue's Implement runs across pages (issue #7968). The
+            # return to awaiting approval forces a fresh read, so its log line
+            # does not print counts cached up to 30s earlier.
+            if [ "$IMPL_RETURNED_TO_APPROVAL" = true ] || [ "$NOW" -ge "$IMPL_PROGRESS_NEXT_READ" ]; then
+              IMPL_PROGRESS_NEXT_READ=$((NOW + 30))
+              if ! scoped_implement_progress_counts; then
+                IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"
+              fi
+            fi
+
+            if [ "$IMPL_RETURNED_TO_APPROVAL" = true ]; then
+              echo "  ↩ Issue #${ISSUE_NUMBER} returned to ai:awaiting-approval — latest scoped Implement run: id=${IMPL_RUN_ID_LATEST:-unknown} status=${IMPL_RUN_STATUS} conclusion=${IMPL_RUN_CONCLUSION_LATEST}"
+            fi
+            # A failed label read returns "" and must not erase the last observation.
+            if [ -n "$LABELS" ]; then
+              IMPL_PREV_LABELS="$LABELS"
             fi
 
             # ── Adaptive signals: step name + commit count ──

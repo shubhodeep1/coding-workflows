@@ -36,8 +36,8 @@ def _iso(value: datetime) -> str:
 	return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _ticket(comment_id: int, run_id: int, *, attempt: int = 1, job: str = "intake", login: str = LOGIN, age_seconds: int = 60) -> dict:
-	return {"id": comment_id, "user": {"login": login}, "created_at": _iso(NOW - timedelta(seconds=age_seconds)),
+def _ticket(comment_id: int, run_id: int, *, attempt: int = 1, job: str = "intake", login: str = LOGIN, age_seconds: int = 60, now: datetime | None = None) -> dict:
+	return {"id": comment_id, "user": {"login": login}, "created_at": _iso((now or NOW) - timedelta(seconds=age_seconds)),
 		"body": heal.render_heal_queue_ticket(run_id, attempt, job)}
 
 
@@ -104,13 +104,11 @@ def test_lost_ticket() -> None:
 
 
 def test_position_cli(tmp_path: Path) -> None:
-	# The CLI reads the real clock (heal-queue has no --now), so these tickets
-	# are dated from it too; dating them from NOW expires them after the lease.
+	# The CLI measures ticket age against the wall clock, so these fixtures are
+	# stamped from the real current time (as _live_ticket does), not from NOW.
 	cli_now = datetime.now(timezone.utc)
-	holder_ticket = dict(_ticket(10, 101), created_at=_iso(cli_now - timedelta(seconds=5)))
-	own_ticket = dict(_ticket(20, 200), created_at=_iso(cli_now - timedelta(seconds=1)))
 	comments = tmp_path / "comments.json"
-	comments.write_text(json.dumps([[holder_ticket], [own_ticket]]), encoding="utf-8")
+	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5, now=cli_now)], [_ticket(20, 200, age_seconds=1, now=cli_now)]]), encoding="utf-8")
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
