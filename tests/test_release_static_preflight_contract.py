@@ -115,7 +115,8 @@ def test_run_body_has_no_expressions() -> None:
 def test_live_jobs_depend_on_resolve_version() -> None:
 	jobs = _jobs()
 	present = [name for name in LIVE_JOBS if name in jobs]
-	assert present, "no live jobs found"
+	# A renamed or removed live job must fail here, not drop out of the check.
+	assert set(present) == set(LIVE_JOBS), sorted(set(LIVE_JOBS) - set(present))
 	for name in present:
 		needs = jobs[name].get("needs")
 		if isinstance(needs, str):
