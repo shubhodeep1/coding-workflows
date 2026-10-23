@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/workflow-failure-heal-intake.yml:75,380 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The concurrency expressions compare HEAL_INTAKE_QUEUE_ENABLED to lowercase 'false' case-sensitively, but the queue script disables the queue case-insensitively. With the variable set to 'FALSE', both jobs use per-run concurrency groups while the queue script skips acquisition.\n  WHY: Multiple intake runs can proceed concurrently without queue serialization, allowing duplicate heal decisions. The source labels this severity MAJOR (mapped to high). Note: minimax_minimax-m3 states the GitHub `!=` comparison is case-insensitive, which contradicts this finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh:247-252 | hardening suggestion (HARDENING_RISK_SCORE: 1)\n  PROBLEM: REPORT_MAX_AGE is normalised only inside the single arithmetic expression. A later arithmetic use of it would hit the same octal problem.\n  WHY: Suggested minimal fix: normalise it once with `REPORT_MAX_AGE=$((10#${REPORT_MAX_AGE}))` right after line 247 (1 line changed).\n- No defects found in the last run's changes. The `10#` arithmetic fix at lines 247-252 is correct, and the README and test edits match it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/workflow-failure-heal-intake.yml:75,380 | severity=MAJOR | confidence=5\n  PROBLEM: The concurrency expressions are case-sensitive, but the queue script disables the queue case-insensitively. With the variable set to 'FALSE', both jobs use per-run concurrency groups while the queue script skips acquisition.\n  WHY: Multiple intake runs can proceed concurrently without queue serialization, allowing duplicate heal decisions and bypassing the intended shared-group rollback behavior. The README documents that 'false' in any letter case disables the queue.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2cdad3caff2113715102041478028b4de3d7387f1c27b5cdf6783ea199ca1551",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7924,
+    "run_id": "39907176577",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39907176577",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023070014_75555d40b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7924,
+    "run_id": "39907176577"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T07:00:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
