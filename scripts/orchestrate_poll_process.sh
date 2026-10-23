@@ -18396,7 +18396,8 @@ _fetch_standalone_marker_issues_graphql() {
 #           `errors[].path`; on total failure (non-zero exit, unparseable
 #           JSON, non-object repository, invalid input, an error without a
 #           path) 1 failed GraphQL call plus the legacy REST call for every
-#           label.
+#           label. An unusable label list returns 1 with no output and no
+#           API call; the caller then lists all its labels over REST.
 #   Fail-open: never shrinks coverage. Every anomaly adds the label to
 #           `fallback_labels`, and the caller keeps `|| echo '[]'` on each
 #           REST call. Owner and name are passed only as `-f` variables;
@@ -18411,7 +18412,13 @@ _fetch_standalone_pipeline_label_issues_graphql() {
 
   local valid
   valid="$(printf '%s' "${labels_json}" | jq -r 'if (type == "array") and (length > 0) and all(.[]; (type == "string") and test("^[A-Za-z0-9:._-]+$")) then "yes" else "no" end' 2>/dev/null || echo "no")"
-  if [ "${valid}" != "yes" ] || ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+  # Labels that cannot be named back cannot be listed over REST either, so
+  # an unusable label input returns 1 with no output; the caller then
+  # falls back to REST for its own full label list (never shrinks coverage).
+  if [ "${valid}" != "yes" ]; then
+    return 1
+  fi
+  if ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
     printf '%s\n' "${total_failure}"
     return 0
   fi

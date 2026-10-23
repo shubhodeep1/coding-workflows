@@ -26948,10 +26948,6 @@ def test_v2_extract_skip_status_skips_non_string_status():
 	assert json.loads(skipped.stdout)["status"] == "validating"
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 _STANDALONE_PIPELINE_LABELS = (
 	"ai:clarification",
 	"ai:planning",
@@ -27033,3 +27029,7 @@ def test_standalone_pipeline_label_batch_unrecognised_answer_keeps_rest_path() -
 	assert result["pipeline_label_graphql_calls"] == 0, log
 	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
 	assert {501, 502, 503} <= set(result.get("candidate_details_requested", [])), log
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
