@@ -462,6 +462,85 @@ def test_resolve_script_wires_tier_selection_and_verifier_args() -> None:
 	assert "FINGERPRINT_TIER_DOWNGRADED_V1" in body
 
 
+def test_non_retryable_isolation_failure_escalates_on_first_failure(tmp_path: Path) -> None:
+	ns = _retry_state_namespace()
+	with _pushd(tmp_path):
+		artifact = ns["build_resolver_retry_state_artifact"](
+			pr_payload=_pr_payload(head_sha="head-host-only"),
+			pr_issue_comments=[],
+			fingerprints={},
+			baseline_state={},
+			threshold=5,
+			repository="owner/repo",
+			pr_number="3933",
+			run_url="https://github.com/owner/repo/actions/runs/39882356505",
+			verifier_module=None,
+			isolation_failure_reason="sandbox_path_host_only",
+			run_id="39882356505",
+			conflict_paths=[".ai/validate.yml", "../escape", "bad path"],
+		)
+	assert artifact["ok"] is True
+	assert artifact["consecutive_failure_count"] == 1
+	assert artifact["escalated"] is True
+	state = artifact["retry_state"]
+	assert state["escalated_at"]
+	assert state["non_retryable"] is True
+	assert state["last_failure_reason"] == "sandbox_path_host_only"
+	assert state["last_run_id"] == "39882356505"
+	assert state["last_conflict_paths"] == [".ai/validate.yml"]
+	assert "Escalated on the first failure: `sandbox_path_host_only`" in artifact["summary_comment_body"]
+	assert "`.ai/validate.yml`" in artifact["summary_comment_body"]
+
+
+def test_non_retryable_escalation_kill_switch_keeps_threshold(tmp_path: Path) -> None:
+	ns = _retry_state_namespace()
+	with _pushd(tmp_path):
+		artifact = ns["build_resolver_retry_state_artifact"](
+			pr_payload=_pr_payload(head_sha="head-host-only"),
+			pr_issue_comments=[],
+			fingerprints={},
+			baseline_state={},
+			threshold=5,
+			repository="owner/repo",
+			pr_number="3933",
+			run_url="",
+			verifier_module=None,
+			isolation_failure_reason="sandbox_path_host_only",
+			escalate_non_retryable=False,
+		)
+	assert artifact["escalated"] is False
+	assert artifact["retry_state"]["non_retryable"] is True
+	assert "last_run_id" not in artifact["retry_state"]
+
+
+def test_retryable_failures_record_reason_without_escalating(tmp_path: Path) -> None:
+	_seed_repo_files(tmp_path)
+	artifact = _build_artifact(tmp_path=tmp_path, pr_payload=_pr_payload(head_sha="head-fp"))
+	assert artifact["escalated"] is False
+	assert artifact["retry_state"]["last_failure_reason"] == "fingerprint_violations"
+	assert artifact["retry_state"]["non_retryable"] is False
+	other = _build_artifact(
+		tmp_path=tmp_path,
+		pr_payload=_pr_payload(head_sha="head-iso"),
+		fingerprints={},
+		baseline_state={},
+		isolation_failure_reason="provider_unavailable",
+	)
+	assert other["escalated"] is False
+
+
+def test_retry_state_persists_over_rest_not_graphql() -> None:
+	body = _resolve_script_text()
+	persist = body[body.index("_persist_resolver_retry_state_from_current_failure()"):]
+	persist = persist[: persist.index("\n}\n")]
+	assert "gh_retry gh pr edit" not in persist
+	assert "gh_retry gh issue edit" not in persist
+	assert 'gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --input "${_body_payload}"' in persist
+	assert 'gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:resolver-escalated"' in persist
+	assert persist.index("Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1") < persist.index("_sync_local_pr_body_from_file")
+	assert 'RESOLVER_CONFLICT_PATH_REPORT_FILE="${conflict_path_report}"' in body
+
+
 def main() -> int:
 	selected_names = list(sys.argv[1:])
 	tests_by_name = {
