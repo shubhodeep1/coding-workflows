@@ -91,6 +91,17 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
+### `scripts/workflow_failure_heal_queue.sh` + the "Wait for the heal intake queue" / "Leave the heal intake queue" steps of `.github/workflows/workflow-failure-heal-intake.yml`
+
+- **Introduced in:** the PR "Queue heal intake reports instead of cancelling them" (2026-10-23)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually (or together with the heal intake in the entry above)
+- **Removal preflight checks:**
+  - `rg -n 'workflow_failure_heal_queue\.sh' .github/workflows` returns nothing, and both jobs of `workflow-failure-heal-intake.yml` use the shared `workflow-failure-heal-intake` concurrency group again (the `HEAL_INTAKE_QUEUE_ENABLED=false` behaviour).
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:heal-intake-queue"` returns at most the queue issue, and its comments hold no ticket younger than `HEAL_INTAKE_QUEUE_LEASE_SECONDS` (10800 s), so no run is waiting; then close that issue.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py` passes after `tests/test_workflow_failure_heal_queue.py` and the `heal-queue` subcommand are removed.
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_failure_heal_non_retryable_backfill.sh` + the "Backfill non-retryable autofix failure reports" step of `.github/workflows/review_autofix_sweep.yml` + the `non-retryable-backfill` job of `workflow-templates/ai-review.yml`
 
 - **Introduced in:** the PR for #7291 (2026-10-14)
