@@ -643,8 +643,8 @@ jobs:
       - name: Validate prerequisites
         run: |
           set -euo pipefail
-          # Phase 4b caps its queue-time deadline extension against the
-          # job's start, so the serial budget below still holds.
+          # Phase 4 (#8004) and Phase 4b cap their deadline extensions
+          # against the job's start, so the serial budget below still holds.
           echo "E2E_JOB_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           if [ -z "${GH_TOKEN}" ]; then
             echo "::error::GH_PAT secret is required for E2E tests (GITHUB_TOKEN cannot trigger downstream workflows)"
@@ -1991,6 +1991,63 @@ jobs:
           REVIEW_PHASE_STARTED_AT=$(date +%s)
           REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))
           echo "Review total wall-clock budget: ${REVIEW_PHASE_WALL_BUDGET_MINUTES} minutes"
+          # BEGIN phase4 review deadline extension (#8004)
+          # The bait-covering review can queue behind the PR-open review in
+          # the pr-autofix-<PR> group (cancel-in-progress: false), so one
+          # Phase 4 may span two review runs. Run 39969947939 hit the fixed
+          # base deadline 6 minutes after the editor pushed its fix, with
+          # ~80 minutes of job budget unused. Past the base deadline the
+          # loop keeps waiting only while the watched run is queued, or
+          # in_progress and active (the same rule as the per-step stall
+          # guard), never past a ceiling that keeps Phase 4b, Phase 6,
+          # Phase 7 and finalization their budgets inside the job timeout
+          # (same job-start cap as Phase 4b's RETRY_DEADLINE_CEILING).
+          # The base deadline is never shortened; with no recorded job
+          # start the ceiling equals the base, so nothing is extended.
+          REVIEW_PHASE_BASE_DEADLINE="$REVIEW_PHASE_DEADLINE"
+          REVIEW_PHASE_DEADLINE_CEILING="$REVIEW_PHASE_DEADLINE"
+          if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
+              && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[1-9][0-9]*$ ]] \
+              && [[ "${EDITOR_RETRY_BUDGET_MINUTES:-}" =~ ^[1-9][0-9]*$ ]] \
+              && [[ "${PHASE_TIMEOUT:-}" =~ ^[1-9][0-9]*$ ]] \
+              && [[ "${PHASE7_WAIT_BUDGET_MINUTES:-}" =~ ^[1-9][0-9]*$ ]] \
+              && [[ "${E2E_FINALIZATION_RESERVE_MINUTES:-}" =~ ^[1-9][0-9]*$ ]]; then
+            REVIEW_PHASE_DEADLINE_CEILING=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - EDITOR_RETRY_BUDGET_MINUTES - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60 ))
+            if [ "$REVIEW_PHASE_DEADLINE_CEILING" -lt "$REVIEW_PHASE_BASE_DEADLINE" ]; then
+              REVIEW_PHASE_DEADLINE_CEILING="$REVIEW_PHASE_BASE_DEADLINE"
+            fi
+          fi
+          REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
+          # Reads the previous poll's RUN_ID / RUN_STATUS /
+          # CURRENT_STEP_STARTED_AT / BAIT_UNCOVERED_RUN_IDS and the current
+          # NOW / IDLE. Returns 0 only when waiting past the base deadline
+          # is allowed.
+          review_phase_deadline_extension_allowed() {
+            local now="${NOW:-}" step_epoch step_elapsed
+            [[ "$now" =~ ^[0-9]+$ ]] || return 1
+            [ "$now" -lt "$REVIEW_PHASE_DEADLINE_CEILING" ] || return 1
+            [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] || return 1
+            case ",${BAIT_UNCOVERED_RUN_IDS:-}," in
+              *",${RUN_ID},"*) return 1 ;;
+            esac
+            case "${RUN_STATUS:-}" in
+              queued|pending|waiting|requested) return 0 ;;
+              in_progress) ;;
+              *) return 1 ;;
+            esac
+            if [[ "${IDLE:-}" =~ ^[0-9]+$ ]] && [ "$IDLE" -lt "$INACTIVITY_LIMIT" ]; then
+              return 0
+            fi
+            [ -n "${CURRENT_STEP_STARTED_AT:-}" ] || return 1
+            step_epoch=$(date -d "${CURRENT_STEP_STARTED_AT}" +%s 2>/dev/null || echo 0)
+            [[ "$step_epoch" =~ ^[0-9]+$ ]] || return 1
+            [ "$step_epoch" -gt 0 ] || return 1
+            step_elapsed=$((now - step_epoch))
+            [ "$step_elapsed" -ge 0 ] || return 1
+            [ "$step_elapsed" -lt "$STEP_INACTIVITY_LIMIT" ] || return 1
+            return 0
+          }
+          # END phase4 review deadline extension (#8004)
           LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
           PREV_STATE=""
           LAST_STEP_GUARD_RUN_ID=""
@@ -2160,9 +2217,21 @@ jobs:
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
             if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then
-              echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
-              echo "status=timeout" >> "$GITHUB_OUTPUT"
-              exit 1
+              if review_phase_deadline_extension_allowed; then
+                if [ "$REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED" = "0" ]; then
+                  echo "E2E_REVIEW_DEADLINE_EXTENDED run=${RUN_ID} status=${RUN_STATUS} base=${REVIEW_PHASE_BASE_DEADLINE} ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+                  REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1
+                fi
+              else
+                echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
+                if [ "$REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED" = "1" ]; then
+                  EXT_RUN_ID="${RUN_ID:-unknown}"
+                  EXT_RUN_STATUS="${RUN_STATUS:-unknown}"
+                  echo "::error::Deadline extension ended for review run ${EXT_RUN_ID//[^0-9a-z]/} (status ${EXT_RUN_STATUS//[^a-z_]/}); ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+                fi
+                echo "status=timeout" >> "$GITHUB_OUTPUT"
+                exit 1
+              fi
             fi
 
             # Find the review workflow run for this PR's head branch

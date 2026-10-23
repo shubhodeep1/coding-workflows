@@ -649,6 +649,133 @@ def test_phase4_checkout_marker_and_every_early_exit_are_covered() -> None:
 	assert phase4.count('review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"') == 4
 
 
+_PHASE4_EXT_BEGIN = "# BEGIN phase4 review deadline extension (#8004)"
+_PHASE4_EXT_END = "# END phase4 review deadline extension (#8004)"
+_PHASE4_BASE = 100_000
+_PHASE4_JOB_START = 90_000
+_PHASE4_DEFAULT_CEILING = _PHASE4_JOB_START + (300 - 25 - 30 - 10 - 20) * 60
+_PHASE4_BUDGET_ENV = {
+	"E2E_JOB_TIMEOUT_MINUTES": "300", "EDITOR_RETRY_BUDGET_MINUTES": "25", "PHASE_TIMEOUT": "30",
+	"PHASE7_WAIT_BUDGET_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "20",
+}
+
+
+def _phase4_step(workflow: str) -> str:
+	return _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
+
+
+def _phase4_deadline_extension_block(workflow: str) -> str:
+	step = _phase4_step(workflow)
+	block = _slice_between(step, _PHASE4_EXT_BEGIN, _PHASE4_EXT_END)
+	return textwrap.dedent("          " + block)
+
+
+def _run_phase4_deadline_logic(**env: str) -> dict[str, str]:
+	block = _phase4_deadline_extension_block(_read_workflow())
+	script = "set -euo pipefail\n" + block + textwrap.dedent("""\
+	rc=0
+	review_phase_deadline_extension_allowed || rc=$?
+	echo "base=${REVIEW_PHASE_BASE_DEADLINE}"
+	echo "ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+	echo "rc=${rc}"
+	""")
+	full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TZ": "UTC",
+		"REVIEW_PHASE_DEADLINE": str(_PHASE4_BASE), "INACTIVITY_LIMIT": "3600",
+		"STEP_INACTIVITY_LIMIT": "4500"}
+	full_env.update(env)
+	full_env = {key: value for key, value in full_env.items() if value is not None}
+	result = subprocess.run(["bash", "-c", script], env=full_env, capture_output=True, text=True, timeout=30)
+	assert result.returncode == 0, result.stderr + result.stdout
+	values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+	return values
+
+
+def _phase4_iso(epoch: int) -> str:
+	return subprocess.run(["date", "-u", "-d", f"@{epoch}", "+%Y-%m-%dT%H:%M:%SZ"],
+		capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _phase4_active(**overrides: str) -> dict[str, str]:
+	env = {**_PHASE4_BUDGET_ENV, "E2E_JOB_STARTED_EPOCH": str(_PHASE4_JOB_START),
+		"NOW": str(_PHASE4_BASE + 600), "RUN_ID": "20", "RUN_STATUS": "in_progress", "IDLE": "30",
+		"BAIT_UNCOVERED_RUN_IDS": "", "CURRENT_STEP_STARTED_AT": ""}
+	env.update(overrides)
+	return _run_phase4_deadline_logic(**env)
+
+
+def test_phase4_deadline_ceiling_formula_and_base_never_shortened() -> None:
+	step = _phase4_step(_read_workflow())
+	assert "REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))" in step
+	assert ("REVIEW_PHASE_DEADLINE_CEILING=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - EDITOR_RETRY_BUDGET_MINUTES"
+		" - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60 ))") in step
+	assert step.index("REVIEW_PHASE_DEADLINE=$((") < step.index(_PHASE4_EXT_BEGIN)
+	values = _phase4_active()
+	assert values["base"] == str(_PHASE4_BASE)
+	assert values["ceiling"] == str(_PHASE4_DEFAULT_CEILING)
+	# A ceiling below the base is raised to the base, never below it.
+	values = _phase4_active(E2E_JOB_STARTED_EPOCH="1000")
+	assert values["ceiling"] == str(_PHASE4_BASE)
+	assert values["rc"] == "1"
+	# No (or a non-numeric) job start: the ceiling equals the base.
+	for start in ("", "abc"):
+		values = _phase4_active(E2E_JOB_STARTED_EPOCH=start)
+		assert values["ceiling"] == str(_PHASE4_BASE)
+		assert values["rc"] == "1"
+	values = _phase4_active(PHASE_TIMEOUT="x")
+	assert values["ceiling"] == str(_PHASE4_BASE)
+
+
+def test_phase4_active_in_progress_candidate_waits_past_base_deadline() -> None:
+	assert _phase4_active()["rc"] == "0"
+	for status in ("queued", "pending", "waiting", "requested"):
+		assert _phase4_active(RUN_STATUS=status, IDLE="9999")["rc"] == "0"
+	now = _PHASE4_BASE + 600
+	step_start = _phase4_iso(now - 600)
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT=step_start)["rc"] == "0"
+
+
+def test_phase4_stalled_or_uncovered_candidate_times_out_at_base_deadline() -> None:
+	now = _PHASE4_BASE + 600
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT=_phase4_iso(now - 5000))["rc"] == "1"
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT="not-a-date")["rc"] == "1"
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT=_phase4_iso(now + 600))["rc"] == "1"
+	assert _phase4_active(IDLE="9999")["rc"] == "1"
+	assert _phase4_active(BAIT_UNCOVERED_RUN_IDS="10,20")["rc"] == "1"
+	assert _phase4_active(BAIT_UNCOVERED_RUN_IDS="20")["rc"] == "1"
+	assert _phase4_active(BAIT_UNCOVERED_RUN_IDS="200,2")["rc"] == "0"
+	for status in ("none", "completed", "unknown", ""):
+		assert _phase4_active(RUN_STATUS=status)["rc"] == "1"
+	values = _run_phase4_deadline_logic(**_PHASE4_BUDGET_ENV, E2E_JOB_STARTED_EPOCH=str(_PHASE4_JOB_START),
+		NOW=str(now), IDLE="30")
+	assert values["rc"] == "1"
+	for run_id in ("unknown", "", "20x"):
+		assert _phase4_active(RUN_ID=run_id)["rc"] == "1"
+
+
+def test_phase4_nothing_waits_past_the_ceiling() -> None:
+	for now in (_PHASE4_DEFAULT_CEILING, _PHASE4_DEFAULT_CEILING + 1):
+		assert _phase4_active(NOW=str(now), RUN_STATUS="queued")["rc"] == "1"
+		assert _phase4_active(NOW=str(now))["rc"] == "1"
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 1))["rc"] == "0"
+
+
+def test_phase4_deadline_check_uses_extension_and_logs_once() -> None:
+	step = _phase4_step(_read_workflow())
+	check = _slice_between(step, 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then', "# Find the review workflow run")
+	assert "if review_phase_deadline_extension_allowed; then" in check
+	assert step.count("E2E_REVIEW_DEADLINE_EXTENDED") == 1
+	log_index = check.index("E2E_REVIEW_DEADLINE_EXTENDED")
+	assert check.index('if [ "$REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED" = "0" ]; then') < log_index
+	assert "REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1" in check[log_index:]
+	timeout_path = check[check.index("          else\n"):]
+	assert "Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget" in timeout_path
+	assert 'echo "status=timeout" >> "$GITHUB_OUTPUT"' in timeout_path
+	assert "exit 1" in timeout_path
+	# The extension never bypasses the inactivity or per-step stall checks.
+	assert 'if [ $IDLE -ge $INACTIVITY_LIMIT ]; then' in step
+	assert 'REVIEW_STEP_TIMEOUT_MAX=90' in step
+
+
 def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:
 	workflow = _read_workflow()
 	phase6 = _phase6(workflow)
