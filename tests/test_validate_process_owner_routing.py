@@ -360,7 +360,7 @@ def test_non_tracking_run_is_never_reported_or_read() -> None:
 
 
 def test_switch_off_leaves_behaviour_unchanged() -> None:
-	for value, warns in (("false", False), ("FALSE", False), ("maybe", True)):
+	for value in ("false", "FALSE"):
 		sb = _sandbox()
 		try:
 			base_status = {"status": "fail", "raw_status": "harness_error", "summary": "s", "failure_summary": None, "tracking_issue": "7"}
@@ -386,10 +386,44 @@ def test_switch_off_leaves_behaviour_unchanged() -> None:
 			assert sb.argv() == [], sb.argv()
 			assert not sb.gh_log.exists()
 			assert set(json.loads(Path(sb.env["STATUS_FILE"]).read_text(encoding="utf-8"))) == set(base_status)
-			assert ("reason=invalid_switch" in result.stderr) is warns, result.stderr
+			assert "reason=invalid_switch" not in result.stderr, result.stderr
 			assert "VALIDATION_OWNER owner=" not in result.stdout
 		finally:
 			sb.cleanup()
+
+
+def test_invalid_switch_warns_and_stays_on_like_the_poller() -> None:
+	# scripts/orchestrate_poll_process.sh treats an invalid value as on; validate
+	# must match, or the poller holds for markers validate never writes.
+	_need_jq()
+	for value in ("maybe", "1"):
+		sb = _sandbox()
+		try:
+			sb.classify_result(owner="harness", reason="sandbox_unavailable", stage="sandbox", fingerprint=FP_A)
+			result = sb.run(
+				'validation_owner_fixed sandbox_unavailable "x"\nvalidation_owner_fixed sandbox_unavailable "x"\necho "OWNER=${VALIDATION_OWNER_OWNER}"\n',
+				VALIDATION_HARNESS_HEAL_ENABLED=value,
+				TRACKING_ISSUE_NUM="0",
+			)
+			assert "OWNER=harness" in result.stdout, (value, result.stdout, result.stderr)
+			assert result.stderr.count("reason=invalid_switch") == 1, result.stderr
+		finally:
+			sb.cleanup()
+
+
+def test_failed_bounce_read_is_retried_not_memoized() -> None:
+	_need_jq()
+	sb = _sandbox()
+	try:
+		comments = sb.root / "comments.jsonl"
+		comments.write_text(json.dumps({"login": "pipeline-bot", "body": f"<!-- validation-harness-bounce:v1 fp={FP_A} -->"}) + "\n", encoding="utf-8")
+		failed = sb.run("validation_owner_load_bounced\n", STUB_LOGIN="", STUB_COMMENTS_FILE=str(comments))
+		assert "reason=login_unavailable" in failed.stderr, failed.stderr
+		assert (sb.runtime / "validation_harness_bounced_fps.txt").read_text(encoding="utf-8") == ""
+		sb.run("validation_owner_load_bounced\n", STUB_LOGIN="pipeline-bot", STUB_COMMENTS_FILE=str(comments))
+		assert (sb.runtime / "validation_harness_bounced_fps.txt").read_text(encoding="utf-8").split() == [FP_A]
+	finally:
+		sb.cleanup()
 
 
 def test_fail_open_when_classifier_is_missing_or_broken() -> None:
@@ -446,6 +480,25 @@ def test_fallback_signature_ignores_the_no_error_lines_sentinel() -> None:
 		sb.run('validation_owner_signature generate "Template mode requires the renderer"\n', STUB_SIGNATURE="no-error-lines")
 		signature = (sb.runtime / "validation_harness_signature.txt").read_text(encoding="utf-8").strip()
 		assert signature == "Template mode requires the renderer", signature
+	finally:
+		sb.cleanup()
+
+
+def test_log_tail_sentinel_falls_back_to_the_summary() -> None:
+	sb = _sandbox()
+	try:
+		status_file = sb.root / "sandbox_status.txt"
+		status_file.write_text("fail provision rootless_packages_unavailable\n", encoding="utf-8")
+		sb.run(
+			'validation_owner_signature sandbox "rootless_packages_unavailable"\n',
+			STUB_SIGNATURE="no-error-lines",
+			VALIDATION_HARNESS_SANDBOX_STATUS_FILE=str(status_file),
+		)
+		signature = (sb.runtime / "validation_harness_signature.txt").read_text(encoding="utf-8").strip()
+		assert signature == "rootless_packages_unavailable", signature
+		# Without fallback text the sentinel is kept (today's behaviour).
+		sb.run("validation_owner_signature sandbox\n", STUB_SIGNATURE="no-error-lines", VALIDATION_HARNESS_SANDBOX_STATUS_FILE=str(status_file))
+		assert (sb.runtime / "validation_harness_signature.txt").read_text(encoding="utf-8").strip() == "no-error-lines"
 	finally:
 		sb.cleanup()
 

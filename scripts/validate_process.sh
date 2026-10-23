@@ -2215,11 +2215,14 @@ validation_owner_enabled()
     ""|true) return 0 ;;
     false) return 1 ;;
   esac
+  # Same contract as the poller's validation harness hold
+  # (scripts/orchestrate_poll_process.sh): an invalid value warns and stays on,
+  # so validate writes the owner markers the poller's hold waits for.
   if [ "${VALIDATION_OWNER_SWITCH_WARNED}" != "1" ]; then
-    echo "::warning::VALIDATION_OWNER outcome=skip reason=invalid_switch (VALIDATION_HARNESS_HEAL_ENABLED must be true or false; owner routing is off)." >&2
+    echo "::warning::VALIDATION_OWNER outcome=default reason=invalid_switch (VALIDATION_HARNESS_HEAL_ENABLED must be true or false; owner routing stays on)." >&2
     VALIDATION_OWNER_SWITCH_WARNED="1"
   fi
-  return 1
+  return 0
 }
 
 validation_owner_in_list()
@@ -2266,14 +2269,20 @@ validation_owner_pipeline_login()
 
 validation_owner_load_bounced()
 {
-  local out login="" comments=""
+  local out loaded login="" comments=""
   validation_owner_enabled || return 0
   out="$(validation_owner_runtime_file validation_harness_bounced_fps.txt)"
-  if [ -f "${out}" ] && [ ! -L "${out}" ]; then
+  # Memoized by a separate sentinel, written only once the markers were read
+  # (or need no read), so a failed read is retried by the next call.
+  loaded="$(validation_owner_runtime_file validation_harness_bounced_loaded)"
+  if [ -f "${loaded}" ] && [ ! -L "${loaded}" ] && [ -f "${out}" ] && [ ! -L "${out}" ]; then
     return 0
   fi
   : > "${out}" 2>/dev/null || return 0
-  is_tracking_run || return 0
+  if ! is_tracking_run; then
+    : > "${loaded}" 2>/dev/null || true
+    return 0
+  fi
   if ! login="$(validation_owner_pipeline_login)"; then
     echo "::warning::VALIDATION_OWNER outcome=fail_open reason=login_unavailable (bounce markers not read)." >&2
     return 0
@@ -2296,6 +2305,7 @@ validation_owner_load_bounced()
     | (last // "")
     | (capture("^<!-- validation-harness-bounce:v1 fp=(?<fp>[0-9a-f]{64})( [^>]*)? -->$")? // empty)
     | .fp' 2>/dev/null | sort -u > "${out}" 2>/dev/null || : > "${out}"
+  : > "${loaded}" 2>/dev/null || true
 }
 
 validation_owner_signature()
@@ -2325,6 +2335,12 @@ validation_owner_signature()
       if [ -s "${tail_file}" ]; then
         signature="$(python3 -I -B "${helper}" error-signature --log-file "${tail_file}" 2>/dev/null | head -n 1 | cut -c1-200 || true)"
       fi
+    fi
+    # A log with no error-shaped line (the sandbox status file is one) gives
+    # the "no-error-lines" sentinel; prefer the fallback text then, so
+    # distinct failures of one stage keep distinct fingerprints.
+    if [ "${signature}" = "no-error-lines" ] && [ -n "${fallback}" ]; then
+      signature=""
     fi
     if [ -z "${signature}" ] && [ -n "${fallback}" ]; then
       # Normalise the fallback text through error-signature like a log tail,
