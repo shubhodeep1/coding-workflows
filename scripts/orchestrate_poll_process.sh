@@ -12647,7 +12647,7 @@ _integration_retry_state_failure_detail() {
 # API budget (CLAUDE.md §15): reads only the PR body the caller fetched; the
 # writes are the existing state comment plus one tracking comment per change.
 # Returns 0 when parked (the caller returns), 1 otherwise.
-# Log: INTEGRATION_CONFLICT_PARKED tracking_issue=<n> pr=<n> head=<sha> reason=non_retryable|gate_cap count=<n> outcome=parked|unchanged
+# Log: INTEGRATION_CONFLICT_PARKED tracking_issue=<n> pr=<n> head=<sha> reason=non_retryable|gate_cap count=<n> outcome=parked|unchanged|write_failed
 _integration_conflict_park_if_stuck() {
   local final_pr="$1" head_sha="$2" retry_state="$3"
   local park_reason="" park_count park_failure park_non_retryable park_detail park_err prev_status prev_err
