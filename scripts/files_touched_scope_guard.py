@@ -816,8 +816,12 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str) -> list[st
 	fragments follow the same rules). An issue without a list, or with an empty
 	or malformed one, is not checked, as the implement guard skips it too. A
 	directory or glob the plan lists is not an exact file and is not checked
-	here; the implement guard still applies to whatever gets staged.
+	here; the implement guard still applies to whatever gets staged. A
+	workflow-heal issue (its body carries the heal scope marker) is not checked:
+	on the heal route implement enforces that marker, not files_touched.
 	"""
+	if "<!-- ai:workflow-heal-scope:v1" in (issue_body or ""):
+		return []
 	allowlist = normalize_allowlist(extract_files_touched(issue_body or "") or [])
 	if not allowlist:
 		return []
@@ -851,6 +855,7 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 		protected = extract_plan_automation_paths(plan_text)
 		flag_on = _flag_enabled(flag_value)
 		grant: object = None
+		metadata = None
 		if protected and flag_on:
 			if not issue_meta_file:
 				record = {"decision": PLAN_DECISION_HOLD, "reason": "issue_meta_unavailable",
@@ -909,8 +914,10 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 		# list to compare, so the check is skipped; implement still enforces.
 		if decision == PLAN_DECISION_APPROVE and not grant_proposed and issue_meta_file \
 				and plan_files_touched_gate_active():
-			with open(issue_meta_file, encoding="utf-8") as handle:
-				issue_meta = json.load(handle)
+			issue_meta = metadata
+			if issue_meta is None:
+				with open(issue_meta_file, encoding="utf-8") as handle:
+					issue_meta = json.load(handle)
 			outside = plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "")
 			if outside:
 				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside

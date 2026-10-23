@@ -105,7 +105,13 @@ def test_lost_ticket() -> None:
 
 def test_position_cli(tmp_path: Path) -> None:
 	comments = tmp_path / "comments.json"
-	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5)], [_ticket(20, 200, age_seconds=1)]]), encoding="utf-8")
+	# The CLI has no --now option and reads the wall clock, so the tickets are
+	# dated from it too; the fixed NOW would be past the lease after 15:00 UTC.
+	wall_now = datetime.now(timezone.utc)
+	ahead, mine = _ticket(10, 101), _ticket(20, 200)
+	ahead["created_at"] = _iso(wall_now - timedelta(seconds=5))
+	mine["created_at"] = _iso(wall_now - timedelta(seconds=1))
+	comments.write_text(json.dumps([[ahead], [mine]]), encoding="utf-8")
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
