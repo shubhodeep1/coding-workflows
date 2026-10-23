@@ -2602,15 +2602,17 @@ validation_owner_ruled_out_block()
 # fix-up; the harness part is reported separately (harness_report=true).
 validation_owner_split_mixed()
 {
-  local owner_json unsplit tmp ids_json expected kept
+  local owner_json unsplit tmp ids_json expected kept past_cap
+  local cap=50
   owner_json="$(validation_owner_runtime_file validation_owner.json)"
   unsplit="$(validation_owner_runtime_file validation_diagnosis_unsplit.json)"
-  # A fix issue whose files list is past the cap already counts as
-  # project-owned, so only a fix_issues list past the classifier's cap (50;
-  # the issues after it are unclassified) skips the split.
-  if [ "$(jq -r '.truncated // false' "${owner_json}" 2>/dev/null || echo true)" != "false" ] \
-    && [ "$(jq -r 'if (.fix_issues | type) == "array" then (.fix_issues | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 51)" -gt 50 ]; then
-    echo "::warning::VALIDATION_OWNER outcome=split_skipped reason=truncated (all fix issues kept)." >&2
+  # The classifier decides only the first ${cap} fix issues (a fix issue whose
+  # files list is past its cap already counts as project-owned). Issues after
+  # index ${cap} are unclassified, so they are always kept; only the known
+  # harness-owned issues within the cap are dropped.
+  past_cap="$(jq -r --argjson cap "${cap}" 'if (.fix_issues | type) == "array" then ([.fix_issues[$cap:][] | select(type == "object")] | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || true)"
+  if ! [[ "${past_cap}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::VALIDATION_OWNER outcome=split_skipped reason=split_failed (all fix issues kept)." >&2
     return 0
   fi
   ids_json="$(jq -c '(.project_fix_ids // []) | if type == "array" then map(strings) else [] end' "${owner_json}" 2>/dev/null || true)"
@@ -2621,11 +2623,13 @@ validation_owner_split_mixed()
   fi
   cp -f -- "${DIAGNOSE_RESULT_FILE}" "${unsplit}" 2>/dev/null || return 0
   tmp="${DIAGNOSE_RESULT_FILE}.split.tmp"
-  if ! jq --argjson ids "${ids_json}" '
+  expected=$((expected + past_cap))
+  if ! jq --argjson ids "${ids_json}" --argjson cap "${cap}" '
       .fix_issues as $all
       | .fix_issues = [range(0; ($all | length)) as $i | $all[$i]
           | select(type == "object")
-          | select(((.id // null) as $id | ($id != null and ($ids | index($id | tostring)) != null))
+          | select($i >= $cap
+              or ((.id // null) as $id | ($id != null and ($ids | index($id | tostring)) != null))
               or (($ids | index("index-\($i)")) != null))]' \
       "${DIAGNOSE_RESULT_FILE}" > "${tmp}" 2>/dev/null; then
     rm -f -- "${tmp}" 2>/dev/null || true
@@ -2648,7 +2652,10 @@ validation_owner_route_diagnosis()
 {
   validation_owner_enabled || return 0
   if [ "${ESCALATED_FROM_NEEDS_FIXES:-false}" = "true" ]; then
-    validation_owner_fixed escalated_repeat
+    # Pass the first failure as fallback text, like the other Layer 0 sites,
+    # so a log tail with no error-shaped line does not give every escalated
+    # failure the shared "no-error-lines" fingerprint.
+    validation_owner_fixed escalated_repeat "${FIRST_FAILURE:-}"
     return 0
   fi
   validation_owner_classify layer1 "${DIAG_STATUS:-}"

@@ -526,12 +526,15 @@ def test_mixed_split_runs_when_only_a_files_list_was_truncated() -> None:
 		result = sb.run("DIAG_STATUS=needs_fixes\nvalidation_owner_route_diagnosis\n")
 		kept = json.loads(sb.diagnosis.read_text(encoding="utf-8"))["fix_issues"]
 		assert [i["id"] for i in kept] == ["a"], (kept, result.stderr)
-		# A fix_issues list past the classifier's cap still skips the split.
-		many = [{"id": f"i{n}"} for n in range(51)]
+		# Past the classifier's cap (50) the known harness issues are still
+		# dropped; the unclassified issues after the cap are kept.
+		many = [{"id": f"i{n}", "files": ["validation/x.sh"]} for n in range(52)]
 		sb.diagnosis.write_text(json.dumps({"status": "needs_fixes", "fix_issues": many}), encoding="utf-8")
+		sb.classify_result(owner="mixed", reason="mixed_harness_part", stage="diagnose", fingerprint=FP_A, project_fix_ids=["i0"], truncated=True)
 		result = sb.run("DIAG_STATUS=needs_fixes\nvalidation_owner_route_diagnosis\n")
-		assert len(json.loads(sb.diagnosis.read_text(encoding="utf-8"))["fix_issues"]) == 51
-		assert "reason=truncated" in result.stderr, result.stderr
+		kept = json.loads(sb.diagnosis.read_text(encoding="utf-8"))["fix_issues"]
+		assert [i["id"] for i in kept] == ["i0", "i50", "i51"], (kept, result.stderr)
+		assert "VALIDATION_OWNER outcome=split kept_fix_issues=3" in result.stdout, result.stdout + result.stderr
 	finally:
 		sb.cleanup()
 
@@ -555,6 +558,23 @@ def test_real_classifier_reads_the_files_fields() -> None:
 		assert "DIAG=needs_fixes OWNER=mixed" in result.stdout, result.stdout + result.stderr
 		kept = json.loads(sb.diagnosis.read_text(encoding="utf-8"))["fix_issues"]
 		assert [i["id"] for i in kept] == ["p"], kept
+	finally:
+		sb.cleanup()
+
+
+def test_escalated_repeat_uses_the_first_failure_as_fallback() -> None:
+	_need_jq()
+	sb = _sandbox()
+	try:
+		sb.classify_result(owner="harness", reason="escalated_repeat", stage="run", fingerprint=FP_A)
+		result = sb.run(
+			"ESCALATED_FROM_NEEDS_FIXES=true\nFIRST_FAILURE='test 10_api failed'\nvalidation_owner_route_diagnosis\n",
+			STUB_SIGNATURE="no-error-lines",
+		)
+		signature = (sb.runtime / "validation_harness_signature.txt").read_text(encoding="utf-8").strip()
+		assert signature == "test 10_api failed", (signature, result.stderr)
+		args = [a for a in sb.argv() if a[0] == "classify-validation-owner"][-1]
+		assert args[args.index("--fixed-reason") + 1] == "escalated_repeat"
 	finally:
 		sb.cleanup()
 
@@ -620,6 +640,7 @@ def test_diagnose_prompts_document_the_optional_fields() -> None:
 	rendered = subprocess.run(
 		["bash", "scripts/render_prompt.sh", "prompts/mode-validate-diagnose.txt"],
 		cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120,
+		env={k: v for k, v in os.environ.items() if k not in ("SEMBLE_PREFETCH", "WORKFLOW_EDIT_RESTRICTION")},
 	)
 	assert rendered.returncode == 0, rendered.stderr
 	assert '"harness_files"' in rendered.stdout
