@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:12651-12669 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The poller trusts retry-state JSON (`non_retryable`, failure count) from the editable final-PR body without verifying its author, and uses it to park the project (`integration_sync_status=escalated`). The reviewers cite these places: `_integration_conflict_park_if_stuck`, the retry-state read at ~12790 (`extract_autofix_resolver_retry_state_from_pr_body`), lines 9415-9424, 12786-12793 and 12659-12666.\n  WHY: Anyone who can edit the PR body can force a park. The reviewers disagree on severity: anthropic_claude-sonnet-5_5 rated it NIT with confidence 2 and said the trust pattern already exists; openai_gpt-6-luna rated it MAJOR; google_gemini-3_1-flash-lite gave no severity. The highest is used. minimax_minimax-m3 and qwen_qwen3_7-plus dismissed it as pre-existing.\n- scripts/orchestrate_poll_process.sh:12808, 12821-12822 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `INTEGRATION_PARK_REBUILD_NOTE` is passed as a prefix assignment on a function call and may leak into the second call site at 12821-12822, contaminating `park_err`.\n  WHY: google_gemini-3_1-flash-lite says non-POSIX bash persists the variable, which would cause repeated notifications. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and qwen_qwen3_7-plus rejected the claim, saying default bash scopes the assignment to the call. Gemini gave no severity, so medium is a placeholder.\n- scripts/orchestrate_poll_process.sh:12688-12699 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The park function does not check whether writing the parked state (`jq`/`mv`) succeeded before it posts the tracking comment, sends the Telegram warning and returns success.\n  WHY: If the write fails, the persisted state is unchanged, so the next poll tick parks again and notifications repeat.\n- scripts/orchestrate_poll_process.sh:_integration_conflict_park_if_stuck (read of INTEGRATION_PARK_REBUILD_NOTE) | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: `INTEGRATION_PARK_REBUILD_NOTE` comes from `BRANCH_REBUILD_ESCALATED_ERROR` and is appended unfiltered to `integration_sync_last_error`, the tracking comment and the Telegram message.\n  WHY: The text is internal, so the risk is low. The reviewer suggests truncating it, for example `${INTEGRATION_PARK_REBUILD_NOTE:0:300}`. This was a hardening suggestion with risk score 1; the severity is inferred.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:`_integration_conflict_park_if_stuck` and the retry-state read at ~12790 (`extract_autofix_resolver_retry_state_from_pr_body`) | severity=NIT | confidence=2\n  PROBLEM: The retry state comes from the editable final-PR body and its author is not verified, so anyone with PR-edit rights can set `non_retryable=true` or a count at the cap and park the project.\n  WHY: This is not new trust, because the existing `resolver_retry_escalated` and `head_sha` checks already read the same block. A park is cleared by any push to the head.\n- scripts/orchestrate_poll_process.sh:`_integration_conflict_park_if_stuck`, where `INTEGRATION_PARK_REBUILD_NOTE` is read (hardening suggestion, risk score 1)\n  PROBLEM: The note comes from `BRANCH_REBUILD_ESCALATED_ERROR` and is appended unfiltered to `integration_sync_last_error`, the tracking comment and the Telegram message.\n  WHY: It is internal text, so the risk is low. Suggested fix: truncate it to a fixed length (about 1 line changed).\n- The reviewer dropped the \"INTEGRATION_PARK_REBUILD_NOTE leaks between calls\" finding, because the script never enables POSIX mode.\n- All other categories: NONE. No task gaps.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:12651-12669 | confidence=4\n  PROBLEM: The poller accepts `AUTOFIX_RESOLVER_RETRY_STATE_V1` JSON from the mutable final-PR body and uses it to set `integration_sync_status=escalated`.\n  WHY: Anyone who can edit the PR body can inject `non_retryable=true` or change the failure counts to force a park.\n- scripts/orchestrate_poll_process.sh:12808, 12821-12822 | confidence=4\n  PROBLEM: `INTEGRATION_PARK_REBUILD_NOTE` is passed as a prefix assignment on a function call and is never cleared.\n  WHY: The reviewer says non-POSIX bash persists the variable, so the second call inherits the stale note. That would contaminate `park_err` and cause repeated Telegram and tracking comments.\n- Hardening suggestion (risk score 1, about 5 lines): inside `_integration_conflict_park_if_stuck`, read the note into a local variable with `local park_rebuild_note=\"${INTEGRATION_PARK_REBUILD_NOTE:-}\"`.\n- All other categories: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:9415-9424, 12786-12793, 12659-12666 | severity=MAJOR | confidence=4\n  PROBLEM: The poller accepts the last valid retry-state JSON block in the final PR body without verifying who wrote it, then trusts `non_retryable` and `consecutive_failure_count` to park the project.\n  WHY: A user who can edit the PR description can add a block with the current `head_sha` and `non_retryable: true`. The next poll tick then sets `integration_sync_status=escalated` and skips resolver and judge dispatches until the head changes.\n- scripts/orchestrate_poll_process.sh:12688-12699 | severity=MAJOR | confidence=4\n  PROBLEM: The park function does not check whether writing the parked state succeeded before posting the tracking comment, sending the Telegram warning and returning success.\n  WHY: If `jq` or `mv` fails, the persisted state is unchanged. The same retry state then triggers parking again on the next tick, so notifications repeat and the park is not durable.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "477a52a59c978fdb18dbc53443c0ea3d186da0a81e3f045223c8588e83613c3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7940,
+    "run_id": "39925813994",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39925813994",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023100107_448e91db37",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7940,
+    "run_id": "39925813994"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T10:01:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
