@@ -791,6 +791,9 @@ def handoff_nested_deps(stage, work, listing):
 		entries = json.loads(Path(listing).read_text(encoding="utf-8"))
 	except FileNotFoundError:
 		entries = []
+	except (OSError, ValueError):
+		log("handoff-nested-deps skipped=list reason=malformed")
+		entries = []
 	if not isinstance(entries, list):
 		raise Rejected("nested dependency list is not a list")
 	moved = 0
@@ -809,7 +812,10 @@ def handoff_nested_deps(stage, work, listing):
 		except (NotADirectoryError, Rejected):
 			log(f"handoff-nested-deps skipped={index} reason=unsafe_source")
 			continue
-		if source.is_symlink() or not source.is_dir():
+		if source.is_symlink():
+			log(f"handoff-nested-deps skipped={index} reason=unsafe_source")
+			continue
+		if not source.is_dir():
 			log(f"handoff-nested-deps skipped={index} reason=install_missing")
 			continue
 		parts = PurePosixPath(path).parts
