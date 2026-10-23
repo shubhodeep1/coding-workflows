@@ -1616,10 +1616,12 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		# One attempt only: the streak counts each posted marker, so retrying a
 		# create whose response was lost could post two and park after one refusal.
 		# A failed write is logged and paged instead.
-		if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${invalid_text}
+		local invalid_record_rc=0
+		gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${invalid_text}
 
-${invalid_marker}" >/dev/null 2>&1; then
-			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_record outcome=failed reason=record_failed"
+${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
+		if [ "${invalid_record_rc}" -ne 0 ]; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_record outcome=failed reason=record_failed rc=${invalid_record_rc}"
 			[ "${invalid_park}" != "true" ] && [ "${UNBLOCK_JUDGE_MODEL_NO_ANSWER}" != "true" ] && unblock_tg WARNING "Unblock judge could not record a refused answer on #${ITEM} (${ITEM_STOP}); refused answers are not counted until this write succeeds, so the item cannot be parked for a person yet."
 		fi
 		if [ "${invalid_park}" != "true" ]; then
