@@ -2038,6 +2038,13 @@ sys.exit(1)
 PY
 	if [ "${parse_rc}" -ne 0 ]; then
 		[ "${parse_rc}" -ne 3 ] || unblock_log "item=${ITEM} outcome=skip reason=verdict_secret_rejected"
+		# An empty reply is no answer (an outage, not a refusal): post the
+		# uncounted marker so it cannot park the item. Non-empty output with no
+		# verdict is a refused answer and still counts.
+		if [ "${parse_rc}" -ne 3 ] && [ "${UNBLOCK_JUDGE_MODEL_NO_ANSWER}" != "true" ] && ! grep -q '[^[:space:]]' "${output_file}" 2>/dev/null; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=model_failed reason=empty_output"
+			UNBLOCK_JUDGE_MODEL_NO_ANSWER="true"
+		fi
 		echo '{}' > "${RUNTIME_DIR}/verdict_raw.json"
 	fi
 	return 0

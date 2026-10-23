@@ -3211,6 +3211,9 @@ jobs:
           # run_attempt would relabel this attempt's failure diagnostics as
           # a BLOCKED verdict the model never gave.
           rm -f "${RUNTIME_DIR}/codex_blocked.flag"
+          # And the latch marker "Telegram failure notification" reads: a stale
+          # one would page a WARNING for a latch this attempt never applied.
+          rm -f "${RUNTIME_DIR}/implement_blocked_latched.flag"
           CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"
           git status --porcelain -uall | filter_runtime_status_noise > "${CODEX_PRE_BASELINE}" 2>/dev/null || : > "${CODEX_PRE_BASELINE}"
           codex_pre_baseline_lines="$(wc -l < "${CODEX_PRE_BASELINE}" | tr -d ' ')"
