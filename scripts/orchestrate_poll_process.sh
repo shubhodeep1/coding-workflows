@@ -18394,10 +18394,12 @@ _fetch_standalone_marker_issues_graphql() {
 #           1 plus one REST `gh issue list` per flagged label when an alias
 #           is missing, null, paginated (`hasNextPage`) or named in
 #           `errors[].path`; on total failure (non-zero exit, unparseable
-#           JSON, non-object repository, invalid input, an error without a
-#           path) 1 failed GraphQL call plus the legacy REST call for every
-#           label. An unusable label list returns 1 with no output and no
-#           API call; the caller then lists all its labels over REST.
+#           JSON, non-object repository, an error without a path) 1 failed
+#           GraphQL call plus the legacy REST call for every label. An
+#           invalid GITHUB_REPOSITORY makes no GraphQL call and returns
+#           every label as a fallback. An unusable label list returns 1
+#           with no output and no API call; the caller then lists all its
+#           labels over REST.
 #   Fail-open: never shrinks coverage. Every anomaly adds the label to
 #           `fallback_labels`, and the caller keeps `|| echo '[]'` on each
 #           REST call. Owner and name are passed only as `-f` variables;
