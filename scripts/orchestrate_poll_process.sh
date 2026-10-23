@@ -15135,6 +15135,12 @@ validation_harness_hold_status_line() {
 # harness hold. The state field was already written by mark_validation_failed.
 _validation_harness_hold_finish() {
   local vhf_reason="$1" vhf_fp="$2" vhf_support="$3"
+  # Keep the project out of this tick's unblock scan too: the per-project
+  # loop only records holds that were already active when the tick started.
+  if [ -n "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE:-}" ]; then
+    echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}" 2>/dev/null \
+      || echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=unblock_skip_write_failed"
+  fi
   set_tracking_phase_label "ai:validation-failed"
   gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
   ensure_label_exists "ai:harness-broken" >/dev/null 2>&1 || true
@@ -15255,7 +15261,10 @@ mark_validation_failed() {
       else
         echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=capped fp=${harness_hold_fp} pin=${harness_hold_support} heal_issue=none"
         if jq -e 'has("validation_harness_hold")' "${STATE_FILE}" >/dev/null 2>&1; then
-          jq 'del(.validation_harness_hold)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          if ! { jq 'del(.validation_harness_hold)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+            rm -f "${STATE_FILE}.tmp"
+            echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=hold_clear_failed"
+          fi
         fi
       fi
     fi

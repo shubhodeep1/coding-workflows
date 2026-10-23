@@ -15489,9 +15489,14 @@ def test_validation_harness_hold_is_dropped_from_unblock_scan_search():
 	assert filter_at < scan.index("scripts/unblock_scan.py select")
 	assert "reason=harness_hold_filter_failed" in scan
 	loop_skip = script.index('VALIDATION_HARNESS_HOLD_SKIP_UNBLOCK="true"')
-	append_at = script.index('echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}"')
+	append_at = script.index('echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}"', loop_skip)
 	assert loop_skip < append_at < script.index("reason=harness_hold\"", loop_skip)
 	assert script.index("VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE=\"$(mktemp") < script.index("run_unblock_scan() {")
+	# The hold-entry tick must also be excluded: the finish helper records it.
+	finish = _extract_bash_function(script, "_validation_harness_hold_finish() {")
+	assert 'echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}"' in finish
+	assert "outcome=unblock_skip_write_failed" in finish
+	assert "outcome=hold_clear_failed" in script
 
 
 def _harness_config_block(script: str) -> str:
