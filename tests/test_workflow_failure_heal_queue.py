@@ -105,7 +105,11 @@ def test_lost_ticket() -> None:
 
 def test_position_cli(tmp_path: Path) -> None:
 	comments = tmp_path / "comments.json"
-	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5)], [_ticket(20, 200, age_seconds=1)]]), encoding="utf-8")
+	# The CLI has no --now flag and checks the lease against the real clock,
+	# so these tickets are dated from the real time, not the fixed NOW.
+	real_now = datetime.now(timezone.utc)
+	cli_tickets = [dict(_ticket(10, 101), created_at=_iso(real_now - timedelta(seconds=5))), dict(_ticket(20, 200), created_at=_iso(real_now - timedelta(seconds=1)))]
+	comments.write_text(json.dumps([[cli_tickets[0]], [cli_tickets[1]]]), encoding="utf-8")
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")

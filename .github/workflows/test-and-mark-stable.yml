@@ -642,8 +642,8 @@ jobs:
 
       # Phase 4 and Phase 4b run step bodies moved to scripts/ (#7991,
       # workflow file size guard). They are read from this run's own commit,
-      # never from the main checkout above, and copied to RUNNER_TEMP because
-      # the Phase 5 re-checkout cleans untracked workspace directories.
+      # never from the main checkout above, and copied to RUNNER_TEMP so they
+      # live outside the workspace that the later Phase 5 re-checkout cleans.
       - name: Checkout release-gate step scripts
         uses: actions/checkout@v5
         with:
@@ -662,6 +662,10 @@ jobs:
         run: |
           set -euo pipefail
           SRC_DIR=".stable-e2e-step-src"
+          if [ -z "${RUNNER_TEMP:-}" ] || [[ "${RUNNER_TEMP}" != /* ]]; then
+            echo "::error::Release gate step scripts: RUNNER_TEMP must be an absolute path."
+            exit 1
+          fi
           DEST_DIR="${RUNNER_TEMP}/stable-e2e-step-scripts"
           if ! [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Release gate step scripts: github.sha is not a 40-hex commit."
