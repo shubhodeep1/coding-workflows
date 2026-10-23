@@ -4753,6 +4753,15 @@ jobs:
               fi
               if [ -n "${push_transient_class}" ]; then
                 if [ "${push_transient_retry}" -ge "${push_transient_max}" ]; then
+                  # The last retry's push may have landed despite the error.
+                  if final_ls_out="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" 2>/dev/null)" \
+                    && [ -n "${final_ls_out}" ] \
+                    && [ "${final_ls_out%%[[:space:]]*}" = "$(git rev-parse HEAD)" ]; then
+                    echo "AUTOFIX_PUSH_TRANSIENT_RETRY pr=${PR_NUMBER:-unknown} attempt=${push_transient_retry}/${push_transient_max} class=${push_transient_class} outcome=landed"
+                    echo "Push complete."
+                    echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
+                    break
+                  fi
                   echo "AUTOFIX_PUSH_TRANSIENT_RETRY pr=${PR_NUMBER:-unknown} attempt=${push_transient_retry}/${push_transient_max} class=${push_transient_class} outcome=gave_up"
                   echo "::error::git push failed (exit ${push_exit}) with a transient error after ${push_transient_max} retries; giving up."
                   exit "${push_exit}"

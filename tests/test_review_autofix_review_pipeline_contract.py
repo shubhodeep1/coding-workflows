@@ -8629,6 +8629,17 @@ if cmd == "rev-parse":
 	sys.exit(0)
 if cmd == "ls-remote":
 	tip = os.environ.get("FAKE_GIT_LS_REMOTE", "")
+	if "," in tip:
+		seq_path = os.environ["FAKE_GIT_LS_REMOTE_COUNT"]
+		try:
+			with open(seq_path, encoding="utf-8") as fh:
+				n = int(fh.read().strip() or "0")
+		except FileNotFoundError:
+			n = 0
+		with open(seq_path, "w", encoding="utf-8") as fh:
+			fh.write(str(n + 1))
+		seq = tip.split(",")
+		tip = seq[min(n, len(seq) - 1)]
 	if tip == "FAIL":
 		sys.stderr.write("fatal: unable to access remote\n")
 		sys.exit(128)
@@ -8681,6 +8692,7 @@ def _run_push_pending_commits_step(
 		"FAKE_GIT_PUSH_STATE": str(state),
 		"FAKE_GIT_HEAD": _PUSH_HEAD_SHA,
 		"FAKE_GIT_LS_REMOTE": ls_remote,
+		"FAKE_GIT_LS_REMOTE_COUNT": str(tmp_path / "ls_remote_count"),
 	}
 	if enabled is not None:
 		env["AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED"] = enabled
@@ -8773,6 +8785,21 @@ def test_push_pending_commits_transient_retry_gives_up_after_two(tmp_path: Path)
 	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=2/2 class=remote_rejected_failed outcome=gave_up" in output
 	assert result["sleeps"] == ["5", "10"]
 	assert "AUTOFIX_EDITS_PUSHED=true" not in str(result["github_env"])
+
+
+def test_push_pending_commits_transient_retry_final_landed_check(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, "remote: Internal Server Error\n")],
+		ls_remote=f"FAIL,{'b' * 40},{_PUSH_HEAD_SHA}",
+	)
+	assert result["returncode"] == 0, result["output"]
+	assert result["pushes"] == 3
+	output = str(result["stdout"])
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=2/2 class=server_error outcome=landed" in output
+	assert "outcome=gave_up" not in output
+	assert "AUTOFIX_EDITS_PUSHED=true" in str(result["github_env"])
+	assert result["sleeps"] == ["5", "10"]
 
 
 def test_push_pending_commits_protected_rejection_is_never_retried(tmp_path: Path) -> None:
