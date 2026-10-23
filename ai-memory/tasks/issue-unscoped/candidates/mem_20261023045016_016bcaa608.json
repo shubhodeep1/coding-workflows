@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:26951-27035 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The four new standalone pipeline label tests and their helpers are defined after the `if __name__ == \"__main__\": raise SystemExit(main())` guard at lines 26951-26952, so `main()` runs before they exist and reports them as \"unknown test name\".\n  WHY: `main()` builds `tests_by_name` from `globals()` at call time (lines 26013-26017), so the new tests never execute and the `orchestrate-poll` shards and the aggregate `lint` check fail. Reviewers rated this BLOCKER; the ledger maps it to critical. Fix: move the `__main__` guard to the end of the file, after line 27035.\n- scripts/orchestrate_poll_process.sh:18406-18417 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: In `_fetch_standalone_pipeline_label_issues_graphql`, a non-array, empty or non-string input makes `all_fallback` empty. The helper then returns `fallback_labels: []`, and the caller lists no issues and makes no REST calls.\n  WHY: This breaks the helper's documented \"Fail-open: never shrinks coverage\" contract. It is not reachable today, because the only caller passes a fixed seven-label literal. Both reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:26951-26952 (new definitions at 26955-27035) | severity=BLOCKER | confidence=5\n  PROBLEM: The PR appended the four new tests and their helpers after the `__main__` guard, so `main()` runs before they are defined and does not find them in `tests_by_name`.\n  WHY: For each missing name, `main()` prints `FAIL <name>: unknown test name` and returns 1 (lines 26018-26029). All four `orchestrate-poll` shards and the aggregate `lint` check fail. Fix: move the `__main__` block to the end of the file, after line 27035.\n- scripts/orchestrate_poll_process.sh:~18414-18417 (`_fetch_standalone_pipeline_label_issues_graphql`, `valid` check and `total_failure` payload) | severity=NIT | confidence=2\n  PROBLEM: If the input is not a usable array, `all_fallback` is `[]`, so the helper returns `fallback_labels: []`. The caller then makes no REST calls and lists no issues.\n  WHY: This is not reachable today, because the only caller passes the fixed seven-label `pipeline_labels` literal. The reviewer reports it for completeness, not as a defect in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrate_poll_process.py:26951 | severity=BLOCKER | confidence=5\n  PROBLEM: The `if __name__ == \"__main__\": raise SystemExit(main())` block precedes the new standalone label batch test functions.\n  WHY: `main()` builds the test list using `globals()` before the new functions are defined, so all four new test shards fail with \"unknown test name\".\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:26951-26952 (new definitions at 26955-27035) | severity=BLOCKER | confidence=5\n  PROBLEM: The whole new test block was appended after the `__main__` guard. When `main()` runs at line 26952, `_STANDALONE_PIPELINE_LABELS` and the four `test_standalone_pipeline_*` functions are not yet in the module namespace.\n  WHY: `main()` builds its name table from `globals()` at lines 26013-26017, prints `FAIL <name>: unknown test name` (line 26022) and returns 1 (line 26029). CI run 39896162205 failed all four `orchestrate-poll` shards and the aggregate `CI / lint` check. Fix: move the guard to the end of the file, after line 27035.\n- scripts/orchestrate_poll_process.sh:18406-18417, consumed at 20851-20863 | severity=NIT | confidence=2\n  PROBLEM: The total-failure payload derives `fallback_labels` from a filtered copy of the input. A non-array, empty or wholly non-string `$1` yields `{\"issues\":[],\"fallback_labels\":[]}`, so the caller does zero REST calls and gets zero candidates.\n  WHY: This contradicts the helper's documented \"Fail-open: never shrinks coverage\" (line 18400). It is not reachable from today's single caller, because `pipeline_labels` at line 20841 is a fixed seven-label literal. The reviewer suggests dropping the `else []` collapse (about 1 line).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:26951-26952, 26955-26963, 26993-27035 | severity=BLOCKER | confidence=5\n  PROBLEM: The four new tests are defined after the `__main__` block calls `main()`. The test runner builds `tests_by_name` from the globals available at that point (26012-26018), so these test names are absent.\n  WHY: CI invokes tests by name, and `main()` reports \"unknown test name\" and exits with failure. This fails the `orchestrate-poll` job and the aggregate `lint` check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrate_poll_process.py:26951-27035 | severity=BLOCKER | confidence=5\n  PROBLEM: The four new test functions and their helpers (`_STANDALONE_PIPELINE_LABELS`, `_run_standalone_label_batch_tick`, `_stall_listing_labels`) are defined after the `if __name__ == \"__main__\": raise SystemExit(main())` guard at lines 26951-26952.\n  WHY: `main()` at line 26013 builds `tests_by_name` from `globals()` at call time, so it reports each new test as \"unknown test name\" and exits 1. CI run 39896162205 confirms all four orchestrate-poll shards and the aggregate lint check fail. Fix: move the `__main__` guard to the end of the file.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d10ff51e18220e3986d76430b9b438d50170f1109503fe1dbbeef54a20afb752",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7938,
+    "run_id": "39896162337",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39896162337",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023045016_016bcaa608",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7938,
+    "run_id": "39896162337"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T04:50:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
