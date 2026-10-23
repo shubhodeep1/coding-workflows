@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "When changing a workflow, check for a focused test under `tests/` that verifies its structure or behavior; several merged changes updated workflow files alongside dedicated workflow contract tests. This is especially useful for preserving workflow gates and input-handling guarantees.",
+  "fingerprint": "0862cf1669dbca1f5c78e5b68b3fab5f028590ad3914f76f76d276ad2ac8b774",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39937599444",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39937599444",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7914",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7915",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7926",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7928",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7929",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7919",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7920",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7933",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7937",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7938"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261023102915_eaf703fc8b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow YAML changes in this repository are commonly paired with contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-23T10:29:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
