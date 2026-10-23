@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (no gap; severity=NIT, confidence=5)\n  Requirement: Rewrite tests/e2e_smoke_canary_b.txt so line 1 is `status: ok` and line 2 is `decompose-run: 39969947939`, with a trailing newline and no other file changed.\n  Expected change site: tests/e2e_smoke_canary_b.txt\n  Evidence of absence: There is no gap. The PR diff has a single hunk in that file that replaces `decompose-run: 25567947079` with `decompose-run: 39969947939`, and `pr_changed_files.txt` lists only that file. All three acceptance criteria are met. I did not open the file to confirm the trailing newline. The diff shows no \"no newline at end of file\" marker, which is consistent with one being present.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (no gap; severity=NIT, confidence=5)\n  Requirement: \"rewrite tests/e2e_smoke_canary_b.txt so that it contains exactly these two lines, followed by a trailing newline: `status: ok` / `decompose-run: 39969947939`\" and \"No other file is changed.\"\n  Expected change site: tests/e2e_smoke_canary_b.txt (only file in files_touched)\n  Evidence of absence: No gap. The PR diff (tests/e2e_smoke_canary_b.txt, hunk @@ -1,2 +1,2 @@) replaces `decompose-run: 25567947079` with `decompose-run: 39969947939` while keeping `status: ok` as line 1; pr_changed_files.txt lists only tests/e2e_smoke_canary_b.txt. All three acceptance criteria are met by the shipped hunk. The merge-resolve commit touched tests/e2e_smoke_canary.txt and tests/test_workflow_failure_heal_queue.py (last_commit_stat.txt), but that is the base-sync merge commit, not the issue deliverable.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "777b587bac70e82602e457264973a2dfd57426b98a76af0b13d18b0f30680207",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7989,
+    "run_id": "40015152780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40015152780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023211250_cc00129c66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7989,
+    "run_id": "40015152780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T21:12:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
