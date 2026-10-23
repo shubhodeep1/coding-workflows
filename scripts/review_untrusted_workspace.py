@@ -189,9 +189,12 @@ def hidden_build_output_dirs(tracked):
 		if index is None:
 			continue
 		prefix = parts[:index + 1]
-		if any(part.startswith(".") or "secret" in part.lower() or "credential" in part.lower()
+		# allowed() admits .github/actions/** and .github/workflows/**, so a
+		# committed action bundle (.github/actions/<name>/dist/) is reported too.
+		admitted_dot = len(prefix) >= 3 and prefix[:2] in ((".github", "workflows"), (".github", "actions"))
+		if any((part.startswith(".") and not (admitted_dot and position == 0)) or "secret" in part.lower() or "credential" in part.lower()
 			or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info"))
-			or (part.lower() in EXCLUDED and part.lower() not in HIDDEN_BUILD_OUTPUT_DIRS) for part in prefix):
+			or (part.lower() in EXCLUDED and part.lower() not in HIDDEN_BUILD_OUTPUT_DIRS) for position, part in enumerate(prefix)):
 			continue
 		key = "/".join(prefix)
 		# Only the directory path is printed, so only it must be plain ASCII and short.

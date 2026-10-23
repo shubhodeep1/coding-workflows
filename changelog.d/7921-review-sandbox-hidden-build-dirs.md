@@ -13,4 +13,4 @@ What this means for operators: poller judges, the review editor and the other ro
 
 ### For contributors
 
-Only tracked files count, and only plain-ASCII paths are listed; a path under a dot directory or `node_modules`, or with a secret-like name, is left out of the note. The list is written next to the snapshot manifest as `<manifest>.hidden_build_dirs.json`. The note is advisory: a missing or unreadable list adds nothing to the prompt and never fails the run.
+Only tracked files count, and only plain-ASCII paths are listed; a path under a dot directory (other than `.github/actions` and `.github/workflows`, which the sandbox admits, so a committed action bundle is listed) or `node_modules`, or with a secret-like name, is left out of the note. The list is written next to the snapshot manifest as `<manifest>.hidden_build_dirs.json`. The note is advisory: a missing or unreadable list adds nothing to the prompt and never fails the run.

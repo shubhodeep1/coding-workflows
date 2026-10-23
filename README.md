@@ -1545,8 +1545,9 @@ issue to "restore" a committed `dist/` in tele-funtoken-msg-scoring #4770),
 `review_untrusted_workspace.py snapshot` records the committed ones it hid,
 directory names and file counts only, and `review_untrusted_sandbox.sh` adds a
 "Directories left out of this sandbox copy" note to every prompt it runs (at
-most 40 directories; plain-ASCII paths only; paths under dot directories or
-`node_modules` are not listed). The snapshot logs the count as
+most 40 directories; plain-ASCII paths only; paths under dot directories,
+other than `.github/actions` and `.github/workflows`, or under `node_modules`
+are not listed). The snapshot logs the count as
 `REVIEW_ISOLATION_SNAPSHOT hidden_build_dirs=<n>`. The directories stay out of
 the copy, so nothing new can be edited or written back.
 

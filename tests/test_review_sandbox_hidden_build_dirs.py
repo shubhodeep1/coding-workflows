@@ -151,3 +151,19 @@ def test_snapshot_does_not_count_tracked_files_deleted_from_the_worktree(tmp_pat
 	_, manifest, _ = _snapshot(tmp_path, host)
 	hidden = json.loads(manifest.with_name(manifest.name + ".hidden_build_dirs.json").read_text(encoding="utf-8"))
 	assert hidden["cloudflare/worker/dist"] == 2
+
+
+def test_hidden_build_output_dirs_reports_committed_action_bundles(tmp_path):
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	try:
+		import review_untrusted_workspace as workspace_module
+	finally:
+		sys.path.pop(0)
+	tracked = {
+		".github/actions/setup/dist/index.js",
+		".github/actions/setup/dist/licenses.txt",
+		".github/ai/dist/x.js",
+		".github/dist/x.js",
+		".cache/dist/y.js",
+	}
+	assert workspace_module.hidden_build_output_dirs(tracked) == {".github/actions/setup/dist": 2}
