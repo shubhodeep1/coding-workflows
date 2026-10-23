@@ -9,4 +9,6 @@ Until now, `scripts/check_workflow_script_refs.py` ran only inside `validate-scr
 | `false` | turns the preflight off |
 | Any other value | turns it off with a warning that does not print the value |
 | Extra GitHub API calls | 0 |
-| Added time | seconds |
+| Live E2E time spent after a missing reference in run 35802596362 | about 98 minutes, now 0 |
+
+What this means for operators: a release that names a missing `scripts/` file now fails in `resolve-version` with an error annotation, and no live E2E job starts. Set `RELEASE_STATIC_PREFLIGHT_ENABLED=false` only to turn the early check off; `validate-scripts` still runs it.

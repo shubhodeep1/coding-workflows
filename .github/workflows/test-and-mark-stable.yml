@@ -367,7 +367,11 @@ jobs:
             echo "::warning::${checker} is missing or a symlink; preflight skipped (validate-scripts still runs the check)"
             exit 0
           fi
-          PYTHONDONTWRITEBYTECODE=1 python3 "${checker}"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${checker}" || {
+            preflight_rc=$?
+            echo "::error::Workflow script reference preflight failed; see the FAIL lines above for the missing references"
+            exit "${preflight_rc}"
+          }
 
       - name: Resolve version tag
         id: resolve

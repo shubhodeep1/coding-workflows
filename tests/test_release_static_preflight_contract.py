@@ -103,6 +103,9 @@ def test_step_present_before_resolve_version_tag() -> None:
 	assert step["env"]["RELEASE_STATIC_PREFLIGHT_ENABLED"] == (
 		"${{ vars.RELEASE_STATIC_PREFLIGHT_ENABLED || 'true' }}"
 	)
+	# A preflight failure must fail resolve-version so the live jobs never start.
+	assert "continue-on-error" not in step
+	assert "if" not in step
 
 
 def test_run_body_has_no_expressions() -> None:
@@ -154,6 +157,7 @@ def test_missing_reference_fails(tmp_path: pathlib.Path, value: str | None) -> N
 	result = _run_body(root, overrides)
 	assert result.returncode != 0
 	assert "does_not_exist.sh" in result.stderr
+	assert "::error::" in result.stdout
 
 
 def test_resolving_reference_passes_in_temp_layout(tmp_path: pathlib.Path) -> None:
