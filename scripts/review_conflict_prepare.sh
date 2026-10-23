@@ -477,6 +477,147 @@ if [ "${_ff_kept}" -gt 0 ]; then
   fi
 fi
 
+# >>> .ai/ validation asset take-base (integration sync)
+# The resolver sandbox excludes .ai/ (review_untrusted_workspace.py EXCLUDED),
+# so a conflict on a tracked .ai/ file failed every integration-sync resolver
+# run closed with sandbox_path_host_only, and the host-only take-base below is
+# off for orchestrator/project-* heads (tele-funtoken-msg-scoring final PR
+# #3933, runs 39882356505 / 39886330204 / 39887520970).  On an
+# orchestrator/project-* head, take the default branch's version of the
+# allowlisted .ai/ validation config here, on the trusted runner.
+# .ai/validate.yml is the consumer's committed validation config (not a
+# generated file): the default branch's copy is what validation already runs
+# there, so it wins, and the project-side diff that is dropped is posted on
+# the PR (ai_asset_take_base_comment.md) once the merge commit exists.  The
+# integration fingerprint check still runs on the merged tree: a merged
+# sub-issue fingerprint on a taken path puts it back in the resolver working
+# set, where the sandbox refuses it (sandbox_path_host_only, which escalates).
+# Only the allowlist below is touched; every other path, stage shape, symlink
+# and non-regular blob stays on the fail-closed path.
+# Switch: CONFLICT_AI_ASSET_TAKE_BASE_ENABLED (default true; unset, empty or
+# true in any case is on, false off, anything else off with a warning).
+# Log key: CONFLICT_RESOLVER_AI_ASSET_TAKE_BASE pr=<n> path=<p> outcome=taken|skip
+#   (taken: base=<branch> stages=<s>; skip: reason=<token>)
+AI_ASSET_TAKE_BASE_ALLOWLIST=(".ai/validate.yml")
+AI_ASSET_TAKE_BASE_COMMENT_FILE="${RUNTIME_DIR}/ai_asset_take_base_comment.md"
+AI_ASSET_TAKE_BASE_PATHS_FILE="${RUNTIME_DIR}/ai_asset_take_base_paths.txt"
+rm -f -- "${AI_ASSET_TAKE_BASE_COMMENT_FILE}" "${AI_ASSET_TAKE_BASE_COMMENT_FILE}.posted" "${AI_ASSET_TAKE_BASE_PATHS_FILE}"
+_ai_resolved=false
+_ai_defer_commit=false
+_ai_pr="${PR_NUMBER:-none}"
+_ai_switch="$(printf '%s' "${CONFLICT_AI_ASSET_TAKE_BASE_ENABLED-}" | tr '[:upper:]' '[:lower:]')"
+_ai_enabled=false
+case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+  orchestrator/project-*)
+    case "${_ai_switch}" in
+      ''|true) _ai_enabled=true ;;
+      false) ;;
+      *) echo "::warning::.ai asset take-base: CONFLICT_AI_ASSET_TAKE_BASE_ENABLED has an unrecognised value; take-base is off." ;;
+    esac
+    ;;
+esac
+if [ "${_ai_enabled}" = "true" ] && [ "${_resolver_allowlist_count}" -gt 0 ] \
+   && git rev-parse -q --verify 'MERGE_HEAD^{commit}' >/dev/null 2>&1; then
+  _ai_merge_base="$(git merge-base HEAD MERGE_HEAD 2>/dev/null || true)"
+  _ai_dir="$(mktemp -d)"
+  : > "${_ai_dir}/sections.md"
+  for _ai_path in "${AI_ASSET_TAKE_BASE_ALLOWLIST[@]}"; do
+    grep -Fxq -- "${_ai_path}" "${RESOLVER_ALLOWLIST_FILE}" || continue
+    _ai_stages="$(git ls-files -u -- "${_ai_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+    _ai_stages="${_ai_stages% }"
+    if [ -L ".ai" ] || [ -L "${_ai_path}" ]; then
+      echo "CONFLICT_RESOLVER_AI_ASSET_TAKE_BASE pr=${_ai_pr} path=${_ai_path} outcome=skip reason=unsafe_path"
+      continue
+    fi
+    _ai_action=""
+    case "${_ai_stages}" in
+      '1 2 3'|'2 3'|'1 3') _ai_action=checkout ;;
+      '1 2') _ai_action=delete ;;
+      *)
+        echo "CONFLICT_RESOLVER_AI_ASSET_TAKE_BASE pr=${_ai_pr} path=${_ai_path} outcome=skip reason=stage_shape stages=${_ai_stages:-none}"
+        continue
+        ;;
+    esac
+    if [ "${_ai_action}" = "checkout" ]; then
+      # Only a regular blob from the base side (no symlink, no submodule).
+      _ai_tree_mode="$(git ls-tree --full-tree MERGE_HEAD -- "${_ai_path}" 2>/dev/null | awk 'NR == 1 {print $1 " " $2}')"
+      case "${_ai_tree_mode}" in
+        '100644 blob'|'100755 blob') ;;
+        *)
+          echo "CONFLICT_RESOLVER_AI_ASSET_TAKE_BASE pr=${_ai_pr} path=${_ai_path} outcome=skip reason=base_not_regular"
+          continue
+          ;;
+      esac
+    fi
+    : > "${_ai_dir}/dropped.diff"
+    if [ -n "${_ai_merge_base}" ]; then
+      git diff "${_ai_merge_base}" HEAD -- "${_ai_path}" > "${_ai_dir}/dropped_full.diff" 2>/dev/null || true
+      head -n 200 "${_ai_dir}/dropped_full.diff" > "${_ai_dir}/dropped.diff"
+      if [ "$(wc -l < "${_ai_dir}/dropped_full.diff" | tr -d '[:space:]')" -gt 200 ]; then
+        printf '%s\n' "... (truncated at 200 lines)" >> "${_ai_dir}/dropped.diff"
+      fi
+    fi
+    if [ "${_ai_action}" = "delete" ]; then
+      git rm -q -- "${_ai_path}" || { echo "::error::.ai asset take-base failed path=${_ai_path}"; rm -rf -- "${_ai_dir}"; exit 1; }
+    else
+      git checkout MERGE_HEAD -- "${_ai_path}" || { echo "::error::.ai asset take-base failed path=${_ai_path}"; rm -rf -- "${_ai_dir}"; exit 1; }
+    fi
+    if [ -n "$(git ls-files -u -- "${_ai_path}" 2>/dev/null || echo error)" ]; then
+      echo "::error::.ai asset take-base left ${_ai_path} unmerged; refusing to dispatch resolver."
+      rm -rf -- "${_ai_dir}"
+      exit 1
+    fi
+    printf '%s\n' "${_ai_path}" >> "${AI_ASSET_TAKE_BASE_PATHS_FILE}"
+    _ai_resolved=true
+    echo "CONFLICT_RESOLVER_AI_ASSET_TAKE_BASE pr=${_ai_pr} path=${_ai_path} outcome=taken base=${BASE_BRANCH} stages=${_ai_stages}"
+    _ai_fence_len="$(grep -o '`\+' "${_ai_dir}/dropped.diff" 2>/dev/null | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' || true)"
+    [ "${_ai_fence_len:-0}" -ge 3 ] || _ai_fence_len=2
+    _ai_fence="$(printf '%*s' "$((_ai_fence_len + 1))" '' | tr ' ' '`')"
+    {
+      printf '\n#### `%s` (index stages %s)\n\n' "${_ai_path}" "${_ai_stages}"
+      if [ -s "${_ai_dir}/dropped.diff" ]; then
+        printf '%sdiff\n' "${_ai_fence}"
+        cat "${_ai_dir}/dropped.diff"
+        printf '%s\n' "${_ai_fence}"
+      else
+        printf '%s\n' "(no integration-branch diff against the merge base)"
+      fi
+    } >> "${_ai_dir}/sections.md"
+  done
+  if [ "${_ai_resolved}" = "true" ]; then
+    {
+      printf '%s\n' "<!-- ai:ai-asset-take-base:v1 pr=${_ai_pr} head=$(git rev-parse HEAD) -->"
+      printf '%s\n\n' "### Validation config merge conflicts resolved with \`${BASE_BRANCH}\`'s version"
+      printf '%s\n' "The merge with \`origin/${BASE_BRANCH}\` conflicted on \`.ai/\` validation config, which the sandboxed conflict resolver may never edit. Each path below took the \`${BASE_BRANCH}\` branch's version (log key \`CONFLICT_RESOLVER_AI_ASSET_TAKE_BASE\`). The integration branch's changes to them, shown below, were dropped; re-apply any that are still needed in a follow-up change."
+      head -c 61440 "${_ai_dir}/sections.md"
+      if [ "$(wc -c < "${_ai_dir}/sections.md" | tr -d '[:space:]')" -gt 61440 ]; then
+        printf '\n\n%s\n' "(dropped diff omitted: comment size budget reached; the text above may end mid-diff)"
+      fi
+    } > "${AI_ASSET_TAKE_BASE_COMMENT_FILE}"
+    git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+    _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+    echo ".ai asset take-base: ${_resolver_allowlist_count} unmerged path(s) remain."
+    if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+      # Integration-sync only: commit after the fingerprint check below.
+      _ai_defer_commit=true
+    fi
+  fi
+  rm -rf "${_ai_dir}"
+fi
+# Posts the take-base comment once the merge commit exists. Fail-open.
+_conflict_prepare_post_ai_asset_comment()
+{
+  [ -f "${AI_ASSET_TAKE_BASE_COMMENT_FILE}" ] && [ ! -L "${AI_ASSET_TAKE_BASE_COMMENT_FILE}" ] || return 0
+  [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ -n "${GITHUB_REPOSITORY:-}" ] || return 0
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${AI_ASSET_TAKE_BASE_COMMENT_FILE}" >/dev/null 2>&1; then
+    mv -f -- "${AI_ASSET_TAKE_BASE_COMMENT_FILE}" "${AI_ASSET_TAKE_BASE_COMMENT_FILE}.posted" 2>/dev/null || true
+  else
+    echo "::warning::.ai asset take-base: failed to post the dropped-changes comment on PR #${PR_NUMBER}; the merge commit stands."
+  fi
+  return 0
+}
+# <<< .ai/ validation asset take-base
+
 # Deterministic resolution for the generated workspace manifest.
 # .ai/.workspace_source_manifest.txt is a sorted, unique-line file
 # inventory written by workspace_init.sh's materialize_source_tree();
@@ -708,7 +849,8 @@ fi
 _det_commit_label="${_det_commit_label:-Manifest union-merge}"
 _det_commit_path="${_det_commit_path:-${MANIFEST_UNION_PATH}}"
 if [ "${_ghm_resolved:-false}" = "true" ] && [ "${_resolver_allowlist_count}" -eq 0 ] \
-   && [ "${_mu_resolved}" != "true" ] && [ "${_ff_defer_commit}" != "true" ]; then
+   && [ "${_mu_resolved}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
+   && [ "${_ai_resolved:-false}" != "true" ]; then
   if [ "${_ghm_defer_commit:-false}" = "true" ]; then
     _mu_defer_commit=true
     _det_commit_label="Guard-hook template merge"
@@ -727,6 +869,15 @@ if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true"
     _det_commit_scope="folded-fragment-only"
     _det_commit_path="folded fragments"
   fi
+fi
+
+if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
+   && [ "${_ai_defer_commit:-false}" = "true" ]; then
+  _mu_defer_commit=true
+  _det_commit_label=".ai asset take-base"
+  _det_commit_scope=".ai-asset-only"
+  _det_commit_path="$(paste -sd ' ' "${AI_ASSET_TAKE_BASE_PATHS_FILE}" 2>/dev/null || echo .ai/)"
+  echo ".ai asset take-base: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
 fi
 
 if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ]; then
@@ -1291,12 +1442,31 @@ if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; the
     echo "::error::${_det_commit_label:-Manifest union-merge}: unhandled reason=integration_sync detail=fingerprint_unverified; the integration fingerprint check could not run on the merged tree, refusing to commit the ${_det_commit_scope:-manifest-only} resolution of ${_det_commit_path:-${MANIFEST_UNION_PATH}}."
     exit 1
   fi
+  # A .ai asset take-base whose merged tree fails a fingerprint is not
+  # committed: the violating paths (already added to the resolver allowlist
+  # above) go to the resolver, which refuses a taken .ai/ path as host-only
+  # and records the retry state that escalates the head.  Failing here
+  # instead would leave no retry state, so neither escalation nor the
+  # poller's park could ever engage.  _ai_resolved also covers a take-base
+  # whose commit the manifest union-merge deferred first (both .ai/ files
+  # conflicted), which leaves _det_commit_scope unset.
+  if { [ "${_det_commit_scope:-}" = ".ai-asset-only" ] || [ "${_ai_resolved:-false}" = "true" ]; } \
+     && [ "${_ff_defer_commit}" != "true" ] \
+     && [ -n "${FP_VIOLATED_FILES_LIST}" ] && [ "${_mu_remaining_unmerged}" -eq 0 ]; then
+    echo "::warning::.ai asset take-base: the merged tree fails merged sub-issue fingerprints; handing the violating path(s) to the resolver instead of committing."
+    _mu_defer_commit=false
+  fi
+fi
+if [ "${_mu_defer_commit}" = "true" ] || [ "${_ff_defer_commit}" = "true" ]; then
   if [ -n "${FP_VIOLATED_FILES_LIST}" ] || [ "${_mu_remaining_unmerged}" -ne 0 ]; then
     echo "::error::${_det_commit_label:-Manifest union-merge}: unhandled reason=integration_sync detail=fingerprint_violations; auto-merged files fail merged sub-issue fingerprints (or unmerged paths remain), refusing to commit the ${_det_commit_scope:-manifest-only} resolution of ${_det_commit_path:-${MANIFEST_UNION_PATH}}."
     exit 1
   fi
   git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
+  if type _conflict_prepare_post_ai_asset_comment >/dev/null 2>&1; then
+    _conflict_prepare_post_ai_asset_comment
+  fi
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
   echo "${_det_commit_label:-Manifest union-merge}: integration fingerprints verified on the merged tree — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
   exit 0

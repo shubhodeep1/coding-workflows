@@ -3944,6 +3944,9 @@ jobs:
           # Keep the PR's copy of a changelog.d / agents.d fragment that the
           # base branch folded and deleted (modify/delete, #7130).
           CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED: ${{ vars.CONFLICT_FOLDED_FRAGMENT_KEEP_ENABLED || 'true' }}
+          # Take the default branch's .ai/validate.yml on an orchestrator/project-*
+          # integration-sync conflict (the sandbox excludes .ai/).
+          CONFLICT_AI_ASSET_TAKE_BASE_ENABLED: ${{ vars.CONFLICT_AI_ASSET_TAKE_BASE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"
@@ -3981,6 +3984,9 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           RESOLVER_ESCAPE_THRESHOLD_N: ${{ vars.RESOLVER_ESCAPE_THRESHOLD_N || '5' }}
+          # Escalate the integration-sync retry state on the first non-retryable
+          # isolation failure (sandbox_path_host_only and friends).
+          RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED: ${{ vars.RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED || 'true' }}
           # Decoupled from EDITOR_REASONING_EFFORT: the smoke-test override
           # ("Detect smoke test PR" step) sets editor reasoning to "none" so
           # the single-line bait removal completes deterministically. The

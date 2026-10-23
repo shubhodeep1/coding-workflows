@@ -1432,7 +1432,11 @@ jobs:
             echo "::error::Workflow log analysis can only push report updates from branch refs (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
             exit 1
           fi
-          TARGET_BRANCH="${{ github.ref_name }}"
+          TARGET_BRANCH="${GITHUB_REF_NAME:-}"
+          if [ -z "${TARGET_BRANCH}" ]; then
+            echo "::error::Workflow log analysis can only push report updates from branch refs (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
+            exit 1
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -1603,7 +1607,7 @@ jobs:
           REPORT_FILE="${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file || '' }}"
           REPORT_URL=""
           if [ -n "${REPORT_FILE}" ]; then
-            REPORT_URL="${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${REPORT_FILE}"
+            REPORT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/${REPORT_FILE}"
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${ANALYSIS_STATUS}" = "completed" ]; then

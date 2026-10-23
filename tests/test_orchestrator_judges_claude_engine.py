@@ -715,7 +715,7 @@ def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 def test_integration_judge_does_not_charge_an_already_active_resolver() -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	invocation = text.split("invoke_judge_for_integration_conflict() {", 1)[1].split("\n}\n", 1)[0]
-	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?', 1)[1]
+	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${resolver_retry_state:-}" || integration_judge_result=$?', 1)[1]
 	assert 'if [ "${integration_dispatch_rc}" -eq 2 ]; then' in invocation
 	assert 'return 3' in invocation.split('if [ "${integration_dispatch_rc}" -eq 2 ]; then', 1)[1].split("\n    fi", 1)[0]
 	assert caller.index('if [ "${integration_judge_result}" -eq 3 ]; then') < caller.index('total_dispatches=$((total_dispatches + 1))')
@@ -723,7 +723,7 @@ def test_integration_judge_does_not_charge_an_already_active_resolver() -> None:
 	program = ('set -euo pipefail\n'
 		'invoke_judge_for_integration_conflict() { return 3; }\n'
 		'check_deferral() {\nlocal final_pr=77 integration_branch=integration default_branch=main integration_judge_result=0\n'
-		'invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?\n'
+		'invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${resolver_retry_state:-}" || integration_judge_result=$?\n'
 		+ deferral + '\nprintf "unexpected accounting\\n"\n}\ncheck_deferral\n')
 	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
@@ -774,7 +774,7 @@ def test_unpublished_integration_guidance_defers_resolver_dispatch() -> None:
 	assert 'post_issue_comment_json "${TRACKING_NUM}" "${integration_comment_body}"' in invocation
 	assert 'if ! printf \'%s\' "${integration_comment_result}" | jq -e' in invocation
 	assert invocation.index('return 4') < invocation.index('_dispatch_review_for_conflicts "${final_pr}"')
-	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?', 1)[1]
+	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${resolver_retry_state:-}" || integration_judge_result=$?', 1)[1]
 	assert caller.index('if [ "${integration_judge_result}" -eq 4 ]; then') < caller.index('total_dispatches=$((total_dispatches + 1))')
 
 
