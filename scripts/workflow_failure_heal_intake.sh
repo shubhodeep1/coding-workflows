@@ -1120,7 +1120,8 @@ _validation_route_post()
 	# looks like a routing marker so only the marker appended below remains.
 	local route_grep_rc=0
 	grep -v 'workflow-failure-heal:validation-route' "${route_body}" > "${route_body}.tmp" 2>/dev/null || route_grep_rc=$?
-	if [ "${route_grep_rc}" -le 1 ]; then mv "${route_body}.tmp" "${route_body}"; else rm -f "${route_body}.tmp"; fi
+	# A grep error (rc >= 2) leaves the body unfiltered: post the marker alone.
+	if [ "${route_grep_rc}" -le 1 ]; then mv "${route_body}.tmp" "${route_body}"; else rm -f "${route_body}.tmp"; : > "${route_body}"; fi
 	{ echo; echo "${route_marker}"; } >> "${route_body}"
 	if gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${route_body}" >/dev/null 2>&1; then
 		route_state="posted"
