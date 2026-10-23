@@ -172,7 +172,9 @@ VALIDATION_MAX_FILES_PER_ISSUE = 50
 VALIDATION_MAX_PATHS = 200
 VALIDATION_MANAGED_PATHS_TIMEOUT_SECONDS = 120
 _VALIDATION_COMMIT_RE = re.compile(r"^([0-9a-f]{40}|HEAD)$")
-_VALIDATION_HEX_RUN_RE = re.compile(r"\b[0-9a-fA-F]{7,64}\b")
+# Full 40/64-hex SHAs, or shorter hex runs that contain a digit (so plain
+# words such as "defaced" are kept).
+_VALIDATION_HEX_RUN_RE = re.compile(r"\b(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64}|(?=[0-9a-fA-F]*[0-9])[0-9a-fA-F]{7,64})\b")
 
 # A consumer security audit finding on an unmodified file the @stable sync
 # manages (plan docs/plans/synced-file-security-findings-heal-intake-plan.md,
@@ -1424,8 +1426,12 @@ def load_validation_managed_paths(support_root: str, commit: str) -> frozenset[s
 	if not helper.is_file():
 		raise ValueError("build_sync_manifest.py is missing next to workflow_failure_heal.py")
 	command = [sys.executable, "-I", "-B", str(helper), "managed-paths", "--repo-root", str(Path(support_root).resolve()), "--commit", commit]
+	# GIT_DIR / GIT_WORK_TREE (exported by the validate job) would override
+	# the helper's ``git -C <support_root>`` and read the consumer repository.
+	child_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+	child_env["PYTHONDONTWRITEBYTECODE"] = "1"
 	try:
-		result = subprocess.run(command, capture_output=True, text=True, timeout=VALIDATION_MANAGED_PATHS_TIMEOUT_SECONDS, check=False)
+		result = subprocess.run(command, capture_output=True, text=True, timeout=VALIDATION_MANAGED_PATHS_TIMEOUT_SECONDS, check=False, env=child_env)
 	except (OSError, subprocess.TimeoutExpired) as exc:
 		raise ValueError("managed-path lookup failed") from exc
 	if result.returncode != 0:
@@ -1517,6 +1523,10 @@ def _normalize_validation_signature_once(text: str, source_repo: str | None) -> 
 	text = " ".join(text.split())
 	if isinstance(source_repo, str) and source_repo:
 		text = re.sub(re.escape(source_repo), "<repo>", text, flags=re.IGNORECASE)
+		bare_name = source_repo.rsplit("/", 1)[-1]
+		if bare_name:
+			# Runner paths such as /home/runner/work/<name>/<name>/ carry only the name.
+			text = re.sub(r"(?<![A-Za-z0-9_.<>-])" + re.escape(bare_name) + r"(?![A-Za-z0-9_.<>-])", "<repo>", text, flags=re.IGNORECASE)
 	text = _VALIDATION_HEX_RUN_RE.sub("<sha>", text)
 	text = neutralize_untrusted_routing(text)[0]
 	text = text.replace("`", "'")
@@ -1549,11 +1559,22 @@ def validation_failure_fingerprint(stage: str, reason: str, signature: Any, *, s
 	return fingerprint(VALIDATION_FAILURE_FINGERPRINT_WORKFLOW, f"{stage}:{reason}", normalize_validation_signature(signature, source_repo=source_repo))
 
 
-def _validation_fix_issues(diagnosis: dict[str, Any]) -> list[dict[str, Any]]:
+def _validation_fix_issues(diagnosis: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
+	"""``(index in the diagnosis array, fix issue)`` for the first VALIDATION_MAX_FIX_ISSUES entries."""
 	raw = diagnosis.get("fix_issues")
 	if not isinstance(raw, list):
 		return []
-	return [issue for issue in raw if isinstance(issue, dict)][:VALIDATION_MAX_FIX_ISSUES]
+	return [(index, issue) for index, issue in enumerate(raw[:VALIDATION_MAX_FIX_ISSUES]) if isinstance(issue, dict)]
+
+
+def _validation_fix_issues_truncated(diagnosis: dict[str, Any]) -> bool:
+	raw = diagnosis.get("fix_issues")
+	return isinstance(raw, list) and len(raw) > VALIDATION_MAX_FIX_ISSUES
+
+
+def _validation_issue_files_truncated(issue: dict[str, Any]) -> bool:
+	raw = issue.get("files")
+	return isinstance(raw, list) and len(raw) > VALIDATION_MAX_FILES_PER_ISSUE
 
 
 def _validation_harness_files(diagnosis: dict[str, Any]) -> list[str]:
@@ -1574,7 +1595,7 @@ def validation_diagnosis_has_paths(diagnosis: Any) -> bool:
 		return False
 	if _validation_harness_files(diagnosis):
 		return True
-	return any(_validation_issue_files(issue) for issue in _validation_fix_issues(diagnosis))
+	return any(_validation_issue_files(issue) for _index, issue in _validation_fix_issues(diagnosis))
 
 
 def classify_validation_owner(
@@ -1605,11 +1626,17 @@ def classify_validation_owner(
 	empty ``fix_issues`` is never ``project``. A fingerprint in
 	``bounced_fingerprints`` turns the owner into ``none`` with reason
 	``bounced_repeat``. ``project_fix_ids`` names the project-owned fix
-	issues (their ``id``, or ``index-<n>`` without one) for the mixed split.
+	issues (their ``id``, or ``index-<n>`` without one, ``n`` being the
+	position in the diagnosis array) for the mixed split. Lists past the
+	caps are not dropped silently: a fix issue whose ``files`` list is
+	longer than VALIDATION_MAX_FILES_PER_ISSUE counts as project-owned, and
+	when every fix issue within VALIDATION_MAX_FIX_ISSUES is harness-owned
+	but more follow, the owner stays ``none`` (``truncated`` is then true). Raises ``ValueError``
+	when paths must be classified and ``consumer_root`` is not a directory.
 	"""
 	managed = frozenset(managed_paths or ())
 	bounced = {str(value).strip().lower() for value in bounced_fingerprints or () if isinstance(value, str) and _FP_HEX_RE.match(value.strip().lower())}
-	result: dict[str, Any] = {"owner": "none", "reason": "", "stage": "", "fingerprint": "", "harness_paths": [], "project_paths": [], "project_fix_ids": []}
+	result: dict[str, Any] = {"owner": "none", "reason": "", "stage": "", "fingerprint": "", "harness_paths": [], "project_paths": [], "project_fix_ids": [], "truncated": False}
 
 	def add_paths(paths: Iterable[Any]) -> tuple[list[str], list[str]]:
 		harness, project = classify_validation_paths(paths, consumer_root=consumer_root, support_root=support_root, managed_paths=managed)
@@ -1634,13 +1661,17 @@ def classify_validation_owner(
 				diagnosis = json.loads(diagnosis)
 			except ValueError:
 				diagnosis = None
+		if isinstance(diagnosis, dict) and validation_diagnosis_has_paths(diagnosis) and not (isinstance(consumer_root, str) and consumer_root and os.path.isdir(consumer_root)):
+			raise ValueError("consumer root must be an existing directory")
 		if isinstance(diagnosis, dict):
 			status = diagnosis.get("status")
 			fix_issues = _validation_fix_issues(diagnosis)
+			issues_truncated = _validation_fix_issues_truncated(diagnosis)
+			result["truncated"] = issues_truncated
 			harness_files = _validation_harness_files(diagnosis)
 			if status == "harness_error":
 				add_paths(harness_files)
-				for issue in fix_issues:
+				for _index, issue in fix_issues:
 					add_paths(_validation_issue_files(issue))
 				result.update({"owner": "harness", "reason": "diagnosis_harness", "stage": "diagnose"})
 			elif status == "needs_fixes":
@@ -1649,22 +1680,28 @@ def classify_validation_owner(
 					# Nothing to file in the consumer: never project-owned.
 					if raw_status == "harness_error":
 						result.update({"owner": "harness", "reason": "diagnosis_harness", "stage": "diagnose"})
-				elif not any("files" in issue for issue in fix_issues):
+				elif not any("files" in issue for _index, issue in fix_issues):
 					result["owner"] = "project"
-					result["project_fix_ids"] = [_validation_fix_id(issue, index) for index, issue in enumerate(fix_issues)]
+					result["project_fix_ids"] = [_validation_fix_id(issue, index) for index, issue in fix_issues]
 				else:
 					harness_issues = 0
 					project_ids: list[str] = []
-					for index, issue in enumerate(fix_issues):
+					for index, issue in fix_issues:
 						files = _validation_issue_files(issue)
 						owners = [validation_path_owner(path, consumer_root=consumer_root, support_root=support_root, managed_paths=managed) for path in files]
 						add_paths(files)
-						if files and all(owner == "harness" for owner in owners):
+						files_truncated = _validation_issue_files_truncated(issue)
+						if files_truncated:
+							result["truncated"] = True
+						if files and not files_truncated and all(owner == "harness" for owner in owners):
 							harness_issues += 1
 						else:
 							project_ids.append(_validation_fix_id(issue, index))
 					result["project_fix_ids"] = project_ids
-					if not project_ids:
+					if not project_ids and issues_truncated:
+						# The issues past the cap are unknown: keep today's path.
+						pass
+					elif not project_ids:
 						result.update({"owner": "harness", "reason": "owner_paths", "stage": "diagnose"})
 					elif harness_issues == 0 and not result["harness_paths"]:
 						result["owner"] = "project"

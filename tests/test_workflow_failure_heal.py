@@ -8469,3 +8469,52 @@ def test_validation_cli_round_trips(tmp_path: Path) -> None:
 	verdict = json.loads(_val_cli("verify-phase-provenance", "--payload-json", str(phase_payload), "--run-json", str(run_file), "--jobs-json", str(jobs_file),
 		"--comments-json", str(tmp_path / "none.json"), "--self-repo", SELF_REPO, "--comment-author", "").stdout)
 	assert verdict == {"verified": True, "reason": "ok", "run_id": _VAL_RUN_ID}
+
+
+def test_load_validation_managed_paths_ignores_inherited_git_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = _val_support_repo(tmp_path)
+	other = tmp_path / "other-git"
+	other.mkdir()
+	subprocess.run(["git", "init", "-q"], cwd=other, check=True, capture_output=True)
+	monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+	monkeypatch.setenv("GIT_WORK_TREE", str(other))
+	assert ".github/workflows/ai-validate.yml" in heal.load_validation_managed_paths(str(root), "HEAD")
+
+
+def test_validation_signature_masks_bare_repo_name() -> None:
+	first = heal.normalize_validation_signature("failed in /home/runner/work/example-consumer/example-consumer/validation/a.sh", source_repo=CONSUMER_REPO)
+	second = heal.normalize_validation_signature("failed in /home/runner/work/other-app/other-app/validation/a.sh", source_repo="org/other-app")
+	assert first == second == "failed in /home/runner/work/<repo>/<repo>/validation/a.sh"
+	assert "example-consumer" not in first
+	# A longer name containing the repo name is kept, and the result is idempotent.
+	kept = heal.normalize_validation_signature("example-consumer-tools broke", source_repo=CONSUMER_REPO)
+	assert kept == "example-consumer-tools broke"
+	repo_named = heal.normalize_validation_signature("repo failed", source_repo="org/repo")
+	assert repo_named == "<repo> failed" and heal.normalize_validation_signature(repo_named, source_repo="org/repo") == repo_named
+	# Plain hex-letter words are not SHAs; full SHAs and digit-bearing runs are.
+	assert heal.normalize_validation_signature(f"defaced {SHA_A} abc1234") == "defaced <sha> <sha>"
+
+
+def test_classify_validation_owner_keeps_original_fix_issue_index(tmp_path: Path) -> None:
+	result = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": ["junk", {"files": ["validation/x.sh"]}, {"files": ["src/app.py"]}]})
+	assert result["owner"] == "mixed" and result["project_fix_ids"] == ["index-2"]
+
+
+def test_classify_validation_owner_truncated_lists_are_not_harness(tmp_path: Path) -> None:
+	many = [{"id": f"h{n}", "files": ["validation/x.sh"]} for n in range(heal.VALIDATION_MAX_FIX_ISSUES + 1)]
+	result = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": many})
+	assert result["owner"] == "none" and result["truncated"] is True and result["fingerprint"] == ""
+	files = ["validation/x.sh"] * heal.VALIDATION_MAX_FILES_PER_ISSUE + ["src/app.py"]
+	long_files = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": files}]})
+	assert long_files["owner"] == "mixed" and long_files["project_fix_ids"] == ["a"] and long_files["truncated"] is True
+	assert _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["validation/x.sh"]}]})["truncated"] is False
+
+
+def test_classify_validation_owner_requires_consumer_root_for_paths(tmp_path: Path) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["scripts/foo.sh"]}]}
+	for root in ("", str(tmp_path / "missing")):
+		with pytest.raises(ValueError):
+			_val_classify(tmp_path, diagnosis, consumer_root=root)
+	# Layer 0 and path-free diagnoses need no consumer root.
+	assert _val_classify(tmp_path, diagnosis, consumer_root="", fixed_reason="sandbox_unavailable")["owner"] == "harness"
+	assert _val_classify(tmp_path, {"status": "harness_error"}, consumer_root="")["owner"] == "harness"
