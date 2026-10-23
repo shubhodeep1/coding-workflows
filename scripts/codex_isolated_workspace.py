@@ -741,16 +741,21 @@ def find_nested_node_projects(work):
 def stage_nested_node(work, stage, meta):
 	"""Stage each nested Node project's package.json and lockfile; return the count."""
 	lines = []
-	projects = find_nested_node_projects(work)
-	if len(projects) > MAX_NESTED_NODE_PROJECTS:
-		log(f"stage-deps nested_node_skipped={len(projects) - MAX_NESTED_NODE_PROJECTS} reason=project_limit")
-		projects = projects[:MAX_NESTED_NODE_PROJECTS]
-	for rel in projects:
+	over_limit = present = unreadable = 0
+	# The cap counts staged projects, not candidates, so a skipped project
+	# never takes a slot from a later eligible one.
+	for rel in find_nested_node_projects(work):
 		if (work / rel / "node_modules").exists() or (work / rel / "node_modules").is_symlink():
+			present += 1
+			continue
+		if len(lines) >= MAX_NESTED_NODE_PROJECTS:
+			over_limit += 1
 			continue
 		package = deps_manifest(work, rel + "/package.json")
 		if package is None:
+			unreadable += 1
 			continue
+		staged = len(lines)
 		for lock, mode in NODE_LOCKFILES:
 			data = deps_manifest(work, rel + "/" + lock)
 			if data is None:
@@ -761,6 +766,11 @@ def stage_nested_node(work, stage, meta):
 			(target / lock).write_bytes(data)
 			lines.append(f"{len(lines)} {mode} {rel}")
 			break
+		if len(lines) == staged:
+			unreadable += 1
+	for count, reason in ((over_limit, "project_limit"), (present, "node_modules_present"), (unreadable, "manifest_unavailable")):
+		if count:
+			log(f"stage-deps nested_node_skipped={count} reason={reason}")
 	if lines:
 		(meta / "nested").write_text("".join(line + "\n" for line in lines), encoding="ascii")
 	return len(lines)
@@ -772,14 +782,19 @@ def handoff_nested(stage, work):
 		lines = (stage / ".codex-deps" / "nested").read_text(encoding="ascii").splitlines()
 	except FileNotFoundError:
 		return
+	except (OSError, ValueError) as exc:
+		log(f"handoff-nested moved=0 skipped=all reason=list_unreadable error={type(exc).__name__}")
+		return
 	moved = skipped = 0
 	for line in lines[:MAX_NESTED_NODE_PROJECTS]:
 		parts = line.split(" ")
 		if len(parts) != 3 or not parts[0].isdigit() or not NESTED_NODE_PATH_RE.fullmatch(parts[2]):
 			skipped += 1
 			continue
-		source = stage / "nested" / parts[0] / "node_modules"
 		try:
+			# walk_no_follow refuses a symlinked STAGE/nested or STAGE/nested/<n>:
+			# STAGE is writable inside the dependency container.
+			source = walk_no_follow(stage, "nested/" + parts[0] + "/node_modules")
 			info = source.lstat()
 			parent = walk_no_follow(work, parts[2] + "/node_modules").parent
 			parent_info = parent.lstat()

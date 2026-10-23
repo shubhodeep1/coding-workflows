@@ -414,9 +414,9 @@ if [ "${action}" = prepare ]; then
 							[ -d "nested/${nested_idx}" ] && [ ! -L "nested/${nested_idx}" ] || continue
 							echo "CODEX_ISOLATION deps nested_node index=${nested_idx} mode=${nested_mode}"
 							case "${nested_mode}" in
-								npm-ci) (cd "nested/${nested_idx}" && npm ci --ignore-scripts) 2>&1 || install_failed=true ;;
-								yarn) (cd "nested/${nested_idx}" && npx --yes yarn install --frozen-lockfile --ignore-scripts) 2>&1 || install_failed=true ;;
-								pnpm) (cd "nested/${nested_idx}" && npx --yes pnpm install --frozen-lockfile --ignore-scripts) 2>&1 || install_failed=true ;;
+								npm-ci) (cd "nested/${nested_idx}" && npm ci --ignore-scripts) </dev/null 2>&1 || install_failed=true ;;
+								yarn) (cd "nested/${nested_idx}" && npx --yes yarn install --frozen-lockfile --ignore-scripts) </dev/null 2>&1 || install_failed=true ;;
+								pnpm) (cd "nested/${nested_idx}" && npx --yes pnpm install --frozen-lockfile --ignore-scripts) </dev/null 2>&1 || install_failed=true ;;
 							esac
 						done < .codex-deps/nested
 					fi

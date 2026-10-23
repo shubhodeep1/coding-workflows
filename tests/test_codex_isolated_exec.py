@@ -358,6 +358,51 @@ def test_prepare_deps_failure_remains_unverified_warning(sandbox):
 	assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
 
 
+def test_prepare_deps_installs_and_hands_off_nested_node_projects(sandbox):
+	worker = sandbox["repo"] / "cloudflare" / "worker"
+	worker.mkdir(parents=True)
+	(worker / "package.json").write_text('{"name":"worker"}\n')
+	(worker / "package-lock.json").write_text("{}\n")
+	(worker / "index.ts").write_text("export {}\n")
+	git(sandbox["repo"], "add", "-A")
+	git(sandbox["repo"], "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "worker")
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DEPS_CREATE_NESTED_NODE_MODULES": "1"})
+	prep = run_helper(sandbox, "prepare", "--deps")
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	try:
+		assert "nested_node=1" in prep.stderr
+		assert "handoff-nested moved=1 skipped=0" in prep.stderr
+		(runner,) = docker_runs(sandbox["docker_log"])
+		assert "index.ts" not in json.dumps(runner)
+		marker = root / "work" / "cloudflare" / "worker" / "node_modules" / "marker"
+		assert marker.read_text() == "nested installed\n"
+		assert "cloudflare/worker/node_modules" in json.loads((root / "manifest.json").read_text())["prep_roots"]
+		assert not (worker / "node_modules").exists()
+	finally:
+		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+def test_nested_install_loop_runs_each_mode_without_consuming_the_list(tmp_path):
+	meta = tmp_path / ".codex-deps"
+	meta.mkdir()
+	for index in range(3):
+		(tmp_path / "nested" / str(index)).mkdir(parents=True)
+	(meta / "nested").write_text("0 npm-ci a\nbad line\n1 yarn b\n2 pnpm c\n")
+	shell_source = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text()
+	start = shell_source.index("if [ -f .codex-deps/nested ]; then")
+	end = shell_source.index('case "$(cat .codex-deps/python)" in', start)
+	# The stubs read stdin: without </dev/null they would swallow the list.
+	command = ('npm() { cat >/dev/null; echo "npm:$(basename "$PWD"):$*"; }\n'
+		'npx() { cat >/dev/null; echo "npx:$(basename "$PWD"):$*"; [ "$2" != pnpm ]; }\n'
+		"install_failed=false\n" + shell_source[start:end] + '\nprintf "failed=%s\\n" "$install_failed"\n')
+	proc = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True, text=True, check=True)
+	assert "npm:0:ci --ignore-scripts" in proc.stdout
+	assert "npx:1:--yes yarn install --frozen-lockfile --ignore-scripts" in proc.stdout
+	assert "npx:2:--yes pnpm install --frozen-lockfile --ignore-scripts" in proc.stdout
+	assert proc.stdout.strip().endswith("failed=true")
+
+
 @pytest.mark.parametrize("mode", ["both", "pyproject"])
 def test_dependency_fallback_reports_missing_dev_dependencies(tmp_path, mode):
 	meta = tmp_path / ".codex-deps"

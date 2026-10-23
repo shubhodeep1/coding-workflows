@@ -959,3 +959,42 @@ def test_handoff_nested_without_list_is_a_no_op(tmp_path):
 	(tmp_path / "work").mkdir()
 	proc = run("handoff-nested", tmp_path / "stage", tmp_path / "work")
 	assert "handoff-nested" not in proc.stderr
+
+
+def test_stage_deps_nested_cap_counts_staged_projects_only(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	for index in range(10):
+		project = _nested_project(work, f"pkg{index}")
+		if index < 3:
+			(project / "node_modules").mkdir()
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	assert "nested_node=7" in proc.stderr
+	assert "nested_node_skipped=3 reason=node_modules_present" in proc.stderr
+	assert "project_limit" not in proc.stderr
+
+
+def test_handoff_nested_refuses_a_symlinked_stage_directory(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	_nested_project(work, "app")
+	outside = tmp_path / "outside"
+	(outside / "node_modules" / "secret").mkdir(parents=True)
+	stage = tmp_path / "stage"
+	(stage / ".codex-deps").mkdir(parents=True)
+	(stage / ".codex-deps" / "nested").write_text("0 npm-ci app\n")
+	(stage / "nested").mkdir()
+	(stage / "nested" / "0").symlink_to(outside)
+	proc = run("handoff-nested", stage, work)
+	assert "handoff-nested moved=0 skipped=1" in proc.stderr
+	assert (outside / "node_modules" / "secret").is_dir()
+	assert not (work / "app" / "node_modules").exists()
+
+
+def test_handoff_nested_unreadable_list_is_logged_not_raised(tmp_path):
+	stage = tmp_path / "stage"
+	(stage / ".codex-deps" / "nested").mkdir(parents=True)
+	(tmp_path / "work").mkdir()
+	proc = run("handoff-nested", stage, tmp_path / "work")
+	assert "reason=list_unreadable" in proc.stderr

@@ -95,6 +95,14 @@ if container_name.startswith("codex-isolated-deps"):
 		os.makedirs(os.path.join(host_cwd, "node_modules"), exist_ok=True)
 		with open(os.path.join(host_cwd, "node_modules", "marker"), "w") as handle:
 			handle.write("installed\n")
+	nested_list = os.path.join(host_cwd or "", ".codex-deps", "nested")
+	if PASSTHROUGH.get("FAKE_DEPS_CREATE_NESTED_NODE_MODULES") and workdir == "/codex-deps" and host_cwd and os.path.isfile(nested_list):
+		with open(nested_list) as handle:
+			for nested_line in handle:
+				nested_index = nested_line.split(" ")[0]
+				os.makedirs(os.path.join(host_cwd, "nested", nested_index, "node_modules"), exist_ok=True)
+				with open(os.path.join(host_cwd, "nested", nested_index, "node_modules", "marker"), "w") as marker:
+					marker.write("nested installed\n")
 	sys.exit(1 if PASSTHROUGH.get("FAKE_DEPS_FAIL") else 0)
 env = dict(container_env)
 env.update(PASSTHROUGH)
