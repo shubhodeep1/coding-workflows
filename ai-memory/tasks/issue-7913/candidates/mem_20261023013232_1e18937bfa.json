@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Route runtime-validation failures to the repository that owns the fix\",\"issues\":[{\"id\":\"p1a-heal-validation-kind-core\",\"title\":\"Validation harness routing P1a: `validation_failure` kind, ownership classifier and payload in workflow_failure_heal.py\",\"priority\":1},{\"id\":\"p1b-heal-intake-validation-route\",\"title\":\"Validation harness routing P1b: intake outcomes and routing marker for `validation_failure`; phase reporter accepts `validate`\",\"priority\":2},{\"id\":\"p1c-validate-process-owner-routing\",\"title\":\"Validation harness routing P1c: ownership classification in validate_process.sh and `files` fields in the diagnose prompt\",\"priority\":2},{\"id\":\"p1d-validate-yml-heal-report-job\",\"title\":\"Validation harness routing P1d: validate.yml heal-report job, outputs, support SHA line, and Phase 1 docs\",\"priority\":3},{\"id\":\"p2a-poller-harness-hold-entry\",\"title\":\"Validation harness routing P2a: poller config, hold entry in mark_validation_failed, unblock-scan exclusion and /revalidate clearing\",\"priority\":1},{\"id\":\"p2b-poller-harness-hold-resume\",\"title\":\"Validation harness routing P2b: per-tick hold check \u2014 routing marker, bounce, pin ancestry, heal-issue state and automatic resume\",\"priority\":2},{\"id\":\"p2c-poller-hold-limit-judge-request-docs\",\"title\":\"Validation harness routing P2c: 14-day hold limit, judge hold-request handling, and Phase 2 docs\",\"priority\":3},{\"id\":\"p3a-unblock-target-repo-verdict\",\"title\":\"Validation harness routing P3a: unblock judge `target_repo` verdict field, ledger validation and path-ownership backstop\",\"priority\":2},{\"id\":\"p3b-unblock-judge-heal-report-exec\",\"title\":\"Validation harness routing P3b: unblock_judge.sh runs heal_report and hold_request ops; workflow wiring and Phase 3 docs\",\"priority\":3},{\"id\":\"p4-validation-cycle-derivation\",\"title\":\"Validation harness routing P4: derive VALIDATION_CYCLE from the trusted dispatch comment so cross-cycle escalation fires in consumers\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"p1a-heal-validation-kind-core\",\"to\":\"p1b-heal-intake-validation-route\"},{\"from\":\"p1a-heal-validation-kind-core\",\"to\":\"p1c-validate-process-owner-routing\"},{\"from\":\"p1b-heal-intake-validation-route\",\"to\":\"p1d-validate-yml-heal-report-job\"},{\"from\":\"p1c-validate-process-owner-routing\",\"to\":\"p1d-validate-yml-heal-report-job\"},{\"from\":\"p2a-poller-harness-hold-entry\",\"to\":\"p2b-poller-harness-hold-resume\"},{\"from\":\"p2b-poller-harness-hold-resume\",\"to\":\"p2c-poller-hold-limit-judge-request-docs\"},{\"from\":\"p1d-validate-yml-heal-report-job\",\"to\":\"p2c-poller-hold-limit-judge-request-docs\"},{\"from\":\"p1a-heal-validation-kind-core\",\"to\":\"p3a-unblock-target-repo-verdict\"},{\"from\":\"p3a-unblock-target-repo-verdict\",\"to\":\"p3b-unblock-judge-heal-report-exec\"},{\"from\":\"p2c-poller-hold-limit-judge-request-docs\",\"to\":\"p3b-unblock-judge-heal-report-exec\"},{\"from\":\"p1c-validate-process-owner-routing\",\"to\":\"p4-validation-cycle-derivation\"}]}",
+  "fingerprint": "630c9d6dc287afbe0f5d1f6bf53a6084d36755dbce3e8574d86a0be672723233",
+  "lineage": {
+    "issue_number": 7913,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39883336904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39883336904",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261023013232_1e18937bfa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7913,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39883336904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Route runtime-validation failures to the repository that owns the fix' into 10 issues (tracking #7913)",
+  "timestamps": {
+    "created_at": "2026-10-23T01:32:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
