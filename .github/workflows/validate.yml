@@ -60,6 +60,21 @@ name: AI Validate (Reusable)
       metadata_file:
         description: "Path to validation_metadata.json"
         value: ${{ jobs.validate.outputs.metadata_file }}
+      failure_owner:
+        description: "Who owns a failed validation (harness|project|mixed|none); docs/plans/validation-failure-harness-routing-plan.md"
+        value: ${{ jobs.validate.outputs.failure_owner }}
+      harness_report:
+        description: "true when the failure is harness-owned and its stage, reason and fingerprint passed validation, so the heal-report job reports it"
+        value: ${{ jobs.validate.outputs.harness_report }}
+      harness_stage:
+        description: "Harness stage of a harness-owned failure ([a-z_]{1,40}, empty otherwise)"
+        value: ${{ jobs.validate.outputs.harness_stage }}
+      harness_reason:
+        description: "Harness reason of a harness-owned failure ([a-z_]{1,40}, empty otherwise)"
+        value: ${{ jobs.validate.outputs.harness_reason }}
+      harness_fp:
+        description: "Fingerprint of a harness-owned failure (64 hex, empty otherwise)"
+        value: ${{ jobs.validate.outputs.harness_fp }}
 
 env:
   # Claude capacity wait (issue #7370): a capacity fallback waits for the
@@ -104,6 +119,12 @@ jobs:
       failure_summary: ${{ steps.collect_status.outputs.failure_summary }}
       status_file: ${{ steps.collect_status.outputs.status_file }}
       metadata_file: ${{ steps.collect_status.outputs.metadata_file }}
+      failure_owner: ${{ steps.collect_status.outputs.failure_owner }}
+      harness_report: ${{ steps.collect_status.outputs.harness_report }}
+      harness_stage: ${{ steps.collect_status.outputs.harness_stage }}
+      harness_reason: ${{ steps.collect_status.outputs.harness_reason }}
+      harness_fp: ${{ steps.collect_status.outputs.harness_fp }}
+      harness_signature_b64: ${{ steps.collect_status.outputs.harness_signature_b64 }}
 
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
@@ -516,6 +537,10 @@ jobs:
             echo "::error::Validation support checkout is not the pinned commit (expected ${helper_ref}, got ${support_sha})."
             exit 1
           fi
+          # The commit the support scripts come from; scripts/validate_process.sh
+          # records it in the validation-harness-owner:v1 marker.
+          echo "VALIDATE_SUPPORT_SHA sha=${support_sha}"
+          echo "VALIDATE_SUPPORT_SHA=${support_sha}" >> "$GITHUB_ENV"
           if [ ! -f "${helper_stage_dir}/scripts/stage_workflow_support.sh" ] ||
              [ ! -f "${helper_stage_dir}/scripts/run_workspace_hook.sh" ]; then
             echo "::error::Trusted validation support helpers are unavailable."
@@ -666,7 +691,9 @@ jobs:
               "scripts/mcp_handshake_probe.py",
               "scripts/transcript_archive.sh",
               "scripts/emit_event.sh",
-              "scripts/emit_event.py"
+              "scripts/emit_event.py",
+              "scripts/workflow_failure_heal.py",
+              "scripts/build_sync_manifest.py"
             ],
             "serena_template_path": "scripts/templates/serena_project.yml.j2",
             "required_prompts": [
@@ -1346,6 +1373,9 @@ jobs:
           # the failure issue).
           MAX_SELF_HEAL_ATTEMPTS: ${{ env.VALIDATE_SCHEDULED_MODE == 'true' && '0' || vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
           VALIDATE_DETERMINISTIC_ONLY: ${{ env.VALIDATE_SCHEDULED_MODE }}
+          # Harness-owned failures go to workflow failure heal (README "Runtime
+          # Validation Phase" > "Harness-owned failures"); false restores the old path.
+          VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
           VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' && steps.renderer_dependencies.outputs.renderer_state == 'prepared' }}
           VALIDATION_RENDERER_DEPENDENCIES_OUTCOME: ${{ steps.renderer_dependencies.outcome }}
@@ -1428,6 +1458,44 @@ jobs:
           summary="$(jq -r '.summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           failure_summary="$(jq -r '.failure_summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
 
+          # Harness ownership (docs/plans/validation-failure-harness-routing-plan.md,
+          # Phase 1). scripts/validate_process.sh writes these fields after the
+          # model phases ran, so each value is checked against a fixed vocabulary
+          # or pattern before it becomes an output. Anything else turns the heal
+          # report off (fail closed: nothing is reported).
+          failure_owner="$(jq -r '(.failure_owner // "none") | tostring' "${STATUS_FILE_PATH}" 2>/dev/null || echo none)"
+          case "${failure_owner}" in
+            harness|project|mixed|none) ;;
+            *) failure_owner="none" ;;
+          esac
+          harness_stage="$(jq -r '(.harness_stage // "") | tostring' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+          [[ "${harness_stage}" =~ ^[a-z_]{1,40}$ ]] || harness_stage=""
+          harness_reason="$(jq -r '(.harness_reason // "") | tostring' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+          [[ "${harness_reason}" =~ ^[a-z_]{1,40}$ ]] || harness_reason=""
+          harness_fp="$(jq -r '(.harness_fp // "") | tostring' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+          [[ "${harness_fp}" =~ ^[0-9a-f]{64}$ ]] || harness_fp=""
+          harness_report="$(jq -r 'if .harness_report == true then "true" else "false" end' "${STATUS_FILE_PATH}" 2>/dev/null || echo false)"
+          [ "${harness_report}" = "true" ] || harness_report="false"
+          case "${failure_owner}" in
+            harness|mixed) ;;
+            *) harness_report="false" ;;
+          esac
+          if [ -z "${harness_stage}" ] || [ -z "${harness_reason}" ] || [ -z "${harness_fp}" ]; then
+            harness_report="false"
+          fi
+          # The heal-report job runs on another runner, so the signature file
+          # travels as a base64 job output: exact bytes (the reporter recomputes
+          # the fingerprint from them), at most 1024 bytes, base64 alphabet only.
+          harness_signature_b64=""
+          harness_signature_path="${RUNTIME_DIR}/validation_harness_signature.txt"
+          if [ "${harness_report}" = "true" ] && [ -f "${harness_signature_path}" ] && [ ! -L "${harness_signature_path}" ]; then
+            harness_signature_bytes="$(wc -c < "${harness_signature_path}" | tr -d '[:space:]')"
+            if [[ "${harness_signature_bytes}" =~ ^[0-9]+$ ]] && [ "${harness_signature_bytes}" -ge 1 ] && [ "${harness_signature_bytes}" -le 1024 ]; then
+              harness_signature_b64="$(base64 -w0 < "${harness_signature_path}" 2>/dev/null || true)"
+              [[ "${harness_signature_b64}" =~ ^[A-Za-z0-9+/=]{4,1368}$ ]] || harness_signature_b64=""
+            fi
+          fi
+
           if [ ! -f "${METADATA_FILE_PATH}" ]; then
             jq -n \
               --arg status "${status}" \
@@ -1450,6 +1518,12 @@ jobs:
             echo "failure_summary=${failure_summary}"
             echo "status_file=${STATUS_FILE_PATH}"
             echo "metadata_file=${METADATA_FILE_PATH}"
+            echo "failure_owner=${failure_owner}"
+            echo "harness_report=${harness_report}"
+            echo "harness_stage=${harness_stage}"
+            echo "harness_reason=${harness_reason}"
+            echo "harness_fp=${harness_fp}"
+            echo "harness_signature_b64=${harness_signature_b64}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Emit Serena stats
@@ -1766,3 +1840,130 @@ jobs:
           else
             echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
           fi
+
+  heal-report:
+    # Workflow failure heal (README "Runtime Validation Phase" > "Harness-owned
+    # failures"; docs/plans/validation-failure-harness-routing-plan.md, Phase 1).
+    # A runtime validation failure owned by the harness this repository ships
+    # (a Layer 0 stage, a harness_error diagnosis, or needs_fixes whose files
+    # are all harness-managed; a mixed result too) is reported to
+    # coding-workflows' heal intake as one `validation_failure` report, so the
+    # harness is fixed upstream instead of filing fix-up issues the project
+    # cannot act on. Only a failed validate job with a validated
+    # harness_report output is reported: a cancelled run was superseded or
+    # timed out, and the intake requires a failed run conclusion. A separate
+    # job, so the validate job has finished and the intake reads its complete
+    # log. The signature file reaches this runner as the base64 job output
+    # harness_signature_b64 (checked against the base64 alphabet on both
+    # sides) and is decoded into RUNNER_TEMP. Granted only `id-token: write`
+    # (every caller wrapper grants it) so the reporter can attach the OIDC
+    # report identity the intake verifies; GH_PAT does the work. The reporter
+    # always exits 0. VALIDATION_HARNESS_HEAL_ENABLED=false turns it off.
+    needs: validate
+    if: >-
+      always() && needs.validate.result == 'failure' &&
+      needs.validate.outputs.harness_report == 'true' &&
+      inputs.tracking_issue != '' && inputs.tracking_issue != '0' &&
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
+      !contains(fromJson('["false"]'), vars.VALIDATION_HARNESS_HEAL_ENABLED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_PHASE: validate
+      WORKFLOW_HEAL_ISSUE_NUMBER: ${{ inputs.tracking_issue }}
+      WORKFLOW_HEAL_VALIDATION_STAGE: ${{ needs.validate.outputs.harness_stage }}
+      WORKFLOW_HEAL_VALIDATION_REASON: ${{ needs.validate.outputs.harness_reason }}
+      WORKFLOW_HEAL_VALIDATION_FP: ${{ needs.validate.outputs.harness_fp }}
+      VALIDATION_SIGNATURE_B64: ${{ needs.validate.outputs.harness_signature_b64 }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+    steps:
+      - name: Resolve workflow support ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
+          else
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (as implement.yml's heal-report job). Tags, branches and
+            # any other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Report the harness-owned validation failure to workflow failure heal
+        run: |
+          set -euo pipefail
+          reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          # A pinned support ref must be exactly the commit the caller pinned
+          # (tele-funtoken-msg-scoring#4566); never run another ref's reporter.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=support_ref_mismatch ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          report_dir="${RUNNER_TEMP}/workflow-heal-phase-report"
+          mkdir -p "${report_dir}"
+          # Decode the signature only when the job output is plain base64; the
+          # reporter skips (and logs why) when the variable is left empty.
+          WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE=""
+          if [[ "${VALIDATION_SIGNATURE_B64:-}" =~ ^[A-Za-z0-9+/=]{4,1368}$ ]]; then
+            signature_file="${report_dir}/validation_harness_signature.txt"
+            rm -f "${signature_file}"
+            if printf '%s' "${VALIDATION_SIGNATURE_B64}" | base64 -d > "${signature_file}" 2>/dev/null; then
+              WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE="${signature_file}"
+            fi
+          fi
+          export WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE
+          REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
+            RUNTIME_DIR="${report_dir}" \
+            bash "${reporter}"

@@ -555,3 +555,74 @@ def test_promote_candidate_markers_present(workflow: str) -> None:
 	assert "SUPPORT_REF source=promote_candidate sha=" in text, workflow
 	assert "SUPPORT_REF source=promote_candidate_unprotected" in text, workflow
 	assert f"{workflow.replace('.yml', '')}\\.yml@refs/heads/promote-candidate$" in text, workflow
+
+
+# validate.yml's heal-report job (docs/plans/validation-failure-harness-routing-plan.md,
+# Phase 1) resolves and checks its support ref like implement.yml's. validate.yml
+# is not in WORKFLOWS: its validate job has no main fallback checkout or
+# "Ensure workflow support source checkout" step, so it is checked here.
+
+
+def _validate_heal_report_job() -> dict:
+	data = yaml.safe_load((ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8"))
+	return data["jobs"]["heal-report"]
+
+
+def test_validate_heal_report_job_shape() -> None:
+	job = _validate_heal_report_job()
+	assert job["needs"] == "validate"
+	assert job["permissions"] == {"id-token": "write"}
+	assert job["timeout-minutes"] == 10
+	assert job["env"]["WORKFLOW_HEAL_PHASE"] == "validate"
+	condition = job["if"]
+	assert "needs.validate.result == 'failure'" in condition
+	assert "needs.validate.outputs.harness_report == 'true'" in condition
+	assert "vars.WORKFLOW_HEAL_ENABLED" in condition and "vars.VALIDATION_HARNESS_HEAL_ENABLED" in condition
+
+
+def test_validate_heal_report_support_ref_follows_the_pin(tmp_path: Path) -> None:
+	steps = [step for step in _validate_heal_report_job()["steps"] if step.get("name") == "Resolve workflow support ref"]
+	assert len(steps) == 1
+	step = steps[0]
+	assert step["env"]["SUPPORT_REF_WORKFLOW_JOB_JSON"] == "${{ toJSON(job) }}"
+	reusable = f"{SUPPORT_REPO}/.github/workflows/validate.yml"
+	cases = (
+		("shubhodeep1/binance-blessings", f"{reusable}@{PIN}", PIN),
+		("shubhodeep1/binance-blessings", f"{reusable}@refs/tags/stable", "stable"),
+		("shubhodeep1/binance-blessings", f"{reusable}@refs/heads/main", "stable"),
+		("shubhodeep1/binance-blessings", "", "stable"),
+		("shubhodeep1/binance-blessings", f"{SUPPORT_REPO}/.github/workflows/implement.yml@{PIN}", "stable"),
+		("shubhodeep1/binance-blessings", f"evil/coding-workflows/.github/workflows/validate.yml@{PIN}", "stable"),
+		("shubhodeep1/binance-blessings", f"{reusable}@{PIN[:-1]}", "stable"),
+		(SUPPORT_REPO, f"{reusable}@{PIN}", "1" * 40),
+		(SUPPORT_REPO, f"{reusable}@refs/heads/main", "1" * 40),
+	)
+	for repository, workflow_ref, expected in cases:
+		values = _run(step, repository, workflow_ref, tmp_path)
+		assert values == {"SCRIPT_REF": expected}, (repository, workflow_ref, values)
+	result, values, _outputs, calls = _run_script(
+		_substitute(step["run"], SUPPORT_REPO),
+		tmp_path,
+		{"SUPPORT_REF_WORKFLOW_JOB_JSON": json.dumps({"workflow_ref": _ref("validate.yml", "refs/heads/promote-candidate")})},
+	)
+	assert result.returncode == 0, result.stderr
+	assert values == {"SCRIPT_REF": PC_TIP} and len(calls) == 1
+	assert f"SUPPORT_REF source=promote_candidate sha={PC_TIP}" in result.stdout
+
+
+def test_validate_heal_report_support_checkout_is_verified_before_use() -> None:
+	steps = _validate_heal_report_job()["steps"]
+	index = next(
+		i
+		for i, step in enumerate(steps)
+		if str(step.get("uses", "")).startswith("actions/checkout@")
+		and (step.get("with") or {}).get("repository") == SUPPORT_REPO
+		and (step.get("with") or {}).get("path") == ".codex-workflow-src"
+	)
+	checkout = steps[index]["with"]
+	assert checkout["ref"] == "${{ env.SCRIPT_REF }}"
+	assert checkout["persist-credentials"] is False and checkout["sparse-checkout"] == "scripts"
+	user = next(later for later in steps[index + 1 :] if ".codex-workflow-src" in str(later.get("run", "")))
+	script = str(user["run"])
+	assert "${{" not in script
+	assert '=~ ^[0-9a-f]{40}$ ]]' in script and "git -C .codex-workflow-src rev-parse HEAD" in script and '"${SCRIPT_REF' in script
