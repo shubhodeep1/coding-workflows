@@ -8,6 +8,6 @@ The `release` job was gated on `success()`, which GitHub evaluates as false when
 | Jobs whose gate changed | `release`, `sync-to-main` |
 | Still never tags | `gate_only` runs, `dry_run` runs, cancelled runs, any run where `validate` did not succeed |
 
-The release Telegram notification now counts a skipped e2e smoke test as passed on a `skip_e2e=true` run that is not a dry run, so a release that published is reported as SUCCEEDED (with `e2e ⊘`) instead of FAILED.
+The release Telegram notification now counts a skipped e2e smoke test as passed on a `skip_e2e=true` run that is not a dry run, so a release that published is reported as SUCCEEDED (with `e2e ⊘`) instead of FAILED. The orphans, orchestrate, validate-fx, negative and alt-model icons on that line now show each job's result (`⊘` when skipped) instead of a fixed `✓`.
 
 What this means for operators: the documented emergency path ("Skip E2E test and only mark stable") works again. A full-gate run whose e2e jobs fail still skips `validate` and therefore still does not tag.

@@ -7679,7 +7679,9 @@ jobs:
               MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
               RELEASE_ICON="✓"
             fi
-            MSG+=$'\n'"e2e ${E2E_ICON} scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
+            # Supplemental jobs are skipped on skip_e2e runs; show ⊘, not ✓.
+            _result_icon() { case "$1" in success) echo "✓" ;; skipped) echo "⊘" ;; "") echo "-" ;; *) echo "✗" ;; esac; }
+            MSG+=$'\n'"e2e ${E2E_ICON} scripts ✓ orphans $(_result_icon "$ORPHANS") orchestrate $(_result_icon "$ORCHESTRATE_DECOMPOSE") validate-fx $(_result_icon "$VALIDATE_STANDALONE") negative $(_result_icon "$CLARIFY_REJECTS") alt-model $(_result_icon "$ALT_MODEL") release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
           else
             MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
             # A newer release run cancels this run's e2e-smoke-test through the
