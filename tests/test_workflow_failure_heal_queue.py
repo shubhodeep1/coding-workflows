@@ -109,7 +109,10 @@ def test_position_cli(tmp_path: Path) -> None:
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-	base = [sys.executable, str(SCRIPTS_DIR / "workflow_failure_heal.py"), "heal-queue", "position", "--comments-json", str(comments), "--ticket-id", "20", "--login", LOGIN]
+	# The CLI uses the wall clock while the tickets are stamped from the fixed
+	# NOW, so pass a lease long enough that ticket 10 never goes stale here.
+	base = [sys.executable, str(SCRIPTS_DIR / "workflow_failure_heal.py"), "heal-queue", "position", "--comments-json", str(comments), "--ticket-id", "20", "--login", LOGIN,
+		"--lease-seconds", str(100 * 365 * 24 * 3600)]
 	waiting = json.loads(subprocess.run(base, capture_output=True, text=True, env=env, check=True).stdout)
 	assert waiting["status"] == "wait" and waiting["holder"]["run_id"] == "101"
 	going = json.loads(subprocess.run([*base, "--runs-json", str(runs)], capture_output=True, text=True, env=env, check=True).stdout)

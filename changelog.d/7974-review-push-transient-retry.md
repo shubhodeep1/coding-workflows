@@ -5,7 +5,7 @@ Before, the step retried only non-fast-forward rejections. Every other failure e
 
 - A failure is retried only when the push output matches a GitHub 5xx (`Internal Server Error`, `The requested URL returned error: 5xx`, `HTTP 5xx`), `remote rejected ... (failed)`, or a network error (`RPC failed`, `unexpected disconnect`, `early EOF`, `Connection reset`, `Could not resolve host`, `Operation timed out`).
 - Protected-branch and repository-rule rejections (`GH006`, `GH013`, `protected branch`, `push declined`, `repository rule`) are checked first and still fail at once.
-- Each retry waits 5 s, then 10 s, and reads the remote tip with `git ls-remote`. When the tip already equals the local commit, the push counts as done; the tip is checked once more before giving up after the second retry. Otherwise the same plain push runs again; a remote that moved meanwhile goes through the existing fetch-and-merge path. Nothing is force-pushed or rebased.
+- Each retry waits 5 s, then 10 s, and reads the remote tip with `git ls-remote`, bounded by a 60 s timeout. When the tip already equals the local commit, the push counts as done; the tip is checked once more before giving up after the second retry. Otherwise the same plain push runs again; a remote that moved meanwhile goes through the existing fetch-and-merge path. Nothing is force-pushed or rebased, and the push output the step prints has any token in a URL replaced with `***`.
 - Each decision logs `AUTOFIX_PUSH_TRANSIENT_RETRY pr=<n> attempt=<i>/2 class=server_error|remote_rejected_failed|network outcome=retry|landed|gave_up`.
 - Switch: `AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED` (default `true`; `false` in any letter case restores the old behaviour).
 

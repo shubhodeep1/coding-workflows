@@ -4730,7 +4730,8 @@ jobs:
             # on stdout, which would cause stderr-only classification to
             # mis-route a retryable failure to the hard-fail branch.
             git push origin "HEAD:${TARGET_BRANCH}" >"${push_stderr_file}" 2>&1 || push_exit=$?
-            cat "${push_stderr_file}" >&2
+            # The origin URL carries the token; redact URL userinfo before echoing.
+            sed -E 's#(https?://)[^/@[:space:]]+@#\1***@#g' "${push_stderr_file}" >&2
             if [ "${push_exit}" -eq 0 ]; then
               echo "Push complete."
               echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"
@@ -4754,7 +4755,7 @@ jobs:
               if [ -n "${push_transient_class}" ]; then
                 if [ "${push_transient_retry}" -ge "${push_transient_max}" ]; then
                   # The last retry's push may have landed despite the error.
-                  if final_ls_out="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" 2>/dev/null)" \
+                  if final_ls_out="$(timeout 60 git ls-remote origin "refs/heads/${TARGET_BRANCH}" 2>/dev/null)" \
                     && [ -n "${final_ls_out}" ] \
                     && [ "${final_ls_out%%[[:space:]]*}" = "$(git rev-parse HEAD)" ]; then
                     echo "AUTOFIX_PUSH_TRANSIENT_RETRY pr=${PR_NUMBER:-unknown} attempt=${push_transient_retry}/${push_transient_max} class=${push_transient_class} outcome=landed"
@@ -4769,7 +4770,7 @@ jobs:
                 push_transient_retry=$((push_transient_retry + 1))
                 sleep "$((5 * push_transient_retry))"
                 local_head="$(git rev-parse HEAD)"
-                if ls_out="$(git ls-remote origin "refs/heads/${TARGET_BRANCH}" 2>/dev/null)"; then
+                if ls_out="$(timeout 60 git ls-remote origin "refs/heads/${TARGET_BRANCH}" 2>/dev/null)"; then
                   remote_tip="${ls_out%%[[:space:]]*}"
                 else
                   remote_tip=""
