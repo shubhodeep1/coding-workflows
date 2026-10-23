@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:2235 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The diagnostic invocation (python3 \"${HEAL_PY}\" diagnose ...) is not invoked for the validation_failure kind.\n  WHY: A validation_failure report skips the diagnostic process needed to determine a fix proposal; the reviewer rated it BLOCKER. Sonnet-5_5, minimax-m3 and qwen3_7-plus checked this and found the diagnosis path is reached, so the reviewers disagree.\n- scripts/workflow_failure_heal_intake.sh:1980-2004 | severity=medium | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The duplicate path continues with outcome=duplicate even when posting the occurrence comment fails.\n  WHY: Lines 1982-1983 only log a warning, so the intake tells the tracking issue the failure was recorded as another occurrence and emits a duplicate routing marker, but the existing heal issue never receives the occurrence. The reviewer rated it MAJOR.\n- scripts/workflow_failure_heal_intake.sh:3012 | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The heal-scope recovery `compose-occurrence --payload-json \"${PAYLOAD_FILE}\"` call passes the full normalized payload instead of `$(_compose_payload_file)`.\n  WHY: `validate_payload` rejects the extra keys for validation_failure, so the occurrence would be dropped. It is not reachable today because recovery applies only to autofix_failure. Both reviewers made it a hardening suggestion with risk score 1. Sonnet-5_5 gave confidence 2 to its task-gap item and none to this one, so confidence is carried over from the only stated value.\n- scripts/workflow_failure_heal_intake.sh:1121 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `_validation_route_post()` builds `repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments` with no empty-`ISSUE_NUMBER` guard.\n  WHY: A future early `exit` between :1229 and the first post would POST to `issues//comments`, unlike `_comment_on_source` (:2614), which returns early. This is a hardening suggestion with no stated confidence.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"a budget or switch skip -> skipped\" and \"every outcome ends in exactly one comment on the tracking issue.\"\n  expected_change_site: scripts/workflow_failure_heal_intake.sh, the `WORKFLOW_HEAL_ENABLED` gate near line 295\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5]\n  EVIDENCE: `WORKFLOW_HEAL_ENABLED=false` exits at line 295 before payload validation, provenance and the exit trap, so no skipped routing marker or comment is posted. Sonnet-5_5 rated this NIT with confidence 2 and judged it deliberate, since nothing is posted before provenance is verified. The Gemini reviewer rated it MAJOR with confidence 4. minimax-m3 and qwen3_7-plus rejected it as not a defect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/workflow_failure_heal_intake.sh:3012 | hardening suggestion | risk score 1\n  PROBLEM: For `validation_failure`, the heal-scope recovery `compose-occurrence` call passes the full normalized payload, which `validate_payload` would reject for extra keys.\n  WHY: It is not reachable today because heal-scope recovery applies only to `autofix_failure`. The suggested fix is to pass `\"$(_compose_payload_file)\"`.\n- TASK_GAP (rejected by the reviewer): the four pass-1 consensus gaps (fingerprint branch placement, diagnosis not invoked, `validate` phase handling, `WORKFLOW_HEAL_ENABLED=false` posting no marker) are judged invalid.\n  Requirement: \"a budget or switch skip -> skipped\" and \"every outcome ends in exactly one comment on the tracking issue.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh, the `ENABLED` gate near line 295\n  Evidence of absence: `WORKFLOW_HEAL_ENABLED=false` exits at line 295 before payload validation and provenance, so no routing comment is posted. This is deliberate, because `ISSUE_NUMBER` is untrusted until provenance is verified.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal_intake.sh:2235 | severity=BLOCKER | confidence=4\n  PROBLEM: The diagnostic invocation (python3 \"${HEAL_PY}\" diagnose ...) is not invoked for the validation_failure kind.\n  WHY: When a validation_failure report is received, the script skips the diagnostic process required to determine a fix proposal.\n- TASK_GAP:\n  Requirement: \"a budget or switch skip -> skipped\" and \"Every outcome ends in one comment on the tracking issue.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh (at the switch check)\n  Evidence of absence: The script exits early when WORKFLOW_HEAL_ENABLED=false, without setting up the exit trap or posting a skipped marker on the tracking issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal_intake.sh:3012 | hardening suggestion | risk score 1\n  PROBLEM: The third `compose-occurrence --payload-json \"${PAYLOAD_FILE}\"` call, in the trailing `HEAL_SCOPE_RECOVERY_ACTIVE` block, still passes the raw payload.\n  WHY: `validate_payload` rejects the extra keys for `validation_failure`, so the call fails, `RECOVERY_OCCURRENCE_STATE=failed` and the occurrence is silently dropped. The suggested fix is `--payload-json \"$(_compose_payload_file)\"`.\n- scripts/workflow_failure_heal_intake.sh:1121 | hardening suggestion | risk score 1\n  PROBLEM: `_validation_route_post()` has no empty-`ISSUE_NUMBER` guard, unlike `_comment_on_source` (:2614).\n  WHY: A future early `exit` between :1229 and the first post would POST to `issues//comments`. The suggested fix is `[ -n \"${ISSUE_NUMBER:-}\" ] || return 0` after the `POSTED` check.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal_intake.sh:1980-2004 | severity=MAJOR | confidence=5\n  PROBLEM: The duplicate path continues with outcome=duplicate even when posting the occurrence comment fails.\n  WHY: Lines 1982-1983 only log a warning, so the intake tells the tracking issue the failure \"was recorded there as another occurrence\" and emits a duplicate routing marker, but the existing heal issue never receives the occurrence.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4853ac1b1b56b1984b8ec5d3369984dc1cd2d884b6a3faf576c7250b845a6ee8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7958,
+    "run_id": "39958174054",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39958174054",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023133403_8e8df28b84",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7958,
+    "run_id": "39958174054"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T13:34:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
