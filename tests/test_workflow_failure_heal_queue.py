@@ -36,8 +36,8 @@ def _iso(value: datetime) -> str:
 	return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _ticket(comment_id: int, run_id: int, *, attempt: int = 1, job: str = "intake", login: str = LOGIN, age_seconds: int = 60) -> dict:
-	return {"id": comment_id, "user": {"login": login}, "created_at": _iso(NOW - timedelta(seconds=age_seconds)),
+def _ticket(comment_id: int, run_id: int, *, attempt: int = 1, job: str = "intake", login: str = LOGIN, age_seconds: int = 60, now: datetime | None = None) -> dict:
+	return {"id": comment_id, "user": {"login": login}, "created_at": _iso((now or NOW) - timedelta(seconds=age_seconds)),
 		"body": heal.render_heal_queue_ticket(run_id, attempt, job)}
 
 
@@ -104,15 +104,16 @@ def test_lost_ticket() -> None:
 
 
 def test_position_cli(tmp_path: Path) -> None:
+	# The CLI measures ticket ages against the real clock and has no time
+	# override, so its fixtures are dated from the wall clock, not NOW.
+	wall_now = datetime.now(timezone.utc)
 	comments = tmp_path / "comments.json"
-	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5)], [_ticket(20, 200, age_seconds=1)]]), encoding="utf-8")
+	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5, now=wall_now)], [_ticket(20, 200, age_seconds=1, now=wall_now)]]), encoding="utf-8")
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-	# The CLI uses the wall clock while the tickets are stamped from the fixed
-	# NOW, so pass a lease long enough that ticket 10 never goes stale here.
 	base = [sys.executable, str(SCRIPTS_DIR / "workflow_failure_heal.py"), "heal-queue", "position", "--comments-json", str(comments), "--ticket-id", "20", "--login", LOGIN,
-		"--lease-seconds", str(100 * 365 * 24 * 3600)]
+		"--lease-seconds", "10800"]
 	waiting = json.loads(subprocess.run(base, capture_output=True, text=True, env=env, check=True).stdout)
 	assert waiting["status"] == "wait" and waiting["holder"]["run_id"] == "101"
 	going = json.loads(subprocess.run([*base, "--runs-json", str(runs)], capture_output=True, text=True, env=env, check=True).stdout)
