@@ -279,7 +279,7 @@ set_issue_phase_label_resilient() {
 			continue
 		fi
 		if _del_err="$(GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE \
-			"repos/${repo}/issues/${issue_number}/labels/${_stale_enc}" 2>&1 >/dev/null)"; then
+			"repos/${repo}/issues/${issue_number}/labels/${_stale_enc}" </dev/null 2>&1 >/dev/null)"; then
 			continue
 		fi
 		# A 404 means the label is already gone (removed concurrently).
