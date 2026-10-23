@@ -287,7 +287,8 @@ set_issue_phase_label_resilient() {
 			continue
 		fi
 		local _del_first=""
-		_del_first="$(printf '%s' "${_del_err}" | head -n1 | tr -d '\r')"
+		# gh_retry prints its retry notices first and gh's own error last.
+		_del_first="$(printf '%s\n' "${_del_err}" | tr -d '\r' | awk 'NF { l = $0 } END { print substr(l, 1, 200) }')"
 		echo "::warning::set_issue_phase_label_resilient: could not remove stale phase label '${_stale_name}' from #${issue_number}: ${_del_first//::/: :}" >&2
 	done < <(printf '%s' "${_stale}" | jq -r '.[]' 2>/dev/null || true)
 	return 0

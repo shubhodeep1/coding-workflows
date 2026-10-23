@@ -4027,6 +4027,9 @@ elif path.endswith("/comments") and method == "POST":
 	data.setdefault("comments_posted", []).append(field("body"))
 elif path.endswith("/labels") and method == "GET":
 	print(json.dumps(["ai:done"]))
+elif method == "DELETE" and "/labels/" in path:
+	# set_issue_phase_label_resilient removes stale phase labels one by one.
+	pass
 elif path.endswith("/labels"):
 	number = path.split("/")[-2]
 	if method == "PUT":
