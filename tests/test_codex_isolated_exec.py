@@ -391,7 +391,7 @@ def test_nested_install_loop_runs_each_mode_without_consuming_the_list(tmp_path)
 	(meta / "nested").write_text("0 npm-ci a\nbad line\n1 yarn b\n2 pnpm c\n")
 	shell_source = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text()
 	start = shell_source.index("if [ -f .codex-deps/nested ]; then")
-	end = shell_source.index('case "$(cat .codex-deps/python)" in', start)
+	end = shell_source.index('[ "${install_failed}" = false ] ||', start)
 	# The stubs read stdin: without </dev/null they would swallow the list.
 	command = ('npm() { cat >/dev/null; echo "npm:$(basename "$PWD"):$*"; }\n'
 		'npx() { cat >/dev/null; echo "npx:$(basename "$PWD"):$*"; [ "$2" != pnpm ]; }\n'

@@ -406,7 +406,19 @@ if [ "${action}" = prepare ]; then
 						pnpm) npx --yes pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true ;;
 						npm-install) npm install --ignore-scripts 2>&1 || install_failed=true ;;
 					esac
-					# Nested Node projects with their own lockfile (stage-deps writes
+					case "$(cat .codex-deps/python)" in
+						requirements) pip install -r .codex-deps/requirements.txt 2>&1 || install_failed=true ;;
+						both) pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
+							|| { install_failed=true; pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || :; } ;;
+						pyproject) pip install -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
+							|| { install_failed=true; pip install -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || :; } ;;
+					esac
+					if [ -f .codex-deps/want-pytest ] && ! python3 -c "import pytest" >/dev/null 2>&1; then
+						pip install pytest 2>&1 || true
+					fi
+					# Nested Node projects with their own lockfile run after the root Node,
+					# Python and pytest steps so they cannot starve them of the shared
+					# 900-second budget (stage-deps writes
 					# "<n> <mode> <dir>" lines; only STAGE/nested/<n> is installed here).
 					if [ -f .codex-deps/nested ]; then
 						while read -r nested_idx nested_mode nested_dir; do
@@ -419,16 +431,6 @@ if [ "${action}" = prepare ]; then
 								pnpm) (cd "nested/${nested_idx}" && npx --yes pnpm install --frozen-lockfile --ignore-scripts) </dev/null 2>&1 || install_failed=true ;;
 							esac
 						done < .codex-deps/nested
-					fi
-					case "$(cat .codex-deps/python)" in
-						requirements) pip install -r .codex-deps/requirements.txt 2>&1 || install_failed=true ;;
-						both) pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
-							|| { install_failed=true; pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || :; } ;;
-						pyproject) pip install -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
-							|| { install_failed=true; pip install -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || :; } ;;
-					esac
-					if [ -f .codex-deps/want-pytest ] && ! python3 -c "import pytest" >/dev/null 2>&1; then
-						pip install pytest 2>&1 || true
 					fi
 					[ "${install_failed}" = false ] || echo "::warning::Some project dependencies could not be installed in the isolated dependency phase; the agent marks validations it cannot run as UNVERIFIED."
 				' >&2 || echo "::warning::CODEX_ISOLATION dependency phase failed; the agent runs without preinstalled dependencies." >&2
