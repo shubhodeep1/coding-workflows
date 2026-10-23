@@ -6110,7 +6110,7 @@ jobs:
           # never open a second PR.
           pr_create_attempt=1
           pr_create_max_attempts=3
-          pr_create_transient_re='Something went wrong while executing your query|HTTP 50[0-4]|50[0-4] (Bad Gateway|Service Unavailable|Gateway Time-?out|Internal Server Error)|i/o timeout|timed out|TLS handshake timeout|connection reset|connection refused|unexpected EOF'
+          pr_create_transient_re='Something went wrong while executing your query|HTTP 50[0-4]|50[0-4] (Bad Gateway|Service Unavailable|Gateway Time-?out|Internal Server Error)|i/o timeout|timed out|timeout awaiting|TLS handshake timeout|connection reset|connection refused|unexpected EOF|(^|[^[:alnum:]_])EOF([^[:alnum:]_]|$)'
           while ! gh pr create "${PR_CREATE_ARGS[@]}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; do
             echo "PR creation failed. This may indicate a PR was created by another process during execution."
             if [ -s "${RUNTIME_DIR}/created_pr_url.err" ]; then

@@ -1494,6 +1494,28 @@ def test_create_pr_gives_up_after_bounded_transient_retries():
 		assert "attempt=3/3 outcome=give_up reason=no_existing_pr" in proc.stdout, proc.stdout
 
 
+def test_create_pr_retries_go_http_header_timeout_and_bare_eof():
+	"""Go HTTP client errors `gh` emits (`timeout awaiting response headers`,
+	a bare `EOF` after the request URL) are transient and must be retried."""
+	for stderr_text in (
+		"Post \"https://example.invalid/graphql\": net/http: timeout awaiting response headers\n",
+		"Post \"https://example.invalid/graphql\": EOF\n",
+	):
+		with tempfile.TemporaryDirectory() as td:
+			tmp = Path(td)
+			proc, gh_out = _run_create_pr_recovery(
+				tmp,
+				"7956",
+				[],
+				gh_pr_create_stderr=stderr_text,
+				pr_create_fail_times=1,
+				pr_create_success_stdout="https://github.com/owner/repo/pull/8001\n",
+			)
+			assert proc.returncode == 0, f"stderr: {proc.stderr}\nstdout: {proc.stdout}"
+			assert _pr_create_calls(tmp) == 2, stderr_text
+			assert "pr_url=https://github.com/owner/repo/pull/8001" in gh_out, gh_out
+
+
 def test_create_pr_does_not_retry_non_transient_error():
 	"""A deterministic error (here: nothing to merge) fails on the first
 	attempt; retrying it would only add delay."""
