@@ -7597,6 +7597,8 @@ jobs:
         if: always()
         env:
           GATE_ONLY: ${{ inputs.gate_only }}
+          SKIP_E2E: ${{ inputs.skip_e2e }}
+          DRY_RUN: ${{ inputs.dry_run }}
           RELEASE_ENABLED: ${{ needs.release.outputs.release_enabled }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -7656,7 +7658,17 @@ jobs:
           if [ "$RELEASE" = "success" ] || { [ "$GATE_ONLY" = "true" ] && [ "$RELEASE" = "skipped" ]; }; then
             release_ok=true
           fi
-          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$release_ok" = "true" ] && [ "$all_supplemental_ok" = "true" ]; then
+          # skip_e2e (not dry_run) skips the smoke test on purpose; the release
+          # still published, so a skipped e2e must not report FAILED (#7977).
+          e2e_ok=false
+          E2E_ICON="✓"
+          if [ "$E2E" = "success" ]; then
+            e2e_ok=true
+          elif [ "$E2E" = "skipped" ] && [ "${SKIP_E2E:-}" = "true" ] && [ "${DRY_RUN:-}" != "true" ]; then
+            e2e_ok=true
+            E2E_ICON="⊘"
+          fi
+          if [ "$e2e_ok" = "true" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$release_ok" = "true" ] && [ "$all_supplemental_ok" = "true" ]; then
             if [ "$GATE_ONLY" = "true" ]; then
               MSG="Release gate ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
               RELEASE_ICON="⊘"
@@ -7667,7 +7679,7 @@ jobs:
               MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
               RELEASE_ICON="✓"
             fi
-            MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
+            MSG+=$'\n'"e2e ${E2E_ICON} scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
           else
             MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
             # A newer release run cancels this run's e2e-smoke-test through the

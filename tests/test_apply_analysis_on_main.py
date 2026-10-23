@@ -361,6 +361,14 @@ def test_release_gate_only_mode_contract() -> None:
 	for needed in ("source", "resolve-version", "validate"):
 		assert f"needs.{needed}.result == 'success'" in release_if
 	assert gate["jobs"]["sync-to-main"]["if"].startswith("!cancelled() &&")
+	# The notify step must not report a skip_e2e release as FAILED.
+	notify_step = next(
+		step for job in gate["jobs"].values() for step in job.get("steps", [])
+		if step.get("name") == "Send Telegram notification"
+	)
+	assert notify_step["env"]["SKIP_E2E"] == "${{ inputs.skip_e2e }}"
+	assert '[ "$E2E" = "skipped" ] && [ "${SKIP_E2E:-}" = "true" ] && [ "${DRY_RUN:-}" != "true" ]' in notify_step["run"]
+	assert 'if [ "$e2e_ok" = "true" ] && [ "$SCRIPTS" = "success" ]' in notify_step["run"]
 	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
 	source_run = gate["jobs"]["source"]["steps"][0]["run"]
 	assert gate["jobs"]["source"]["steps"][0]["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
