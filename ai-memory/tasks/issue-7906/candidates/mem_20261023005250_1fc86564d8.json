@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue (canary-a, tracking #7905)\n\nPlanning ref: `orchestrator/project-7905` at `e5537d8f92c4ec7e2c44a8c015b005841f315295`. The integration branch mismatch line reads `false`.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names exactly one file, two required lines and a single trailing newline. It forbids touching any other file, including `tests/e2e_smoke_canary_b.txt`. Nothing is gained by widening the scope, and narrowing it would leave the acceptance criteria unmet. So the plan changes that one file only.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a plain-text data edit. The file currently holds three lines:\n```\nstatus: ok\nrun_id: 26151428977\nupdated-by: ai-pipeline\n```\nLine 1 is already `status: ok` and stays as it is. Replace line 2 (`run_id: 26151428977`) with `decompose-run: 39879064171`. Leave line 3 (`updated-by: ai-pipeline`) untouched, because the issue says not to reformat unrelated content. The file must still end with exactly one trailing newline.\n\n## Data structures affected\nOnly the contents of `tests/e2e_smoke_canary.txt`. No schema or code reads its second line.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Keep the existing third line\n- Chosen: Replace only line 2 and keep `updated-by: ai-pipeline` as line 3.\n- Alternatives considered: Rewrite the file to exactly two lines, which the \"if the file does not exist\" branch describes.\n- Why: The file already exists, so the \"replace\" branch applies, and the scope rule forbids reformatting unrelated content. Keeping line 3 still meets every acceptance criterion.\n\n## Security considerations\nThere is no trust boundary, endpoint, external input, secret or money state involved. The only abuse case is editing the sibling canary file, and the scope rule prevents that.\n\n## Risks and edge cases\n- If the file is rewritten without a trailing newline, or with extra blank lines, `sed -n 2p` still passes but the newline rule is broken. Write the file with exactly one final `\\n`.\n- If `tests/e2e_smoke_canary_b.txt` gets touched by accident, the diff-stat criterion fails.\n\n## Testing considerations\nCheck each acceptance criterion directly:\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 39879064171`.\n- `tail -c1` of the file is a newline.\n- `git diff --stat` lists only this one file.\n\nNo contract tests are needed.\n\n## Pre-execution self-check\nThe file path exists, the edit is fully specified and no external inputs are required.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "1ac9a91071d45b20f297730b02bb682fa6fa29d37b0823a5fdf1143b9d7f9258",
+  "lineage": {
+    "issue_number": 7906,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39879890460",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39879890460",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7906"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261023005250_1fc86564d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7906,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39879890460"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #7906",
+  "timestamps": {
+    "created_at": "2026-10-23T00:52:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
