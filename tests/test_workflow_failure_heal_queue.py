@@ -104,11 +104,11 @@ def test_lost_ticket() -> None:
 
 
 def test_position_cli(tmp_path: Path) -> None:
+	# The CLI measures ticket age against the wall clock, so these fixtures are
+	# stamped from the real current time (as _live_ticket does), not from NOW.
+	cli_now = datetime.now(timezone.utc)
 	comments = tmp_path / "comments.json"
-	# The CLI has no --now and uses the real clock, so tickets must be fresh
-	# against it, not against the fixed NOW (which goes stale after the lease).
-	real_now = datetime.now(timezone.utc)
-	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5, now=real_now)], [_ticket(20, 200, age_seconds=1, now=real_now)]]), encoding="utf-8")
+	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5, now=cli_now)], [_ticket(20, 200, age_seconds=1, now=cli_now)]]), encoding="utf-8")
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
