@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-23T07:54:37Z",
+  "tick_at": "2026-10-23T08:17:04Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -276,13 +276,13 @@
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "10",
+      "integration_ahead_by": "12",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 2,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -290,14 +290,14 @@
       },
       "number": 7913,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Route runtime-validation failures to the repository that owns the fix",
       "total_waves": 5,
-      "wave_complete": false
+      "wave_complete": true
     },
     {
       "current_wave": 1,
-      "integration_ahead_by": "11",
+      "integration_ahead_by": "12",
       "issue_counts": {
         "closed": 0,
         "done": 1,
