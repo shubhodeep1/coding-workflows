@@ -2020,7 +2020,8 @@ jobs:
           REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
           # Set when the loop drops the watched run (bait not covered or
           # coverage unknown) or advances the pin, so the run to judge next
-          # has not been polled yet; cleared once a poll reports a run ID.
+          # has not been polled yet. It allows one poll past the base
+          # deadline: the next deadline check consumes it.
           REVIEW_PHASE_HANDOFF_PENDING=0
           # Reads the previous poll's RUN_ID / RUN_STATUS /
           # CURRENT_STEP_STARTED_AT / BAIT_UNCOVERED_RUN_IDS and the current
@@ -2196,6 +2197,7 @@ jobs:
             if [ "$BAIT_REVIEW_VERDICT" = "not_covered" ]; then
               echo "::warning::Review run ${RUN_ID} checked out a pre-bait head or had no checkout marker; not a review of the bait"
               BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
+              REVIEW_PHASE_HANDOFF_PENDING=1
               LAST_ACTIVITY=$NOW
               PREV_STATE=""
             elif [ "$RUN_STATUS" = "completed" ] && [ "${BAIT_REVIEW_COOLDOWN_SKIP:-0}" != "1" ]; then
@@ -2207,10 +2209,10 @@ jobs:
               if [ "${BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]}" -ge 3 ]; then
                 echo "::warning::Review run ${RUN_ID} bait coverage stayed unverifiable; waiting for a bait-head review instead"
                 BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
+                REVIEW_PHASE_HANDOFF_PENDING=1
                 PREV_STATE=""
               fi
             fi
-            REVIEW_PHASE_HANDOFF_PENDING=1
             sleep "$POLL_INTERVAL"
             ELAPSED=$((ELAPSED + POLL_INTERVAL))
             return 1
@@ -2239,6 +2241,8 @@ jobs:
                 exit 1
               fi
             fi
+            # The handoff allowance covers exactly one poll (#8004).
+            REVIEW_PHASE_HANDOFF_PENDING=0
 
             # Find the review workflow run for this PR's head branch
             PR_BRANCH="ai/issue-${ISSUE_NUMBER}"

@@ -769,7 +769,15 @@ def test_phase4_handoff_polls_the_next_run_past_the_base_deadline() -> None:
 	assert _phase4_active(TEST_HANDOFF_PENDING="1", E2E_JOB_STARTED_EPOCH="", RUN_STATUS="completed")["rc"] == "1"
 	step = _phase4_step(_read_workflow())
 	coverage = _slice_between(step, "require_bait_review_coverage() {", "# Give the review workflow a moment to start")
-	assert "REVIEW_PHASE_HANDOFF_PENDING=1" in coverage[coverage.rindex("fi"):]
+	# Set only where a run is actually dropped, never for an in-progress
+	# run whose coverage is still unknown (it is not dropped).
+	assert coverage.count("REVIEW_PHASE_HANDOFF_PENDING=1") == 2
+	for drop in re.finditer(r'BAIT_UNCOVERED_RUN_IDS="\$\{BAIT_UNCOVERED_RUN_IDS:\+', coverage):
+		assert coverage[drop.end():].lstrip().split("\n", 2)[1].strip() == "REVIEW_PHASE_HANDOFF_PENDING=1"
+	assert "REVIEW_PHASE_HANDOFF_PENDING=1" not in coverage[coverage.rindex("fi"):]
+	# One-shot: consumed right after the deadline check, so it allows one poll.
+	check = _slice_between(step, 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then', "# Find the review workflow run")
+	assert check.rstrip().endswith("REVIEW_PHASE_HANDOFF_PENDING=0")
 	pin_advance = _slice_between(step, 'PIN_SHA="${PIN_HEAD_NOW}"', "continue")
 	assert "REVIEW_PHASE_HANDOFF_PENDING=1" in pin_advance
 	assert 'if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi' in step
