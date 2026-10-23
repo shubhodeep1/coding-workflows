@@ -104,8 +104,13 @@ def test_lost_ticket() -> None:
 
 
 def test_position_cli(tmp_path: Path) -> None:
+	# The CLI reads the real clock (heal-queue has no --now), so these tickets
+	# are dated from it too; dating them from NOW expires them after the lease.
+	cli_now = datetime.now(timezone.utc)
+	holder_ticket = dict(_ticket(10, 101), created_at=_iso(cli_now - timedelta(seconds=5)))
+	own_ticket = dict(_ticket(20, 200), created_at=_iso(cli_now - timedelta(seconds=1)))
 	comments = tmp_path / "comments.json"
-	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5)], [_ticket(20, 200, age_seconds=1)]]), encoding="utf-8")
+	comments.write_text(json.dumps([[holder_ticket], [own_ticket]]), encoding="utf-8")
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
