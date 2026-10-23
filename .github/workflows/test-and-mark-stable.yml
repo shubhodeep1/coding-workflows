@@ -2028,9 +2028,12 @@ jobs:
           # NOW / IDLE. Returns 0 only when waiting past the base deadline
           # is allowed.
           review_phase_deadline_extension_allowed() {
-            local now="${NOW:-}" step_epoch step_elapsed
+            local now="${NOW:-}" step_epoch step_elapsed poll_margin="${POLL_INTERVAL:-0}"
             [[ "$now" =~ ^[0-9]+$ ]] || return 1
-            [ "$now" -lt "$REVIEW_PHASE_DEADLINE_CEILING" ] || return 1
+            # Leave room for the poll and its sleep, so no allowed poll
+            # ends past the ceiling.
+            [[ "$poll_margin" =~ ^[0-9]+$ ]] || poll_margin=0
+            [ "$((now + poll_margin))" -lt "$REVIEW_PHASE_DEADLINE_CEILING" ] || return 1
             [ "${REVIEW_PHASE_HANDOFF_PENDING:-0}" = "1" ] && return 0
             [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] || return 1
             case ",${BAIT_UNCOVERED_RUN_IDS:-}," in
@@ -2227,7 +2230,9 @@ jobs:
             if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then
               if review_phase_deadline_extension_allowed; then
                 if [ "$REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED" = "0" ]; then
-                  echo "E2E_REVIEW_DEADLINE_EXTENDED run=${RUN_ID} status=${RUN_STATUS} base=${REVIEW_PHASE_BASE_DEADLINE} ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+                  EXT_LOG_RUN_ID="${RUN_ID:-unknown}"
+                  EXT_LOG_RUN_STATUS="${RUN_STATUS:-unknown}"
+                  echo "E2E_REVIEW_DEADLINE_EXTENDED run=${EXT_LOG_RUN_ID//[^0-9a-z]/} status=${EXT_LOG_RUN_STATUS//[^a-z_]/} base=${REVIEW_PHASE_BASE_DEADLINE} ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
                   REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1
                 fi
               else

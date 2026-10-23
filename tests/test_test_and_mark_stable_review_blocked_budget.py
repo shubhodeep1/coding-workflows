@@ -758,6 +758,11 @@ def test_phase4_nothing_waits_past_the_ceiling() -> None:
 		assert _phase4_active(NOW=str(now), RUN_STATUS="queued")["rc"] == "1"
 		assert _phase4_active(NOW=str(now))["rc"] == "1"
 	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 1))["rc"] == "0"
+	# A poll (and its sleep) must end by the ceiling, so the check keeps a
+	# POLL_INTERVAL margin; a malformed interval counts as no margin.
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 10), POLL_INTERVAL="10")["rc"] == "1"
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 11), POLL_INTERVAL="10")["rc"] == "0"
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 1), POLL_INTERVAL="x")["rc"] == "0"
 
 
 def test_phase4_handoff_polls_the_next_run_past_the_base_deadline() -> None:
