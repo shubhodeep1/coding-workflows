@@ -29,8 +29,13 @@
 #                                                           failed cycle runs already
 #                                                           covered this tip
 #   PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor          main diverged from the stable
-#                                                           tag / last baseline; cannot
-#                                                           fast-forward, so no cycle
+#                                                           tag / last baseline, or the
+#                                                           stable BRANCH is not an
+#                                                           ancestor of the main tip (or,
+#                                                           pinned, of the frozen
+#                                                           candidate; detail ref=heads/
+#                                                           stable); cannot fast-forward,
+#                                                           so no cycle
 #   PROMOTE_CYCLE_SKIPPED reason=insufficient_docs          fewer than PROMOTE_CYCLE_MIN_DOCS docs
 #   PROMOTE_CYCLE_SKIPPED reason=guard_unavailable          an API guard failed; fail closed
 #   PROMOTE_CYCLE_SKIPPED reason=gate_busy                  another test-and-mark-stable run (a
@@ -81,6 +86,9 @@
 #   PROMOTE_CYCLE_ENABLED               default true
 #   PROMOTE_CYCLE_DEFAULT_BRANCH        default main
 #   PROMOTE_CYCLE_STABLE_TAG            default stable
+#   PROMOTE_CYCLE_STABLE_BRANCH         default stable (the branch the promotion
+#                                       fast-forwards; must be an ancestor of the
+#                                       candidate, #7888)
 #   PROMOTE_CYCLE_WORKFLOW_FILE         default promote-main-to-stable.yml (self)
 #   PROMOTE_CYCLE_GATE_WORKFLOW_FILE    default test-and-mark-stable.yml
 #   PROMOTE_CYCLE_GATE_WAIT_SECS        default 18000
@@ -119,6 +127,7 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 PROMOTE_CYCLE_ENABLED="${PROMOTE_CYCLE_ENABLED:-true}"
 PROMOTE_CYCLE_DEFAULT_BRANCH="${PROMOTE_CYCLE_DEFAULT_BRANCH:-main}"
 PROMOTE_CYCLE_STABLE_TAG="${PROMOTE_CYCLE_STABLE_TAG:-stable}"
+PROMOTE_CYCLE_STABLE_BRANCH="${PROMOTE_CYCLE_STABLE_BRANCH:-stable}"
 PROMOTE_CYCLE_WORKFLOW_FILE="${PROMOTE_CYCLE_WORKFLOW_FILE:-promote-main-to-stable.yml}"
 PROMOTE_CYCLE_GATE_WORKFLOW_FILE="${PROMOTE_CYCLE_GATE_WORKFLOW_FILE:-test-and-mark-stable.yml}"
 PROMOTE_CYCLE_GATE_WAIT_SECS="${PROMOTE_CYCLE_GATE_WAIT_SECS:-18000}"
@@ -385,6 +394,62 @@ require_code_changes()
 	if [ -z "${CODE_CHANGES_OUT}" ]; then
 		skip_cycle "$3" "base=$1 head=$2"
 	fi
+}
+
+# resolve_stable_branch_commit: prints the stable branch tip (heads/, never
+# the tag of the same name). Exit 2 on any failure, a missing branch included.
+resolve_stable_branch_commit()
+{
+	local sha
+	if ! sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${PROMOTE_CYCLE_STABLE_BRANCH}" 2>/dev/null | jq -r '.object.sha // empty' 2>/dev/null)"; then
+		return 2
+	fi
+	[[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || return 2
+	printf '%s\n' "${sha}"
+}
+
+# require_stable_branch_ancestor <head_sha> <known_compared_base>
+# Exits the cycle (skip) unless the stable branch is an ancestor of
+# <head_sha> (identical or ahead), because promote-main-to-stable.yml can
+# only fast-forward it (#7888). <known_compared_base> is a commit that
+# require_code_changes already compared with <head_sha> (diverged and
+# behind were skipped there), so a branch at that commit needs no second
+# compare. Runs in the main shell so skip_cycle really exits.
+# API calls: 1 ref read, +1 compare when neither shortcut applies.
+require_stable_branch_ancestor()
+{
+	local head="$1"
+	local known_base="${2:-}"
+	local branch_sha rc saved_out saved_status
+	set +e
+	branch_sha="$(resolve_stable_branch_commit)"
+	rc=$?
+	set -e
+	if [ "${rc}" -ne 0 ]; then
+		skip_cycle guard_unavailable "lookup=branch:${PROMOTE_CYCLE_STABLE_BRANCH}"
+	fi
+	if [ "${branch_sha}" = "${head}" ]; then
+		return 0
+	fi
+	if [ -n "${known_base}" ] && [ "${branch_sha}" = "${known_base}" ]; then
+		return 0
+	fi
+	# code_changes_between overwrites the tag-compare globals the caller logs.
+	saved_out="${CODE_CHANGES_OUT}"
+	saved_status="${CODE_CHANGES_STATUS:-}"
+	set +e
+	code_changes_between "${branch_sha}" "${head}"
+	rc=$?
+	set -e
+	if [ "${rc}" -eq 3 ] || { [ "${rc}" -eq 0 ] && [ "${CODE_CHANGES_STATUS:-}" != "ahead" ] && [ "${CODE_CHANGES_STATUS:-}" != "identical" ]; }; then
+		skip_cycle base_not_ancestor "base=${branch_sha} head=${head} status=${CODE_CHANGES_STATUS:-unknown} ref=heads/${PROMOTE_CYCLE_STABLE_BRANCH}"
+	fi
+	if [ "${rc}" -ne 0 ]; then
+		skip_cycle guard_unavailable "compare=${branch_sha}...${head}"
+	fi
+	CODE_CHANGES_OUT="${saved_out}"
+	CODE_CHANGES_STATUS="${saved_status}"
+	return 0
 }
 
 # tick_operator_steps <tag_commit>: tick ai:operator-step entries whose merge
@@ -659,11 +724,13 @@ case "${tag_lookup_rc}" in
 		# Before the code-change guard: right after a promotion it skips.
 		tick_operator_steps "${tag_commit}" || true
 		require_code_changes "${tag_commit}" "${main_tip}" no_code_changes
+		require_stable_branch_ancestor "${main_tip}" "${tag_commit}"
 		echo "Code changes since ${PROMOTE_CYCLE_STABLE_TAG} (${tag_commit:0:7}):"
 		printf '%s\n' "${CODE_CHANGES_OUT}" | sed 's/^/  /'
 		;;
 	1)
 		echo "::warning::Tag ${PROMOTE_CYCLE_STABLE_TAG} does not exist; treating main as never promoted."
+		require_stable_branch_ancestor "${main_tip}" ""
 		;;
 	*)
 		skip_cycle guard_unavailable "lookup=tag:${PROMOTE_CYCLE_STABLE_TAG}"
@@ -778,6 +845,12 @@ if [ "${pin_mode}" = "true" ]; then
 		pin_mode=false
 		echo "PROMOTE_CYCLE_PIN outcome=skipped reason=freeze_failed detail=${PIN_FREEZE_DETAIL:-unknown}"
 	fi
+fi
+# Pinned: the stable branch can move between step 3 and the freeze, and an
+# adopted candidate can differ from main_tip, so check it again. A skip here
+# releases the freeze tag through the EXIT trap.
+if [ "${pin_mode}" = "true" ]; then
+	require_stable_branch_ancestor "${pin_candidate_sha}" ""
 fi
 before_gate_ids="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50" | jq -c '[.workflow_runs[]?.id]')"
 echo "Dispatching ${PROMOTE_CYCLE_GATE_WORKFLOW_FILE} on ${gate_ref} with gate_only=true (smoke gate for ${cycle_baseline_sha})."

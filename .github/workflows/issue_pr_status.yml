@@ -1054,9 +1054,12 @@ jobs:
     # Consumer workflow-sync PRs (same-repository auto/update-workflows-* or
     # ai-sync/stable heads) are skipped too: they only refresh upstream-managed
     # wrappers (the script repeats the check as ACTIVATION_VERIFY ...
-    # reason=workflow_sync_pr). Never fails the workflow.
+    # reason=workflow_sync_pr). A PR labelled ai:skip-activation-verify is
+    # skipped as well (reason=skip_label); a PR whose every changed file
+    # matches ACTIVATION_VERIFY_EXEMPT_GLOBS (plans, raw design drops) is
+    # skipped by the script (reason=exempt_paths). Never fails the workflow.
     needs: sync-issue-status
-    if: always() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == github.event.repository.default_branch && !startsWith(github.event.pull_request.head.ref, 'orchestrator/project-') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.event.pull_request.head.ref, 'auto/update-workflows-') || github.event.pull_request.head.ref == 'ai-sync/stable')) && vars.ACTIVATION_VERIFY_ENABLED != 'false'
+    if: always() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == github.event.repository.default_branch && !startsWith(github.event.pull_request.head.ref, 'orchestrator/project-') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.event.pull_request.head.ref, 'auto/update-workflows-') || github.event.pull_request.head.ref == 'ai-sync/stable')) && !contains(github.event.pull_request.labels.*.name, 'ai:skip-activation-verify') && vars.ACTIVATION_VERIFY_ENABLED != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     continue-on-error: true
@@ -1230,6 +1233,10 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body || '' }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          # Merges whose every changed file matches are not verified (plans, raw
+          # design drops); a mixed PR is verified on its other files only.
+          ACTIVATION_VERIFY_EXEMPT_GLOBS: ${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**' }}
           LINKED_ISSUE: ${{ needs.sync-issue-status.outputs.linked_issue }}
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}

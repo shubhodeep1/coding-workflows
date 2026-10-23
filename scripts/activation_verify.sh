@@ -25,7 +25,10 @@
 #                                 PR_NUMBER, MERGE_SHA, PR_TITLE, PR_BODY,
 #                                 LINKED_ISSUE (number or empty), PR_COMMITS,
 #                                 TARGET_DIR; optional PR_HEAD_REF and
-#                                 PR_HEAD_REPOSITORY (see the sync-PR skip).
+#                                 PR_HEAD_REPOSITORY (see the sync-PR skip),
+#                                 PR_LABELS (JSON array of label names) and
+#                                 ACTIVATION_VERIFY_EXEMPT_GLOBS (see the
+#                                 exempt-path skip).
 #   activation_verify.sh project  the poller, when an orchestrator project
 #                                 completes. Env: REPOSITORY, TRACKING_NUM,
 #                                 PROJECT_TITLE, PROJECT_BODY, TARGET_DIR,
@@ -47,6 +50,20 @@
 # that were noise. The skip needs PR_HEAD_REF and a PR_HEAD_REPOSITORY equal to
 # REPOSITORY; a missing value verifies as before. It runs before any GitHub
 # call, so a skipped PR costs no API request.
+#
+# Plans and raw input drops are not verified (issue #4726 in
+# tele-funtoken-msg-scoring): a merged plan or a designer's raw game build
+# reads to the model as unshipped work, so it filed a code gap that the
+# pipeline then built and merged with nobody asking. In PR mode:
+#   - a PR labelled ai:skip-activation-verify is skipped before any GitHub
+#     call (reason=skip_label);
+#   - when every changed file matches ACTIVATION_VERIFY_EXEMPT_GLOBS
+#     (comma-separated, default docs/plans/**; a value replaces the default;
+#     `**` spans folders, `*` stays inside one), the merge is skipped without
+#     a model call or comment (reason=exempt_paths);
+#   - a mixed PR is verified on its other files only; the exempt ones go to
+#     the model as exempt_changed_files, which it must never turn into a gap.
+# Project mode is unchanged: a project was ordered explicitly.
 #
 # Model text never starts a comment line ("Summary: ", "Trigger: ", "Fix: "):
 # the poller's /judge_resume, /revalidate and /re-security-pass handlers match
@@ -246,6 +263,56 @@ activation_sync_branch_label()
 	esac
 }
 
+# True when PR_LABELS (a JSON array of names) holds ai:skip-activation-verify.
+# A missing or malformed value is no label.
+activation_has_skip_label()
+{
+	printf '%s' "${PR_LABELS:-[]}" | jq -e 'type == "array" and any(.[]; . == "ai:skip-activation-verify")' >/dev/null 2>&1
+}
+
+# Splits the JSON array of changed files in $1 by ACTIVATION_VERIFY_EXEMPT_GLOBS.
+# Prints {"exempt": [...], "other": [...]}; on a parse failure prints nothing
+# and returns 1 (the caller then verifies every file, as before).
+activation_split_exempt_files()
+{
+	ACTIVATION_SPLIT_FILES_JSON="$1" python3 -I -B - <<'PY'
+import fnmatch, json, os, sys
+from functools import lru_cache
+from pathlib import PurePosixPath
+raw = os.environ.get("ACTIVATION_VERIFY_EXEMPT_GLOBS", "") or "docs/plans/**"
+patterns = [item.strip().lstrip("/") for item in raw.split(",") if item.strip().lstrip("/")]
+if not patterns:
+	# A set value such as "," names no pattern: nothing is exempt, so every file is verified.
+	print("::warning::ACTIVATION_VERIFY_EXEMPT_GLOBS names no pattern; verifying every changed file.", file=sys.stderr)
+def matches(path, pattern):
+	path_parts = PurePosixPath(path).parts
+	pattern_parts = PurePosixPath(pattern).parts
+	@lru_cache(maxsize=None)
+	def match(path_idx, pattern_idx):
+		while pattern_idx < len(pattern_parts):
+			part = pattern_parts[pattern_idx]
+			if part == "**":
+				if pattern_idx + 1 == len(pattern_parts):
+					return path_idx < len(path_parts)
+				return any(match(next_idx, pattern_idx + 1) for next_idx in range(path_idx, len(path_parts) + 1))
+			if path_idx >= len(path_parts) or not fnmatch.fnmatchcase(path_parts[path_idx], part):
+				return False
+			path_idx += 1
+			pattern_idx += 1
+		return path_idx == len(path_parts)
+	return match(0, 0)
+try:
+	files = json.loads(os.environ["ACTIVATION_SPLIT_FILES_JSON"])
+	if not isinstance(files, list) or not all(isinstance(name, str) for name in files):
+		raise ValueError
+except (KeyError, ValueError):
+	sys.exit(1)
+exempt = [name for name in files if any(matches(name, pattern) for pattern in patterns)]
+other = [name for name in files if name not in exempt]
+print(json.dumps({"exempt": exempt, "other": other}))
+PY
+}
+
 activation_main()
 {
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file activation_model_rc=0
@@ -253,6 +320,7 @@ activation_main()
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_existing_fix activation_fix_lookup_ok
 	local activation_engine_labels="" activation_sync_label=""
+	local activation_exempt_json activation_split_json
 	if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
 		activation_log "mode=${mode} outcome=skip reason=disabled"
 		return 0
@@ -274,6 +342,10 @@ activation_main()
 			fi
 			if activation_sync_label="$(activation_sync_branch_label)"; then
 				activation_log "mode=pr item=${PR_NUMBER} outcome=skip reason=workflow_sync_pr sync_branch=${activation_sync_label}"
+				return 0
+			fi
+			if activation_has_skip_label; then
+				activation_log "mode=pr item=${PR_NUMBER} outcome=skip reason=skip_label"
 				return 0
 			fi
 			key="pr-${PR_NUMBER}"
@@ -312,10 +384,22 @@ activation_main()
 				activation_log "mode=pr item=${item} outcome=skip reason=fallback_diff_empty"
 				return 0
 			fi
+			activation_exempt_json="[]"
+			if activation_split_json="$(activation_split_exempt_files "${activation_files_json}")"; then
+				activation_exempt_json="$(printf '%s' "${activation_split_json}" | jq -c '.exempt')"
+				if printf '%s' "${activation_split_json}" | jq -e '.other | length == 0' >/dev/null 2>&1; then
+					activation_log "mode=pr item=${item} outcome=skip reason=exempt_paths exempt_files=$(printf '%s' "${activation_exempt_json}" | jq 'length')"
+					return 0
+				fi
+				activation_files_json="$(printf '%s' "${activation_split_json}" | jq -c '.other')"
+			else
+				echo "::warning::Activation exempt-path check failed for #${PR_NUMBER}; verifying every changed file."
+			fi
 			jq -n --arg pr "${PR_NUMBER}" --arg sha "${MERGE_SHA:-}" --arg title "${PR_TITLE:-}" --arg body "${PR_BODY:-}" \
 				--argjson linked "${linked_json}" \
 				--argjson files "${activation_files_json}" \
-				'{kind: "merged pull request", pull_request: ($pr | tonumber), merge_commit: $sha, title: $title, body: ($body[0:6000]), linked_issue: $linked, changed_files: $files}' \
+				--argjson exempt "${activation_exempt_json}" \
+				'{kind: "merged pull request", pull_request: ($pr | tonumber), merge_commit: $sha, title: $title, body: ($body[0:6000]), linked_issue: $linked, changed_files: $files} + (if ($exempt | length) > 0 then {exempt_changed_files: $exempt} else {} end)' \
 				> "${context_file}" 2>/dev/null || echo '{}' > "${context_file}"
 			;;
 		project)

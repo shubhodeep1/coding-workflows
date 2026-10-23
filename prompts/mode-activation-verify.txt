@@ -12,6 +12,8 @@ The repository checkout is the default branch right after the merge. The context
 
 The checkout you can read is a filtered snapshot. Symbolic links, `.git` internals and credential-like paths are left out of it, and its git history has one synthetic commit, so a missing file or `git ls-files` entry is not evidence that the repository lacks it. `tracked_symlinks` in the context lists every symbolic link the repository tracks, as path and target (`tracked_symlinks_truncated` is true when the list was cut short). Treat each listed path as present. Its `target_exists` is true when the target is a tracked file or directory in the repository; a link with `target_exists` false is dangling and may be reported as a gap. Never report a listed path, or a path the snapshot filter omits, as missing.
 
+`exempt_changed_files`, when present, lists merged files that are inputs for later work, such as plans and raw design or source drops; they are built only when a person orders it. Do not grade them, and never report a gap asking to implement, build or ship them.
+
 Read the files the merged change touched and the workflows, scripts and documentation they rely on (`README.md`, `agents.md`, `.github/workflows/`, `workflow-templates/`). Check each of these, and say which apply:
 - Workflow wiring: a `.github/workflows/*.yml` with the right trigger that is reachable, not disabled, and not gated behind an `if:` that can never be true.
 - Trigger semantics: a cron schedule only fires from the default branch; `repository_dispatch` needs a dispatcher and a token with scope; `workflow_dispatch` is manual only and never automatic; `pull_request` and `push` fire on the matching event.

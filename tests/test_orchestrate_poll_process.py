@@ -2907,6 +2907,9 @@ if args[0] == 'api':
 				{'sha': 'c%04d' % idx, 'parents': [{'sha': 'p%d' % j} for j in range(int(n))]}
 				for idx, n in enumerate(parent_counts)
 			]
+		# Persist the store so every compare call is recorded in api_calls
+		# (the #7888 stable-branch ancestor tests count these calls).
+		save()
 		if jq == '.ahead_by':
 			print(ahead_by)
 		elif jq:
