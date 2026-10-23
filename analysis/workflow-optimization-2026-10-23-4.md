@@ -675,3 +675,188 @@ Method: each estimate is the body's line count × the average line width read of
 | Code modularization | `scripts/stage_workflow_support.sh`, `orchestrate_poll.yml` (+5 phase workflows), `comprehensive-test-and-release.yml`, `scripts/dispatch_and_watch_workflow_run.sh`, `workflow-log-analysis.yml`, new `.github/actions/setup-wla-agent/`, new `scripts/workflow_log_analysis_helpers.sh`, `implement.yml` | Large |
 | Expression size reduction | `orchestrate_poll.yml`, `workflow-log-analysis.yml`, `test-and-mark-stable.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | `test-and-mark-stable.yml`, `comprehensive-test-and-release.yml`, `cancel_on_pr_close.yml`, `promote_candidate_follow.sh`, `label_helpers.sh`, `review_autofix_sweep.yml`, `retarget_merged_base.sh`, `prompts/mode-workflow-audit.txt` (+ template), 8 workflows for DEAD-001 | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-23)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means static reading proves every precondition: same endpoint or a strict field subset, the same pagination, filters and token, the same function or step with no mutation in between, unchanged error and retry behaviour, no concurrency boundary crossed, and any documented cache contract kept. The implement stage may act on these without further review. `NEEDS_VERIFICATION` means the change looks sound, but at least one precondition cannot be proven from source alone; the named check must pass first. `RISKY_SKIP` means the call is in a pagination path, a retry or race-defending path, an identity or auth flow, or a path whose log keys other tooling reads. It is listed only for visibility and must not be auto-implemented. This pass found **no** `SAFE_TO_MERGE` findings.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: Backfill makes a separate `totalCount` GraphQL call before its first paginated PR page**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:** `scripts/workflow_failure_heal_non_retryable_backfill.sh:172` (`COUNT_QUERY`) and `:177` (count call); `:161` (`QUERY`) and `:233-235` (first page call).
+- **Current → proposed:** 1 count call + ⌈MAX_PRS/10⌉ page calls (default 1 + 5) per tick → 0 + 5 on ticks where `total_open ≤ MAX_PRS`. That saves 1 call per tick, about 48/day at the `*/30` sweep cadence (`review_autofix_sweep.yml:79-80`). Rotation ticks stay at the same count.
+- **Endpoint:** GraphQL `repository.pullRequests(states: OPEN)`, both calls.
+- **Evidence:**
+  - Both queries read the same `pullRequests(states: OPEN)` connection.
+  - The count only chooses the start cursor (`:188-226`). When `total_open ≤ MAX_PRS`, `cursor` stays `""`, so the first page call is exactly the query that would run anyway.
+    ```bash
+    COUNT_QUERY='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN) { totalCount } } }'
+    ```
+- **Proposed fix (for manual review only):** add `totalCount` to `QUERY`'s `pullRequests` selection.
+  - Issue the first page with `cursor=""`.
+  - If `totalCount ≤ MAX_PRS`, keep that page and drop `COUNT_QUERY`.
+  - Otherwise, throw the page away and run today's rotation path (`:188-226`).
+- **Safety rationale:** this merges into a manually paginated, window-rotated listing (`:165-170`, `:195-224`, `:229-260`). That is a pagination trigger, and it risks shifting page boundaries and the `listing_truncated` / `window_rotated` log semantics.
+- **Downstream signal:** do not auto-implement. Before changing anything, a reviewer must confirm three things:
+  - the rotated window's start (`window * MAX_PRS`) is unchanged;
+  - a discarded first page on rotation ticks does not count toward `fetched`;
+  - the `outcome=info reason=window_rotated` line is still emitted with the same fields.
+
+**MERGE-002: The open-PR set is listed up to 5 times in one `review_autofix_sweep` job**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+
+  | Step | Location | Call | When it runs |
+  |---|---|---|---|
+  | Enumerate | `.github/workflows/review_autofix_sweep.yml:228-237` | REST `GET pulls?state=open`, `--paginate` | every tick |
+  | CI recovery | `scripts/ci_cancelled_rerun.py:117-145`, called at `:317` | REST `GET pulls?state=open`, `--paginate --slurp` | every tick with eligible PRs |
+  | Backfill | `scripts/workflow_failure_heal_non_retryable_backfill.sh:161`, `:229-260` | GraphQL pages of 10, `orderBy UPDATED_AT ASC` | every tick |
+  | Security holds | `scripts/review_security_hold_sweep.py:47-65`, `:276-280` | GraphQL pages of 50, `orderBy UPDATED_AT DESC` | only when `SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true'` (`review_autofix_sweep.yml:601`) |
+  | Provider outage | `scripts/provider_outage.py:386-395` | GraphQL pages of 50 | only on outage recovery (docstring `:52-54`) |
+
+- **Current → proposed:**
+  - Today: ⌈N/100⌉ + ⌈N/100⌉ + (1 + ≤5) + ⌈N/50⌉ + ⌈N/50⌉ in the worst case.
+  - Proposed: unchanged in this pass. A later design could share one GraphQL snapshot between the backfill and the security-hold pass. Both read `headRefOid` and `comments(last: 100)` with author and body, which would save ⌈N/50⌉ calls per tick when the security pass is on.
+- **Endpoints:** REST `repos/{r}/pulls`; GraphQL `repository.pullRequests`.
+- **Evidence:** every listing reads open PRs and their head SHA. `ci_cancelled_rerun.py:8-10` rejects reuse on purpose:
+  ```text
+  The sweep's earlier PR snapshot cannot prove a head is still current after
+  the review-dispatch loop
+  ```
+- **Proposed fix:** none to implement now. Do not reuse the enumerate snapshot (`${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json`, `:239`) in place of the CI step's live re-read. That re-read is the `superseded_head` guard (`ci_cancelled_rerun.py:328-330`).
+- **Safety rationale:**
+  - Every call is paginated.
+  - The CI re-read deliberately defends against heads moving during the dispatch loop.
+  - The two GraphQL listings use opposite orderings, page sizes and windows (`MAX_PRS` rotation against all PRs).
+  - The security pass may run under a different token (`GH_PAT || github.token`, `review_autofix_sweep.yml:603`).
+- **Downstream signal:** do not auto-implement. A shared backfill/security snapshot needs a design review covering:
+  - ordering (ASC vs DESC);
+  - the MAX_PRS window against full coverage;
+  - token scope (`SECURITY_HOLD_SWEEP_TOKEN_MODE`, `review_security_hold_sweep.py:12-21`);
+  - the `hasPreviousPage` comment-history fallback (`:296-305`).
+
+**MERGE-003: The promote-candidate follower makes 3–4 separate ref reads per invocation**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:** `scripts/promote_candidate_follow.sh`:
+  - `:148` `branches/${FOLLOW_BRANCH}`
+  - `:168` `git/ref/tags/${FOLLOW_TAG}`
+  - `:181` `git/ref/heads/main`
+  - `:210` `git/tags/${TAG_OBJECT_SHA}`, only for an annotated tag
+- **Current → proposed:** 3 (or 4) REST GETs → 1 aliased GraphQL query, in theory: three `ref(qualifiedName:)` aliases, with `... on Tag { message }` folding in the tag-object read.
+- **Endpoints:** REST `branches/{b}`, `git/ref/tags/{t}`, `git/ref/heads/main`, `git/tags/{sha}`.
+- **Evidence:**
+  - All four calls are sequential reads in step 1 or step 3, with no write in between (`:145-229`).
+  - `follow_api` routes them through `gh_api_retry` (`:108-114`).
+- **Proposed fix (for manual review only):** one GraphQL query following the alias pattern of `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh`).
+- **Safety rationale:** this path explicitly defends against a freeze-tag race (Deep Audit BUG-005). Merging would also change the error semantics:
+  - REST 404 → `BRANCH_EXISTS=false` or `TAG_EXISTS=false` (`:150`, `:170`), while GraphQL returns `null`. The fail-closed `tag_read_failed` behaviour (`:173-174`) has to be kept.
+  - REST `protected` (`:158-162`) has no exact GraphQL equivalent that covers both rulesets and classic protection.
+- **Downstream signal:** do not auto-implement. BUG-005 adds a fresh tag re-read before the PATCH (`:237-238`), which runs against this consolidation. Settle BUG-005 first, then have a reviewer decide whether a GraphQL `protected` substitute is acceptable.
+
+**MERGE-004: The retarget lookup makes 2 REST calls per hop that one GraphQL query could cover**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Calls involved:** `scripts/retarget_merged_base.sh:54-55` (closed-PR search by head) and `:64` (head ref read), both inside `retarget_lookup_merged`. The function is called once per hop from `retarget_follow` (`:84-95`, at most `RETARGET_MERGED_BASE_MAX_HOPS`, default 3).
+- **Current → proposed:** 2 calls per hop → 1 call per hop (up to 6 → 3 per invocation). Only non-default branches trigger it (`:110`, `:134`).
+- **Endpoints:** REST `repos/{r}/pulls?state=closed&head={owner}:{b}&per_page=20` and `repos/{r}/git/ref/heads/{b}` → GraphQL `repository { ref(qualifiedName: "refs/heads/<b>") { target { oid } } pullRequests(headRefName: "<b>", states: MERGED, last: 20) { nodes { number baseRefName headRefOid mergedAt headRepositoryOwner { login } } } }`.
+- **Evidence:** both calls take the same `branch` in the same function with no mutation in between. The second call depends only on the first's `head_sha` for a client-side comparison (`:74`), not for its URL.
+  ```bash
+  if ! merged_json="$(gh api "repos/${repo}/pulls?state=closed&head=${head_query}&per_page=20" \
+  ...
+  if ! tip="$(gh api "repos/${repo}/git/ref/heads/$(retarget_urlencode "${branch}")" --jq '.object.sha // ""' 2>"${tip_error_file}")"; then
+  ```
+- **Proposed fix:** replace both calls in `retarget_lookup_merged` with one GraphQL call that keeps the output contract (`"<merged_pr_number> <base_ref>"` or empty, return 1 on lookup failure). Wrap it in `gh_api_retry --optional` (this also covers Deep Audit CONSIST-004).
+- **Safety rationale:** error semantics are not provably identical.
+  - The REST 404 on the ref means "deleted, retarget allowed" (`:65-71`). GraphQL returns `ref: null`, which also happens for permission or visibility failures.
+  - `head=owner:branch` limits matches to same-owner heads. GraphQL `headRefName` also matches fork PRs unless they are filtered on `headRepositoryOwner`.
+  - Today's REST call takes the 20 most recent *closed* PRs and then filters to merged. GraphQL `states: MERGED, last: 20` selects differently.
+- **Downstream signal:** before implementing, verify each of these with a fixture in `tests/`:
+  - (a) a deleted ref, a permission error and an existing ref map to the same three outcomes as today;
+  - (b) the fork-PR filter on `headRepositoryOwner.login == owner` keeps today's owner scoping;
+  - (c) choosing the latest merged PR by `mergedAt` matches `sort_by(.merged_at) | last` (`:55`) for a reused branch name.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: `set_issue_phase_label_resilient` GETs the issue's labels even though the POST it makes next returns the full label set**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:** `scripts/label_helpers.sh:226-227` (paginated GET `issues/{n}/labels`) and `:266-267` (POST `issues/{n}/labels`, output discarded to `/dev/null`).
+- **Current → proposed:** 1 GET (≥1 page) + 1 POST + k DELETE per transition → 1 POST + k DELETE. That saves 1 call per phase transition, on top of API-005's saving.
+- **Endpoint:** REST `repos/{r}/issues/{n}/labels`, GET and POST.
+- **Evidence:**
+  - The GET only computes `_stale`, the phase labels other than the target (`:253-254`).
+  - The POST already runs before any DELETE (`:240-251`: "POST the target first, so the issue is never without a phase label").
+  - GitHub's "Add labels to an issue" endpoint answers `200` with an array of label objects. The docs search did not find an explicit statement that this is the issue's full set after the add ([REST API endpoints for labels](https://docs.github.com/en/rest/issues/labels)).
+- **Proposed fix (for manual review only):**
+  - Capture the POST's stdout instead of discarding it.
+  - Compute `_stale` from `[.[].name]` of that response with the existing jq filter (`:253-254`).
+  - Drop the GET.
+  - Keep the "POST failed → `SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME=failed`" branch.
+  - This also removes the BUG-006 `pipefail` exposure at `:226-227`.
+- **Safety rationale:**
+  - The GET uses `--paginate` (pagination trigger), while the POST response is a single unpaginated body, so a large label set could change page-boundary semantics.
+  - Removing the GET also removes the `GET labels failed — falling back to POST add` warning (`:228`), which is an observable log change.
+- **Downstream signal:** do not auto-implement. A reviewer must:
+  - confirm against a live repo that the POST response lists every label on an issue with more than 30 labels, so it is not truncated;
+  - confirm that no log parser or test greps the `GET labels failed` string (`tests/`, `scripts/cost_audit.py`).
+
+**REUSE-002: The GH_PAT login is resolved up to 3 times per sweep job**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:**
+  - `scripts/workflow_failure_heal_non_retryable_backfill.sh:150`: every tick, `GH_TOKEN: secrets.GH_PAT`, `review_autofix_sweep.yml:566`.
+  - `scripts/review_security_hold_sweep.py:229`: legacy token mode, which is the default here; no workflow sets `SECURITY_HOLD_SWEEP_TOKEN_MODE`. Runs when the security pass is enabled. `GH_TOKEN: GH_PAT || github.token`, `review_autofix_sweep.yml:603`.
+  - `scripts/provider_outage.py:349-353`: memoized per process, called only when the tracker list is non-empty (docstring `:47-48`).
+- **Current → proposed:** up to 3 `GET /user` calls per tick → 1, by passing the login forward through a step output.
+- **Endpoint:** REST `GET /user`.
+- **Evidence:** all three read `.login` for the same PAT, in steps of the same job.
+- **Proposed fix (for manual review only):** none. Each helper uses the login as a trust anchor for marker authorship, so it is resolved inside the helper on purpose.
+- **Safety rationale:** this is an identity/auth flow (an auth trigger).
+  - `review_security_hold_sweep.py:203-246` deliberately scopes which token resolves which identity, and can fall back to `github.token`, so the identities can differ.
+  - Passing a login between steps would widen the trust boundary.
+- **Downstream signal:** do not auto-implement. It needs a security review of marker-author trust before the login is shared across helpers.
+
+**REUSE-003: Merge-train `release` reads `default_branch` over REST even on a `pull_request` close event that carries it**
+- **Safety tag:** `RISKY_SKIP`
+- **Calls involved:** `scripts/review_merge_train.sh:1138-1149` (`_mt_resolve_default_branch`, REST `GET repos/{r}`). It is reached lazily through `_mt_inflight_review_branches` (`:1155`), which runs at most once per release, and only once a queued PR passes the base filter (`:1359-1360`). The callers are `.github/workflows/cancel_on_pr_close.yml:424` and `.github/workflows/orchestrate_poll.yml:263`.
+- **Current → proposed:** 1 → 0 per release that evaluates a queued PR, by seeding `MT_DEFAULT_BRANCH` from `${{ github.event.repository.default_branch }}` through `env:`.
+- **Endpoint:** REST `repos/{r}`.
+- **Evidence:** `MT_DEFAULT_BRANCH=""` (`:1137`) is the memo. Because `_mt_inflight_review_branches` runs in a `$(...)` subshell (`:1360`), the memo never outlives that one call, so the read cannot already be deduplicated by the memo.
+- **Proposed fix (for manual review only):** pre-set `MT_DEFAULT_BRANCH` only when the env value matches `^[A-Za-z0-9._/-]+$` (the existing validation, `:1143`). Fall back to the REST read otherwise.
+- **Safety rationale:**
+  - The read guards the issue #6629 provenance check ("no fallback, so a failed read is never mistaken for main", `:1132-1136`) inside a listing that explicitly defends against status-transition races (`:1068-1080`, double status pass at `:1166`). That is a race-defense trigger.
+  - Changing where the value comes from changes the trust model.
+- **Downstream signal:** do not auto-implement. A reviewer must confirm three things:
+  - the event payload's `repository.default_branch` is trusted equally for `pull_request` (closed) and `schedule` events;
+  - the `MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=default_branch_unavailable` log line keeps its meaning;
+  - the gain is worth it. Per the timing note under API-001, this call only happens when the train is non-empty.
+
+### Dead Calls (DEAD-API-###)
+No findings. Every call reviewed in this pass has its result consumed:
+- the sweep listings at `review_autofix_sweep.yml:228-439`;
+- the cancel/close listings and the PR-state batch at `cancel_on_pr_close.yml:155-345`;
+- the follower reads at `promote_candidate_follow.sh:148-243`;
+- every `ci_cancelled_rerun.py` listing;
+- the backfill count, skip and page calls;
+- every merge-train release read.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP. Removing the scheduled `release` from `cancel_on_pr_close.yml:391-427` changes observable `MERGE_TRAIN_*` log output that this report's analysis reads (`MERGE_TRAIN_RELEASE_SUMMARY`). Correction to its numbers: an idle release costs 1 call (open PRs, `review_merge_train.sh:1343`), because the default-branch read is lazy (`:1359-1360`), so idle duplication is about 288 calls/day, not ≥576. `vars.WORKFLOW_PROFILE == 'core'` already appears as a gate value at `review_autofix_sweep.yml:173`.
+- API-002: NEEDS_VERIFICATION. This resolves its open item: the only consumer of `provider_outage_trackers.json` (`orchestrate_poll.yml:1140`) reads only `.pull_request`, `.author_association` and `.body`. GraphQL `issues` already excludes PRs, and `authorAssociation` uses the same OWNER/MEMBER/COLLABORATOR values. Three constraints apply:
+  - Keep the failure split: the outage read fails open (`:294-296`), while the tracking listing is fatal under `set -e` (`:301`).
+  - Keep the `search`-based probe (`:352-364`) conditional on `COUNT == 0`, not folded into every tick.
+  - Keep `first: 20` until BUG-008 lands.
+- API-003: NEEDS_VERIFICATION. Alternate fix: scheduled runs (`*/30`, `:79-80`) run on the default branch, so `GITHUB_REF_NAME` is the default branch when `GITHUB_EVENT_NAME=schedule`. Reuse it only then, and keep the REST read at `:285` for `workflow_dispatch` (`:81`). The read uses `READ_TOKEN` (`github.token`), so the saving lands on the GITHUB_TOKEN budget, not GH_PAT.
+- API-004: RISKY_SKIP. The listings are paginated (`review_autofix_sweep.yml:340-343` `--paginate`), and `ci_cancelled_rerun.py:84-86` enforces strict per-status completeness, so a shared repo-wide listing changes page-boundary semantics. Defer it, as the Deep Audit says.
+- API-005: NEEDS_VERIFICATION. The memo must be keyed `repo:label`, set only on success or "already exists" (`label_helpers.sh:177-193`), and be process-local, because the helper is sourced by many workflows. Pairs with REUSE-001 for the GET in the same function.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | MERGE-004 |
+| RISKY_SKIP | 6 | MERGE-001, MERGE-002, MERGE-003, REUSE-001, REUSE-002, REUSE-003 |
+
+The counts cover this pass's new findings only. The Deep Audit cross-references are tagged in the section above: API-002, API-003 and API-005 are NEEDS_VERIFICATION; API-001 and API-004 are RISKY_SKIP.
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
