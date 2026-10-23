@@ -809,18 +809,31 @@ def plan_files_touched_gate_active() -> bool:
 		and (os.environ.get("ALLOW_OUT_OF_SCOPE_FILES") or "false") != "true"
 
 
-def plan_files_outside_files_touched(plan_text: str, issue_body: str) -> list[str]:
+# Implement's heal-route classifier (workflow_failure_heal.is_heal_route): the
+# ai:workflow-heal label or the intake's fingerprint marker. The scope marker
+# alone does not put an issue on the heal route.
+_HEAL_ROUTE_FP_RE = re.compile(r"<!-- workflow-failure-heal:fp=[0-9a-f]{64} -->")
+
+
+def _issue_on_heal_route(issue_body: str, labels: object) -> bool:
+	names = [label.get("name") if isinstance(label, dict) else label
+		for label in (labels if isinstance(labels, list) else [])]
+	return "ai:workflow-heal" in names or bool(_HEAL_ROUTE_FP_RE.search(issue_body or ""))
+
+
+def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: object = None) -> list[str]:
 	"""Exact files in a plan's Files section that the issue's files_touched list misses.
 
 	Uses the implement guard's matcher (path_in_scope: lockfiles and agents.d
 	fragments follow the same rules). An issue without a list, or with an empty
 	or malformed one, is not checked, as the implement guard skips it too. A
 	directory or glob the plan lists is not an exact file and is not checked
-	here; the implement guard still applies to whatever gets staged. A
-	workflow-heal issue (its body carries the heal scope marker) is not checked:
-	on the heal route implement enforces that marker, not files_touched.
+	here; the implement guard still applies to whatever gets staged. An issue
+	on the heal route (the ai:workflow-heal label or the heal fingerprint
+	marker, as implement decides it) is not checked: there implement enforces
+	the heal scope marker, not files_touched.
 	"""
-	if "<!-- ai:workflow-heal-scope:v1" in (issue_body or ""):
+	if _issue_on_heal_route(issue_body, labels):
 		return []
 	allowlist = normalize_allowlist(extract_files_touched(issue_body or "") or [])
 	if not allowlist:
@@ -918,7 +931,8 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 			if issue_meta is None:
 				with open(issue_meta_file, encoding="utf-8") as handle:
 					issue_meta = json.load(handle)
-			outside = plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "")
+			outside = plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
+				issue_meta.get("labels"))
 			if outside:
 				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):

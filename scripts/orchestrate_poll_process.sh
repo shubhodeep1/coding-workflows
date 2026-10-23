@@ -17018,12 +17018,12 @@ _plan_auto_approval_gate()
             .[$n]
             | select(type == "object")
             | select((.body | type) == "string" and (.author_login | type) == "string" and .author_login != "")
-            | {number: ($n | tonumber), body: .body, user: {login: .author_login}, author_association: (.author_association // "")}
+            | {number: ($n | tonumber), body: .body, user: {login: .author_login}, author_association: (.author_association // ""), labels: (.labels // [])}
           ' > "${gate_meta_file}" 2>/dev/null; then
           gate_meta_arg="${gate_meta_file}"
         else
           # Without metadata the guard cannot compare the plan with files_touched.
-          echo "::notice::AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve issue=${issue_num} files_touched_check=skipped reason=issue_meta_unavailable"
+          echo "::notice::AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve issue=${issue_num} files_touched_check=skipped reason=issue_meta_unavailable outcome=skip"
         fi
         gate_result="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard_py}" --plan-auto-approval-gate \
           --plan-file "${gate_plan_file}" \

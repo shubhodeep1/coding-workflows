@@ -1001,9 +1001,15 @@ def test_plan_files_outside_files_touched_uses_the_implement_matcher() -> None:
 		assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, skipped) == [], skipped
 	# A plan without a Files section names no exact files.
 	assert guard.plan_files_outside_files_touched("Change `backend/x.py`.", body) == []
-	# A workflow-heal issue: implement enforces its scope marker, not files_touched.
-	heal_body = body + "\n<!-- ai:workflow-heal-scope:v1 paths=backend/poll.py runs=1 -->\n"
-	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, heal_body) == []
+	# A heal-route issue (label or fingerprint marker, as implement decides):
+	# implement enforces its scope marker, not files_touched.
+	scope_marker = "\n<!-- ai:workflow-heal-scope:v1 paths=backend/poll.py runs=1 -->\n"
+	fp_marker = "\n<!-- workflow-failure-heal:fp=" + "a" * 64 + " -->\n"
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body + fp_marker) == []
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body, [{"name": "ai:workflow-heal"}]) == []
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body, ["ai:workflow-heal"]) == []
+	# The scope marker alone is not the heal route: implement enforces files_touched.
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body + scope_marker) == ["backend/withdrawal_flow.py"]
 
 
 def test_plan_files_touched_gate_switches() -> None:
