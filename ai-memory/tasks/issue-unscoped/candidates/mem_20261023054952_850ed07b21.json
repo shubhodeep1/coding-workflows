@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal.py:3989-4043 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: CAP_JOB_MOCK_GH has no handler for DELETE repos/.../issues/<n>/labels/<name>, so the helper's new per-label DELETE falls through to the final else (lines 4039-4041) and exits 1.\n  WHY: gh_retry retries the failing DELETE 5 times (1+2+4+8 = 15s of sleep per labelling run) while the tests still pass, which adds silent CI time to a module that has already hit its timeout. Severity disagreement: MAJOR (sonnet, minimax, qwen) vs NIT (luna), so the highest is used.\n- scripts/label_helpers.sh:289-291 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: _del_first takes head -n1 of gh_retry's stderr, which is the retry notice rather than the underlying gh error, and the value is unbounded.\n  WHY: A non-404 DELETE failure logs a misleading warning without the real cause, which weakens the diagnostics. Severities were stated as NIT or not stated.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Update assertions in tests/test_review_rb_judge_label_propagation.py (around line 3029) that expect a PUT from the phase swap so they expect the POST + DELETE shape.\n  expected_change_site: tests/test_review_rb_judge_label_propagation.py (test_resilient_phase_swap_allows_terminal_to_terminal, lines 3085-3089)\n  confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  EVIDENCE: The PR has no hunk in that file and line 3089 still asserts len(_put_label_calls(state)) == 1. Both reviewers judged the deferral justified, because the test exercises _resilient_phase_swap in scripts/review_rb_judge.sh, not the changed helper. Severity was NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal.py:3989-4043 (CAP_JOB_MOCK_GH; label branches 4028-4036, final else 4039-4041) | severity=MAJOR | confidence=4\n  PROBLEM: The mock gh has no handler for DELETE .../labels/<name>. The helper's DELETE of ai%3Adone reaches the final else and exits 1.\n  WHY: gh_retry retries 5 times with sleeps of 1, 2, 4 and 8 seconds (about 15s per call, scripts/gh_helpers.sh lines 1082-1127). The labels_set assertions at lines 4107, 4276 and 4289 still pass. Suggested fix: add `elif method == \"DELETE\" and \"/labels/\" in path: pass`.\n- scripts/label_helpers.sh:289-291 | severity=NIT | confidence=3\n  PROBLEM: _del_err captures gh_retry's stderr, so its first line is the retry notice rather than the underlying error, and it may be empty or long.\n  WHY: The warning for a non-404 DELETE failure quotes the retry notice. It still names the label and the issue number, so only the diagnostic detail is weak.\n- TASK_GAP: Requirement: Update tests/test_review_rb_judge_label_propagation.py assertions that expect a PUT from the phase swap to the POST + DELETE shape.\n  Expected change site: tests/test_review_rb_judge_label_propagation.py\n  Evidence of absence: No hunk in that file. The reviewer treats the deferral as justified, because the tests run _resilient_phase_swap in scripts/review_rb_judge.sh, which the PR does not touch. | severity=NIT | confidence=2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/label_helpers.sh:290-291 | confidence=4\n  PROBLEM: The error message for a failed DELETE quotes the first line of stderr, which may be a gh_retry retry notice rather than the actual API error.\n  WHY: The warning carries misleading diagnostics, which makes debugging difficult.\n- Task gaps: none identified.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/label_helpers.sh:289-291 | severity=NIT | confidence=4\n  PROBLEM: _del_err captures gh_retry's stderr and head -n1 selects the retry notice (gh_helpers.sh:1117), not the real gh error (1119, or 1134 on give-up). _del_first is also unbounded.\n  WHY: A non-404 DELETE failure never logs the actual error (403, 422 or a network error), which defeats the observability the change was meant to add.\n- tests/test_workflow_failure_heal.py:3989-4043 (branch at line 4030; fall-through at 4039-4041) | severity=MAJOR | confidence=4\n  PROBLEM: The helper's DELETE to .../labels/ai%3Adone does not end in /labels, so the mock exits 1.\n  WHY: The real gh_retry sleeps 15s per labelling run. Nine _run_cap_job calls reach the labelling step (lines 4105, 4189, 4193, 4268, 4279, 4287, 4329, 4337, 4345), adding about 135s inside a CI module that was already cancelled at its timeout. The tests still pass.\n- Task completeness: none. The reviewer verified the deferral of tests/test_review_rb_judge_label_propagation.py as correct.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_workflow_failure_heal.py:4028-4041 (CAP_JOB_MOCK_GH) | severity=NIT | confidence=5\n  PROBLEM: The mock rejects the helper's new per-label DELETE. The GET returns ai:done, the DELETE falls through to sys.exit(1).\n  WHY: gh_retry retries the DELETE five times with backoff, so each affected cap-job case adds 15s of sleeps while still passing.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_workflow_failure_heal.py:4028-4041 (CAP_JOB_MOCK_GH) | severity=MAJOR | confidence=4\n  PROBLEM: The mock gh has no branch for DELETE .../labels/<name>. The request does not match path.endswith(\"/labels\") at line 4030 and falls through to the final else at 4039-4041.\n  WHY: gh_retry backs off for 15s per DELETE. At least 3 tests that assert labels_set (lines 4107, 4276, 4289) add about 45s of CI time. Suggested fix: add `elif method == \"DELETE\" and \"/labels/\" in path: pass`.\n- TASK_GAP: Requirement: Update assertions in tests/test_review_rb_judge_label_propagation.py (around line 3029) that expect a PUT from the phase swap to expect the POST + DELETE shape.\n  Expected change site: tests/test_review_rb_judge_label_propagation.py (test_resilient_phase_swap_allows_terminal_to_terminal, line 3085-3089)\n  Evidence of absence: No hunk in that file, and line 3089 still asserts len(_put_label_calls(state)) == 1. The reviewer judges the deferral sound, because the test runs _resilient_phase_swap from scripts/review_rb_judge.sh. | severity=NIT | confidence=3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3f795245fefbcb93a99b258bed8225f42c225bd946a65452ec0dfdd7d9dbd0c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7933,
+    "run_id": "39905504188",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39905504188",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023054952_850ed07b21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7933,
+    "run_id": "39905504188"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T05:49:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
