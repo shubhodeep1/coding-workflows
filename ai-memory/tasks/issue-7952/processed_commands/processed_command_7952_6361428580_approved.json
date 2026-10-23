@@ -5,13 +5,27 @@
   "entry_id": "processed_command_7952_6361428580_approved",
   "issue_number": 7952,
   "metadata": {
+    "branch": "ai/issue-7952",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "prompts/_templates/mode-validate-diagnose.txt",
+      "prompts/contracts/mode-validate-diagnose.yml",
+      "prompts/mode-validate-diagnose.txt",
+      "scripts/validate_process.sh",
+      "tests/test_validate_process_owner_routing.py"
+    ],
+    "issue_number": 7952,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7952",
+    "pr_number": 7959,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7959",
+    "run_attempt": "1",
+    "run_id": "39929441558",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39929441558"
   },
   "run_attempt": 1,
   "run_id": "39929441558",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-23T09:22:25Z",
+  "status": "completed",
+  "timestamp": "2026-10-23T09:49:05Z",
   "workflow": "implement"
 }
