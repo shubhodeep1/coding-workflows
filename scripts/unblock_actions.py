@@ -503,7 +503,11 @@ def _load_ownership():
 
 
 def _instruction_paths(text: object, repo: str = "") -> list[str]:
-	"""Path-like tokens in verdict instructions, de-duplicated, order kept, capped."""
+	"""Path-like tokens in verdict instructions, de-duplicated, order kept.
+
+	Stops one token past HARNESS_MAX_PATH_TOKENS so a caller can tell a
+	truncated list; callers slice back to the cap.
+	"""
 	if not isinstance(text, str):
 		return []
 	skip = {repo.lower(), HARNESS_REPO}
@@ -638,7 +642,8 @@ def _harness_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
 	lines += ["", f"Why: {_one_line(verdict.get('reason', ''))}"]
 	ops: list[dict] = [{"op": "comment", "issue": item, "body": "\n".join(lines)}, heal]
 	fp = verdict.get("fingerprint")
-	if ctx["kind"] == "project" and isinstance(fp, str) and HARNESS_HOLD_FP_RE.match(fp):
+	# No hold without a report: nothing would ship the fix the hold waits for.
+	if sendable and ctx["kind"] == "project" and isinstance(fp, str) and HARNESS_HOLD_FP_RE.match(fp):
 		ops.append({
 			"op": "hold_request",
 			"issue": ctx["tracking"],
@@ -650,6 +655,15 @@ def _harness_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
 		ops.append({"op": "telegram", "level": "DEBUG", "text": f"Unblock judge routed #{item} ({ctx['stop']}) to a harness heal report; no fix-up filed."})
 	else:
 		ops.append({"op": "telegram", "level": "WARNING", "text": f"Unblock judge found #{item} ({ctx['stop']}) harness-owned, but it has no escalation label for a heal report; a person must file the harness change."})
+	return ops
+
+
+def _mixed_heal_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
+	"""The heal report for a mixed verdict's harness part, plus a WARNING when no report can be sent."""
+	heal = _heal_report_op(ctx, verdict, route)
+	ops: list[dict] = [heal]
+	if not heal["label"]:
+		ops.append({"op": "telegram", "level": "WARNING", "text": f"Unblock judge found a harness-owned part in #{ctx['item']} ({ctx['stop']}), but it has no escalation label for a heal report; a person must file the harness change."})
 	return ops
 
 
@@ -903,7 +917,7 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	if name in PROTECTED_HANDOFF_VERDICTS and ctx.get("protected_rejection"):
 		handoff = _protected_handoff_ops(ctx, verdict)
 		if route["mode"] == "mixed":
-			handoff.append(_heal_report_op(ctx, verdict, route))
+			handoff += _mixed_heal_ops(ctx, verdict, route)
 		return handoff
 	if name == "retry_budget":
 		ops += [{"op": "comment", "issue": item, "body": f"Next attempt, per the unblock judge: {verdict['instructions']}"}]
@@ -1083,7 +1097,7 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		raise UsageError(f"unknown verdict {name!r}")
 	if route["mode"] == "mixed":
 		# The verdict's own fix-up stays; the harness part goes to a heal report.
-		ops.append(_heal_report_op(ctx, verdict, route))
+		ops += _mixed_heal_ops(ctx, verdict, route)
 	return ops
 
 

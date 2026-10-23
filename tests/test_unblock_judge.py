@@ -4208,7 +4208,7 @@ def test_harness_pr_heal_report_kind(harness_env) -> None:
 
 
 def test_backstop_routes_harness_only_paths(harness_env) -> None:
-	ctx = _ctx("project", stop="validation-failed")
+	ctx = _ctx("project", stop="validation-failed", labels=["ai:validation-failed", "ai:harness-broken"])
 	verdict = _verdict(
 		"descope", stop="validation-failed", target_repo="consumer",
 		instructions="Fix `validation/x.sh` and scripts/only_harness.sh:12 for acme/app, see https://example.com/a/b.py",
@@ -4222,7 +4222,7 @@ def test_backstop_routes_harness_only_paths(harness_env) -> None:
 
 
 def test_mixed_paths_keep_fixup_and_add_heal_report(harness_env) -> None:
-	ctx = _ctx(stop="validation-failed")
+	ctx = _ctx(stop="validation-failed", labels=["ai:validation-failed", "ai:harness-broken"])
 	verdict = _verdict("descope", stop="validation-failed", target_repo="consumer", instructions="Drop the check in src/app.py and fix validation/x.sh")
 	ops = actions.plan(verdict, ctx)
 	harness_env.setenv("UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED", "false")
@@ -4235,7 +4235,7 @@ def test_mixed_paths_keep_fixup_and_add_heal_report(harness_env) -> None:
 
 def test_mixed_enabled_operator_step_also_gets_heal_report(harness_env) -> None:
 	verdict = _verdict("operator_step", placeholder="NEW_PATH_ENABLED", target_repo="consumer", instructions="Edit src/app.py and validation/x.sh")
-	ops = actions.plan(verdict, _ctx())
+	ops = actions.plan(verdict, _ctx(labels=["ai:blocked", "ai:needs-human"]))
 	assert ops[0]["op"] == "create_issue" and ops[-1]["op"] == "heal_report"
 
 
@@ -4330,8 +4330,9 @@ def test_harness_verdict_wins_over_protected_handoff(harness_env) -> None:
 	assert [op["op"] for op in ops] == ["comment", "heal_report", "telegram"]
 	consumer = actions.plan(_verdict("descope", instructions="drop the cache"), _ctx(protected_rejection=PROTECTED))
 	assert not any(op["op"] == "heal_report" for op in consumer)
-	mixed = actions.plan(_verdict("descope", instructions="edit src/app.py and validation/x.sh"), _ctx(protected_rejection=PROTECTED))
-	assert mixed[-1]["op"] == "heal_report" and mixed[:-1] == actions._protected_handoff_ops(_ctx(protected_rejection=PROTECTED), _verdict("descope", instructions="edit src/app.py and validation/x.sh"))
+	labelled = _ctx(protected_rejection=PROTECTED, labels=["ai:blocked", "ai:needs-human"])
+	mixed = actions.plan(_verdict("descope", instructions="edit src/app.py and validation/x.sh"), labelled)
+	assert mixed[-1]["op"] == "heal_report" and mixed[:-1] == actions._protected_handoff_ops(labelled, _verdict("descope", instructions="edit src/app.py and validation/x.sh"))
 
 
 def test_heal_report_labels_match_the_intake() -> None:
@@ -4369,3 +4370,19 @@ def test_backstop_exactly_at_the_token_cap_routes_harness_only(harness_env) -> N
 	paths = " ".join(f"validation/t{n}.sh" for n in range(actions.HARNESS_MAX_PATH_TOKENS))
 	route = actions._harness_route(_verdict("descope", target_repo="consumer", instructions=paths), _ctx())
 	assert len(route["harness_paths"]) == actions.HARNESS_MAX_PATH_TOKENS and route["mode"] == "harness"
+
+
+def test_mixed_verdict_without_accepted_label_warns(harness_env) -> None:
+	verdict = _verdict("descope", stop="blocked", target_repo="consumer", instructions="Edit src/app.py and validation/x.sh")
+	ops = actions.plan(verdict, _ctx(labels=["ai:blocked"]))
+	assert ops[-2]["op"] == "heal_report" and ops[-2]["label"] == ""
+	assert ops[-1]["op"] == "telegram" and ops[-1]["level"] == "WARNING"
+	labelled = actions.plan(verdict, _ctx(labels=["ai:blocked", "ai:needs-human"]))
+	assert labelled[-1]["op"] == "heal_report" and labelled[-1]["label"] == "ai:needs-human"
+
+
+def test_harness_project_without_accepted_label_posts_no_hold(harness_env) -> None:
+	ctx = _ctx("project", stop="validation-failed", labels=["ai:validation-failed"])
+	ops = actions.plan(_verdict("descope", stop="validation-failed", instructions="fix it", target_repo="harness"), ctx)
+	assert [op["op"] for op in ops] == ["comment", "heal_report", "telegram"]
+	assert ops[2]["level"] == "WARNING"
