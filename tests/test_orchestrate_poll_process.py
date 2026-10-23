@@ -15607,6 +15607,23 @@ def test_validation_harness_pin_reads_default_branch_wrapper_locally():
 			bad = _run_bash_snippet(run_twice, env, cwd=repo)
 			assert bad.stdout.splitlines() == [" rc=1", " rc=1 state=failed"], bad.stdout + bad.stderr
 
+	# Without CWS_DEFAULT_BRANCH or origin/HEAD the branch comes from the event
+	# payload, then from a scheduled run's ref; neither makes an API call.
+	no_branch_env = {"CWS_DEFAULT_BRANCH": "", "GITHUB_EVENT_NAME": "", "GITHUB_REF_NAME": "", "GITHUB_EVENT_PATH": ""}
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _repo(tmp, one)
+		event = os.path.join(tmp, "event.json")
+		with open(event, "w", encoding="utf-8") as fh:
+			json.dump({"repository": {"default_branch": "main"}}, fh)
+		if shutil.which("jq"):
+			from_event = _run_bash_snippet(run_twice, {**no_branch_env, "GITHUB_EVENT_PATH": event}, cwd=repo)
+			assert from_event.stdout.splitlines()[0] == f"{pin} rc=0", from_event.stdout + from_event.stderr
+		from_schedule = _run_bash_snippet(run_twice, {**no_branch_env, "GITHUB_EVENT_NAME": "schedule", "GITHUB_REF_NAME": "main"}, cwd=repo)
+		assert from_schedule.stdout.splitlines()[0] == f"{pin} rc=0", from_schedule.stdout + from_schedule.stderr
+		unresolved = _run_bash_snippet(run_twice, {**no_branch_env, "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF_NAME": "main"}, cwd=repo)
+		assert unresolved.stdout.splitlines()[0] == " rc=1", unresolved.stdout + unresolved.stderr
+		assert "VALIDATION_HARNESS_HOLD outcome=pin_unresolved reason=branch_unresolved" in unresolved.stderr
+
 
 
 

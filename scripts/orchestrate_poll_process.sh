@@ -15049,11 +15049,23 @@ validation_harness_pin() {
     vhp_branch="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
     vhp_branch="${vhp_branch#origin/}"
   fi
+  # actions/checkout creates no origin/HEAD, and the sources above are often
+  # still empty when mark_validation_failed runs. Fall back to the runner's
+  # event payload, then to the ref of a scheduled run (always the default
+  # branch). Both are local reads; no API call.
+  if [ -z "${vhp_branch}" ] && [ -f "${GITHUB_EVENT_PATH:-}" ]; then
+    vhp_branch="$(jq -r '.repository.default_branch // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+  fi
+  if [ -z "${vhp_branch}" ] && [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
+    vhp_branch="${GITHUB_REF_NAME:-}"
+  fi
   if ! [[ "${vhp_branch}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    echo "VALIDATION_HARNESS_HOLD outcome=pin_unresolved reason=branch_unresolved" >&2
     return 1
   fi
   vhp_wf="${VALIDATE_WORKFLOW_NAME:-ai-validate.yml}"
   if ! [[ "${vhp_wf}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+    echo "VALIDATION_HARNESS_HOLD outcome=pin_unresolved reason=workflow_name_invalid" >&2
     return 1
   fi
   vhp_pins="$(git show "origin/${vhp_branch}:.github/workflows/${vhp_wf}" 2>/dev/null \
@@ -20604,6 +20616,7 @@ run_unblock_scan() {
     if ! jq -c --argjson held "${_scan_harness_held:-[]}" '[.[]? | select(.number as $n | any($held[]; . == $n) | not)]' \
       "${work_dir}/search.json" > "${work_dir}/search_harness_unheld.json" 2>/dev/null \
       || ! mv -f "${work_dir}/search_harness_unheld.json" "${work_dir}/search.json"; then
+      rm -f "${work_dir}/search_harness_unheld.json"
       echo "UNBLOCK_SCAN outcome=skip reason=harness_hold_filter_failed"
       return 0
     fi
