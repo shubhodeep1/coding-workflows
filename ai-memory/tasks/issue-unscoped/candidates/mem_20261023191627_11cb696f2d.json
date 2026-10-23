@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/7991-test-and-mark-stable-step-scripts.md:11 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fragment states \"The workflow is now 360,916 bytes.\" but the latest edit to .github/workflows/test-and-mark-stable.yml (RUNNER_TEMP absolute-path guard plus comment reword) made that figure stale.\n  WHY: The published size cannot be reproduced with `wc -c` (editor summary reports 361,124 bytes), so the release note is inaccurate; there is no runtime effect. All five reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/7991-test-and-mark-stable-step-scripts.md:11 | severity=NIT | confidence=4\n  PROBLEM: The fragment still publishes the pre-edit size \"360,916 bytes\", while the editor summary reports 361,124 bytes after the RUNNER_TEMP guard (~207 bytes) was added.\n  WHY: Nothing breaks. The release note gives a size that `wc -c` does not reproduce. The 430,000-byte contract ceiling claim still holds.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/7991-test-and-mark-stable-step-scripts.md:11 | severity=NIT | confidence=5\n  PROBLEM: The reported workflow size (360,916 bytes) in the changelog fragment is outdated and inaccurate.\n  WHY: Later changes adding absolute path validation increased the workflow size beyond this figure, misleading readers.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/7991-test-and-mark-stable-step-scripts.md:11 | severity=NIT | confidence=5\n  PROBLEM: The last run changed .github/workflows/test-and-mark-stable.yml (comment reword at lines 643-646, RUNNER_TEMP absolute-path guard at lines 665-668, about 208 bytes) without updating the byte count this fragment publishes.\n  WHY: There is no runtime effect. The fragment is folded verbatim into CHANGELOG.md, so the release note carries a stale figure and the wrong headroom (about 118,876 bytes to the 480,000 guard, not the implied 119,084).\n- HARDENING_SUGGESTIONS: .github/workflows/test-and-mark-stable.yml, \"Verify release-gate step scripts\" step, per-script check at lines 680-685. The chain refuses a symlinked `${SRC_DIR}/scripts` and a symlinked `${src}`, but not a symlinked `${SRC_DIR}` itself. Suggested fix: add `[ -L \"${SRC_DIR}\" ]` to the existing condition (~1 line). This is defence-in-depth, since the directory is created by actions/checkout.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/7991-test-and-mark-stable-step-scripts.md:11 | severity=NIT | confidence=4\n  PROBLEM: The byte count \"360,916 bytes\" is stale. The latest workflow diff adds the RUNNER_TEMP validation block and changes the surrounding comment without updating the figure.\n  WHY: There is no workflow runtime failure. The changelog reports a size that no longer matches the modified workflow.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/7991-test-and-mark-stable-step-scripts.md:11 | severity=NIT | confidence=5\n  PROBLEM: The fragment states \"now 360,916 bytes\", but the latest change to .github/workflows/test-and-mark-stable.yml (lines 665-668) added a RUNNER_TEMP validation block (~207 bytes) without updating it. The workflow is now ~361,123 bytes.\n  WHY: The published size is not reproducible with `wc -c`. CI behaviour is unaffected.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "942e990ebcb90fa3097ca3d4cfe153886931a84771fe4d0eac1cc705a0a9120e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8001,
+    "run_id": "40002652777",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40002652777",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023191627_11cb696f2d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8001,
+    "run_id": "40002652777"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T19:16:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
