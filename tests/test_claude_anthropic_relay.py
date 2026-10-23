@@ -92,7 +92,7 @@ def chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 	bridge.mode = "bridge"
 	bridge.socket_path = sock
 	_serve(bridge)
-	yield {"bridge_port": bridge.server_address[1], "socket": sock}
+	yield {"bridge_port": bridge.server_address[1], "socket": sock, "broker": broker}
 	for server in (bridge, broker, upstream):
 		server.shutdown()
 		server.server_close()
@@ -663,4 +663,69 @@ def test_main_refuses_bad_arguments(tmp_path: Path) -> None:
 	token.write_text("t", encoding="utf-8")
 	os.chmod(token, 0o600)
 	assert run("broker", str(tmp_path / "s"), str(token), "gpt-5") == 2
+	assert run("broker", str(tmp_path / "s"), str(token), MODEL, "--allow-web-fetch") == 2
+	assert run("broker", str(tmp_path / "s"), str(token), MODEL, "--allow-web-search", "extra") == 2
 	assert run("bridge") == 2
+
+
+# The tool the pinned CLI's WebSearch sends (2.1.289; see the relay docstring).
+CLI_WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+
+
+def test_web_search_stays_refused_without_the_broker_flag(chain) -> None:
+	status, _, _ = _post(chain["bridge_port"], body={"model": MODEL, "tools": [CLI_WEB_SEARCH_TOOL]})
+	assert status == 400
+	assert _Upstream.seen == []
+
+
+@pytest.mark.parametrize("tool", (
+	CLI_WEB_SEARCH_TOOL,
+	dict(CLI_WEB_SEARCH_TOOL, allowed_domains=["docs.npmjs.com", "*.cloudflare.com"]),
+	dict(CLI_WEB_SEARCH_TOOL, blocked_domains=["example.com"], search_profile="fast"),
+	{"type": "web_search_20250305", "name": "web_search"},
+))
+def test_web_search_in_the_cli_shape_is_forwarded_with_the_flag(chain, tool: dict) -> None:
+	chain["broker"].allow_web_search = True
+	status, _, _ = _post(chain["bridge_port"], body={"model": MODEL, "tools": [tool], "tool_choice": {"type": "tool", "name": "web_search"}})
+	assert status == 200
+	assert len(_Upstream.seen) == 1
+
+
+@pytest.mark.parametrize("tool", (
+	{"type": "web_fetch_20250910", "name": "web_fetch"},
+	{"type": "code_execution_20250522", "name": "code_execution"},
+	{"type": "mcp_toolset", "name": "x"},
+	{"type": "web_search_20260101", "name": "web_search"},
+	dict(CLI_WEB_SEARCH_TOOL, name="other"),
+	dict(CLI_WEB_SEARCH_TOOL, max_uses=9),
+	dict(CLI_WEB_SEARCH_TOOL, max_uses=0),
+	dict(CLI_WEB_SEARCH_TOOL, max_uses=True),
+	dict(CLI_WEB_SEARCH_TOOL, user_location={"type": "approximate"}),
+	dict(CLI_WEB_SEARCH_TOOL, allowed_domains="example.com"),
+	dict(CLI_WEB_SEARCH_TOOL, allowed_domains=["bad domain"]),
+	dict(CLI_WEB_SEARCH_TOOL, allowed_domains=["a.com"] * 101),
+	dict(CLI_WEB_SEARCH_TOOL, search_profile="Fast; drop"),
+))
+def test_only_the_cli_web_search_shape_passes_with_the_flag(chain, tool: dict) -> None:
+	chain["broker"].allow_web_search = True
+	status, _, _ = _post(chain["bridge_port"], body={"model": MODEL, "tools": [tool]})
+	assert status == 400
+	assert _Upstream.seen == []
+
+
+def test_web_search_flag_does_not_admit_other_egress_in_the_same_request(chain) -> None:
+	chain["broker"].allow_web_search = True
+	for body in (
+		{"model": MODEL, "tools": [CLI_WEB_SEARCH_TOOL, {"type": "web_fetch_20250910", "name": "web_fetch"}]},
+		{"model": MODEL, "tools": [CLI_WEB_SEARCH_TOOL], "mcp_servers": []},
+		{"model": "claude-other-model", "tools": [CLI_WEB_SEARCH_TOOL]},
+	):
+		status, _, _ = _post(chain["bridge_port"], body=body)
+		assert status == 400
+	assert _Upstream.seen == []
+
+
+def test_web_search_predicate_needs_the_explicit_allow() -> None:
+	assert relay.request_has_provider_egress({"tools": [CLI_WEB_SEARCH_TOOL]})
+	assert not relay.request_has_provider_egress({"tools": [CLI_WEB_SEARCH_TOOL]}, allow_web_search=True)
+	assert relay.request_has_provider_egress({"tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]}, allow_web_search=True)

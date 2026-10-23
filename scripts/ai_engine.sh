@@ -473,6 +473,10 @@ claude_run()
 		profile="read"
 	fi
 	hide_claude_md="$(_ai_engine_py config --key hide_claude_md 2>/dev/null || echo false)"
+	# Provider-side web search (config `web_search`, default on). A failed read
+	# leaves it off: the relay then refuses the search tool as before.
+	local claude_web_search
+	claude_web_search="$(_ai_engine_py config --key web_search 2>/dev/null || echo false)"
 	if ! instructions="$(_ai_engine_instructions_file)"; then
 		ai_engine_fallback "${role}" instructions_missing
 		return "${AI_ENGINE_FALLBACK_EXIT}"
@@ -521,6 +525,7 @@ claude_run()
 	# checkout paths match; the guard hook is copied to /support/guard.py.
 	local -a settings_args=(settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile "${profile}" --guard-hook /support/guard.py)
 	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
+	[ "${claude_web_search}" = "true" ] && settings_args+=(--web-search)
 	if ! _ai_engine_py "${settings_args[@]}"; then
 		ai_engine_fallback "${role}" policy_unavailable
 		return "${AI_ENGINE_FALLBACK_EXIT}"
@@ -533,6 +538,8 @@ claude_run()
 		# Keep in sync with PROFILE_TOOLS["write"] in claude_engine.py.
 		*) tools="Read,Grep,Glob,Bash,Edit,Write"; mode="bypassPermissions"; isolation_mode="workspace" ;;
 	esac
+	# CLAUDE_WEB_SEARCH_TOOL in claude_engine.py; the relay flag below admits it.
+	[ "${claude_web_search}" = "true" ] && tools+=",WebSearch"
 	# The CLI's session store (~/.claude) lives outside the container so a
 	# later claude_run in the same job can resume the session (answer Q18 A).
 	local claude_home
@@ -544,6 +551,7 @@ claude_run()
 	# The container copy leaves CLAUDE.md out and never writes one back; the
 	# host file is never moved (answer Q19 A).
 	[ "${hide_claude_md}" = "true" ] && isolation_args+=(--hide-claude-md)
+	[ "${claude_web_search}" = "true" ] && isolation_args+=(--claude-web-search)
 	local include_path
 	while IFS= read -r include_path; do
 		if [ -n "${include_path}" ]; then

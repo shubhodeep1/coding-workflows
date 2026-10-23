@@ -2655,10 +2655,12 @@ poller judges retry OpenCode in a fresh isolated sandbox; other roles use
 their codex/OpenCode fallback. The pinned CLI is `@anthropic-ai/claude-code`
 `cli_version` from the same file,
 installed by `.github/actions/install-claude`.
-The write profile has no `WebFetch`/`WebSearch`, and the host relay
-(`scripts/claude_anthropic_relay.py`) accepts only untyped or `custom`
-client tools, rejecting unknown provider-side tool types as well as known
-web, code-execution and MCP-connector tools. A missing
+No profile has `WebFetch`. `WebSearch` is added to every profile while
+`claude_engine.json` `web_search` is on (the default); the host relay
+(`scripts/claude_anthropic_relay.py`) then admits exactly that provider
+search tool (`--allow-web-search`) and otherwise accepts only untyped or
+`custom` client tools, rejecting unknown provider-side tool types as well as
+known web-fetch, code-execution and MCP-connector tools. A missing
 `codex_isolated_exec.sh` makes `claude_run` fall back to codex rather than
 running Claude with host credentials.
 
