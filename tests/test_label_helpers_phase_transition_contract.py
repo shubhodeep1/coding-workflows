@@ -69,9 +69,22 @@ _FAKE_GH = r'''#!/usr/bin/env python3
 import json
 import os
 import sys
+import urllib.parse
 
 args = sys.argv[1:]
 log = os.environ["FAKE_GH_LOG"]
+state_path = os.environ["FAKE_GH_STATE"]
+
+
+def _load():
+	with open(state_path, encoding="utf-8") as fh:
+		return json.load(fh)
+
+
+def _save(labels):
+	with open(state_path, "w", encoding="utf-8") as fh:
+		json.dump(labels, fh)
+
 with open(log, "a", encoding="utf-8") as fh:
 	fh.write(json.dumps(args) + "\n")
 
@@ -85,17 +98,26 @@ if args and args[0] == "api":
 		if os.environ.get("FAKE_GET") == "fail":
 			sys.stderr.write("gh: Server Error (HTTP 500)\n")
 			sys.exit(1)
-		# Snapshot the GET sees. A concurrent writer adds force-review right
-		# after it, so a later full-set write would drop that label.
-		print(json.dumps(json.loads(os.environ["FAKE_LABELS"])))
-		state = os.environ["FAKE_GH_STATE"]
-		with open(state, "w", encoding="utf-8") as fh:
-			fh.write("force-review added after GET\n")
+		# Serve the current label state, then let a concurrent writer add
+		# force-review right after the read. A later full-set write built
+		# from this snapshot would drop that label from the state file.
+		print(json.dumps(_load()))
+		labels = _load()
+		if "force-review" not in labels:
+			labels.append("force-review")
+		_save(labels)
 		sys.exit(0)
 	if method == "POST":
 		if os.environ.get("FAKE_POST") == "fail":
 			sys.stderr.write("gh: Server Error (HTTP 500)\n")
 			sys.exit(1)
+		labels = _load()
+		for i, arg in enumerate(args):
+			if arg == "-f" and i + 1 < len(args) and args[i + 1].startswith("labels[]="):
+				name = args[i + 1][len("labels[]="):]
+				if name not in labels:
+					labels.append(name)
+		_save(labels)
 		print("[]")
 		sys.exit(0)
 	if method == "DELETE":
@@ -106,8 +128,13 @@ if args and args[0] == "api":
 		if mode == "500":
 			sys.stderr.write("gh: Server Error (HTTP 500)\n")
 			sys.exit(1)
+		path = next(a for a in args if a.startswith("repos/"))
+		name = urllib.parse.unquote(path.rsplit("/", 1)[1])
+		_save([label for label in _load() if label != name])
 		sys.exit(0)
 	if method == "PUT":
+		# Full-set replacement (the removed BUG-001 shape).
+		_save(json.load(sys.stdin).get("labels", []))
 		sys.exit(0)
 sys.exit(0)
 '''
@@ -117,6 +144,7 @@ def _run_swap(
 	labels: list[str],
 	target: str,
 	env_extra: dict[str, str] | None = None,
+	final_labels: list[str] | None = None,
 ) -> tuple[int, str, str, list[list[str]]]:
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
@@ -132,13 +160,14 @@ def _run_swap(
 		fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 		log = tmp_path / "gh_calls.jsonl"
 		log.write_text("", encoding="utf-8")
+		state_file = tmp_path / "labels.json"
+		state_file.write_text(json.dumps(labels), encoding="utf-8")
 		env = dict(os.environ)
 		env.update(
 			{
 				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
 				"FAKE_GH_LOG": str(log),
-				"FAKE_GH_STATE": str(tmp_path / "state.txt"),
-				"FAKE_LABELS": json.dumps(labels),
+				"FAKE_GH_STATE": str(state_file),
 				"GITHUB_REPOSITORY": "o/r",
 			}
 		)
@@ -163,6 +192,8 @@ def _run_swap(
 			check=False,
 		)
 		calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+		if final_labels is not None:
+			final_labels.extend(json.loads(state_file.read_text(encoding="utf-8")))
 	outcome = ""
 	for line in proc.stdout.splitlines():
 		if line.startswith("OUTCOME="):
@@ -200,11 +231,15 @@ def _delete_paths(calls: list[list[str]]) -> list[str]:
 def test_phase_swap_keeps_label_added_after_get() -> None:
 	if not _jq_available():
 		return
+	final: list[str] = []
 	rc, outcome, _stderr, calls = _run_swap(
-		["ai:review-blocked", "ai:orchestrator-managed"], "ai:ready-to-merge"
+		["ai:review-blocked", "ai:orchestrator-managed"], "ai:ready-to-merge",
+		final_labels=final,
 	)
 	assert rc == 0
 	assert outcome == "applied"
+	# The fake adds force-review after the GET; it must survive the swap.
+	assert sorted(final) == ["ai:orchestrator-managed", "ai:ready-to-merge", "force-review"]
 	assert _api_calls(calls, "PUT") == []
 	posts = _api_calls(calls, "POST")
 	assert len(posts) == 1

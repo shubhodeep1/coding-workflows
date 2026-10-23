@@ -286,7 +286,9 @@ set_issue_phase_label_resilient() {
 		if printf '%s' "${_del_err}" | grep -qiE 'HTTP 404|Not Found'; then
 			continue
 		fi
-		echo "::warning::set_issue_phase_label_resilient: could not remove stale phase label '${_stale_name}' from #${issue_number}." >&2
+		local _del_first=""
+		_del_first="$(printf '%s' "${_del_err}" | head -n1 | tr -d '\r')"
+		echo "::warning::set_issue_phase_label_resilient: could not remove stale phase label '${_stale_name}' from #${issue_number}: ${_del_first//::/: :}" >&2
 	done < <(printf '%s' "${_stale}" | jq -r '.[]' 2>/dev/null || true)
 	return 0
 }
