@@ -1479,8 +1479,9 @@ replaced; `runs_missing` stays a permanent skip when neither has a run.
 **Daily consumer health check.** In `shubhodeep1/coding-workflows` only, the `poll` job of `.github/workflows/orchestrate_poll.yml` runs `scripts/consumer_health_check.sh` once per UTC day: the step `Look up today's consumer health check` checks for an Actions cache entry `consumer-health-check-<YYYY-MM-DD>`, and `Record today's consumer health check` saves it only after a successful check, so later ticks that day skip without an API call and a failed or missed tick is retried on the next one. For each repository in `.github/ai/consumer_repos.json` the script reads the workflow list, the newest `ai-orchestrate-poll.yml` run (only when that wrapper is active) and the open `ai:orchestrator-tracking` issues, and `scripts/consumer_health_check.py evaluate` decides. A wrapper (a `*.yml` under `workflow-templates/`) in state `disabled_inactivity` is switched back on; one disabled by a person or token, or in any other non-active state, is reported (`workflows_disabled`), as are an active poller with no run in `CONSUMER_HEALTH_POLLER_SILENT_HOURS` (default 6, `poller_silent`), an open tracking issue with `CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT` or more comments (default 2000, `tracking_issue_comments`) and a failed read (`unreadable`). The workflow and tracking-issue listings are paginated, and a failed issue create or close makes the run exit 1 so the next tick retries the day; a failed enable is logged and retried by the next day's check, and its WARNING is sent with the day-recording run or, when issue writes keep failing, in one WARNING per UTC day (the script writes `failure_alerted=true` and `Record today's consumer health failure alert` saves `consumer-health-alert-<YYYY-MM-DD>`, which the next ticks pass back as `CONSUMER_HEALTH_FAILURE_ALERTED`). The silence window is measured from the newest poll run's `run_started_at` (falling back to `created_at`), and an issue is closed before its closing comment is posted so a retry never duplicates the comment. Each consumer and problem gets one `ai:consumer-health` issue in this repository, whose body starts with `<!-- ai:consumer-health:v1 repo=<owner/repo> problem=<key> -->`, and one Telegram WARNING when it opens. Only issues the pipeline account filed with that first line count: an open one suppresses a duplicate, and one whose problem is gone (or whose repository left the consumer list) is closed with a comment. A repository that could not be read keeps its other issues open. `CONSUMER_HEALTH_CHECK_ENABLED=false` turns the check off.
 
 Heal intake reports with no runs (#7424): a report that claimed no run at all
-(a label-only report such as `ai:scope-blocked`, or `engine_fallback`) has no
-verified run to bound a heal scope with. Both the pre-compose scope-marker
+(a label-only report such as `ai:scope-blocked`, or an `engine_fallback` report
+whose `reporter_run` is missing or did not verify) has no verified run to bound
+a heal scope with. Both the pre-compose scope-marker
 guard (`WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED`) and the creation gate
 (`HEAL_INTAKE_SCOPE_GUARD_ENABLED`) skip it with
 `WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=marker_guard|scope_guard`
@@ -2391,7 +2392,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `engine_fallback` heal dispatch per refused (role, reason), fingerprinted
   on role and reason only (`workflow_failure_heal.py
   engine-fallback-fingerprint`, deterministic reason `engine_fallback_refused`,
-  no run references or log reads), plus one Telegram WARNING. Implement and
+  no `run_refs` or log reads; `reporter_run` names the reporting run for the
+  heal scope), plus one Telegram WARNING. Implement and
   review report refusals through their existing heal reporters.
 - **Merged-PR guard.** Both `.claude/hooks/pr_merge_status_guard.py` and its
   `workflow-templates/` copy check origin PR history only for pushes to origin.

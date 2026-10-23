@@ -102,7 +102,8 @@
 #                                         intake-rendered scope marker is missing or invalid; default
 #                                         true refuses to file them (skip reason=scope_marker_unresolved,
 #                                         CRITICAL). A report that claimed no run at all (a
-#                                         label-only or engine_fallback report) can never get a
+#                                         label-only report, or an engine_fallback report whose
+#                                         reporter_run is missing or did not verify) can never get a
 #                                         scope, so it skips quietly instead
 #                                         (skip reason=scope_unavailable_no_runs, exit 0, no alert)
 #   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
@@ -604,8 +605,9 @@ _git_fetch_diagnosis_ref()
 }
 
 
-# A report that claimed no run (a label-only report, engine_fallback) has no
-# verified run to bound a heal scope with, so its scope can never resolve.
+# A report that claimed no run (a label-only report, an engine_fallback report
+# whose reporter_run is missing or did not verify) has no verified run to bound
+# a heal scope with, so its scope can never resolve.
 # Refusing it is expected, not an intake defect: skip with a log line and
 # exit 0 instead of a CRITICAL alert and a failed run. A report that claimed
 # runs keeps the CRITICAL refusal, because there an unresolved scope is a fault.
@@ -616,10 +618,13 @@ _git_fetch_diagnosis_ref()
 # "unknown", which is not "0", so the report keeps the refusal (fail closed).
 # A synced_security_finding report carries no run_refs by design but has a
 # verified reporter run, so an unverified scope there is a fault: it must not
-# exit the whole intake in the middle of its fingerprint-group loop.
+# exit the whole intake in the middle of its fingerprint-group loop. The same
+# holds for an engine_fallback report whose reporter_run verified
+# (ENGINE_REPORTER_RUN_REF, set before the scope inputs are frozen).
 _heal_report_claimed_no_runs()
 {
 	[ "${SOURCE_KIND:-}" != "synced_security_finding" ] \
+		&& [ -z "${ENGINE_REPORTER_RUN_REF:-}" ] \
 		&& [ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo unknown)" = "0" ]
@@ -1939,6 +1944,48 @@ elif [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
 	fi
 fi
 
+# --- Engine fallback reporting run -------------------------------------------
+#
+# An engine_fallback report names no failed run (run_refs stays empty, no log
+# is read), so its heal scope is the reporting run plus the fixed engine
+# support paths (ENGINE_FALLBACK_SCOPE_PATHS). The run comes from the report,
+# which usually carries no OIDC identity, so it is bound here to GitHub's run
+# object first (verify-engine-reporter-run): same repository, same workflow
+# name, the claimed attempt, still running or finished within
+# WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS. A report without a run, or one that
+# does not bind, keeps the run-less outcome (skip reason=scope_unavailable_no_runs).
+# CLAUDE.md §15 audit: no earlier call in this script reads the reporting run
+# (claim binding and provenance read only run_refs, which this kind leaves
+# empty), so this is one GET per engine_fallback report, and only on the
+# `open` decision: duplicates, escalations and budget stops never reach it.
+ENGINE_REPORTER_RUN_REF=""
+ENGINE_SCOPE_RUNS_JSON='[]'
+ENGINE_SCOPE_PATHS_JSON='[]'
+if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
+	ENGINE_REPORTER_RUN_ID="$(_pf '.reporter_run.run_id // ""')"
+	if [[ "${ENGINE_REPORTER_RUN_ID}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		ENGINE_REPORTER_RUN_FILE="${RUNTIME_DIR}/engine_reporter_run.json"
+		ENGINE_REPORTER_RUN_RESULT="${RUNTIME_DIR}/engine_reporter_run_result.json"
+		if ! gh_api_json_to_file "${ENGINE_REPORTER_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${ENGINE_REPORTER_RUN_ID}" 2>/dev/null \
+			|| ! jq -e 'type == "object"' "${ENGINE_REPORTER_RUN_FILE}" >/dev/null 2>&1; then
+			printf '{}\n' > "${ENGINE_REPORTER_RUN_FILE}"
+		fi
+		if python3 "${HEAL_PY}" verify-engine-reporter-run --payload-json "${PAYLOAD_FILE}" --run-json "${ENGINE_REPORTER_RUN_FILE}" \
+			--max-age "${REPORT_MAX_AGE}" > "${ENGINE_REPORTER_RUN_RESULT}" 2>/dev/null \
+			&& jq -e '.ok == true and (.run_ref | type == "string") and (.scope_paths | type == "array")' "${ENGINE_REPORTER_RUN_RESULT}" >/dev/null 2>&1; then
+			ENGINE_REPORTER_RUN_REF="$(jq -r '.run_ref' "${ENGINE_REPORTER_RUN_RESULT}")"
+			ENGINE_SCOPE_RUNS_JSON="$(jq -c '[.run_ref]' "${ENGINE_REPORTER_RUN_RESULT}")"
+			ENGINE_SCOPE_PATHS_JSON="$(jq -c '.scope_paths' "${ENGINE_REPORTER_RUN_RESULT}")"
+			log "engine_reporter_run outcome=verified run=${ENGINE_REPORTER_RUN_REF} attempt=$(jq -r '.run_attempt // "1"' "${ENGINE_REPORTER_RUN_RESULT}" | tr -cd '0-9') fp=${FP} source=${SOURCE_LABEL}"
+		else
+			ENGINE_REPORTER_RUN_REJECT="$(jq -r '.reason // ""' "${ENGINE_REPORTER_RUN_RESULT}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+			log "engine_reporter_run outcome=rejected reason=${ENGINE_REPORTER_RUN_REJECT:-verifier_error} run_id=${ENGINE_REPORTER_RUN_ID} fp=${FP} source=${SOURCE_LABEL}"
+		fi
+	else
+		log "engine_reporter_run outcome=absent fp=${FP} source=${SOURCE_LABEL}"
+	fi
+fi
+
 # Freeze the heal-scope inputs before the diagnosis prompt assembles any
 # untrusted evidence (#6463): only validated report fields, authenticated run metadata
 # and the ownership facts computed above. _open_issue reads this snapshot,
@@ -1963,11 +2010,13 @@ _heal_slurp_verified_runs()
 }
 jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 	--argjson failing_tests "${FAILING_TESTS_JSON}" \
+	--argjson engine_runs "${ENGINE_SCOPE_RUNS_JSON:-[]}" \
+	--argjson engine_paths "${ENGINE_SCOPE_PATHS_JSON:-[]}" \
 	--argjson runs "$(_heal_slurp_verified_runs '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique')" \
 	--argjson self_workflows "$(_heal_slurp_verified_runs '[.[] | .referenced_paths[]?] | unique')" \
 	--argjson consumer_workflows "$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')" \
 	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
-	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
+	'{crash_file: $crash, runs: (($runs + $engine_runs) | unique), self_workflows: ($self_workflows + $engine_paths), consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
 	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
 	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
 
@@ -2015,6 +2064,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	elif [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 		echo "Refused AI engine fallback: role $(_pf '.engine_role') reason $(_pf '.engine_reason') (Claude unavailable for a non-capacity reason; the role failed instead of running codex)"
 		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
+		[ -z "${ENGINE_REPORTER_RUN_REF}" ] || echo "Reporting run (verified): https://github.com/${SOURCE_REPO}/actions/runs/${ENGINE_REPORTER_RUN_ID}"
 	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
@@ -2225,6 +2275,15 @@ case "${CLASSIFICATION}" in
 		fi
 		;;
 esac
+
+# An engine_fallback scope names only coding-workflows engine support code
+# (ENGINE_FALLBACK_SCOPE_PATHS), never consumer files, so a consumer-app-defect
+# issue could never get a scope. The refusal is decided by that harness code:
+# file it here as workflow-defect.
+if [ "${SOURCE_KIND}" = "engine_fallback" ] && [ "${CLASSIFICATION}" = "consumer-app-defect" ]; then
+	log "classification_remapped from=consumer-app-defect to=workflow-defect reason=engine_fallback_harness_scope source=${SOURCE_LABEL} fp=${FP}"
+	CLASSIFICATION="workflow-defect"
+fi
 
 # --- Route -----------------------------------------------------------------
 

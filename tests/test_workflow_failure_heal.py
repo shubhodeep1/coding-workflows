@@ -6546,6 +6546,232 @@ def test_intake_fingerprints_engine_fallback_without_logs() -> None:
 	assert '"${SOURCE_KIND}" == "engine_fallback"' not in text
 
 
+# --- engine_fallback reporting run: heal scope instead of scope_unavailable_no_runs ---
+
+ENGINE_RUN_ID = "39565576987"
+ENGINE_WORKFLOW = "AI Orchestrate Poller"
+
+
+def _engine_scoped_payload(**overrides) -> dict:
+	payload = heal.build_engine_fallback_payload(
+		repo=CONSUMER_REPO, role="SECURITY_AUDIT", reason="isolation_unavailable", workflow_name=ENGINE_WORKFLOW,
+		run_id=ENGINE_RUN_ID, run_attempt="2", wrapper_sha=None, reporter_run_url=None,
+		records=["v1\t1700000000\tSECURITY_AUDIT\tisolation_unavailable\tnon_capacity\trefused\tcapacity"],
+	)
+	payload.update(overrides)
+	return payload
+
+
+def _engine_run(**overrides) -> dict:
+	run = {"id": int(ENGINE_RUN_ID), "repository": {"full_name": CONSUMER_REPO}, "name": ENGINE_WORKFLOW,
+		"run_attempt": 2, "status": "in_progress", "conclusion": None,
+		"created_at": "2026-10-21T07:40:00Z", "updated_at": "2026-10-21T07:50:00Z"}
+	run.update(overrides)
+	return run
+
+
+def test_engine_fallback_payload_carries_the_reporting_run() -> None:
+	normalized = heal.validate_payload(_engine_scoped_payload())
+	assert normalized["reporter_run"] == {"run_id": ENGINE_RUN_ID, "run_attempt": "2"}
+	# run_refs stays empty: no log read, no claim binding, no provenance gate.
+	assert normalized["run_refs"] == []
+	assert heal.unwrap_dispatch(heal.wrap_dispatch(normalized)["client_payload"]) == normalized
+	assert f"- **Reporting run:** https://github.com/{CONSUMER_REPO}/actions/runs/{ENGINE_RUN_ID}/attempts/2" in heal._context_lines(normalized, run_summaries=[])
+	# The attempt defaults to 1; no run id means no reporter_run.
+	assert heal.build_engine_fallback_payload(repo=CONSUMER_REPO, role="PLAN", reason="no_credential", workflow_name="AI Plan",
+		run_id="7", wrapper_sha=None, reporter_run_url=None, records=[])["reporter_run"] == {"run_id": "7", "run_attempt": "1"}
+	assert heal.build_engine_fallback_payload(repo=CONSUMER_REPO, role="PLAN", reason="no_credential", workflow_name="AI Plan",
+		run_id="", wrapper_sha=None, reporter_run_url=None, records=[])["reporter_run"] is None
+	# Older reporters (no field) and malformed values keep the run-less path; neither is fatal.
+	legacy = _engine_scoped_payload()
+	legacy.pop("reporter_run")
+	assert heal.validate_payload(legacy)["reporter_run"] is None
+	for bad in ({"run_id": "0", "run_attempt": "1"}, {"run_id": "12", "run_attempt": "x"}, {"run_id": True, "run_attempt": "1"}, "12", [12]):
+		assert heal.validate_payload(_engine_scoped_payload(reporter_run=bad))["reporter_run"] is None, bad
+	# The fingerprint still ignores the run: every run of a refusal joins one issue.
+	assert heal.validate_payload(_engine_scoped_payload())["failure_reason"] == heal.ENGINE_FALLBACK_FAILURE_REASON
+
+
+@pytest.mark.parametrize(
+	("run", "reason"),
+	[
+		({}, "run_unavailable"),
+		(_engine_run(id=1), "run_id_mismatch"),
+		(_engine_run(repository={"full_name": "someone/else"}), "run_not_in_source_repo"),
+		(_engine_run(repository=None), "run_not_in_source_repo"),
+		(_engine_run(name="AI Plan"), "workflow_name_mismatch"),
+		(_engine_run(run_attempt=1), "run_attempt_mismatch"),
+		(_engine_run(status="completed", updated_at="2026-10-21T05:00:00Z"), "run_stale"),
+		(_engine_run(status="completed", updated_at=None), "run_stale"),
+	],
+)
+def test_verify_engine_reporter_run_rejects(run: dict, reason: str) -> None:
+	now = datetime(2026, 10, 21, 8, 0, tzinfo=timezone.utc)
+	result = heal.verify_engine_reporter_run(heal.validate_payload(_engine_scoped_payload()), run, max_age=3600, now=now)
+	assert result == {"ok": False, "reason": reason}
+
+
+def test_verify_engine_reporter_run_binds_current_runs() -> None:
+	now = datetime(2026, 10, 21, 8, 0, tzinfo=timezone.utc)
+	payload = heal.validate_payload(_engine_scoped_payload())
+	for run in (_engine_run(), _engine_run(status="queued"), _engine_run(run_attempt=3),
+			_engine_run(status="completed", conclusion="success", updated_at="2026-10-21T07:30:00Z"),
+			_engine_run(repository={"full_name": CONSUMER_REPO.upper()})):
+		result = heal.verify_engine_reporter_run(payload, run, max_age=3600, now=now)
+		assert result["ok"] is True, run
+		assert result["run_ref"] == f"{CONSUMER_REPO}:{ENGINE_RUN_ID}"
+		assert result["scope_paths"] == list(heal.ENGINE_FALLBACK_SCOPE_PATHS)
+	assert heal.verify_engine_reporter_run(heal.validate_payload(_engine_fallback_payload(reporter_run=None)), _engine_run(), max_age=3600, now=now)["reason"] == "no_reporter_run"
+	assert heal.verify_engine_reporter_run(heal.validate_payload(_consumer_payload()), _engine_run(), max_age=3600, now=now)["reason"] == "not_engine_fallback"
+
+
+def test_engine_fallback_scope_renders_a_valid_marker_from_the_reporting_run(tmp_path: Path) -> None:
+	# The scope the intake freezes for a verified engine_fallback report passes
+	# the same marker check implement preflight uses.
+	now = datetime(2026, 10, 21, 8, 0, tzinfo=timezone.utc)
+	verified = heal.verify_engine_reporter_run(heal.validate_payload(_engine_scoped_payload()), _engine_run(), max_age=3600, now=now)
+	existing = set(heal.ENGINE_FALLBACK_SCOPE_PATHS) - {"scripts/review_untrusted_sandbox.sh"}
+	marker = heal.render_heal_scope_marker(crash_file=None, workflow_paths=verified["scope_paths"], changed_files=[],
+		runs=[verified["run_ref"]], exists=lambda path: path in existing)
+	marker_file = tmp_path / "marker.txt"
+	marker_file.write_text(marker + "\n", encoding="utf-8")
+	assert heal.check_heal_scope_marker_file(str(marker_file))["status"] == "valid"
+	assert f"runs={CONSUMER_REPO}:{ENGINE_RUN_ID} -->" in marker
+	assert "scripts/ai_engine.sh," in marker and "scripts/review_untrusted_sandbox.sh" not in marker
+	# Every fixed path is a path a heal scope may name.
+	assert all(heal._safe_heal_path(path) for path in heal.ENGINE_FALLBACK_SCOPE_PATHS)
+	assert all((REPO_ROOT / path).is_file() for path in heal.ENGINE_FALLBACK_SCOPE_PATHS)
+	# Without a verified run the marker cannot render, which is the old drop.
+	assert heal.render_heal_scope_marker(crash_file=None, workflow_paths=verified["scope_paths"], changed_files=[], runs=[], exists=lambda path: True) == ""
+
+
+def test_engine_fallback_reporting_run_cli_round_trip(tmp_path: Path) -> None:
+	script = str(REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	built = subprocess.run(
+		[sys.executable, script, "build-engine-fallback-payload", "--repo", CONSUMER_REPO, "--role", "SECURITY_AUDIT",
+		"--reason", "isolation_unavailable", "--workflow-name", ENGINE_WORKFLOW, "--run-id", ENGINE_RUN_ID, "--run-attempt", "2"],
+		capture_output=True, text=True, env=env, check=True,
+	)
+	payload_file = tmp_path / "payload.json"
+	payload_file.write_text(built.stdout, encoding="utf-8")
+	assert json.loads(built.stdout)["reporter_run"] == {"run_id": ENGINE_RUN_ID, "run_attempt": "2"}
+	run_file = tmp_path / "run.json"
+	run_file.write_text(json.dumps(_engine_run()), encoding="utf-8")
+	ok = subprocess.run([sys.executable, script, "verify-engine-reporter-run", "--payload-json", str(payload_file), "--run-json", str(run_file), "--max-age", "3600"],
+		capture_output=True, text=True, env=env, check=False)
+	assert ok.returncode == 0 and json.loads(ok.stdout)["run_ref"] == f"{CONSUMER_REPO}:{ENGINE_RUN_ID}"
+	run_file.write_text(json.dumps(_engine_run(name="AI Plan")), encoding="utf-8")
+	bad = subprocess.run([sys.executable, script, "verify-engine-reporter-run", "--payload-json", str(payload_file), "--run-json", str(run_file), "--max-age", "3600"],
+		capture_output=True, text=True, env=env, check=False)
+	assert bad.returncode == 1 and json.loads(bad.stdout) == {"ok": False, "reason": "workflow_name_mismatch"}
+	run_file.write_text("not json", encoding="utf-8")
+	broken = subprocess.run([sys.executable, script, "verify-engine-reporter-run", "--payload-json", str(payload_file), "--run-json", str(run_file), "--max-age", "3600"],
+		capture_output=True, text=True, env=env, check=False)
+	assert broken.returncode == 1 and json.loads(broken.stdout)["reason"] == "run_unavailable"
+
+
+def test_engine_fallback_reporter_passes_the_run_attempt() -> None:
+	text = (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").read_text(encoding="utf-8")
+	build = text[text.index("build-engine-fallback-payload"):text.index("wrap-dispatch --payload-json")]
+	assert '--run-id "${RUN_ID}" --run-attempt "${GITHUB_RUN_ATTEMPT:-}"' in build
+
+
+def _prepare_engine_scope_support(tmp: Path, work: Path) -> None:
+	"""A `stable` support ref holding the engine support files (minus one), so the scope resolves."""
+	remote = tmp / "remote.git"
+	subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+	subprocess.run(["git", "init", "-q", "-b", "stable"], cwd=work, check=True)
+	subprocess.run(["git", "config", "user.name", "test"], cwd=work, check=True)
+	subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=work, check=True)
+	present = [path for path in heal.ENGINE_FALLBACK_SCOPE_PATHS if path != "scripts/review_untrusted_sandbox.sh"]
+	for path in present:
+		(work / path).parent.mkdir(parents=True, exist_ok=True)
+		(work / path).write_text("support\n", encoding="utf-8")
+	subprocess.run(["git", "add", "-f", *present], cwd=work, check=True)
+	subprocess.run(["git", "commit", "-qm", "support"], cwd=work, check=True)
+	subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
+	subprocess.run(["git", "push", "-q", "origin", "stable"], cwd=work, check=True)
+
+
+def _engine_run_get_calls(state: dict) -> list:
+	return [call for call in state.get("calls", []) if any(part == f"repos/{CONSUMER_REPO}/actions/runs/{ENGINE_RUN_ID}" for part in call)]
+
+
+def _engine_intake_setup(tg_log: Path):
+	tg = _nr_tg_setup(tg_log)
+
+	def _setup(tmp: Path, work: Path) -> None:
+		_prepare_engine_scope_support(tmp, work)
+		tg(tmp, work)
+	return _setup
+
+
+def test_intake_files_engine_fallback_heal_issue_scoped_to_the_reporting_run(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	state = _intake_state(run_details={ENGINE_RUN_ID: _engine_run()})
+	result, state, prompt = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL engine_reporter_run outcome=verified run={CONSUMER_REPO}:{ENGINE_RUN_ID} attempt=2 " in result.stdout
+	assert "scope_unavailable_no_runs" not in result.stdout
+	assert "WORKFLOW_HEAL scope_guard outcome=verified" in result.stdout
+	assert len(state["issues_created"]) == 1
+	issue = state["issues_created"][0]
+	assert issue["repo"] == SELF_REPO
+	assert issue["title"] == "Workflow heal: AI engine fallback refused for SECURITY_AUDIT (isolation_unavailable)"
+	body = issue["body"]
+	assert body.count("ai:workflow-heal-scope:v1") == 1
+	expected_paths = ",".join(path for path in heal.ENGINE_FALLBACK_SCOPE_PATHS if path != "scripts/review_untrusted_sandbox.sh")
+	assert f"paths={expected_paths},tests/**,changelog.d/*.md runs={CONSUMER_REPO}:{ENGINE_RUN_ID} -->" in body
+	assert f"https://github.com/{CONSUMER_REPO}/actions/runs/{ENGINE_RUN_ID}/attempts/2" in body
+	assert heal.parse_heal_markers(body)["fp"] == heal.engine_fallback_fingerprint("SECURITY_AUDIT", "isolation_unavailable")
+	assert f"Reporting run (verified): https://github.com/{CONSUMER_REPO}/actions/runs/{ENGINE_RUN_ID}" in prompt
+	# One run read (§15), and it is a GET.
+	calls = _engine_run_get_calls(state)
+	assert len(calls) == 1 and calls[0][calls[0].index("--method") + 1] == "GET"
+	assert not [line for line in tg_log.read_text().splitlines() if line.startswith("CRITICAL\t")] if tg_log.exists() else True
+
+
+def test_intake_keeps_the_quiet_skip_when_the_reporting_run_does_not_bind(tmp_path: Path) -> None:
+	cases = [
+		("rejected reason=workflow_name_mismatch", _engine_scoped_payload(), {ENGINE_RUN_ID: _engine_run(name="AI Plan")}),
+		("rejected reason=run_unavailable", _engine_scoped_payload(), {}),
+		("rejected reason=run_not_in_source_repo", _engine_scoped_payload(), {ENGINE_RUN_ID: _engine_run(repository={"full_name": "someone/else"})}),
+		("absent", _engine_scoped_payload(reporter_run=None), {ENGINE_RUN_ID: _engine_run()}),
+	]
+	for index, (outcome, payload, run_details) in enumerate(cases):
+		tg_log = tmp_path / f"tg-{index}.log"
+		result, state, _ = _run_intake(payload, _intake_state(run_details=run_details), diagnosis=DIAG_WORKFLOW_DEFECT,
+			setup_git=_engine_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+		assert result.returncode == 0, outcome + result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL engine_reporter_run outcome={outcome} " in result.stdout, result.stdout
+		assert "WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=marker_guard " in result.stdout, result.stdout
+		assert "issues_created" not in state
+		assert not [line for line in (tg_log.read_text() if tg_log.exists() else "").splitlines() if line.startswith("CRITICAL\t")]
+		assert len(_engine_run_get_calls(state)) == (0 if outcome == "absent" else 1)
+
+
+def test_intake_engine_fallback_duplicate_reads_no_run(tmp_path: Path) -> None:
+	fp = heal.engine_fallback_fingerprint("SECURITY_AUDIT", "isolation_unavailable")
+	state = _intake_state(run_details={ENGINE_RUN_ID: _engine_run()}, heal_issues=[_heal_issue(812, state="open", fp=fp)])
+	result, state, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tmp_path / "tg.log"), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL duplicate existing_issue=812 existing_repo={SELF_REPO} fp={fp}" in result.stdout
+	assert "engine_reporter_run" not in result.stdout
+	assert _engine_run_get_calls(state) == []
+	assert "issues_created" not in state
+
+
+def test_intake_engine_fallback_consumer_app_defect_is_filed_here(tmp_path: Path) -> None:
+	result, state, _ = _run_intake(_engine_scoped_payload(), _intake_state(run_details={ENGINE_RUN_ID: _engine_run()}), diagnosis=DIAG_CONSUMER_APP_SCOPE,
+		setup_git=_engine_intake_setup(tmp_path / "tg.log"), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "classification_remapped from=consumer-app-defect to=workflow-defect reason=engine_fallback_harness_scope" in result.stdout
+	assert [issue["repo"] for issue in state["issues_created"]] == [SELF_REPO]
+
+
 # --- Issue #7059: no heal issue without a valid intake-authored scope marker ---
 
 
