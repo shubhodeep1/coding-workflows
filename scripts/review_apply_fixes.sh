@@ -763,7 +763,7 @@ editor_attempt_result_failure_class()
 		78) echo "workspace_safety_violation" ;;
 		79) echo "config_bootstrap" ;;
 		80) echo "claude_capacity" ;;
-		124|137) echo "timeout" ;;
+		124|137|143) echo "timeout" ;;
 		*) echo "exit_nonzero" ;;
 	esac
 	return 0
@@ -2301,7 +2301,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
   emit_editor_substate "InitializingSession" "${attempt}"
   emit_editor_substate "StreamingTurn" "${attempt}"
-  editor_attempt_started_at="$(date +%s 2>/dev/null || echo 0)"
+  # Empty on failure (not 0), so a failed read logs duration_secs=0, not the epoch.
+  editor_attempt_started_at="$(date +%s 2>/dev/null || true)"
   (
     trap '' PIPE
     PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"

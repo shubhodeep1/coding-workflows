@@ -258,7 +258,9 @@ def load_profile_manifests(templates_dir: Path) -> dict[str, set[str]]:
 	manifests: dict[str, set[str]] = {}
 	for profile in WORKFLOW_PROFILE_NAMES:
 		names = _load_named_profile_manifest_names(templates_dir, profile)
-		if names is not None:
+		# An empty manifest counts as missing (the updater refuses it with
+		# ERR_WORKFLOW_PROFILE_EMPTY), so that profile audits every template.
+		if names:
 			manifests[profile] = names
 	return manifests
 

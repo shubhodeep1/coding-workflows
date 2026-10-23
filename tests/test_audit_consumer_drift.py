@@ -970,6 +970,23 @@ def test_missing_profile_manifest_disables_skipping() -> None:
 		assert "DRIFT_SCAN_SKIP" not in output
 
 
+def test_empty_profile_manifest_disables_skipping() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-empty-core-") as td:
+		templates_dir = _profile_templates_dir(Path(td))
+		(templates_dir / "profiles" / "core.txt").write_text("# comment only\n\n", encoding="utf-8")
+		assert "core" not in drift_audit.load_profile_manifests(templates_dir)
+		result, output, _executor = _run_profile_audit(
+			templates_dir,
+			[
+				_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "core"})),
+				_listing_call("octo/demo", []),
+			],
+		)
+		assert _missing_files(result) == set(PROFILE_TEMPLATE_BODIES)
+		assert "profile=core manifest=missing" in output.splitlines()[0]
+		assert "DRIFT_SCAN_SKIP" not in output
+
+
 def test_profile_is_cached_per_repository() -> None:
 	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-cache-") as td:
 		templates_dir = _profile_templates_dir(Path(td))
@@ -1036,6 +1053,7 @@ def main() -> int:
 	test_transient_profile_failure_is_retried()
 	test_present_out_of_profile_wrapper_is_still_compared()
 	test_missing_profile_manifest_disables_skipping()
+	test_empty_profile_manifest_disables_skipping()
 	test_profile_is_cached_per_repository()
 	test_default_auditor_makes_no_profile_call()
 	test_load_profile_manifests_reads_repo_manifests()

@@ -417,6 +417,7 @@ def test_editor_attempt_result_failure_class_tokens_closed() -> None:
 		(("80", "observed", "0"), "claude_capacity"),
 		(("124", "none", "0"), "timeout"),
 		(("137", "none", "0"), "timeout"),
+		(("143", "none", "0"), "timeout"),
 		(("2", "none", "0"), "exit_nonzero"),
 		(("226", "none", "9"), "exit_nonzero"),
 		(("abc", "none", "9"), "exit_nonzero"),
