@@ -806,7 +806,11 @@ def handoff_nested(stage, work):
 			or target.exists() or target.is_symlink()):
 			skipped += 1
 			continue
-		os.rename(source, target)
+		try:
+			os.rename(source, target)
+		except OSError:
+			skipped += 1
+			continue
 		moved += 1
 	log(f"handoff-nested moved={moved} skipped={skipped}")
 

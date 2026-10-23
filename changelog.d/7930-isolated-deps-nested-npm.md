@@ -8,7 +8,7 @@ The dependency phase now also finds `package.json` files below the root that sit
 | Nested projects installed per job | at most 8 (sorted by path; projects skipped for an existing `node_modules` or an unreadable manifest do not use a slot) |
 | Search depth | 4 directories below the root |
 | Directories never searched | dot directories, `node_modules`, `dist`, `build`, `coverage`, `vendor` |
-| New log fields | `stage-deps ... nested_node=<n>`, `stage-deps nested_node_skipped=<n> reason=project_limit|node_modules_present|manifest_unavailable`, `handoff-nested moved=<n> skipped=<n>` |
+| New log fields | `stage-deps ... nested_node=<n>`, `stage-deps nested_node_skipped=<n> reason=project_limit\|node_modules_present\|manifest_unavailable`, `handoff-nested moved=<n> skipped=<n>` |
 
 What this means for consumer repos: a repository with nested npm projects spends more time in the implement dependency phase, and the nested installs share its existing 900-second budget. A nested project without a lockfile is not installed. A failed nested install warns like a failed root install; the agent then marks validations it cannot run as UNVERIFIED.
 
