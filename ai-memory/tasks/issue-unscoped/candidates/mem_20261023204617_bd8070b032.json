@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:2000-2006, 2099-2105 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The moved bodies resolve workspace-relative paths against the step's current working directory (`scripts/stable_e2e_step_wait_review.sh:102`, `scripts/stable_e2e_step_verify_bait_removed.sh:65`, `scripts/stable_e2e_step_verify_bait_removed.sh:228`), so a later `working-directory:` would break them with exit 127.\n  WHY: The CWD dependency is implicit. The suggested fix is `cd \"${GITHUB_WORKSPACE}\"` before `source`. This was given as a hardening suggestion with HARDENING_RISK_SCORE 2, and no severity was stated.\n- .github/workflows/test-and-mark-stable.yml:2002, 2101 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The wrapper guards reject symlinks and non-regular files but accept a zero-byte or truncated script copy.\n  WHY: Sourcing an empty file makes the gate fail later and less legibly. The suggested fix is a `[ ! -s ... ]` check. This was given as a hardening suggestion with HARDENING_RISK_SCORE 1, and no severity was stated.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add the script to REQUIRED_BOOTSTRAP_SCRIPTS in scripts/stage_workflow_support.sh\n  expected_change_site: scripts/stage_workflow_support.sh\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/stage_workflow_support.sh was not modified in the diff, and REQUIRED_BOOTSTRAP_SCRIPTS does not list stable_e2e_step_wait_review.sh or stable_e2e_step_verify_bait_removed.sh. The reviewer marked this SEVERITY: BLOCKER. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and qwen_qwen3_7-plus rejected this gap: the issue's parenthetical scopes it to review_autofix.yml, test-and-mark-stable.yml does not run stage_workflow_support.sh, and the file is outside the files_touched grant.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Add the script to REQUIRED_BOOTSTRAP_SCRIPTS in scripts/stage_workflow_support.sh\n  Expected change site: scripts/stage_workflow_support.sh\n  Evidence of absence: The script scripts/stage_workflow_support.sh was not modified in the provided diff and does not list the new scripts stable_e2e_step_wait_review.sh or stable_e2e_step_verify_bait_removed.sh in REQUIRED_BOOTSTRAP_SCRIPTS as required by the workflow size guard pattern documentation.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:2000-2006, 2099-2105 | hardening suggestion, HARDENING_RISK_SCORE=2\n  PROBLEM: The moved bodies resolve workspace-relative paths against the step's current working directory (`scripts/stable_e2e_step_wait_review.sh:102`, `scripts/stable_e2e_step_verify_bait_removed.sh:65`, `scripts/stable_e2e_step_verify_bait_removed.sh:228`), so a later `working-directory:` would break them with exit 127.\n  WHY: The CWD dependency is implicit. The suggested fix is `cd \"${GITHUB_WORKSPACE}\"` before `source \"${STABLE_E2E_STEP_SCRIPT}\"`.\n- .github/workflows/test-and-mark-stable.yml:2002, 2101 | hardening suggestion, HARDENING_RISK_SCORE=1\n  PROBLEM: The wrapper guards reject symlinks and non-regular files but accept a zero-byte or truncated script copy.\n  WHY: Sourcing an empty file makes the gate fail later and less legibly. The suggested fix is to add `[ ! -s \"${STABLE_E2E_STEP_SCRIPT}\" ]` to both guards.\n- Cross-pollination note: minimax_minimax-m3 rejected the google_gemini-3_1-flash-lite TASK_GAP and did not re-emit it. Its reasons:\n  - The issue's parenthetical scopes REQUIRED_BOOTSTRAP_SCRIPTS to review_autofix.yml.\n  - The only per-script assertion is in `tests/test_review_autofix_step_scripts_contract.py:115`.\n  - test-and-mark-stable.yml never runs stage_workflow_support.sh.\n  - The file is outside the files_touched grant.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "335da8cf08e354e690f1f87e9a22d833c8b34b48599dddfedefdbc75b8a19628",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8001,
+    "run_id": "40010280876",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40010280876",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023204617_bd8070b032",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8001,
+    "run_id": "40010280876"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T20:46:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
