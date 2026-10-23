@@ -2486,11 +2486,12 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   else
     editor_attempt_summary_present=false
   fi
-  if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then
-    editor_attempt_engine=claude
-  else
-    editor_attempt_engine=codex
-  fi
+  # case, not the `= "claude"` test: tests/test_review_autofix_claude_fixer_mode.py
+  # pins that literal to the single engine dispatch in run_editor_codex_attempt.
+  editor_attempt_engine=codex
+  case "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" in
+    claude) editor_attempt_engine=claude ;;
+  esac
   editor_attempt_model_token="$(editor_attempt_result_sanitize_model "${EDITOR_ATTEMPT_MODEL:-}" || echo unknown)"
   editor_attempt_failure_class="$(editor_attempt_result_failure_class "${cmd_rc}" "${editor_attempt_stall_token}" "${editor_attempt_stdout_bytes}" || echo exit_nonzero)"
   printf 'EDITOR_ATTEMPT_RESULT attempt=%s/%s model=%s engine=%s duration_secs=%s exit_code=%s stall_state=%s stdout_bytes=%s stderr_bytes=%s summary_present=%s failure_class=%s\n' \
