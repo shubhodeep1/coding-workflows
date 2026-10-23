@@ -56,10 +56,11 @@ def _run_failure_step_full(
 	meta_labels: list[str] | None = None,
 	fail_label_read: bool = False,
 	labels_raw: str | None = None,
+	runtime_out: Path | None = None,
 ) -> tuple[list[list[str]], str]:
 	script = _render_github_expressions(_extract_run_script("Comment on issue failure"))
 	with tempfile.TemporaryDirectory() as tmp:
-		tmp_path = Path(tmp)
+		tmp_path = Path(runtime_out) if runtime_out is not None else Path(tmp)
 		bin_dir = tmp_path / "bin"
 		bin_dir.mkdir()
 		(bin_dir / "gh").write_text(MOCK_GH, encoding="utf-8")
@@ -110,8 +111,11 @@ def _run_failure_step_full(
 		return calls, proc.stdout
 
 
-def _run_failure_step(*, blocked_reason: str | None, labels: list[str], fail_blocked_edit: bool = False) -> list[list[str]]:
-	calls, _ = _run_failure_step_full(blocked_reason=blocked_reason, labels=labels, fail_blocked_edit=fail_blocked_edit)
+def _run_failure_step(*, blocked_reason: str | None, labels: list[str], fail_blocked_edit: bool = False,
+		runtime_out: Path | None = None) -> list[list[str]]:
+	calls, _ = _run_failure_step_full(
+		blocked_reason=blocked_reason, labels=labels, fail_blocked_edit=fail_blocked_edit, runtime_out=runtime_out
+	)
 	return calls
 
 
@@ -166,6 +170,74 @@ def test_blocked_verdict_does_not_report_terminalization_when_latch_fails() -> N
 	calls = _run_failure_step(blocked_reason="BLOCKED: credentials unavailable", labels=["ai:implementing"], fail_blocked_edit=True)
 	assert len(_label_edits(calls)) == 1
 	assert _comment_bodies(calls) == []
+
+
+def _runtime_after_failure_step(tmp_path: Path, **kwargs) -> Path:
+	tmp_path.mkdir(parents=True, exist_ok=True)
+	_run_failure_step(runtime_out=tmp_path, **kwargs)
+	return tmp_path / "runtime"
+
+
+def test_latch_flag_is_written_only_when_the_blocked_latch_is_set(tmp_path: Path) -> None:
+	blocked = _runtime_after_failure_step(tmp_path / "a", blocked_reason="BLOCKED: npm registry unavailable", labels=["ai:implementing"])
+	assert (blocked / "implement_blocked_latched.flag").is_file()
+	failed = _runtime_after_failure_step(tmp_path / "b", blocked_reason="BLOCKED: x", labels=["ai:implementing"], fail_blocked_edit=True)
+	assert not (failed / "implement_blocked_latched.flag").exists()
+	plain = _runtime_after_failure_step(tmp_path / "c", blocked_reason=None, labels=["ai:implementing"])
+	assert not (plain / "implement_blocked_latched.flag").exists()
+
+
+FAKE_TG_HELPERS = '''tg_send_phase_failure() { printf '%s|%s|%s\\n' "$3" "$4" "$2" >> "$FAKE_TG_LOG"; }
+'''
+
+
+def _run_telegram_step(tmp_path: Path, *, blocked_reason: str | None, latched: bool) -> tuple[str, str, str]:
+	script = _render_github_expressions(_extract_run_script("Telegram failure notification"))
+	tmp_path.mkdir(parents=True, exist_ok=True)
+	support = tmp_path / "support"
+	support.mkdir()
+	(support / "tg_helpers.sh").write_text(FAKE_TG_HELPERS, encoding="utf-8")
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir()
+	if blocked_reason is not None:
+		(runtime_dir / "codex_blocked.flag").write_text(blocked_reason + "\n", encoding="utf-8")
+	if latched:
+		(runtime_dir / "implement_blocked_latched.flag").write_text("", encoding="utf-8")
+	log = tmp_path / "tg.log"
+	env = os.environ.copy()
+	for key in ("BASH_ENV", "ENV"):
+		env.pop(key, None)
+	env.update({
+		"FAKE_TG_LOG": str(log),
+		"ISSUE_NUMBER": "4770",
+		"ISSUE_URL": "https://github.com/owner/repo/issues/4770",
+		"RUNTIME_DIR": str(runtime_dir),
+		"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(support),
+	})
+	step = tmp_path / "step.sh"
+	step.write_text(script, encoding="utf-8")
+	proc = subprocess.run(["bash", str(step)], cwd=str(tmp_path), env=env, text=True, capture_output=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	level, tracked, message = log.read_text(encoding="utf-8").split("|", 2)
+	return level, tracked, message
+
+
+def test_latched_blocked_verdict_pages_at_warning(tmp_path: Path) -> None:
+	# tele-funtoken-msg-scoring#4770: sent at DEBUG, the alert was dropped
+	# under the default ALERT_MSG_LEVEL=WARNING and nobody was told.
+	level, tracked, message = _run_telegram_step(tmp_path, blocked_reason="BLOCKED: npm registry unavailable for npm ci", latched=True)
+	assert level == "WARNING" and tracked == "4770"
+	assert message.startswith("Implementation blocked on issue #4770: human input required")
+	assert "Reason: BLOCKED: npm registry unavailable for npm ci" in message
+	assert "Issue: https://github.com/owner/repo/issues/4770" in message
+	assert "Run: https://github.com/owner/repo/actions/runs/777" in message
+
+
+def test_unlatched_or_ordinary_failures_stay_at_debug(tmp_path: Path) -> None:
+	level, _, message = _run_telegram_step(tmp_path / "a", blocked_reason="BLOCKED: x", latched=False)
+	assert level == "DEBUG" and message.startswith("AI implementation workflow failed for issue #4770")
+	level, _, message = _run_telegram_step(tmp_path / "b", blocked_reason=None, latched=True)
+	assert level == "DEBUG" and message.startswith("AI implementation workflow failed for issue #4770")
 
 
 def test_failure_step_does_not_read_labels_from_issue_meta_file() -> None:

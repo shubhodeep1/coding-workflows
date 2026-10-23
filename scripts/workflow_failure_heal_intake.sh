@@ -721,7 +721,7 @@ _synced_security_finding_intake()
 	local ss_path_check="" ss_count=0 ss_index=0 ss_links="" ss_action="" ss_reason="" ss_level="DEBUG"
 	local ss_group="" ss_decision="" ss_existing="" ss_prior="" ss_gen="" ss_root="" ss_label=""
 	local ss_scope="" ss_scope_input="" ss_scope_status="" ss_title="" ss_body="" ss_url="" ss_number=""
-	local ss_retired="" ss_group_file=""
+	local ss_retired="" ss_group_file="" ss_scope_json="" ss_scope_rc=0
 	mkdir -p "${ss_dir}"
 	HEAL_SCOPE_RECOVERY_ACTIVE="false"
 	CLASSIFICATION="workflow-defect"
@@ -852,7 +852,17 @@ _synced_security_finding_intake()
 					'{crash_file: null, workflow_paths: .source_paths, changed_files: [], runs: [$run], failing_tests: {names: [], files: [], pairs: []}}' \
 					"${ss_group}" > "${ss_scope_input}"
 				python3 "${HEAL_PY}" heal-scope render --input-json "${ss_scope_input}" --checkout . --ref HEAD > "${ss_scope}" 2>/dev/null || : > "${ss_scope}"
-				ss_scope_status="$(python3 "${HEAL_PY}" heal-scope check-marker --marker-file "${ss_scope}" 2>/dev/null | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)"
+				# check-marker prints its JSON and exits non-zero for a non-valid
+				# marker, so read .status from the captured output (not a pipeline,
+				# whose `|| echo` would append a second value under pipefail).
+				ss_scope_json=""
+				ss_scope_rc=0
+				ss_scope_json="$(python3 "${HEAL_PY}" heal-scope check-marker --marker-file "${ss_scope}" 2>/dev/null)" || ss_scope_rc=$?
+				ss_scope_status="$(jq -r '.status // "unknown"' <<< "${ss_scope_json}" 2>/dev/null || echo unknown)"
+				[[ "${ss_scope_status}" =~ ^[a-z_]{1,20}$ ]] || ss_scope_status="unknown"
+				if [ "${ss_scope_rc}" -ne 0 ] && [ "${ss_scope_status}" = "valid" ]; then
+					ss_scope_status="unknown"
+				fi
 				if [ "${ss_scope_status}" != "valid" ]; then
 					log "skip reason=scope_unresolved fp=${FP} status=$(printf '%s' "${ss_scope_status}" | tr -cd 'a-z_' | head -c 20) source=${SOURCE_REPO}"
 					ss_skipped=$((ss_skipped + 1))

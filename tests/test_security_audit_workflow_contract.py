@@ -3385,8 +3385,9 @@ def test_security_audit_claude_engine_success_skips_codex() -> None:
 		argv = state["claude_calls"][0]
 		assert argv[argv.index("--model") + 1] == "claude-opus-5-5"
 		assert argv[argv.index("--effort") + 1] == "high"
-		# Read profile: no shell and no edit tools.
-		assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob"
+		# Read profile: no shell and no edit tools; provider web search only
+		# (claude_engine.json `web_search`).
+		assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob,WebSearch"
 		assert "Audit scope" in state["claude_stdin"][0]
 		# The audited code is untrusted: no job credential reaches the agent.
 		assert state["claude_secret_env"] == [[]]

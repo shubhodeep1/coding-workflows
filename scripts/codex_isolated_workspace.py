@@ -41,7 +41,21 @@ Subcommands:
        Stage allowlisted Node manifests and filtered Python requirement lists
        from the credential-filtered WORK copy. Only STAGE (not WORK) is
        mounted in the network-isolated dependency container, alongside the
-       allowlisted registry proxy.
+       allowlisted registry proxy. Besides the root manifests, up to
+       MAX_NESTED_NODE_PROJECTS subdirectory Node projects (a package.json
+       plus a lockfile, at most MAX_NESTED_NODE_DEPTH levels down, outside
+       hidden directories and node_modules) are staged one per
+       `.codex-deps/nested/<n>/` and listed in `.codex-deps/nested.json`
+       (tele-funtoken-msg-scoring#4770: the Worker in
+       cloudflare/funtoken-competition-worker/ got no dependencies).
+
+  handoff-nested-deps STAGE WORK LIST
+      After the dependency phase: move each `.codex-deps/nested/<n>/node_modules`
+      the install produced into WORK at the project path LIST names (LIST is
+      a copy of `nested.json` taken before the install container ran). A path
+      that is not a safe directory with a package.json, or that already has
+      node_modules, is skipped. prep-finalize then records each moved
+      directory as a prep root, so it is never copied back to the host.
 
   transfer HOST DEST MANIFEST
       Apply the agent's changes in DEST to HOST (answer Q5 A): changed or new
@@ -99,6 +113,9 @@ MAX_TRANSFER_TOTAL = 2 * 1024 * 1024 * 1024
 MAX_INCLUDE_TOTAL = 256 * 1024 * 1024
 MAX_DEPS_MANIFEST_BYTES = 64 * 1024 * 1024
 MAX_DEPS_REQUIREMENTS = 5000
+MAX_NESTED_NODE_PROJECTS = 6
+MAX_NESTED_NODE_DEPTH = 4
+NESTED_NODE_LOCKS = (("package-lock.json", "npm-ci"), ("yarn.lock", "yarn"), ("pnpm-lock.yaml", "pnpm"))
 CHUNK = 1024 * 1024
 BINARY_SNIFF_BYTES = 8192
 
@@ -697,6 +714,139 @@ def deps_filter(lines, project_name="", max_entries=MAX_DEPS_REQUIREMENTS):
 	return accepted
 
 
+def find_nested_node_projects(work):
+	"""Subdirectory Node projects with a lockfile, in sorted walk order.
+
+	Returns (paths, over_limit): the relative POSIX paths of at most
+	MAX_NESTED_NODE_PROJECTS directories below WORK (never WORK itself), at
+	most MAX_NESTED_NODE_DEPTH levels down, that hold a package.json and one of
+	NESTED_NODE_LOCKS, plus how many more qualified past the limit. Symlinks
+	are never followed; hidden directories, node_modules, credential-looking
+	paths and projects that already have node_modules are skipped. Reads
+	directory names only, never file content.
+	"""
+	found = []
+	over_limit = 0
+	for directory, dirs, files in os.walk(work, followlinks=False):
+		here = Path(directory)
+		rel = here.relative_to(work)
+		depth = len(rel.parts)
+		dirs[:] = sorted(
+			name for name in dirs
+			if depth < MAX_NESTED_NODE_DEPTH and not name.startswith(".") and name != "node_modules"
+			and not (here / name).is_symlink() and readonly_allowed((rel / name).as_posix())
+		)
+		if depth == 0 or "package.json" not in files or not any(lock in files for lock, _ in NESTED_NODE_LOCKS):
+			continue
+		name = rel.as_posix()
+		if not readonly_allowed(name):
+			continue
+		if (here / "node_modules").exists() or (here / "node_modules").is_symlink():
+			log(f"stage-deps nested_skipped=present depth={depth}")
+			continue
+		if len(found) >= MAX_NESTED_NODE_PROJECTS:
+			over_limit += 1
+			continue
+		found.append(name)
+	return found, over_limit
+
+
+def stage_nested_node(work, stage):
+	"""Stage each nested Node project's package.json and lockfile, nothing else."""
+	meta = stage / ".codex-deps"
+	projects, over_limit = find_nested_node_projects(work)
+	listed = []
+	for path in projects:
+		package = deps_manifest(work, f"{path}/package.json")
+		if package is None:
+			log("stage-deps nested_skipped=manifest")
+			continue
+		lock_name, lock_data, mode = "", None, ""
+		for name, selected_mode in NESTED_NODE_LOCKS:
+			lock_data = deps_manifest(work, f"{path}/{name}")
+			if lock_data is not None:
+				lock_name, mode = name, selected_mode
+				break
+		if lock_data is None:
+			log("stage-deps nested_skipped=manifest")
+			continue
+		target = meta / "nested" / str(len(listed))
+		target.mkdir(parents=True)
+		(target / "package.json").write_bytes(package)
+		(target / lock_name).write_bytes(lock_data)
+		(target / "mode").write_text(mode + "\n", encoding="ascii")
+		listed.append({"index": len(listed), "path": path, "mode": mode})
+	if listed:
+		(meta / "nested.json").write_text(json.dumps(listed), encoding="utf-8")
+	log(f"stage-deps nested_node={len(listed)} nested_over_limit={over_limit}")
+
+
+def handoff_nested_deps(stage, work, listing):
+	"""Move nested node_modules from STAGE into WORK at the listed project paths.
+
+	LISTING is the host-side copy of `nested.json` (the install container can
+	write STAGE, so its copy is not trusted). Every path is re-checked here.
+	"""
+	try:
+		entries = json.loads(Path(listing).read_text(encoding="utf-8"))
+	except FileNotFoundError:
+		entries = []
+	except (OSError, ValueError):
+		log("handoff-nested-deps skipped=list reason=malformed")
+		entries = []
+	if not isinstance(entries, list):
+		raise Rejected("nested dependency list is not a list")
+	moved = 0
+	for entry in entries[:MAX_NESTED_NODE_PROJECTS]:
+		if not isinstance(entry, dict) or type(entry.get("index")) is not int or not isinstance(entry.get("path"), str):
+			log("handoff-nested-deps skipped=entry reason=malformed")
+			continue
+		index, path = entry["index"], entry["path"]
+		# The install container can write every stage directory, so no parent
+		# of the source may be a symlink (walk_no_follow lstat-checks them).
+		try:
+			source = walk_no_follow(stage, f".codex-deps/nested/{index}/node_modules")
+		except FileNotFoundError:
+			log(f"handoff-nested-deps skipped={index} reason=install_missing")
+			continue
+		except (NotADirectoryError, Rejected):
+			log(f"handoff-nested-deps skipped={index} reason=unsafe_source")
+			continue
+		if source.is_symlink():
+			log(f"handoff-nested-deps skipped={index} reason=unsafe_source")
+			continue
+		if not source.is_dir():
+			log(f"handoff-nested-deps skipped={index} reason=install_missing")
+			continue
+		parts = PurePosixPath(path).parts
+		if not readonly_allowed(path) or not parts or len(parts) > MAX_NESTED_NODE_DEPTH \
+			or PurePosixPath(path).is_absolute() \
+			or any(part.startswith(".") or part == "node_modules" for part in parts):
+			log(f"handoff-nested-deps skipped={index} reason=unsafe_path")
+			continue
+		try:
+			project = walk_no_follow(work, path)
+			project_info = project.lstat()
+			package_info = (project / "package.json").lstat()
+		except (FileNotFoundError, NotADirectoryError, Rejected):
+			log(f"handoff-nested-deps skipped={index} reason=missing_project")
+			continue
+		if not stat.S_ISDIR(project_info.st_mode) or not stat.S_ISREG(package_info.st_mode):
+			log(f"handoff-nested-deps skipped={index} reason=missing_project")
+			continue
+		target = project / "node_modules"
+		if target.exists() or target.is_symlink():
+			log(f"handoff-nested-deps skipped={index} reason=present")
+			continue
+		try:
+			os.rename(source, target)
+		except OSError as exc:
+			log(f"handoff-nested-deps skipped={index} reason=rename_failed errno={exc.errno}")
+			continue
+		moved += 1
+	log(f"handoff-nested-deps moved={moved}")
+
+
 def stage_deps(work, stage):
 	"""Stage fixed filenames only; neither parse nor execute source code."""
 	meta = stage / ".codex-deps"
@@ -762,6 +912,7 @@ def stage_deps(work, stage):
 		and isinstance(project["tool"].get("pytest"), dict) and "ini_options" in project["tool"]["pytest"]):
 		(meta / "want-pytest").touch()
 	log(f"stage-deps node={node_mode} python={python_mode}")
+	stage_nested_node(work, stage)
 
 
 def host_matches(host_path, expected):
@@ -1093,11 +1244,11 @@ def copy_include(source, target):
 
 def main():
 	command = sys.argv[1] if len(sys.argv) > 1 else ""
-	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "stage-deps": 2, "transfer": 3, "seed-git": 2, "copy-include": 2}
+	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "stage-deps": 2, "handoff-nested-deps": 3, "transfer": 3, "seed-git": 2, "copy-include": 2}
 	if command not in arity or (len(sys.argv) != arity[command] + 2
 		and not (command == "export-oversized" and len(sys.argv) == 8)
 		and not (command == "seed-git" and len(sys.argv) == 5)):
-		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|stage-deps|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
+		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|stage-deps|handoff-nested-deps|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
 		raise SystemExit(2)
 	args = [Path(value) for value in sys.argv[2:]]
 	if command == "export-oversized" and len(args) == 6:
@@ -1118,6 +1269,8 @@ def main():
 			prep_finalize(*args)
 		elif command == "stage-deps":
 			stage_deps(*args)
+		elif command == "handoff-nested-deps":
+			handoff_nested_deps(*args)
 		elif command == "transfer":
 			transfer(*args)
 		elif command == "seed-git":

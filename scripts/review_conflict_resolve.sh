@@ -2317,7 +2317,7 @@ _persist_resolver_retry_state_from_current_failure()
     rm -f "${_body_file}"
     return 0
   fi
-  if ! gh_retry gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body-file "${_body_file}" >/dev/null; then
+  if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -F "body=@${_body_file}" >/dev/null; then
     echo "::warning::Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1 to PR #${PR_NUMBER}; skipping escalation side effects so poller state does not drift from GitHub."
     rm -f "${_body_file}"
     return 0
