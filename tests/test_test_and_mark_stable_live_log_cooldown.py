@@ -13,10 +13,15 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
@@ -36,7 +41,8 @@ JOBS_LOG_FETCH_RE = re.compile(
 
 
 def _step_text() -> str:
-	wf = WORKFLOW.read_text(encoding="utf-8")
+	# Phase 4 body lives in scripts/stable_e2e_step_wait_review.sh (#7991).
+	wf = expanded_test_and_mark_stable_text()
 	start = wf.find(STEP_MARKER)
 	assert start != -1, "wait-review step not found"
 	end = wf.find("\n      - name:", start)
