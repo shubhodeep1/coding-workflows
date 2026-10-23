@@ -4179,12 +4179,12 @@ def test_target_repo_enum_and_default() -> None:
 
 
 def test_harness_verdict_on_project_files_no_fixup(harness_env) -> None:
-	ctx = _ctx("project", stop="validation-failed")
+	ctx = _ctx("project", stop="validation-failed", labels=["ai:validation-failed", "ai:harness-broken"])
 	ops = actions.plan(_verdict("descope", stop="validation-failed", instructions="fix the harness", target_repo="harness"), ctx)
 	assert [op["op"] for op in ops] == ["comment", "heal_report", "hold_request", "telegram"]
 	assert not any("ai:unblock-fixup" in op.get("body", "") for op in ops)
 	heal = ops[1]
-	assert heal["label"] == "ai:validation-failed" and heal["kind"] == "issue" and heal["fingerprint"] == FP
+	assert heal["label"] == "ai:harness-broken" and heal["kind"] == "issue" and heal["fingerprint"] == FP
 	hold = ops[2]
 	assert hold["issue"] == 7
 	assert hold["body"].splitlines()[-1] == f"<!-- ai:unblock-harness-hold-request:v1 item=7 fingerprint={FP} -->"
@@ -4204,7 +4204,7 @@ def test_harness_verdict_on_standalone_issue_has_no_hold_or_resume(harness_env) 
 def test_harness_pr_heal_report_kind(harness_env) -> None:
 	ops = actions.plan(_verdict("retry_budget", instructions="x", target_repo="harness"), _ctx("pr", stop="review-autofix-failed"))
 	heal = [op for op in ops if op["op"] == "heal_report"][0]
-	assert heal["kind"] == "pull_request" and heal["label"] == "ai:review-autofix-failed"
+	assert heal["kind"] == "issue" and heal["label"] == ""
 
 
 def test_backstop_routes_harness_only_paths(harness_env) -> None:
@@ -4332,3 +4332,26 @@ def test_harness_verdict_wins_over_protected_handoff(harness_env) -> None:
 	assert not any(op["op"] == "heal_report" for op in consumer)
 	mixed = actions.plan(_verdict("descope", instructions="edit src/app.py and validation/x.sh"), _ctx(protected_rejection=PROTECTED))
 	assert mixed[-1]["op"] == "heal_report" and mixed[:-1] == actions._protected_handoff_ops(_ctx(protected_rejection=PROTECTED), _verdict("descope", instructions="edit src/app.py and validation/x.sh"))
+
+
+def test_heal_report_labels_match_the_intake() -> None:
+	ownership = actions._load_ownership()
+	assert ownership is not None
+	assert actions.HEAL_REPORT_LABELS == ownership.HUMAN_NEEDED_LABELS
+
+
+def test_heal_report_label_is_one_the_intake_accepts(harness_env) -> None:
+	def label(stop: str, labels: list[str]) -> str:
+		ops = actions.plan(_verdict("retry_budget", instructions="x", target_repo="harness"), _ctx(stop=stop, labels=labels))
+		return [op for op in ops if op["op"] == "heal_report"][0]["label"]
+
+	assert label("scope-blocked", ["ai:scope-blocked", "ai:harness-broken"]) == "ai:scope-blocked"
+	assert label("blocked", ["ai:blocked", "ai:needs-human", "ai:harness-broken"]) == "ai:harness-broken"
+	assert label("blocked", ["ai:blocked", "ai:needs-human"]) == "ai:needs-human"
+	assert label("blocked", ["ai:blocked"]) == ""
+
+
+def test_backstop_token_cap_never_routes_harness_only(harness_env) -> None:
+	paths = " ".join(f"validation/t{n}.sh" for n in range(actions.HARNESS_MAX_PATH_TOKENS)) + " src/app.py"
+	route = actions._harness_route(_verdict("descope", target_repo="consumer", instructions=paths), _ctx())
+	assert len(route["harness_paths"]) == actions.HARNESS_MAX_PATH_TOKENS and route["mode"] == "mixed"

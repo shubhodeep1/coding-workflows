@@ -89,11 +89,13 @@ Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "close", "issue": n, "reason": "not_planned", "pr": bool}
   {"op": "dispatch_review", "pr": n}
   {"op": "telegram", "level": s, "text": s}
-  {"op": "heal_report", "issue": n, "kind": "issue"|"pull_request", "label": s,
+  {"op": "heal_report", "issue": n, "kind": "issue", "label": s,
    "fingerprint": s, "reason": s, "harness_paths": [s], "project_paths": [s]}
-      (the work belongs in shubhodeep1/coding-workflows: send a workflow
-      failure heal report for item n with its block label; an empty label
-      means none could be named)
+      (the work belongs in shubhodeep1/coding-workflows: send an issue-kind
+      workflow failure heal report for item n, also for a pull request, with
+      its block label when the heal intake accepts it (HEAL_REPORT_LABELS),
+      else another accepted label on the item; an empty label means none
+      could be named and no report can be sent)
   {"op": "hold_request", "issue": n, "fingerprint": s, "body": s}
       (a project item routed to the harness: post `body`, which ends with
       `<!-- ai:unblock-harness-hold-request:v1 item=<n> fingerprint=<fp> -->`,
@@ -174,6 +176,17 @@ HARNESS_MAX_PATH_TOKENS = 50
 HARNESS_SHOWN_PATHS = 20
 HARNESS_HOLD_FP_RE = re.compile(r"^[0-9a-f]{12}$")
 HARNESS_HOLD_MARKER_PREFIX = "<!-- ai:unblock-harness-hold-request:v1"
+# The labels the heal intake accepts on an issue-kind report: a copy of
+# workflow_failure_heal.HUMAN_NEEDED_LABELS (a test keeps the two equal).
+HEAL_REPORT_LABELS = (
+	"ai:needs-human",
+	"ai:check-triage-escalated",
+	"ai:destructive-blocked",
+	"ai:scope-blocked",
+	"ai:harness-broken",
+	"ai:resolver-escalated",
+	"ai:security-pass-failed",
+)
 # CI-failure issues and the PR that owns them (#7032). check_failure_triage.sh
 # writes both the label and the marker; unblock re-issues copy the marker.
 CHECK_TRIAGE_LABELS = ("ai:check-triage", "ai:check-triage-escalated")
@@ -556,6 +569,9 @@ def _harness_route(verdict: dict, ctx: dict, env: object = None) -> dict:
 				# A failed managed-path read included: partial data could misroute.
 				print("warning: unblock target_repo backstop failed; using the verdict field only", file=sys.stderr)
 				harness_paths, project_paths, unlisted_project = [], [], False
+	# A token list at the cap may have dropped later paths, so it never proves harness-only.
+	if len(tokens) >= HARNESS_MAX_PATH_TOKENS:
+		unlisted_project = True
 	route.update(harness_paths=list(harness_paths), project_paths=list(project_paths))
 	if field == "harness":
 		route.update(mode="harness", reason="target_repo")
@@ -569,14 +585,23 @@ def _harness_route(verdict: dict, ctx: dict, env: object = None) -> dict:
 
 
 def _heal_report_op(ctx: dict, verdict: dict, route: dict) -> dict:
-	label = _stop_label(ctx["stop"])
-	if not label:
-		label = "ai:harness-broken" if "ai:harness-broken" in ctx["labels"] else ""
+	# The intake rejects a label outside HEAL_REPORT_LABELS; prefer the stop's
+	# own label, then ai:harness-broken, then any accepted label on the item.
+	stop_label = _stop_label(ctx["stop"])
+	present = [name for name in HEAL_REPORT_LABELS if name in ctx["labels"]]
+	if stop_label in HEAL_REPORT_LABELS:
+		label = stop_label
+	elif "ai:harness-broken" in present:
+		label = "ai:harness-broken"
+	else:
+		label = present[0] if present else ""
 	fp = verdict.get("fingerprint")
 	return {
 		"op": "heal_report",
 		"issue": ctx["item"],
-		"kind": "pull_request" if ctx["kind"] == "pr" else "issue",
+		# Always issue-kind: unblock_judge.yml is authorized only for `issue`
+		# reports, and the issues API also reads a pull request by number.
+		"kind": "issue",
 		"label": label,
 		"fingerprint": fp if isinstance(fp, str) and HARNESS_HOLD_FP_RE.match(fp) else "",
 		"reason": route["reason"],
