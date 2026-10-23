@@ -62,14 +62,17 @@ permissions:
   # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
   id-token: write
 
-# Serialise every intake so the fingerprint dedup and the open-issue / per-day
-# budgets are evaluated against a consistent issue list. A schedule run gets
-# its own group (a pending scan must not replace a pending report); its
-# recovery-scan job joins the shared group at job level, and runs only when
-# recovery-candidates saw no other active intake run, because a newly queued
-# group member replaces the pending one.
+# Every intake is serialised so the fingerprint dedup and the open-issue /
+# per-day budgets are evaluated against a consistent issue list. A shared
+# concurrency group did that by cancelling: GitHub keeps one pending run per
+# group and a newly queued run replaces it, so a burst of reports lost all but
+# the first and the last (about 15 cancelled runs on 2026-10-21). Each run now
+# gets its own group and waits its turn in the first-come, first-served queue
+# of scripts/workflow_failure_heal_queue.sh instead (intake and recovery-scan
+# jobs alike). HEAL_INTAKE_QUEUE_ENABLED=false turns the queue off and brings
+# back the shared group. A schedule run always gets its own group.
 concurrency:
-  group: ${{ github.event_name == 'schedule' && format('workflow-failure-heal-recovery-list-{0}', github.run_id) || 'workflow-failure-heal-intake' }}
+  group: ${{ github.event_name == 'schedule' && format('workflow-failure-heal-recovery-list-{0}', github.run_id) || vars.HEAL_INTAKE_QUEUE_ENABLED != 'false' && format('workflow-failure-heal-intake-run-{0}', github.run_id) || 'workflow-failure-heal-intake' }}
   cancel-in-progress: false
 
 env:
@@ -94,7 +97,9 @@ jobs:
         (github.event.workflow_run.name != 'Nightly Validation Self-Test' ||
          github.event.workflow_run.head_branch == github.event.repository.default_branch)))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 45 minutes of intake work plus up to HEAL_INTAKE_QUEUE_MAX_WAIT_SECONDS
+    # (80 minutes) waiting for its turn in the report queue.
+    timeout-minutes: 130
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -135,6 +140,9 @@ jobs:
       # accepts them after the binding checks. An identity is always verified.
       WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
       WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
+      # Report queue (scripts/workflow_failure_heal_queue.sh): 'false' turns it
+      # off and restores the shared concurrency group, which cancels pending runs.
+      HEAL_INTAKE_QUEUE_ENABLED: ${{ vars.HEAL_INTAKE_QUEUE_ENABLED || 'true' }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -229,6 +237,13 @@ jobs:
           fi
           echo "source_repo=$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" | tr -cd 'A-Za-z0-9_./-' | head -c 120)" >> "$GITHUB_OUTPUT"
 
+      # Waits for this report's turn instead of letting a newer run cancel it.
+      # Never fails the job: when the queue cannot be used the report proceeds.
+      - name: Wait for the heal intake queue
+        env:
+          HEAL_INTAKE_QUEUE_JOB: intake
+        run: bash scripts/workflow_failure_heal_queue.sh acquire
+
       - name: Install Codex CLI
         uses: ./.github/actions/install-codex
         with:
@@ -289,6 +304,12 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/workflow_failure_heal_intake.sh
+
+      - name: Leave the heal intake queue
+        if: always()
+        env:
+          HEAL_INTAKE_QUEUE_JOB: intake
+        run: bash scripts/workflow_failure_heal_queue.sh release
 
       - name: Notify on intake workflow failure
         if: ${{ failure() }}
@@ -353,9 +374,10 @@ jobs:
     needs: recovery-candidates
     if: needs.recovery-candidates.outputs.count != '' && needs.recovery-candidates.outputs.count != '0'
     runs-on: ubuntu-latest
-    timeout-minutes: 95
+    # 95 minutes of scan work plus up to 80 minutes in the report queue.
+    timeout-minutes: 175
     concurrency:
-      group: workflow-failure-heal-intake
+      group: ${{ vars.HEAL_INTAKE_QUEUE_ENABLED != 'false' && format('workflow-failure-heal-recovery-scan-{0}', github.run_id) || 'workflow-failure-heal-intake' }}
       cancel-in-progress: false
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -383,6 +405,9 @@ jobs:
       HEAL_SYNCED_SECURITY_LINE_BUCKET: ${{ vars.HEAL_SYNCED_SECURITY_LINE_BUCKET || '25' }}
       WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
       WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
+      # Report queue (scripts/workflow_failure_heal_queue.sh): 'false' turns it
+      # off and restores the shared concurrency group, which cancels pending runs.
+      HEAL_INTAKE_QUEUE_ENABLED: ${{ vars.HEAL_INTAKE_QUEUE_ENABLED || 'true' }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -413,6 +438,11 @@ jobs:
           RUNTIME_DIR="/tmp/workflow-heal-recovery-scan-${GITHUB_RUN_ID}"
           mkdir -p "${RUNTIME_DIR}"
           echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
+
+      - name: Wait for the heal intake queue
+        env:
+          HEAL_INTAKE_QUEUE_JOB: recovery-scan
+        run: bash scripts/workflow_failure_heal_queue.sh acquire
 
       - name: Install Codex CLI
         uses: ./.github/actions/install-codex
@@ -471,6 +501,12 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/workflow_failure_heal_recovery_scan.sh
+
+      - name: Leave the heal intake queue
+        if: always()
+        env:
+          HEAL_INTAKE_QUEUE_JOB: recovery-scan
+        run: bash scripts/workflow_failure_heal_queue.sh release
 
       - name: Notify on recovery scan failure
         if: ${{ failure() }}

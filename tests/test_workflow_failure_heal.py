@@ -301,8 +301,10 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	assert set(heal.RELEASE_WORKFLOW_NAMES) == actual_names
 	job = intake["jobs"]["intake"]
 	assert "failure" in job["if"] and "timed_out" in job["if"]
-	# Every event but the hourly recovery scan keeps the shared group (#7333).
-	assert intake["concurrency"]["group"] == "${{ github.event_name == 'schedule' && format('workflow-failure-heal-recovery-list-{0}', github.run_id) || 'workflow-failure-heal-intake' }}"
+	# Each run gets its own group and waits in the report queue; the shared
+	# group (#7333) comes back only with HEAL_INTAKE_QUEUE_ENABLED=false
+	# (tests/test_workflow_failure_heal_queue.py).
+	assert intake["concurrency"]["group"] == "${{ github.event_name == 'schedule' && format('workflow-failure-heal-recovery-list-{0}', github.run_id) || vars.HEAL_INTAKE_QUEUE_ENABLED != 'false' && format('workflow-failure-heal-intake-run-{0}', github.run_id) || 'workflow-failure-heal-intake' }}"
 	assert intake["concurrency"]["cancel-in-progress"] is False
 	assert job["if"].split()[:3] == ["github.event_name", "!=", "'schedule'"]
 	run_step = [s for s in job["steps"] if s.get("name") == "Run workflow failure heal intake"][0]
@@ -8023,7 +8025,7 @@ def test_heal_scope_recovery_scan_workflow_wiring() -> None:
 	scan = intake["jobs"]["recovery-scan"]
 	assert scan["needs"] == "recovery-candidates"
 	assert "needs.recovery-candidates.outputs.count != '0'" in scan["if"]
-	assert scan["concurrency"] == {"group": "workflow-failure-heal-intake", "cancel-in-progress": False}
+	assert scan["concurrency"] == {"group": "${{ vars.HEAL_INTAKE_QUEUE_ENABLED != 'false' && format('workflow-failure-heal-recovery-scan-{0}', github.run_id) || 'workflow-failure-heal-intake' }}", "cancel-in-progress": False}
 	assert scan["env"]["HEAL_SCOPE_RECOVERY_ENABLED"] == "${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}"
 	assert scan["env"]["HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK"] == "${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK || '1' }}"
 	assert scan["env"]["HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS"] == "${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS || '3' }}"
