@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "When changing workflow YAML or orchestration scripts, look for an existing dedicated test module and extend it to cover the relevant behavior or contract. Recent merged changes repeatedly updated workflow/script files alongside targeted tests, including tests for untrusted-input handling, release preflight, retry state, and orchestration behavior.",
+  "fingerprint": "c5b538c150cdcd022f6c7044534c1f83d5d1e0b9e77e000143f391c29969f1bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39922043783",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39922043783",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7914",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7927",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7928",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7929",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7931",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7920",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7932",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7936",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7937",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7938"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261023081906_a908d4ea96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and script behavior changes in this repository are commonly paired with focused regression or contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-23T08:19:06Z",
+    "promoted_at": "2026-10-23T08:21:11Z",
+    "superseded_at": null
+  }
+}
