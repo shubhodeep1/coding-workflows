@@ -15,9 +15,10 @@
 #
 # This helper makes one live REST call for open PRs whose head is <branch>.
 # Exit 0 (outcome=replace) only when that call succeeds and lists none; the
-# caller then overwrites the branch with a lease pinned to the remote SHA it
-# just fetched. Every other case exits 1 (outcome=keep) and the caller keeps
-# its rebase fallback:
+# caller then supersedes the branch with an ours-strategy merge (this run's
+# tree, the leftover tip as second parent) and a plain fast-forward push, so
+# no force push is needed. Every other case exits 1 (outcome=keep) and the
+# caller keeps its rebase fallback:
 #   reason=not_issue_branch    <branch> is not ai/issue-<N>
 #   reason=invalid_repo        <owner/repo> is malformed
 #   reason=open_pr             an open PR uses the branch (count=<n>)

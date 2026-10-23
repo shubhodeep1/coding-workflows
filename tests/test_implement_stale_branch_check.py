@@ -10,10 +10,13 @@ upstream"), so the new PR sat on already-merged history, re-showed the earlier
 phase's diff and conflicted with the base.
 
 ``scripts/implement_stale_branch_check.sh`` tells the step whether any open PR
-uses the branch; when none does, the step replaces the branch with a lease
-pinned to the fetched SHA instead of rebasing onto it. These tests cover the
-helper's decisions with a fake ``gh`` and run the live "Push branch" step
-against a real local remote.
+uses the branch; when none does, the step supersedes the branch with an
+ours-strategy merge (this run's tree, the leftover tip as second parent) and a
+plain fast-forward push instead of rebasing onto it. No force push is used,
+because the consumer's "Copilot review" ruleset blocks non-fast-forward
+updates on every branch. These tests cover the helper's decisions with a fake
+``gh`` and run the live "Push branch" step against a real local remote that
+rejects non-fast-forward pushes the same way.
 """
 
 from __future__ import annotations
@@ -162,6 +165,8 @@ def _leftover_branch_scenario(tmp: Path) -> dict[str, str | Path]:
 	"""
 	remote = tmp / "remote.git"
 	_git(tmp, "init", "-q", "--bare", "-b", "main", str(remote))
+	# Mirror the consumer ruleset's non_fast_forward rule: no force pushes.
+	_git(remote, "config", "receive.denyNonFastForwards", "true")
 	seed = tmp / "seed"
 	_git(tmp, "clone", "-q", str(remote), str(seed))
 	_set_identity(seed)
@@ -227,9 +232,38 @@ def test_push_replaces_leftover_branch_when_no_open_pr() -> None:
 		assert "Attempting rebase onto origin" not in output
 		remote = scenario["remote"]
 		tip = _git(remote, "rev-parse", "refs/heads/ai/issue-7")
-		assert tip == scenario["fresh"], output
-		assert _git(remote, "rev-parse", f"{tip}^") == scenario["squash"]
-		assert not _is_ancestor(remote, scenario["old_tip"], tip), "new work must not sit on the merged phase's commits"
+		parents = _git(remote, "rev-list", "--parents", "-n", "1", tip).split()[1:]
+		assert parents == [scenario["fresh"], scenario["old_tip"]], output
+		assert _git(remote, "rev-parse", f"{tip}^{{tree}}") == _git(remote, "rev-parse", f"{scenario['fresh']}^{{tree}}")
+		assert _git(remote, "merge-base", "main", tip) == scenario["squash"]
+		pr_diff = _git(remote, "diff", f"main...{tip}")
+		added = [line for line in pr_diff.splitlines() if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))]
+		assert added == ["+phase 2"], f"PR diff must show only this run's work: {added}"
+		assert _git(remote, "merge-tree", "--write-tree", "main", tip), "merging the base must stay clean"
+
+
+def test_push_falls_back_to_rebase_when_superseding_push_is_rejected() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		scenario = _leftover_branch_scenario(tmp)
+		hook = scenario["remote"] / "hooks" / "pre-receive"
+		hook.write_text(
+			"#!/usr/bin/env bash\n"
+			"while read -r _old new _ref; do\n"
+			"  if [ \"$(git rev-list --parents -n 1 \"$new\" | wc -w)\" -gt 2 ]; then echo 'merge commits refused' >&2; exit 1; fi\n"
+			"done\n",
+			encoding="utf-8",
+		)
+		hook.chmod(0o755)
+		result = _run_push_step(tmp, scenario["workspace"], open_prs="0")
+		output = result.stdout + result.stderr
+		assert result.returncode == 0, output
+		assert "Superseding leftover ai/issue-7 failed" in output
+		assert "Attempting rebase onto origin/ai/issue-7" in output
+		tip = _git(scenario["remote"], "rev-parse", "refs/heads/ai/issue-7")
+		assert len(_git(scenario["remote"], "rev-list", "--parents", "-n", "1", tip).split()) == 2
+		assert _is_ancestor(scenario["remote"], scenario["old_tip"], tip)
+		assert _git(scenario["workspace"], "status", "--porcelain") == ""
 
 
 def test_push_keeps_rebase_when_an_open_pr_uses_the_branch() -> None:
