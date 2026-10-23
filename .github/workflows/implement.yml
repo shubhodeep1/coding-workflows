@@ -5734,7 +5734,8 @@ jobs:
                     stale_branch_decision="keep"
                     if [ ! -f "${stale_branch_helper}" ] || [ -L "${stale_branch_helper}" ]; then
                       echo "::warning::implement_stale_branch_check.sh is not staged as a regular file; keeping the rebase fallback for ${TARGET_BRANCH}."
-                    elif bash "${stale_branch_helper}" "${GITHUB_REPOSITORY}" "${TARGET_BRANCH}"; then
+                    # timeout: a hung lookup must not hold the push step; rc 124 keeps the rebase.
+                    elif timeout 120 bash "${stale_branch_helper}" "${GITHUB_REPOSITORY}" "${TARGET_BRANCH}"; then
                       stale_branch_decision="replace"
                     fi
                   fi
