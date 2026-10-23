@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"No other file is changed.\" (issue #7984; files_touched lists only tests/e2e_smoke_canary.txt)\n  expected_change_site: The PR change set should contain only tests/e2e_smoke_canary.txt.\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: tests/test_workflow_failure_heal_queue.py (`_ticket` at lines 36-43 and `test_position_cli` at lines 105-116) is also modified, from the last commit \"AI implementation for issue #7998 (#8006)\". Severity disagreement: sonnet-5_5 said NIT (confidence 3), gemini said BLOCKER, minimax said BLOCKER, luna said MAJOR, qwen said MAJOR. The highest is BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"No other file is changed.\" (issue #7984; files_touched lists only tests/e2e_smoke_canary.txt)\nExpected change site: The PR change set should contain only tests/e2e_smoke_canary.txt.\nEvidence of absence: The PR diff also modifies tests/test_workflow_failure_heal_queue.py (`_ticket` at lines 36-43 and `test_position_cli` at lines 105-116). It matches the last commit, \"AI implementation for issue #7998 (#8006)\", which already landed on the base. The canary change itself is correct. It has exactly `status: ok` and `decompose-run: 39969947939`, with the old `run_id:` and `updated-by:` lines removed. The test change fixes a real defect belonging to #7998, and reverting it would break CI. The reviewer does not recommend a code change, and calls this a PR-composition note.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"No other file is changed.\" (issue #7984; only tests/e2e_smoke_canary.txt may change)\nExpected change site: The PR change set should contain only tests/e2e_smoke_canary.txt.\nEvidence of absence: The PR diff modifies tests/test_workflow_failure_heal_queue.py (lines 36-43, 105-116), which violates the explicit scope constraint of issue #7984. The fix for issue #7998 belongs in a separate pull request.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"No other file is changed.\" (issue #7984 acceptance criteria; `files_touched:` block lists only `tests/e2e_smoke_canary.txt`)\nExpected change site: The PR change set should contain only `tests/e2e_smoke_canary.txt`\nEvidence of absence: The PR diff also modifies `tests/test_workflow_failure_heal_queue.py`. Lines 36-43 add a `base: datetime | None = None` parameter to `_ticket` and route `(base or NOW)` into `created_at`. Lines 105-116 introduce `cli_now = datetime.now(timezone.utc)` and pass `base=cli_now` to both `_ticket` calls in `test_position_cli`. The last commit message is \"AI implementation for issue #7998 (#8006)\". The PR description says \"Closes #7984\", and the linked issue forbids touching any other file. Under the orchestrator's `files_touched:` scope contract, a one-path issue may not be expanded to a second path without an explicit re-grant, and none is given.\nSEVERITY: BLOCKER\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"No other file is changed.\" Only `tests/e2e_smoke_canary.txt` may change.\nExpected change site: The PR change set should contain only `tests/e2e_smoke_canary.txt`.\nEvidence of absence: The PR diff also modifies `tests/test_workflow_failure_heal_queue.py` in `_ticket` and `test_position_cli`. The one-file-only acceptance criterion is unmet.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\nRequirement: \"No other file is changed.\" (issue #7984 acceptance criteria; files_touched lists only tests/e2e_smoke_canary.txt)\nExpected change site: The PR change set should contain only tests/e2e_smoke_canary.txt. No modifications to tests/test_workflow_failure_heal_queue.py.\nEvidence of absence: The PR diff modifies tests/test_workflow_failure_heal_queue.py (lines 36-43: `_ticket` function signature and implementation; lines 105-116: `test_position_cli` function). The last commit message \"AI implementation for issue #7998 (#8006)\" confirms the test fix belongs to a different issue (#7998). The editor summary (entry[3]) acknowledges the test defect is real but states it is out of scope for this PR.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "658c9e39ea0990d7d78f3b6f44c3d664ef769d3c13938579a60ab12332125934",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7990,
+    "run_id": "40002904644",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40002904644",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023185537_9156edfaf4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7990,
+    "run_id": "40002904644"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T18:55:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
