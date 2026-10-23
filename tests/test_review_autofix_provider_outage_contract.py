@@ -240,7 +240,6 @@ def test_marker_step_drops_non_numeric_items(tmp_path: Path) -> None:
 _FAKE_GH = """#!/usr/bin/env bash
 case "$*" in
   "label create"*) exit 0 ;;
-  *"-X PUT"*) cat >/dev/null; [ "${FAKE_PUT:-ok}" = ok ] ;;
   *"-X POST"*) [ "${FAKE_POST:-ok}" = ok ] ;;
   *--paginate*) echo '[]' ;;
   *) exit 0 ;;
@@ -270,6 +269,5 @@ def _label_outcome(tmp_path: Path, args: str, **env: str) -> tuple[int, str]:
 
 def test_label_helper_reports_outcome_without_changing_return_code(tmp_path: Path) -> None:
 	assert _label_outcome(tmp_path, "5 ai:review-blocked") == (0, "applied")
-	assert _label_outcome(tmp_path, "5 ai:review-blocked", FAKE_PUT="fail") == (0, "applied")
-	assert _label_outcome(tmp_path, "5 ai:review-blocked", FAKE_PUT="fail", FAKE_POST="fail") == (0, "failed")
+	assert _label_outcome(tmp_path, "5 ai:review-blocked", FAKE_POST="fail") == (0, "failed")
 	assert _label_outcome(tmp_path, "''") == (0, "skipped")

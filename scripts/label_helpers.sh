@@ -283,7 +283,7 @@ set_issue_phase_label_resilient() {
 			continue
 		fi
 		# A 404 means the label is already gone (removed concurrently).
-		if printf '%s' "${_del_err}" | grep -Eq 'HTTP 404|Not Found'; then
+		if printf '%s' "${_del_err}" | grep -qiE 'HTTP 404|Not Found'; then
 			continue
 		fi
 		echo "::warning::set_issue_phase_label_resilient: could not remove stale phase label '${_stale_name}' from #${issue_number}." >&2

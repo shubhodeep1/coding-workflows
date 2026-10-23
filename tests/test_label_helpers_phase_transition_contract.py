@@ -144,7 +144,10 @@ def _run_swap(
 		)
 		env.pop("GH_TOKEN", None)
 		env.update(env_extra or {})
+		# pipefail mirrors the `set -euo pipefail` callers run under, so a
+		# failed GET reaches the helper's GET-failure fallback.
 		script = (
+			'set -o pipefail\n'
 			f'source "{scripts_dir / "label_helpers.sh"}"\n'
 			f'set_issue_phase_label_resilient 5 "{target}" o/r\n'
 			'rc=$?\n'
@@ -255,11 +258,12 @@ def test_phase_swap_post_failure_skips_deletes() -> None:
 def test_phase_swap_get_failure_falls_back_to_single_post() -> None:
 	if not _jq_available():
 		return
-	rc, outcome, _stderr, calls = _run_swap(
+	rc, outcome, stderr, calls = _run_swap(
 		["ai:review-blocked"], "ai:ready-to-merge", {"FAKE_GET": "fail"}
 	)
 	assert rc == 0
 	assert outcome == "applied"
+	assert "GET labels failed for #5" in stderr
 	assert len(_api_calls(calls, "POST")) == 1
 	assert _api_calls(calls, "DELETE") == []
 	assert _api_calls(calls, "PUT") == []
