@@ -430,6 +430,113 @@ def test_stage_deps_allowlists_node_manifests(repo, tmp_path, lock, mode):
 	assert "package.json" not in tree(other_stage)
 
 
+def _node_project(root, rel, lock="package-lock.json"):
+	project = root / rel
+	project.mkdir(parents=True, exist_ok=True)
+	(project / "package.json").write_text('{"name":"p"}')
+	if lock:
+		(project / lock).write_text("lock\n")
+	(project / "index.js").write_text("source, never staged\n")
+	return project
+
+
+def test_stage_deps_stages_nested_node_projects_with_a_lockfile(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	_node_project(work, "cloudflare/worker")
+	_node_project(work, "apps/web", lock="pnpm-lock.yaml")
+	_node_project(work, "fixtures/no-lock", lock=None)
+	_node_project(work, ".hidden/app")
+	_node_project(work, "a/b/c/d/too-deep")
+	present = _node_project(work, "has/modules")
+	(present / "node_modules").mkdir()
+	_node_project(work, "secrets/app")
+	(work / "linked").symlink_to(work / "cloudflare")
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	listed = json.loads((stage / ".codex-deps" / "nested.json").read_text())
+	assert listed == [
+		{"index": 0, "path": "apps/web", "mode": "pnpm"},
+		{"index": 1, "path": "cloudflare/worker", "mode": "npm-ci"},
+	]
+	assert sorted(p.name for p in (stage / ".codex-deps" / "nested" / "1").iterdir()) == ["mode", "package-lock.json", "package.json"]
+	assert not any(p.name == "index.js" for p in stage.rglob("*"))
+	assert "stage-deps nested_node=2 nested_over_limit=0" in proc.stderr
+	assert "nested_skipped=present" in proc.stderr
+
+
+def test_stage_deps_caps_nested_projects_and_writes_no_list_without_any(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	empty_stage = tmp_path / "empty-stage"
+	run("stage-deps", work, empty_stage)
+	assert not (empty_stage / ".codex-deps" / "nested.json").exists()
+	for index in range(8):
+		_node_project(work, f"pkgs/p{index}")
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	assert len(json.loads((stage / ".codex-deps" / "nested.json").read_text())) == 6
+	assert "nested_node=6 nested_over_limit=2" in proc.stderr
+
+
+def test_handoff_nested_deps_moves_only_into_listed_safe_projects(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	_node_project(work, "cloudflare/worker")
+	_node_project(work, "present")
+	(work / "present" / "node_modules").mkdir()
+	(work / "real").mkdir()
+	(work / "link").symlink_to(work / "real", target_is_directory=True)
+	(work / "real" / "package.json").write_text("{}")
+	stage = tmp_path / "stage"
+	entries = [
+		{"index": 0, "path": "cloudflare/worker"},
+		{"index": 1, "path": "present"},
+		{"index": 2, "path": "../escape"},
+		{"index": 3, "path": "link"},
+		{"index": "4", "path": "missing"},
+		{"index": 5, "path": ".git"},
+	]
+	for entry in entries:
+		modules = stage / ".codex-deps" / "nested" / str(entry["index"]) / "node_modules"
+		modules.mkdir(parents=True)
+		(modules / "marker").write_text("x")
+	listing = tmp_path / "list.json"
+	listing.write_text(json.dumps(entries))
+	proc = run("handoff-nested-deps", stage, work, listing)
+	assert (work / "cloudflare" / "worker" / "node_modules" / "marker").is_file()
+	assert list((work / "present" / "node_modules").iterdir()) == []
+	assert not (tmp_path / "escape").exists() and not (work / "real" / "node_modules").exists()
+	assert not (work / "missing").exists()
+	assert "handoff-nested-deps moved=1" in proc.stderr
+	assert "skipped=1 reason=present" in proc.stderr and "skipped=2 reason=unsafe_path" in proc.stderr
+	assert "skipped=3 reason=missing_project" in proc.stderr, proc.stderr
+	assert "skipped=entry reason=malformed" in proc.stderr and "skipped=5 reason=unsafe_path" in proc.stderr
+	missing_list = run("handoff-nested-deps", stage, work, tmp_path / "absent.json")
+	assert "handoff-nested-deps moved=0" in missing_list.stderr
+
+
+def test_handoff_nested_deps_never_follows_a_swapped_stage_directory(tmp_path):
+	# The install container can write the stage: a nested/<n> directory it
+	# replaced with a symlink to a directory outside the stage is not followed.
+	work = tmp_path / "work"
+	work.mkdir()
+	_node_project(work, "swapped")
+	_node_project(work, "not-installed")
+	outside = tmp_path / "outside"
+	(outside / "node_modules").mkdir(parents=True)
+	nested = tmp_path / "stage" / ".codex-deps" / "nested"
+	nested.mkdir(parents=True)
+	(nested / "0").symlink_to(outside, target_is_directory=True)
+	listing = tmp_path / "list.json"
+	listing.write_text(json.dumps([{"index": 0, "path": "swapped"}, {"index": 1, "path": "not-installed"}]))
+	proc = run("handoff-nested-deps", tmp_path / "stage", work, listing)
+	assert (outside / "node_modules").is_dir() and not (work / "swapped" / "node_modules").exists()
+	assert "skipped=0 reason=unsafe_source" in proc.stderr
+	assert "skipped=1 reason=install_missing" in proc.stderr
+	assert "handoff-nested-deps moved=0" in proc.stderr
+
+
 @pytest.mark.parametrize("bad_kind", ["symlink", "oversized"])
 def test_stage_deps_skips_unsafe_manifests(repo, tmp_path, bad_kind):
 	work = tmp_path / "work"

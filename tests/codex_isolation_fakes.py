@@ -95,6 +95,13 @@ if container_name.startswith("codex-isolated-deps"):
 		os.makedirs(os.path.join(host_cwd, "node_modules"), exist_ok=True)
 		with open(os.path.join(host_cwd, "node_modules", "marker"), "w") as handle:
 			handle.write("installed\n")
+		nested_root = os.path.join(host_cwd, ".codex-deps", "nested")
+		for entry in sorted(os.listdir(nested_root)) if os.path.isdir(nested_root) else []:
+			project = os.path.join(nested_root, entry)
+			if os.path.isfile(os.path.join(project, "mode")):
+				os.makedirs(os.path.join(project, "node_modules"), exist_ok=True)
+				with open(os.path.join(project, "node_modules", "marker"), "w") as handle:
+					handle.write(f"nested {entry}\n")
 	nested_list = os.path.join(host_cwd or "", ".codex-deps", "nested")
 	if PASSTHROUGH.get("FAKE_DEPS_CREATE_NESTED_NODE_MODULES") and workdir == "/codex-deps" and host_cwd and os.path.isfile(nested_list):
 		with open(nested_list) as handle:
@@ -103,6 +110,10 @@ if container_name.startswith("codex-isolated-deps"):
 				os.makedirs(os.path.join(host_cwd, "nested", nested_index, "node_modules"), exist_ok=True)
 				with open(os.path.join(host_cwd, "nested", nested_index, "node_modules", "marker"), "w") as marker:
 					marker.write("nested installed\n")
+	if PASSTHROUGH.get("FAKE_DEPS_TAMPER_NESTED") and host_cwd:
+		# A hostile install rewriting the in-stage list must not redirect the hand-off.
+		with open(os.path.join(host_cwd, ".codex-deps", "nested.json"), "w") as handle:
+			handle.write('[{"index": 0, "path": "src", "mode": "npm-ci"}]')
 	sys.exit(1 if PASSTHROUGH.get("FAKE_DEPS_FAIL") else 0)
 env = dict(container_env)
 env.update(PASSTHROUGH)
@@ -123,6 +134,7 @@ if agent == "claude" and socket_dir:
 			token_path = names[names.index(sock) + 1]
 			with open(token_path, encoding="utf-8") as handle:
 				env["FAKE_RELAY_TOKEN"] = handle.read().strip()
+			env["FAKE_RELAY_WEB_SEARCH"] = "1" if "--allow-web-search" in names else "0"
 			break
 proc = subprocess.run([PASSTHROUGH.get("FAKE_CLAUDE_BIN", agent) if agent == "claude" else agent, *codex_args], cwd=host_cwd, env=env)
 sys.exit(proc.returncode)
