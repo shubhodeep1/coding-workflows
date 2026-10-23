@@ -5,13 +5,24 @@
   "entry_id": "processed_command_7931_6356396729_approved",
   "issue_number": 7931,
   "metadata": {
+    "branch": "ai/issue-7931",
+    "changed_files": [
+      "changelog.d/7931-resolver-retry-state-rest-patch.md",
+      "scripts/review_conflict_resolve.sh",
+      "tests/test_review_conflict_resolve_retry_state.py"
+    ],
+    "issue_number": 7931,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7931",
+    "pr_number": 7936,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7936",
+    "run_attempt": "1",
+    "run_id": "39893196073",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39893196073"
   },
   "run_attempt": 1,
   "run_id": "39893196073",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-23T03:20:43Z",
+  "status": "completed",
+  "timestamp": "2026-10-23T03:31:44Z",
   "workflow": "implement"
 }
