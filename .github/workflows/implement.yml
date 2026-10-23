@@ -1451,7 +1451,7 @@ jobs:
           mkdir -p scripts
           mkdir -p -- "${RUNTIME_DIR}/host_python"
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -3211,6 +3211,9 @@ jobs:
           # run_attempt would relabel this attempt's failure diagnostics as
           # a BLOCKED verdict the model never gave.
           rm -f "${RUNTIME_DIR}/codex_blocked.flag"
+          # And the latch marker "Telegram failure notification" reads: a stale
+          # one would page a WARNING for a latch this attempt never applied.
+          rm -f "${RUNTIME_DIR}/implement_blocked_latched.flag"
           CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"
           git status --porcelain -uall | filter_runtime_status_noise > "${CODEX_PRE_BASELINE}" 2>/dev/null || : > "${CODEX_PRE_BASELINE}"
           codex_pre_baseline_lines="$(wc -l < "${CODEX_PRE_BASELINE}" | tr -d ' ')"
@@ -5680,6 +5683,17 @@ jobs:
           rm -f "${health_script}"
           trap - EXIT
 
+          # A leftover ai/issue-<N> on origin belongs to an earlier PR: this
+          # run skipped the issue if it had an open PR and runs one at a time
+          # per issue. Rebasing the fresh commit onto it stacked new work on
+          # already-merged history (shubhodeep1/tele-funtoken-msg-scoring#4752),
+          # so when the helper confirms no open PR uses the branch, supersede
+          # it with a fast-forward merge that keeps this run's tree (no force
+          # push). Decided at most once per step (one API call), and only
+          # after a non-fast-forward rejection.
+          stale_branch_helper="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/implement_stale_branch_check.sh"
+          stale_branch_decision=""
+
           for attempt in 1 2 3; do
             # Fetch latest remote state before pushing so local tracking refs
             # are up to date.
@@ -5719,6 +5733,42 @@ jobs:
               # is needed (or safe) in that path.
               if [ "${ALLOW_FORCE_PUSH:-false}" != "true" ]; then
                 if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
+                  if [ -z "${stale_branch_decision}" ] && [[ "${TARGET_BRANCH}" =~ ^ai/issue-[0-9]+$ ]]; then
+                    stale_branch_decision="keep"
+                    if [ ! -f "${stale_branch_helper}" ] || [ -L "${stale_branch_helper}" ]; then
+                      echo "::warning::implement_stale_branch_check.sh is not staged as a regular file; keeping the rebase fallback for ${TARGET_BRANCH}."
+                    # timeout: a hung lookup must not hold the push step; rc 124 keeps the rebase.
+                    elif timeout 120 bash "${stale_branch_helper}" "${GITHUB_REPOSITORY}" "${TARGET_BRANCH}"; then
+                      stale_branch_decision="replace"
+                    fi
+                  fi
+                  if [ "${stale_branch_decision}" = "replace" ]; then
+                    # Supersede the leftover branch with an ours-strategy merge:
+                    # the tree stays this run's fresh tree and the leftover tip
+                    # becomes a second parent, so the push is a plain
+                    # fast-forward (rulesets that block force-pushes allow it)
+                    # and the PR diff against the base shows only this run's
+                    # work. Undo the merge and fall back to rebase on failure.
+                    STALE_REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"
+                    STALE_FRESH_HEAD="$(git rev-parse HEAD)"
+                    STALE_FRESH_TREE="$(git rev-parse "HEAD^{tree}")"
+                    echo "No open PR uses ${TARGET_BRANCH}; superseding the leftover branch (${STALE_REMOTE_SHA}) with a merge that keeps this run's tree instead of rebasing onto it."
+                    # --allow-unrelated-histories: the workspace is a depth-1
+                    # checkout, so the leftover branch shares no merge base with
+                    # HEAD's grafted root; -s ours never needs one.
+                    if git merge --no-edit -s ours --allow-unrelated-histories \
+                         -m "Supersede leftover ${TARGET_BRANCH} (no open PR); keep this run's tree" \
+                         "${STALE_REMOTE_SHA}" \
+                       && [ "$(git rev-parse "HEAD^{tree}")" = "${STALE_FRESH_TREE}" ] \
+                       && git push -u origin "HEAD:${TARGET_BRANCH}"; then
+                      echo "Push succeeded on attempt ${attempt} (superseded leftover ${TARGET_BRANCH})."
+                      exit 0
+                    fi
+                    echo "::warning::Superseding leftover ${TARGET_BRANCH} failed (the branch may have moved); falling back to rebase."
+                    git merge --abort >/dev/null 2>&1 || true
+                    git reset --quiet --hard "${STALE_FRESH_HEAD}"
+                    stale_branch_decision="keep"
+                  fi
                   echo "Attempting rebase onto origin/${TARGET_BRANCH} to reconcile non-fast-forward..."
                   if ! git rebase "origin/${TARGET_BRANCH}"; then
                     if ! git rebase --abort; then
@@ -6247,7 +6297,10 @@ jobs:
           fi
 
           if [ ! -s "${CHANGED_FILES_FILE}" ]; then
-            git show --name-only --pretty='' HEAD > "${CHANGED_FILES_FILE}" || true
+            # HEAD may be the two-parent supersede merge, whose tree equals its
+            # first parent's (empty first-parent diff), so list the newest
+            # non-merge commit on the first-parent chain: this run's commit.
+            git show --name-only --pretty='' "$(git rev-list --first-parent --no-merges -n 1 HEAD)" > "${CHANGED_FILES_FILE}" || true
           fi
 
           CHANGED_FILES_JSON="$(jq -R -s -c 'split("\n") | map(select(length > 0))' "${CHANGED_FILES_FILE}")"
@@ -6688,6 +6741,9 @@ jobs:
               echo "::error::Failed to apply the ai:blocked latch to issue ${ISSUE_NUMBER}; refusing to report terminalization."
               exit 1
             fi
+            # Read by "Telegram failure notification": the latch is set, so a
+            # person is needed now and the alert goes out at WARNING.
+            : > "${RUNTIME_DIR}/implement_blocked_latched.flag"
             BLOCKED_COMMENT="$(printf '%s\n\n%s\n\n%s\n%s\n\n%s' \
               "Implementation blocked: human input required." \
               "Reason: ${BLOCKED_REASON}" \
@@ -6747,7 +6803,19 @@ jobs:
           source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          if [ "${{ job.status }}" = "cancelled" ]; then
+          IMPLEMENT_FAILURE_TG_LEVEL="DEBUG"
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/implement_blocked_latched.flag" ] \
+            && [ -f "${RUNTIME_DIR}/codex_blocked.flag" ]; then
+            # A deliberate BLOCKED verdict parked the issue in ai:blocked:
+            # nothing retries it and a person must act, so page at WARNING.
+            # At DEBUG it was dropped under the default ALERT_MSG_LEVEL and
+            # nobody heard (tele-funtoken-msg-scoring#4770).
+            IMPLEMENT_FAILURE_TG_LEVEL="WARNING"
+            BLOCKED_REASON="$(head -n 1 "${RUNTIME_DIR}/codex_blocked.flag" | cut -c1-600)"
+            MSG="Implementation blocked on issue #${ISSUE_NUMBER}: human input required"
+            MSG+=$'\n'
+            MSG+="Reason: ${BLOCKED_REASON}"
+          elif [ "${{ job.status }}" = "cancelled" ]; then
             MSG="AI implementation workflow cancelled/timed out for issue #${ISSUE_NUMBER}"
           else
             MSG="AI implementation workflow failed for issue #${ISSUE_NUMBER}"
@@ -6757,9 +6825,9 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           if declare -F tg_send_phase_failure >/dev/null 2>&1; then
-            # DEBUG: the heal-report job and the unblock judge pick this up
-            # and page when a person is needed.
-            tg_send_phase_failure implement "${MSG}" "DEBUG" "${ISSUE_NUMBER}"
+            # DEBUG for other failures: the heal-report job and the unblock
+            # judge pick those up and page when a person is needed.
+            tg_send_phase_failure implement "${MSG}" "${IMPLEMENT_FAILURE_TG_LEVEL}" "${ISSUE_NUMBER}"
           else
             echo "::warning::tg_helpers.sh unavailable; skipping Telegram notification."
           fi
