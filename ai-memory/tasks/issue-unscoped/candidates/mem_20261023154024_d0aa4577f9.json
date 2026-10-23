@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "When changing a GitHub Actions workflow or an orchestration/helper script, add or update a narrowly scoped test alongside it. Merged changes repeatedly pair these files with tests for workflow contracts, polling behavior, retries, phase transitions, and input handling.",
+  "fingerprint": "dc1ebbb8e8b4fff1a40e9218f488e0a2ab7ef39bb0ad4defffb27c2ef325e815",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39977800368",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39977800368",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7949",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7950",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7960",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7968",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7970",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7953",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7957",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7966",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7969",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7972"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261023154024_d0aa4577f9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow and shell-script changes are commonly protected by focused Python contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-23T15:40:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
