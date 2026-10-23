@@ -5,13 +5,24 @@
   "entry_id": "processed_command_7927_6356010628_approved",
   "issue_number": 7927,
   "metadata": {
+    "branch": "ai/issue-7927",
+    "changed_files": [
+      ".github/workflows/workflow-log-analysis.yml",
+      "changelog.d/workflow-log-analysis-ref-name-env.md",
+      "tests/test_workflow_untrusted_input_contract.py"
+    ],
+    "issue_number": 7927,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7927",
+    "pr_number": 7932,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7932",
+    "run_attempt": "1",
+    "run_id": "39890332780",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39890332780"
   },
   "run_attempt": 1,
   "run_id": "39890332780",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-23T02:44:04Z",
+  "status": "completed",
+  "timestamp": "2026-10-23T02:54:05Z",
   "workflow": "implement"
 }
