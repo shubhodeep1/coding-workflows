@@ -413,7 +413,7 @@ def _phase_step_script(step_id: str) -> str:
 	raise AssertionError(f"{step_id} step not found")
 
 
-def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, terminal: bool = False, failed_page: int | None = None, pr_recheck_number: int | None = None, active_run: dict | None = None, later_pages: list | None = None, terminal_timeout: str = "0") -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, terminal: bool = False, failed_page: int | None = None, pr_recheck_number: int | None = None, active_run: dict | None = None, later_pages: list | None = None, terminal_timeout: str = "0", labels_later: str | None = None, switch_after: int = 0) -> tuple[int, dict[str, str], list[list[str]], str]:
 	# Runs the real wait-clarify / wait-implement script against the stub gh
 	# and returns its exit code, GITHUB_OUTPUT, gh calls, and combined output.
 	with tempfile.TemporaryDirectory() as tmp:
@@ -466,6 +466,9 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 			env["PHASE_TIMEOUT"] = terminal_timeout
 		if later_pages is not None:
 			env["STUB_RUN_PAGES_LATER"] = str(later_file)
+		if labels_later is not None:
+			env["STUB_LABELS_LATER"] = labels_later
+			env["STUB_LABELS_SWITCH_AFTER"] = str(switch_after)
 		proc = subprocess.run(["bash", "-c", _phase_step_script(step_id)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
 		outputs: dict[str, str] = {}
 		for line in output_file.read_text(encoding="utf-8").splitlines():
@@ -618,12 +621,52 @@ def test_implement_terminal_check_rechecks_newly_indexed_active_run() -> None:
 
 
 def test_implement_terminal_check_reuses_known_active_run_id() -> None:
-	active = _run(777, name="Internal: AI Implement", conclusion=None, status="in_progress")
-	pages = [[_run(1000 + i, name="Internal: AI Implement", title=ALT_TITLE) for i in range(100)], [active]]
+	# The progress counter stops at page 1 (our completed run 778), so the
+	# terminal walk runs, finds active 777 on page 2, and the next poll checks
+	# 777 by ID instead of walking page 2 again.
+	active = _run(777, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-09-28T03:49:00Z")
+	pages = [[_run(778, name="Internal: AI Implement")] + [_run(1000 + i, name="Internal: AI Implement", title=ALT_TITLE) for i in range(99)], [active]]
 	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, terminal_timeout="2", active_run=active)
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
 	assert any(call[1].endswith("/actions/runs/777") for call in calls), calls
-	assert len([path for path in _run_pages_requested(calls) if "&page=" in path]) == 2, calls
+	assert sum("&page=2&" in path for path in _run_pages_requested(calls)) == 1, calls
+
+
+def test_implement_progress_counter_finds_issue_run_behind_full_noise_page() -> None:
+	# Issue #7968 (run 39926633796): the old counter read one unscoped 50-run
+	# page, never saw this issue's Implement run, and ended as a 30-minute
+	# timeout instead of implement_failed with the run ID.
+	pages = [_noise_page(1000, 100), [_run(777, name="Internal: AI Implement", conclusion="failure")]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "implement_failed", (outputs, log)
+	assert "issue run_id=777 conclusion=failure" in log, log
+
+
+def test_implement_progress_counter_ignores_other_issue_runs() -> None:
+	pages = [[_run(601, name="Internal: AI Implement", title=ALT_TITLE, conclusion="failure")]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "impl_runs: 0 total" in log, log
+	# Only the counter's page-1 read; the terminal walk never runs.
+	assert len(_run_pages_requested(calls)) == 1, _run_pages_requested(calls)
+
+
+def test_implement_progress_counter_logs_return_to_awaiting_approval() -> None:
+	pages = [[_run(777, name="Internal: AI Implement", conclusion=None, status="in_progress")]]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, terminal=True, terminal_timeout="2", labels="ai:implementing", labels_later="ai:awaiting-approval", switch_after=1)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "returned to ai:awaiting-approval — latest scoped Implement run: id=777 status=in_progress conclusion=unknown" in log, log
+
+
+def test_implement_progress_counter_uses_issue_scoped_paginated_reads() -> None:
+	script = _phase_step_script("wait-implement")
+	assert "actions/runs?per_page=50&created=>${IMPL_CREATED_AFTER}" not in script
+	counter = script[script.index("scoped_implement_progress_counts() {"):script.index("IMPL_PREV_LABELS=\"\"")]
+	assert "actions/runs?per_page=100&page=${progress_page}&created=>${IMPL_CREATED_AFTER}" in counter
+	assert "select(.display_title == $title)" in counter
+	assert "SCOPED_RUN_LOOKUP_MAX_PAGES" in counter
+	helper = script[script.index("scoped_implement_runs_complete() {"):script.index("capture_run_id() {")]
+	assert "select(.display_title == $title)" in helper
 
 
 def test_implement_terminal_check_preserves_pr_recheck() -> None:
