@@ -15319,6 +15319,8 @@ The project stays failed with \`ai:validation-failed\` and needs a person. Repai
   fi
   tg_cleanup_msgs "${TRACKING_NUM}"
   tg_notify "Project #${TRACKING_NUM} validation harness hold ended (${vhe_outcome}). Manual repair plus /revalidate required." "CRITICAL"
+  # The park is done; the alert's status must not read as a persistence failure.
+  return 0
 }
 
 # The `/revalidate` state reset applied by resume and bounce (the recovery
