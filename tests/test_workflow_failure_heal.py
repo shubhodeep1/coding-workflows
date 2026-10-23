@@ -8753,3 +8753,253 @@ def test_classify_validation_owner_requires_consumer_root_for_paths(tmp_path: Pa
 	# Layer 0 and path-free diagnoses need no consumer root.
 	assert _val_classify(tmp_path, diagnosis, consumer_root="", fixed_reason="sandbox_unavailable")["owner"] == "harness"
 	assert _val_classify(tmp_path, {"status": "harness_error"}, consumer_root="")["owner"] == "harness"
+
+
+# --- validation_failure routing (validation-failure-harness-routing plan, Phase 1) ---
+
+VALIDATION_SIGNATURE = "validation_harness_sandbox.sh: rootless dockerd did not start in shubhodeep1/example-consumer"
+VALIDATION_JOB_LOG = (
+	"2026-10-22T10:00:00.000Z ##[group]Run bash scripts/validate_process.sh\n"
+	"2026-10-22T10:00:00.000Z ##[endgroup]\n"
+	"2026-10-22T10:00:01.000Z ::error::validation_harness_sandbox.sh: rootless dockerd did not start\n"
+	"2026-10-22T10:00:02.000Z ##[error]Process completed with exit code 1.\n"
+)
+VALIDATION_ROUTE_RE = re.compile(
+	r"<!-- workflow-failure-heal:validation-route:v1 fp=([0-9a-f]{64}) outcome=(opened|duplicate|already-fixed|bounced|skipped)"
+	r" issue=(none|[1-9][0-9]*) classification=([a-z-]+) run=([0-9]+) -->"
+)
+VALIDATION_TRACKING_COMMENTS = f"repos/{CONSUMER_REPO}/issues/42/comments"
+
+
+def _validation_payload(**overrides) -> dict:
+	payload = heal.build_validation_failure_payload(
+		repo=CONSUMER_REPO, issue_number=42, run_id="500", wrapper_sha=SHA_A, stage="sandbox", reason="sandbox_unavailable",
+		signature=VALIDATION_SIGNATURE, workflow_name="AI Validate", reporter_run_url=None,
+	)
+	payload.update(overrides)
+	return payload
+
+
+def _validation_fp() -> str:
+	return heal.validation_failure_fingerprint("sandbox", "sandbox_unavailable", VALIDATION_SIGNATURE, source_repo=CONSUMER_REPO)
+
+
+def _validation_run(**overrides) -> dict:
+	run = {
+		"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "workflow_dispatch", "path": ".github/workflows/ai-validate.yml",
+		"status": "in_progress", "conclusion": None, "display_title": "AI Validate [tracking:42]", "head_sha": SHA_A,
+		"html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		"referenced_workflows": [{"path": f"{SELF_REPO}/.github/workflows/validate.yml@stable"}],
+	}
+	run.update(overrides)
+	return run
+
+
+def _validation_intake_state(**overrides) -> dict:
+	return _intake_state(**{
+		"jobs": {"500": [
+			{"id": 9201, "name": "validate / validate", "workflow_name": "AI Validate", "conclusion": "failure",
+				"steps": [{"name": "Run validation process", "conclusion": "failure"}]},
+			{"id": 9202, "name": "validate / heal-report", "workflow_name": "AI Validate", "conclusion": None, "steps": []},
+		]},
+		"job_logs": {"9201": VALIDATION_JOB_LOG},
+		"run_details": {"500": _validation_run()},
+		**overrides,
+	})
+
+
+def _assert_validation_route(result: subprocess.CompletedProcess[str], state: dict, outcome: str, *, issue: str = "none", classification: str) -> dict:
+	assert result.returncode == 0, result.stderr + result.stdout
+	comments = [c for c in state.get("comments_posted", []) if c["path"] == VALIDATION_TRACKING_COMMENTS]
+	assert len(comments) == 1, comments
+	last_line = comments[0]["body"].rstrip("\n").splitlines()[-1]
+	match = VALIDATION_ROUTE_RE.fullmatch(last_line)
+	assert match, last_line
+	assert match.groups() == (_validation_fp(), outcome, issue, classification, "500")
+	assert f"WORKFLOW_HEAL received kind=validation_failure outcome={outcome} fp={_validation_fp()}" in result.stdout
+	# Never an issue in the source (consumer) repository for this kind.
+	assert not [i for i in state.get("issues_created", []) if i.get("repo") == CONSUMER_REPO]
+	assert not [i for i in state.get("issues_composed", []) if i.get("repo") == CONSUMER_REPO]
+	return comments[0]
+
+
+def test_intake_validation_failure_fingerprint_and_self_repo_dedup_only() -> None:
+	signature = heal.normalize_validation_signature(VALIDATION_SIGNATURE, source_repo=CONSUMER_REPO)
+	assert "<repo>" in signature
+	assert _validation_fp() == heal.fingerprint("validation-harness", "sandbox:sandbox_unavailable", signature)
+	result, state, prompt = _run_intake(_validation_payload(), _validation_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL provenance_verified source={CONSUMER_REPO} kind=validation_failure issue=42 runs=1" in result.stdout
+	assert f"WORKFLOW_HEAL fingerprint fp={_validation_fp()} workflow=validation-harness step=sandbox:sandbox_unavailable" in result.stdout
+	assert "rootless dockerd did not start" in prompt and "Validation stage: sandbox  reason: sandbox_unavailable" in prompt
+	# Only coding-workflows' heal issues are listed (Q14); no comment list is read.
+	issue_lists = [call for call in state["calls"] if any(part.endswith("/issues") for part in call) and "--paginate" in call]
+	assert issue_lists and all(f"repos/{SELF_REPO}/issues" in call for call in issue_lists)
+	assert not [call for call in state["calls"] if VALIDATION_TRACKING_COMMENTS in call and "--method" in call]
+	# One run GET and one jobs GET (provenance, reused by the log collection).
+	for path in (f"repos/{CONSUMER_REPO}/actions/runs/500", f"repos/{CONSUMER_REPO}/actions/runs/500/jobs"):
+		assert len([call for call in state["calls"] if path in call]) == 1, path
+
+
+def _prepare_validation_scope_support(payload: dict):
+	def _setup(tmp: Path, work: Path) -> None:
+		remote = tmp / "remote.git"
+		subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+		subprocess.run(["git", "init", "-q", "-b", "stable"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.name", "test"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=work, check=True)
+		(work / ".github" / "workflows" / "validate.yml").write_text("name: validate\n", encoding="utf-8")
+		subprocess.run(["git", "add", "-f", ".github/workflows/validate.yml"], cwd=work, check=True)
+		subprocess.run(["git", "commit", "-qm", "support"], cwd=work, check=True)
+		subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
+		subprocess.run(["git", "push", "-q", "origin", "stable"], cwd=work, check=True)
+		payload["wrapper_sha"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True).stdout.strip()
+	return _setup
+
+
+@pytest.mark.parametrize("diagnosis,classification", [
+	(DIAG_WORKFLOW_DEFECT, "workflow-defect"),
+	("## Classification\ninconclusive\n\n## Summary\nUnclear cause.\n", "inconclusive"),
+])
+def test_intake_validation_failure_opens_heal_issue_here(diagnosis: str, classification: str) -> None:
+	payload = _validation_payload()
+	result, state, _ = _run_intake(payload, _validation_intake_state(), diagnosis=diagnosis,
+		setup_git=_prepare_validation_scope_support(payload), extra_env=SCOPE_GUARD_ON)
+	assert "WORKFLOW_HEAL scope_guard outcome=verified" in result.stdout, result.stdout
+	assert [issue["repo"] for issue in state["issues_created"]] == [SELF_REPO]
+	assert "- **Target branch:** `stable`" in state["issues_created"][0]["body"]
+	comment = _assert_validation_route(result, state, "opened", issue="901", classification=classification)
+	assert f"https://github.com/{SELF_REPO}/issues/901" in comment["body"]
+
+
+@pytest.mark.parametrize("diagnosis,classification", [
+	(DIAG_CONSUMER_APP_SCOPE, "consumer-app-defect"),
+	("## Classification\nconsumer-config\n\n## Summary\nThe consumer has no Docker on its runner.\n", "consumer-config"),
+	("## Classification\ntransient\n\n## Summary\nA registry hiccup.\n", "transient"),
+	(DIAG_PR_SELF_INFLICTED, "pr-self-inflicted"),
+	(DIAG_BASE_SELF_INFLICTED, "base-self-inflicted"),
+])
+def test_intake_validation_failure_bounces_non_harness_verdicts(diagnosis: str, classification: str) -> None:
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(), diagnosis=diagnosis, extra_env=SCOPE_GUARD_ON)
+	comment = _assert_validation_route(result, state, "bounced", classification=classification)
+	assert f"`{classification}` (not a harness defect)" in comment["body"]
+	assert "issues_created" not in state and "issues_composed" not in state
+	assert f"WORKFLOW_HEAL no_issue classification={classification} kind=validation_failure outcome=bounced" in result.stdout
+
+
+def test_intake_validation_failure_duplicate_records_occurrence_and_routes() -> None:
+	state = _validation_intake_state(heal_issues=[_heal_issue(812, state="open", fp=_validation_fp())])
+	result, state, _ = _run_intake(_validation_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	comment = _assert_validation_route(result, state, "duplicate", issue="812", classification="none")
+	assert f"https://github.com/{SELF_REPO}/issues/812" in comment["body"]
+	assert [c["path"] for c in state["comments_posted"] if c["path"] != VALIDATION_TRACKING_COMMENTS] == [f"repos/{SELF_REPO}/issues/812/comments"]
+	assert "issues_created" not in state
+
+
+def test_intake_validation_failure_already_fixed_routes_without_issue() -> None:
+	compare = _compare(1, [(SHA_FIX, "AI implementation for issue #4350 (#4351)")])
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(compare=compare), diagnosis=DIAG_ALREADY_FIXED)
+	comment = _assert_validation_route(result, state, "already-fixed", classification="already-fixed")
+	assert "`already-fixed`" in comment["body"]
+	assert "issues_created" not in state
+
+
+def test_intake_validation_failure_skips_are_routed() -> None:
+	# Scope guard off (the test default): the issue is composed, not filed.
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	comment = _assert_validation_route(result, state, "skipped", classification="workflow-defect")
+	assert "`scope_guard_disabled`" in comment["body"]
+	# Budget exhausted: stops before diagnosis, so no classification.
+	other = _heal_issue(813, state="open", fp="9" * 64)
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(heal_issues=[other]), diagnosis=DIAG_WORKFLOW_DEFECT,
+		extra_env={"WORKFLOW_HEAL_MAX_OPEN_ISSUES": "1"})
+	comment = _assert_validation_route(result, state, "skipped", classification="none")
+	assert "`budget_exhausted`" in comment["body"]
+	assert "issues_composed" not in state
+
+
+def test_intake_validation_failure_provenance_rejection_posts_nothing() -> None:
+	for run in (_validation_run(path=".github/workflows/ai-plan.yml"), _validation_run(display_title="AI Validate [tracking:43]"),
+			_validation_run(repository={"full_name": "someone/else"})):
+		result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(run_details={"500": run}), diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL skip reason=provenance_rejected" in result.stdout
+		assert "comments_posted" not in state and "issues_created" not in state
+		assert "received kind=validation_failure" not in result.stdout
+		assert not [call for call in state["calls"] if any("/actions/jobs/" in part for part in call)]
+
+
+def _stage_validation_report(tmp: Path, *, flags: dict[str, str] | None = None) -> tuple[Path, Path, dict[str, str]]:
+	work, state_file, env = _stage_phase_report(tmp, comments=[])
+	signature_file = tmp / "signature.txt"
+	signature_file.write_text(VALIDATION_SIGNATURE + "\n", encoding="utf-8")
+	env.update({
+		"WORKFLOW_HEAL_PHASE": "validate",
+		"REPORT_WORKFLOW_NAME": "AI Validate",
+		"WORKFLOW_HEAL_VALIDATION_STAGE": "sandbox",
+		"WORKFLOW_HEAL_VALIDATION_REASON": "sandbox_unavailable",
+		"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": str(signature_file),
+		"WORKFLOW_HEAL_VALIDATION_FP": _validation_fp(),
+	})
+	env.update(flags or {})
+	return work, state_file, env
+
+
+def test_phase_report_validate_dispatches_one_validation_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-phase-validate-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_validation_report(tmp)
+		result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL_PHASE_REPORT dispatched issue=42 phase=validate stage=sandbox reason=sandbox_unavailable fp={_validation_fp()} run=500" in result.stdout
+		state = _state(state_file)
+		assert len(state["dispatches"]) == 1
+		dispatch = state["dispatches"][0]
+		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches" and dispatch["body"]["event_type"] == "workflow-failure-heal"
+		payload = heal.validate_payload(dispatch["body"]["client_payload"]["report"])
+		assert payload["source_kind"] == "validation_failure" and payload["issue_number"] == 42
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500"] and payload["wrapper_sha"] == SHA_A
+		assert heal.validation_failure_fingerprint(payload["validation_stage"], payload["validation_reason"], payload["validation_signature"]) == _validation_fp()
+		# No GitHub read at all: only the dispatch.
+		assert [call for call in state["calls"] if "--input" not in call] == []
+
+
+def test_phase_report_validate_skips_cleanly() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-phase-validate-link-") as link_dir:
+		target = Path(link_dir) / "real.txt"
+		target.write_text("x\n", encoding="utf-8")
+		link = Path(link_dir) / "link.txt"
+		link.symlink_to(target)
+		empty = Path(link_dir) / "empty.txt"
+		empty.write_text("", encoding="utf-8")
+		cases = [
+			({"VALIDATION_HARNESS_HEAL_ENABLED": "FALSE"}, "skip reason=disabled (VALIDATION_HARNESS_HEAL_ENABLED=false)"),
+			({"WORKFLOW_HEAL_VALIDATION_STAGE": ""}, "skip reason=missing_validation_context field=stage"),
+			({"WORKFLOW_HEAL_VALIDATION_REASON": "Bad Reason"}, "skip reason=missing_validation_context field=reason"),
+			({"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": ""}, "skip reason=missing_validation_context field=signature_file"),
+			({"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": str(link)}, "skip reason=missing_validation_context field=signature_file"),
+			({"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": str(empty)}, "skip reason=missing_validation_context field=signature_file"),
+			({"WORKFLOW_HEAL_VALIDATION_FP": "abc"}, "skip reason=missing_validation_context field=fp"),
+			({"WORKFLOW_HEAL_VALIDATION_FP": "0" * 64}, "skip reason=fingerprint_mismatch"),
+			({"WORKFLOW_HEAL_VALIDATION_REASON": "preflight_failed"}, "skip reason=payload_build_failed"),
+			({"REPORT_WRAPPER_SHA": ""}, "skip reason=payload_build_failed"),
+		]
+		for flags, expected in cases:
+			with tempfile.TemporaryDirectory(prefix="heal-phase-validate-skip-") as tmp_name:
+				work, state_file, env = _stage_validation_report(Path(tmp_name), flags=flags)
+				result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+				assert result.returncode == 0, (flags, result.stderr, result.stdout)
+				assert expected in result.stdout, (flags, result.stdout)
+				state = _state(state_file)
+				assert "dispatches" not in state and "calls" not in state, flags
+
+
+def test_intake_compose_payload_keys_match_validation_failure_keys() -> None:
+	# _compose_payload_file limits the compose payload to the keys the
+	# validation_failure validator accepts; keep its jq list in step.
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	body = text.split("_compose_payload_file()\n{", 1)[1].split("\n}\n", 1)[0]
+	match = re.search(r"jq '\{([^}]*)\}", body)
+	assert match, body
+	keys = {key.strip() for key in match.group(1).split(",")}
+	assert keys == set(heal.VALIDATION_FAILURE_PAYLOAD_KEYS)
