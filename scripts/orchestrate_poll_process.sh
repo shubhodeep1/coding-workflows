@@ -15100,7 +15100,7 @@ validation_harness_marker() {
     | sort_by(.created_at, .id)
     | last
     | if . == null then empty else .m end
-  ' 2>/dev/null || true
+  ' 2>/dev/null || echo "::warning::VALIDATION_HARNESS_HOLD outcome=marker_lookup_failed kind=${vhm_kind}" >&2
 }
 
 # local:<16 hex> fingerprint of a harness failure reason when no trusted owner
@@ -15248,6 +15248,10 @@ mark_validation_failed() {
           }
         ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" \
           && harness_hold_entered="true"
+        if [ "${harness_hold_entered}" != "true" ]; then
+          rm -f "${STATE_FILE}.tmp"
+          echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed"
+        fi
       else
         echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=capped fp=${harness_hold_fp} pin=${harness_hold_support} heal_issue=none"
         if jq -e 'has("validation_harness_hold")' "${STATE_FILE}" >/dev/null 2>&1; then
@@ -19866,6 +19870,11 @@ _stall_check_triage_resolution_gate() {
 # written by the per-project loop and read by run_unblock_scan. No API call.
 UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.XXXXXX" 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.txt")"
 : > "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+# Tracking issues held for a harness fix this tick (Refs #7913), one per line,
+# written by the per-project loop. run_unblock_scan drops them from its search
+# results, because the hold keeps block labels the search matches. No API call.
+VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_harness_hold.XXXXXX" 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/unblock_harness_hold.txt")"
+: > "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}" 2>/dev/null || true
 # unblock_trusted_login and its cache are defined above the state extractor.
 
 # Per project, before any command handler. Returns 10 only when the
@@ -20577,6 +20586,18 @@ run_unblock_scan() {
     return 0
   fi
   printf '%s' "${search_items}" > "${work_dir}/search.json"
+  # Projects held for a harness fix (Refs #7913) keep ai:validation-failed and
+  # ai:harness-broken, which the search matches; drop them before selection.
+  if [ -s "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE:-}" ]; then
+    local _scan_harness_held
+    _scan_harness_held="$(sort -u "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}" 2>/dev/null | jq -R 'select(test("^[0-9]+$")) | tonumber' | jq -cs '.' 2>/dev/null || echo '[]')"
+    if ! jq -c --argjson held "${_scan_harness_held:-[]}" '[.[]? | select(.number as $n | any($held[]; . == $n) | not)]' \
+      "${work_dir}/search.json" > "${work_dir}/search_harness_unheld.json" 2>/dev/null \
+      || ! mv -f "${work_dir}/search_harness_unheld.json" "${work_dir}/search.json"; then
+      echo "UNBLOCK_SCAN outcome=skip reason=harness_hold_filter_failed"
+      return 0
+    fi
+  fi
   sort -u "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null | jq -R 'select(test("^[0-9]+$")) | tonumber' | jq -s '.' > "${work_dir}/failed_projects.json" 2>/dev/null \
     || echo '[]' > "${work_dir}/failed_projects.json"
   numbers_json="$(jq -c --slurpfile failed "${work_dir}/failed_projects.json" '
@@ -23713,6 +23734,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   VALIDATION_HARNESS_HOLD_SKIP_UNBLOCK="false"
   if [ "${PROJECT_STATUS}" = "failed" ] && validation_harness_hold_active; then
     VALIDATION_HARNESS_HOLD_SKIP_UNBLOCK="true"
+    echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}" 2>/dev/null || true
     echo "UNBLOCK_SCAN item=${TRACKING_NUM} kind=project outcome=skip reason=harness_hold"
   fi
   if [ "${PROJECT_STATUS}" = "failed" ] && [ "${VALIDATION_HARNESS_HOLD_SKIP_UNBLOCK}" != "true" ]; then
@@ -25139,6 +25161,7 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
          .validation_stale_pin_recovered_ref = $recovered_ref |
          del(.validation_failure_reason) |
          del(.validation_failure_class) |
+         del(.validation_harness_hold) |
          del(.validation_last_raw_status)' \
         "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
       # A failed rewrite would leave the failed state without the guard flag.

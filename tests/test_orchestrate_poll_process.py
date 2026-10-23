@@ -15479,6 +15479,21 @@ def test_validation_harness_hold_skips_unblock_scan_offer():
 	assert skip_line not in switched_off["stdout"] + switched_off["stderr"]
 
 
+def test_validation_harness_hold_is_dropped_from_unblock_scan_search():
+	"""The hold keeps block labels the scan's search matches, so the scan must drop it."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	scan = _extract_bash_function(script, "run_unblock_scan() {")
+	filter_at = scan.index('"${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE:-}"')
+	assert scan.index("> \"${work_dir}/search.json\"") < filter_at
+	assert filter_at < scan.index('sort -u "${UNBLOCK_FAILED_PROJECTS_FILE}"')
+	assert filter_at < scan.index("scripts/unblock_scan.py select")
+	assert "reason=harness_hold_filter_failed" in scan
+	loop_skip = script.index('VALIDATION_HARNESS_HOLD_SKIP_UNBLOCK="true"')
+	append_at = script.index('echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}"')
+	assert loop_skip < append_at < script.index("reason=harness_hold\"", loop_skip)
+	assert script.index("VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE=\"$(mktemp") < script.index("run_unblock_scan() {")
+
+
 def _harness_config_block(script: str) -> str:
 	start = script.index("# Validation harness hold (Refs #7913, docs/plans")
 	end_marker = '  VALIDATION_HARNESS_ROUTE_LOGIN=""\nfi\n'
