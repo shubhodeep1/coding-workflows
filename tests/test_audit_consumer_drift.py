@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import subprocess
 import sys
@@ -749,6 +751,262 @@ def test_command_failure_is_recorded_without_aborting_other_repos() -> None:
 		executor.assert_consumed()
 
 
+def _variables_call(repo: str, **kwargs) -> PlannedCall:
+	return PlannedCall(
+		(
+			"gh",
+			"api",
+			"-H",
+			"Accept: application/vnd.github+json",
+			f"repos/{repo}/actions/variables/WORKFLOW_PROFILE",
+		),
+		**kwargs,
+	)
+
+
+def _listing_call(repo: str, names: list[str]) -> PlannedCall:
+	return PlannedCall(
+		(
+			"gh",
+			"api",
+			"-H",
+			"Accept: application/vnd.github+json",
+			f"repos/{repo}/contents/.github/workflows",
+		),
+		stdout=json.dumps([{"name": name, "type": "file"} for name in names]),
+	)
+
+
+def _content_call(repo: str, name: str, body: str) -> PlannedCall:
+	return PlannedCall(
+		(
+			"gh",
+			"api",
+			"-H",
+			"Accept: application/vnd.github.raw+json",
+			f"repos/{repo}/contents/.github/workflows/{name}",
+		),
+		stdout=body,
+	)
+
+
+PROFILE_TEMPLATE_BODIES = {
+	"ai-clarify.yml": "name: AI Clarify\n",
+	"ai-plan.yml": "name: AI Plan\n",
+	"ai-orchestrate.yml": "name: AI Orchestrate\n",
+	"ai-security-audit.yml": "name: AI Security Audit\n",
+	"review_rb_judge_dispatch.yml": "name: Review-blocked judge dispatch\n",
+}
+PROFILE_MANIFESTS_TEXT = {
+	"core": "ai-clarify.yml\nai-plan.yml\n",
+	"standard": "ai-clarify.yml\nai-plan.yml\nai-orchestrate.yml\nreview_rb_judge_dispatch.yml\n",
+	"full": "ai-clarify.yml\nai-plan.yml\nai-orchestrate.yml\nai-security-audit.yml\nreview_rb_judge_dispatch.yml\n",
+}
+
+
+def _profile_templates_dir(root: Path, *, skip_profiles: tuple[str, ...] = ()) -> Path:
+	templates_dir = root / "workflow-templates"
+	_write_templates(templates_dir, PROFILE_TEMPLATE_BODIES)
+	(templates_dir / "profiles").mkdir()
+	for profile, text in PROFILE_MANIFESTS_TEXT.items():
+		if profile in skip_profiles:
+			continue
+		(templates_dir / "profiles" / f"{profile}.txt").write_text(text, encoding="utf-8")
+	return templates_dir
+
+
+def _run_profile_audit(
+	templates_dir: Path,
+	calls: list[PlannedCall],
+	repo: str = "octo/demo",
+) -> tuple[object, str, FakeExecutor]:
+	executor = FakeExecutor(calls)
+	auditor = drift_audit.ConsumerDriftAuditor(
+		expected_templates=drift_audit.load_expected_templates(templates_dir),
+		max_diff_lines=10,
+		executor=executor,
+		sleeper=lambda _delay: None,
+		profile_manifests=drift_audit.load_profile_manifests(templates_dir),
+	)
+	buffer = io.StringIO()
+	with contextlib.redirect_stdout(buffer):
+		result = auditor.audit_repository(repo)
+	executor.assert_consumed()
+	return result, buffer.getvalue(), executor
+
+
+def _missing_files(result) -> set[str]:
+	return {item.file for item in result.drift_items if item.missing}
+
+
+def test_core_profile_skips_out_of_profile_wrappers() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-core-") as td:
+		templates_dir = _profile_templates_dir(Path(td))
+		result, output, executor = _run_profile_audit(
+			templates_dir,
+			[
+				_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": " Core "})),
+				_listing_call("octo/demo", ["ai-clarify.yml"]),
+				_content_call("octo/demo", "ai-clarify.yml", "name: AI Clarify\n"),
+			],
+		)
+		assert result.outcome == "drift"
+		assert _missing_files(result) == {"ai-plan.yml"}
+		assert "profile=core" in output.splitlines()[0]
+		for name in ("ai-orchestrate.yml", "ai-security-audit.yml", "review_rb_judge_dispatch.yml"):
+			assert (
+				f"DRIFT_SCAN_SKIP repository=octo/demo file={name} reason=not_in_profile profile=core"
+				in output
+			)
+		assert not any(
+			"ai-orchestrate.yml" in command[-1] for command, _cwd, _check, _env in executor.seen
+		)
+
+
+def test_standard_profile_audits_review_dispatch_and_skips_full_only() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-standard-") as td:
+		templates_dir = _profile_templates_dir(Path(td))
+		result, output, _executor = _run_profile_audit(
+			templates_dir,
+			[
+				_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "standard"})),
+				_listing_call("octo/demo", ["ai-clarify.yml", "ai-plan.yml", "ai-orchestrate.yml"]),
+				_content_call("octo/demo", "ai-clarify.yml", "name: AI Clarify\n"),
+				_content_call("octo/demo", "ai-orchestrate.yml", "name: AI Orchestrate\n"),
+				_content_call("octo/demo", "ai-plan.yml", "name: AI Plan\n"),
+			],
+		)
+		assert _missing_files(result) == {"review_rb_judge_dispatch.yml"}
+		assert "file=ai-security-audit.yml reason=not_in_profile profile=standard" in output
+		assert "file=review_rb_judge_dispatch.yml reason=not_in_profile" not in output
+
+
+def test_full_profile_and_unset_variable_report_every_missing_wrapper() -> None:
+	for variable_call in (
+		_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "full"})),
+		_variables_call("octo/demo", stderr="gh: Not Found (HTTP 404)", returncode=1),
+	):
+		with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-full-") as td:
+			templates_dir = _profile_templates_dir(Path(td))
+			result, output, _executor = _run_profile_audit(
+				templates_dir,
+				[variable_call, _listing_call("octo/demo", [])],
+			)
+			assert _missing_files(result) == set(PROFILE_TEMPLATE_BODIES)
+			assert "profile=full" in output.splitlines()[0]
+			assert "DRIFT_SCAN_SKIP" not in output
+
+
+def test_unknown_profile_keeps_previous_behaviour() -> None:
+	for variable_call in (
+		_variables_call("octo/demo", stderr="gh: Forbidden (HTTP 403)", returncode=1),
+		_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "bogus"})),
+		_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "../../core"})),
+		_variables_call("octo/demo", stdout="not json"),
+		_variables_call("octo/demo", stdout=json.dumps(["core"])),
+	):
+		with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-unknown-") as td:
+			templates_dir = _profile_templates_dir(Path(td))
+			result, output, _executor = _run_profile_audit(
+				templates_dir,
+				[variable_call, _listing_call("octo/demo", [])],
+			)
+			assert _missing_files(result) == set(PROFILE_TEMPLATE_BODIES)
+			assert "profile=unknown" in output.splitlines()[0]
+			assert "DRIFT_SCAN_SKIP" not in output
+
+
+def test_transient_profile_failure_is_retried() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-profile-retry-") as td:
+		templates_dir = _profile_templates_dir(Path(td))
+		result, output, _executor = _run_profile_audit(
+			templates_dir,
+			[
+				_variables_call("octo/demo", stderr="gh: Bad Gateway (HTTP 502)", returncode=1),
+				_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "core"})),
+				_listing_call("octo/demo", []),
+			],
+		)
+		start_lines = [line for line in output.splitlines() if line.startswith("DRIFT_SCAN_START ")]
+		assert start_lines and start_lines[0].endswith("profile=core")
+		assert "DRIFT_SCAN_RETRY" in output
+		assert _missing_files(result) == {"ai-clarify.yml", "ai-plan.yml"}
+
+
+def test_present_out_of_profile_wrapper_is_still_compared() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-present-") as td:
+		templates_dir = _profile_templates_dir(Path(td))
+		result, _output, _executor = _run_profile_audit(
+			templates_dir,
+			[
+				_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "core"})),
+				_listing_call("octo/demo", ["ai-clarify.yml", "ai-plan.yml", "ai-orchestrate.yml"]),
+				_content_call("octo/demo", "ai-clarify.yml", "name: AI Clarify\n"),
+				_content_call("octo/demo", "ai-orchestrate.yml", "name: Locally edited\n"),
+				_content_call("octo/demo", "ai-plan.yml", "name: AI Plan\n"),
+			],
+		)
+		assert result.outcome == "drift"
+		assert [(item.file, item.missing) for item in result.drift_items] == [("ai-orchestrate.yml", False)]
+
+
+def test_missing_profile_manifest_disables_skipping() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-no-core-") as td:
+		templates_dir = _profile_templates_dir(Path(td), skip_profiles=("core",))
+		assert "core" not in drift_audit.load_profile_manifests(templates_dir)
+		result, output, _executor = _run_profile_audit(
+			templates_dir,
+			[
+				_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "core"})),
+				_listing_call("octo/demo", []),
+			],
+		)
+		assert _missing_files(result) == set(PROFILE_TEMPLATE_BODIES)
+		assert "DRIFT_SCAN_SKIP" not in output
+
+
+def test_profile_is_cached_per_repository() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-consumer-drift-cache-") as td:
+		templates_dir = _profile_templates_dir(Path(td))
+		executor = FakeExecutor(
+			[
+				_variables_call("octo/demo", stdout=json.dumps({"name": "WORKFLOW_PROFILE", "value": "core"})),
+				_listing_call("octo/demo", []),
+			]
+		)
+		auditor = drift_audit.ConsumerDriftAuditor(
+			expected_templates=drift_audit.load_expected_templates(templates_dir),
+			max_diff_lines=10,
+			executor=executor,
+			profile_manifests=drift_audit.load_profile_manifests(templates_dir),
+		)
+		with contextlib.redirect_stdout(io.StringIO()):
+			auditor.audit_repository("octo/demo")
+			auditor.audit_repository("octo/demo")
+		executor.assert_consumed()
+
+
+def test_default_auditor_makes_no_profile_call() -> None:
+	auditor = drift_audit.ConsumerDriftAuditor(
+		expected_templates={},
+		max_diff_lines=1,
+		executor=FakeExecutor([]),
+	)
+	assert auditor.fetch_workflow_profile("octo/demo") == "unknown"
+
+
+def test_load_profile_manifests_reads_repo_manifests() -> None:
+	manifests = drift_audit.load_profile_manifests(REPO_ROOT / "workflow-templates")
+	assert set(manifests) == {"core", "standard", "full"}
+	assert "review_rb_judge_dispatch.yml" in manifests["standard"]
+	assert "review_rb_judge_dispatch.yml" in manifests["full"]
+	assert "review_rb_judge_dispatch.yml" not in manifests["core"]
+	assert manifests["full"] == _parse_full_profile_manifest(
+		REPO_ROOT / "workflow-templates" / "profiles" / "full.txt"
+	)
+	assert drift_audit._load_named_profile_manifest_names(REPO_ROOT / "workflow-templates", "../full") is None
+
+
 def main() -> int:
 	test_load_target_repositories_deduplicates_and_validates()
 	test_expected_templates_render_current_stable_sha_and_detect_stale_pin()
@@ -766,6 +1024,16 @@ def main() -> int:
 	test_retry_parameters_are_normalized_and_retry_delay_is_capped()
 	test_retry_parameters_fall_back_to_safe_defaults()
 	test_command_failure_is_recorded_without_aborting_other_repos()
+	test_core_profile_skips_out_of_profile_wrappers()
+	test_standard_profile_audits_review_dispatch_and_skips_full_only()
+	test_full_profile_and_unset_variable_report_every_missing_wrapper()
+	test_unknown_profile_keeps_previous_behaviour()
+	test_transient_profile_failure_is_retried()
+	test_present_out_of_profile_wrapper_is_still_compared()
+	test_missing_profile_manifest_disables_skipping()
+	test_profile_is_cached_per_repository()
+	test_default_auditor_makes_no_profile_call()
+	test_load_profile_manifests_reads_repo_manifests()
 	return 0
 
 

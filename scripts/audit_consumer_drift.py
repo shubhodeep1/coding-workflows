@@ -27,6 +27,13 @@ REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 DEFAULT_GH_API_MAX_ATTEMPTS = 4
 DEFAULT_GH_API_RETRY_BASE_SECONDS = 2.0
 MAX_GH_API_RETRY_DELAY_SECONDS = 30.0
+# Install profiles a consumer can select with the WORKFLOW_PROFILE repository
+# variable (update_workflows.yml defaults an unset variable to "full"). A
+# profile that cannot be read or validated resolves to "unknown", which keeps
+# the audit's previous behaviour: every template is audited (fail safe).
+WORKFLOW_PROFILE_NAMES = ("core", "standard", "full")
+DEFAULT_WORKFLOW_PROFILE = "full"
+UNKNOWN_WORKFLOW_PROFILE = "unknown"
 STANDARD_MANAGED_HEADER = (
 	"# IMPORTANT: This file is managed by coding-workflows and may be overwritten",
 	"# automatically when upstream templates change. To opt out of auto-updates,",
@@ -231,6 +238,45 @@ def _load_profile_manifest_names(templates_dir: Path) -> set[str]:
 	return names
 
 
+def _load_named_profile_manifest_names(templates_dir: Path, profile: str) -> set[str] | None:
+	"""Return the wrapper basenames listed in ``profiles/<profile>.txt``.
+
+	Applies the same line filters as ``_load_profile_manifest_names``. Returns
+	``None`` (no manifest) when ``profile`` is not a known profile name or the
+	manifest is missing or unreadable, so callers can fall back to auditing
+	every template for that profile.
+	"""
+	if profile not in WORKFLOW_PROFILE_NAMES:
+		return None
+	manifest_path = templates_dir / "profiles" / f"{profile}.txt"
+	try:
+		manifest_text = manifest_path.read_text(encoding="utf-8")
+	except (OSError, UnicodeDecodeError):
+		return None
+
+	names: set[str] = set()
+	for raw_line in manifest_text.splitlines():
+		name = raw_line.strip()
+		if not name or name.startswith("#"):
+			continue
+		if "/" in name or "\\" in name or name in {".", ".."}:
+			continue
+		if not PROFILE_MANIFEST_NAME_RE.match(name):
+			continue
+		names.add(name)
+	return names
+
+
+def load_profile_manifests(templates_dir: Path) -> dict[str, set[str]]:
+	"""Return ``{profile: wrapper names}`` for every readable profile manifest."""
+	manifests: dict[str, set[str]] = {}
+	for profile in WORKFLOW_PROFILE_NAMES:
+		names = _load_named_profile_manifest_names(templates_dir, profile)
+		if names is not None:
+			manifests[profile] = names
+	return manifests
+
+
 def load_expected_templates(
 	templates_dir: Path,
 	stable_sha: str | None = None,
@@ -425,6 +471,7 @@ class ConsumerDriftAuditor:
 		gh_api_max_attempts: int = DEFAULT_GH_API_MAX_ATTEMPTS,
 		gh_api_retry_base_seconds: float = DEFAULT_GH_API_RETRY_BASE_SECONDS,
 		sleeper: Any = time.sleep,
+		profile_manifests: dict[str, set[str]] | None = None,
 	) -> None:
 		self.expected_templates = expected_templates
 		self.max_diff_lines = max_diff_lines
@@ -442,6 +489,10 @@ class ConsumerDriftAuditor:
 		self.sleeper = sleeper
 		self.workflow_dir_listing_cache: dict[str, set[str]] = {}
 		self.workflow_file_cache: dict[tuple[str, str], str | None] = {}
+		# None turns profile resolution off: no variables read, profile
+		# "unknown", every template audited (the pre-profile behaviour).
+		self.profile_manifests = profile_manifests
+		self.workflow_profile_cache: dict[str, str] = {}
 
 	def _run_gh_api(self, endpoint: str, *, raw: bool = False) -> subprocess.CompletedProcess[str]:
 		accept = "application/vnd.github.raw+json" if raw else "application/vnd.github+json"
@@ -496,6 +547,42 @@ class ConsumerDriftAuditor:
 		self.workflow_dir_listing_cache[repository] = files
 		return files
 
+	def fetch_workflow_profile(self, repository: str) -> str:
+		"""Resolve the consumer's WORKFLOW_PROFILE; never raises.
+
+		Returns one of WORKFLOW_PROFILE_NAMES, "full" for an unset variable
+		(HTTP 404), or "unknown" for any other failure or an invalid value.
+		"""
+		if self.profile_manifests is None:
+			return UNKNOWN_WORKFLOW_PROFILE
+		cached = self.workflow_profile_cache.get(repository)
+		if cached is not None:
+			return cached
+
+		# GitHub API hygiene (§14): one extra REST read per consumer per run.
+		# The existing calls (the contents/.github/workflows listing and the
+		# per-file raw content reads) return no repository variables. The
+		# result is cached per repository, and every failure falls back to
+		# "unknown", which audits every template (fail safe).
+		endpoint = f"repos/{repository}/actions/variables/WORKFLOW_PROFILE"
+		profile = UNKNOWN_WORKFLOW_PROFILE
+		try:
+			proc = self._run_gh_api(endpoint)
+			if proc.returncode == 0:
+				payload = json.loads(proc.stdout or "")
+				value = payload.get("value") if isinstance(payload, dict) else None
+				if isinstance(value, str):
+					normalized = value.strip().lower()
+					if normalized in WORKFLOW_PROFILE_NAMES:
+						profile = normalized
+			elif _is_not_found_response(proc.stdout, proc.stderr):
+				profile = DEFAULT_WORKFLOW_PROFILE
+		except (CommandFailure, json.JSONDecodeError, ValueError):
+			profile = UNKNOWN_WORKFLOW_PROFILE
+
+		self.workflow_profile_cache[repository] = profile
+		return profile
+
 	def fetch_workflow_content(self, repository: str, file_name: str, *, available_files: set[str]) -> str | None:
 		cache_key = (repository, file_name)
 		if cache_key in self.workflow_file_cache:
@@ -518,11 +605,31 @@ class ConsumerDriftAuditor:
 		return normalized
 
 	def audit_repository(self, repository: str) -> RepoAuditResult:
-		print(f"DRIFT_SCAN_START repository={repository} templates={len(self.expected_templates)}")
+		profile = self.fetch_workflow_profile(repository)
+		print(
+			f"DRIFT_SCAN_START repository={repository} templates={len(self.expected_templates)} "
+			f"profile={profile}"
+		)
+		profile_names: set[str] | None = None
+		if self.profile_manifests is not None and profile != UNKNOWN_WORKFLOW_PROFILE:
+			profile_names = self.profile_manifests.get(profile)
 		try:
 			available_files = self.fetch_workflow_directory_listing(repository)
 			drift_items: list[DriftItem] = []
 			for file_name, expected_text in sorted(self.expected_templates.items()):
+				# A wrapper the consumer's profile does not install is expected
+				# to be absent. A wrapper the consumer has is always compared.
+				if (
+					profile_names is not None
+					and file_name not in available_files
+					and file_name not in profile_names
+				):
+					print(
+						"DRIFT_SCAN_SKIP "
+						f"repository={repository} file={file_name} "
+						f"reason=not_in_profile profile={profile}"
+					)
+					continue
 				actual_text = self.fetch_workflow_content(
 					repository,
 					file_name,
@@ -627,6 +734,7 @@ def main() -> int:
 	auditor = ConsumerDriftAuditor(
 		expected_templates=expected_templates,
 		max_diff_lines=args.max_diff_lines,
+		profile_manifests=load_profile_manifests(args.templates_dir),
 	)
 	results = auditor.audit_repositories(repositories)
 	summary = summarize_results(results, sorted(expected_templates))
