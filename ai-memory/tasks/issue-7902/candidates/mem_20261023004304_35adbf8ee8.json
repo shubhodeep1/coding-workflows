@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which part of the repository should this issue improve?\nChoices:\nA) One specific workflow or pipeline phase (clarify, plan, implement, review/autofix, orchestrate, validate, heal). Name it in your answer. (RECOMMENDED)\nB) Documentation (README, agents.md fragments, docs/)\nC) Tests or CI (ci.yml, contract tests, run time)\nD) This issue was filed by mistake or as a test and should be closed without changes\nQ2: What concrete problem or outcome should the change address?\nChoices:\nA) A specific bug or failing behaviour. Describe what happens now, what should happen instead, and give a run, PR or issue link if you have one. (RECOMMENDED)\nB) Performance or cost (for example run time or model spend). Name the metric and the target.\nC) Reliability (stalls, retries, flaky runs). Name the symptom.\nD) A new capability. Describe the desired behaviour.\nQ3: How will we know the change is done?\nChoices:\nA) A stated, testable acceptance criterion that you give in your answer (for example \"workflow X no longer does Y\" or \"a test asserting Z passes\") (RECOMMENDED)\nB) A measurable target (for example \"CI under N minutes\")\nC) The planner proposes the criteria, and you approve them at the plan stage",
+  "fingerprint": "fc3ba56e9c87b5d15cd9c91ab9c0a6ad6a01a2525f7c5e03e75dbb0d4ffb1684",
+  "lineage": {
+    "issue_number": 7902,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39879277018",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39879277018",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261023004304_35adbf8ee8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7902,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39879277018"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #7902 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-23T00:43:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
