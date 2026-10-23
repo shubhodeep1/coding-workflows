@@ -42,7 +42,7 @@ with open(os.environ["GH_LOG"], "a", encoding="utf-8") as log:
             if value.startswith("@"):
                 value = open(value[1:], encoding="utf-8").read()
             entry["body"] = value
-        # set_issue_phase_label_resilient sends the label set on stdin.
+        # Record any request body sent on stdin (`--input -`).
         if arg == "--input" and i + 1 < len(args) and args[i + 1] == "-":
             entry["stdin"] = sys.stdin.read()
     log.write(json.dumps(entry) + "\n")
