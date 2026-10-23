@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:359-360 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The pre-existing `ENFORCE_FILES_TOUCHED` and `ALLOW_OUT_OF_SCOPE_FILES` rows still list \"Used By: implement\" even though this PR forwards both into `plan.yml` and all five `orchestrate_poll.yml` gate steps, and `plan_files_touched_gate_active()` reads them.\n  WHY: The documented scope is narrower than the effective scope, so an operator could set `ENFORCE_FILES_TOUCHED=false` without knowing it also disables the new plan-time auto-approval hold. The reviewer rated this NIT, which is mapped to low. It is a documentation gap with no runtime failure.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:359-360 (the `ENFORCE_FILES_TOUCHED` and `ALLOW_OUT_OF_SCOPE_FILES` rows, \"Used By\" column) vs. README.md:103, `.github/workflows/plan.yml:82-84`, `.github/workflows/orchestrate_poll.yml:914-916` (and the four other poll steps) | severity=NIT | confidence=4\n  PROBLEM: The two pre-existing variable rows still declare `Used By: implement`, but this PR forwards both variables into `plan.yml`'s job env and into all five `orchestrate_poll.yml` gate steps, and `plan_files_touched_gate_active()` (`scripts/files_touched_scope_guard.py:806-809`) reads them to decide whether the new plan-time hold applies.\n  WHY: No runtime failure. An operator reading README.md:359-360 would conclude `ENFORCE_FILES_TOUCHED=false` only affects the implement commit, and would not expect it to also disable the new plan-stage auto-approval hold.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "44733896562c44678905e0592d05328dc8ba447a558a1eff2d2ba6adaa464861",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7986,
+    "run_id": "40022735673",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40022735673",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023213949_8013614bf9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7986,
+    "run_id": "40022735673"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T21:39:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
