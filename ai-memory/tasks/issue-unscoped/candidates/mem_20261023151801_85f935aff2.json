@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal_queue.py:106-115 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: test_position_cli stamps tickets from the hardcoded NOW (2026-10-23 12:00Z, line 32) but runs the real heal-queue position CLI, which uses the wall clock and a 10,800 s default lease, so it returns 'go' instead of 'wait'.\n  WHY: The time-dependent failure turns tests-heal-plan-and-validation red and blocks CI and auto-merge. Reviewers rated it MAJOR; the ledger maps that to high.\n- .github/workflows/review_autofix.yml:4757,4772 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The two new `git ls-remote origin \"refs/heads/${TARGET_BRANCH}\"` calls in \"Push all pending commits\" have no timeout.\n  WHY: A hung network call holds the step until the job timeout, defeating the bounded 2-retry design. These came from hardening suggestions (risk score 2); gemini gave it ISSUE_CONFIDENCE 3.\n- .github/workflows/review_autofix.yml:4733 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The push error output is printed with `cat \"${push_stderr_file}\" >&2` and is not sanitized, although origin carries GH_TOKEN (line 4677).\n  WHY: An HTTP push failure can expose the credential-bearing URL in the log. The reviewer rated it MAJOR and filed it under task completeness.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Never print the push URL; it carries the token.\"\n  expected_change_site: .github/workflows/review_autofix.yml, \"Push all pending commits\" error-output handling (line 4733)\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The workflow sets origin to a URL containing GH_TOKEN at line 4677 and prints the captured push output with `cat \"${push_stderr_file}\" >&2` at line 4733. The PR adds retry handling but does not sanitize that output.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_workflow_failure_heal_queue.py:106-114 | severity=high (source: MAJOR) | confidence=5\n  PROBLEM: test_position_cli uses a hardcoded NOW (line 32) against the real CLI wall clock and a 10,800 s lease, so the assertion `waiting[\"status\"] == \"wait\"` fails with 'go'.\n  WHY: It fails tests-heal-plan-and-validation, keeps CI / lint red and blocks auto-merge. The failure is time-dependent and unrelated to the push-step change.\n- .github/workflows/review_autofix.yml:4757,4772 | hardening (risk score 2)\n  PROBLEM: The two `git ls-remote` calls have no time bound.\n  WHY: A hung network call holds the step until the job timeout. Suggested fix: prefix both calls with `timeout 60`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal_queue.py:114 | confidence=5\n  PROBLEM: test_position_cli fails because of a hardcoded time constant.\n  WHY: The tickets are already past the stale threshold against the real wall clock and the 10,800 s lease, so the CLI returns 'go' instead of 'wait'.\n- .github/workflows/review_autofix.yml:4772,4757 | confidence=3\n  PROBLEM: The `git ls-remote` commands lack a timeout.\n  WHY: A hung remote holds the step and the job until the global timeout, defeating the bounded retry. Suggested fix: `timeout 60` on both calls (hardening risk score 2).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:~4756,~4761 | hardening (risk score 2)\n  PROBLEM: Neither new `git ls-remote` call has a wall-clock bound.\n  WHY: A network hang during the retry path holds the step until the job timeout (default 360 minutes) and defeats the bounded-retry design. Suggested fix: `timeout 30` on both calls.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_workflow_failure_heal_queue.py:32, 39-40, 106-115; scripts/workflow_failure_heal.py:5356, 5370, 5842-5844 | severity=high (source: MAJOR) | confidence=5\n  PROBLEM: test_position_cli uses tickets timestamped relative to a fixed 2026-10-23 12:00 UTC time, but invokes the CLI without a fixed clock or a longer lease.\n  WHY: The CLI uses the real UTC clock and a 10,800 s lease. At 15:01 UTC the first ticket was stale, so the CLI returned \"go\" instead of \"wait\" and failed tests-heal-plan-and-validation.\n- TASK_GAP:\n  Requirement: \"Never print the push URL; it carries the token.\"\n  Expected change site: .github/workflows/review_autofix.yml, \"Push all pending commits\" error-output handling.\n  Evidence of absence: The workflow sets origin to a URL containing GH_TOKEN at line 4677, then prints the captured git push output with `cat \"${push_stderr_file}\" >&2` at line 4733. The PR adds retry handling but does not sanitize that output.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- .github/workflows/review_autofix.yml:4757,4772 | hardening (risk score 2)\n  PROBLEM: The new `git ls-remote` calls have no per-command timeout.\n  WHY: A stalled remote read delays the retry decision until the job-level timeout.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "15e03370f42448b9862c3d9bfad45a26df5512828c89d7a84f51e88b536e5b20",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7976,
+    "run_id": "39972062857",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39972062857",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023151801_85f935aff2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7976,
+    "run_id": "39972062857"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T15:18:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
