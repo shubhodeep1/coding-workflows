@@ -1109,6 +1109,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_owner_routing.py
 
       # Moved from tests-hooks-and-orchestrator, which took 15m09s of its 20
       # minutes on main (run 38508333607, budget-watch issue #7366). Step
