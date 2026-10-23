@@ -74,6 +74,8 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 			"!contains(toJson(github.event.issue.labels.*.name), 'ai:consumer-health')",
 			# Scheduled-validation failure issues are automation reports (#7553).
 			"!contains(toJson(github.event.issue.labels.*.name), 'ai:scheduled-validation-failed')",
+			# The heal intake report queue issue is automation state, not a task.
+			"!contains(toJson(github.event.issue.labels.*.name), 'ai:heal-intake-queue')",
 			"github.event.issue.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.issue.author_association)",
 			"github.event.issue.user.type == 'Bot'",
