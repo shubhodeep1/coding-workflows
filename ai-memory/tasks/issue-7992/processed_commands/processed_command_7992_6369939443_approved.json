@@ -5,13 +5,22 @@
   "entry_id": "processed_command_7992_6369939443_approved",
   "issue_number": 7992,
   "metadata": {
+    "branch": "ai/issue-7992",
+    "changed_files": [
+      "tests/test_workflow_failure_heal_queue.py"
+    ],
+    "issue_number": 7992,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/7992",
+    "pr_number": 7996,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/7996",
+    "run_attempt": "1",
+    "run_id": "39989070462",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/39989070462"
   },
   "run_attempt": 1,
   "run_id": "39989070462",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-23T16:51:10Z",
+  "status": "completed",
+  "timestamp": "2026-10-23T17:01:48Z",
   "workflow": "implement"
 }
