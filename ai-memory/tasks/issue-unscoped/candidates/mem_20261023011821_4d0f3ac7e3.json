@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_ledger.py:742-754 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The legacy no-answer invalid-verdict marker is skipped by `invalid_verdict_streak` without resetting the streak, so a refusal, an outage and a second refusal count as two refusals in a row and park the item.\n  WHY: This contradicts the \"two refused answers in a row\" contract. Severity is MAJOR (mapped to high), and anthropic_claude-sonnet-5_5 disagreed, judging the behavior intentional and documented. luna also cites scripts/unblock_judge.sh:1605-1609 as the site that posts the legacy marker.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When the write fails, the judge still logs `op=invalid_verdict_record outcome=failed reason=record_failed`\" (the reviewer reads this as implying the Telegram alert should fire unconditionally)\n  expected_change_site: scripts/unblock_judge.sh\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The `unblock_tg` WARNING is gated by `[ \"${invalid_park}\" != \"true\" ]`, so no notification is sent when the item was slated to be parked and the marker write fails. minimax_minimax-m3 and anthropic_claude-sonnet-5_5 disputed this: the log line is unconditional and the gating is intended.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_ledger.py:742-754 | severity=MAJOR | confidence=4\n  PROBLEM: The streak counter for refused answers does not reset when it meets a legacy uncounted marker.\n  WHY: A refusal, an outage (legacy marker) and a second refusal bring the streak to 2 and park the item erroneously.\n- TASK_GAP:\n  Requirement: \"When the write fails, the judge still logs `op=invalid_verdict_record outcome=failed reason=record_failed`\" (implying the Telegram alert should fire unconditionally).\n  Expected change site: scripts/unblock_judge.sh\n  Evidence of absence: The code logs the record_failed outcome, but the Telegram alert `unblock_tg` WARNING is gated by [ \"${invalid_park}\" != \"true\" ], so no notification is sent when the item was slated to be parked during a failed write.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_ledger.py:724-754 | severity=MAJOR | confidence=3\n  PROBLEM: `invalid_verdict_streak` treats the legacy marker as neither counted nor a break (the `if last == legacy_line: continue` branch), so a refusal, an outage and a refusal reach streak=2 and park the item.\n  WHY: Only one actual refusal occurred after the outage, and `test_model_failure_is_not_counted_as_a_refused_answer` (tests/test_unblock_judge.py:2628-2664) does not cover the refused+outage+refused case.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:1605-1609; scripts/unblock_ledger.py:742-754 | severity=MAJOR | confidence=5\n  PROBLEM: A model failure posts the legacy invalid-verdict marker, which the streak counter ignores without resetting the streak.\n  WHY: After one refused answer, a model or isolation failure posts the marker at line 1609. The next refused answer is then counted as the second refusal in a row, and the item is parked even though a no-answer run occurred between the refusals.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_ledger.py:742-754 | severity=MAJOR | confidence=4\n  PROBLEM: The legacy invalid-verdict marker is skipped with `continue`, so it neither increments the streak nor resets it.\n  WHY: After one refusal, an outage and a second refusal, the item is parked. This contradicts the \"two refused answers in a row\" contract in changelog.d/7901-blocked-item-alerts.md and agents.d/7901-blocked-item-alerts.md.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3b638bbfab5d64905fcaf6bdb4388d08b302b00c84a527463dc900e8adf3ee25",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7901,
+    "run_id": "39880714129",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39880714129",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023011821_4d0f3ac7e3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7901,
+    "run_id": "39880714129"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T01:18:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
