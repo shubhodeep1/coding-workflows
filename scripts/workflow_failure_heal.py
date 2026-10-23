@@ -5280,6 +5280,104 @@ def _write_json(value: Any) -> None:
 	sys.stdout.write("\n")
 
 
+# ---------------------------------------------------------------------------
+# Heal intake report queue (scripts/workflow_failure_heal_queue.sh)
+# ---------------------------------------------------------------------------
+#
+# GitHub keeps one running and one pending run per concurrency group, and a
+# newly queued run cancels the pending one, so a burst of heal reports lost
+# every report but the first and the last (about 15 cancelled intake runs on
+# 2026-10-21, none of which ever started a job). The intake therefore no
+# longer shares a concurrency group (unless HEAL_INTAKE_QUEUE_ENABLED=false):
+# each run posts a ticket comment on the queue issue and waits until no live
+# ticket is older than its own. Comment ids grow monotonically, so the order
+# is first come, first served. Only tickets written by the pipeline login
+# count. A ticket is stale (it no longer holds anyone back) when it is older
+# than the lease, when its run has completed, when its run has moved on to a
+# later attempt, or when it is an earlier ticket of the waiting run itself (an
+# earlier attempt, or a duplicate left by a retried post).
+
+HEAL_QUEUE_LABEL = "ai:heal-intake-queue"
+HEAL_QUEUE_JOBS: tuple[str, ...] = ("intake", "recovery-scan")
+HEAL_QUEUE_DEFAULT_LEASE_SECONDS = 10_800
+_HEAL_QUEUE_TICKET_RE = re.compile(r"<!-- ai:heal-intake-queue:v1 run=([1-9][0-9]{0,19}) attempt=([1-9][0-9]{0,3}) job=(intake|recovery-scan) -->")
+
+
+def render_heal_queue_ticket(run_id: Any, attempt: Any, job: str) -> str:
+	"""The ticket comment body: one line for people, then the marker as the last line."""
+	run_text = str(run_id or "")
+	attempt_text = "1" if attempt is None or attempt == "" else str(attempt)
+	if not re.fullmatch(r"[1-9][0-9]{0,19}", run_text) or not re.fullmatch(r"[1-9][0-9]{0,3}", attempt_text) or job not in HEAL_QUEUE_JOBS:
+		raise ValueError("invalid heal queue ticket fields")
+	return (f"Heal intake run {run_text} (attempt {attempt_text}, job {job}) is waiting for its turn. "
+		"This comment is deleted when the run finishes.\n\n"
+		f"<!-- ai:heal-intake-queue:v1 run={run_text} attempt={attempt_text} job={job} -->")
+
+
+def heal_queue_tickets(comments: Any, trusted_login: str) -> list[dict[str, Any]]:
+	"""Valid tickets by ``trusted_login``, oldest (lowest comment id) first.
+
+	Accepts a flat comment list or gh's ``--slurp`` list of pages. The marker
+	must be the last line of the body; anything else is ignored.
+	"""
+	flat: list[Any] = []
+	for entry in comments if isinstance(comments, list) else []:
+		flat.extend(entry if isinstance(entry, list) else [entry])
+	login = (trusted_login or "").lower()
+	tickets: list[dict[str, Any]] = []
+	for comment in flat:
+		if not isinstance(comment, dict) or not login:
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if str(user.get("login") or "").lower() != login:
+			continue
+		comment_id = comment.get("id")
+		if isinstance(comment_id, bool) or not isinstance(comment_id, int) or comment_id <= 0:
+			continue
+		lines = str(comment.get("body") or "").strip().splitlines()
+		match = _HEAL_QUEUE_TICKET_RE.fullmatch(lines[-1].strip()) if lines else None
+		if not match:
+			continue
+		tickets.append({"comment_id": comment_id, "run_id": match.group(1), "attempt": int(match.group(2)),
+			"job": match.group(3), "created_at": comment.get("created_at")})
+	return sorted(tickets, key=lambda ticket: ticket["comment_id"])
+
+
+def heal_queue_position(*, comments: Any, ticket_id: int, trusted_login: str, lease_seconds: int,
+		runs: dict[str, Any] | None = None, now: datetime | None = None) -> dict[str, Any]:
+	"""Decide whether the run holding ``ticket_id`` may enter the intake.
+
+	``runs`` maps a run id to its ``GET actions/runs/<id>`` object for the
+	holders the caller has checked. Returns ``status`` (``go``: no live ticket
+	is older; ``wait``; ``lost``: our ticket is gone), ``position`` (live
+	tickets ahead), ``holder`` (the oldest live ticket ahead, or None) and
+	``stale`` (comment ids of stale tickets ahead, which the caller deletes).
+	"""
+	now = now or _utc_now()
+	runs = runs or {}
+	tickets = heal_queue_tickets(comments, trusted_login)
+	mine = next((ticket for ticket in tickets if ticket["comment_id"] == ticket_id), None)
+	if mine is None:
+		return {"status": "lost", "position": 0, "holder": None, "stale": []}
+	live: list[dict[str, Any]] = []
+	stale: list[int] = []
+	for ticket in tickets:
+		if ticket["comment_id"] >= ticket_id:
+			break
+		created = _parse_iso(ticket.get("created_at"))
+		run = runs.get(ticket["run_id"]) if isinstance(runs.get(ticket["run_id"]), dict) else {}
+		current_attempt = _positive_int(run.get("run_attempt")) or 0
+		if (created is None or (now - created).total_seconds() > lease_seconds
+				or (ticket["run_id"] == mine["run_id"] and ticket["attempt"] <= mine["attempt"])
+				or run.get("status") == "completed"
+				or current_attempt > ticket["attempt"]):
+			stale.append(ticket["comment_id"])
+		else:
+			live.append(ticket)
+	holder = dict(live[0], age_seconds=int((now - _parse_iso(live[0]["created_at"])).total_seconds())) if live else None
+	return {"status": "wait" if live else "go", "position": len(live), "holder": holder, "stale": stale}
+
+
 def _cmd_build_issue_payload(args: argparse.Namespace) -> int:
 	issue = _load_json_file(args.issue_json)
 	comments = _load_json_file(args.comments_json) if args.comments_json else []
@@ -5724,6 +5822,27 @@ def _heal_test_files_for_names(checkout: str, ref: str, names: Iterable[str]) ->
 			if path and path not in found and _safe_heal_path(path):
 				found.append(path)
 	return found
+
+
+def _cmd_heal_queue(args: argparse.Namespace) -> int:
+	if args.operation == "ticket":
+		sys.stdout.write(render_heal_queue_ticket(args.run_id, args.attempt, args.job) + "\n")
+		return 0
+	try:
+		comments = _load_json_file(args.comments_json)
+	except (OSError, ValueError):
+		comments = []
+	try:
+		runs = _load_json_file(args.runs_json) if args.runs_json else {}
+	except (OSError, ValueError):
+		runs = {}
+	ticket_id = _positive_int(args.ticket_id)
+	if ticket_id is None:
+		raise ValueError("ticket id must be a positive integer")
+	_write_json(heal_queue_position(comments=comments, ticket_id=ticket_id, trusted_login=args.login,
+		lease_seconds=_positive_int(args.lease_seconds) or HEAL_QUEUE_DEFAULT_LEASE_SECONDS,
+		runs=runs if isinstance(runs, dict) else {}))
+	return 0
 
 
 def _cmd_heal_scope(args: argparse.Namespace) -> int:
@@ -6374,6 +6493,18 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("heal-route")
 	p.add_argument("--issue-json", required=True)
 	p.set_defaults(func=_cmd_heal_route)
+
+	p = sub.add_parser("heal-queue", help="Heal intake report queue: print a ticket body (ticket) or decide whether a ticket's run may enter the intake (position)")
+	p.add_argument("operation", choices=("ticket", "position"))
+	p.add_argument("--run-id", default="")
+	p.add_argument("--attempt", default="1")
+	p.add_argument("--job", default="intake")
+	p.add_argument("--comments-json", default="", help="the queue issue's comments (gh --paginate --slurp pages or a flat list)")
+	p.add_argument("--ticket-id", default="")
+	p.add_argument("--login", default="", help="the pipeline login; only its tickets count")
+	p.add_argument("--lease-seconds", default=str(HEAL_QUEUE_DEFAULT_LEASE_SECONDS))
+	p.add_argument("--runs-json", default="", help="{run_id: GET actions/runs/<id>} for checked holders")
+	p.set_defaults(func=_cmd_heal_queue)
 
 	p = sub.add_parser("heal-scope")
 	p.add_argument("operation", choices=("render", "verify", "verify-edits", "carry", "strip", "failing-tests", "check-marker"))
