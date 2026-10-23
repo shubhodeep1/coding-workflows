@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.79,
+  "details": "When a change affects repository behavior, check the `changelog.d/` convention and include a fragment where appropriate; multiple merged behavior changes paired one with their implementation and tests. Analysis-document-only changes did not show this pattern, so it need not apply to documentation-only work.",
+  "fingerprint": "add7ed75ba856e53eed391e0362fa23d791c1fad51eb3808214753c67ca45570",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39883481146",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39883481146",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7857",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7865",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7870",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7872",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7888",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7862",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7866",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7871",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7875",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7889"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261023013656_1437212df0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Runtime and workflow behavior changes commonly include a `changelog.d/` fragment.",
+  "timestamps": {
+    "created_at": "2026-10-23T01:36:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
