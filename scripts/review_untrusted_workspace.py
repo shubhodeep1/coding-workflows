@@ -213,8 +213,8 @@ def hidden_build_note(manifest):
 	lines = [
 		"## Directories left out of this sandbox copy",
 		"",
-		"This sandbox's copy of the repository leaves out every `dist`, `build` and `coverage` directory, even committed ones. "
-		"These directories are committed at this commit but are not visible to you here:",
+		("This sandbox's copy of the repository leaves out every `dist`, `build` and `coverage` directory, even committed ones. "
+			"These directories are committed at this commit but are not visible to you here:"),
 		"",
 	]
 	lines += [f"- `{key}/` ({value} committed file{'s' if value != 1 else ''})" for key, value in entries[:MAX_HIDDEN_BUILD_NOTE_DIRS]]
@@ -222,8 +222,8 @@ def hidden_build_note(manifest):
 		lines.append(f"- ...and {len(entries) - MAX_HIDDEN_BUILD_NOTE_DIRS} more")
 	lines += [
 		"",
-		"Their absence from your copy is not evidence that they are missing from the branch. "
-		"Do not report them as missing and do not create work to restore or rebuild them on that basis.",
+		("Their absence from your copy is not evidence that they are missing from the branch. "
+			"Do not report them as missing and do not create work to restore or rebuild them on that basis."),
 	]
 	return "\n".join(lines)
 

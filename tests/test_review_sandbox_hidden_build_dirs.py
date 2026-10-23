@@ -58,14 +58,14 @@ def _snapshot(tmp_path, host):
 	workspace = tmp_path / "source"
 	manifest = tmp_path / "baseline.json"
 	result = subprocess.run([sys.executable, str(WORKSPACE_PY), "snapshot", str(host), str(workspace), str(manifest)],
-		capture_output=True, text=True, env=_env())
+		capture_output=True, text=True, env=_env(), check=False)
 	assert result.returncode == 0, result.stderr
 	return workspace, manifest, result.stderr
 
 
 def _note(manifest):
 	result = subprocess.run([sys.executable, str(WORKSPACE_PY), "hidden-note", str(manifest)],
-		capture_output=True, text=True, env=_env())
+		capture_output=True, text=True, env=_env(), check=False)
 	assert result.returncode == 0, result.stderr
 	return result.stdout
 
