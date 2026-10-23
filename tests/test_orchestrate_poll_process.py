@@ -2841,6 +2841,11 @@ if args[0] == 'api':
 	if m_commit:
 		files = [{'filename': f} for f in (store.get('commit_files') or {}).get(m_commit.group(1), [])]
 		payload = {'sha': m_commit.group(1), 'files': files}
+		# Opt-in committer date (validation harness hold truncated compare, #7913).
+		commit_date = (store.get('commit_dates') or {}).get(m_commit.group(1))
+		if commit_date:
+			payload['commit'] = {'committer': {'date': commit_date}}
+		save()
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
@@ -15882,6 +15887,33 @@ def test_validation_harness_hold_resumes_on_pin_alone_without_heal_issue():
 		assert "outcome=resumed" in output
 
 
+def test_validation_harness_hold_truncated_compare_reads_pin_commit_date():
+	# The compare lists 250 of 400 commits, so its last listed commit is older
+	# than the pin: the pin commit's own date decides.
+	store = {
+		"compare_total_commits": 400,
+		"commit_dates": {_HOLD_PIN_NEW: "2026-02-03T00:00:00Z"},
+	}
+	result = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-02T00:00:00Z"},
+		store=store,
+	)
+	output = result["stdout"] + result["stderr"]
+	assert result["latest_state"]["status"] == "validating", output
+	assert len(result["validation_dispatches"]) == 1, output
+	assert sum(c.endswith(f"coding-workflows/commits/{_HOLD_PIN_NEW}") for c in result["api_calls"]) == 1, result["api_calls"]
+
+	unread = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-01T11:00:00Z"},
+		store={"compare_total_commits": 400},
+	)
+	out2 = unread["stdout"] + unread["stderr"]
+	assert _hold_line("waiting", heal_issue=_HOLD_HEAL_ISSUE, reason="pin_date_unknown") in out2, out2
+	_assert_harness_still_held(unread)
+
+
 def test_validation_harness_hold_dispatch_failure_restores_hold_and_labels():
 	result = _run_harness_tick(fail_dispatch=True)
 	output = result["stdout"] + result["stderr"]
@@ -26837,7 +26869,7 @@ def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
 
 NEEDS_HUMAN_TERMINAL_CALLS = {
 	"security_pass_failed": 3,
-	"validation_failed": 3,
+	"validation_failed": 4,
 	"final_merge_exhausted": 1,
 	"integration_conflict_capped": 1,
 	"judge_cycles_exhausted": 1,
@@ -26853,15 +26885,20 @@ def test_needs_human_digest_terminal_paths_call_the_helper():
 		assert script.count(f'needs_human_park_project "{reason}"') == count, reason
 	lines = script.splitlines()
 	# The validation harness hold (Refs #7913) waits for a harness fix instead
-	# of parking, so its helper is the one exemption from the adjacency rule.
-	hold_start = lines.index("_validation_harness_hold_finish() {")
-	hold_end = lines.index("}", hold_start)
-	assert any(
-		l.strip() == 'set_tracking_phase_label "ai:validation-failed"' for l in lines[hold_start:hold_end]
-	)
-	assert not any("needs_human_park_project" in l for l in lines[hold_start:hold_end])
+	# of parking: entering the hold and rolling back a failed resume dispatch
+	# restore ai:validation-failed without parking, so those two helpers are
+	# the exemptions from the adjacency rule.
+	exempt = []
+	for header in ("_validation_harness_hold_finish() {", "_validation_harness_hold_resume() {"):
+		hold_start = lines.index(header)
+		hold_end = lines.index("}", hold_start)
+		assert any(
+			l.strip() == 'set_tracking_phase_label "ai:validation-failed"' for l in lines[hold_start:hold_end]
+		), header
+		assert not any("needs_human_park_project" in l for l in lines[hold_start:hold_end]), header
+		exempt.append((hold_start, hold_end))
 	for idx, line in enumerate(lines):
-		if hold_start <= idx < hold_end:
+		if any(start <= idx < end for start, end in exempt):
 			continue
 		if line.strip() in ('set_tracking_phase_label "ai:security-pass-failed"', 'set_tracking_phase_label "ai:validation-failed"'):
 			assert lines[idx + 1].strip().startswith("needs_human_park_project "), idx

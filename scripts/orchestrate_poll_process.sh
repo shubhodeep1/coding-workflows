@@ -15189,7 +15189,8 @@ The latest validation run reported \`raw_status=harness_error\`. The project sta
 # Per held project per tick: the routing marker is read from COMMENTS and the
 # pin with a local `git show` (no API calls). Only after the pin changed does
 # the tick read the harness repo: at most one compare and one issue GET, both
-# memoized by key in the caches below (one poller process is one tick).
+# memoized by key in the caches below (one poller process is one tick), plus
+# one pin-commit GET only when the compare lists fewer commits than it counts.
 # ---------------------------------------------------------------------------
 declare -gA _VALIDATION_HARNESS_COMPARE_CACHE=()  # "<support>...<pin>" -> "<status>|<committer date>" or "__error__"
 declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()    # "<heal issue>" -> "<state>|<state_reason>|<closed_at>" or "__error__"
@@ -15223,8 +15224,20 @@ _validation_harness_hold_compare() {
     # ${GITHUB_REPOSITORY} branches, not the harness repo's support commits,
     # so no existing call returns this ancestry.
     if vhc_out="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/compare/${vhc_key}" \
-      --jq '[(.status // ""), (((.commits // []) | last | .commit.committer.date?) // "")] | join("|")' 2>/dev/null)"; then
-      _VALIDATION_HARNESS_COMPARE_CACHE[${vhc_key}]="${vhc_out}"
+      --jq '[(.status // ""), (((.commits // []) | last | .commit.committer.date?) // ""), ((.commits // []) | length | tostring), ((.total_commits // 0) | tostring)] | join("|")' 2>/dev/null)"; then
+      local vhc_status vhc_date vhc_listed vhc_total
+      IFS='|' read -r vhc_status vhc_date vhc_listed vhc_total <<< "${vhc_out}"
+      if [ "${vhc_status}" = "ahead" ] \
+        && [[ "${vhc_listed}" =~ ^[0-9]{1,9}$ ]] && [[ "${vhc_total}" =~ ^[0-9]{1,9}$ ]] \
+        && [ "$((10#${vhc_listed}))" -lt "$((10#${vhc_total}))" ]; then
+        # GitHub lists at most 250 commits, so the last listed one is not the
+        # pin. Only for such a truncated range: one GET of the pin commit for
+        # its committer date, memoized with the compare result. A failed read
+        # leaves the date empty, which keeps the hold waiting.
+        vhc_date="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/commits/${vhc_pin}" \
+          --jq '(.commit.committer.date // "")' 2>/dev/null || echo '')"
+      fi
+      _VALIDATION_HARNESS_COMPARE_CACHE[${vhc_key}]="${vhc_status}|${vhc_date}"
     else
       _VALIDATION_HARNESS_COMPARE_CACHE[${vhc_key}]="__error__"
     fi
@@ -15277,13 +15290,19 @@ _validation_harness_hold_issue_state() {
 
 # Ends the hold with today's park (needs-human digest) and a CRITICAL alert.
 # Args: <outcome token> <detail>
+# Returns 1, with nothing parked or announced, when the cleared hold cannot be
+# persisted: the hold stays, so the next tick retries instead of paging again.
 _validation_harness_hold_end_park() {
   local vhe_outcome="$1" vhe_detail="$2"
-  if ! { jq 'del(.validation_harness_hold)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+  cp "${STATE_FILE}" "${STATE_FILE}.vhh_bak"
+  if ! { jq 'del(.validation_harness_hold)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; } \
+    || ! post_state_comment; then
     rm -f "${STATE_FILE}.tmp"
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
     echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=hold_clear_failed"
+    return 1
   fi
-  post_state_comment || true
+  rm -f "${STATE_FILE}.vhh_bak"
   set_tracking_phase_label "ai:validation-failed"
   needs_human_park_project "validation_failed"
   post_tracking_comment "## ❌ Runtime validation harness hold ended
@@ -15336,12 +15355,15 @@ _validation_harness_hold_bounce() {
 
 The workflow failure heal intake classified the harness failure as \`${vhb_class}\` (heal issue: ${vhb_issue_ref}), so it is owned by this project and the harness hold ended."
   if [ "$((10#${vhb_count}))" -ge "$((10#${vhb_max}))" ]; then
+    if ! _validation_harness_hold_end_park "bounced" "The harness heal intake returned the failure to the project (\`${vhb_class}\`) and the validation recovery budget is spent (${vhb_count}/${vhb_max})."; then
+      _validation_harness_hold_log "unknown" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "state_write_failed"
+      return 0
+    fi
     post_tracking_comment "${vhb_body_head}
 
 The validation recovery budget is spent (${vhb_count}/${vhb_max}).
 
 <!-- validation-harness-bounce:v1 fp=${vhb_fp} -->"
-    _validation_harness_hold_end_park "bounced" "The harness heal intake returned the failure to the project (\`${vhb_class}\`) and the validation recovery budget is spent (${vhb_count}/${vhb_max})."
     _validation_harness_hold_log "bounced" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "recovery_exhausted"
     return 10
   fi
@@ -15355,15 +15377,29 @@ The validation recovery budget is spent (${vhb_count}/${vhb_max}).
     _validation_harness_hold_log "unknown" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "state_write_failed"
     return 0
   fi
+  # As in the resume path: a leftover failure label would make the next
+  # tick's validating branch fail the bounced run again, so verify the
+  # removal with one fresh labels read before the state is persisted.
+  local vhb_fresh=""
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validation-failed" >/dev/null || true
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
+  if ! vhb_fresh="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/labels" --jq '[.[].name]' 2>/dev/null)" \
+    || has_label "${vhb_fresh}" "ai:validation-failed" \
+    || has_label "${vhb_fresh}" "ai:validate-failed" \
+    || has_label "${vhb_fresh}" "ai:harness-broken"; then
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS:-[]}" || true
+    _validation_harness_hold_log "unknown" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "label_write_failed"
+    return 0
+  fi
   if ! post_state_comment; then
     mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS:-[]}" || true
     _validation_harness_hold_log "unknown" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "state_write_failed"
     return 0
   fi
   rm -f "${STATE_FILE}.vhh_bak"
-  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validation-failed" >/dev/null || true
-  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
-  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
   set_tracking_phase_label "ai:validating"
   post_tracking_comment "${vhb_body_head}
 
@@ -15431,7 +15467,9 @@ _validation_harness_hold_resume() {
   LAST_VAL_CONCLUSION=''
   if ! dispatch_validation_if_needed 1; then
     mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
-    post_state_comment || true
+    if ! post_state_comment; then
+      echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed reason=hold_restore_not_persisted"
+    fi
     set_tracking_phase_label "ai:validation-failed"
     _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS:-[]}" || true
     _validation_harness_hold_log "unknown" "${vhr_fp}" "${vhr_pin}" "${vhr_issue}" "dispatch_failed"
@@ -15516,6 +15554,7 @@ validation_harness_hold_tick() {
       post_state_comment || echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed"
     else
       rm -f "${STATE_FILE}.tmp"
+      echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed"
     fi
     _validation_harness_hold_log "waiting" "${vht_fp}" "${vht_pin}" "${vht_issue}" "support_baselined"
     return 0
@@ -15548,7 +15587,10 @@ validation_harness_hold_tick() {
     fi
     case "${VHH_ISSUE_STATE_REASON}" in
       not_planned)
-        _validation_harness_hold_end_park "not_planned" "Harness heal issue shubhodeep1/coding-workflows#${vht_issue} was closed as not planned, so no harness fix is coming."
+        if ! _validation_harness_hold_end_park "not_planned" "Harness heal issue shubhodeep1/coding-workflows#${vht_issue} was closed as not planned, so no harness fix is coming."; then
+          _validation_harness_hold_log "unknown" "${vht_fp}" "${vht_pin}" "${vht_issue}" "state_write_failed"
+          return 0
+        fi
         _validation_harness_hold_log "not_planned" "${vht_fp}" "${vht_pin}" "${vht_issue}"
         return 10
         ;;
