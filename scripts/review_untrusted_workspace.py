@@ -166,6 +166,7 @@ def admitted_commands_path(manifest):
 # (tele-funtoken-msg-scoring #4770).
 HIDDEN_BUILD_OUTPUT_DIRS = frozenset({"dist", "build", "coverage"})
 MAX_HIDDEN_BUILD_NOTE_DIRS = 40
+MAX_HIDDEN_BUILD_NOTE_KEY_LEN = 200
 
 
 def hidden_build_dirs_path(manifest):
@@ -181,8 +182,6 @@ def hidden_build_output_dirs(tracked):
 	"""
 	counts = {}
 	for name in tracked:
-		if not re.fullmatch(r"[A-Za-z0-9._/-]+", name):
-			continue
 		parts = PurePosixPath(name).parts
 		if any(part in (".", "..") for part in parts):
 			continue
@@ -191,9 +190,13 @@ def hidden_build_output_dirs(tracked):
 			continue
 		prefix = parts[:index + 1]
 		if any(part.startswith(".") or "secret" in part.lower() or "credential" in part.lower()
+			or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info"))
 			or (part.lower() in EXCLUDED and part.lower() not in HIDDEN_BUILD_OUTPUT_DIRS) for part in prefix):
 			continue
 		key = "/".join(prefix)
+		# Only the directory path is printed, so only it must be plain ASCII and short.
+		if len(key) > MAX_HIDDEN_BUILD_NOTE_KEY_LEN or not re.fullmatch(r"[A-Za-z0-9._/-]+", key):
+			continue
 		counts[key] = counts.get(key, 0) + 1
 	return counts
 
@@ -207,7 +210,8 @@ def hidden_build_note(manifest):
 	if not isinstance(data, dict):
 		return ""
 	entries = sorted((key, value) for key, value in data.items()
-		if isinstance(key, str) and re.fullmatch(r"[A-Za-z0-9._/-]+", key) and isinstance(value, int) and value > 0)
+		if isinstance(key, str) and len(key) <= MAX_HIDDEN_BUILD_NOTE_KEY_LEN and re.fullmatch(r"[A-Za-z0-9._/-]+", key)
+		and isinstance(value, int) and value > 0)
 	if not entries:
 		return ""
 	lines = [
@@ -396,7 +400,9 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 		# A count only: paths are PR-controlled and stay out of workflow logs.
 		print(f"REVIEW_ISOLATION_SNAPSHOT oversized_skipped={oversized} max_file_bytes={MAX_FILE}", file=sys.stderr)
 	admitted_commands_path(manifest).write_text(json.dumps(sorted(commands)), encoding="utf-8")
-	hidden_dirs = hidden_build_output_dirs(tracked)
+	# Count only tracked files still present in the worktree (an unstaged
+	# deletion was not hidden by the snapshot, it was absent).
+	hidden_dirs = hidden_build_output_dirs({name for name in tracked if os.path.lexists(host / name)})
 	hidden_build_dirs_path(manifest).write_text(json.dumps(hidden_dirs, sort_keys=True), encoding="utf-8")
 	if hidden_dirs:
 		# A count only: paths are PR-controlled and stay out of workflow logs.

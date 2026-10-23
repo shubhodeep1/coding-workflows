@@ -125,3 +125,29 @@ def test_sandbox_appends_the_note_after_every_prompt_install():
 	assert installs == 2
 	assert text.count('install -m 0600 "${prompt}" "${root}/prompt"\n\treview_append_hidden_build_note\n') == 1
 	assert text.count('install -m 0600 "${prompt}" "${root}/prompt"\nreview_append_hidden_build_note\n') == 1
+
+
+def test_hidden_build_output_dirs_filters_on_the_directory_path(tmp_path):
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	try:
+		import review_untrusted_workspace as workspace_module
+	finally:
+		sys.path.pop(0)
+	tracked = {
+		"worker/dist/logo final.js",
+		"worker/dist/logo@2x.png",
+		"certs.pem/build/x.txt",
+		"deploy.key/dist/x.js",
+		"pkg.egg-info/dist/x",
+		("a" * 250) + "/dist/x.js",
+		"bad name/dist/x.js",
+	}
+	assert workspace_module.hidden_build_output_dirs(tracked) == {"worker/dist": 2}
+
+
+def test_snapshot_does_not_count_tracked_files_deleted_from_the_worktree(tmp_path):
+	host = _repo(tmp_path)
+	(host / "cloudflare" / "worker" / "dist" / "index.html").unlink()
+	_, manifest, _ = _snapshot(tmp_path, host)
+	hidden = json.loads(manifest.with_name(manifest.name + ".hidden_build_dirs.json").read_text(encoding="utf-8"))
+	assert hidden["cloudflare/worker/dist"] == 2

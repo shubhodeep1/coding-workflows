@@ -9,7 +9,7 @@ On 2026-10-22 the wave judge for tele-funtoken-msg-scoring project #3928 filed f
 | Directories listed per prompt | at most 40 |
 | New log field | `REVIEW_ISOLATION_SNAPSHOT hidden_build_dirs=<n>` (a count, never a path) |
 
-What this means for operators: judges, reviewers and the review editor no longer file or plan work to rebuild committed build output just because they cannot see it. No setting changes.
+What this means for operators: poller judges, the review editor and the other roles that run in the review sandbox (including the Claude-pool reviewer slot) no longer file or plan work to rebuild committed build output just because they cannot see it. No setting changes.
 
 ### For contributors
 
