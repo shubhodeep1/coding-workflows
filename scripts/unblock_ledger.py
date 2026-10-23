@@ -733,7 +733,10 @@ def invalid_verdict_streak(comments: object, trusted_login: str, item: int, stop
 	fingerprint adds one; any other unblock marker for the item (a round, a
 	hold, a fix-up wait, an invalid verdict on another block) ends the run.
 	The older invalid-verdict marker without stop and fingerprint is neither
-	counted nor a break. No API call.
+	counted nor a break. The judge also posts it when the model gave no answer
+	(bad config, isolation failure), so a run with no answer between two
+	refused answers leaves them in a row: no other answer came between them,
+	and the no-answer run itself never parks. No API call.
 	"""
 	if not isinstance(comments, list):
 		raise InputError("comments must be a JSON array")

@@ -402,6 +402,16 @@ def test_invalid_verdict_streak_ignores_legacy_untrusted_and_other_items() -> No
 	assert ledger.invalid_verdict_streak(comments, BOT, 7, "blocked", FP) == 1
 
 
+def test_no_answer_marker_between_two_refusals_keeps_them_in_a_row() -> None:
+	# A run where the model gave no answer posts the uncounted legacy marker:
+	# it neither counts nor breaks, so refused, no answer, refused is two
+	# refused answers with no other answer between them.
+	legacy = _refused("<!-- ai:unblock-wait:v1 item=7 reason=invalid_verdict -->")
+	comments = [_refused(_invalid_marker()), legacy, _refused(_invalid_marker())]
+	assert ledger.invalid_verdict_streak(comments, BOT, 7, "blocked", FP) == 2
+	assert ledger.invalid_verdict_streak([legacy, legacy], BOT, 7, "blocked", FP) == 0
+
+
 def test_invalid_verdicts_in_row_make_the_item_terminal_at_the_cap() -> None:
 	below = ledger.decide(7, "blocked", FP, [], None, NOW, invalid_verdicts_in_row=ledger.INVALID_VERDICT_PARK_AFTER - 1)
 	assert below["terminal"] is False and "close" not in below["allowed"]
