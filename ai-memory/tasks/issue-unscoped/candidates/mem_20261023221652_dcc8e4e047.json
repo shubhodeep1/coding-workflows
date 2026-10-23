@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:103,359-360 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: README says any value other than `true` for `ENFORCE_FILES_TOUCHED` turns off the plan-time `files_touched` auto-approval hold, but `plan_files_touched_gate_active()` (scripts/files_touched_scope_guard.py:808) treats an empty value as `true`, so the hold stays on.\n  WHY: An operator who clears the variable expecting the hold to turn off still gets `plan_files_outside_files_touched` holds. All four reviewers rated this NIT (documentation mismatch only), mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:359 (`ENFORCE_FILES_TOUCHED` row; also README.md:103) | severity=NIT | confidence=4\n  PROBLEM: README says any value other than `true` turns off the plan-time `files_touched` auto-approval hold, but `plan_files_touched_gate_active()` (scripts/files_touched_scope_guard.py:808) reads `(os.environ.get(\"ENFORCE_FILES_TOUCHED\") or \"true\") == \"true\"`, so an empty value counts as `true`. `plan.yml` and `orchestrate_poll.yml` also fall back to `'true'`.\n  WHY: Documentation mismatch only. An operator who sets an empty string still gets holds with reason `plan_files_outside_files_touched`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:359 and README.md:103 | severity=NIT | confidence=5\n  PROBLEM: The `ENFORCE_FILES_TOUCHED` and `PLAN_FILES_TOUCHED_GATE_ENABLED` rows say a value other than `true` turns off the plan-time hold. `plan_files_touched_gate_active()` (scripts/files_touched_scope_guard.py:808) resolves an unset or empty value to `true`, matching `scripts/implement_commit_changes.sh:565` and `.github/workflows/plan.yml:82`.\n  WHY: The README contradicts the code and the `agents.d/plan-gate-files-touched.md` fragment. An operator who clears the variable still gets holds. The impact is bounded and the issue is documentation-only.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:103,359-360 (`scripts/files_touched_scope_guard.py:808-809`) | severity=NIT | confidence=5\n  PROBLEM: README says `ENFORCE_FILES_TOUCHED` being \"not true\" or any value other than `true` turns off the plan-time hold. The helper replaces an empty value with `true`, so the hold remains active.\n  WHY: An operator who clears the variable expecting the hold to turn off still has plans held when they list files outside `files_touched`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- README.md:359-360 (also README.md:103) | severity=NIT | confidence=5\n  PROBLEM: README says any value other than `true` turns off the plan-time hold, but `plan_files_touched_gate_active()` at scripts/files_touched_scope_guard.py:808-809 uses `(os.environ.get(\"ENFORCE_FILES_TOUCHED\") or \"true\") == \"true\"`, so an empty string keeps the gate active. The test `test_plan_files_touched_gate_switches` pins this with `({\"ENFORCE_FILES_TOUCHED\": \"\"}, True)`.\n  WHY: An operator who sets `ENFORCE_FILES_TOUCHED=` expecting to disable the hold still gets plans held with reason `plan_files_outside_files_touched`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "40730c530a58df7cc1bd7ace7e7203e766155fb31ebfe3f9c4c293aa8446d9dd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7986,
+    "run_id": "40028532100",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40028532100",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023221652_dcc8e4e047",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7986,
+    "run_id": "40028532100"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T22:16:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
