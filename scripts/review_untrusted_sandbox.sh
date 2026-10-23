@@ -468,6 +468,14 @@ if [ "${engine}" = claude ]; then
 	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${claude_role}" instructions_missing; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	settings_args=(settings --checkout /source --out "${root}/claude-settings.json" --profile "${claude_access}" --guard-hook /guard.py)
 	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
+	# Provider-side web search (claude_engine.json `web_search`, default on);
+	# a failed read leaves it off and the relay refuses the tool as before.
+	review_web_search="$(_ai_engine_py config --key web_search 2>/dev/null || echo false)"
+	review_relay_args=()
+	if [ "${review_web_search}" = true ]; then
+		settings_args+=(--web-search)
+		review_relay_args+=(--allow-web-search)
+	fi
 	_ai_engine_py "${settings_args[@]}" || { ai_engine_fallback "${claude_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	mapfile -t claude_accounts < <(ai_engine_accounts)
 	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${claude_role}" "$(ai_engine_no_account_reason)"; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
@@ -481,6 +489,7 @@ if [ "${engine}" = claude ]; then
 		claude_permissions=dontAsk
 		claude_source_mount+=',readonly'
 	fi
+	[ "${review_web_search}" = true ] && claude_tools+=',WebSearch'
 	install -m 0600 "${prompt}" "${root}/prompt"
 	image="$(< "${root}/image")"
 	[[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo '::error::Invalid review image ID' >&2; exit 1; }
@@ -504,7 +513,7 @@ if [ "${engine}" = claude ]; then
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${root}/socket/provider.sock" "${root}/transcript.jsonl"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
-			python3 "${support}/claude_anthropic_relay.py" broker "${root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" &
+			python3 "${support}/claude_anthropic_relay.py" broker "${root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" ${review_relay_args[@]+"${review_relay_args[@]}"} &
 		broker_pid=$!
 		for _ in $(seq 1 50); do
 			[ -S "${root}/socket/provider.sock" ] && break

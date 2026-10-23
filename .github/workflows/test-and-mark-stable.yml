@@ -339,6 +339,40 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # Static preflight (analysis/workflow-optimization-2026-09-23-2.md, Speed #2):
+      # release run 35802596362 ran its live E2E jobs for ~98 minutes after
+      # validate-scripts had already failed on a missing scripts/ reference.
+      # Every live job needs resolve-version, so this seconds-long check stops
+      # them first. validate-scripts keeps its own copy of the check.
+      - name: Preflight workflow script references
+        id: script_ref_preflight
+        env:
+          RELEASE_STATIC_PREFLIGHT_ENABLED: ${{ vars.RELEASE_STATIC_PREFLIGHT_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          switch="${RELEASE_STATIC_PREFLIGHT_ENABLED-true}"
+          case "${switch,,}" in
+            ""|true) ;;
+            false)
+              echo "::notice::RELEASE_STATIC_PREFLIGHT_ENABLED=false; workflow script reference preflight skipped"
+              exit 0
+              ;;
+            *)
+              echo "::warning::RELEASE_STATIC_PREFLIGHT_ENABLED has an unrecognised value; preflight skipped (validate-scripts still runs the check)"
+              exit 0
+              ;;
+          esac
+          checker="scripts/check_workflow_script_refs.py"
+          if [ -L "${checker}" ] || [ ! -f "${checker}" ]; then
+            echo "::warning::${checker} is missing or a symlink; preflight skipped (validate-scripts still runs the check)"
+            exit 0
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 "${checker}" || {
+            preflight_rc=$?
+            echo "::error::Workflow script reference preflight failed; see the FAIL lines above for the missing references"
+            exit "${preflight_rc}"
+          }
+
       - name: Resolve version tag
         id: resolve
         env:

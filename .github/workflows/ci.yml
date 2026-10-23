@@ -1241,6 +1241,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_files_touched_scope_guard.py
 
+      - name: Implement leftover issue-branch replacement tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_stale_branch_check.py
+
       - name: Shared PR check-runs merge gate (pr_checks_lib) tests
         run: |
           set -euo pipefail
@@ -1761,6 +1766,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_release_notify_superseded.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_release_static_preflight_contract.py
 
       - name: Release CI gate tests (stubbed gh; both release workflows)
         run: |

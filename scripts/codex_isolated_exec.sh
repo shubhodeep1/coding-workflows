@@ -45,7 +45,8 @@
 #                              --claude-cli-version X.Y.Z
 #                              --claude-settings FILE --claude-guard-hook FILE
 #                              --claude-instructions FILE [--claude-home DIR]
-#                              [--hide-claude-md] [--workdir DIR]
+#                              [--hide-claude-md] [--claude-web-search]
+#                              [--workdir DIR]
 #                              [--include PATH]... -- CLAUDE_ARGS...
 #       The Claude engine (scripts/ai_engine.sh claude_run): runs
 #       `claude CLAUDE_ARGS...` in the same container, with the pinned Claude
@@ -58,6 +59,9 @@
 #       CLAUDE_ARGS name. --claude-home is kept across runs as the CLI's
 #       ~/.claude (session resume). --hide-claude-md keeps the top-level
 #       CLAUDE.md out of the copy and out of the write-back.
+#       --claude-web-search starts the broker with --allow-web-search, so the
+#       provider's web search tool (the CLI's WebSearch) passes the relay;
+#       the container keeps --network none either way.
 #       Exit 75: isolation unavailable (no Docker or python3, image build
 #       failed); the caller falls back to codex (plan D1). Exit 73: the relay
 #       did not start for this account. Otherwise the CLI's exit status.
@@ -117,6 +121,7 @@ claude_guard_hook=""
 claude_instructions=""
 claude_home=""
 hide_claude_md="false"
+claude_web_search="false"
 image_context_out=""
 includes=()
 codex_args=()
@@ -139,6 +144,7 @@ while [ "$#" -gt 0 ]; do
 		--claude-instructions) claude_instructions="${2:-}"; shift 2 ;;
 		--claude-home) claude_home="${2:-}"; shift 2 ;;
 		--hide-claude-md) hide_claude_md="true"; shift ;;
+		--claude-web-search) claude_web_search="true"; shift ;;
 		--out) image_context_out="${2:-}"; shift 2 ;;
 		--) shift; codex_args=("$@"); break ;;
 		*) echo "::error::CODEX_ISOLATION unknown argument: $1" >&2; exit 2 ;;
@@ -351,6 +357,11 @@ if [ "${action}" = prepare ]; then
 		stage="${root}/deps-stage"
 		mkdir -m 0755 "${stage}"
 		if workspace_py stage-deps "${root}/work" "${stage}"; then
+			# The install container can write the stage, so the hand-off reads
+			# this host-side copy of the nested project list, taken first.
+			if [ -f "${stage}/.codex-deps/nested.json" ] && [ ! -L "${stage}/.codex-deps/nested.json" ]; then
+				cp -- "${stage}/.codex-deps/nested.json" "${root}/nested-deps.json"
+			fi
 			if [ ! -f "${support_dir}/dependency_registry_proxy.py" ] || [ -L "${support_dir}/dependency_registry_proxy.py" ]; then
 				echo "::warning::CODEX_ISOLATION deps_skipped reason=proxy_support_missing" >&2
 			else
@@ -416,6 +427,17 @@ if [ "${action}" = prepare ]; then
 					if [ -f .codex-deps/want-pytest ] && ! python3 -c "import pytest" >/dev/null 2>&1; then
 						pip install pytest 2>&1 || true
 					fi
+					# Subdirectory projects (stage-deps: package.json plus a lockfile
+					# only), each installed in its own staged directory, after the root and Python
+					# installs so they cannot use up the shared container budget first.
+					for nested_dir in .codex-deps/nested/*/; do
+						[ -f "${nested_dir}mode" ] || continue
+						case "$(cat "${nested_dir}mode")" in
+							npm-ci) (cd "${nested_dir}" && npm ci --ignore-scripts 2>&1) || install_failed=true ;;
+							yarn) (cd "${nested_dir}" && npx --yes yarn install --frozen-lockfile --ignore-scripts 2>&1) || install_failed=true ;;
+							pnpm) (cd "${nested_dir}" && npx --yes pnpm install --frozen-lockfile --ignore-scripts 2>&1) || install_failed=true ;;
+						esac
+					done
 					[ "${install_failed}" = false ] || echo "::warning::Some project dependencies could not be installed in the isolated dependency phase; the agent marks validations it cannot run as UNVERIFIED."
 				' >&2 || echo "::warning::CODEX_ISOLATION dependency phase failed; the agent runs without preinstalled dependencies." >&2
 			stop_deps_broker
@@ -423,6 +445,11 @@ if [ "${action}" = prepare ]; then
 				mv -- "${stage}/node_modules" "${root}/work/node_modules" || echo "::warning::CODEX_ISOLATION node_modules hand-off failed" >&2
 			elif [ -e "${stage}/node_modules" ] || [ -L "${stage}/node_modules" ]; then
 				echo "::warning::CODEX_ISOLATION node_modules hand-off skipped" >&2
+			fi
+			if [ -f "${root}/nested-deps.json" ]; then
+				workspace_py handoff-nested-deps "${stage}" "${root}/work" "${root}/nested-deps.json" \
+					|| echo "::warning::CODEX_ISOLATION nested node_modules hand-off failed" >&2
+				rm -f -- "${root}/nested-deps.json"
 			fi
 			if [ -f "${stage}/.codex-deps/source-install" ]; then
 				# Editable builds may write into the disposable copy. prep-finalize
@@ -605,8 +632,10 @@ done
 image="$(build_image)"
 rm -f -- "${root}/socket/provider.sock"
 if [ "${engine}" = claude ]; then
+	relay_extra_args=()
+	[ "${claude_web_search}" = true ] && relay_extra_args+=(--allow-web-search)
 	env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
-		"${python_bin}" "${support_dir}/claude_anthropic_relay.py" broker "${root}/socket/provider.sock" "${claude_token_file}" "${claude_models}" &
+		"${python_bin}" "${support_dir}/claude_anthropic_relay.py" broker "${root}/socket/provider.sock" "${claude_token_file}" "${claude_models}" ${relay_extra_args[@]+"${relay_extra_args[@]}"} &
 else
 	env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${model}" PYTHONDONTWRITEBYTECODE=1 \
 		"${python_bin}" "${support_dir}/clarify_openrouter_broker.py" broker "${root}/socket/provider.sock" &
@@ -634,7 +663,7 @@ else
 fi
 
 if [ "${engine}" = claude ]; then
-	echo "CODEX_ISOLATION run engine=claude mode=${mode} model=${model} workdir=${workdir} persistent_root=$([ "${ephemeral}" = true ] && echo false || echo true) session_store=$([ -n "${claude_home}" ] && echo true || echo false) hide_claude_md=${hide_claude_md}" >&2
+	echo "CODEX_ISOLATION run engine=claude mode=${mode} model=${model} workdir=${workdir} persistent_root=$([ "${ephemeral}" = true ] && echo false || echo true) session_store=$([ -n "${claude_home}" ] && echo true || echo false) hide_claude_md=${hide_claude_md} web_search=${claude_web_search}" >&2
 	# The CLI talks to the in-container bridge with a placeholder token; the
 	# host relay swaps in the account token and checks the model.
 	engine_env=(

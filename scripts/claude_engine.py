@@ -19,9 +19,10 @@ stdout, diagnostics to stderr):
     from (``label:<name>``, ``var:AI_ENGINE_<R>``, ``var:AI_ENGINE`` or
     ``default``). Labels come from ``AI_ENGINE_LABELS`` (D2), the variables
     from the environment.
-  * ``settings --checkout DIR --out FILE [--profile P] [--allow-workflow-edits]``
-    — render ``scripts/claude_settings.json.tmpl`` (the P5 permission policy)
-    for one run.
+  * ``settings --checkout DIR --out FILE [--profile P] [--allow-workflow-edits]
+    [--web-search]`` — render ``scripts/claude_settings.json.tmpl`` (the P5
+    permission policy) for one run; ``--web-search`` allows WebSearch in the
+    ``read`` profile.
   * ``trust --workdir DIR [--home H]`` — mark DIR trusted in ``~/.claude.json``
     (spike S10: until then the CLI ignores ``permissions.allow``).
   * ``support-file --name config|template|guard-hook`` — the path of a trusted
@@ -140,6 +141,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 	"utility_model": "claude-sonnet-5-5",
 	"default_effort": "high",
 	"hide_claude_md": False,
+	"web_search": True,
 	"utility_roles": list(UTILITY_ROLES),
 	"role_defaults": {role: _role_default(role) for role in ROLES},
 }
@@ -170,6 +172,11 @@ PROFILE_TOOLS: dict[str, str] = {
 	"write": "Read,Grep,Glob,Bash,Edit,Write",
 	"read": "Read,Grep,Glob",
 }
+# Added to every profile's tool list when the config's `web_search` is on
+# (default). It reaches the web only through the provider's search tool,
+# which the host relay admits with --allow-web-search
+# (scripts/claude_anthropic_relay.py); the container itself keeps no network.
+CLAUDE_WEB_SEARCH_TOOL = "WebSearch"
 PROFILE_MODES: dict[str, str] = {
 	"write": "bypassPermissions",
 	"read": "dontAsk",
@@ -259,6 +266,7 @@ def normalize_config(raw: Any) -> tuple[dict[str, Any], list[str]]:
 		take(key, isinstance(raw.get(key), str) and bool(MODEL_RE.match(raw.get(key, ""))))
 	take("default_effort", raw.get("default_effort") in EFFORTS)
 	take("hide_claude_md", isinstance(raw.get("hide_claude_md"), bool))
+	take("web_search", isinstance(raw.get("web_search"), bool))
 	if "utility_roles" in raw:
 		value = raw["utility_roles"]
 		if isinstance(value, list) and all(item in ROLES for item in value):
@@ -447,8 +455,13 @@ def render_settings(
 	guard_hook: str,
 	profile: str = "write",
 	allow_workflow_edits: bool = False,
+	web_search: bool = False,
 ) -> dict[str, Any]:
 	"""Render the P5 permission policy for one run.
+
+	With ``web_search`` the ``read`` profile's allow list also names
+	CLAUDE_WEB_SEARCH_TOOL, since its ``dontAsk`` mode refuses any tool not
+	allowed; ``write`` runs in ``bypassPermissions`` and needs no rule.
 
 	``checkout`` and ``guard_hook`` must be absolute paths. The template's
 	``__CHECKOUT__`` and ``__GUARD_HOOK__`` placeholders are replaced inside
@@ -487,6 +500,8 @@ def render_settings(
 		deny = [rule for rule in deny if WORKFLOW_DENY_MARKER not in rule]
 	permissions["deny"] = deny
 	permissions["allow"] = list(READ_PROFILE_ALLOW) if profile == "read" else []
+	if web_search and profile == "read":
+		permissions["allow"].append(CLAUDE_WEB_SEARCH_TOOL)
 	env = settings.get("env")
 	if isinstance(env, dict):
 		for key in list(env):
@@ -989,6 +1004,7 @@ def cmd_settings(args: argparse.Namespace) -> int:
 		guard_hook,
 		profile=args.profile,
 		allow_workflow_edits=args.allow_workflow_edits,
+		web_search=args.web_search,
 	)
 	out = Path(args.out)
 	out.parent.mkdir(parents=True, exist_ok=True)
@@ -1146,6 +1162,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--out", required=True)
 	p.add_argument("--profile", choices=PROFILES, default="write")
 	p.add_argument("--allow-workflow-edits", action="store_true")
+	p.add_argument("--web-search", action="store_true")
 	p.add_argument("--template", default="")
 	p.add_argument("--guard-hook", default="")
 	p.set_defaults(func=cmd_settings)
