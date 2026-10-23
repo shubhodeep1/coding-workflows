@@ -2561,6 +2561,29 @@ def test_refused_answer_after_a_round_does_not_park(tmp_path: Path) -> None:
 	assert state["labels_added"] == []
 
 
+def test_model_failure_is_not_counted_as_a_refused_answer(tmp_path: Path) -> None:
+	# A model or isolation failure gives no answer at all: it posts the older,
+	# uncounted marker, so an outage cannot park items that were never judged.
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	first_dir = tmp_path / "first"
+	first_dir.mkdir()
+	_, first_state = _judge(first_dir, ISSUE, verdict={"verdict": "close", "reason": "not on the menu"})
+	marker_line = first_state["comments"][0]["body"].splitlines()[-1]
+	prior = [_comment("refused\n\n" + marker_line, "pipeline-bot", "2026-10-04T06:00:00Z")]
+	second_dir = tmp_path / "second"
+	second_dir.mkdir()
+	result, state = _judge(second_dir, ISSUE, comments=prior, UNBLOCK_JUDGE_MODEL="bad model!")
+	assert "reason=invalid_model_config" in result.stdout, result.stdout + result.stderr
+	assert "op=invalid_verdict_park" not in result.stdout
+	assert state["labels_added"] == []
+	assert [comment["body"].splitlines()[-1] for comment in state["comments"]] == [
+		"<!-- ai:unblock-wait:v1 item=7 reason=invalid_verdict -->"
+	]
+	assert ledger.invalid_verdict_streak(prior + [_comment(state["comments"][0]["body"])], BOT, 7, "blocked",
+		ledger.INVALID_VERDICT_MARKER_RE.match(marker_line).group("fp")) == 1
+
+
 @pytest.mark.parametrize("recheck,fail,reason", [
 	(dict(ISSUE, labels=[]), False, "reason=block_state_changed detail=unblocked"),
 	(dict(ISSUE, labels=[{"name": "ai:plan-failed"}]), False, "reason=block_state_changed detail=stop_changed"),

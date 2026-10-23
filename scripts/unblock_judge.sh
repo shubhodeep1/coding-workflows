@@ -109,6 +109,8 @@ NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"
 UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED="${UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED:-true}"
 # Spliced into the re-ask prompt, so it is never taken from the environment.
 UNBLOCK_JUDGE_REASK_NOTE=""
+# Set by unblock_ask_model when the model gave no answer; never from the environment.
+UNBLOCK_JUDGE_MODEL_NO_ANSWER="false"
 if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 	# shellcheck source=/dev/null
 	source "${SUPPORT_DIR}/scripts/label_helpers.sh"
@@ -1599,27 +1601,26 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		# (this one included) hit the same block, take the ledger's terminal
 		# close, which parks the item for a person with one CRITICAL page
 		# (tele-funtoken-msg-scoring#4770 was retried silently every 6 hours).
-		local invalid_park="false" invalid_text invalid_attempt invalid_posted="false"
-		if [ "${terminal}" != "true" ] \
+		local invalid_park="false" invalid_text invalid_marker
+		# A model or isolation failure (no answer at all) is not a refused
+		# answer: post the older, uncounted marker so an outage cannot park items.
+		invalid_marker="<!-- ai:unblock-wait:v1 item=${ITEM} reason=invalid_verdict stop=${ITEM_STOP} fingerprint=${fp} -->"
+		if [ "${UNBLOCK_JUDGE_MODEL_NO_ANSWER}" = "true" ]; then
+			invalid_marker="<!-- ai:unblock-wait:v1 item=${ITEM} reason=invalid_verdict -->"
+		elif [ "${terminal}" != "true" ] \
 			&& jq -e '((.invalid_verdict_streak // 0) + 1) >= (.invalid_verdict_park_after // 2)' "${RUNTIME_DIR}/decision.json" >/dev/null 2>&1; then
 			invalid_park="true"
 		fi
 		invalid_text="The unblock judge could not reach a valid verdict this time and will try again later."
 		[ "${invalid_park}" = "true" ] && invalid_text="The unblock judge could not reach a valid verdict on this block again."
-		# The streak is counted only from these posted markers, so a lost write
-		# would keep the item from ever being parked: retry once, then log and page.
-		for invalid_attempt in 1 2; do
-			if gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${invalid_text}
+		# One attempt only: the streak counts each posted marker, so retrying a
+		# create whose response was lost could post two and park after one refusal.
+		# A failed write is logged and paged instead.
+		if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${invalid_text}
 
-<!-- ai:unblock-wait:v1 item=${ITEM} reason=invalid_verdict stop=${ITEM_STOP} fingerprint=${fp} -->" >/dev/null 2>&1; then
-				invalid_posted="true"
-				break
-			fi
-			[ "${invalid_attempt}" = "1" ] && sleep "${UNBLOCK_INVALID_RECORD_RETRY_SECS:-5}"
-		done
-		if [ "${invalid_posted}" != "true" ]; then
+${invalid_marker}" >/dev/null 2>&1; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_record outcome=failed reason=record_failed"
-			[ "${invalid_park}" != "true" ] && unblock_tg WARNING "Unblock judge could not record a refused answer on #${ITEM} (${ITEM_STOP}); refused answers are not counted until this write succeeds, so the item cannot be parked for a person yet."
+			[ "${invalid_park}" != "true" ] && [ "${UNBLOCK_JUDGE_MODEL_NO_ANSWER}" != "true" ] && unblock_tg WARNING "Unblock judge could not record a refused answer on #${ITEM} (${ITEM_STOP}); refused answers are not counted until this write succeeds, so the item cannot be parked for a person yet."
 		fi
 		if [ "${invalid_park}" != "true" ]; then
 			return 0
@@ -1906,6 +1907,9 @@ unblock_ask_model()
 		cat "${RUNTIME_DIR}/pr_diff.txt"
 	} > "${prompt_file}"
 	: > "${output_file}"
+	# Set when the model gave no answer (bad config, isolation failure); never
+	# read from the environment.
+	UNBLOCK_JUDGE_MODEL_NO_ANSWER="false"
 	if [ -n "${UNBLOCK_JUDGE_REASK_NOTE}" ] && [ -n "${MOCK_UNBLOCK_JUDGE_JSON_REASK:-}" ]; then
 		printf '%s\n' "${MOCK_UNBLOCK_JUDGE_JSON_REASK}" > "${output_file}"
 	elif [ -n "${MOCK_UNBLOCK_JUDGE_JSON:-}" ]; then
@@ -1915,6 +1919,7 @@ unblock_ask_model()
 		reasoning="${UNBLOCK_JUDGE_REASONING:-high}"
 		if [[ ! "${model}" =~ ^[a-zA-Z0-9/_.-]+$ ]] || [[ ! "${reasoning}" =~ ^(xhigh|high|medium|low|none)$ ]]; then
 			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=model_failed reason=invalid_model_config"
+			UNBLOCK_JUDGE_MODEL_NO_ANSWER="true"
 			echo '{}' > "${RUNTIME_DIR}/verdict_raw.json"
 			return 0
 		fi
@@ -1947,6 +1952,7 @@ unblock_ask_model()
 			fi
 			if [ "${rc}" -ne 0 ] && [ "${rc}" -ne 75 ]; then
 				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=model_failed reason=isolation_failed rc=${rc}"
+				UNBLOCK_JUDGE_MODEL_NO_ANSWER="true"
 				: > "${output_file}"
 			fi
 		fi
@@ -1959,6 +1965,7 @@ unblock_ask_model()
 				bash "${SUPPORT_DIR}/scripts/clarify_isolated_run.sh" "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/codex.err" codex UNBLOCK_JUDGE) || iso_rc=$?
 			if [ "${iso_rc}" -ne 0 ]; then
 				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=model_failed reason=isolation_failed rc=${iso_rc}"
+				UNBLOCK_JUDGE_MODEL_NO_ANSWER="true"
 				: > "${output_file}"
 			fi
 		fi
