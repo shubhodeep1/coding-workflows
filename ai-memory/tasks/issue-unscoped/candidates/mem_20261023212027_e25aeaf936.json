@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary_spec.txt:1-3 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The spec file still holds the legacy 3-line format while tests/e2e_smoke_canary.txt was rewritten to the 2-line format, so the byte-for-byte comparison in tests/test_e2e_editor_smoke_canary.py:133 fails.\n  WHY: Phase 4b compares the canary with the spec and reports spec_mismatch; the reviewers rated it BLOCKER (mapped here to critical). Disagreement: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash reported no findings and judged this to be a different harness or the intended behaviour.\n- scripts/review_apply_fixes.sh:1142,1950,1959 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The smoke override prompt and the seed/restore printf statements hardcode the legacy 3-line status/run_id/updated-by format.\n  WHY: Later smoke runs overwrite the canary with the old format, which breaks the Phase 4b byte-for-byte check; the reviewers rated it BLOCKER (mapped here to critical). Disagreement: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash dismissed it as unverified or bait-gated.\n- scripts/review_conflict_prepare.sh:1608-1623 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The conflict-resolver instruction still describes and writes the legacy 3-line run_id format.\n  WHY: A canary conflict resolved by following it restores content that fails the smoke gate's byte-for-byte check; the reviewers rated it BLOCKER (mapped here to critical). Disagreement: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash dismissed it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_e2e_editor_smoke_canary.txt (or tests/e2e_smoke_canary_spec.txt):Line 133 of tests/test_e2e_editor_smoke_canary.py | severity=BLOCKER | confidence=5\n  PROBLEM: The test suite expects the old 3-line format for the smoke canary file, while the PR updates the canary file to a 2-line format.\n  WHY: test_canary_matches_issue_spec_byte_for_byte compares byte-for-byte against the spec file, which still holds the 3-line format, so the CI gate fails.\n- scripts/review_apply_fixes.sh:1142, 1950, 1959 | severity=BLOCKER | confidence=5\n  PROBLEM: The canary restoration logic hardcodes the deprecated 3-line format in printf statements.\n  WHY: When the script restores or seeds the canary, it writes the 3-line format instead of the 2-line format, breaking later smoke tests or validation gates.\n- scripts/review_conflict_prepare.sh:1623 | severity=BLOCKER | confidence=5\n  PROBLEM: The conflict-resolver instruction hardcodes the deprecated 3-line format.\n  WHY: A merge conflict involving the canary file is resolved to the 3-line format, which fails validation gates expecting the 2-line format.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/e2e_smoke_canary_spec.txt:1-3 | severity=BLOCKER | confidence=5\n  PROBLEM: The spec file still holds the legacy 3-line format while tests/e2e_smoke_canary.txt was rewritten to the 2-line format; tests/test_e2e_editor_smoke_canary.py:133 asserts a byte-for-byte match.\n  WHY: Phase 4b of test-and-mark-stable.yml fails with spec_mismatch, and the task forbids editing any other file.\n- scripts/review_apply_fixes.sh:1142,1959 (also 1951) | severity=BLOCKER | confidence=5\n  PROBLEM: The E2E smoke override prompt at line 1142 and the printf at line 1959 write the legacy 3-line template; line 1951 seeds the same format in the sandbox.\n  WHY: These paths overwrite the canary with the legacy format on smoke runs, so the Phase 4b comparison fails with spec_mismatch.\n- scripts/review_conflict_prepare.sh:1623 | severity=BLOCKER | confidence=5\n  PROBLEM: The conflict-resolver override prompt instructs writing the legacy 3-line run_id format.\n  WHY: The resolved canary will not match the new 2-line spec, so Phase 4b fails with spec_mismatch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/e2e_smoke_canary.txt:1-2 | severity=BLOCKER | confidence=5\n  PROBLEM: The canary has the required two-line content, but the expected spec in tests/e2e_smoke_canary_spec.txt remains three lines.\n  WHY: tests/test_e2e_editor_smoke_canary.py:133-140 compares byte-for-byte, so Phase 4b fails with a spec mismatch.\n- scripts/review_apply_fixes.sh:1142, 1950, 1959 | severity=BLOCKER | confidence=5\n  PROBLEM: The smoke-editor instructions and both deterministic restoration paths still write the old three-line status/run_id/updated-by format.\n  WHY: Later smoke runs replace the canary with the old format, which fails the byte-for-byte comparison.\n- scripts/review_conflict_prepare.sh:1608-1623 | severity=BLOCKER | confidence=5\n  PROBLEM: The conflict-resolver instructions still describe the old run_id format and direct restoring the old three-line content.\n  WHY: Following them on a canary conflict restores content that fails the smoke test's byte-for-byte check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/e2e_smoke_canary_spec.txt:1-3 | severity=BLOCKER | confidence=5\n  PROBLEM: The spec file still has the old 3-line format, but the PR changes tests/e2e_smoke_canary.txt to the 2-line format.\n  WHY: tests/test_e2e_editor_smoke_canary.py:133 does a byte-for-byte comparison, so the test fails in Phase 4b of test-and-mark-stable.yml.\n- scripts/review_apply_fixes.sh:1950,1959 | severity=BLOCKER | confidence=5\n  PROBLEM: The canary restoration logic hardcodes the old 3-line format with printf 'status: ok\\nrun_id: %s\\nupdated-by: ai-pipeline\\n'.\n  WHY: The seed at 1950 and the write at 1959 leave the canary in the old format, so the Phase 4b comparison fails.\n- scripts/review_conflict_prepare.sh:1623 | severity=BLOCKER | confidence=5\n  PROBLEM: The conflict-resolver instruction tells the model to write the old 3-line format.\n  WHY: On a canary conflict the resolver restores the 3-line format, and Phase 4b fails against the 2-line format.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ba522f43736f86f80fb7391ffbff68ba76a1a30c412285a8e781b80e331ed2d3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8023,
+    "run_id": "40015438810",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40015438810",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023212027_e25aeaf936",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8023,
+    "run_id": "40015438810"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T21:20:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
