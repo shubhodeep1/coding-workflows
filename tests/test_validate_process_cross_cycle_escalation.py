@@ -392,6 +392,11 @@ def test_cycle_derivation_runs_before_prior_comments_fetch() -> None:
 	prior = text.find('PRIOR_COMMENTS="$(gh_retry gh api')
 	assert call != -1 and owner_end != -1 and prior != -1
 	assert owner_end < call < prior
+	# tests/test_validate_process_template_mode.py extracts everything from
+	# write_result_files() up to "\n\nemit_phase_failure_marker()" and runs it
+	# under set -u; the top-level resolver call must stay outside that slice.
+	marker = text.find("\n\nemit_phase_failure_marker()")
+	assert marker != -1 and marker < call, "cycle derivation must follow emit_phase_failure_marker()"
 
 
 def test_cycle_derived_from_trusted_dispatch_comment() -> None:

@@ -2684,74 +2684,6 @@ validation_owner_route_diagnosis()
 }
 # END validation owner routing
 
-# BEGIN validation cycle derivation (project #7913 p4)
-# Neither validate.yml nor the consumer ai-validate.yml wrapper passes
-# VALIDATION_CYCLE, so it used to stay 1 and the cross-cycle escalation
-# (cycle >= 3) never fired. When it is unset, take the cycle from the newest
-# "## 🧪 Runtime validation dispatched" tracking comment written by the
-# pipeline login (the poller posts "- Cycle: <N>" there). Comments by other
-# authors are ignored. Every failure falls back to cycle 1 (today's value).
-validation_cycle_resolve()
-{
-  local login="" items="" cycle="" status=""
-  if [ "${VALIDATION_CYCLE_EXPLICIT:-false}" = "true" ]; then
-    if [ "${VALIDATION_CYCLE_INVALID_ENV:-false}" = "true" ]; then
-      echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=invalid_env"
-    else
-      echo "VALIDATION_CYCLE_SOURCE source=env cycle=${VALIDATION_CYCLE}"
-    fi
-    return 0
-  fi
-  if ! is_tracking_run; then
-    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=not_tracking_run"
-    return 0
-  fi
-  if ! login="$(validation_owner_pipeline_login)"; then
-    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=login_unavailable"
-    return 0
-  fi
-  # GitHub API audit (unattended_system_instructions.md §14): the existing
-  # PRIOR_COMMENTS read further down runs only when the cycle is already above
-  # 1 and keeps bodies without authors, so it cannot supply the cycle or the
-  # author check. This is one paginated read per tracking run that has no
-  # explicit VALIDATION_CYCLE; the identity read above is memoized and shared
-  # with the owner routing block.
-  if ! items="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" --paginate \
-    --jq '.[] | select(((.body // "") | split("\n")[0] | sub("\r$"; "")) == "## 🧪 Runtime validation dispatched") | {login: (.user.login // ""), body: (.body // "")} | @json' 2>/dev/null)"; then
-    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=comments_unavailable"
-    return 0
-  fi
-  if ! status="$(printf '%s\n' "${items}" | jq -Rrn --arg login "${login}" '
-      [inputs | select(length > 0) | (try fromjson catch null)
-        | select(type == "object" and (.login // "") == $login)] as $trusted
-      | if ($trusted | length) == 0 then "none"
-        else ($trusted[-1].body // "" | tostring | split("\n")
-          | map(sub("[[:space:]]+$"; "")) | map(select(test("^- Cycle: [0-9]+$")))
-          | if length == 0 then "malformed" else ("cycle:" + (.[0] | sub("^- Cycle: "; ""))) end)
-        end' 2>/dev/null)"; then
-    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=comments_unavailable"
-    return 0
-  fi
-  case "${status}" in
-    none)
-      echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=no_dispatch_comment"
-      return 0
-      ;;
-    cycle:*)
-      cycle="${status#cycle:}"
-      ;;
-  esac
-  if ! [[ "${cycle}" =~ ^[1-9][0-9]{0,5}$ ]]; then
-    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=malformed_cycle"
-    return 0
-  fi
-  VALIDATION_CYCLE="${cycle}"
-  echo "VALIDATION_CYCLE_SOURCE source=dispatch_comment cycle=${VALIDATION_CYCLE}"
-  return 0
-}
-validation_cycle_resolve || true
-# END validation cycle derivation
-
 emit_phase_failure_marker()
 {
   local phase="$1"
@@ -2856,6 +2788,74 @@ ${failure_summary}"
     "recommended_resume_action=${recommended_resume_action}" \
     "timestamp=${timestamp}"
 }
+
+# BEGIN validation cycle derivation (project #7913 p4)
+# Neither validate.yml nor the consumer ai-validate.yml wrapper passes
+# VALIDATION_CYCLE, so it used to stay 1 and the cross-cycle escalation
+# (cycle >= 3) never fired. When it is unset, take the cycle from the newest
+# "## 🧪 Runtime validation dispatched" tracking comment written by the
+# pipeline login (the poller posts "- Cycle: <N>" there). Comments by other
+# authors are ignored. Every failure falls back to cycle 1 (today's value).
+validation_cycle_resolve()
+{
+  local login="" items="" cycle="" status=""
+  if [ "${VALIDATION_CYCLE_EXPLICIT:-false}" = "true" ]; then
+    if [ "${VALIDATION_CYCLE_INVALID_ENV:-false}" = "true" ]; then
+      echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=invalid_env"
+    else
+      echo "VALIDATION_CYCLE_SOURCE source=env cycle=${VALIDATION_CYCLE}"
+    fi
+    return 0
+  fi
+  if ! is_tracking_run; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=not_tracking_run"
+    return 0
+  fi
+  if ! login="$(validation_owner_pipeline_login)"; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=login_unavailable"
+    return 0
+  fi
+  # GitHub API audit (unattended_system_instructions.md §14): the existing
+  # PRIOR_COMMENTS read further down runs only when the cycle is already above
+  # 1 and keeps bodies without authors, so it cannot supply the cycle or the
+  # author check. This is one paginated read per tracking run that has no
+  # explicit VALIDATION_CYCLE; the identity read above is memoized and shared
+  # with the owner routing block.
+  if ! items="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" --paginate \
+    --jq '.[] | select(((.body // "") | split("\n")[0] | sub("\r$"; "")) == "## 🧪 Runtime validation dispatched") | {login: (.user.login // ""), body: (.body // "")} | @json' 2>/dev/null)"; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=comments_unavailable"
+    return 0
+  fi
+  if ! status="$(printf '%s\n' "${items}" | jq -Rrn --arg login "${login}" '
+      [inputs | select(length > 0) | (try fromjson catch null)
+        | select(type == "object" and (.login // "") == $login)] as $trusted
+      | if ($trusted | length) == 0 then "none"
+        else ($trusted[-1].body // "" | tostring | split("\n")
+          | map(sub("[[:space:]]+$"; "")) | map(select(test("^- Cycle: [0-9]+$")))
+          | if length == 0 then "malformed" else ("cycle:" + (.[0] | sub("^- Cycle: "; ""))) end)
+        end' 2>/dev/null)"; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=comments_unavailable"
+    return 0
+  fi
+  case "${status}" in
+    none)
+      echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=no_dispatch_comment"
+      return 0
+      ;;
+    cycle:*)
+      cycle="${status#cycle:}"
+      ;;
+  esac
+  if ! [[ "${cycle}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=malformed_cycle"
+    return 0
+  fi
+  VALIDATION_CYCLE="${cycle}"
+  echo "VALIDATION_CYCLE_SOURCE source=dispatch_comment cycle=${VALIDATION_CYCLE}"
+  return 0
+}
+validation_cycle_resolve || true
+# END validation cycle derivation
 
 fail_validate_codex_phase()
 {
