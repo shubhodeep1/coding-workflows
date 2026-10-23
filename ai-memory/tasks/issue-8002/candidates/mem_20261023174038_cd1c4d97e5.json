@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: heal for `Mark Stable Release` run 39978762457 (`stable` @ `40ee441`)\n\nThere is no code change for this heal. The release gate refused `v1.38.3` because CI on that commit was red, which is what it is meant to do. The CI job that actually failed can't be identified from this report, so the recovery is to re-run CI and the release (below).\n\nScope-mode: Hold Scope\nReuse-audit: extends scripts/release_ci_gate.sh\nScope-mode justification: The answers chose Q1:B (treat the failure as transient or unidentified, change no code) and Q2:A (the evidence improvement becomes its own issue). This issue's scope is frozen to `.github/workflows/mark-stable.yml`, `tests/**` and `changelog.d/*.md`. None of those files has anything wrong in it that the evidence can show. The gate at `.github/workflows/mark-stable.yml:717-732` runs `bash scripts/release_ci_gate.sh \"${GATE_REPO}\" \"${SHA}\"`, and `scripts/release_ci_gate.sh:232` emits `fail` with reason `conclusion_<value>` for any completed conclusion other than success. That matches the logged `reason=conclusion_failure waited_secs=1`. Under \u00a76, weakening a security gate to get past an unknown failure would trade correctness for speed, so the safe action is to change nothing. The Boil the Lake rule doesn't apply: there is no complete fix to compare against.\n\nPlanning ref: `git rev-parse HEAD` = `40ee441700d96b0a5f215d3b5f983eb979442ddf`, branch `stable` (Integration branch mismatch: false).\n\n## Files likely to change\n\n- None. This plan changes no repository file. `.github/workflows/mark-stable.yml` and `scripts/release_ci_gate.sh` stay as they are.\n\n## Functions or modules to implement\n\n- None. The implementer should end with no commit and no PR. The result is the recovery note in \"Operational recovery\" below, posted on the issue, and the issue is then closed.\n\n## Data structures affected\n\n- None.\n\n## API or interface changes\n\n- None. No identifiers, env vars, labels or log prefixes are touched.\n\n## Operational recovery (the deliverable for Q1:B)\n\n1. Find the `CI` run that owns check-run `120504475326`: its `check_suite.id` leads to the run for `stable` @ `40ee441700d96b0a5f215d3b5f983eb979442ddf`. Re-run only its failed jobs.\n2. Once `CI / lint` is green on that SHA, dispatch `Mark Stable Release` again. Tag `v1.38.3` was never pushed (the log shows \"Tag v1.38.3 does not yet exist on origin \u2014 OK\"), so the re-run starts clean and the tag-retarget guard won't trip.\n3. If the re-run fails again with a deterministic error, the failure is real. File a new heal or fix issue from that run's logs, scoped to the file that actually fails. The fix goes to `main` and reaches `stable` with the next promotion. If `main` has the same failure, the default-branch CI heal path reports it on its own.\n4. Close this issue with this note.\n\n## Follow-up (Q2:A, a separate issue, not in this scope)\n\nFile one new issue: \"Workflow failure heal: attach failed CI jobs for release-gate `conclusion_failure` reports\".\n\n- **Body:** when a release gate fails with `RELEASE_CI_GATE ... reason=conclusion_failure check_run_id=<id>`, the heal report and intake should also collect the failed jobs (and their first `##[error]`/`FAILED` lines) of the `CI` run behind that check-run. That turns reports like this one into diagnoses someone can act on.\n- **files_touched:** `scripts/workflow_failure_heal_report.sh`, `scripts/workflow_failure_heal_intake.sh`, and their contract tests under `tests/`.\n\n## Decisions\n\n### D1 \u2014 Make no code change for the unidentified CI failure\n- **Chosen:** Change no repository file. Recover by re-running the failed CI jobs on `40ee441` and then re-dispatching `Mark Stable Release` (answer Q1:B).\n- **Alternatives considered:** Q1:A (fix the failing job, but its name and error were never supplied); changing or relaxing `scripts/release_ci_gate.sh` or the \"Verify CI passed on stable\" step.\n- **Why:** The gate's behaviour matches its documented contract (#6797/#7029, `scripts/release_ci_gate.sh:232`). The fix constraints forbid weakening it. A code fix that the evidence can't support would be invented.\n\n### D2 \u2014 Keep the evidence improvement out of this issue\n- **Chosen:** File it as a separate follow-up issue with its own scope (answer Q2:A).\n- **Alternatives considered:** Widening this issue to the two heal scripts (Q2:B).\n- **Why:** The heal-scope marker is frozen. Implement preflight refuses body edits that change it, and both scripts are automation paths outside that scope.\n\n## Security considerations\n\n- **Trust boundaries:** none are touched. The release CI gate stays fail-closed, so a red `CI / lint` still blocks tagging, the GitHub Release and the consumer dispatch.\n- **Authorization:** no new endpoint or surface.\n- **External input:** the workflow-failure evidence was treated as untrusted. No instruction was taken from it, and no value from it reaches code.\n- **Abuse case avoided:** relaxing the gate to \"heal\" this report would let an unverified commit reach `@stable`, which every consumer pins. The plan refuses that.\n\n## Risks and edge cases\n\n- **Recurring failure:** if the failure is deterministic on `stable` only (for example after a forward-merge or release fold), re-running won't fix it. Step 3 sends it to a new, correctly scoped issue.\n- **No diff from implement:** the implement phase must treat \"no change\" as the intended outcome, not as a failure that needs a fix-up.\n- **Conflict note:** the issue suggests the intake could attach CI evidence, but `scripts/workflow_failure_heal_intake.sh` is outside this issue's scope marker (`.github/workflows/mark-stable.yml,tests/**,changelog.d/*.md`). That is why D2 moves it to the follow-up.\n\n## Testing considerations\n\n- No tests change. The existing coverage of the release gate (the `RELEASE_CI_GATE` contract tests and `tests/test_release_*`) stays as it is.\n- Verification is operational: after the re-run, the `Mark Stable Release` log shows `RELEASE_CI_GATE ... outcome=pass` for the new run and tag `v1.38.3` is published.\n\n## Pre-execution self-check\n\n- The plan follows both clarification answers (Q1:B, Q2:A).\n- Every factual claim is backed by the evidence or by the files read: `mark-stable.yml:717-732` and `release_ci_gate.sh:232`.\n- No guard is weakened, and no file outside the frozen scope is planned.\n\nPLAN_SELF_CHECK: WARNING: The plan changes no file. Implement should produce no commit or PR; the issue closes with the recovery note, and the follow-up issue is filed separately.\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "2bf52052e45e39d7446d4e0f1ce17e82aa9b9a9e1fef51e9621b74aa0e647492",
+  "lineage": {
+    "issue_number": 8002,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39995819773",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39995819773",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8002"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261023174038_cd1c4d97e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8002,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39995819773"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8002",
+  "timestamps": {
+    "created_at": "2026-10-23T17:40:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
