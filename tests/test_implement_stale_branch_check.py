@@ -90,7 +90,7 @@ def test_no_open_pr_means_replace_with_one_call() -> None:
 		result, calls = _run_helper(Path(tmp), FAKE_REPO, "ai/issue-4726", out="0")
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert "IMPLEMENT_STALE_BRANCH branch=ai/issue-4726 outcome=replace reason=no_open_pr" in result.stdout
-	assert calls == [f"api repos/{FAKE_REPO}/pulls?state=open&head=octo:ai/issue-4726&per_page=100 --jq length"]
+	assert calls == [f"api repos/{FAKE_REPO}/pulls?state=open&head=octo:ai/issue-4726&per_page=1 --jq if type == \"array\" then length else -1 end"]
 
 
 def test_open_pr_keeps_rebase_fallback() -> None:
@@ -156,7 +156,7 @@ def _set_identity(cwd: Path) -> None:
 	_git(cwd, "config", "commit.gpgsign", "false")
 
 
-def _leftover_branch_scenario(tmp: Path) -> dict[str, str | Path]:
+def _leftover_branch_scenario(tmp: Path, depth: int = 0) -> dict[str, str | Path]:
 	"""Origin holds an earlier phase's ai/issue-7 whose PR was squash-merged into main.
 
 	The workspace is a fresh clone of main with this run's new commit on a
@@ -181,7 +181,12 @@ def _leftover_branch_scenario(tmp: Path) -> dict[str, str | Path]:
 	_git(seed, "push", "-q", "origin", "main")
 
 	workspace = tmp / "workspace"
-	_git(tmp, "clone", "-q", "--single-branch", "-b", "main", str(remote), str(workspace))
+	# implement.yml checks out with fetch-depth: 1; depth=1 reproduces that
+	# grafted root, where the leftover branch shares no merge base with HEAD.
+	if depth:
+		_git(tmp, "clone", "-q", "--depth", str(depth), "--single-branch", "-b", "main", f"file://{remote}", str(workspace))
+	else:
+		_git(tmp, "clone", "-q", "--single-branch", "-b", "main", str(remote), str(workspace))
 	_set_identity(workspace)
 	_git(workspace, "config", f"url.{remote}.insteadOf", f"https://x-access-token:{FAKE_TOKEN}@github.com/{FAKE_REPO}")
 	_git(workspace, "checkout", "-q", "-B", "ai/issue-7")
@@ -222,9 +227,17 @@ def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:
 
 
 def test_push_replaces_leftover_branch_when_no_open_pr() -> None:
+	_assert_push_replaces_leftover_branch(depth=0)
+
+
+def test_push_replaces_leftover_branch_in_shallow_workspace() -> None:
+	_assert_push_replaces_leftover_branch(depth=1)
+
+
+def _assert_push_replaces_leftover_branch(depth: int) -> None:
 	with tempfile.TemporaryDirectory() as tmp_name:
 		tmp = Path(tmp_name)
-		scenario = _leftover_branch_scenario(tmp)
+		scenario = _leftover_branch_scenario(tmp, depth=depth)
 		result = _run_push_step(tmp, scenario["workspace"], open_prs="0")
 		output = result.stdout + result.stderr
 		assert result.returncode == 0, output

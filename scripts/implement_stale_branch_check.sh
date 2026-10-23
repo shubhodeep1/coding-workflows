@@ -58,7 +58,7 @@ fi
 
 stale_branch_owner="${stale_branch_repo%%/*}"
 stale_branch_rc=0
-stale_branch_count="$(gh_retry gh api "repos/${stale_branch_repo}/pulls?state=open&head=${stale_branch_owner}:${stale_branch_name}&per_page=100" --jq 'length')" || stale_branch_rc=$?
+stale_branch_count="$(gh_retry gh api "repos/${stale_branch_repo}/pulls?state=open&head=${stale_branch_owner}:${stale_branch_name}&per_page=1" --jq 'if type == "array" then length else -1 end')" || stale_branch_rc=$?
 if [ "${stale_branch_rc}" -ne 0 ]; then
 	stale_branch_log keep api_unavailable "rc=${stale_branch_rc}"
 	exit 1
