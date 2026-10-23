@@ -348,6 +348,58 @@ def test_prepare_deps_node_modules_remain_in_prep_root(sandbox):
 		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
 
 
+def _nested_worker(repo: Path) -> Path:
+	worker = repo / "cloudflare" / "funtoken-competition-worker"
+	worker.mkdir(parents=True)
+	(worker / "package.json").write_text('{"name":"worker"}\n')
+	(worker / "package-lock.json").write_text("{}\n")
+	(worker / "index.ts").write_text("export {}\n")
+	return worker
+
+
+def test_prepare_deps_installs_a_nested_node_project_into_the_sandbox_only(sandbox):
+	# tele-funtoken-msg-scoring#4770: the Worker's own package.json was never installed.
+	_nested_worker(sandbox["repo"])
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DEPS_CREATE_NODE_MODULES": "1"})
+	prep = run_helper(sandbox, "prepare", "--deps")
+	assert prep.returncode == 0, prep.stderr
+	assert "stage-deps nested_node=1 nested_over_limit=0" in prep.stderr
+	assert "handoff-nested-deps moved=1" in prep.stderr
+	root = Path(prep.stdout.strip())
+	try:
+		(runner,) = docker_runs(sandbox["docker_log"])
+		assert runner["argv"][runner["argv"].index("--network") + 1] == "none"
+		assert not any(f"src={root}/work" in m for m in mounts_of(runner))
+		assert "index.ts" not in json.dumps(runner)
+		installed = root / "work" / "cloudflare" / "funtoken-competition-worker" / "node_modules" / "marker"
+		assert installed.read_text() == "nested 0\n"
+		assert "cloudflare/funtoken-competition-worker/node_modules" in json.loads((root / "manifest.json").read_text())["prep_roots"]
+		assert not (root / "nested-deps.json").exists()
+		write_fake_codex(sandbox, action="edit")
+		result = run_helper(sandbox, "run", "--mode", "workspace", "--root", str(root), *CODEX_ARGS)
+		assert result.returncode == 0, result.stderr
+		assert not (sandbox["repo"] / "cloudflare" / "funtoken-competition-worker" / "node_modules").exists()
+		assert (sandbox["repo"] / "new_file.py").exists()
+	finally:
+		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+def test_prepare_deps_nested_handoff_ignores_a_rewritten_stage_list(sandbox):
+	_nested_worker(sandbox["repo"])
+	# A plausible redirect target: a package.json but no lockfile, so it is
+	# not a nested project of its own and only a rewritten list could name it.
+	(sandbox["repo"] / "src" / "package.json").write_text('{"name":"src"}\n')
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DEPS_CREATE_NODE_MODULES": "1", "FAKE_DEPS_TAMPER_NESTED": "1"})
+	prep = run_helper(sandbox, "prepare", "--deps")
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	try:
+		assert (root / "work" / "cloudflare" / "funtoken-competition-worker" / "node_modules" / "marker").is_file()
+		assert not (root / "work" / "src" / "node_modules").exists()
+	finally:
+		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
 def test_prepare_deps_failure_remains_unverified_warning(sandbox):
 	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DEPS_FAIL": "1"})
 	prep = run_helper(sandbox, "prepare", "--deps")
