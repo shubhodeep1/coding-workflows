@@ -374,5 +374,7 @@ def test_queue_script_is_staged_from_the_trusted_checkout() -> None:
 	# script from it; the queue never runs code from a report.
 	text = QUEUE_SCRIPT.read_text(encoding="utf-8")
 	assert "set -uo pipefail" in text and "exit 0" in text
-	assert "--method DELETE" in text and "GH_RETRY_IDEMPOTENT=true" in text
+	# gh_retry retries a DELETE by default; the idempotent marker must never ride
+	# on a /comments line (tests/test_workflow_gh_retry_fallback_contract.py).
+	assert "--method DELETE" in text and "GH_RETRY_IDEMPOTENT=true" not in text
 	assert os.access(QUEUE_SCRIPT, os.X_OK)

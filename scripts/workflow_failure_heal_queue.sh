@@ -34,7 +34,8 @@
 #                                          the workflow then restores the shared
 #                                          concurrency group (default true)
 #   HEAL_INTAKE_QUEUE_JOB                  intake | recovery-scan (default intake)
-#   HEAL_INTAKE_QUEUE_POLL_SECONDS         seconds between queue reads (default 20)
+#   HEAL_INTAKE_QUEUE_POLL_SECONDS         seconds between queue reads (default 20; grows
+#                                          with the wait to at most three times this)
 #   HEAL_INTAKE_QUEUE_MAX_WAIT_SECONDS     wait before proceeding unlocked (default 4800)
 #   HEAL_INTAKE_QUEUE_LEASE_SECONDS        age after which a ticket no longer counts (default 10800)
 #   HEAL_INTAKE_QUEUE_HOLDER_CHECK_SECONDS min seconds between reads of one holder's run (default 300)
@@ -124,7 +125,8 @@ if [ "${MODE}" = "release" ]; then
 		log "outcome=skip reason=no_ticket job=${JOB} run=${RUN_ID:-none}"
 		exit 0
 	fi
-	if GH_RETRY_IDEMPOTENT=true gh_retry gh api --method DELETE "repos/${SELF_REPO}/issues/comments/${TICKET_ID}" >/dev/null 2>&1; then
+	# gh_retry retries a DELETE without the idempotent marker (only POST creates need it).
+	if gh_retry gh api --method DELETE "repos/${SELF_REPO}/issues/comments/${TICKET_ID}" >/dev/null 2>&1; then
 		log "outcome=released ticket=${TICKET_ID} job=${JOB} run=${RUN_ID}"
 	else
 		# The next waiter reads this run as completed and skips the ticket.
@@ -187,8 +189,9 @@ if [ -z "${QUEUE_ISSUE}" ]; then
 	fi
 	[ -n "${CREATED_NUMBER}" ] || _unlocked issue_create_failed
 	# Another run may have opened one at the same time: everyone uses the
-	# lowest number, and the loser closes its own.
-	QUEUE_ISSUE="$(_find_queue_issue)" || QUEUE_ISSUE=""
+	# lowest number, and the loser closes its own. A failed re-list proceeds
+	# unlocked rather than silently queueing on what may be a second issue.
+	QUEUE_ISSUE="$(_find_queue_issue)" || _unlocked issue_list_failed
 	[ -n "${QUEUE_ISSUE}" ] || QUEUE_ISSUE="${CREATED_NUMBER}"
 	if [ "${QUEUE_ISSUE}" != "${CREATED_NUMBER}" ]; then
 		gh_retry gh issue close "${CREATED_NUMBER}" --repo "${SELF_REPO}" --reason "not planned" --comment "Duplicate of #${QUEUE_ISSUE} (opened at the same time)." >/dev/null 2>&1 || true
@@ -200,8 +203,17 @@ fi
 [[ "${QUEUE_ISSUE}" =~ ^[1-9][0-9]*$ ]] || _unlocked issue_list_failed
 
 TICKET_BODY="$(python3 -I -B "${HEAL_PY}" heal-queue ticket --run-id "${RUN_ID}" --attempt "${RUN_ATTEMPT}" --job "${JOB}" 2>/dev/null)" || _unlocked ticket_render_failed
-TICKET_ID="$(gh_retry gh api --method POST "repos/${SELF_REPO}/issues/${QUEUE_ISSUE}/comments" -f body="${TICKET_BODY}" --jq .id 2>/dev/null | tr -d '[:space:]')"
-[[ "${TICKET_ID}" =~ ^[1-9][0-9]{0,19}$ ]] || { TICKET_ID=""; _unlocked ticket_post_failed; }
+# gh_retry makes one attempt for a POST create, so retry here. A post whose
+# response was lost leaves an earlier ticket of this run, which the position
+# rules treat as stale and delete.
+TICKET_ID=""
+for _ticket_post_try in 1 2 3; do
+	TICKET_ID="$(gh_retry gh api --method POST "repos/${SELF_REPO}/issues/${QUEUE_ISSUE}/comments" -f body="${TICKET_BODY}" --jq .id 2>/dev/null | tr -d '[:space:]')"
+	[[ "${TICKET_ID}" =~ ^[1-9][0-9]{0,19}$ ]] && break
+	TICKET_ID=""
+	[ "${_ticket_post_try}" -ge 3 ] || sleep "${POLL_SECONDS}"
+done
+[ -n "${TICKET_ID}" ] || _unlocked ticket_post_failed
 # Exported before the wait, so a cancelled run's release step still deletes it.
 _env_out HEAL_INTAKE_QUEUE_ISSUE "${QUEUE_ISSUE}"
 _env_out HEAL_INTAKE_QUEUE_TICKET_ID "${TICKET_ID}"
@@ -215,11 +227,25 @@ READ_FAILURES=0
 LAST_STATE=""
 declare -A HOLDER_CHECKED_AT=()
 
+# The poll interval grows with the wait (to at most three times
+# HEAL_INTAKE_QUEUE_POLL_SECONDS), so a long queue does not spend the shared
+# GH_PAT budget at the full rate.
+_poll_delay()
+{
+	local delay=$(( POLL_SECONDS + $(_waited) / 120 ))
+	[ "${delay}" -le $(( POLL_SECONDS * 3 )) ] || delay=$(( POLL_SECONDS * 3 ))
+	echo "${delay}"
+}
+
 while :; do
+	# Checked first, so no path back to the top of the loop can skip it.
+	if [ "$(_waited)" -ge "${MAX_WAIT_SECONDS}" ]; then
+		_unlocked max_wait
+	fi
 	if ! gh_retry gh api --method GET --paginate --slurp "repos/${SELF_REPO}/issues/${QUEUE_ISSUE}/comments?per_page=100" > "${COMMENTS_FILE}" 2>/dev/null; then
 		READ_FAILURES=$((READ_FAILURES + 1))
 		[ "${READ_FAILURES}" -lt 3 ] || _unlocked comments_unavailable
-		sleep "${POLL_SECONDS}"
+		sleep "$(_poll_delay)"
 		continue
 	fi
 	READ_FAILURES=0
@@ -230,7 +256,7 @@ while :; do
 	fi
 	while IFS= read -r stale_id; do
 		[[ "${stale_id}" =~ ^[1-9][0-9]{0,19}$ ]] || continue
-		if GH_RETRY_IDEMPOTENT=true gh_retry gh api --method DELETE "repos/${SELF_REPO}/issues/comments/${stale_id}" >/dev/null 2>&1; then
+		if gh_retry gh api --method DELETE "repos/${SELF_REPO}/issues/comments/${stale_id}" >/dev/null 2>&1; then
 			log "stale_ticket_removed ticket=${stale_id} issue=${QUEUE_ISSUE}"
 		fi
 	done < <(jq -r '.stale[]' "${DECISION_FILE}")
@@ -270,8 +296,5 @@ while :; do
 		log "waiting issue=${QUEUE_ISSUE} ticket=${TICKET_ID} position=${POSITION} holder_run=${HOLDER_RUN:-none} job=${JOB} run=${RUN_ID} waited_seconds=$(_waited)"
 		LAST_STATE="${STATE}"
 	fi
-	if [ "$(_waited)" -ge "${MAX_WAIT_SECONDS}" ]; then
-		_unlocked max_wait
-	fi
-	sleep "${POLL_SECONDS}"
+	sleep "$(_poll_delay)"
 done
