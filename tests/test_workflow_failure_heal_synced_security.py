@@ -315,10 +315,11 @@ def _git(cwd: Path, *args: str) -> None:
 class _Release:
 	"""setup_git hook for base._run_intake: a release commit and a signed identity."""
 
-	def __init__(self, payload: dict, *, identity: bool = True, workflow_file: str = "security-audit.yml", ref_sha: str | None = None, consumers: tuple[str, ...] = (CONSUMER_A, CONSUMER_B), retired: tuple[str, ...] = (), retired_at_head: tuple[str, ...] = ()) -> None:
+	def __init__(self, payload: dict, *, identity: bool = True, workflow_file: str = "security-audit.yml", ref_sha: str | None = None, consumers: tuple[str, ...] = (CONSUMER_A, CONSUMER_B), retired: tuple[str, ...] = (), retired_at_head: tuple[str, ...] = (), unretired_at_head: tuple[str, ...] = ()) -> None:
 		self.payload = payload
 		self.retired = retired
 		self.retired_at_head = retired_at_head
+		self.unretired_at_head = unretired_at_head
 		self.identity = identity
 		self.workflow_file = workflow_file
 		self.ref_sha = ref_sha
@@ -365,6 +366,16 @@ class _Release:
 				"# Consumer files retired from the sync.\n" + "".join(f"{path} {'b' * 64}\n" for path in self.retired_at_head), encoding="utf-8")
 			_git(work, "add", "workflow-templates")
 			_git(work, "commit", "-qm", "retire after the release")
+		if self.unretired_at_head:
+			# After the consumer's pin, HEAD ships the files again as .claude/
+			# templates and drops the retired list, so only the release lists them.
+			for path in self.unretired_at_head:
+				template = work / "workflow-templates" / path
+				template.parent.mkdir(parents=True, exist_ok=True)
+				template.write_text("# shipped again after the release\n", encoding="utf-8")
+			_git(work, "rm", "-q", "workflow-templates/retired_files.txt")
+			_git(work, "add", "workflow-templates")
+			_git(work, "commit", "-qm", "un-retire after the release")
 		self.payload["wrapper_sha"] = sha
 		claims = base._id_claims(
 			now=int(time.time()),
@@ -523,6 +534,25 @@ def test_intake_skips_findings_on_files_retired_only_at_head() -> None:
 	assert "report_auth=rejected" not in result.stdout
 	assert f"skip reason=retired_file file={RETIRED_AFTER_PIN} " in result.stdout
 	assert "scope_unresolved" not in result.stdout
+	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=2 opened=1 occurrences=0 skipped=1" in result.stdout
+	assert len(state.get("issues_created", [])) == 1
+
+
+RETIRED_IN_RELEASE = ".claude/commands/retired-in-release.md"
+
+
+def test_intake_skips_findings_on_files_retired_only_in_the_release() -> None:
+	"""The release lists the file as retired, but HEAD ships it again and has
+	no retired list. The release's list alone still skips the finding (owner
+	decision: a file retired at the consumer's pin is skipped even when HEAD
+	un-retires it; the consumer's next sync replaces it anyway). HEAD has a
+	source for the file, so without the release list the finding would open
+	an issue."""
+	payload = _payload(findings=[_finding(file=RETIRED_IN_RELEASE, finding_id="in-release"), _finding(line=30, finding_id="live")])
+	result, state = _intake(payload, extra_env=SCOPE_GUARD_ON, retired=(RETIRED_IN_RELEASE,), unretired_at_head=(RETIRED_IN_RELEASE,))
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "report_auth=rejected" not in result.stdout
+	assert f"skip reason=retired_file file={RETIRED_IN_RELEASE} " in result.stdout
 	assert "WORKFLOW_HEAL received kind=synced_security_finding findings=2 opened=1 occurrences=0 skipped=1" in result.stdout
 	assert len(state.get("issues_created", [])) == 1
 
