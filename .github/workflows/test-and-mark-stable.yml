@@ -679,7 +679,7 @@ jobs:
           install -d -m 0700 "${DEST_DIR}"
           for script in stable_e2e_step_wait_review.sh stable_e2e_step_verify_bait_removed.sh; do
             src="${SRC_DIR}/scripts/${script}"
-            if [ -L "${SRC_DIR}/scripts" ] || [ -L "${src}" ] || [ ! -f "${src}" ]; then
+            if [ -L "${SRC_DIR}" ] || [ -L "${SRC_DIR}/scripts" ] || [ -L "${src}" ] || [ ! -f "${src}" ]; then
               echo "::error::Release gate step script ${script} is missing, not a regular file, or a symlink."
               exit 1
             fi

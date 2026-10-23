@@ -8,7 +8,7 @@ The two largest step bodies in the `e2e-smoke-test` job now live in `scripts/`. 
 | Phase 4: Wait for review & autofix to complete (`wait-review`) | `scripts/stable_e2e_step_wait_review.sh` | about 48,600 |
 | Phase 4b: Verify editor restored canary (`verify-bait-removed`) | `scripts/stable_e2e_step_verify_bait_removed.sh` | about 34,000 |
 
-The workflow is now 360,916 bytes. Each step keeps its name, id, `if:` and `env:`. Its `run:` block sources the script from a copy taken from a sparse checkout pinned to the run's own commit (`github.sha`), never from the `main` checkout. A new step checks that checkout's commit and refuses symlinks before it copies the scripts to `RUNNER_TEMP`. If the scripts are missing or unverified, the step fails. No inputs, outputs or GitHub API calls change.
+The workflow is now 361,147 bytes. Each step keeps its name, id, `if:` and `env:`. Its `run:` block sources the script from a copy taken from a sparse checkout pinned to the run's own commit (`github.sha`), never from the `main` checkout. A new step checks that checkout's commit and refuses symlinks before it copies the scripts to `RUNNER_TEMP`. If the scripts are missing or unverified, the step fails. No inputs, outputs or GitHub API calls change.
 
 What this means for consumer repos: nothing. This workflow runs only in coding-workflows.
 
