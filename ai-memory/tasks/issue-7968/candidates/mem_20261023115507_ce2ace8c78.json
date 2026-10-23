@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the Phase 3b monitor bug be fixed? It reports `impl_runs: 0` while an Implement run existed, so the step ended as a 30-minute \"stalled\" timeout instead of `implement_failed` with the run ID.\nChoices:\nA. Inside the heal scope: build `IMPL_RUN_TOTAL`, `IMPL_RUN_IN_PROGRESS`, `IMPL_RUN_STATUS` and `IMPL_RUN_ID_LATEST` from runs whose `display_title` matches the issue title, paging up to `SCOPED_RUN_LOOKUP_MAX_PAGES` with `per_page=100`. Also log the run ID and conclusion when the label goes back to `ai:awaiting-approval`. Add a regression test in `tests/` with more than 50 newer unrelated runs plus one completed matching Implement run, asserting `implement_failed`, not `timeout`. Add a changelog fragment. (RECOMMENDED)\nB. Same as A, but keep the counter unscoped and only add pagination.\nC. Make no code change and treat the whole failure as environmental. The run is re-run by hand.\nQ2: How should the orchestrate-decompose timeout be handled? The child run sat `queued` for about 41 of its 50 minutes before any step ran.\nChoices:\nA. Treat it as environmental (runner saturation) and change no code for it. Record that in the plan and changelog fragment, and leave `--completion-timeout-secs 3000` and the watcher unchanged. (RECOMMENDED)\nB. Inside the heal scope: raise only that step's `--completion-timeout-secs` (currently `3000` at `test-and-mark-stable.yml:5637`) so it has more room for queue time.\nC. Change `scripts/dispatch_and_watch_workflow_run.sh`: start the completion budget at the first non-`queued` status, keep a separate bound on queue time, and log how long the run was queued. Add a watcher test.\n   **Note:** C is outside this issue's frozen heal scope, so implement would refuse it here. Choosing C means filing a separate, non-heal issue for the watcher change, or re-scoping this one by hand.",
+  "fingerprint": "70edc7fe2482ba44ff59516798b4b9c78f7f94d99e04a872fbae09725e75bbf3",
+  "lineage": {
+    "issue_number": 7968,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "39948572175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39948572175",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261023115507_ce2ace8c78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 7968,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "39948572175"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #7968 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-23T11:55:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
