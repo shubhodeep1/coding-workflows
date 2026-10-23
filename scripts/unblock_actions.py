@@ -89,13 +89,13 @@ Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "close", "issue": n, "reason": "not_planned", "pr": bool}
   {"op": "dispatch_review", "pr": n}
   {"op": "telegram", "level": s, "text": s}
-  {"op": "heal_report", "issue": n, "kind": "issue", "label": s,
+  {"op": "heal_report", "issue": n, "kind": "issue", "label": s, "sendable": bool,
    "fingerprint": s, "reason": s, "harness_paths": [s], "project_paths": [s]}
       (the work belongs in shubhodeep1/coding-workflows: send an issue-kind
       workflow failure heal report for item n, also for a pull request, with
       its block label when the heal intake accepts it (HEAL_REPORT_LABELS),
-      else another accepted label on the item; an empty label means none
-      could be named and no report can be sent)
+      else another accepted label on the item; an empty label, and
+      `sendable: false`, mean none could be named and no report can be sent)
   {"op": "hold_request", "issue": n, "fingerprint": s, "body": s}
       (a project item routed to the harness: post `body`, which ends with
       `<!-- ai:unblock-harness-hold-request:v1 item=<n> fingerprint=<fp> -->`,
@@ -173,6 +173,9 @@ HARNESS_PATH_PREFIXES = (".github/", ".claude/", "validation/", "workflow-templa
 # Well-known file names without an extension, accepted bare or as a last segment.
 HARNESS_EXTENSIONLESS_NAMES = frozenset(("Makefile", "Dockerfile", "Pipfile", "Procfile", "Gemfile", "LICENSE", "CODEOWNERS"))
 HARNESS_MAX_PATH_TOKENS = 50
+# A slash token made only of path characters (`src/config`); one that
+# _instruction_paths skips as not file-like may still name project-side work.
+HARNESS_SLASH_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+/?$")
 HARNESS_SHOWN_PATHS = 20
 HARNESS_HOLD_FP_RE = re.compile(r"^[0-9a-f]{12}$")
 HARNESS_HOLD_MARKER_PREFIX = "<!-- ai:unblock-harness-hold-request:v1"
@@ -536,6 +539,32 @@ def _instruction_paths(text: object, repo: str = "") -> list[str]:
 	return found
 
 
+def _has_unclassified_slash_token(text: object, repo: str = "") -> bool:
+	"""True when instructions name a slash path `_instruction_paths` skipped (an extensionless `src/config`).
+
+	Such a token never reaches the ownership classifier, so it cannot prove
+	the work harness-only. Prose such as `and/or` also counts; that only
+	keeps the consumer fix-up (a `mixed` route), the safe direction.
+	"""
+	if not isinstance(text, str):
+		return False
+	skip = {repo.lower(), HARNESS_REPO}
+	kept = set(_instruction_paths(text, repo))
+	for raw in HARNESS_PATH_TOKEN_RE.findall(text):
+		if "://" in raw:
+			continue
+		token = raw
+		while token.startswith("./"):
+			token = token[2:]
+		token = token.rstrip(".,;:!)]}")
+		token = re.sub(r":[0-9]+(?::[0-9]+)?$", "", token)
+		if "/" not in token or token.lower() in skip or token in kept:
+			continue
+		if HARNESS_SLASH_TOKEN_RE.fullmatch(token):
+			return True
+	return False
+
+
 def _harness_route(verdict: dict, ctx: dict, env: object = None) -> dict:
 	"""Whether an instruction verdict's change belongs in the harness repository."""
 	env = os.environ if env is None else env
@@ -572,12 +601,15 @@ def _harness_route(verdict: dict, ctx: dict, env: object = None) -> dict:
 				)
 				normalize = getattr(ownership, "_normalize_validation_path", None)
 				unlisted_project = callable(normalize) and any(normalize(token) is None for token in tokens)
-			except Exception:
+			except Exception as exc:
 				# A failed managed-path read included: partial data could misroute.
-				print("warning: unblock target_repo backstop failed; using the verdict field only", file=sys.stderr)
+				print(f"warning: unblock target_repo backstop failed ({type(exc).__name__}); using the verdict field only", file=sys.stderr)
 				harness_paths, project_paths, unlisted_project = [], [], False
 	# A token list past the cap dropped later paths, so it never proves harness-only.
 	if truncated:
+		unlisted_project = True
+	# A skipped extensionless slash path (`src/config`) is unclassified project-side work too.
+	if _has_unclassified_slash_token(verdict.get("instructions"), ctx["repo"]):
 		unlisted_project = True
 	route.update(harness_paths=list(harness_paths), project_paths=list(project_paths))
 	if field == "harness":
@@ -610,6 +642,8 @@ def _heal_report_op(ctx: dict, verdict: dict, route: dict) -> dict:
 		# reports, and the issues API also reads a pull request by number.
 		"kind": "issue",
 		"label": label,
+		# False when no accepted label exists: the intake would reject the report.
+		"sendable": bool(label),
 		"fingerprint": fp if isinstance(fp, str) and HARNESS_HOLD_FP_RE.match(fp) else "",
 		"reason": route["reason"],
 		"harness_paths": route["harness_paths"][:HARNESS_SHOWN_PATHS],
@@ -1010,10 +1044,12 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			pr_target_branch = None
 			if ctx.get("pr_source_present"):
 				if ctx.get("pr_source_metadata_unsafe"):
-					return [
+					unsafe = [
 						{"op": "comment", "issue": item, "body": "This pull request stays open: its linked issue's security finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
 						{"op": "telegram", "level": "WARNING", "text": f"Could not safely re-issue PR #{item}; its linked issue's metadata needs correction."},
 					]
+					# The harness part of a mixed verdict is still reported.
+					return unsafe + (_mixed_heal_ops(ctx, verdict, route) if route["mode"] == "mixed" else [])
 				if ctx.get("pr_source_finding_id"):
 					body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['pr_source_finding_id']} -->\n{body}"
 					pr_labels = [SECURITY_LABEL]

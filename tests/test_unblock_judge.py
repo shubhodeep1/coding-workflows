@@ -4386,3 +4386,19 @@ def test_harness_project_without_accepted_label_posts_no_hold(harness_env) -> No
 	ops = actions.plan(_verdict("descope", stop="validation-failed", instructions="fix it", target_repo="harness"), ctx)
 	assert [op["op"] for op in ops] == ["comment", "heal_report", "telegram"]
 	assert ops[2]["level"] == "WARNING"
+
+
+def test_backstop_extensionless_project_path_keeps_consumer_fixup(harness_env) -> None:
+	verdict = _verdict("descope", target_repo="consumer", instructions="Fix validation/check.sh and update src/config")
+	route = actions._harness_route(verdict, _ctx())
+	assert route["mode"] == "mixed" and route["harness_paths"] == ["validation/check.sh"]
+	ops = actions.plan(verdict, _ctx(labels=["ai:blocked", "ai:needs-human"]))
+	assert ops[0]["op"] == "create_issue" and ops[-1]["op"] == "heal_report" and ops[-1]["sendable"] is True
+	assert not actions._has_unclassified_slash_token("fix validation/x.sh for acme/app, see https://e.com/a/b", "acme/app")
+
+
+def test_unsafe_pr_reissue_metadata_still_reports_mixed_harness_part(harness_env) -> None:
+	ctx = _ctx("pr", stop="review-autofix-failed", labels=["ai:review-autofix-failed", "ai:needs-human"])
+	ctx.update(pr_trusted=True, pr_source_present=True, pr_source_metadata_unsafe=True)
+	ops = actions.plan(_verdict("reissue", stop="review-autofix-failed", instructions="edit src/app.py and validation/x.sh"), ctx)
+	assert [op["op"] for op in ops] == ["comment", "telegram", "heal_report"]
