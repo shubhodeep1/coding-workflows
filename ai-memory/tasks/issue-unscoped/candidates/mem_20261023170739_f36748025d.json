@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:7682 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The Telegram SUCCEEDED message hard-codes \u2713 for orphans, orchestrate, validate-fx, negative and alt-model, even when those jobs were skipped (for example on a skip_e2e=true release).\n  WHY: The operator is told five live tests passed when they never ran. Severity is NIT for every reviewer who stated one, so I recorded it as low. The message is informational only.\n- .github/workflows/test-and-mark-stable.yml:7665-7670 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The e2e_ok predicate leaves E2E_ICON at the default \u2713 when e2e is skipped but SKIP_E2E is unset (for example a gate_only run that skips e2e another way). A skip_e2e=true run with an e2e result of failure falls to FAILED, which the reviewer says is unlikely in practice.\n  WHY: The SUCCEEDED line can claim e2e passed when it was skipped. The reviewer rated it NIT with low likelihood.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/test-and-mark-stable.yml:7682 | severity=NIT | confidence=4\n  PROBLEM: The icons for orphans, orchestrate, validate-fx, negative and alt-model are hard-coded to \u2713. Only the e2e icon is derived from its result.\n  WHY: On a skip_e2e=true release these jobs are skipped (if: `!inputs.skip_e2e && !inputs.dry_run` at lines 5264, 5400, 5601, 5853, 5931 and 6151-6152), yet the SUCCEEDED message says they passed. The message is informational only and nothing gates on it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:7682 | severity=NIT | confidence=4\n  PROBLEM: The success notification hard-codes \u2713 for orphans, orchestrate, validate-fx, negative and alt-model, even if those jobs did not execute.\n  WHY: Reporting skipped jobs as passed is misleading and degrades the operational clarity of the Telegram report.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:7682 | severity=NIT | confidence=4\n  PROBLEM: The SUCCEEDED line still hard-codes \u2713 for orphans, orchestrate, validate-fx, negative and alt-model. On a skip_e2e=true dispatch all five are skipped (lines 5400, 5601, 5853, 5931, 6151-6153). The new E2E_ICON check (lines 7663-7670) handles only the e2e slot, while LOG_ANALYSIS_ICON (lines 7649-7654) is already dynamic.\n  WHY: A successful skip_e2e=true run reports five live tests as passed when they were skipped. The all_supplemental_ok loop (line 7640) already accepts skipped, so the SUCCEEDED path is reachable.\n- .github/workflows/test-and-mark-stable.yml:7665-7670 | severity=NIT | confidence=2\n  PROBLEM: The e2e_ok predicate does not cover a skipped e2e when SKIP_E2E is unset, so E2E_ICON stays \u2713 (for example a gate_only run that skips e2e another way). A skip_e2e=true run with an e2e result of failure falls through to e2e_ok=false and prints FAILED, which is unlikely in practice.\n  WHY: The SUCCEEDED line can claim e2e passed when it was skipped. This is lower likelihood than the first finding.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/test-and-mark-stable.yml:7682 | severity=NIT | confidence=4\n  PROBLEM: The summary line hard-codes \u2713 for orphans, orchestrate, validate-fx, negative and alt-model, but those five jobs share the condition `!inputs.skip_e2e && !inputs.dry_run` and are skipped on a skip_e2e=true release.\n  WHY: The notification tells the operator five live tests passed when none ran. The fix has the same shape as LOG_ANALYSIS_ICON and E2E_ICON: derive each icon from its result variable.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "b0f21ded621a0c70b845a9e8a971227ffb8edf9967f6f6384542a5c23a03ba6c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7977,
+    "run_id": "39983330986",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39983330986",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023170739_f36748025d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7977,
+    "run_id": "39983330986"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T17:07:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
