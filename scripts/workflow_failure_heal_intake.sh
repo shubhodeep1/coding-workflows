@@ -1121,6 +1121,9 @@ _validation_route_post()
 	if gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${route_body}" >/dev/null 2>&1; then
 		route_state="posted"
 	fi
+	# The comment is not retried (a lost response could double it); surface a
+	# failed post so the missing routing marker is visible in the run.
+	[ "${route_state}" = "posted" ] || echo "::warning::WORKFLOW_HEAL validation_route_comment_failed fp=${VALIDATION_ROUTE_FP} source=${SOURCE_LABEL}"
 	log "received kind=validation_failure outcome=${route_outcome} fp=${VALIDATION_ROUTE_FP} issue=${route_issue} classification=${route_classification} comment=${route_state} source=${SOURCE_LABEL}"
 }
 
@@ -1401,6 +1404,7 @@ while IFS=$'\t' read -r run_id run_url; do
 		log "warn jobs_fetch_failed source=${SOURCE_REPO} run=${run_id}"
 		if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ "${RUN_COUNT}" -eq 1 ]; then
 			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
+			VALIDATION_ROUTE_SKIP_REASON="current_run_jobs_unavailable"
 			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
 			exit 0
 		fi
@@ -1410,6 +1414,7 @@ while IFS=$'\t' read -r run_id run_url; do
 		log "warn jobs_fetch_invalid source=${SOURCE_REPO} run=${run_id}"
 		if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ "${RUN_COUNT}" -eq 1 ]; then
 			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
+			VALIDATION_ROUTE_SKIP_REASON="current_run_jobs_unavailable"
 			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
 			exit 0
 		fi
@@ -1420,6 +1425,7 @@ while IFS=$'\t' read -r run_id run_url; do
 			and (.name | type == "string") and .name != "heal-report"
 			and (.name | endswith("/ heal-report") | not))' "${JOBS_FILE}" >/dev/null 2>&1; then
 		log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_no_failed_job"
+		VALIDATION_ROUTE_SKIP_REASON="current_run_no_failed_job"
 		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
 		exit 0
 	fi
@@ -1472,6 +1478,7 @@ done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
 if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ -n "${PENDING_CURRENT_RUN}" ] \
 	&& ! jq -e --arg run_id "${PENDING_CURRENT_RUN}" 'any(.[]; .run_id == $run_id)' "${SUMMARIES_FILE}" >/dev/null 2>&1; then
 	log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${PENDING_CURRENT_RUN} reason=current_run_no_failed_job"
+	VALIDATION_ROUTE_SKIP_REASON="current_run_no_failed_job"
 	log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
 	exit 0
 fi
