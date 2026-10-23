@@ -18380,6 +18380,90 @@ _fetch_standalone_marker_issues_graphql() {
     }' 2>/dev/null || echo '{"state":[],"clarify":[]}'
 }
 
+# Batched listing of open issues per standalone pipeline label.
+# Batching contract (unattended §14):
+#   Input:  $1 = JSON array of label strings (the caller's
+#           `pipeline_labels`), each matching ^[A-Za-z0-9:._-]+$.
+#   Output: one compact JSON object on stdout:
+#             {"issues":[{"number":N},...], "fallback_labels":["ai:...",...]}
+#           `issues` is the union (unique_by number) of the labels the
+#           GraphQL answer covered completely; `fallback_labels` lists the
+#           labels the caller must still list over REST.
+#   API calls: 1 GraphQL request (one `repository.issues(labels:)` alias
+#           per label; never `search`, whose index can lag) normally;
+#           1 plus one REST `gh issue list` per flagged label when an alias
+#           is missing, null, paginated (`hasNextPage`) or named in
+#           `errors[].path`; on total failure (non-zero exit, unparseable
+#           JSON, non-object repository, invalid input, an error without a
+#           path) 1 failed GraphQL call plus the legacy REST call for every
+#           label.
+#   Fail-open: never shrinks coverage. Every anomaly adds the label to
+#           `fallback_labels`, and the caller keeps `|| echo '[]'` on each
+#           REST call. Owner and name are passed only as `-f` variables;
+#           labels are fixed literals, validated and @json-encoded.
+_fetch_standalone_pipeline_label_issues_graphql() {
+  local labels_json="${1:-[]}"
+  local all_fallback
+  all_fallback="$(printf '%s' "${labels_json}" | jq -c 'if type == "array" then [.[] | select(type == "string")] else [] end' 2>/dev/null || echo '[]')"
+  [ -n "${all_fallback}" ] || all_fallback='[]'
+  local total_failure
+  total_failure="$(jq -cn --argjson fb "${all_fallback}" '{issues:[],fallback_labels:$fb}' 2>/dev/null || echo '{"issues":[],"fallback_labels":[]}')"
+
+  local valid
+  valid="$(printf '%s' "${labels_json}" | jq -r 'if (type == "array") and (length > 0) and all(.[]; (type == "string") and test("^[A-Za-z0-9:._-]+$")) then "yes" else "no" end' 2>/dev/null || echo "no")"
+  if [ "${valid}" != "yes" ] || ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+    printf '%s\n' "${total_failure}"
+    return 0
+  fi
+
+  local query
+  # shellcheck disable=SC2016
+  query="$(printf '%s' "${labels_json}" | jq -r '
+    "query($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n"
+    + ([to_entries[] | "    l\(.key): issues(states: [OPEN], labels: [\(.value | @json)], first: 100) {\n      pageInfo { hasNextPage }\n      nodes { number }\n    }\n"] | join(""))
+    + "  }\n}"' 2>/dev/null || true)"
+  if [ -z "${query}" ]; then
+    printf '%s\n' "${total_failure}"
+    return 0
+  fi
+
+  local resp
+  if ! resp="$(gh_retry gh api graphql \
+      -f owner="${GITHUB_REPOSITORY%%/*}" \
+      -f name="${GITHUB_REPOSITORY#*/}" \
+      -f query="${query}" 2>/dev/null)"; then
+    printf '%s\n' "${total_failure}"
+    return 0
+  fi
+
+  local out
+  out="$(printf '%s' "${resp}" | jq -c --argjson labels "${labels_json}" '
+    if (type != "object") or ((.data.repository | type) != "object") then
+      {issues: [], fallback_labels: $labels}
+    elif ([(.errors // [])[] | select(((.path // null) | type) != "array")] | length) > 0 then
+      {issues: [], fallback_labels: $labels}
+    else
+      . as $r
+      | [(.errors // [])[] | .path[] | tostring] as $err_paths
+      | [range(0; $labels | length) as $i
+          | ("l\($i)") as $a
+          | ($r.data.repository[$a]) as $conn
+          | {label: $labels[$i],
+             conn: $conn,
+             flagged: (($conn | type) != "object"
+                       or (($conn.nodes | type) != "array")
+                       or ($conn.pageInfo.hasNextPage == true)
+                       or ($err_paths | index($a)) != null)}] as $rows
+      | {issues: ([$rows[] | select(.flagged | not) | .conn.nodes[] | select(. != null and (.number | type) == "number") | {number}] | unique_by(.number)),
+         fallback_labels: [$rows[] | select(.flagged) | .label]}
+    end' 2>/dev/null || true)"
+  if [ -z "${out}" ]; then
+    printf '%s\n' "${total_failure}"
+    return 0
+  fi
+  printf '%s\n' "${out}"
+}
+
 # Batch-fetch labels, recent comments and latest-linked-PR state for a
 # list of candidate issue numbers via a single GraphQL query per batch
 # (aliased issue selectors).  Replaces the per-candidate REST /labels,
@@ -20757,7 +20841,27 @@ run_standalone_stall_recovery() {
   local pipeline_labels='["ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]'
   local labeled_issues='[]'
   local lbl
-  for lbl in ai:clarification ai:planning ai:awaiting-approval ai:implementing ai:done ai:ready-to-merge ai:review-blocked; do
+  # One aliased GraphQL request lists every pipeline label; the REST
+  # listing below runs only for labels the batch could not cover.
+  local _pls_resp
+  local _pls_fallback
+  local _pls_ok="true"
+  _pls_resp="$(_fetch_standalone_pipeline_label_issues_graphql "${pipeline_labels}")" || _pls_resp=""
+  [ -n "${_pls_resp}" ] || _pls_ok="false"
+  labeled_issues="$(printf '%s' "${_pls_resp}" | jq -c 'if (.issues | type) == "array" then .issues else [] end' 2>/dev/null || echo '[]')"
+  [ -n "${labeled_issues}" ] || labeled_issues='[]'
+  _pls_fallback="$(printf '%s' "${_pls_resp}" | jq -r 'if (.fallback_labels | type) == "array" then .fallback_labels[] else error("no fallback list") end' 2>/dev/null)" || _pls_ok="false"
+  if [ "${_pls_ok}" != "true" ]; then
+    labeled_issues='[]'
+    _pls_fallback="$(jq -r '.[]' <<<"${pipeline_labels}")"
+  fi
+  if [ -n "${_pls_fallback}" ]; then
+    echo "::notice::Standalone stall recovery: label GraphQL batch fell back to REST for: $(printf '%s' "${_pls_fallback}" | tr '\n' ' ')"
+  fi
+  local -a _pls_fallback_list=()
+  mapfile -t _pls_fallback_list <<<"${_pls_fallback}"
+  for lbl in "${_pls_fallback_list[@]}"; do
+    [ -n "${lbl}" ] || continue
     local by_label
     by_label="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "${lbl}" --json number --limit 1000 2>/dev/null || echo '[]')"
     labeled_issues="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${labeled_issues}") <(printf '%s\n' "${by_label}"))"
