@@ -17130,6 +17130,8 @@ _plan_auto_approval_hold_notify()
           then "**Automatic approval withheld: the plan lists automation paths, and automatic approval of such plans is off.**"
           elif ($reason | IN("plan_gate_error", "plan_gate_helper_unavailable", "identity_unavailable", "issue_meta_unavailable", "plan_comment_unavailable", "pipeline_plan_grant_write_failed", "pipeline_plan_grant_body_changed"))
           then "**Automatic approval withheld: the automation-path grant check could not run.**"
+          elif $reason == "plan_files_outside_files_touched"
+          then "**Automatic approval withheld: the plan changes files outside the `files_touched` list of this issue, so implementation would refuse the commit.**"
           else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
         "",
         "Reason: `\($reason)`",
@@ -17138,7 +17140,9 @@ _plan_auto_approval_hold_notify()
         (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
         (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
         "",
-        "Stall recovery did not post `/approved`. To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way.",
+        (if $reason == "plan_files_outside_files_touched"
+          then "Stall recovery did not post `/approved`. To proceed, a maintainer either adds these paths to the `files_touched` list in the issue body or asks for a narrower plan, then replies `/approved`. `/approved` alone does not help: the implement-time `files_touched` guard would still refuse these files."
+          else "Stall recovery did not post `/approved`. To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way." end),
         "",
         "<!-- ai:automation-path-plan-hold:v1 issue=\($issue) reason=\($reason) source=poller paths=\($b64) -->"
       ] | join("\n")' 2>/dev/null)"; then

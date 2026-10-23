@@ -49,6 +49,14 @@ Inputs:
                           pipeline_plan_grant; the record then has
                           pipeline_grant_body: true and the caller must write
                           the body at PATH to the issue first.
+                          With --issue-meta-file, a plan whose Files section
+                          lists an exact file outside the issue's
+                          files_touched list holds with reason
+                          plan_files_outside_files_touched, while
+                          ENFORCE_FILES_TOUCHED is "true" (default),
+                          ALLOW_OUT_OF_SCOPE_FILES is not "true" and
+                          PLAN_FILES_TOUCHED_GATE_ENABLED is not off
+                          (all read from the environment).
   --plan-auto-approval-gate --plan-file PATH --heal-scope-file PATH
                           --flag-enabled VALUE --issue-number NUMBER
                           Workflow-heal plans (#7444): approve only when every
@@ -86,6 +94,7 @@ import argparse
 import fnmatch
 from functools import lru_cache
 import json
+import os
 from pathlib import PurePosixPath
 import re
 import subprocess
@@ -776,6 +785,45 @@ def _flag_enabled(value: str) -> bool:
 	return (value or "").strip().lower() in {"", "1", "true", "yes", "on"}
 
 
+# Plan files outside files_touched. The implement-time scope guard refuses a
+# commit that stages a path outside the issue's files_touched list and latches
+# ai:scope-blocked. A plan that already names such a file in its Files section
+# is held here instead, before an automatic /approved spends an implementation
+# run that is certain to be refused (consumer tele-funtoken-msg-scoring #4795:
+# the planner widened the scope in prose, auto-approval passed, and the
+# implement run was blocked on the three files it added).
+PLAN_FILES_TOUCHED_GATE_REASON = "plan_files_outside_files_touched"
+
+
+def plan_files_touched_gate_active() -> bool:
+	"""True when the implement guard would block, so the plan gate checks too.
+
+	Mirrors implement.yml: ENFORCE_FILES_TOUCHED enforces only when it is
+	exactly "true" (default) and ALLOW_OUT_OF_SCOPE_FILES downgrades a block
+	only when exactly "true". PLAN_FILES_TOUCHED_GATE_ENABLED (default true)
+	turns this plan-time check off on its own.
+	"""
+	if (os.environ.get("PLAN_FILES_TOUCHED_GATE_ENABLED") or "true").strip().lower() in {"false", "0", "no", "off"}:
+		return False
+	return (os.environ.get("ENFORCE_FILES_TOUCHED") or "true") == "true" \
+		and (os.environ.get("ALLOW_OUT_OF_SCOPE_FILES") or "false") != "true"
+
+
+def plan_files_outside_files_touched(plan_text: str, issue_body: str) -> list[str]:
+	"""Exact files in a plan's Files section that the issue's files_touched list misses.
+
+	Uses the implement guard's matcher (path_in_scope: lockfiles and agents.d
+	fragments follow the same rules). An issue without a list, or with an empty
+	or malformed one, is not checked, as the implement guard skips it too. A
+	directory or glob the plan lists is not an exact file and is not checked
+	here; the implement guard still applies to whatever gets staged.
+	"""
+	allowlist = normalize_allowlist(extract_files_touched(issue_body or "") or [])
+	if not allowlist:
+		return []
+	return [path for path in extract_plan_file_paths(plan_text) if not path_in_scope(path, allowlist)]
+
+
 def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
 	pipeline_login: str, allow_workflow_edits: str, issue_number: str, origin_repo: str = "",
 	grant_body_out: str = "") -> tuple[dict, int]:
@@ -855,6 +903,17 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 					# Report what the proposed grant still misses (a listed
 					# directory or glob, or a path the plan named only in prose).
 					decision, reason, denied = proposed
+		# An approval the implement scope guard would refuse is held. The
+		# pipeline plan grant is skipped: its block is written from this plan.
+		# Without issue metadata (the poller's cache had no body) there is no
+		# list to compare, so the check is skipped; implement still enforces.
+		if decision == PLAN_DECISION_APPROVE and not grant_proposed and issue_meta_file \
+				and plan_files_touched_gate_active():
+			with open(issue_meta_file, encoding="utf-8") as handle:
+				issue_meta = json.load(handle)
+			outside = plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "")
+			if outside:
+				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
 		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
 		grant_proposed = False
