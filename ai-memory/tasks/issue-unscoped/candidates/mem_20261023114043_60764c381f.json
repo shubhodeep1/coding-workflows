@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:341-343 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The snapshot's `hidden_dirs` count uses `os.lexists(host / name)` over the `tracked` set from `ls-files -z`, and the reviewer questions whether the set can go stale between the `ls-files` call and the check.\n  WHY: The reviewer concludes \"The logic seems correct\", because the filter matches the stated intent of reporting tracked build output present on disk. No severity was stated, so low is a placeholder.\n- scripts/review_untrusted_sandbox.sh:403-405 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `review_append_hidden_build_note` ends in `|| true`, so a broken environment (e.g. `python3` missing) silently drops the note.\n  WHY: The reviewer accepts this as fine because the requirement is that the note is \"advisory and fail-open\". No severity was stated, so low is a placeholder.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_workspace.py:341-343 | confidence=4\n  PROBLEM: The snapshot's `hidden_dirs` count uses `os.lexists(host / name)` over the `tracked` set from `ls-files -z`, and the reviewer questions whether the set can go stale between the `ls-files` call and the check.\n  WHY: The reviewer concludes \"The logic seems correct\", because the filter matches the stated intent of reporting tracked build output present on disk.\n- scripts/review_untrusted_sandbox.sh:403-405 | confidence=4\n  PROBLEM: `review_append_hidden_build_note` ends in `|| true`, so a broken environment (e.g. `python3` missing) silently drops the note.\n  WHY: The reviewer accepts this as fine because the requirement is that the note is \"advisory and fail-open\".\n- TASK_GAP (reported with SEVERITY: NIT, ISSUE_CONFIDENCE: 5; the reviewer states all requirements are satisfied, so it is not a real gap)\n  Requirement: \"snapshot now records the hidden committed directories (names and counts only)\" and \"review_untrusted_sandbox.sh appends a short note to every prompt\"\n  Expected change site: scripts/review_untrusted_workspace.py, scripts/review_untrusted_sandbox.sh, agents.d/7921-review-sandbox-hidden-build-dirs.md\n  Evidence of absence: The PR diff implements all required changes (hidden dir snapshot, reporting, prompt note, agent-fragment documentation). All requirements are satisfied.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "34531c63d555bdd6039968132095e555b23de97db887842e43ae12441e1ef6ba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7967,
+    "run_id": "39941290712",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39941290712",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023114043_60764c381f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7967,
+    "run_id": "39941290712"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-23T11:40:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
