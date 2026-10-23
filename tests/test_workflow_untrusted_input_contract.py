@@ -293,6 +293,22 @@ def test_release_source_jobs_do_not_interpolate_ref_expressions() -> None:
 		assert detect_env.get("DISPATCH_REF") == "${{ github.ref }}"
 
 
+def test_workflow_log_analysis_run_steps_do_not_interpolate_ref_expressions() -> None:
+	jobs = _workflow("workflow-log-analysis.yml").get("jobs")
+	assert isinstance(jobs, dict)
+	checked = 0
+	for job_id, job in jobs.items():
+		if not isinstance(job, dict):
+			continue
+		for step in job.get("steps", []):
+			if isinstance(step, dict) and isinstance(step.get("run"), str):
+				checked += 1
+				assert not REF_EXPRESSION.search(step["run"]), (
+					f"workflow-log-analysis.yml:{job_id}:{step.get('name')} interpolates a ref into shell source"
+				)
+	assert checked > 0
+
+
 def test_release_source_ref_check_is_exact_and_literal() -> None:
 	with TemporaryDirectory(prefix="release-ref-contract-") as temp_dir:
 		temp_path = Path(temp_dir)
