@@ -1,0 +1,8 @@
+<!-- agents: section="Workflow file size limit" -->
+- `test-and-mark-stable.yml` (#7991) moves step bodies the same way, but because it is dispatch-only and does not stage support scripts, its wrapper reads a copy pinned to `github.sha`:
+  - The `e2e-smoke-test` job bodies live in `scripts/stable_e2e_step_wait_review.sh` (Phase 4) and `scripts/stable_e2e_step_verify_bait_removed.sh` (Phase 4b); a new one is named `stable_e2e_step_<slug>.sh` under `scripts/`. Each starts with a `#!/usr/bin/env bash` / `# shellcheck shell=bash` comment header and has mode `0755`.
+  - "Checkout release-gate step scripts" sparse-checks them out at `${{ github.sha }}` into `.stable-e2e-step-src` with `persist-credentials: false`.
+  - "Verify release-gate step scripts" (`id: stable_e2e_step_scripts`) requires that checkout's HEAD to equal `github.sha` and every script to be a regular file, not a symlink. It copies the scripts to `${RUNNER_TEMP}/stable-e2e-step-scripts` (outside the workspace, so the later Phase 5 `ref: main` re-checkout, which cleans the workspace, cannot remove them) and sets `STABLE_E2E_STEP_SCRIPTS_VERIFIED=true` in `GITHUB_ENV`.
+  - Each moved step's `run:` sources `${RUNNER_TEMP}/stable-e2e-step-scripts/<script>` only when that flag is `true` and the file is a regular file; otherwise it fails with `::error::`.
+  - Tests read the bodies through `expanded_test_and_mark_stable_text()`. The registry is `TEST_AND_MARK_STABLE_STEP_SCRIPTS`, both in `tests/review_autofix_step_scripts.py`. `tests/test_test_and_mark_stable_step_scripts_contract.py` pins the wrapper, the pinned checkout and a 430,000-byte ceiling for the workflow.
+  - A new moved step adds its script to the sparse-checkout list, the verify loop, the registry and `docs/INVENTORY.md`.

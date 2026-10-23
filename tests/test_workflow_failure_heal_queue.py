@@ -36,8 +36,8 @@ def _iso(value: datetime) -> str:
 	return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _ticket(comment_id: int, run_id: int, *, attempt: int = 1, job: str = "intake", login: str = LOGIN, age_seconds: int = 60) -> dict:
-	return {"id": comment_id, "user": {"login": login}, "created_at": _iso(NOW - timedelta(seconds=age_seconds)),
+def _ticket(comment_id: int, run_id: int, *, attempt: int = 1, job: str = "intake", login: str = LOGIN, age_seconds: int = 60, now: datetime = NOW) -> dict:
+	return {"id": comment_id, "user": {"login": login}, "created_at": _iso(now - timedelta(seconds=age_seconds)),
 		"body": heal.render_heal_queue_ticket(run_id, attempt, job)}
 
 
@@ -104,8 +104,12 @@ def test_lost_ticket() -> None:
 
 
 def test_position_cli(tmp_path: Path) -> None:
+	# The CLI measures ticket age against the wall clock with the default
+	# lease, so these tickets are dated from the real time, not the fixed NOW
+	# (#7994: NOW-dated tickets went stale three hours after NOW).
+	wall = datetime.now(timezone.utc)
 	comments = tmp_path / "comments.json"
-	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5)], [_ticket(20, 200, age_seconds=1)]]), encoding="utf-8")
+	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5, now=wall)], [_ticket(20, 200, age_seconds=1, now=wall)]]), encoding="utf-8")
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
@@ -114,6 +118,12 @@ def test_position_cli(tmp_path: Path) -> None:
 	assert waiting["status"] == "wait" and waiting["holder"]["run_id"] == "101"
 	going = json.loads(subprocess.run([*base, "--runs-json", str(runs)], capture_output=True, text=True, env=env, check=True).stdout)
 	assert going["status"] == "go" and going["stale"] == [10]
+	# A holder past the default 10,800-second lease no longer holds the queue.
+	expired = tmp_path / "expired.json"
+	expired.write_text(json.dumps([_ticket(10, 101, age_seconds=20_000, now=wall), _ticket(20, 200, age_seconds=1, now=wall)]), encoding="utf-8")
+	lapsed = json.loads(subprocess.run([*base[:base.index("--comments-json") + 1], str(expired), *base[base.index("--comments-json") + 2:]],
+		capture_output=True, text=True, env=env, check=True).stdout)
+	assert lapsed["status"] == "go" and lapsed["stale"] == [10]
 	ticket = subprocess.run([sys.executable, str(SCRIPTS_DIR / "workflow_failure_heal.py"), "heal-queue", "ticket", "--run-id", "7", "--attempt", "3", "--job", "intake"],
 		capture_output=True, text=True, env=env, check=True).stdout
 	assert ticket.strip().endswith("<!-- ai:heal-intake-queue:v1 run=7 attempt=3 job=intake -->")
