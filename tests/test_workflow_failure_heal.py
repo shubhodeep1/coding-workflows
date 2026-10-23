@@ -6603,6 +6603,8 @@ def test_engine_fallback_payload_carries_the_reporting_run() -> None:
 		(_engine_run(run_attempt=1), "run_attempt_mismatch"),
 		(_engine_run(status="completed", updated_at="2026-10-21T05:00:00Z"), "run_stale"),
 		(_engine_run(status="completed", updated_at=None), "run_stale"),
+		(_engine_run(status="waiting", updated_at="2026-10-21T05:00:00Z"), "run_stale"),
+		(_engine_run(status="pending", updated_at=None), "run_stale"),
 	],
 )
 def test_verify_engine_reporter_run_rejects(run: dict, reason: str) -> None:
@@ -6770,6 +6772,8 @@ def test_intake_engine_fallback_consumer_app_defect_is_filed_here(tmp_path: Path
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "classification_remapped from=consumer-app-defect to=workflow-defect reason=engine_fallback_harness_scope" in result.stdout
 	assert [issue["repo"] for issue in state["issues_created"]] == [SELF_REPO]
+	# The remap's effect: the issue carries the default heal target branch.
+	assert "- **Target branch:** `stable`" in state["issues_created"][0]["body"]
 
 
 # --- Issue #7059: no heal issue without a valid intake-authored scope marker ---

@@ -1968,7 +1968,7 @@ if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 		ENGINE_REPORTER_RUN_RESULT="${RUNTIME_DIR}/engine_reporter_run_result.json"
 		if ! gh_api_json_to_file "${ENGINE_REPORTER_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${ENGINE_REPORTER_RUN_ID}" 2>/dev/null \
 			|| ! jq -e 'type == "object"' "${ENGINE_REPORTER_RUN_FILE}" >/dev/null 2>&1; then
-			printf '{}\n' > "${ENGINE_REPORTER_RUN_FILE}"
+			printf '{}\n' > "${ENGINE_REPORTER_RUN_FILE}" || true
 		fi
 		if python3 "${HEAL_PY}" verify-engine-reporter-run --payload-json "${PAYLOAD_FILE}" --run-json "${ENGINE_REPORTER_RUN_FILE}" \
 			--max-age "${REPORT_MAX_AGE}" > "${ENGINE_REPORTER_RUN_RESULT}" 2>/dev/null \
@@ -1978,7 +1978,7 @@ if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 			ENGINE_SCOPE_PATHS_JSON="$(jq -c '.scope_paths' "${ENGINE_REPORTER_RUN_RESULT}")"
 			log "engine_reporter_run outcome=verified run=${ENGINE_REPORTER_RUN_REF} attempt=$(jq -r '.run_attempt // "1"' "${ENGINE_REPORTER_RUN_RESULT}" | tr -cd '0-9') fp=${FP} source=${SOURCE_LABEL}"
 		else
-			ENGINE_REPORTER_RUN_REJECT="$(jq -r '.reason // ""' "${ENGINE_REPORTER_RUN_RESULT}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+			ENGINE_REPORTER_RUN_REJECT="$(jq -r '.reason // ""' "${ENGINE_REPORTER_RUN_RESULT}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 40 || true)"
 			log "engine_reporter_run outcome=rejected reason=${ENGINE_REPORTER_RUN_REJECT:-verifier_error} run_id=${ENGINE_REPORTER_RUN_ID} fp=${FP} source=${SOURCE_LABEL}"
 		fi
 	else
@@ -2277,9 +2277,12 @@ case "${CLASSIFICATION}" in
 esac
 
 # An engine_fallback scope names only coding-workflows engine support code
-# (ENGINE_FALLBACK_SCOPE_PATHS), never consumer files, so a consumer-app-defect
-# issue could never get a scope. The refusal is decided by that harness code:
-# file it here as workflow-defect.
+# (ENGINE_FALLBACK_SCOPE_PATHS), never consumer files, and the refusal is
+# decided by that harness code. The report has no issue_number, so a
+# consumer-app-defect verdict would already file in this repository; the remap
+# makes the issue a workflow-defect so it carries the default heal target
+# branch (TARGET_BRANCH_DEFAULT, `stable`) and workflow-defect wording, instead
+# of no Target branch.
 if [ "${SOURCE_KIND}" = "engine_fallback" ] && [ "${CLASSIFICATION}" = "consumer-app-defect" ]; then
 	log "classification_remapped from=consumer-app-defect to=workflow-defect reason=engine_fallback_harness_scope source=${SOURCE_LABEL} fp=${FP}"
 	CLASSIFICATION="workflow-defect"

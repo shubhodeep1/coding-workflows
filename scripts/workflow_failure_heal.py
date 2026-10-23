@@ -1333,9 +1333,10 @@ def verify_engine_reporter_run(payload: dict[str, Any], run: Any, *, max_age: in
 	attempt = _positive_int(run.get("run_attempt"))
 	if attempt is None or attempt < int(claimed["run_attempt"]):
 		return {"ok": False, "reason": "run_attempt_mismatch"}
-	# A queued or running run is current (the reporter is its last step); a
-	# finished one must have finished recently, so an old run cannot be replayed.
-	if run.get("status") == "completed":
+	# A queued or running run is current (the reporter is its last step). Every
+	# other status (completed, waiting, pending, requested) must have been
+	# updated recently, so an old run cannot be replayed.
+	if run.get("status") not in ("queued", "in_progress"):
 		finished = _parse_iso(run.get("updated_at"))
 		if finished is None or (now - finished).total_seconds() > max_age or finished > now + timedelta(seconds=ENGINE_REPORTER_RUN_CLOCK_SKEW_SECONDS):
 			return {"ok": False, "reason": "run_stale"}
