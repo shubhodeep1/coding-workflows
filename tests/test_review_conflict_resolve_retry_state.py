@@ -399,9 +399,9 @@ def test_resolve_script_uses_single_escalation_marker_literal_source() -> None:
 def _persist_retry_state_function_text() -> str:
 	body = _resolve_script_text()
 	start = body.index("_persist_resolver_retry_state_from_current_failure()")
-	header_end = body.index("\n", start) + 1
-	next_fn = re.search(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*$", body[header_end:], flags=re.M)
-	end = header_end + next_fn.start() if next_fn else len(body)
+	# End at the function's own closing brace (first column-0 "}"), not at the
+	# next function header, so unrelated top-level code is not checked.
+	end = body.index("\n}\n", start) + 2
 	return body[start:end]
 
 
@@ -427,7 +427,9 @@ def test_retry_state_patch_keeps_gh_retry_attempts() -> None:
 	import subprocess
 
 	if shutil.which("bash") is None:
-		return
+		import pytest
+
+		pytest.skip("bash unavailable")
 	helpers = REPO_ROOT / "scripts" / "gh_helpers.sh"
 	proc = subprocess.run(
 		[
@@ -441,7 +443,11 @@ def test_retry_state_patch_keeps_gh_retry_attempts() -> None:
 		text=True,
 		timeout=60,
 	)
-	assert proc.returncode != 0, "PATCH must not be treated as a single-attempt POST create"
+	# Exit 1 means "retryable"; any other non-zero (e.g. 127) means the helper
+	# could not be sourced or was renamed, which must not pass silently.
+	assert proc.returncode == 1, (
+		f"PATCH must keep full gh_retry attempts (rc={proc.returncode}, stderr={proc.stderr[:200]})"
+	)
 
 
 def test_retry_state_artifact_treats_missing_baseline_as_regressed(tmp_path: Path) -> None:
