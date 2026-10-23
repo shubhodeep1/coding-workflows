@@ -2018,6 +2018,10 @@ jobs:
             fi
           fi
           REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
+          # Set when the loop drops the watched run (bait not covered or
+          # coverage unknown) or advances the pin, so the run to judge next
+          # has not been polled yet; cleared once a poll reports a run ID.
+          REVIEW_PHASE_HANDOFF_PENDING=0
           # Reads the previous poll's RUN_ID / RUN_STATUS /
           # CURRENT_STEP_STARTED_AT / BAIT_UNCOVERED_RUN_IDS and the current
           # NOW / IDLE. Returns 0 only when waiting past the base deadline
@@ -2026,6 +2030,7 @@ jobs:
             local now="${NOW:-}" step_epoch step_elapsed
             [[ "$now" =~ ^[0-9]+$ ]] || return 1
             [ "$now" -lt "$REVIEW_PHASE_DEADLINE_CEILING" ] || return 1
+            [ "${REVIEW_PHASE_HANDOFF_PENDING:-0}" = "1" ] && return 0
             [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] || return 1
             case ",${BAIT_UNCOVERED_RUN_IDS:-}," in
               *",${RUN_ID},"*) return 1 ;;
@@ -2205,6 +2210,7 @@ jobs:
                 PREV_STATE=""
               fi
             fi
+            REVIEW_PHASE_HANDOFF_PENDING=1
             sleep "$POLL_INTERVAL"
             ELAPSED=$((ELAPSED + POLL_INTERVAL))
             return 1
@@ -2382,6 +2388,7 @@ jobs:
               RUN_STATUS=$(echo "$REVIEW_RUN" | jq -r '.status // "unknown"')
               RUN_CONCLUSION=$(echo "$REVIEW_RUN" | jq -r '.conclusion // "null"')
               RUN_ID=$(echo "$REVIEW_RUN" | jq -r '.id // "unknown"')
+              if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi
 
               echo "  Review run #${RUN_ID}: status=${RUN_STATUS}, conclusion=${RUN_CONCLUSION}"
 
@@ -2419,6 +2426,7 @@ jobs:
                   if [ -n "${PIN_SHA:-}" ] && [ -n "${PIN_HEAD_NOW}" ] && [ "${PIN_HEAD_NOW}" != "${PIN_SHA}" ]; then
                     echo "  ↪ PR head advanced past pin (${PIN_SHA:0:7} → ${PIN_HEAD_NOW:0:7}); advancing pin and polling successor run next iteration"
                     PIN_SHA="${PIN_HEAD_NOW}"
+                    REVIEW_PHASE_HANDOFF_PENDING=1
                     LAST_ACTIVITY=$NOW
                     PREV_STATE=""
                     sleep "$POLL_INTERVAL"

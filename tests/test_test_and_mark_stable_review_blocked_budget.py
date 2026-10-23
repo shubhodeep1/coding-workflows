@@ -673,6 +673,7 @@ def _phase4_deadline_extension_block(workflow: str) -> str:
 def _run_phase4_deadline_logic(**env: str) -> dict[str, str]:
 	block = _phase4_deadline_extension_block(_read_workflow())
 	script = "set -euo pipefail\n" + block + textwrap.dedent("""\
+	REVIEW_PHASE_HANDOFF_PENDING="${TEST_HANDOFF_PENDING:-0}"
 	rc=0
 	review_phase_deadline_extension_allowed || rc=$?
 	echo "base=${REVIEW_PHASE_BASE_DEADLINE}"
@@ -757,6 +758,21 @@ def test_phase4_nothing_waits_past_the_ceiling() -> None:
 		assert _phase4_active(NOW=str(now), RUN_STATUS="queued")["rc"] == "1"
 		assert _phase4_active(NOW=str(now))["rc"] == "1"
 	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 1))["rc"] == "0"
+
+
+def test_phase4_handoff_polls_the_next_run_past_the_base_deadline() -> None:
+	# A run just dropped as not covering the bait, or a just-advanced pin,
+	# still gets the poll that finds its successor (until the ceiling).
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", RUN_STATUS="completed", BAIT_UNCOVERED_RUN_IDS="20")["rc"] == "0"
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", RUN_STATUS="none", RUN_ID="unknown")["rc"] == "0"
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", NOW=str(_PHASE4_DEFAULT_CEILING), RUN_STATUS="completed")["rc"] == "1"
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", E2E_JOB_STARTED_EPOCH="", RUN_STATUS="completed")["rc"] == "1"
+	step = _phase4_step(_read_workflow())
+	coverage = _slice_between(step, "require_bait_review_coverage() {", "# Give the review workflow a moment to start")
+	assert "REVIEW_PHASE_HANDOFF_PENDING=1" in coverage[coverage.rindex("fi"):]
+	pin_advance = _slice_between(step, 'PIN_SHA="${PIN_HEAD_NOW}"', "continue")
+	assert "REVIEW_PHASE_HANDOFF_PENDING=1" in pin_advance
+	assert 'if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi' in step
 
 
 def test_phase4_deadline_check_uses_extension_and_logs_once() -> None:
