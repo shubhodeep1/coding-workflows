@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "When changing a workflow, script, or orchestration behavior, look for an existing test named for that component or contract and extend it rather than defaulting to a broad test file. Examples include dedicated tests for review pipeline contracts, polling guards, and failure-heal queue behavior.",
+  "fingerprint": "7201246b5249118ddc90d5d251815e763fb19f8f8acd257cf6962e1b5d89f3cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40013350286",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40013350286",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/7984",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7992",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7993",
+      "https://github.com/shubhodeep1/coding-workflows/issues/7994",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8000",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7990",
+      "https://github.com/shubhodeep1/coding-workflows/pull/7996",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8003",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8005",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8008"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261023195434_772d5e402e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow changes in this repository are commonly covered by narrowly scoped regression tests.",
+  "timestamps": {
+    "created_at": "2026-10-23T19:54:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
