@@ -442,12 +442,19 @@ write_result_files {shlex.quote(status)} {shlex.quote(summary)} {shlex.quote(fai
 	assert "fix_issues=2" in fail_summary_lines[0]
 	assert 'summary="Validation needs fixes"' in fail_summary_lines[0]
 	assert 'failure_summary="Line one Line two"' in fail_summary_lines[0]
+	# write_result_files also merges the validation owner fields (project #7913
+	# p1c); with no classification in this run the owner is "none".
 	assert fail_status_payload == {
 		"failure_summary": "Line one\nLine two",
 		"raw_status": "needs_fixes",
 		"status": "fail",
 		"summary": "Validation needs fixes",
 		"tracking_issue": "1234",
+		"failure_owner": "none",
+		"harness_report": False,
+		"harness_stage": "",
+		"harness_reason": "",
+		"harness_fp": "",
 	}
 	assert fail_metadata_payload["status"] == "fail"
 	assert fail_metadata_payload["raw_status"] == "needs_fixes"
