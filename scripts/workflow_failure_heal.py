@@ -1560,9 +1560,12 @@ def _normalize_validation_signature_once(text: str, source_repo: str | None) -> 
 def normalize_validation_signature(signature: Any, *, source_repo: str | None = None) -> str:
 	"""One-line, redacted, routing-neutralised error signature of at most 200 characters.
 
-	The repository name becomes ``<repo>`` and every hex run of 7-64
-	characters becomes ``<sha>``, so the same harness failure gets the same
-	fingerprint in every consumer and at every commit (Q14). Idempotent: the
+	The ``owner/name`` slug and the bare repository name (as a whole word)
+	become ``<repo>``. A full 40- or 64-character hex SHA, or a 7-64
+	character hex run that contains a digit, becomes ``<sha>``; hex runs made
+	only of the letters a-f (words such as "defaced") are kept. So the same
+	harness failure gets the same fingerprint in every consumer and at every
+	commit (Q14). Idempotent: the
 	intake recomputes the fingerprint from the normalised payload.
 	"""
 	text = "" if signature is None else str(signature)
@@ -1638,7 +1641,7 @@ def classify_validation_owner(
 	"""Decide who owns a failed validation run (plan "Ownership decision").
 
 	Returns ``{owner, reason, stage, fingerprint, harness_paths,
-	project_paths, project_fix_ids}`` with owner ``harness``, ``project``,
+	project_paths, project_fix_ids, truncated}`` with owner ``harness``, ``project``,
 	``mixed`` or ``none`` (``none`` keeps today's path). Layer 0: a
 	``fixed_reason`` the validate run decided itself is harness-owned and the
 	diagnosis is not read. Layer 1: a ``harness_error`` diagnosis is
