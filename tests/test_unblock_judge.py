@@ -4130,3 +4130,170 @@ def test_both_unblock_prompts_carry_the_implementer_environment_paragraph() -> N
 	assert "_UNSET_OPERATOR_STEP" in paragraphs[0]
 	workflow = (ROOT / ".github" / "workflows" / "unblock_judge.yml").read_text(encoding="utf-8")
 	assert "UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED: ${{ vars.UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED || 'true' }}" in workflow
+
+
+# --- target_repo verdict field and harness routing (P3a, Refs #7913) ---------
+
+
+TARGET_REPO_FIVE = ("retry_budget", "descope", "reissue", "accept_with_followup", "operator_step")
+
+
+def _target_repo_raw(name: str, **extra) -> dict:
+	raw = {"verdict": name, "reason": "r", "instructions": "do the narrower thing"}
+	if name == "operator_step":
+		raw.update(placeholder="NEW_PATH_ENABLED")
+	raw.update(extra)
+	return raw
+
+
+@pytest.fixture
+def harness_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+	for name in ("SUPPORT_DIR", "TARGET_DIR", "UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED"):
+		monkeypatch.delenv(name, raising=False)
+	support = tmp_path / "support"
+	target = tmp_path / "target"
+	(support / "scripts").mkdir(parents=True)
+	(support / "scripts" / "only_harness.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+	(target / "src").mkdir(parents=True)
+	(target / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+	monkeypatch.setenv("SUPPORT_DIR", str(support))
+	monkeypatch.setenv("TARGET_DIR", str(target))
+	ownership = actions._load_ownership()
+	assert ownership is not None
+	monkeypatch.setattr(ownership, "load_validation_managed_paths", lambda *_args: frozenset())
+	return monkeypatch
+
+
+def test_target_repo_enum_and_default() -> None:
+	decision = ledger.decide(7, "blocked", FP, [], None, NOW, "issue")
+	for name in TARGET_REPO_FIVE:
+		assert ledger.validate(_target_repo_raw(name), decision, "o/r")["target_repo"] == "consumer"
+		for value in ("consumer", "harness"):
+			assert ledger.validate(_target_repo_raw(name, target_repo=value), decision, "o/r")["target_repo"] == value
+		assert ledger.validate(_target_repo_raw(name, target_repo=""), decision, "o/r")["target_repo"] == "consumer"
+		for bad in ("other", 5, ["harness"]):
+			with pytest.raises(ledger.UsageError, match="target_repo"):
+				ledger.validate(_target_repo_raw(name, target_repo=bad), decision, "o/r")
+	answer = ledger.validate({"verdict": "auto_answer", "reason": "r", "answer": "Q1: A", "target_repo": "harness"}, decision, "o/r")
+	assert "target_repo" not in answer
+
+
+def test_harness_verdict_on_project_files_no_fixup(harness_env) -> None:
+	ctx = _ctx("project", stop="validation-failed")
+	ops = actions.plan(_verdict("descope", stop="validation-failed", instructions="fix the harness", target_repo="harness"), ctx)
+	assert [op["op"] for op in ops] == ["comment", "heal_report", "hold_request", "telegram"]
+	assert not any("ai:unblock-fixup" in op.get("body", "") for op in ops)
+	heal = ops[1]
+	assert heal["label"] == "ai:validation-failed" and heal["kind"] == "issue" and heal["fingerprint"] == FP
+	hold = ops[2]
+	assert hold["issue"] == 7
+	assert hold["body"].splitlines()[-1] == f"<!-- ai:unblock-harness-hold-request:v1 item=7 fingerprint={FP} -->"
+	assert ops[3]["level"] == "DEBUG"
+	assert not ops[0]["body"].startswith("/") and "Change needed in the harness: fix the harness" in ops[0]["body"]
+
+
+def test_harness_verdict_on_standalone_issue_has_no_hold_or_resume(harness_env) -> None:
+	for name in TARGET_REPO_FIVE:
+		extra = {"placeholder": "X_UNSET_OPERATOR_STEP", "operator_instructions": "do it"} if name == "operator_step" else {}
+		ops = actions.plan(_verdict(name, instructions="fix it", target_repo="harness", **extra), _ctx(has_plan=True))
+		names = [op["op"] for op in ops]
+		assert names == ["comment", "heal_report", "telegram"], name
+		assert not any(body.startswith(("/approved", "/answer", "/reclarify")) for body in _bodies(ops))
+
+
+def test_harness_pr_heal_report_kind(harness_env) -> None:
+	ops = actions.plan(_verdict("retry_budget", instructions="x", target_repo="harness"), _ctx("pr", stop="review-autofix-failed"))
+	heal = [op for op in ops if op["op"] == "heal_report"][0]
+	assert heal["kind"] == "pull_request" and heal["label"] == "ai:review-autofix-failed"
+
+
+def test_backstop_routes_harness_only_paths(harness_env) -> None:
+	ctx = _ctx("project", stop="validation-failed")
+	verdict = _verdict(
+		"descope", stop="validation-failed", target_repo="consumer",
+		instructions="Fix `validation/x.sh` and scripts/only_harness.sh:12 for acme/app, see https://example.com/a/b.py",
+	)
+	route = actions._harness_route(verdict, ctx)
+	assert route["mode"] == "harness" and route["reason"] == "backstop"
+	assert route["harness_paths"] == ["validation/x.sh", "scripts/only_harness.sh"] and route["project_paths"] == []
+	ops = actions.plan(verdict, ctx)
+	assert [op["op"] for op in ops] == ["comment", "heal_report", "hold_request", "telegram"]
+	assert ops[1]["reason"] == "backstop"
+
+
+def test_mixed_paths_keep_fixup_and_add_heal_report(harness_env) -> None:
+	ctx = _ctx(stop="validation-failed")
+	verdict = _verdict("descope", stop="validation-failed", target_repo="consumer", instructions="Drop the check in src/app.py and fix validation/x.sh")
+	ops = actions.plan(verdict, ctx)
+	harness_env.setenv("UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED", "false")
+	baseline = actions.plan(verdict, ctx)
+	assert ops[:-1] == baseline and any(op["op"] == "create_issue" for op in baseline)
+	heal = ops[-1]
+	assert heal["op"] == "heal_report" and heal["reason"] == "mixed_harness_part"
+	assert heal["harness_paths"] == ["validation/x.sh"] and heal["project_paths"] == ["src/app.py"]
+
+
+def test_mixed_enabled_operator_step_also_gets_heal_report(harness_env) -> None:
+	verdict = _verdict("operator_step", placeholder="NEW_PATH_ENABLED", target_repo="consumer", instructions="Edit src/app.py and validation/x.sh")
+	ops = actions.plan(verdict, _ctx())
+	assert ops[0]["op"] == "create_issue" and ops[-1]["op"] == "heal_report"
+
+
+def test_switch_off_restores_todays_ops(harness_env, capsys) -> None:
+	ctx = _ctx("project", stop="validation-failed")
+	verdict = _verdict("descope", stop="validation-failed", instructions="fix validation/x.sh", target_repo="harness")
+	harness_env.setenv("UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED", "false")
+	off = actions.plan(verdict, ctx)
+	assert [op["op"] for op in off] == ["comment"] and "ai:unblock-fixup-request:v1" in off[0]["body"]
+	harness_env.setenv("UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED", "maybe")
+	assert actions.plan(verdict, ctx) == off
+	assert "UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED" in capsys.readouterr().err
+	harness_env.setenv("UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED", "TRUE")
+	assert actions.plan(verdict, ctx)[1]["op"] == "heal_report"
+
+
+def test_import_failure_falls_back_to_field(harness_env) -> None:
+	harness_env.setattr(actions, "_load_ownership", lambda: None)
+	ctx = _ctx(stop="validation-failed")
+	backstop_only = _verdict("descope", stop="validation-failed", target_repo="consumer", instructions="fix validation/x.sh")
+	assert actions._harness_route(backstop_only, ctx)["mode"] == "consumer"
+	assert any(op["op"] == "create_issue" for op in actions.plan(backstop_only, ctx))
+	assert actions._harness_route(dict(backstop_only, target_repo="harness"), ctx)["mode"] == "harness"
+
+
+def test_import_failure_warns(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+	monkeypatch.setattr(actions, "_OWNERSHIP_CACHE", {})
+	monkeypatch.setattr(actions.Path, "with_name", lambda self, name: Path("/nonexistent/workflow_failure_heal.py"))
+	assert actions._load_ownership() is None
+	assert "ownership helper import failed" in capsys.readouterr().err
+
+
+def test_no_dirs_means_field_only(monkeypatch: pytest.MonkeyPatch) -> None:
+	for name in ("SUPPORT_DIR", "TARGET_DIR", "UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED"):
+		monkeypatch.delenv(name, raising=False)
+	verdict = _verdict("descope", stop="validation-failed", instructions="fix validation/x.sh")
+	assert actions._harness_route(verdict, _ctx(stop="validation-failed"))["mode"] == "consumer"
+
+
+def test_source_repo_and_security_issue_keep_fixup(harness_env) -> None:
+	verdict = _verdict("descope", stop="blocked", instructions="fix validation/x.sh", target_repo="harness")
+	src = actions.plan(verdict, _ctx(repo="shubhodeep1/coding-workflows"))
+	assert any(op["op"] == "create_issue" for op in src) and not any(op["op"] == "heal_report" for op in src)
+	sec = actions.plan(verdict, _ctx(labels=["ai:blocked", "ai:security"]))
+	assert not any(op["op"] == "heal_report" for op in sec)
+	harness_env.setenv("UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED", "false")
+	assert actions.plan(verdict, _ctx(labels=["ai:blocked", "ai:security"])) == sec
+
+
+def test_instruction_paths_extraction() -> None:
+	text = "Edit `./CLAUDE.md`, .github/workflows/x.yml; .claude/hooks and v1.2, origin/main, acme/app, shubhodeep1/coding-workflows (scripts/a.py:3:4)."
+	assert actions._instruction_paths(text, "acme/app") == [
+		"CLAUDE.md", ".github/workflows/x.yml", ".claude/hooks", "scripts/a.py",
+	]
+
+
+def test_unblock_prompts_carry_target_repo() -> None:
+	for rel in ("prompts/mode-judge-unblock.txt", "prompts/_templates/mode-judge-unblock.txt"):
+		text = (ROOT / rel).read_text(encoding="utf-8")
+		assert '"target_repo": "consumer" | "harness"' in text
+		assert "`target_repo` (`consumer` | `harness`) is required for" in text
