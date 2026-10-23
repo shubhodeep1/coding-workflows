@@ -1465,3 +1465,42 @@ Processed: 2026-10-22
 - MERGE-001, MERGE-002, REUSE-001 — rejected (tagged NEEDS_VERIFICATION); MERGE-002 would also change the documented clear-note plus `/answer` contract.
 - MERGE-003, MERGE-004, REUSE-002 — rejected (tagged RISKY_SKIP).
 - Executive summary, pipeline flow table, per-repo breakdown and metrics appendix — non-material: evidence, not recommendations.
+
+### `analysis/workflow-optimization-2026-09-23-2.md`
+Processed: 2026-10-23
+- Speed 1 (integrity-preflight job): already-implemented — since the #4707 CI split, `Script-workflow cross-reference` runs in the parallel ~2-minute `static-checks` job, not after the test suite, and prints one FAIL line per missing reference. Making the test jobs `needs` it was rejected because it adds that job to every critical path. The `WORKFLOW_SCRIPT_REF_SUMMARY` line was rejected: nothing reads it.
+- Speed 2 (release live jobs gated on static preflight): applied — the script-ref check now runs in `resolve-version` of `test-and-mark-stable.yml` (step `script_ref_preflight`, `RELEASE_STATIC_PREFLIGHT_ENABLED`). Gating on the whole `validate-scripts` job was rejected: it would add up to 60-90 minutes to every release.
+- Speed 3 (dedupe pending review dispatches): already-implemented — the sweep counts queued, in_progress and pending runs and has a stale-queued cutoff; the poller has `_has_active_autofix_run`; there is the PR-named run listing (#4927/#6629) and the merge-train inflight check. The new `REVIEW_DISPATCH_DECISION` prefix was rejected.
+- Speed 4 (enable reviewer circuit breaker): rejected — it is already opt-in through `REVIEWER_CIRCUIT_BREAKER_ENABLED`. Turning it on by default would change review behaviour in every consumer. The `REVIEWER_MAX_STEPS` / `REVIEWER_TOOL_REPEAT_LIMIT` loop guards and size tiers now cover the stall cost.
+- Speed 5 (Semble low-yield overflow): already-implemented — `TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED` defaults to false.
+- Cost 1 (adaptive fanout): already-implemented — `REVIEW_TIER_RESOLVER_ENABLED` is on by default (lite 1 / standard 4 / full). The circuit-breaker part was rejected, as in Speed 4.
+- Cost 2 (prompt growth): rejected — there is no concrete, verifiable change, and README trimming and pre-assembled static context already exist.
+- Cost 3 (same-head editor no-op breaker): already-implemented — the identical-failure fingerprint cap (`REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL`=3) and `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` cover it.
+- Cost 4 (Semble telemetry fields): rejected — it is a micro-saving and nothing would read the fields.
+- Cost 5 (memory trimming): rejected — it carries quality risk, and the planning memory budget is already 1,200 tokens.
+- Rel 1 (missing scripts/helper.sh reference): already-implemented — all references resolve on main, and the check runs in CI and in both release gates.
+- Rel 2 (metadata-integrity digest diagnostics): rejected — obsolete; the "Could not publish the linked-issue metadata integrity digest" message no longer exists in `scripts/` or `review_autofix.yml`.
+- Rel 3 (empty editor output): already-implemented — the editor retry loop retries empty output, falls back to `MODEL_EDITOR_FALLBACK` on the final attempt, and has the stall fallback.
+- Rel 4 (security-audit path diagnostics): already-implemented — `security-audit: codex-stderr-tail` and `provider=` classification exist.
+- Rel 5 (exclude Semble contract-test fallbacks): already-implemented — `_is_contract_test_semble_line` in `scripts/cost_audit.py`.
+- AI memory telemetry additions: already-implemented — in part (fail-open telemetry carries `exit_code`, `duration_ms` and `stderr_category`). The rest was rejected: no consumer.
+- GH_API_SUMMARY wrapper telemetry: rejected — `GH_API_RETRY` lines already exist.
+- Dispatch payload_property_count contract: already-implemented — reporters wrap the payload as `client_payload {schema_version, report}`.
+- Prompt-cache ordering and fingerprinting: rejected — the proposal is generic, with no measured change.
+- Orchestrator upstream dispatch gating and transition/correlation markers: rejected — job-level predicates already gate, with phase-wrapper predicate parity, and nothing would read the new markers.
+- BUG-001 (label PUT race): applied — `set_issue_phase_label_resilient` in `scripts/label_helpers.sh` now POSTs the target and DELETEs stale phase labels instead of writing the whole label set with PUT.
+- BUG-002 (integration-ref single-attempt): already-implemented — the resolver exits 75/2 and callers fail closed (`INTEGRATION_REF_RESOLVE outcome=rate_limited|api_unavailable`).
+- SEC-001 (github.ref_name in shell): applied — `workflow-log-analysis.yml` run bodies now use env vars (the remaining `github.ref_name` is in the `concurrency.group` expression, not shell); the release workflows were already fixed and tested.
+- BATCH-001 (standalone 7 label listings): applied — one aliased GraphQL `repository.issues` query in `scripts/orchestrate_poll_process.sh`, with a per-label REST fallback.
+- BATCH-002: rejected — the doc tags it RISKY_SKIP (poller race-defense paths, paginated comments).
+- BATCH-003: rejected — it is about 11 calls once per nightly cycle, and markers past 100 comments carry fallback risk.
+- BATCH-004: rejected — few references per PR, and `lint_pr_body_auto_close` is the §21 safety gate whose per-issue failure semantics are kept.
+- DUP-001 / DUP-002 / DUP-003 / DUP-004: rejected — these are refactor-only changes (§9) with support-staging and release-safety risk. BUG-002, which motivated DUP-001, is already fixed in the shared resolver script.
+- EXPR-001: rejected — obsolete; the `Stage workflow support files` run body has no `${{ }}` left (only in env), so the expression length limit does not apply.
+- DEAD-001: rejected — §10 forbids removing identifiers without an explicit instruction, and the functions are harmless.
+- DEAD-002: rejected — `tests/test_codex_thread_reuse_review.py` pins these helpers.
+- CONSIST-001: already-implemented — `gh_api_safe` transient retry, `GH_API_SAFE_RETRY`.
+- MERGE-001: rejected — it saves one call only on the fallback path and changes the failure boundary.
+- MERGE-002 / MERGE-004: rejected — the doc tags them RISKY_SKIP.
+- MERGE-003: already-implemented — clarify's comment read is paginated once and shared.
+- REUSE-001: rejected — it is a cross-step cache with low value.

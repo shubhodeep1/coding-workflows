@@ -856,6 +856,9 @@ def _run_poller(
 	enable_clean_wave_judge_skip: str = "true",
 	judge_repeat_fingerprint_max: str = "2",
 	mock_gh_issue_list_label_filter: bool = False,
+	mock_pipeline_label_graphql: bool = False,
+	pipeline_label_graphql_has_next: list[str] | None = None,
+	fail_pipeline_label_graphql: bool = False,
 	fail_needs_human_issue_list: bool = False,
 	compare_ahead_by: int = 0,
 	compare_ahead_by_sequence: list[int] | None = None,
@@ -1415,6 +1418,10 @@ esac
 			"actions_runs_status": int(actions_runs_status),
 			"actions_runs_status_sequence": list(actions_runs_status_sequence),
 			"mock_gh_issue_list_label_filter": bool(mock_gh_issue_list_label_filter),
+			"mock_pipeline_label_graphql": bool(mock_pipeline_label_graphql),
+			"pipeline_label_graphql_has_next": list(pipeline_label_graphql_has_next or []),
+			"fail_pipeline_label_graphql": bool(fail_pipeline_label_graphql),
+			"pipeline_label_graphql_calls": 0,
 			"fail_needs_human_issue_list": bool(fail_needs_human_issue_list),
 			"compare_ahead_by": int(compare_ahead_by),
 			"compare_ahead_by_sequence": list(compare_ahead_by_sequence),
@@ -2049,6 +2056,9 @@ if args[0] == 'api':
 		)
 		if is_candidate_details_batch:
 			store['candidate_details_graphql_calls'] = int(store.get('candidate_details_graphql_calls', 0)) + 1
+			store.setdefault('candidate_details_requested', []).extend(
+				int(n) for _alias, n in re.findall(r'i(\d+)\s*:\s*issue\(number:\s*(\d+)\)', query)
+			)
 		# Classify the query so tests can count wave-label-batch attempts
 		# independently of unrelated GraphQL callers (standalone-stall
 		# marker search, candidate details batch). The wave label batch
@@ -2067,6 +2077,41 @@ if args[0] == 'api':
 		if mode == 'error':
 			print('graphql failed', file=sys.stderr)
 			sys.exit(1)
+		# Standalone stall recovery's pipeline-label batch
+		# (_fetch_standalone_pipeline_label_issues_graphql). Opt-in only:
+		# without the flag the query falls through to the generic answer,
+		# every alias is missing and the poller takes the REST fallback for
+		# all seven labels, exactly as before the batch existed.
+		pls_aliases = re.findall(
+			r'\bl(\d+)\s*:\s*issues\(states:\s*\[OPEN\],\s*labels:\s*\[("(?:[^"\\]|\\.)*")\]',
+			query,
+		)
+		if pls_aliases and store.get('mock_pipeline_label_graphql') is True:
+			store['pipeline_label_graphql_calls'] = int(store.get('pipeline_label_graphql_calls', 0)) + 1
+			save()
+			if store.get('fail_pipeline_label_graphql'):
+				print('pipeline label graphql failed', file=sys.stderr)
+				sys.exit(1)
+			has_next = set(store.get('pipeline_label_graphql_has_next', []) or [])
+			pls_repo = {}
+			for pls_alias, pls_label_json in pls_aliases:
+				pls_label = json.loads(pls_label_json)
+				pls_nodes = []
+				for inum, idata in store.get('issues', {}).items():
+					if idata.get('closed'):
+						continue
+					if pls_label not in (idata.get('labels', []) or []):
+						continue
+					try:
+						pls_nodes.append({'number': int(inum)})
+					except (TypeError, ValueError):
+						continue
+				pls_repo['l' + pls_alias] = {
+					'pageInfo': {'hasNextPage': pls_label in has_next},
+					'nodes': pls_nodes,
+				}
+			print(json.dumps({'data': {'repository': pls_repo}}))
+			sys.exit(0)
 		aliases = []
 		for alias, issue_num in re.findall(r'i(\d+)\s*:\s*issue\(number:\s*(\d+)\)', query):
 			aliases.append((int(alias), int(issue_num)))
@@ -2422,6 +2467,11 @@ if args[0] == 'api':
 			sys.exit(1)
 		issue = get_issue(m.group(1))
 		issue_state = 'closed' if issue.get('closed') else 'open'
+		# Opt-in closed state, state_reason and closed_at (validation harness
+		# hold heal-issue reads, #7913 P2b).
+		issue_ext = (store.get('issue_extra_fields') or {}).get(m.group(1), {})
+		if 'closed' in issue_ext:
+			issue_state = 'closed' if issue_ext.get('closed') else 'open'
 		if jq == '.body':
 			print(issue.get('body', ''))
 		elif jq == '.state':
@@ -2440,7 +2490,8 @@ if args[0] == 'api':
 				'body': issue.get('body', ''),
 				'title': issue.get('title', ''),
 				'state': issue_state,
-				'state_reason': issue.get('state_reason', ''),
+				'state_reason': issue_ext.get('state_reason', issue.get('state_reason', '')),
+				'closed_at': issue_ext.get('closed_at'),
 				'labels': [{'name': l} for l in issue.get('labels', [])],
 			}
 			import subprocess as _sp
@@ -2835,6 +2886,11 @@ if args[0] == 'api':
 	if m_commit:
 		files = [{'filename': f} for f in (store.get('commit_files') or {}).get(m_commit.group(1), [])]
 		payload = {'sha': m_commit.group(1), 'files': files}
+		# Opt-in committer date (validation harness hold truncated compare, #7913).
+		commit_date = (store.get('commit_dates') or {}).get(m_commit.group(1))
+		if commit_date:
+			payload['commit'] = {'committer': {'date': commit_date}}
+		save()
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
@@ -2878,6 +2934,11 @@ if args[0] == 'api':
 	m = re.search(r'^repos/[^/]+/[^/]+/compare/.+\.\.\..+$', path)
 	if m:
 		if store.get('compare_ahead_by_force_error'):
+			sys.stderr.write('simulated compare API error\n')
+			sys.exit(22)
+		# 'compare_fail_ranges' fails only the listed '<base>...<head>' ranges.
+		if path.split('/compare/', 1)[1] in (store.get('compare_fail_ranges') or []):
+			save()
 			sys.stderr.write('simulated compare API error\n')
 			sys.exit(22)
 		sequence = store.get('compare_ahead_by_sequence') or []
@@ -3088,6 +3149,13 @@ args = list(raw_args)
 while len(args) >= 2 and args[0] in ('-C', '-c'):
 	global_opts.extend(args[:2])
 	args = args[2:]
+
+# Validation harness hold tests (#7913, P2b): 'git_show_blobs' maps a
+# `<rev>:<path>` argument of `git show` to fixed file content, so the
+# poller's local pin read sees a chosen default-branch wrapper.
+if len(args) == 2 and args[0] == 'show' and args[1] in (store.get('git_show_blobs') or {}):
+	sys.stdout.write(store['git_show_blobs'][args[1]])
+	sys.exit(0)
 
 if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and '--name-only' in args:
 	paths = list(store.get('merge_tree_conflict_paths', []))
@@ -15627,6 +15695,308 @@ def test_validation_harness_pin_reads_default_branch_wrapper_locally():
 
 
 
+# ---------------------------------------------------------------------------
+# Tests: validation harness hold per-tick check and resume (Refs #7913, P2b)
+# ---------------------------------------------------------------------------
+
+_HOLD_PIN_NEW = "c" * 40
+_HOLD_PIN_DATE = "2026-02-01T12:00:00Z"
+_HOLD_HEAL_ISSUE = "900"
+_HOLD_WRAPPER_PATH = "origin/main:.github/workflows/ai-validate.yml"
+
+
+def _harness_route_comment(
+	*, outcome: str = "opened", issue: str = _HOLD_HEAL_ISSUE, classification: str = "workflow-defect",
+	login: str = _HARNESS_ROUTE_LOGIN, fp: str = _HARNESS_OWNER_FP,
+) -> dict:
+	return {
+		"body": (
+			"The workflow failure heal intake routed this validation failure.\n"
+			f"<!-- workflow-failure-heal:validation-route:v1 fp={fp} outcome={outcome} issue={issue} "
+			f"classification={classification} run=4242 -->\n"
+		),
+		"user": {"login": login},
+		"author_association": "OWNER",
+	}
+
+
+def _run_harness_tick(
+	*, pin: str | None = _HOLD_PIN_NEW, support: str | None = _HARNESS_OWNER_SUPPORT,
+	comments: list | None = None, compare_status: str = "ahead", heal: dict | None = None,
+	recovery: int = 1, env: dict | None = None, store: dict | None = None,
+	fail_dispatch: bool = False,
+) -> dict:
+	state = _harness_held_failed_state()
+	state["validation_recovery_count"] = recovery
+	state["validation_harness_hold"] = {
+		"fp": _HARNESS_OWNER_FP, "support": support, "heal_issue": None,
+		"outcome": None, "since": "2026-01-01T00:00:00Z", "reason": "harness",
+	}
+	extra: dict = {}
+	if pin:
+		extra["git_show_blobs"] = {
+			_HOLD_WRAPPER_PATH: (
+				"jobs:\n  v:\n    uses: shubhodeep1/coding-workflows/.github/workflows/"
+				f"validate.yml@{pin} # stable\n"
+			),
+		}
+	if pin and support:
+		extra["compare_status_by_range"] = {f"{support}...{pin}": compare_status}
+		extra["compare_commits_detail"] = [
+			{"sha": pin, "parents": [{"sha": support}], "commit": {"committer": {"date": _HOLD_PIN_DATE}}},
+		]
+	if heal is not None:
+		extra["issue_extra_fields"] = {_HOLD_HEAL_ISSUE: heal}
+	extra.update(store or {})
+	overrides = {
+		"VALIDATION_HARNESS_ROUTE_LOGIN": _HARNESS_ROUTE_LOGIN,
+		"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false",
+		"CWS_DEFAULT_BRANCH": "main",
+		# The harness default is 0; a bounce needs budget to revalidate.
+		"MAX_VALIDATION_RECOVERY_ATTEMPTS": "2",
+	}
+	overrides.update(env or {})
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
+		tracking_comments=comments or [],
+		capture_telegram_calls=True,
+		fail_validation_dispatch=fail_dispatch,
+		env_overrides=overrides,
+		mock_store_extra=extra,
+	)
+
+
+def _hold_line(outcome: str, *, pin: str = _HOLD_PIN_NEW, heal_issue: str = "none", reason: str | None = None) -> str:
+	line = (
+		f"VALIDATION_HARNESS_HOLD tracking_issue=192 outcome={outcome} fp={_HARNESS_OWNER_FP} "
+		f"pin={pin} heal_issue={heal_issue}"
+	)
+	return line + (f" reason={reason}" if reason else "")
+
+
+def _harness_api_reads(result: dict) -> tuple[int, int]:
+	calls = result["api_calls"]
+	compares = sum("repos/shubhodeep1/coding-workflows/compare/" in c for c in calls)
+	issues = sum(c.endswith(f"coding-workflows/issues/{_HOLD_HEAL_ISSUE}") for c in calls)
+	return compares, issues
+
+
+def _assert_harness_still_held(result: dict) -> None:
+	output = result["stdout"] + result["stderr"]
+	ls = result.get("latest_state") or result["state_on_disk"]
+	assert ls["status"] == "failed", output
+	assert "validation_harness_hold" in ls, output
+	assert result["validation_dispatches"] == [], output
+	assert not any("<!-- validation-harness-resume:v1" in b for b in _harness_comment_bodies(result))
+
+
+def test_validation_harness_hold_waits_on_unchanged_pin_without_api_calls():
+	result = _run_harness_tick(pin=_HARNESS_OWNER_SUPPORT)
+	output = result["stdout"] + result["stderr"]
+	assert _hold_line("waiting", pin=_HARNESS_OWNER_SUPPORT, reason="pin_unchanged") in output, output
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+	assert result["state_on_disk"]["validation_harness_hold"]["support"] == _HARNESS_OWNER_SUPPORT
+	assert result["validation_dispatches"] == []
+
+	unreadable = _run_harness_tick(pin=None)
+	out2 = unreadable["stdout"] + unreadable["stderr"]
+	assert _hold_line("waiting", pin="unknown", reason="pin_unresolved") in out2, out2
+	assert _harness_api_reads(unreadable) == (0, 0), unreadable["api_calls"]
+	assert unreadable["validation_dispatches"] == []
+
+
+def test_validation_harness_hold_resumes_when_heal_issue_closed_before_pin():
+	result = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-01T11:00:00Z"},
+	)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert "validation_harness_hold" not in ls
+	assert ls["validation_recovery_count"] == 1
+	assert ls["validation_cycle"] == 1
+	assert ls["validation_harness_resumes"] == {"by_fp": {_HARNESS_OWNER_FP: 1}, "total": 1}
+	assert len(result["validation_dispatches"]) == 1, output
+	assert "ai:validating" in result["tracking_labels"]
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert "ai:harness-broken" not in result["tracking_labels"]
+	resume = [b for b in _harness_comment_bodies(result) if "## ▶️ Runtime validation resumed after a harness fix" in b]
+	assert len(resume) == 1, output
+	assert resume[0].rstrip().splitlines()[-1] == (
+		f"<!-- validation-harness-resume:v1 fp={_HARNESS_OWNER_FP} pin={_HOLD_PIN_NEW} -->"
+	)
+	assert any(n["level"] == "DEBUG" and "resumed after a harness fix" in n["message"] for n in result["telegram_notifications"])
+	assert _hold_line("resumed", heal_issue=_HOLD_HEAL_ISSUE) in output, output
+	assert _harness_api_reads(result) == (1, 1), result["api_calls"]
+
+
+def test_validation_harness_hold_waits_while_heal_issue_open_or_closed_after_pin():
+	open_result = _run_harness_tick(comments=[_harness_route_comment()])
+	out = open_result["stdout"] + open_result["stderr"]
+	assert _hold_line("waiting", heal_issue=_HOLD_HEAL_ISSUE, reason="heal_issue_open") in out, out
+	_assert_harness_still_held(open_result)
+	hold = open_result["latest_state"]["validation_harness_hold"]
+	assert (hold["heal_issue"], hold["outcome"]) == (900, "opened")
+
+	late = _run_harness_tick(
+		comments=[_harness_route_comment(outcome="duplicate")],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-02T00:00:00Z"},
+	)
+	out = late["stdout"] + late["stderr"]
+	assert _hold_line("waiting", heal_issue=_HOLD_HEAL_ISSUE, reason="heal_closed_after_pin") in out, out
+	_assert_harness_still_held(late)
+
+
+def test_validation_harness_hold_not_planned_heal_issue_parks_project():
+	result = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "not_planned", "closed_at": "2026-02-01T11:00:00Z"},
+	)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", output
+	assert "validation_harness_hold" not in ls
+	assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" in output
+	assert any(n["level"] == "CRITICAL" and "hold ended (not_planned)" in n["message"] for n in result["telegram_notifications"])
+	assert any("## ❌ Runtime validation harness hold ended" in b for b in _harness_comment_bodies(result))
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert result["validation_dispatches"] == []
+	assert _hold_line("not_planned", heal_issue=_HOLD_HEAL_ISSUE) in output, output
+
+
+def test_validation_harness_hold_waits_on_behind_or_diverged_pin():
+	for status in ("behind", "diverged"):
+		result = _run_harness_tick(comments=[_harness_route_comment()], compare_status=status)
+		output = result["stdout"] + result["stderr"]
+		assert _hold_line("waiting", heal_issue=_HOLD_HEAL_ISSUE, reason=f"pin_{status}") in output, output
+		assert _harness_api_reads(result) == (1, 0), result["api_calls"]
+		_assert_harness_still_held(result)
+
+	failed = _run_harness_tick(store={"compare_fail_ranges": [f"{_HARNESS_OWNER_SUPPORT}...{_HOLD_PIN_NEW}"]})
+	output = failed["stdout"] + failed["stderr"]
+	assert _hold_line("unknown", reason="compare_failed") in output, output
+	_assert_harness_still_held(failed)
+
+
+def test_validation_harness_hold_bounce_charges_recovery_attempt():
+	result = _run_harness_tick(comments=[_harness_route_comment(outcome="bounced", classification="consumer-app-defect")])
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert "validation_harness_hold" not in ls
+	assert ls["validation_recovery_count"] == 2
+	assert len(result["validation_dispatches"]) == 1, output
+	bounce = [b for b in _harness_comment_bodies(result) if "## ↩️ Harness heal returned the failure" in b]
+	assert len(bounce) == 1, output
+	assert "consumer-app-defect" in bounce[0]
+	assert bounce[0].rstrip().splitlines()[-1] == f"<!-- validation-harness-bounce:v1 fp={_HARNESS_OWNER_FP} -->"
+	assert "outcome=bounced" in output
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+
+	exhausted = _run_harness_tick(comments=[_harness_route_comment(outcome="bounced")], recovery=2)
+	output = exhausted["stdout"] + exhausted["stderr"]
+	ls = exhausted["latest_state"]
+	assert ls["status"] == "failed", output
+	assert "validation_harness_hold" not in ls
+	assert ls["validation_recovery_count"] == 2
+	assert exhausted["validation_dispatches"] == []
+	assert any(n["level"] == "CRITICAL" for n in exhausted["telegram_notifications"])
+	assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" in output
+	assert "outcome=bounced" in output and "reason=recovery_exhausted" in output
+
+
+def test_validation_harness_hold_untrusted_bounce_marker_is_ignored():
+	result = _run_harness_tick(
+		pin=_HARNESS_OWNER_SUPPORT,
+		comments=[_harness_route_comment(outcome="bounced", login="outsider")],
+	)
+	output = result["stdout"] + result["stderr"]
+	assert _hold_line("waiting", pin=_HARNESS_OWNER_SUPPORT, reason="pin_unchanged") in output, output
+	assert not any("validation-harness-bounce:v1" in b for b in _harness_comment_bodies(result))
+	assert result["state_on_disk"]["validation_recovery_count"] == 1
+
+
+def test_validation_harness_hold_resumes_on_pin_alone_without_heal_issue():
+	for comments in ([], [_harness_route_comment(outcome="already-fixed")]):
+		result = _run_harness_tick(comments=comments)
+		output = result["stdout"] + result["stderr"]
+		ls = result["latest_state"]
+		assert ls["status"] == "validating", output
+		assert "validation_harness_hold" not in ls
+		assert len(result["validation_dispatches"]) == 1, output
+		assert _harness_api_reads(result) == (1, 0), result["api_calls"]
+		assert "outcome=resumed" in output
+
+
+def test_validation_harness_hold_truncated_compare_reads_pin_commit_date():
+	# The compare lists 250 of 400 commits, so its last listed commit is older
+	# than the pin: the pin commit's own date decides.
+	store = {
+		"compare_total_commits": 400,
+		"commit_dates": {_HOLD_PIN_NEW: "2026-02-03T00:00:00Z"},
+	}
+	result = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-02T00:00:00Z"},
+		store=store,
+	)
+	output = result["stdout"] + result["stderr"]
+	assert result["latest_state"]["status"] == "validating", output
+	assert len(result["validation_dispatches"]) == 1, output
+	assert sum(c.endswith(f"coding-workflows/commits/{_HOLD_PIN_NEW}") for c in result["api_calls"]) == 1, result["api_calls"]
+
+	unread = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-01T11:00:00Z"},
+		store={"compare_total_commits": 400},
+	)
+	out2 = unread["stdout"] + unread["stderr"]
+	assert _hold_line("waiting", heal_issue=_HOLD_HEAL_ISSUE, reason="pin_date_unknown") in out2, out2
+	_assert_harness_still_held(unread)
+
+
+def test_validation_harness_hold_dispatch_failure_restores_hold_and_labels():
+	result = _run_harness_tick(fail_dispatch=True)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", output
+	assert ls["validation_harness_hold"]["fp"] == _HARNESS_OWNER_FP
+	assert "validation_harness_resumes" not in ls
+	assert ls["validation_last_raw_status"] == "harness_error"
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert not any("<!-- validation-harness-resume:v1" in b for b in _harness_comment_bodies(result))
+	assert _hold_line("unknown", reason="dispatch_failed") in output, output
+
+
+def test_validation_harness_hold_baselines_unknown_support_and_switch_off_skips():
+	result = _run_harness_tick(support=None)
+	output = result["stdout"] + result["stderr"]
+	assert _hold_line("waiting", reason="support_baselined") in output, output
+	assert result["latest_state"]["validation_harness_hold"]["support"] == _HOLD_PIN_NEW
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+	assert result["validation_dispatches"] == []
+
+	off = _run_harness_tick(env={"VALIDATION_HARNESS_HEAL_ENABLED": "false"})
+	assert "VALIDATION_HARNESS_HOLD tracking_issue=192 outcome=" not in off["stdout"] + off["stderr"]
+	assert off["validation_dispatches"] == []
+
+
+def test_validation_harness_hold_tick_runs_after_stale_pin_block_and_documents_api_budget():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	stale = script.index("# Stale validation-wrapper pin — one-shot automatic recovery (#7138)")
+	tick = script.index("validation_harness_hold_tick || VHH_TICK_RC=$?")
+	resume = script.index("# /judge_resume — manual reset from judge/recovery failure")
+	assert stale < tick < resume
+	for fn in ("_validation_harness_hold_compare() {", "_validation_harness_hold_issue_state() {"):
+		body = _extract_bash_function(script, fn)
+		assert "§14/§15 API budget" in body and "memoized" in body
+
+
 def test_validation_fixing_label_collects_active_fix_issue_ids_from_comment():
 	state = _base_state(status="validating")
 	state["validation_cycle"] = 1
@@ -26544,7 +26914,7 @@ def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
 
 NEEDS_HUMAN_TERMINAL_CALLS = {
 	"security_pass_failed": 3,
-	"validation_failed": 3,
+	"validation_failed": 4,
 	"final_merge_exhausted": 1,
 	"integration_conflict_capped": 1,
 	"judge_cycles_exhausted": 1,
@@ -26560,15 +26930,20 @@ def test_needs_human_digest_terminal_paths_call_the_helper():
 		assert script.count(f'needs_human_park_project "{reason}"') == count, reason
 	lines = script.splitlines()
 	# The validation harness hold (Refs #7913) waits for a harness fix instead
-	# of parking, so its helper is the one exemption from the adjacency rule.
-	hold_start = lines.index("_validation_harness_hold_finish() {")
-	hold_end = lines.index("}", hold_start)
-	assert any(
-		l.strip() == 'set_tracking_phase_label "ai:validation-failed"' for l in lines[hold_start:hold_end]
-	)
-	assert not any("needs_human_park_project" in l for l in lines[hold_start:hold_end])
+	# of parking: entering the hold and rolling back a failed resume dispatch
+	# restore ai:validation-failed without parking, so those two helpers are
+	# the exemptions from the adjacency rule.
+	exempt = []
+	for header in ("_validation_harness_hold_finish() {", "_validation_harness_hold_resume() {"):
+		hold_start = lines.index(header)
+		hold_end = lines.index("}", hold_start)
+		assert any(
+			l.strip() == 'set_tracking_phase_label "ai:validation-failed"' for l in lines[hold_start:hold_end]
+		), header
+		assert not any("needs_human_park_project" in l for l in lines[hold_start:hold_end]), header
+		exempt.append((hold_start, hold_end))
 	for idx, line in enumerate(lines):
-		if hold_start <= idx < hold_end:
+		if any(start <= idx < end for start, end in exempt):
 			continue
 		if line.strip() in ('set_tracking_phase_label "ai:security-pass-failed"', 'set_tracking_phase_label "ai:validation-failed"'):
 			assert lines[idx + 1].strip().startswith("needs_human_park_project "), idx
@@ -27279,6 +27654,89 @@ def test_v2_extract_skip_status_skips_non_string_status():
 		skipped = subprocess.run(["python3", script, "extract", "--comments-json", str(comments_json), "--skip-status", "failed"], capture_output=True, text=True, timeout=30)
 	assert skipped.returncode == 0, skipped.stderr
 	assert json.loads(skipped.stdout)["status"] == "validating"
+
+
+_STANDALONE_PIPELINE_LABELS = (
+	"ai:clarification",
+	"ai:planning",
+	"ai:awaiting-approval",
+	"ai:implementing",
+	"ai:done",
+	"ai:ready-to-merge",
+	"ai:review-blocked",
+)
+
+
+def _run_standalone_label_batch_tick(**kwargs) -> dict:
+	# Standalone stall recovery only (no tracking project), with a mix of
+	# pipeline-labelled, closed and non-pipeline issues.
+	return _run_poller(
+		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={
+			10: ["ai:merged"],
+			501: ["ai:awaiting-approval"],
+			502: ["ai:done"],
+			503: ["ai:planning"],
+			504: ["ai:done"],
+			505: ["ai:merged"],
+		},
+		issue_closed={504: True},
+		mock_gh_issue_list_label_filter=True,
+		tracking_issues_override=[],
+		env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true"},
+		**kwargs,
+	)
+
+
+def _stall_listing_labels(result: dict) -> list[str]:
+	# Only standalone stall recovery lists labels with `--json number`; the
+	# close-merged and orphan sweeps ask for other fields.
+	return [c.get("label") for c in result.get("issue_list_calls", []) if c.get("json") == "number"]
+
+
+def test_standalone_pipeline_labels_listed_with_one_graphql_batch() -> None:
+	batched = _run_standalone_label_batch_tick(mock_pipeline_label_graphql=True)
+	log = batched["stdout"] + batched["stderr"]
+	assert batched["pipeline_label_graphql_calls"] == 1, log
+	assert _stall_listing_labels(batched) == [], log
+	requested = set(batched.get("candidate_details_requested", []))
+	assert {501, 502, 503} <= requested, log
+	assert not ({504, 505} & requested), log
+	assert "label GraphQL batch fell back to REST" not in log
+
+	legacy = _run_standalone_label_batch_tick(mock_pipeline_label_graphql=True, fail_pipeline_label_graphql=True)
+	assert set(legacy.get("candidate_details_requested", [])) == requested, legacy["stdout"] + legacy["stderr"]
+
+
+def test_standalone_pipeline_label_batch_overflow_lists_only_that_label() -> None:
+	result = _run_standalone_label_batch_tick(
+		mock_pipeline_label_graphql=True, pipeline_label_graphql_has_next=["ai:done"],
+	)
+	log = result["stdout"] + result["stderr"]
+	assert result["pipeline_label_graphql_calls"] == 1, log
+	assert _stall_listing_labels(result) == ["ai:done"], log
+	requested = set(result.get("candidate_details_requested", []))
+	assert {501, 502, 503} <= requested, log
+	assert not ({504, 505} & requested), log
+	assert "label GraphQL batch fell back to REST for: ai:done" in log
+
+
+def test_standalone_pipeline_label_batch_failure_falls_back_to_all_rest_calls() -> None:
+	result = _run_standalone_label_batch_tick(mock_pipeline_label_graphql=True, fail_pipeline_label_graphql=True)
+	log = result["stdout"] + result["stderr"]
+	assert result["pipeline_label_graphql_calls"] == 1, log
+	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
+	assert "::notice::Standalone stall recovery: label GraphQL batch fell back to REST for:" in log
+
+
+def test_standalone_pipeline_label_batch_unrecognised_answer_keeps_rest_path() -> None:
+	# Without the opt-in fake the GraphQL answer has no aliases, so every label
+	# takes the unchanged REST listing, as before the batch existed.
+	result = _run_standalone_label_batch_tick()
+	log = result["stdout"] + result["stderr"]
+	assert result["pipeline_label_graphql_calls"] == 0, log
+	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
+	assert {501, 502, 503} <= set(result.get("candidate_details_requested", [])), log
 
 
 if __name__ == "__main__":

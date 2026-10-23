@@ -3059,6 +3059,28 @@ if ! [[ "${INTEGRATION_CONFLICT_LIFETIME_MAX}" =~ ^[0-9]+$ ]] || [ "${INTEGRATIO
   INTEGRATION_CONFLICT_LIFETIME_MAX="10"
 fi
 
+# INTEGRATION_CONFLICT_PARK_ENABLED (default true) — park an integration
+# conflict instead of spending resolver or judge dispatches when the final PR
+# body's AUTOFIX_RESOLVER_RETRY_STATE_V1 shows, for the unchanged PR head,
+# either a non-retryable resolver failure (the sandbox refuses the conflict
+# set) or at least INTEGRATION_CONFLICT_PARK_GATE_CAP identical failures
+# (the review gate's identical-failure cap then stops every new run on that
+# head, so a dispatch only burns INTEGRATION_CONFLICT_LIFETIME_MAX).
+# INTEGRATION_CONFLICT_PARK_GATE_CAP defaults to
+# REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL (default 3), the gate's own cap.
+# tele-funtoken-msg-scoring final PR #3933 (2026-10-23).
+INTEGRATION_CONFLICT_PARK_ENABLED="${INTEGRATION_CONFLICT_PARK_ENABLED:-true}"
+if is_truthy "${INTEGRATION_CONFLICT_PARK_ENABLED}"; then
+  INTEGRATION_CONFLICT_PARK_ENABLED="true"
+else
+  INTEGRATION_CONFLICT_PARK_ENABLED="false"
+fi
+INTEGRATION_CONFLICT_PARK_GATE_CAP="${INTEGRATION_CONFLICT_PARK_GATE_CAP:-${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}}"
+if ! [[ "${INTEGRATION_CONFLICT_PARK_GATE_CAP}" =~ ^[0-9]+$ ]] || [ "${INTEGRATION_CONFLICT_PARK_GATE_CAP}" -lt 1 ]; then
+  echo "::warning::INTEGRATION_CONFLICT_PARK_GATE_CAP must be a positive integer; defaulting to 3"
+  INTEGRATION_CONFLICT_PARK_GATE_CAP="3"
+fi
+
 BRANCH_REBUILD_ENABLED="${BRANCH_REBUILD_ENABLED:-false}"
 if is_truthy "${BRANCH_REBUILD_ENABLED}"; then
   BRANCH_REBUILD_ENABLED="true"
@@ -10495,7 +10517,12 @@ EOF
 # review-blocked judge block (~L3700-3720) but is PR-scoped rather
 # than issue-scoped.
 #
-# Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch>
+# Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch> [resolver_retry_state_json]
+#   resolver_retry_state_json: the final PR body's AUTOFIX_RESOLVER_RETRY_STATE_V1
+#   (already fetched by heal_integration_branch_conflict); its newest failure
+#   reason / run / conflicted paths go into the prompt. The judge's previous
+#   "Integration conflict diagnosis" comment comes from this tick's tracking
+#   comments (COMMENTS), trusted author only. No extra API calls.
 # Returns: 0 on successful resolver dispatch, 1 on failure, 2 on isolation deferral,
 #          3 when an existing resolver run already owns this PR,
 #          4 when guidance could not be published for the resolver,
@@ -10505,6 +10532,7 @@ invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
   local default_branch="$3"
+  local judge_retry_state="${4:-}"
 
   [ -n "${final_pr}" ] || return 1
   : > "${RUNTIME_DIR:?}/judge_isolation_reason"
@@ -10603,6 +10631,21 @@ invoke_judge_for_integration_conflict() {
   local intent_fingerprints
   intent_fingerprints="$(jq -c '.merged_issue_fingerprints // {}' "${STATE_FILE}" 2>/dev/null || echo "{}")"
   [ -n "${intent_fingerprints}" ] || intent_fingerprints='{}'
+  # Newest resolver failure (from the PR body retry state) and the judge's own
+  # previous diagnosis: without them each judge call started from scratch and
+  # three calls on one head gave three contradictory answers (final PR #3933).
+  local judge_last_failure="" judge_prior_diagnosis="" judge_trusted_login=""
+  judge_last_failure="$(_integration_retry_state_failure_detail "${judge_retry_state}")"
+  # Called in this shell (not a substitution) so the per-tick login cache holds.
+  unblock_trusted_login >/dev/null 2>&1 || true
+  judge_trusted_login="${UNBLOCK_TRUSTED_LOGIN:-}"
+  if [ -n "${judge_trusted_login}" ]; then
+    judge_prior_diagnosis="$(printf '%s' "${COMMENTS:-[]}" | jq -r --arg login "${judge_trusted_login}" --arg pr "Final PR #${final_pr}:" '
+      [.[]? | select((.user.login // "") == $login)
+        | select((.body // "") | type == "string" and startswith("## Integration conflict diagnosis\n"))
+        | select((.body // "") | contains($pr))] | last | .body // ""
+      | gsub("<!--[^>]*-->"; "") | gsub("`"; "'"'"'") | .[0:3000]' 2>/dev/null || true)"
+  fi
   local judge_semble_query_file
   local judge_semble_prefetch=""
   judge_semble_query_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_semble_query.XXXXXX")"
@@ -10612,6 +10655,7 @@ invoke_judge_for_integration_conflict() {
     append_judge_semble_query_text "Changed files JSON:" "${pr_files}" 2500
     append_judge_semble_query_text "PR diff excerpt:" "${pr_diff}" 5000
     append_judge_semble_query_text "Intent fingerprints JSON:" "${intent_fingerprints}" 3500
+    append_judge_semble_query_text "Last resolver failure:" "${judge_last_failure}" 800
   } > "${judge_semble_query_file}"
   judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${judge_static_file}")"
 
@@ -10641,15 +10685,28 @@ invoke_judge_for_integration_conflict() {
     echo "Conflicted files:"
     printf '%s\n' "${judge_conflicts}"
     echo
-    echo 'Edit only the conflicted files listed above. Every conflicted file'
-    echo 'may contain only lines taken from either merge side. Keep each side'
-    echo 'in order, and keep every line both merge sides contain at least as'
-    echo 'many times as the side with fewer copies. Do not duplicate lines'
-    echo 'inherited unchanged from the common base. Changes to other paths'
-    echo 'or lines from neither side reject the resolution without a push.'
-    echo 'Do not use a file mode from neither side or delete a file present'
-    echo 'on both sides; a one-sided delete/modify conflict may resolve to deletion.'
+    echo 'Your guidance goes to the isolated conflict resolver, which edits only'
+    echo 'the conflicted files (plus files that fail a merged sub-issue'
+    echo 'fingerprint). Its rule for a hunk where both sides rewrote the same'
+    echo 'code: synthesize one hunk that keeps both sides'"'"' intent when neither'
+    echo 'side alone preserves every merged sub-issue fingerprint, instead of'
+    echo 'picking a side. Guide it within that rule. It cannot edit host-only'
+    echo 'paths (`.ai/`, host-executed hooks); if the last failure below names'
+    echo 'such a path, say so in the diagnosis.'
     echo
+    if [ -n "${judge_last_failure}" ]; then
+      echo "Last resolver failure on this PR (from the PR retry state): ${judge_last_failure}"
+      echo
+    fi
+    if [ -n "${judge_prior_diagnosis}" ]; then
+      echo "Your previous diagnosis for this PR (untrusted advisory; the resolver"
+      echo "still failed after it, so do not repeat it unchanged — build on it or"
+      echo "say why it was wrong):"
+      echo '```text'
+      printf '%s\n' "${judge_prior_diagnosis}"
+      echo '```'
+      echo
+    fi
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
     echo "Context:"
@@ -12596,6 +12653,107 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${base_ref}\`) ${recovery_
   return 10
 }
 
+# _integration_retry_state_failure_detail <retry_state_json>
+#
+# One line naming the newest resolver failure recorded in the final PR's
+# AUTOFIX_RESOLVER_RETRY_STATE_V1 (review_conflict_resolve.sh): reason, run
+# id, identical-failure count and up to 5 refused conflicted paths. Values
+# are filtered to safe tokens. Prints nothing for an empty or unreadable
+# state. No API calls.
+_integration_retry_state_failure_detail() {
+  local retry_state="$1"
+  [ -n "${retry_state}" ] || return 0
+  printf '%s' "${retry_state}" | jq -r '
+    def tok: tostring | gsub("[^A-Za-z0-9_.:/-]"; "");
+    if type != "object" then empty else
+      [ ("last failure " + ((.last_failure_reason // .isolation_failure_reason // "fingerprint_violations") | tok)),
+        (if (.last_run_id // "" | tostring | test("^[0-9]{1,20}$")) then "run " + (.last_run_id | tostring) else empty end),
+        ("identical failures " + ((.consecutive_failure_count // 0) | tok)),
+        (if ((.last_conflict_paths // []) | type) == "array" and ((.last_conflict_paths // []) | length) > 0
+          then "paths " + ([.last_conflict_paths[:5][] | tok] | join(", "))
+            + (if (.last_conflict_paths | length) > 5 then ", ..." else "" end)
+          else empty end)
+      ] | join("; ")
+    end' 2>/dev/null || true
+}
+
+# _integration_conflict_park_if_stuck <final_pr> <head_sha> <retry_state_json>
+#
+# Called only when the retry state's head_sha equals the final PR's current
+# head, either from the escalated path (after the branch rebuild declined) or
+# for a state that is not escalated. When
+# the newest resolver failure on that head is non-retryable (non_retryable,
+# or an isolation reason the sandbox always refuses) or the identical-failure
+# count reached INTEGRATION_CONFLICT_PARK_GATE_CAP (the review gate's cap
+# then stops every new run on the head), neither the resolver nor the judge
+# is dispatched: integration_sync_status becomes "escalated" with a precise
+# integration_sync_last_error, and no lifetime slot is spent. A new PR head
+# (a push, a branch rebuild or a manual merge) resets this on the next tick.
+# The state comment and one tracking comment are written only when the parked
+# error changes, so an unchanged head does not repost every tick.
+# API budget (CLAUDE.md §15): reads only the PR body the caller fetched; the
+# writes are the existing state comment plus one tracking comment per change.
+# Returns 0 when parked (the caller returns), 1 otherwise.
+# Log: INTEGRATION_CONFLICT_PARKED tracking_issue=<n> pr=<n> head=<sha> reason=non_retryable|gate_cap count=<n> outcome=parked|unchanged|write_failed
+_integration_conflict_park_if_stuck() {
+  local final_pr="$1" head_sha="$2" retry_state="$3"
+  local park_reason="" park_count park_failure park_non_retryable park_detail park_err prev_status prev_err
+
+  [ "${INTEGRATION_CONFLICT_PARK_ENABLED:-true}" = "true" ] || return 1
+  [ -n "${retry_state}" ] || return 1
+  park_count="$(printf '%s' "${retry_state}" | jq -r '.consecutive_failure_count // 0 | tostring' 2>/dev/null || echo 0)"
+  [[ "${park_count}" =~ ^[0-9]+$ ]] || park_count=0
+  park_failure="$(printf '%s' "${retry_state}" | jq -r '.last_failure_reason // .isolation_failure_reason // "" | tostring' 2>/dev/null || echo "")"
+  park_non_retryable="$(printf '%s' "${retry_state}" | jq -r 'if .non_retryable == true then "true" else "false" end' 2>/dev/null || echo false)"
+  case "${park_failure}" in
+    sandbox_path_host_only|sandbox_path_unsupported|sandbox_support_missing) park_non_retryable="true" ;;
+  esac
+  if [ "${park_non_retryable}" = "true" ]; then
+    park_reason="non_retryable"
+  elif [ "${park_count}" -ge "${INTEGRATION_CONFLICT_PARK_GATE_CAP:-3}" ]; then
+    park_reason="gate_cap"
+  else
+    return 1
+  fi
+  park_detail="$(_integration_retry_state_failure_detail "${retry_state}")"
+  if [ "${park_reason}" = "non_retryable" ]; then
+    park_err="resolver cannot resolve final PR #${final_pr} at head ${head_sha}: the sandbox refuses the conflict set (${park_detail:-no detail}); no resolver or judge dispatch until the PR head changes"
+  else
+    park_err="resolver failed identically ${park_count} time(s) on final PR #${final_pr} at head ${head_sha}, so the review gate's identical-failure cap stops new runs (${park_detail:-no detail}); no resolver or judge dispatch until the PR head changes"
+  fi
+  # Set only by the escalated call site: keep the branch rebuild's refusal
+  # reason in the persisted error and the tracking comment.
+  if [ -n "${INTEGRATION_PARK_REBUILD_NOTE:-}" ]; then
+    park_err="${park_err}; branch rebuild: ${INTEGRATION_PARK_REBUILD_NOTE}"
+  fi
+  prev_status="$(jq -r '.integration_sync_status // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  prev_err="$(jq -r '.integration_sync_last_error // ""' "${STATE_FILE}" 2>/dev/null || true)"
+  if [ "${prev_status}" = "escalated" ] && [ "${prev_err}" = "${park_err}" ]; then
+    echo "INTEGRATION_CONFLICT_PARKED tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} head=${head_sha} reason=${park_reason} count=${park_count} outcome=unchanged"
+    return 0
+  fi
+  # Notify only after the parked state is on disk: a failed write would
+  # otherwise repost the comment and WARNING on every tick. Dispatch is
+  # still skipped this tick (return 0); the next tick retries the write.
+  if ! { jq --arg err "${park_err}" \
+      '.integration_sync_status = "escalated" |
+       .integration_sync_last_error = $err' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+    rm -f -- "${STATE_FILE}.tmp" 2>/dev/null || true
+    echo "::warning::INTEGRATION_CONFLICT_PARKED tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} head=${head_sha} reason=${park_reason} count=${park_count} outcome=write_failed"
+    return 0
+  fi
+  post_state_comment || true
+  post_tracking_comment "## ⏸️ Integration conflict parked
+
+Final PR #${final_pr}: ${park_err}.
+
+Resolve the conflict on the integration branch (merge the default branch into it by hand) and push; the next poll tick picks the new head up automatically." || true
+  tg_notify "⏸️ Integration conflict parked for #${TRACKING_NUM:-?} (PR #${final_pr}): ${park_reason}. Push a resolved head to resume." "WARNING" || true
+  echo "INTEGRATION_CONFLICT_PARKED tracking_issue=${TRACKING_NUM:-?} pr=${final_pr} head=${head_sha} reason=${park_reason} count=${park_count} outcome=parked"
+  return 0
+}
+
 heal_integration_branch_conflict() {
   local integration_branch="$1"
   local default_branch="$2"
@@ -12698,12 +12856,24 @@ heal_integration_branch_conflict() {
         if [ -n "${BRANCH_REBUILD_ESCALATED_ERROR:-}" ]; then
           echo "  [integration-heal] ${BRANCH_REBUILD_ESCALATED_ERROR}" >&2
         fi
+        # The resolver escalates a non-retryable failure on its first run, so
+        # the park (one tracking comment + WARNING naming the reason) is
+        # reached here once the branch rebuild declined, not only below.
+        if INTEGRATION_PARK_REBUILD_NOTE="${BRANCH_REBUILD_ESCALATED_ERROR:-}" _integration_conflict_park_if_stuck "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_state}"; then
+          return 0
+        fi
         echo "  [integration-heal] Resolver escape threshold already tripped for final PR #${final_pr} at head ${final_pr_head_sha}; skipping redispatch until the PR head changes."
-        jq --arg err "${BRANCH_REBUILD_ESCALATED_ERROR:-resolver escape threshold reached for final PR #${final_pr} at head ${final_pr_head_sha}}" \
+        local resolver_retry_escalated_detail=""
+        resolver_retry_escalated_detail="$(_integration_retry_state_failure_detail "${resolver_retry_state}")"
+        jq --arg err "${BRANCH_REBUILD_ESCALATED_ERROR:-resolver escape threshold reached for final PR #${final_pr} at head ${final_pr_head_sha}${resolver_retry_escalated_detail:+ (${resolver_retry_escalated_detail})}}" \
           '.integration_sync_status = "escalated" |
            .integration_sync_last_error = $err' \
           "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
+        return 0
+      fi
+      if [ "${resolver_retry_head_sha}" = "${final_pr_head_sha}" ] \
+         && _integration_conflict_park_if_stuck "${final_pr}" "${final_pr_head_sha}" "${resolver_retry_state}"; then
         return 0
       fi
       if [ -n "${resolver_retry_head_sha}" ] && [ "${resolver_retry_head_sha}" != "${final_pr_head_sha}" ]; then
@@ -12854,7 +13024,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       echo '  [integration-heal] Resolver already in flight; deferring judge dispatch accounting.'
       return 0
     fi
-    invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?
+    invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${resolver_retry_state:-}" || integration_judge_result=$?
     if [ "${integration_judge_result}" -eq 3 ]; then
       echo '  [integration-heal] Resolver already in flight; deferring judge dispatch accounting.'
       return 0
@@ -15178,6 +15348,447 @@ The latest validation run reported \`raw_status=harness_error\`. The project sta
   tg_cleanup_msgs "${TRACKING_NUM}"
   tg_notify "Project #${TRACKING_NUM} validation hit a harness error and is waiting for a harness fix (fp=${vhf_fp}, pin=${vhf_support}). /revalidate resumes it now." "WARNING"
   echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=held fp=${vhf_fp} pin=${vhf_support} heal_issue=none"
+}
+
+# ---------------------------------------------------------------------------
+# Validation harness hold: per-tick check and resume (Refs #7913, plan
+# docs/plans/validation-failure-harness-routing-plan.md Phase 2 steps 2 and 4,
+# "Hold and resume (Phase 2, poller)" items 1-5). The time limit and the
+# judge hold request come with P2c.
+#
+# Per held project per tick: the routing marker is read from COMMENTS and the
+# pin with a local `git show` (no API calls). Only after the pin changed does
+# the tick read the harness repo: at most one compare and one issue GET, both
+# memoized by key in the caches below (one poller process is one tick), plus
+# one pin-commit GET only when the compare lists fewer commits than it counts.
+# ---------------------------------------------------------------------------
+declare -gA _VALIDATION_HARNESS_COMPARE_CACHE=()  # "<support>...<pin>" -> "<status>|<committer date>" or "__error__"
+declare -gA _VALIDATION_HARNESS_ISSUE_CACHE=()    # "<heal issue>" -> "<state>|<state_reason>|<closed_at>" or "__error__"
+VHH_COMPARE_STATUS=""
+VHH_PIN_DATE=""
+VHH_ISSUE_STATE=""
+VHH_ISSUE_STATE_REASON=""
+VHH_ISSUE_CLOSED_AT=""
+
+# One VALIDATION_HARNESS_HOLD log line. Args: outcome fp pin heal_issue [reason]
+_validation_harness_hold_log() {
+  local vhl_issue="${4:-}"
+  [[ "${vhl_issue}" =~ ^[0-9]{1,9}$ ]] || vhl_issue="none"
+  echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=$1 fp=$2 pin=${3:-unknown} heal_issue=${vhl_issue}${5:+ reason=$5}"
+}
+
+# Sets VHH_COMPARE_STATUS and VHH_PIN_DATE (committer date of the last commit
+# in the compare response); returns 1 when the read fails.
+_validation_harness_hold_compare() {
+  local vhc_support="$1" vhc_pin="$2" vhc_key vhc_out
+  VHH_COMPARE_STATUS=""
+  VHH_PIN_DATE=""
+  [[ "${vhc_support}" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "${vhc_pin}" =~ ^[0-9a-f]{40}$ ]] || return 1
+  vhc_key="${vhc_support}...${vhc_pin}"
+  if [ -z "${_VALIDATION_HARNESS_COMPARE_CACHE[${vhc_key}]+set}" ]; then
+    # §14/§15 API budget: at most one GET repos/shubhodeep1/coding-workflows/
+    # compare/<support>...<pin> per distinct support/pin pair per tick,
+    # memoized in _VALIDATION_HARNESS_COMPARE_CACHE and never called inside
+    # an inner loop. Audited: the poller's other compare reads target
+    # ${GITHUB_REPOSITORY} branches, not the harness repo's support commits,
+    # so no existing call returns this ancestry.
+    if vhc_out="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/compare/${vhc_key}" \
+      --jq '[(.status // ""), (((.commits // []) | last | .commit.committer.date?) // ""), ((.commits // []) | length | tostring), ((.total_commits // 0) | tostring)] | join("|")' 2>/dev/null)"; then
+      local vhc_status vhc_date vhc_listed vhc_total
+      IFS='|' read -r vhc_status vhc_date vhc_listed vhc_total <<< "${vhc_out}"
+      if [ "${vhc_status}" = "ahead" ] \
+        && [[ "${vhc_listed}" =~ ^[0-9]{1,9}$ ]] && [[ "${vhc_total}" =~ ^[0-9]{1,9}$ ]] \
+        && [ "$((10#${vhc_listed}))" -lt "$((10#${vhc_total}))" ]; then
+        # GitHub lists at most 250 commits, so the last listed one is not the
+        # pin. Only for such a truncated range: one GET of the pin commit for
+        # its committer date, memoized with the compare result. A failed read
+        # leaves the date empty, which keeps the hold waiting.
+        vhc_date="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/commits/${vhc_pin}" \
+          --jq '(.commit.committer.date // "")' 2>/dev/null || echo '')"
+      fi
+      _VALIDATION_HARNESS_COMPARE_CACHE[${vhc_key}]="${vhc_status}|${vhc_date}"
+    else
+      _VALIDATION_HARNESS_COMPARE_CACHE[${vhc_key}]="__error__"
+    fi
+  fi
+  vhc_out="${_VALIDATION_HARNESS_COMPARE_CACHE[${vhc_key}]}"
+  [ "${vhc_out}" != "__error__" ] || return 1
+  IFS='|' read -r VHH_COMPARE_STATUS VHH_PIN_DATE <<< "${vhc_out}"
+  if ! [[ "${VHH_COMPARE_STATUS}" =~ ^[a-z]{1,20}$ ]]; then
+    VHH_COMPARE_STATUS=""
+    VHH_PIN_DATE=""
+    return 1
+  fi
+  return 0
+}
+
+# Sets VHH_ISSUE_STATE, VHH_ISSUE_STATE_REASON and VHH_ISSUE_CLOSED_AT for a
+# heal issue in the harness repo; returns 1 when the read fails.
+_validation_harness_hold_issue_state() {
+  local vhi_issue="$1" vhi_out
+  VHH_ISSUE_STATE=""
+  VHH_ISSUE_STATE_REASON=""
+  VHH_ISSUE_CLOSED_AT=""
+  [[ "${vhi_issue}" =~ ^[0-9]{1,9}$ ]] || return 1
+  if [ -z "${_VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]+set}" ]; then
+    # §14/§15 API budget: at most one GET repos/shubhodeep1/coding-workflows/
+    # issues/<n> per heal issue per tick, memoized in
+    # _VALIDATION_HARNESS_ISSUE_CACHE, and only after the pin moved ahead of
+    # the hold's support commit. No batched read covers issues in the harness
+    # repo (the candidate and linked-PR batches read ${GITHUB_REPOSITORY}).
+    if vhi_out="$(gh_retry _safe_gh_jq "repos/shubhodeep1/coding-workflows/issues/${vhi_issue}" \
+      --jq '[(.state // ""), (.state_reason // ""), (.closed_at // "")] | join("|")' 2>/dev/null)"; then
+      _VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]="${vhi_out}"
+    else
+      _VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]="__error__"
+    fi
+  fi
+  vhi_out="${_VALIDATION_HARNESS_ISSUE_CACHE[${vhi_issue}]}"
+  [ "${vhi_out}" != "__error__" ] || return 1
+  IFS='|' read -r VHH_ISSUE_STATE VHH_ISSUE_STATE_REASON VHH_ISSUE_CLOSED_AT <<< "${vhi_out}"
+  case "${VHH_ISSUE_STATE}" in
+    open|closed) ;;
+    *)
+      VHH_ISSUE_STATE=""
+      return 1
+      ;;
+  esac
+  VHH_ISSUE_STATE_REASON="$(printf '%s' "${VHH_ISSUE_STATE_REASON}" | tr -cd 'a-z_' | cut -c1-40)"
+  return 0
+}
+
+# Ends the hold with today's park (needs-human digest) and a CRITICAL alert.
+# Args: <outcome token> <detail>
+# Returns 1, with nothing parked or announced, when the cleared hold cannot be
+# persisted: the hold stays, so the next tick retries instead of paging again.
+_validation_harness_hold_end_park() {
+  local vhe_outcome="$1" vhe_detail="$2"
+  cp "${STATE_FILE}" "${STATE_FILE}.vhh_bak"
+  if ! { jq 'del(.validation_harness_hold)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; } \
+    || ! post_state_comment; then
+    rm -f "${STATE_FILE}.tmp"
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=hold_clear_failed"
+    return 1
+  fi
+  rm -f "${STATE_FILE}.vhh_bak"
+  set_tracking_phase_label "ai:validation-failed"
+  needs_human_park_project "validation_failed"
+  post_tracking_comment "## ❌ Runtime validation harness hold ended
+
+${vhe_detail}
+
+The project stays failed with \`ai:validation-failed\` and needs a person. Repair the cause, then run \`/revalidate\` to resume runtime validation."
+  COMPLETION_STATUS_STATE_CHANGED="false"
+  update_completion_status_comment "failed" \
+    "## Completion status"$'\n\n'"**State:** \`failed\`"$'\n\n'"The runtime validation harness hold ended (\`${vhe_outcome}\`). Repair the cause, then use \`/revalidate\` to resume validation." \
+    || true
+  if [ "${COMPLETION_STATUS_STATE_CHANGED:-false}" = "true" ]; then
+    post_state_comment || true
+  fi
+  tg_cleanup_msgs "${TRACKING_NUM}"
+  tg_notify "Project #${TRACKING_NUM} validation harness hold ended (${vhe_outcome}). Manual repair plus /revalidate required." "CRITICAL"
+  # The park is done; the alert's status must not read as a persistence failure.
+  return 0
+}
+
+# The `/revalidate` state reset applied by resume and bounce (the recovery
+# count is set by the caller's extra filter).
+_VALIDATION_HARNESS_REVALIDATE_RESET_JQ='.status = "validating" |
+  .validation_cycle = 1 |
+  .validation_active_fix_issues = [] |
+  .validation_fix_issues_batch_cycles = 0 |
+  .validation_last_dispatch_cycle = 0 |
+  .validation_completed_cycle = null |
+  del(.validation_failure_reason) |
+  del(.validation_failure_class) |
+  del(.validation_harness_hold) |
+  del(.validation_last_raw_status)'
+
+# Step 1 on a `bounced` routing marker (Q3): end the hold and charge one
+# recovery attempt with the existing increment rule; an exhausted budget takes
+# today's park path. Returns 10 when it acted, 0 when nothing changed.
+# Args: <fp> <classification> <heal issue|"">
+_validation_harness_hold_bounce() {
+  local vhb_fp="$1" vhb_class="$2" vhb_issue="$3" vhb_count vhb_max vhb_next vhb_issue_ref vhb_pin
+  vhb_pin="${_VALIDATION_HARNESS_PIN_VALUE:-unknown}"
+  vhb_count="$(jq -r '.validation_recovery_count // 0' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${vhb_count}" =~ ^[0-9]{1,9}$ ]] || vhb_count="0"
+  vhb_max="${MAX_VALIDATION_RECOVERY_ATTEMPTS:-2}"
+  [[ "${vhb_max}" =~ ^[0-9]{1,9}$ ]] || vhb_max="2"
+  [[ "${vhb_class}" =~ ^[a-z-]{1,40}$ ]] || vhb_class="unknown"
+  if [[ "${vhb_issue}" =~ ^[0-9]{1,9}$ ]]; then
+    vhb_issue_ref="shubhodeep1/coding-workflows#${vhb_issue}"
+  else
+    vhb_issue_ref="none"
+  fi
+  local vhb_body_head="## ↩️ Harness heal returned the failure to the project
+
+The workflow failure heal intake classified the harness failure as \`${vhb_class}\` (heal issue: ${vhb_issue_ref}), so it is owned by this project and the harness hold ended."
+  if [ "$((10#${vhb_count}))" -ge "$((10#${vhb_max}))" ]; then
+    if ! _validation_harness_hold_end_park "bounced" "The harness heal intake returned the failure to the project (\`${vhb_class}\`) and the validation recovery budget is spent (${vhb_count}/${vhb_max})."; then
+      _validation_harness_hold_log "unknown" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "state_write_failed"
+      return 0
+    fi
+    post_tracking_comment "${vhb_body_head}
+
+The validation recovery budget is spent (${vhb_count}/${vhb_max}).
+
+<!-- validation-harness-bounce:v1 fp=${vhb_fp} -->"
+    _validation_harness_hold_log "bounced" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "recovery_exhausted"
+    return 10
+  fi
+  vhb_next=$((10#${vhb_count} + 1))
+  cp "${STATE_FILE}" "${STATE_FILE}.vhh_bak"
+  if ! { jq --argjson next "${vhb_next}" "${_VALIDATION_HARNESS_REVALIDATE_RESET_JQ} | .validation_recovery_count = \$next" \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; } \
+    || ! jq -e --argjson next "${vhb_next}" '(.status == "validating") and (has("validation_harness_hold") | not) and (.validation_recovery_count == $next)' "${STATE_FILE}" >/dev/null 2>&1; then
+    rm -f "${STATE_FILE}.tmp"
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    _validation_harness_hold_log "unknown" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "state_write_failed"
+    return 0
+  fi
+  # As in the resume path: a leftover failure label would make the next
+  # tick's validating branch fail the bounced run again, so verify the
+  # removal with one fresh labels read before the state is persisted.
+  local vhb_fresh=""
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validation-failed" >/dev/null || true
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
+  if ! vhb_fresh="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/labels" --jq '[.[].name]' 2>/dev/null)" \
+    || has_label "${vhb_fresh}" "ai:validation-failed" \
+    || has_label "${vhb_fresh}" "ai:validate-failed" \
+    || has_label "${vhb_fresh}" "ai:harness-broken"; then
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS:-[]}" || true
+    _validation_harness_hold_log "unknown" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "label_write_failed"
+    return 0
+  fi
+  if ! post_state_comment; then
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS:-[]}" || true
+    _validation_harness_hold_log "unknown" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "state_write_failed"
+    return 0
+  fi
+  rm -f "${STATE_FILE}.vhh_bak"
+  set_tracking_phase_label "ai:validating"
+  post_tracking_comment "${vhb_body_head}
+
+This charges validation recovery attempt ${vhb_next}/${vhb_max}; validation is re-dispatched (cycle 1).
+
+<!-- validation-harness-bounce:v1 fp=${vhb_fp} -->"
+  tg_notify "Project #${TRACKING_NUM}: harness heal returned the validation failure to the project (${vhb_class}); recovery attempt ${vhb_next}/${vhb_max}, revalidating." "DEBUG"
+  _validation_harness_hold_log "bounced" "${vhb_fp}" "${vhb_pin}" "${vhb_issue}" "revalidate"
+  LAST_VAL_RAW_STATUS=''
+  LAST_VAL_CONCLUSION=''
+  if ! dispatch_validation_if_needed 1; then
+    mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after harness bounce. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
+  fi
+  return 10
+}
+
+# Step 5 (Q6): resume validation after a harness fix. The recovery count is
+# kept and the resume caps are counted. The resume marker is posted only after
+# a successful dispatch; a failed dispatch restores the hold, the counters and
+# the failure labels. Returns 10 when it resumed, 0 when nothing changed.
+# Args: <fp> <pin> <heal issue|"">
+_validation_harness_hold_resume() {
+  local vhr_fp="$1" vhr_pin="$2" vhr_issue="$3" vhr_total vhr_fresh=""
+  vhr_total="$(jq -r '(.validation_harness_resumes.total // 0) | tostring' "${STATE_FILE}" 2>/dev/null || echo 0)"
+  [[ "${vhr_total}" =~ ^[0-9]{1,9}$ ]] || vhr_total="0"
+  cp "${STATE_FILE}" "${STATE_FILE}.vhh_bak"
+  if ! { jq --arg fp "${vhr_fp}" "${_VALIDATION_HARNESS_REVALIDATE_RESET_JQ}"' |
+        ((.validation_harness_resumes // {}) | if type == "object" then . else {} end) as $r |
+        (($r.by_fp // {}) | if type == "object" then . else {} end) as $by |
+        .validation_harness_resumes = {
+          by_fp: ($by + {($fp): ((($by[$fp] // 0) | tonumber? // 0) + 1)}),
+          total: ((($r.total // 0) | tonumber? // 0) + 1)
+        }' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; } \
+    || ! jq -e --argjson want "$((10#${vhr_total} + 1))" '(.status == "validating") and (has("validation_harness_hold") | not) and (.validation_harness_resumes.total == $want)' "${STATE_FILE}" >/dev/null 2>&1; then
+    rm -f "${STATE_FILE}.tmp"
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    _validation_harness_hold_log "unknown" "${vhr_fp}" "${vhr_pin}" "${vhr_issue}" "state_write_failed"
+    return 0
+  fi
+  # Remove the failure labels before the state is persisted, as the stale-pin
+  # recovery does: a leftover failure label would make the next tick's
+  # validating branch fail the new run. One fresh labels read (resume path
+  # only) decides; a failure keeps the hold and retries next tick.
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validation-failed" >/dev/null || true
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
+  gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
+  if ! vhr_fresh="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}/labels" --jq '[.[].name]' 2>/dev/null)" \
+    || has_label "${vhr_fresh}" "ai:validation-failed" \
+    || has_label "${vhr_fresh}" "ai:validate-failed" \
+    || has_label "${vhr_fresh}" "ai:harness-broken"; then
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS:-[]}" || true
+    _validation_harness_hold_log "unknown" "${vhr_fp}" "${vhr_pin}" "${vhr_issue}" "label_write_failed"
+    return 0
+  fi
+  # Persist before dispatch so the resume caps survive a crash.
+  if ! post_state_comment; then
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS:-[]}" || true
+    _validation_harness_hold_log "unknown" "${vhr_fp}" "${vhr_pin}" "${vhr_issue}" "state_write_failed"
+    return 0
+  fi
+  set_tracking_phase_label "ai:validating"
+  LAST_VAL_RAW_STATUS=''
+  LAST_VAL_CONCLUSION=''
+  if ! dispatch_validation_if_needed 1; then
+    mv "${STATE_FILE}.vhh_bak" "${STATE_FILE}"
+    if ! post_state_comment; then
+      echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed reason=hold_restore_not_persisted"
+    fi
+    set_tracking_phase_label "ai:validation-failed"
+    _vsp_restore_failure_labels "${TRACKING_NUM}" "${TRACKING_LABELS:-[]}" || true
+    _validation_harness_hold_log "unknown" "${vhr_fp}" "${vhr_pin}" "${vhr_issue}" "dispatch_failed"
+    return 0
+  fi
+  rm -f "${STATE_FILE}.vhh_bak"
+  post_tracking_comment "## ▶️ Runtime validation resumed after a harness fix
+
+The pinned validation workflow moved to \`${vhr_pin}\`, which contains the harness fix, so validation is re-dispatched (cycle 1). Validation recovery counters were kept.
+
+<!-- validation-harness-resume:v1 fp=${vhr_fp} pin=${vhr_pin} -->"
+  tg_notify "Project #${TRACKING_NUM}: validation resumed after a harness fix (pin=${vhr_pin})." "DEBUG"
+  _validation_harness_hold_log "resumed" "${vhr_fp}" "${vhr_pin}" "${vhr_issue}"
+  return 10
+}
+
+# Per-tick check of a project with an active validation_harness_hold. Returns
+# 10 when it acted (resumed, bounced or parked); 0 while waiting or when a
+# read failed, so the caller falls through to the other failed-project steps.
+validation_harness_hold_tick() {
+  local vht_fp vht_support vht_issue vht_outcome vht_marker vht_m_outcome vht_m_issue vht_m_class
+  local vht_pin="unknown" vht_heal_epoch vht_pin_epoch vht_rc
+  vht_fp="$(jq -r '(.validation_harness_hold.fp // "") | tostring' "${STATE_FILE}" 2>/dev/null || echo '')"
+  vht_support="$(jq -r '(.validation_harness_hold.support // "") | tostring' "${STATE_FILE}" 2>/dev/null || echo '')"
+  vht_issue="$(jq -r '(.validation_harness_hold.heal_issue // "") | tostring' "${STATE_FILE}" 2>/dev/null || echo '')"
+  vht_outcome="$(jq -r '(.validation_harness_hold.outcome // "") | tostring' "${STATE_FILE}" 2>/dev/null || echo '')"
+  [[ "${vht_fp}" =~ ^([0-9a-f]{64}|local:[0-9a-f]{16}|judge:[A-Za-z0-9._:-]{1,80})$ ]] || vht_fp="unknown"
+  [[ "${vht_support}" =~ ^[0-9a-f]{40}$ ]] || vht_support=""
+  [[ "${vht_issue}" =~ ^[0-9]{1,9}$ ]] || vht_issue=""
+  case "${vht_outcome}" in
+    opened|duplicate|already-fixed|bounced|skipped) ;;
+    *) vht_outcome="" ;;
+  esac
+  if [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
+    _validation_harness_hold_log "waiting" "${vht_fp}" "unknown" "${vht_issue}" "validation_disabled"
+    return 0
+  fi
+
+  # Step 1: routing marker (from COMMENTS, no API call).
+  validation_harness_route_login >/dev/null
+  vht_marker="$(validation_harness_marker route "${vht_fp}")"
+  if [ -n "${vht_marker}" ]; then
+    vht_m_outcome="$(printf '%s' "${vht_marker}" | jq -r '.outcome // ""' 2>/dev/null || echo '')"
+    vht_m_issue="$(printf '%s' "${vht_marker}" | jq -r '.issue // ""' 2>/dev/null || echo '')"
+    vht_m_class="$(printf '%s' "${vht_marker}" | jq -r '.classification // ""' 2>/dev/null || echo '')"
+    [[ "${vht_m_issue}" =~ ^[0-9]{1,9}$ ]] || vht_m_issue=""
+    if [ "${vht_m_outcome}" = "bounced" ]; then
+      vht_rc=0
+      _validation_harness_hold_bounce "${vht_fp}" "${vht_m_class}" "${vht_m_issue}" || vht_rc=$?
+      return "${vht_rc}"
+    fi
+    case "${vht_m_outcome}" in
+      opened|duplicate|already-fixed|skipped)
+        if [ "${vht_m_outcome}" != "${vht_outcome}" ] || [ "${vht_m_issue}" != "${vht_issue}" ]; then
+          if { jq --arg issue "${vht_m_issue}" --arg outcome "${vht_m_outcome}" '
+              .validation_harness_hold.heal_issue = (if $issue == "" then null else ($issue | tonumber) end) |
+              .validation_harness_hold.outcome = $outcome
+            ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+            post_state_comment || echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed"
+          else
+            rm -f "${STATE_FILE}.tmp"
+            echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed"
+          fi
+        fi
+        vht_outcome="${vht_m_outcome}"
+        vht_issue="${vht_m_issue}"
+        ;;
+    esac
+  fi
+
+  # Step 2: pin (local read, no API call).
+  if ! validation_harness_pin >/dev/null; then
+    _validation_harness_hold_log "waiting" "${vht_fp}" "unknown" "${vht_issue}" "pin_unresolved"
+    return 0
+  fi
+  vht_pin="${_VALIDATION_HARNESS_PIN_VALUE}"
+  if [ -z "${vht_support}" ]; then
+    # No support commit was resolved when the hold began: the current pin is
+    # the baseline, and a later pin ahead of it counts as a fix.
+    if { jq --arg pin "${vht_pin}" '.validation_harness_hold.support = $pin' "${STATE_FILE}" > "${STATE_FILE}.tmp" \
+        && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+      post_state_comment || echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed"
+    else
+      rm -f "${STATE_FILE}.tmp"
+      echo "::warning::VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=state_write_failed"
+    fi
+    _validation_harness_hold_log "waiting" "${vht_fp}" "${vht_pin}" "${vht_issue}" "support_baselined"
+    return 0
+  fi
+  if [ "${vht_pin}" = "${vht_support}" ]; then
+    _validation_harness_hold_log "waiting" "${vht_fp}" "${vht_pin}" "${vht_issue}" "pin_unchanged"
+    return 0
+  fi
+
+  # Step 3: ancestry. Only `ahead` counts.
+  if ! _validation_harness_hold_compare "${vht_support}" "${vht_pin}"; then
+    _validation_harness_hold_log "unknown" "${vht_fp}" "${vht_pin}" "${vht_issue}" "compare_failed"
+    return 0
+  fi
+  if [ "${VHH_COMPARE_STATUS}" != "ahead" ]; then
+    _validation_harness_hold_log "waiting" "${vht_fp}" "${vht_pin}" "${vht_issue}" "pin_${VHH_COMPARE_STATUS}"
+    return 0
+  fi
+
+  # Step 4: heal issue state, only for a routed `opened` / `duplicate` issue.
+  # With already-fixed, skipped or no marker the ancestry check is enough (Q5).
+  if { [ "${vht_outcome}" = "opened" ] || [ "${vht_outcome}" = "duplicate" ]; } && [ -n "${vht_issue}" ]; then
+    if ! _validation_harness_hold_issue_state "${vht_issue}"; then
+      _validation_harness_hold_log "unknown" "${vht_fp}" "${vht_pin}" "${vht_issue}" "heal_issue_read_failed"
+      return 0
+    fi
+    if [ "${VHH_ISSUE_STATE}" = "open" ]; then
+      _validation_harness_hold_log "waiting" "${vht_fp}" "${vht_pin}" "${vht_issue}" "heal_issue_open"
+      return 0
+    fi
+    case "${VHH_ISSUE_STATE_REASON}" in
+      not_planned)
+        if ! _validation_harness_hold_end_park "not_planned" "Harness heal issue shubhodeep1/coding-workflows#${vht_issue} was closed as not planned, so no harness fix is coming."; then
+          _validation_harness_hold_log "unknown" "${vht_fp}" "${vht_pin}" "${vht_issue}" "state_write_failed"
+          return 0
+        fi
+        _validation_harness_hold_log "not_planned" "${vht_fp}" "${vht_pin}" "${vht_issue}"
+        return 10
+        ;;
+      completed)
+        vht_heal_epoch="$(_iso8601_to_epoch "${VHH_ISSUE_CLOSED_AT}" || echo '')"
+        vht_pin_epoch="$(_iso8601_to_epoch "${VHH_PIN_DATE}" || echo '')"
+        if [ -z "${vht_heal_epoch}" ] || [ -z "${vht_pin_epoch}" ]; then
+          _validation_harness_hold_log "waiting" "${vht_fp}" "${vht_pin}" "${vht_issue}" "pin_date_unknown"
+          return 0
+        fi
+        if [ "${vht_heal_epoch}" -gt "${vht_pin_epoch}" ]; then
+          _validation_harness_hold_log "waiting" "${vht_fp}" "${vht_pin}" "${vht_issue}" "heal_closed_after_pin"
+          return 0
+        fi
+        ;;
+      *)
+        _validation_harness_hold_log "waiting" "${vht_fp}" "${vht_pin}" "${vht_issue}" "heal_issue_closed_${VHH_ISSUE_STATE_REASON:-unknown}"
+        return 0
+        ;;
+    esac
+  fi
+
+  # Step 5: resume.
+  vht_rc=0
+  _validation_harness_hold_resume "${vht_fp}" "${vht_pin}" "${vht_issue}" || vht_rc=$?
+  return "${vht_rc}"
 }
 
 mark_validation_failed() {
@@ -18658,6 +19269,99 @@ _fetch_standalone_marker_issues_graphql() {
     }' 2>/dev/null || echo '{"state":[],"clarify":[]}'
 }
 
+# Batched listing of open issues per standalone pipeline label.
+# Batching contract (unattended §14):
+#   Input:  $1 = JSON array of label strings (the caller's
+#           `pipeline_labels`), each matching ^[A-Za-z0-9:._-]+$.
+#   Output: one compact JSON object on stdout:
+#             {"issues":[{"number":N},...], "fallback_labels":["ai:...",...]}
+#           `issues` is the union (unique_by number) of the labels the
+#           GraphQL answer covered completely; `fallback_labels` lists the
+#           labels the caller must still list over REST.
+#   API calls: 1 GraphQL request (one `repository.issues(labels:)` alias
+#           per label; never `search`, whose index can lag) normally;
+#           1 plus one REST `gh issue list` per flagged label when an alias
+#           is missing, null, paginated (`hasNextPage`) or named in
+#           `errors[].path`; on total failure (non-zero exit, unparseable
+#           JSON, non-object repository, an error without a path) 1 failed
+#           GraphQL call plus the legacy REST call for every label. An
+#           invalid GITHUB_REPOSITORY makes no GraphQL call and returns
+#           every label as a fallback. An unusable label list returns 1
+#           with no output and no API call; the caller then lists all its
+#           labels over REST.
+#   Fail-open: never shrinks coverage. Every anomaly adds the label to
+#           `fallback_labels`, and the caller keeps `|| echo '[]'` on each
+#           REST call. Owner and name are passed only as `-f` variables;
+#           labels are fixed literals, validated and @json-encoded.
+_fetch_standalone_pipeline_label_issues_graphql() {
+  local labels_json="${1:-[]}"
+  local all_fallback
+  all_fallback="$(printf '%s' "${labels_json}" | jq -c 'if type == "array" then [.[] | select(type == "string")] else [] end' 2>/dev/null || echo '[]')"
+  [ -n "${all_fallback}" ] || all_fallback='[]'
+  local total_failure
+  total_failure="$(jq -cn --argjson fb "${all_fallback}" '{issues:[],fallback_labels:$fb}' 2>/dev/null || echo '{"issues":[],"fallback_labels":[]}')"
+
+  local valid
+  valid="$(printf '%s' "${labels_json}" | jq -r 'if (type == "array") and (length > 0) and all(.[]; (type == "string") and test("^[A-Za-z0-9:._-]+$")) then "yes" else "no" end' 2>/dev/null || echo "no")"
+  # Labels that cannot be named back cannot be listed over REST either, so
+  # an unusable label input returns 1 with no output; the caller then
+  # falls back to REST for its own full label list (never shrinks coverage).
+  if [ "${valid}" != "yes" ]; then
+    return 1
+  fi
+  if ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+    printf '%s\n' "${total_failure}"
+    return 0
+  fi
+
+  local query
+  # shellcheck disable=SC2016
+  query="$(printf '%s' "${labels_json}" | jq -r '
+    "query($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n"
+    + ([to_entries[] | "    l\(.key): issues(states: [OPEN], labels: [\(.value | @json)], first: 100) {\n      pageInfo { hasNextPage }\n      nodes { number }\n    }\n"] | join(""))
+    + "  }\n}"' 2>/dev/null || true)"
+  if [ -z "${query}" ]; then
+    printf '%s\n' "${total_failure}"
+    return 0
+  fi
+
+  local resp
+  if ! resp="$(gh_retry gh api graphql \
+      -f owner="${GITHUB_REPOSITORY%%/*}" \
+      -f name="${GITHUB_REPOSITORY#*/}" \
+      -f query="${query}" 2>/dev/null)"; then
+    printf '%s\n' "${total_failure}"
+    return 0
+  fi
+
+  local out
+  out="$(printf '%s' "${resp}" | jq -c --argjson labels "${labels_json}" '
+    if (type != "object") or ((.data.repository | type) != "object") then
+      {issues: [], fallback_labels: $labels}
+    elif ([(.errors // [])[] | select(((.path // null) | type) != "array")] | length) > 0 then
+      {issues: [], fallback_labels: $labels}
+    else
+      . as $r
+      | [(.errors // [])[] | .path[] | tostring] as $err_paths
+      | [range(0; $labels | length) as $i
+          | ("l\($i)") as $a
+          | ($r.data.repository[$a]) as $conn
+          | {label: $labels[$i],
+             conn: $conn,
+             flagged: (($conn | type) != "object"
+                       or (($conn.nodes | type) != "array")
+                       or ($conn.pageInfo.hasNextPage == true)
+                       or ($err_paths | index($a)) != null)}] as $rows
+      | {issues: ([$rows[] | select(.flagged | not) | .conn.nodes[] | select(. != null and (.number | type) == "number") | {number}] | unique_by(.number)),
+         fallback_labels: [$rows[] | select(.flagged) | .label]}
+    end' 2>/dev/null || true)"
+  if [ -z "${out}" ]; then
+    printf '%s\n' "${total_failure}"
+    return 0
+  fi
+  printf '%s\n' "${out}"
+}
+
 # Batch-fetch labels, recent comments and latest-linked-PR state for a
 # list of candidate issue numbers via a single GraphQL query per batch
 # (aliased issue selectors).  Replaces the per-candidate REST /labels,
@@ -21053,7 +21757,27 @@ run_standalone_stall_recovery() {
   local pipeline_labels='["ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]'
   local labeled_issues='[]'
   local lbl
-  for lbl in ai:clarification ai:planning ai:awaiting-approval ai:implementing ai:done ai:ready-to-merge ai:review-blocked; do
+  # One aliased GraphQL request lists every pipeline label; the REST
+  # listing below runs only for labels the batch could not cover.
+  local _pls_resp
+  local _pls_fallback
+  local _pls_ok="true"
+  _pls_resp="$(_fetch_standalone_pipeline_label_issues_graphql "${pipeline_labels}")" || _pls_resp=""
+  [ -n "${_pls_resp}" ] || _pls_ok="false"
+  labeled_issues="$(printf '%s' "${_pls_resp}" | jq -c 'if (.issues | type) == "array" then .issues else [] end' 2>/dev/null || echo '[]')"
+  [ -n "${labeled_issues}" ] || labeled_issues='[]'
+  _pls_fallback="$(printf '%s' "${_pls_resp}" | jq -r 'if (.fallback_labels | type) == "array" then .fallback_labels[] else error("no fallback list") end' 2>/dev/null)" || _pls_ok="false"
+  if [ "${_pls_ok}" != "true" ]; then
+    labeled_issues='[]'
+    _pls_fallback="$(jq -r '.[]' <<<"${pipeline_labels}")"
+  fi
+  if [ -n "${_pls_fallback}" ]; then
+    echo "::notice::Standalone stall recovery: label GraphQL batch fell back to REST for: $(printf '%s' "${_pls_fallback}" | tr '\n' ' ')"
+  fi
+  local -a _pls_fallback_list=()
+  mapfile -t _pls_fallback_list <<<"${_pls_fallback}"
+  for lbl in "${_pls_fallback_list[@]}"; do
+    [ -n "${lbl}" ] || continue
     local by_label
     by_label="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open --label "${lbl}" --json number --limit 1000 2>/dev/null || echo '[]')"
     labeled_issues="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${labeled_issues}") <(printf '%s\n' "${by_label}"))"
@@ -25253,6 +25977,20 @@ This recovery runs once per project. Validation counters were kept (cycle ${VSP_
       if ! dispatch_validation_if_needed "${VSP_CYCLE}"; then
         mark_validation_failed "Unable to dispatch ${VALIDATE_WORKFLOW_NAME:-ai-validate.yml} after stale-pin recovery. Error: ${VALIDATION_DISPATCH_ERROR:-unknown}"
       fi
+      continue
+    fi
+  fi
+
+  # ---------------------------------------------------------------
+  # Validation harness hold — per-tick check and resume (Refs #7913, P2b)
+  # ---------------------------------------------------------------
+  # Runs after /revalidate (which wins) and the stale-pin one-shot. Waiting
+  # falls through to the remaining failed-project steps; acting ends the
+  # project's tick.
+  if [ "${PROJECT_STATUS}" = "failed" ] && validation_harness_hold_active; then
+    VHH_TICK_RC=0
+    validation_harness_hold_tick || VHH_TICK_RC=$?
+    if [ "${VHH_TICK_RC}" -eq 10 ]; then
       continue
     fi
   fi
