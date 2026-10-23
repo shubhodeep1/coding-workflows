@@ -1594,16 +1594,34 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 	done
 	if [ "${validate_ok}" != "true" ]; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} outcome=skip reason=invalid_verdict detail=$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" | tr ' ' '_' | cut -c1-120)"
-		gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="The unblock judge could not reach a valid verdict this time and will try again later.
-
-<!-- ai:unblock-wait:v1 item=${ITEM} reason=invalid_verdict stop=${ITEM_STOP} fingerprint=${fp} -->" >/dev/null 2>&1 || true
 		# A refused answer is not a round, so no other terminal condition can
 		# ever hold for it. Once INVALID_VERDICT_PARK_AFTER refusals in a row
 		# (this one included) hit the same block, take the ledger's terminal
 		# close, which parks the item for a person with one CRITICAL page
 		# (tele-funtoken-msg-scoring#4770 was retried silently every 6 hours).
-		if [ "${terminal}" = "true" ] \
-			|| ! jq -e '((.invalid_verdict_streak // 0) + 1) >= (.invalid_verdict_park_after // 2)' "${RUNTIME_DIR}/decision.json" >/dev/null 2>&1; then
+		local invalid_park="false" invalid_text invalid_attempt invalid_posted="false"
+		if [ "${terminal}" != "true" ] \
+			&& jq -e '((.invalid_verdict_streak // 0) + 1) >= (.invalid_verdict_park_after // 2)' "${RUNTIME_DIR}/decision.json" >/dev/null 2>&1; then
+			invalid_park="true"
+		fi
+		invalid_text="The unblock judge could not reach a valid verdict this time and will try again later."
+		[ "${invalid_park}" = "true" ] && invalid_text="The unblock judge could not reach a valid verdict on this block again."
+		# The streak is counted only from these posted markers, so a lost write
+		# would keep the item from ever being parked: retry once, then log and page.
+		for invalid_attempt in 1 2; do
+			if gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${invalid_text}
+
+<!-- ai:unblock-wait:v1 item=${ITEM} reason=invalid_verdict stop=${ITEM_STOP} fingerprint=${fp} -->" >/dev/null 2>&1; then
+				invalid_posted="true"
+				break
+			fi
+			[ "${invalid_attempt}" = "1" ] && sleep "${UNBLOCK_INVALID_RECORD_RETRY_SECS:-5}"
+		done
+		if [ "${invalid_posted}" != "true" ]; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=invalid_verdict_record outcome=failed reason=record_failed"
+			[ "${invalid_park}" != "true" ] && unblock_tg WARNING "Unblock judge could not record a refused answer on #${ITEM} (${ITEM_STOP}); refused answers are not counted until this write succeeds, so the item cannot be parked for a person yet."
+		fi
+		if [ "${invalid_park}" != "true" ]; then
 			return 0
 		fi
 		if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" "${decide_args[@]}" --pending-invalid-verdicts 1 > "${RUNTIME_DIR}/decision.json" \
