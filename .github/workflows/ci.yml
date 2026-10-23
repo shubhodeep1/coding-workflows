@@ -1031,7 +1031,7 @@ jobs:
             echo "::error::${heal_module} shards failed: ${heal_failed_shards[*]}"
             exit 1
           fi
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py tests/test_workflow_failure_heal_synced_security.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py tests/test_workflow_failure_heal_synced_security.py tests/test_workflow_failure_heal_queue.py
           # Model-provider outage classifier, tracker and resume (issue #6633).
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_provider_outage.py tests/test_review_autofix_provider_outage_contract.py tests/test_claude_capacity_wait_call_sites.py
 
@@ -1176,6 +1176,7 @@ jobs:
             tests/test_review_parse_consolidator.py \
             tests/test_review_pipeline_integration.py \
             tests/test_review_rb_judge_reissue_baseline.py \
+            tests/test_review_sandbox_hidden_build_dirs.py \
             tests/test_review_sandbox_install_timeout.py \
             tests/test_review_static_context_readme.py \
             tests/test_semble_helpers.py \
@@ -1240,6 +1241,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_files_touched_scope_guard.py
+
+      - name: Implement leftover issue-branch replacement tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_stale_branch_check.py
 
       - name: Shared PR check-runs merge gate (pr_checks_lib) tests
         run: |

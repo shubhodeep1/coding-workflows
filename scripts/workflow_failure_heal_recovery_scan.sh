@@ -194,10 +194,12 @@ jq --arg login "${LOGIN}" --argjson max "${MAX_ATTEMPTS}" '[.[]
 COUNT="$(jq 'length' "${CANDIDATES_FILE}")"
 log "heal_scope_recovery outcome=scan reason=listed count=${COUNT}"
 if [ "${LIST_ONLY}" = "true" ] && [ "${COUNT}" -gt 0 ]; then
-	# The recovery-scan job joins the shared intake concurrency group, and a
-	# newly queued member replaces the group's pending one. Skip this tick
-	# while another intake run is active, so a scan queued now cannot displace
-	# a report waiting behind it; the next hourly run retries. §14 audit: no
+	# With HEAL_INTAKE_QUEUE_ENABLED=false the recovery-scan job joins the
+	# shared intake concurrency group, and a newly queued member replaces the
+	# group's pending one. Skip this tick while another intake run is active,
+	# so a scan queued now cannot displace a report waiting behind it; the next
+	# hourly run retries. With the report queue on (the default) nothing is
+	# displaced, and the skip only defers the scan to a quiet hour. §14 audit: no
 	# existing call in this script lists workflow runs; one GET of the newest
 	# 100 runs of this workflow. A failed read also skips (fail closed).
 	RUNS_FILE="${RUNTIME_DIR}/recovery_scan_runs.json"

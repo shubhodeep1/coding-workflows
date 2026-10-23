@@ -204,6 +204,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/implement_diagnose_post_codex_failure.sh` — validation failures in implement.yml and file fix-up issues.
 - `scripts/implement_handle_guard_block.sh` — Handle destructive-commit and scope-guard rejections after support cleanup.
 - `scripts/implement_staged_support_workspace.sh` — implement_staged_support_workspace.sh — give the implement editor the branch's own copies of the staged support helpers (self-repo only).
+- `scripts/implement_stale_branch_check.sh` — Tell implement.yml whether a leftover ai/issue-<N> branch has no open PR, so the push replaces it instead of rebasing onto it.
 - `scripts/install_semble.sh` — install_semble.sh — fail-soft Semble installer for GitHub Actions jobs.
 - `scripts/issue_attachment_bundle.py` — Python helper for issue attachment bundle.
 - `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.
@@ -358,6 +359,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workflow_failure_heal_evidence.sh` — Collect bounded, redacted, verified failure logs for heal prompts.
 - `scripts/workflow_failure_heal_non_retryable_backfill.sh` — Scheduled pass (review sweep, consumer `ai-review.yml` schedule) that re-sends a non-retryable review/autofix failure the heal intake never diagnosed, from trusted current-head markers (issue #7291).
 - `scripts/workflow_failure_heal_phase_report.sh` — Report a failed clarify / plan / implement run on an issue to coding-workflows' heal intake from the workflow's `heal-report` job, with the phase's failure streak on that issue.
+- `scripts/workflow_failure_heal_queue.sh` — First-come, first-served queue for the heal intake (`acquire` / `release` steps of both intake jobs): a ticket comment on the `ai:heal-intake-queue` issue, so a burst of reports waits its turn instead of being cancelled.
 - `scripts/workflow_failure_heal_recovery_scan.sh` — Hourly heal-scope recovery scan: rebuild the report of an open, pipeline-authored heal issue without a scope marker and run the intake on it (issue #7333).
 - `scripts/workflow_failure_heal_pr_reconcile.sh` — When a coding-workflows pull request closes, close the heal PRs stacked on its head branch (source not merged) or move their heal commits onto the source base and re-point them (source merged).
 - `scripts/workflow_failure_heal_report.sh` — Report a human-needed escalation from a consumer (or this repo) to coding-workflows with linked failed runs and the wrapper release pin.
