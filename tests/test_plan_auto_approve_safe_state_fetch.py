@@ -87,7 +87,7 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 	posts_out: list | None = None, patches_out: list | None = None, patch_fails: bool = False,
 	graphql: dict | None = None, graphql_fails: bool = False, heal_fix_flag: str | None = None,
 	graphql_calls_out: list | None = None, split_stub_rc: int | None = None,
-	split_env_out: dict | None = None) -> tuple[bool, str, str]:
+	split_env_out: dict | None = None, extra_env: dict | None = None) -> tuple[bool, str, str]:
 	"""Run the shipped step against a fake gh; returns (posted, stdout, output file).
 
 	Every other API write (the hold comment) is appended to ``posts_out``;
@@ -142,7 +142,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 		graphql_log = tmp_path / "graphql"
 		env = os.environ.copy()
 		for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED",
-			"ALLOW_WORKFLOW_EDITS", "PLAN_FILE", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED"):
+			"ALLOW_WORKFLOW_EDITS", "PLAN_FILE", "GITHUB_STEP_SUMMARY", "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED",
+			"ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "PLAN_FILES_TOUCHED_GATE_ENABLED"):
 			env.pop(name, None)
 		env.update({
 			"GITHUB_OUTPUT": str(output_path),
@@ -166,6 +167,8 @@ def _run_auto_approve(issue, *, plan_text: str = ORDINARY_PLAN, fetch_fails: boo
 			env["AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED"] = gate_flag
 		if heal_fix_flag is not None:
 			env["HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED"] = heal_fix_flag
+		if extra_env:
+			env.update(extra_env)
 		result = subprocess.run(["bash", "-c", _auto_approve_script()], cwd=tmp_path, env=env, text=True,
 			capture_output=True, check=True)
 		posts = [entry for entry in (post_log.read_text(encoding="utf-8") if post_log.exists() else "").split("\n<<END>>\n")
@@ -220,7 +223,8 @@ _PIPELINE_ISSUE = {"state": "open", "number": 123, "user": {"type": "User", "log
 	"author_association": "OWNER", "body": "Security finding. No files_touched block."}
 _GRANTED_ISSUE = {"state": "open", "number": 123, "user": {"type": "User", "login": "maintainer"},
 	"author_association": "OWNER",
-	"body": "Fix it.\n\nfiles_touched:\n  - scripts/security_audit.sh\n  - .github/workflows/security-audit.yml\n"}
+	"body": ("Fix it.\n\nfiles_touched:\n  - scripts/security_audit.sh\n  - .github/workflows/security-audit.yml\n"
+		"  - README.md\n")}
 
 
 def test_ungranted_security_finding_plan_is_held_with_flag_off() -> None:
@@ -296,6 +300,70 @@ def test_ordinary_plan_unchanged_and_missing_plan_holds() -> None:
 	posted, stdout, _ = _run_auto_approve(_PIPELINE_ISSUE, plan_text="")
 	assert not posted
 	assert "reason=plan_gate_error outcome=defer" in stdout
+
+
+# --- Plan files outside files_touched (consumer #4795) ----------------------
+# A plan that names a file outside the issue's files_touched list is held,
+# because the implement-time files_touched guard would refuse the commit.
+
+_SCOPED_ISSUE = {"state": "open", "number": 123, "user": {"type": "User", "login": "maintainer"},
+	"author_association": "OWNER",
+	"body": "Fix the poller.\n\nfiles_touched:\n  - backend/poll_telegram_mongo.py\n  - tests/test_poll_telegram_mongo.py\n"}
+WIDENED_PLAN = (
+	"Implementation Plan\n\n## Files likely to change\n- `backend/withdrawal_flow.py`\n"
+	"- `backend/poll_telegram_mongo.py`\n- `tests/test_poll_telegram_mongo.py`\n- `package-lock.json`\n"
+)
+
+
+def test_plan_outside_files_touched_is_held_with_a_comment() -> None:
+	posts: list[str] = []
+	patches: list[str] = []
+	posted, stdout, output = _run_auto_approve(_SCOPED_ISSUE, plan_text=WIDENED_PLAN, posts_out=posts,
+		patches_out=patches)
+	assert not posted, stdout
+	assert patches == []
+	assert "auto_approve_hold_reason=plan_files_outside_files_touched" in output
+	# Only the out-of-scope file is named; the lockfile is allowed as at implement.
+	assert ("AI_PHASE_GATE_V1 phase=plan gate=auto_approve reason=plan_files_outside_files_touched "
+		"outcome=defer issue=123 paths=backend/withdrawal_flow.py") in stdout
+	assert len(posts) == 1
+	hold = posts[0]
+	assert "the plan changes files outside the `files_touched` list of this issue" in hold
+	assert "- `backend/withdrawal_flow.py`" in hold
+	assert "`/approved` alone does not help" in hold
+	assert "reason=plan_files_outside_files_touched source=plan paths=" in hold
+
+
+def test_plan_inside_files_touched_is_approved() -> None:
+	issue = dict(_SCOPED_ISSUE, body=_SCOPED_ISSUE["body"] + "  - backend/withdrawal_flow.py\n")
+	posted, stdout, _ = _run_auto_approve(issue, plan_text=WIDENED_PLAN)
+	assert posted, stdout
+
+
+def test_plan_files_touched_check_follows_the_implement_switches() -> None:
+	# Off whenever implement would not block: enforcement off, out-of-scope
+	# files allowed, or the plan-time check switched off on its own.
+	for extra in ({"ENFORCE_FILES_TOUCHED": "false"}, {"ALLOW_OUT_OF_SCOPE_FILES": "true"},
+		{"PLAN_FILES_TOUCHED_GATE_ENABLED": "false"}):
+		posted, stdout, _ = _run_auto_approve(_SCOPED_ISSUE, plan_text=WIDENED_PLAN, extra_env=extra)
+		assert posted, (extra, stdout)
+	posted, _, _ = _run_auto_approve(_SCOPED_ISSUE, plan_text=WIDENED_PLAN,
+		extra_env={"ENFORCE_FILES_TOUCHED": "true", "ALLOW_OUT_OF_SCOPE_FILES": "false"})
+	assert not posted
+
+
+def test_plan_files_touched_switches_are_wired() -> None:
+	text = _workflow_text()
+	assert "ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}" in text
+	assert "ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}" in text
+	assert "PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}" in text
+	poll = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	gate_steps = poll.count("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}")
+	assert gate_steps >= 1
+	for line in ("ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}",
+		"ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}",
+		"PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}"):
+		assert poll.count(line) == gate_steps, line
 
 
 def test_plan_gate_wiring_defaults_on() -> None:

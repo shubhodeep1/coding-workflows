@@ -75,6 +75,13 @@ jobs:
       # automatic /approved. When on, every listed protected path needs a
       # trusted, exact files_touched grant in the issue body.
       AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+      # The plan auto-approval gate holds a plan whose Files section lists a file
+      # outside the issue's files_touched list, which implement would refuse.
+      # It mirrors implement's ENFORCE_FILES_TOUCHED / ALLOW_OUT_OF_SCOPE_FILES;
+      # PLAN_FILES_TOUCHED_GATE_ENABLED=false turns the plan-time check off.
+      ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+      ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+      PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
       WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
       PLAN_FAILURE_CONTEXT: "Planning run did not complete."
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -2690,6 +2697,8 @@ jobs:
                       then "**Automatic approval withheld: the automation-path grant check could not run.**"
                       elif ($reason | IN("heal_scope_unverified", "heal_scope_plan_out_of_scope", "heal_scope_plan_paths_missing"))
                       then "**Automatic approval withheld: the plan is not inside the verified workflow-heal scope.**"
+                      elif $reason == "plan_files_outside_files_touched"
+                      then "**Automatic approval withheld: the plan changes files outside the `files_touched` list of this issue, so implementation would refuse the commit.**"
                       else "**Automatic approval withheld: the plan lists automation paths without a trusted exact grant.**" end),
                     "",
                     "Reason: `\($detail | gsub("[^a-z0-9_]"; ""))`",
@@ -2699,7 +2708,9 @@ jobs:
                     (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
                     (if any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
                     "",
-                    (if ($heal == "true" or ($reason | startswith("heal_scope_")))
+                    (if $reason == "plan_files_outside_files_touched"
+                      then "To proceed, a maintainer either adds these paths to the `files_touched` list in the issue body or asks for a narrower plan, then replies `/approved`. `/approved` alone does not help: the implement-time `files_touched` guard would still refuse these files."
+                    elif ($heal == "true" or ($reason | startswith("heal_scope_")))
                       then "To proceed, a maintainer reviews the plan and replies `/approved`. Do not edit the issue body: the scope of a workflow-heal issue comes from its scope marker, not `files_touched`, and an edit by anyone but the pipeline makes implementation refuse the issue."
                       else "To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way." end),
                     "",
@@ -2852,9 +2863,15 @@ jobs:
                 {
                   echo "### Automatic plan approval held"
                   echo ""
-                  echo "The plan lists automation paths, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason:-plan_gate_error}\`)."
-                  echo "Protected paths without an exact grant: \`${plan_gate_paths:-none}\`"
-                  echo "A maintainer can review the plan and reply \`/approved\`."
+                  if [ "${plan_gate_reason:-}" = "plan_files_outside_files_touched" ]; then
+                    echo "The plan changes files outside the issue's \`files_touched\` list, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason}\`)."
+                    echo "Plan files outside \`files_touched\`: \`${plan_gate_paths:-none}\`"
+                    echo "A maintainer adds these paths to the issue's \`files_touched\` list or asks for a narrower plan, then replies \`/approved\`. \`/approved\` alone does not help: the implement-time \`files_touched\` guard would still refuse these files."
+                  else
+                    echo "The plan lists automation paths, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason:-plan_gate_error}\`)."
+                    echo "Protected paths without an exact grant: \`${plan_gate_paths:-none}\`"
+                    echo "A maintainer can review the plan and reply \`/approved\`."
+                  fi
                 } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
                 # One deduplicated hold comment plus a WARNING, so a held plan
                 # reaches a human. Failures only warn; a hold never approves.
