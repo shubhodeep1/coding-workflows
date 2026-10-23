@@ -574,7 +574,7 @@ _resolver_fail_closed()
     echo "AUTOFIX_FAILURE_REASON=conflict_resolver_$1" >> "${GITHUB_ENV}" || true
   fi
   if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
-    RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
+    RESOLVER_CONFLICT_PATH_REPORT_FILE="${RESOLVER_CONFLICT_PATH_REPORT_FILE:-}" RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
   fi
   emit_conflict_resolver_substate "Failed" "${attempt:-0}"
   if [ -n "${tmp_output:-}" ]; then rm -f -- "${tmp_output}"; fi
@@ -823,6 +823,8 @@ raise SystemExit(0 if found else 1)
 _resolver_fail_closed_for_conflict_paths()
 {
   local conflict_path_report="$1" conflict_host_only_paths=""
+  # Read by the retry-state builder (last_conflict_paths) via _resolver_fail_closed.
+  RESOLVER_CONFLICT_PATH_REPORT_FILE="${conflict_path_report}"
   if [ -s "${conflict_path_report}" ] && [ ! -L "${conflict_path_report}" ] &&
      ! grep -qv $'^host_only\t[A-Za-z0-9_.][A-Za-z0-9._/-]*$' "${conflict_path_report}"; then
     conflict_host_only_paths="$(awk -F'\t' 'NR <= 20 { printf "%s%s", (NR > 1 ? ", " : ""), $2 } NR == 21 { printf ", ..." }' "${conflict_path_report}")" || conflict_host_only_paths=""
@@ -1740,6 +1742,17 @@ RETRY_STATE_BLOCK_PATTERN = re.compile(
 )
 ESCALATION_COMMENT_MARKER = "<!-- AUTOFIX_RESOLVER_ESCALATED_V1 -->"
 VERIFICATION_TIER_LADDER = ("strict", "ratio", "count_only", "warn_only")
+# Isolation failures another resolver run on the same head cannot fix (the
+# conflict set itself is refused by the sandbox). They escalate on the first
+# failure: the review gate's identical-failure cap stops the head after
+# REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL (default 3) runs, long before the
+# threshold * len(VERIFICATION_TIER_LADDER) escape threshold, so without this
+# the escalation and the poller's branch rebuild could never fire
+# (tele-funtoken-msg-scoring PR #3933, 2026-10-23).
+NON_RETRYABLE_ISOLATION_FAILURE_REASONS = frozenset(
+    {"sandbox_path_host_only", "sandbox_path_unsupported", "sandbox_support_missing"}
+)
+LAST_CONFLICT_PATH_RE = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9._/-]{0,199}$")
 
 
 def _utc_now_iso() -> str:
@@ -1981,6 +1994,8 @@ def build_resolver_escalation_comment(
     pre_existing_drift: list[dict[str, Any]],
     run_url: str,
     max_items: int,
+    non_retryable_reason: str = "",
+    conflict_paths: list[str] | None = None,
 ) -> str:
     lines = [
         ESCALATION_COMMENT_MARKER,
@@ -2001,6 +2016,16 @@ def build_resolver_escalation_comment(
         f"- Regressed fingerprints: {len(regressed_by_resolver)}",
         f"- Pre-existing drift: {len(pre_existing_drift)}",
     ]
+    if non_retryable_reason:
+        lines.extend([
+            "",
+            (
+                f"Escalated on the first failure: `{non_retryable_reason}` cannot be fixed by another "
+                "resolver run on this head (the sandbox refuses the conflict set)."
+            ),
+        ])
+        if conflict_paths:
+            lines.append("Refused conflicted path(s): " + ", ".join(f"`{p}`" for p in conflict_paths[:max_items]))
     if regressed_by_resolver:
         lines.extend(["", "Sample regressed fp_keys:"])
         for item in regressed_by_resolver[:max_items]:
@@ -2027,6 +2052,9 @@ def build_resolver_retry_state_artifact(
     verifier_module: Any,
     max_items: int = 10,
     isolation_failure_reason: str = "",
+    run_id: str = "",
+    conflict_paths: list[str] | None = None,
+    escalate_non_retryable: bool = True,
 ) -> dict[str, Any]:
     body = str(pr_payload.get("body", "") or "")
     head = pr_payload.get("head") or {}
@@ -2091,7 +2119,8 @@ def build_resolver_retry_state_artifact(
             consecutive_failure_count,
             threshold,
         )
-    escalated = consecutive_failure_count >= escalation_threshold
+    non_retryable = isolation_failure_reason in NON_RETRYABLE_ISOLATION_FAILURE_REASONS
+    escalated = consecutive_failure_count >= escalation_threshold or (non_retryable and escalate_non_retryable)
     if (
         escalated
         and previous_head_sha == head_sha
@@ -2124,6 +2153,21 @@ def build_resolver_retry_state_artifact(
     }
     if isolation_failure_reason:
         retry_state["isolation_failure_reason"] = isolation_failure_reason
+    # Context the orchestrator's integration judge and park decision read
+    # from the PR body (no extra API call): the reason, run and conflicted
+    # paths of the newest failure. Paths are filtered to plain names.
+    retry_state["last_failure_reason"] = isolation_failure_reason or "fingerprint_violations"
+    retry_state["non_retryable"] = non_retryable
+    run_token = str(run_id or "").strip()
+    if run_token.isdigit() and len(run_token) <= 20:
+        retry_state["last_run_id"] = run_token
+    safe_paths = sorted({
+        str(path) for path in (conflict_paths or [])
+        if isinstance(path, str) and LAST_CONFLICT_PATH_RE.match(path) and ".." not in path.split("/")
+    })
+    if safe_paths:
+        retry_state["last_conflict_paths"] = safe_paths[:20]
+        retry_state["last_conflict_path_count"] = len(safe_paths)
 
     return {
         "ok": True,
@@ -2150,6 +2194,8 @@ def build_resolver_retry_state_artifact(
             pre_existing_drift=pre_existing_drift,
             run_url=run_url,
             max_items=max_items,
+            non_retryable_reason=isolation_failure_reason if non_retryable else "",
+            conflict_paths=safe_paths,
         ) if escalated else "",
     }
 
@@ -2211,6 +2257,19 @@ def main() -> int:
     if repository and run_id:
         run_url = f"{server_url}/{repository}/actions/runs/{run_id}"
 
+    conflict_paths: list[str] = []
+    report_path = os.environ.get("RESOLVER_CONFLICT_PATH_REPORT_FILE", "").strip()
+    if isolation_failure_reason and report_path and os.path.isfile(report_path) and not os.path.islink(report_path):
+        try:
+            with open(report_path, encoding="utf-8") as handle:
+                for line in handle.read().splitlines()[:500]:
+                    parts = line.split("\t")
+                    if len(parts) == 2 and parts[0] == "host_only":
+                        conflict_paths.append(parts[1])
+        except (OSError, UnicodeDecodeError):
+            conflict_paths = []
+    escalate_switch = os.environ.get("RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED", "true").strip().lower()
+
     result = build_resolver_retry_state_artifact(
         pr_payload=pr_payload,
         pr_issue_comments=pr_issue_comments,
@@ -2223,6 +2282,9 @@ def main() -> int:
         verifier_module=verifier_module,
         max_items=_parse_positive_int(os.environ.get("RESOLVER_RETRY_STATE_MAX_ITEMS"), 10),
         isolation_failure_reason=isolation_failure_reason,
+        run_id=run_id,
+        conflict_paths=conflict_paths,
+        escalate_non_retryable=escalate_switch in ("", "true"),
     )
     print(json.dumps(result, sort_keys=True, ensure_ascii=True))
     return 0
@@ -2317,6 +2379,8 @@ _persist_resolver_retry_state_from_current_failure()
     rm -f "${_body_file}"
     return 0
   fi
+  # REST pulls endpoint (issue #7931, PR #3933): the GraphQL-backed CLI edit
+  # needs read:org and failed every write. Same single write (CLAUDE.md §15).
   if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -F "body=@${_body_file}" >/dev/null; then
     echo "::warning::Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1 to PR #${PR_NUMBER}; skipping escalation side effects so poller state does not drift from GitHub."
     rm -f "${_body_file}"
@@ -2338,7 +2402,21 @@ _persist_resolver_retry_state_from_current_failure()
     return 0
   fi
 
-  echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
+  # A first-failure non-retryable escalation keeps the run's ordinary failure
+  # comment: RESOLVER_ESCALATED=true would skip the review-autofix-failure:v1
+  # marker, and the review gate's identical-failure cap counts those markers
+  # to stop re-dispatch on this head. Threshold escalations keep suppressing,
+  # including every escalation while RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED
+  # is off (same switch parsing as the retry-state builder).
+  local _escalated_env=true _non_retryable_switch
+  _non_retryable_switch="$(printf '%s' "${RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  if { [ -z "${_non_retryable_switch}" ] || [ "${_non_retryable_switch}" = "true" ]; } \
+     && [ "$(jq -r '.retry_state.non_retryable // false' "${RESOLVER_RETRY_STATE_ARTIFACT_FILE}" 2>/dev/null || echo false)" = "true" ]; then
+    _escalated_env=false
+  fi
+  if [ "${_escalated_env}" = "true" ]; then
+    echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
+  fi
 
   if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/label_helpers.sh" ]; then
     # shellcheck source=/dev/null
@@ -2347,7 +2425,9 @@ _persist_resolver_retry_state_from_current_failure()
   if type ensure_label_exists >/dev/null 2>&1; then
     ensure_label_exists "ai:resolver-escalated" "${GITHUB_REPOSITORY}" || true
   fi
-  gh_retry gh issue edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:resolver-escalated" >/dev/null 2>&1 \
+  # REST for the same reason as the body write above. Adding a label is
+  # idempotent, so keep the full retry budget.
+  GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:resolver-escalated" >/dev/null 2>&1 \
     || echo "::warning::Failed to apply ai:resolver-escalated to PR #${PR_NUMBER}."
 
   local _comment_id _comment_file _comment_payload _comment_present=false
@@ -2375,7 +2455,7 @@ _persist_resolver_retry_state_from_current_failure()
   fi
   rm -f "${_comment_file}"
 
-  if [ "${_comment_present}" = "true" ]; then
+  if [ "${_comment_present}" = "true" ] && [ "${_escalated_env}" = "true" ]; then
     echo "RESOLVER_ESCALATED=true" >> "$GITHUB_ENV"
   fi
 }
@@ -3638,21 +3718,24 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
   # Host-only paths the prepare step resolved to the base version (issue
   # #6748): show the dropped PR-side changes on the PR. Fail-open.
-  _resolver_take_base_comment="${RUNTIME_DIR}/host_only_take_base_comment.md"
-  if [ -f "${_resolver_take_base_comment}" ] && [ ! -L "${_resolver_take_base_comment}" ] && \
-     [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
-    _resolver_take_base_posted=false
-    if type gh_retry >/dev/null 2>&1; then
-      gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${_resolver_take_base_comment}" >/dev/null 2>&1 && _resolver_take_base_posted=true
-    else
-      gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${_resolver_take_base_comment}" >/dev/null 2>&1 && _resolver_take_base_posted=true
+  # .ai/ validation config the prepare step took from the base branch on an
+  # integration-sync head (ai_asset_take_base_comment.md) is posted the same way.
+  for _resolver_take_base_comment in "${RUNTIME_DIR}/host_only_take_base_comment.md" "${RUNTIME_DIR}/ai_asset_take_base_comment.md"; do
+    if [ -f "${_resolver_take_base_comment}" ] && [ ! -L "${_resolver_take_base_comment}" ] && \
+       [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+      _resolver_take_base_posted=false
+      if type gh_retry >/dev/null 2>&1; then
+        gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${_resolver_take_base_comment}" >/dev/null 2>&1 && _resolver_take_base_posted=true
+      else
+        gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${_resolver_take_base_comment}" >/dev/null 2>&1 && _resolver_take_base_posted=true
+      fi
+      if [ "${_resolver_take_base_posted}" = "true" ]; then
+        mv -f -- "${_resolver_take_base_comment}" "${_resolver_take_base_comment}.posted" 2>/dev/null || true
+      else
+        echo "::warning::Take-base: failed to post the dropped-changes comment ($(basename -- "${_resolver_take_base_comment}")) on PR #${PR_NUMBER}; the merge commit stands."
+      fi
     fi
-    if [ "${_resolver_take_base_posted}" = "true" ]; then
-      mv -f -- "${_resolver_take_base_comment}" "${_resolver_take_base_comment}.posted" 2>/dev/null || true
-    else
-      echo "::warning::Host-only take-base: failed to post the dropped-changes comment on PR #${PR_NUMBER}; the merge commit stands."
-    fi
-  fi
+  done
   git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}"
   # NOTE: push deferred to final "Push all pending commits" step.
   echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
