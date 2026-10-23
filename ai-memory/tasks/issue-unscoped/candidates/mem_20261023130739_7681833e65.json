@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:6113 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `pr_create_transient_re` transient-error matcher omits `timeout awaiting` (e.g. `net/http: timeout awaiting response headers`) and bare `EOF` (e.g. `Post https://api.github.com/graphql: EOF`), plus other transient markers the repo already treats as transient (per minimax, `audit_consumer_drift.py:371-410`).\n  WHY: When `gh pr create` fails with these errors and the recovery lookup finds no PR, the loop falls through to give_up on the first attempt, leaving the pushed branch without a PR; all three reviewers rated it MAJOR, and openai_gpt-6-luna also cited lines 6184-6194.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:6113 | severity=MAJOR | confidence=4\n  PROBLEM: Incomplete transient error detection in pr_create_transient_re.\n  WHY: The regex fails to match transient errors such as \"net/http: timeout awaiting response headers\" or \"Post https://api.github.com/graphql: EOF\", so the workflow gives up instead of retrying.\n- HARDENING_SUGGESTIONS: expand the regex to include \"net/http: timeout awaiting response headers\" and \"EOF\" (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml:6113 | severity=MAJOR | confidence=4\n  PROBLEM: The transient-error matcher omits `timeout awaiting`, which catches Go's `net/http: timeout awaiting response headers`. `audit_consumer_drift.py:371-410` is the repo's established transient vocabulary and lists `timeout awaiting` at line 399, along with several other markers the PR's regex lacks.\n  WHY: When `gh pr create` fails with a Go HTTP header timeout and the recovery lookup finds no PR, the loop falls through to `outcome=give_up`, even though the failure is the same transient class as the incident this PR targets (release run 39926633796's \"GraphQL: Something went wrong\").\n- HARDENING_SUGGESTIONS: extend the regex with the transient markers in `audit_consumer_drift.py` (`timeout awaiting`, `eof occurred`, `connection aborted`, `context deadline exceeded`, `client.timeout exceeded`, `network is unreachable`, `could not resolve host`, `temporary failure in name resolution`, `no route to host`) (1 line). HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/implement.yml:6113, 6184-6194 | severity=MAJOR | confidence=5\n  PROBLEM: The transient-error matcher omits `timeout awaiting` and bare `EOF`, although the shared GitHub retry classifier recognizes both.\n  WHY: If `gh pr create` returns `net/http: timeout awaiting response headers` or `Post https://api.github.com/graphql: EOF` and the recovery lookup finds no PR, the matcher does not retry and the step exits 1 on its first attempt, leaving the pushed branch without a PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c20cac0a0a13f176761ac42e182e7cd8440579fafd9e2979328dac878b8a84b6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7971,
+    "run_id": "39956617119",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "39956617119",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261023130739_7681833e65",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7971,
+    "run_id": "39956617119"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-23T13:07:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
