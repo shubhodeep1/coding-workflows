@@ -1489,7 +1489,7 @@ jobs:
           harness_signature_b64=""
           harness_signature_path="${RUNTIME_DIR}/validation_harness_signature.txt"
           if [ "${harness_report}" = "true" ] && [ -f "${harness_signature_path}" ] && [ ! -L "${harness_signature_path}" ]; then
-            harness_signature_bytes="$(wc -c < "${harness_signature_path}" | tr -d '[:space:]')"
+            harness_signature_bytes="$(wc -c < "${harness_signature_path}" 2>/dev/null | tr -d '[:space:]' || true)"
             if [[ "${harness_signature_bytes}" =~ ^[0-9]+$ ]] && [ "${harness_signature_bytes}" -ge 1 ] && [ "${harness_signature_bytes}" -le 1024 ]; then
               harness_signature_b64="$(base64 -w0 < "${harness_signature_path}" 2>/dev/null || true)"
               [[ "${harness_signature_b64}" =~ ^[A-Za-z0-9+/=]{4,1368}$ ]] || harness_signature_b64=""
@@ -1955,7 +1955,7 @@ jobs:
             exit 0
           fi
           report_dir="${RUNNER_TEMP}/workflow-heal-phase-report"
-          mkdir -p "${report_dir}"
+          mkdir -p "${report_dir}" || { echo "::warning::WORKFLOW_HEAL_PHASE_REPORT skip reason=report_dir_unavailable"; exit 0; }
           # Decode the signature only when the job output is plain base64; the
           # reporter skips (and logs why) when the variable is left empty.
           WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE=""
