@@ -57,15 +57,18 @@ def test_profile_manifests_match_contracts() -> None:
 		"ai-issue-pr-status.yml",
 		"ai-cancel-on-pr-close.yml",
 		"ai-orchestrate-clarify-respond.yml",
+		# Every profile ships the managed-wrapper integrity check.
+		"ai-workflow-integrity.yml",
 	]
-	standard = core[:-1] + [
+	standard = core[:-2] + [
 		"ai-orchestrate.yml",
 		"ai-orchestrate-poll.yml",
-		core[-1],
+		core[-2],
 		"ai-validate.yml",
 		"ai-sync-labels.yml",
 		"review_rb_judge_dispatch.yml",
 		"unblock_judge_dispatch.yml",
+		"ai-workflow-integrity.yml",
 	]
 	full = sorted(path.name for path in WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
 
@@ -215,7 +218,10 @@ def test_failure_summary_contract_is_present() -> None:
 
 def test_success_path_contracts_are_preserved() -> None:
 	wf = _workflow_text()
-	assert "if: ${{ inputs.allow_workflow_edits != false }}" in wf
+	# allow_workflow_edits no longer skips the job; it gates only the
+	# non-wrapper asset steps and logs a deprecation line (Q2).
+	assert "\n    if: ${{ inputs.allow_workflow_edits != false }}\n" not in wf
+	assert "WORKFLOW_EDITS_OPT_OUT outcome=ignored scope=managed_wrappers" in wf
 	assert 'SELF_TEMPLATE="ai-update-workflows.yml"' in wf
 	assert 'SKIPPED_FILES="${SKIPPED_FILES}${filename} (self-updater absent, skipped)\\n"' in wf
 	assert '[ -e "${LOCAL_DIR}/${SELF_TEMPLATE}" ]' in wf
@@ -230,7 +236,7 @@ def test_success_path_contracts_are_preserved() -> None:
 	assert '- **Audit gate package script action:** ${AUDIT_GATE_SCRIPT_ACTION:-unknown}' in wf
 	assert '- **Audit gate changed files:** ${AUDIT_GATE_CHANGED_COUNT:-0}' in wf
 	assert "if: steps.update.outputs.has_updates == 'true'" in wf
-	assert "ALLOW_WORKFLOW_EDITS repository variable to '\\''false'\\''." in wf
+	assert "ALLOW_WORKFLOW_EDITS='\\''false'\\'' only skips other assets." in wf
 
 
 def test_wrapper_ref_renderer_contract() -> None:
@@ -268,7 +274,7 @@ def test_wrapper_ref_renderer_contract() -> None:
 
 def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
 	templates = sorted(WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
-	assert len(templates) == 18
+	assert len(templates) == 19
 	for template_path in templates:
 		rendered_text = pin_reusable_workflow_refs(
 			template_path.read_text(encoding="utf-8"),

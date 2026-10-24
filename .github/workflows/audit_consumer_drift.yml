@@ -1,8 +1,13 @@
 name: Audit Consumer Drift
 
+# Daily (was weekly): besides the alert, every drifted consumer gets one
+# restore pull request (head auto/restore-managed-workflows, body marker
+# coding-workflows:restore-managed-workflows:v1), opened or refreshed with
+# GH_PAT. Repository variable CONSUMER_DRIFT_REPAIR_ENABLED=false keeps the
+# audit and alert but opens no pull requests (default: unset, repair on).
 on:
   schedule:
-    - cron: '0 8 * * 1'
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 env:
@@ -36,6 +41,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: '1'
+          CONSUMER_DRIFT_REPAIR_ENABLED: ${{ vars.CONSUMER_DRIFT_REPAIR_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
@@ -57,12 +63,29 @@ jobs:
             exit 1
           fi
 
+          # Compare against, and restore from, the released templates and
+          # renderer rather than main's: main can be ahead of stable, and a
+          # restore pull request must match what the consumer's integrity
+          # check renders at the stable release.
+          STABLE_TREE="${RUNTIME_DIR}/stable"
+          mkdir -p "${STABLE_TREE}"
+          git archive FETCH_HEAD workflow-templates scripts/workflow_wrapper_refs.py | tar -x -C "${STABLE_TREE}"
+
+          REPAIR_ARGS=()
+          if [ "${CONSUMER_DRIFT_REPAIR_ENABLED,,}" != "false" ]; then
+            REPAIR_ARGS=(--repair)
+          else
+            echo "DRIFT_REPAIR outcome=disabled reason=CONSUMER_DRIFT_REPAIR_ENABLED"
+          fi
+
           python3 scripts/audit_consumer_drift.py \
             --consumer-repos .github/ai/consumer_repos.json \
-            --templates-dir workflow-templates \
+            --templates-dir "${STABLE_TREE}/workflow-templates" \
+            --renderer "${STABLE_TREE}/scripts/workflow_wrapper_refs.py" \
             --stable-sha "${STABLE_SHA,,}" \
             --output "${SUMMARY_JSON}" \
-            --max-diff-lines 25
+            --max-diff-lines 25 \
+            "${REPAIR_ARGS[@]}"
 
       - name: Build report artifacts
         if: always()
@@ -156,7 +179,15 @@ jobs:
           template_files = summary.get("template_files", [])
           drift_results = [item for item in results if item.get("outcome") == "drift"]
           error_results = [item for item in results if item.get("outcome") == "error"]
-          level = "WARNING" if drift_results or error_results else "DEBUG"
+          repairs = summary.get("repairs", [])
+          # A repository the audit reports as "match" can still differ in exact
+          # bytes (the integrity check compares bytes), so a restore pull request
+          # or a failed repair for it must raise the level too.
+          actionable_repairs = [
+              repair for repair in repairs
+              if not (repair.get("outcome") == "skipped" and repair.get("reason") in ("sync_pull_request_open", "no_exact_drift"))
+          ]
+          level = "WARNING" if drift_results or error_results or actionable_repairs else "DEBUG"
 
           lines = [
               "## Consumer Drift Audit",
@@ -187,6 +218,16 @@ jobs:
                       if diff_preview:
                           lines.extend(["", "```diff", diff_preview, "```"])
 
+          if repairs:
+              lines.extend(["", "### Restore pull requests"])
+              for repair in repairs:
+                  pr = f" #{repair.get('pr_number')}" if repair.get("pr_number") else ""
+                  files = ", ".join(repair.get("files") or []) or "-"
+                  lines.append(
+                      f"- `{repair.get('repository', 'unknown')}` — {repair.get('outcome', 'unknown')}"
+                      f" ({repair.get('reason', '')}){pr}: {files}"
+                  )
+
           if error_results:
               lines.extend(["", "### Repository fetch errors"])
               for result in error_results:
@@ -213,7 +254,7 @@ jobs:
           else:
               telegram_lines.extend(
                   [
-                      "Consumer wrapper drift audit detected drift or repository fetch errors.",
+                      "Consumer wrapper drift audit detected drift, repository fetch errors or restore pull request activity.",
                       (
                           f"Processed={totals.get('processed', 0)} "
                           f"Match={totals.get('match', 0)} Drift={totals.get('drift', 0)} "
@@ -238,6 +279,9 @@ jobs:
                   repo = result.get("repository", "unknown")
                   detail = result.get("error_detail") or result.get("error") or "unknown"
                   blocks.append(f"- {repo}: {result.get('error', 'error')} ({detail})")
+              for repair in repairs:
+                  pr = f" PR #{repair.get('pr_number')}" if repair.get("pr_number") else ""
+                  blocks.append(f"- restore {repair.get('repository', 'unknown')}: {repair.get('outcome', 'unknown')} ({repair.get('reason', '')}){pr}")
               telegram_body = append_capped(blocks, telegram_lines + [f"Run: {run_url}"])
 
           telegram_body_path.write_text(telegram_body + "\n", encoding="utf-8")

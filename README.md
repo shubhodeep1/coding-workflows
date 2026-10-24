@@ -129,10 +129,11 @@ deployment fallback.
 | `UNBLOCK_JUDGE_TIMEOUT_SECS` | No | `1500` | unblock_judge (direct script environment only) | Per-model timeout inside the isolated container; the workflow does not forward this repo variable. Must be a positive integer; invalid direct-run values log `UNBLOCK_JUDGE ... outcome=timeout_fallback` and use `1500` so a bad setting does not strand the item. The workflow job has a separate 45-minute timeout. |
 | `JUDGE_OUTPUT_FAILURE_MAX` | No | `3` | orchestrate_poll | Consecutive project-judge runs with no usable output (the model failed, or its output did not parse) before the project fails with `ai:blocked` for the unblock judge. Reset by the next parsed verdict. Must be a positive integer; invalid values fall back to `3`. |
 | `AI_VALIDATE_SCHEDULE_ENABLED` | No | unset (off) | ai-validate wrapper | `true` opts the repository in to the weekly scheduled validation of the default branch (Monday 04:17 UTC, issue #7553): no model phases, and one `ai:scheduled-validation-failed` issue while it is red. Unset or any other value skips the scheduled job. |
-| `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files and automatic wrapper updates. In implement, `true` is necessary but not sufficient for automation paths: the issue must also have a trusted-author exact `files_touched` grant. `false` rejects staged `.github/`, `.claude/`, `scripts/`, `prompts/`, and `workflow-templates/` paths (workflow edits are still discarded by the existing step). Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
+| `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files. In `update_workflows.yml` it no longer stops managed wrapper updates: with `false` (or `allow_workflow_edits: false` in `ai-update-workflows.yml`) the sync still updates every managed wrapper, skips only the `.claude/`, `CLAUDE.md`, audit-gate, retired-file and changelog/agents asset steps, and logs `WORKFLOW_EDITS_OPT_OUT outcome=ignored scope=managed_wrappers` plus a deprecation warning (see [Managed wrapper integrity](#managed-wrapper-integrity)). In implement, `true` is necessary but not sufficient for automation paths: the issue must also have a trusted-author exact `files_touched` grant. `false` rejects staged `.github/`, `.claude/`, `scripts/`, `prompts/`, and `workflow-templates/` paths (workflow edits are still discarded by the existing step). Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
 | `UPDATER_VERIFY_RELEASE_MANIFEST` | No | `true` | update_workflows | When `true`, unset or empty (case-insensitive; any other value keeps it off, and a value other than `false` also logs a warning), the consumer updater verifies the attested release manifest before it changes any consumer file. It finds the `vX.Y.Z` release whose tag points at the commit `stable` resolves to, downloads its `release-manifest.v1.json` asset (one release lookup and one asset download with `GH_PAT`), and checks it with `gh attestation verify` against this repo's `mark-stable.yml` / `test-and-mark-stable.yml` run from `refs/heads/stable` (both reject any other dispatch ref), GitHub-hosted runners only. It then hash-checks the verifier's own modules and runs `scripts/verify_release_manifest.py` on every file the updater reads. Any failure stops the run before any file is written and nothing is pushed; the summary shows `ERR_RELEASE_MANIFEST_VERIFY_FAILED` and the log an `UPDATER_MANIFEST_VERIFY outcome=rejected reason=<token>` line. Off: one `UPDATER_MANIFEST_VERIFY outcome=skip reason=disabled` line and no API calls. Releases published before the verifier modules were added to the manifest fail with `reason=verifier_unattested`; v1.32.0 and later pass. |
 | `UPDATER_PR_DELIVERY_ENABLED` | No | `true` | update_workflows | When `true`, unset or empty (case-insensitive; any other value keeps it off, and a value other than `false` also logs a warning), the consumer updater delivers its changes as a pull request instead of pushing to the default branch. It commits to `auto/update-workflows-<release-sha-12>`, pushes with a lease (a branch holding commits the updater did not write, or one that moved during the run, fails the run and nothing is pushed), runs `scripts/lint_pr_body_auto_close.py` on the PR title, body and commit message, and opens one pull request or refreshes the open one (one `gh pr list` call scoped to that head and the default branch). Earlier updater pull requests for older releases, opened by the `GH_PAT` account from this repository, are closed with a comment pointing at the new one. A separate `verify` job then checks the PR head out as data, downloads and attests the release manifest again, and compares every file the PR changes with the attested release (wrappers re-rendered at the release SHA, `.claude/` and `CLAUDE.md` against manifest hashes, retired-file deletions against the attested hashes, audit-gate and changelog output by re-running the attested scripts on the PR's parent; anything else is rejected). It posts the commit status `ai-update-workflows/verify` on the PR head and logs one `UPDATER_PR_VERIFY outcome=passed|rejected reason=<token>` line. Auto-merge (`--squash --match-head-commit` on the verified head) is enabled only by that job, only after the check passed, and only when `UPDATER_VERIFY_RELEASE_MANIFEST` verification reported `verified=true`; otherwise the PR waits for a human and the run logs a warning. Any verify error posts a `failure` status and leaves auto-merge off. The `verify` job posts the status with the caller's `statuses: write`, which the current `ai-update-workflows.yml` template grants; with an older wrapper that lacks it, the job retries once with `GH_PAT` and logs a warning, and fails closed only if that also fails. It needs a stable release that already ships `scripts/verify_release_manifest.py verify-pr-tree`. If a human closed this release's PR without merging, the run pushes nothing. Each run logs one `UPDATER_PR_DELIVERY outcome=opened|refreshed|skipped|failed reason=<token>` line; the Telegram notification and the run summary show the PR URL. All PR calls use `GH_PAT`. Off: the `ai-sync/stable` pull request (#7128), or the direct push to the default branch when the `update_via_pull_request` input is `false`. |
-| `AI_WORKFLOW_AUTO_UPDATE_ENABLED` | No | unset (runs) | ai-update-workflows (consumer template) | Consumer kill switch for the updater. Set to `false` and the `update` job of `ai-update-workflows.yml` does not run at all; unset or any other value lets it run. Read by the template's job-level `if:`, so it reaches a consumer on the next `@stable` sync. `ALLOW_WORKFLOW_EDITS=false` instead lets the job run but skips every change. |
+| `AI_WORKFLOW_AUTO_UPDATE_ENABLED` | No | unset (runs) | ai-update-workflows (consumer template) | Consumer kill switch for the updater. Set to `false` and the `update` job of `ai-update-workflows.yml` does not run at all; unset or any other value lets it run. Read by the template's job-level `if:`, so it reaches a consumer on the next `@stable` sync. Wrappers then stay at their pinned release; they are still locked by `ai-workflow-integrity.yml`, and the upstream drift audit still opens restore pull requests for them. `ALLOW_WORKFLOW_EDITS=false` no longer skips wrapper updates. |
+| `CONSUMER_DRIFT_REPAIR_ENABLED` | No | unset (`true`) | audit_consumer_drift (this repo only) | `false` keeps the daily consumer drift audit and its Telegram alert but opens no restore pull requests (logs `DRIFT_REPAIR outcome=disabled`). Unset or any other value: every drifted consumer gets one restore pull request. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. **Orchestrator integration PRs (head ref matching `ORCH_INTEGRATION_BRANCH_PATTERN`, default `^orchestrator/project-`) are unconditionally excluded on both the normal review and deterministic-skip paths** even when this is `true`. The deterministic-skip path also withholds `ai:review-skipped` and linked-issue `ai:ready-to-merge` labels, leaving final merge authorization to the orchestrator: the orchestrator's `finalize_integration_merge_if_needed` handles their merge synchronously once the project is genuinely complete (all waves merged AND the default branch contains the integration tip). Without this exception, an integration-conflict self-healing dispatch could let review_autofix ship the integration branch partway through the project — stranding subsequent wave PRs on the integration branch with no path to default. The PR-metadata fetch fails closed: a transient API error suppresses auto-merge for that cycle (next sync event retries). See shubhodeep1/binance-blessings#135 for the regression case that motivated the exclusion. **forward-merge fallback PRs (head ref matching `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml` when the automated stable→main merge hits conflict or branch protection) auto-merge via a real merge commit instead of a squash** — gated by `FORWARD_MERGE_FALLBACK_AUTO_MERGE` (default `true`; see its own row). These PRs MUST land as a 2-parent merge commit so `stable`'s tip stays reachable from `main`; `gh pr merge --squash --auto` (the regular auto-merge call) silently strips that ancestry, after which `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check refuses the next promote run with the "squash/rebase strips ancestry" error (see `.github/workflows/promote-main-to-stable.yml:115-126` and the CAUTION banner injected into every fallback PR body at `.github/workflows/forward-merge-stable-to-main.yml:265-270`). So the forward-merge branch instead calls `gh pr merge --merge --auto` — the unattended equivalent of the manual "Create a merge commit", which preserves ancestry. The `^auto/forward-merge-stable-` pattern is hard-coded — the branch prefix is owned by the forward-merge workflow and never varies per repo. Both the codex-agent "Enable auto-merge on PR" step and the `deterministic-skip-merge` sibling job apply this merge-commit path, so a small forward-merge fallback that happens to fall under `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS` cannot short-circuit to a squash merge via the deterministic-skip path either. Every reviewed or deterministic-skip auto-merge request is bound with `--match-head-commit` to the head that was reviewed or evaluated by the gate; an unavailable head fails closed, and a concurrent push is rejected so its `synchronize` run can evaluate the new head. **Limitation:** when required checks are pending, GitHub may retain an already-enabled auto-merge setting across later pushes; re-verifying that later head remains separate hardening work. |
 | `MERGE_BASE_FRESHNESS_ENABLED` | No | `true` | review_autofix, orchestrate_poll | Merge-base freshness gate (`scripts/pr_checks_lib.sh`). Before auto-merge is enabled or a direct merge is attempted, the gate compares the PR head with its base (`compare/{head}...{base}`): when the base gained commits since the merge-base that touch a file the PR also touches (renames count under both names; a base-side diff of 300 or more files counts as overlap because GitHub truncates it silently), the branch is updated from the base (`PUT pulls/{n}/update-branch`, bound to the head) instead of merged, the `synchronize` run re-validates CI and review on the combined tree, and the merge waits for that round. A base that did not move, or moved only in other files, merges immediately. Any API failure (or an unresolved head or base) logs `MERGE_BASE_FRESHNESS ... outcome=unknown action=defer` and defers the merge to the next poll tick or review round without requesting a branch update (before #6988 it proceeded). Logs `MERGE_BASE_FRESHNESS pr=<n> head_sha=<sha> base=<ref> outcome=fresh|clean|overlap|disabled|unknown reason=<token> behind_by=<k> overlap=<paths>` and `MERGE_BASE_SYNC ... action=update_branch outcome=accepted|failed`. Wired into the codex-agent `Enable auto-merge on PR` step, the `deterministic-skip-merge` job, the review-blocked judge's merges, and the poller's backward-scan, standalone stall `attempt_merge` and review-blocked merge sites. Why: PR #6741 merged on 2026-10-09 with check-runs from the previous day after #6549 had changed the code its tests exercised, and `main` CI was red for three hours. `true`/`1`/`yes`/`on` (case-insensitive) enable; anything else disables the gate. |
 | `MERGE_BASE_FRESHNESS_MAX_SYNCS` | No | `2` | review_autofix, orchestrate_poll | Warning threshold for merge-base freshness updates of one PR (`0`-`9`; anything else uses `2`). Each accepted update is verified as GitHub's signed two-parent merge of the approved head with the base tip the gate saw, then marked with `<!-- ai:merge-base-sync:v1 pr=<n> from=<head> sync=<k> base=<tip> merge=<commit> -->`; an unverified update gets no marker and the next run reviews in full. Remaining overlap never authorizes a merge: past the threshold each further update still happens and logs `::warning::MERGE_BASE_FRESHNESS ... action=update reason=max_syncs_exceeded`, so the merge waits for CI on the newest combined tree. Head-poll knobs and reason tokens: `agents.md`, "Bound freshness-update markers". Why: #7084, and finding `merge-base-sync-cap-proceeds-on-overlap`. |
@@ -572,6 +573,17 @@ jobs:
             contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
             contains(github.event.comment.body, '[auto-answered-by-orchestrator]')
           )
+        ) ||
+        (
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.type == 'User' &&
+          github.event.comment.author_association == 'OWNER' &&
+          github.event.comment.user.login == github.repository_owner &&
+          startsWith(github.event.comment.body, '/answer') &&
+          (
+            contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
+            contains(github.event.comment.body, '[auto-answered-by-orchestrator]')
+          )
         )
       )
     uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@<40-character-release-sha> # stable
@@ -615,6 +627,14 @@ jobs:
           github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN &&
           startsWith(github.event.comment.body, '/approved') &&
           contains(github.event.comment.body, '[auto-approved-by-plan]')
+        ) ||
+        (
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.type == 'User' &&
+          github.event.comment.author_association == 'OWNER' &&
+          github.event.comment.user.login == github.repository_owner &&
+          startsWith(github.event.comment.body, '/approved') &&
+          contains(github.event.comment.body, '[auto-approved-by-plan]')
         )
       )
     uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@<40-character-release-sha> # stable
@@ -638,8 +658,13 @@ an automation marker (`[auto-answered-by-clarify]`,
 triggers plan or implement, and an automated `/approved` must carry an HMAC
 envelope that the template `ai-plan.yml` job `sign-automated-approval` signs
 and the template `ai-implement.yml` job `verify-automated-approval` checks
-(issue, plan digest, plan run and target ref/SHA). Use the shipped templates
-for this mode; the README examples above omit those two jobs. Likewise
+(issue, plan digest, plan run and target ref/SHA). One exception: the
+repository owner's own account (`author_association == 'OWNER'`, a `User`,
+login equal to `github.repository_owner`) may still post the markers, because
+the pipeline posts its auto-answers and auto-approvals with `GH_PAT`, which
+arrives as the owner; that owner-posted `/approved [auto-approved-by-plan]`
+needs no signature (the owner can already post a plain `/approved`). Use the
+shipped templates for this mode; the README examples above omit those two jobs. Likewise
 `AI_ORCHESTRATOR_APP_LOGIN` lets a dedicated app's issues (labelled
 `ai:orchestrator-managed`, carrying `<!-- ai-orchestrator-provenance:v1 `)
 enter clarify. With the variables unset nothing changes: comments posted
@@ -1194,8 +1219,8 @@ the pipeline. Manual and orchestrator runs are unchanged.
 # when new versions are published to coding-workflows@stable.
 #
 # Opting out:
-#   Set the ALLOW_WORKFLOW_EDITS repository variable to 'false' to prevent
-#   automatic updates. The workflow will still run but skip all changes.
+#   Managed wrappers cannot be opted out (ai-workflow-integrity.yml locks
+#   them). ALLOW_WORKFLOW_EDITS='false' only skips the non-wrapper assets.
 #
 # IMPORTANT: This file is managed by coding-workflows and will be overwritten
 # by the update process. Do not add custom logic here.
@@ -1229,10 +1254,11 @@ jobs:
 > the updater refreshes its pin regardless of install profile. Release dispatches
 > include the peeled release SHA, but the updater independently resolves current
 > `stable`, so delayed events cannot downgrade pins. A Telegram
-> alert lists which files were updated or created. To opt out, set
-> `ALLOW_WORKFLOW_EDITS` to `false`. If you have customized a wrapper and want
-> to keep your changes, either opt out or maintain your customizations after
-> each update.
+> alert lists which files were updated or created. Managed wrappers cannot be
+> customized or opted out: `ai-workflow-integrity.yml` fails any pull request or
+> push that changes them, and `ALLOW_WORKFLOW_EDITS=false` no longer stops
+> wrapper updates (see [Managed wrapper integrity](#managed-wrapper-integrity)).
+> Changes a consumer needs belong upstream in this repository.
 
 **Optional label-sync wrapper:** If you want your repository's `ai:*` labels to
 stay aligned with the upstream contract, add
@@ -1242,20 +1268,87 @@ as `.github/workflows/ai-sync-labels.yml`. It supports manual
 
 **Central consumer drift audit:** This source repo also runs
 [`.github/workflows/audit_consumer_drift.yml`](.github/workflows/audit_consumer_drift.yml)
-on a weekly cron plus manual `workflow_dispatch`. The audit reads the live
+on a daily cron (08:00 UTC) plus manual `workflow_dispatch`. The audit reads the live
 [`.github/ai/consumer_repos.json`](.github/ai/consumer_repos.json) registry,
 fetches each consumer's installed `.github/workflows/ai-*.yml` wrappers, plus
 the other wrappers listed in
 [`workflow-templates/profiles/full.txt`](workflow-templates/profiles/full.txt)
 (`review_rb_judge_dispatch.yml`, `unblock_judge_dispatch.yml`), via the GitHub
-contents API, diffs them against this repo's checked-in
-[`workflow-templates/`](workflow-templates/) copies rendered with the current
-stable release SHA, and reports drift (including stale pins)
-read-only — it never writes to consumer repositories. Transient GitHub API
+contents API, diffs them against the
+[`workflow-templates/`](workflow-templates/) copies of the current `stable`
+release (read from the `stable` tag, not `main`) rendered with that release's
+SHA and renderer, and reports drift (including stale pins). For every
+consumer whose managed wrappers differ from the release bytes (including
+differences the drift report ignores, such as trailing whitespace or the old
+managed header) it then opens, or refreshes, one restore pull request from the branch
+`auto/restore-managed-workflows` that puts each managed wrapper back to the
+exact release bytes; the body carries the marker
+`<!-- coding-workflows:restore-managed-workflows:v1 -->`, so reruns update the
+same pull request (and skip the push when nothing changed). A consumer with an
+open sync pull request (`auto/update-workflows-*` or `ai-sync/stable`) is
+skipped, because that pull request already restores every wrapper. The
+updater is never created by a restore pull request (it stays bootstrap-only),
+and an existing `auto/restore-managed-workflows` branch that the audit did not
+write is left alone (`reason=restore_branch_not_owned`).
+Each repository logs one `DRIFT_REPAIR repository=<r> outcome=created|updated|unchanged|skipped|error reason=<token>`
+line; the run summary and the Telegram alert list the results. Set
+`CONSUMER_DRIFT_REPAIR_ENABLED=false` in this repository to keep the alert
+without pull requests. Transient GitHub API
 failures (intermittent 5xx "Unicorn" pages, rate limits, and network hiccups)
 are retried with exponential backoff before a repository is recorded as an
 error, so a single flaky contents-API response no longer inflates the audit's
 error count into a spurious alert.
+
+#### Managed wrapper integrity
+
+Consumer repos cannot change the managed wrappers (every file the sync installs
+from [`workflow-templates/`](workflow-templates/), including
+`ai-update-workflows.yml` and `ai-workflow-integrity.yml` itself). Three layers
+enforce it:
+
+1. **Integrity check.** [`workflow-templates/ai-workflow-integrity.yml`](workflow-templates/ai-workflow-integrity.yml)
+   calls [`.github/workflows/workflow_integrity.yml`](.github/workflows/workflow_integrity.yml)
+   on `pull_request_target` and on every branch `push`. When a pull request or
+   push changes a managed wrapper, every managed wrapper in the head tree
+   (the `WORKFLOW_PROFILE` manifest, the integrity wrapper, and the updater
+   when present) must be byte-identical to the template rendered at the
+   release SHA the head's `ai-workflow-integrity.yml` pins, and that SHA must
+   be a signed release: the check verifies the release's `sync-manifest.json`
+   attestation, tag and file hashes exactly as `update_workflows.yml` does,
+   then renders with the verified release's renderer. The sync's own update
+   pull requests and the drift audit's restore pull requests pass; a hand edit,
+   a deleted wrapper, mixed pins or a pin to a commit that is not a release
+   fail. Changes to non-managed workflows skip the check. On
+   `pull_request_target` the wrapper runs from the base branch, so a pull
+   request cannot edit the check that judges it, and the pull request's files
+   are only read as git objects. The verdict is the commit status
+   `coding-workflows/workflow-integrity` on the pull request head (push runs
+   only fail the job, so they never overwrite a pull request's verdict). Log
+   prefix: `WORKFLOW_INTEGRITY outcome=pass|skip|fail|error reason=<token>`.
+2. **No opt-out.** `ALLOW_WORKFLOW_EDITS=false` (and `allow_workflow_edits:
+   false` in the updater wrapper) no longer stops wrapper updates; the sync
+   logs `WORKFLOW_EDITS_OPT_OUT outcome=ignored scope=managed_wrappers` and a
+   deprecation warning, and still skips the non-wrapper assets.
+3. **Daily repair.** The upstream drift audit opens or refreshes a restore pull
+   request in each drifted consumer (see "Central consumer drift audit" above).
+
+**Branch ruleset.** Each consumer's default branch carries a ruleset named
+`coding-workflows managed wrappers` that requires the
+`coding-workflows/workflow-integrity` status (from the GitHub Actions app)
+before merging, which also rejects a direct push of a commit without that
+status. Personal-account repositories cannot use path-restricted push
+rulesets, so the ruleset cannot single out the wrapper paths. Repository
+admins are on the bypass list and can still push directly or edit or disable
+the ruleset; the pipelines never merge with `--admin`, so their pull requests
+still wait for the check. Apply the ruleset only after the consumer's default
+branch has `ai-workflow-integrity.yml`; otherwise no workflow posts the
+status and every pull request waits.
+
+**Known limits.** Admins can bypass, as above. A pull request that adds a new
+workflow posting the same status context could impersonate the check, so
+review new workflows in consumer pull requests. Re-pinning every managed
+wrapper to an older signed release passes the check; the next sync moves it
+forward again.
 
 #### Install profiles
 
@@ -1264,11 +1357,12 @@ auto-creates by setting the `WORKFLOW_PROFILE` repository variable. Supported
 values are `core`, `standard`, and `full`; the default is `full`, which
 preserves today's behavior of installing every wrapper template.
 
-- `core` installs the seven-wrapper manifest in
+- `core` installs the eight-wrapper manifest in
   [`workflow-templates/profiles/core.txt`](workflow-templates/profiles/core.txt):
   `ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`, `ai-review.yml`,
   `ai-issue-pr-status.yml`, `ai-cancel-on-pr-close.yml`, and
-  `ai-orchestrate-clarify-respond.yml`. The responder wrapper receives
+  `ai-orchestrate-clarify-respond.yml`, and `ai-workflow-integrity.yml`
+  (every profile ships the integrity check). The responder wrapper receives
   standalone clarification questions even without the orchestrator poller.
 - `standard` installs `core` plus the orchestrator/validation additions listed
   in
@@ -1288,7 +1382,7 @@ not delete wrappers that are already present in `.github/workflows/`.
 > **Terminology note:** the minimum manual-bootstrap wrappers with default
 > standalone auto-decisions are `ai-clarify.yml`, `ai-plan.yml`,
 > `ai-implement.yml`, and `ai-orchestrate-clarify-respond.yml`. The `core` install
-> profile is a separate seven-wrapper auto-install manifest used only by
+> profile is a separate eight-wrapper auto-install manifest used only by
 > `ai-update-workflows.yml`.
 
 > **Canonical audit-gate delivery contract:** `update_workflows.yml` applies
@@ -2354,7 +2448,7 @@ through `clarify → plan → implement → review`.
 | `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` | `true` | Hold automatic plan approval when listed automation paths lack a trusted exact `files_touched` grant |
 | `PLAN_FILES_TOUCHED_GATE_ENABLED` | `true` | Hold automatic plan approval when the plan lists files outside the issue's `files_touched` list |
 | `PLAN_SPLIT_TO_PROJECT_ENABLED` | `true` | Hand a plan that lists more than 50 files to an orchestrator project on the Claude engine instead of holding it for approval |
-| `ALLOW_WORKFLOW_EDITS` | `true` | Allow AI edits to workflow files and automatic wrapper updates |
+| `ALLOW_WORKFLOW_EDITS` | `true` | Allow AI edits to workflow files (no longer stops managed wrapper updates; see [Managed wrapper integrity](#managed-wrapper-integrity)) |
 | `ENABLE_AUTO_MERGE` | `true` | Auto-merge PRs when review passes and checks are green, bound to the reviewed/gate-observed head; missing or concurrently changed heads are refused |
 | `MERGE_BASE_FRESHNESS_ENABLED` | `true` | Before a merge, update a PR from its base and wait for fresh CI when the base gained commits touching the PR's own files; merge immediately otherwise |
 | `MERGE_BASE_FRESHNESS_MAX_SYNCS` | `2` | Updates from the base per PR after which each further update logs a warning; remaining overlap never merges without CI on the newest combined tree |

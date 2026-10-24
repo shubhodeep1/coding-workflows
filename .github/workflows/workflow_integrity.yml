@@ -1,0 +1,706 @@
+---
+name: Workflow Wrapper Integrity
+
+# Consumer-side integrity check for the managed workflow wrappers (the files
+# coding-workflows ships from workflow-templates/*.yml). Called by each
+# consumer's ai-workflow-integrity.yml wrapper on pull_request_target and push.
+#
+# A pull request or push that changes a managed wrapper passes only when every
+# managed wrapper in the head tree is byte-identical to the upstream template
+# rendered at the release SHA the head's ai-workflow-integrity.yml pins, and
+# that SHA is a signed coding-workflows release (the sync manifest's Sigstore
+# attestation, release tag and file hashes, verified exactly as
+# update_workflows.yml verifies them). Nothing from the consumer tree is
+# executed: both trees are read as git objects.
+#
+# On pull_request_target the caller wrapper runs from the base branch, so a
+# pull request cannot edit the check that judges it. The result is posted as
+# the commit status `coding-workflows/workflow-integrity` on the pull request
+# head; branch rulesets require that context. Push runs only fail the job
+# (no status), so a later push can never overwrite a pull request verdict.
+#
+# Log prefix: WORKFLOW_INTEGRITY (outcome=pass|skip|fail|error reason=...).
+
+"on":
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      GIT_LFS_SKIP_SMUDGE: "1"
+      INTEGRITY_STATUS_CONTEXT: coding-workflows/workflow-integrity
+      INTEGRITY_UPSTREAM_REPO: shubhodeep1/coding-workflows
+    steps:
+      - name: Resolve integrity inputs
+        id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_FALLBACK_TOKEN: ${{ secrets.GH_PAT }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PUSH_BEFORE: ${{ github.event.before || '' }}
+          PUSH_AFTER: ${{ github.event.after || '' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+        run: |
+          set -euo pipefail
+
+          WORK="${RUNNER_TEMP}/workflow-integrity"
+          rm -rf "${WORK}"
+          mkdir -p "${WORK}"
+          echo "work=${WORK}" >> "$GITHUB_OUTPUT"
+
+          finish_early() {
+            echo "WORKFLOW_INTEGRITY outcome=$1 reason=$2"
+            echo "outcome=$1" >> "$GITHUB_OUTPUT"
+            echo "reason=$2" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || finish_early error invalid_repository
+          [[ "${DEFAULT_BRANCH}" =~ ^[A-Za-z0-9._/-]+$ ]] || finish_early error invalid_default_branch
+          ZERO_SHA="0000000000000000000000000000000000000000"
+          case "${EVENT_NAME}" in
+            pull_request_target)
+              [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || finish_early error invalid_pr_number
+              [[ "${PR_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || finish_early error invalid_head_sha
+              [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || finish_early error invalid_base_sha
+              MODE=pull_request
+              BASE_SHA="${GITHUB_SHA}"
+              HEAD_SHA="${PR_HEAD_SHA}"
+              ;;
+            push)
+              [[ "${PUSH_AFTER}" =~ ^[0-9a-f]{40}$ ]] || finish_early error invalid_head_sha
+              [ "${PUSH_AFTER}" != "${ZERO_SHA}" ] || finish_early skip branch_deleted
+              MODE=push
+              HEAD_SHA="${PUSH_AFTER}"
+              BASE_SHA=""
+              if [[ "${PUSH_BEFORE}" =~ ^[0-9a-f]{40}$ ]] && [ "${PUSH_BEFORE}" != "${ZERO_SHA}" ]; then
+                BASE_SHA="${PUSH_BEFORE}"
+              fi
+              ;;
+            *)
+              finish_early skip unsupported_event
+              ;;
+          esac
+
+          {
+            echo "mode=${MODE}"
+            echo "base_sha=${BASE_SHA}"
+            echo "head_sha=${HEAD_SHA}"
+            echo "pr_number=${PR_NUMBER}"
+            echo "default_branch=${DEFAULT_BRANCH}"
+            echo "outcome="
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "${MODE}" = "pull_request" ]; then
+            RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
+            post_pending() {
+              GH_TOKEN="$1" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+                -f state=pending \
+                -f "context=${INTEGRITY_STATUS_CONTEXT}" \
+                -f "description=Checking managed workflow wrappers against the pinned release" \
+                -f "target_url=${RUN_URL}" >/dev/null
+            }
+            # Same fallback as update_workflows.yml's verify job: a caller
+            # that does not grant statuses: write still gets a status.
+            if ! post_pending "${GH_TOKEN:-}"; then
+              if [ -n "${STATUS_FALLBACK_TOKEN:-}" ] && post_pending "${STATUS_FALLBACK_TOKEN}"; then
+                echo "::warning::WORKFLOW_INTEGRITY posted the status with GH_PAT because github.token was refused; the caller wrapper should grant statuses: write."
+              else
+                echo "::warning::WORKFLOW_INTEGRITY could not post the pending status."
+              fi
+            fi
+          fi
+          echo "WORKFLOW_INTEGRITY outcome=start mode=${MODE} head=${HEAD_SHA} base=${BASE_SHA:-none}"
+
+      - name: Read consumer workflow trees (data only)
+        id: trees
+        if: steps.inputs.outputs.outcome == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORK: ${{ steps.inputs.outputs.work }}
+          BASE_SHA: ${{ steps.inputs.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.inputs.outputs.head_sha }}
+          DEFAULT_BRANCH: ${{ steps.inputs.outputs.default_branch }}
+        run: |
+          set -euo pipefail
+
+          error_out() {
+            echo "::error::WORKFLOW_INTEGRITY outcome=error reason=$1"
+            echo "outcome=error" >> "$GITHUB_OUTPUT"
+            echo "reason=$1" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
+
+          INTEGRITY_PY="${WORK}/workflow_integrity.py"
+          cat > "${INTEGRITY_PY}" <<'WORKFLOW_INTEGRITY_PY'
+          """Managed workflow wrapper integrity checker (consumer side).
+
+          Kept inline in workflow_integrity.yml on purpose: consumers pin that file by
+          release SHA, so this code is the pinned release's own. It never imports code
+          from the consumer tree it judges, and it runs code from the release under
+          check only after the signed sync manifest has been verified.
+
+          Subcommands (exit 0 ok, 1 rejected or unreadable input, 2 bad arguments):
+            extract REPO SHA DEST   copy the top-level .github/workflows entries of
+                                    commit SHA into DEST; symlinks and other non-blob
+                                    entries are recorded in DEST/.entry-modes.json.
+            detect BASE HEAD        print the managed-candidate files whose bytes or
+                                    presence differ between the two extracted trees.
+            pin HEAD                print the one release SHA the head's integrity
+                                    wrapper pins coding-workflows to.
+            compare BASE HEAD RENDERED PROFILE SHA
+                                    compare every managed wrapper in HEAD with the
+                                    release-rendered copy; print one line per problem.
+          """
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          INTEGRITY_WRAPPER = "ai-workflow-integrity.yml"
+          UPDATER_WRAPPER = "ai-update-workflows.yml"
+          MODES_FILE = ".entry-modes.json"
+          NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.ya?ml$")
+          SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+          USES_RE = re.compile(
+              r"^[ \t-]*uses:[ \t]+['\"]?shubhodeep1/coding-workflows/\.github/workflows/"
+              r"[A-Za-z0-9_.-]+\.ya?ml@([^\s'\"#]+)",
+              re.MULTILINE,
+          )
+
+
+          def fail(code, detail=""):
+              print(f"{code}{(' ' + detail) if detail else ''}")
+              sys.exit(1)
+
+
+          def git(repo, *args):
+              return subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True).stdout
+
+
+          def extract(repo, sha, dest):
+              if not SHA_RE.match(sha):
+                  fail("invalid_sha")
+              os.makedirs(dest, exist_ok=True)
+              try:
+                  listing = git(repo, "ls-tree", "-z", "--full-tree", sha, "--", ".github/workflows/")
+              except subprocess.CalledProcessError:
+                  fail("tree_unreadable", f"sha={sha}")
+              modes = {}
+              for record in listing.split(b"\0"):
+                  if not record:
+                      continue
+                  meta, _, path = record.partition(b"\t")
+                  mode, kind, oid = meta.decode().split()
+                  name = path.decode("utf-8", "replace").rsplit("/", 1)[-1]
+                  if path.decode("utf-8", "replace") != f".github/workflows/{name}" or not NAME_RE.match(name):
+                      continue
+                  if kind == "blob" and mode in ("100644", "100755"):
+                      with open(os.path.join(dest, name), "wb") as handle:
+                          handle.write(git(repo, "cat-file", "blob", oid))
+                  else:
+                      modes[name] = mode
+              with open(os.path.join(dest, MODES_FILE), "w", encoding="utf-8") as handle:
+                  json.dump(modes, handle, sort_keys=True)
+
+
+          def load_tree(directory):
+              tree = {}
+              try:
+                  with open(os.path.join(directory, MODES_FILE), encoding="utf-8") as handle:
+                      modes = json.load(handle)
+              except (OSError, ValueError):
+                  modes = {}
+              for name in sorted(os.listdir(directory)):
+                  if name == MODES_FILE or not NAME_RE.match(name):
+                      continue
+                  with open(os.path.join(directory, name), "rb") as handle:
+                      tree[name] = handle.read()
+              for name, mode in modes.items():
+                  if NAME_RE.match(name):
+                      tree[name] = f"<non-file entry mode {mode}>".encode()
+              return tree, set(modes)
+
+
+          def references_upstream(content):
+              return bool(USES_RE.search(content.decode("utf-8", "replace")))
+
+
+          def detect(base_dir, head_dir):
+              base, _ = load_tree(base_dir)
+              head, _ = load_tree(head_dir)
+              candidates = {INTEGRITY_WRAPPER, UPDATER_WRAPPER}
+              for tree in (base, head):
+                  candidates.update(name for name, content in tree.items() if references_upstream(content))
+              changed = sorted(name for name in candidates if base.get(name) != head.get(name))
+              print(",".join(changed))
+
+
+          def pin(head_dir):
+              head, odd = load_tree(head_dir)
+              if INTEGRITY_WRAPPER not in head or INTEGRITY_WRAPPER in odd:
+                  fail("integrity_wrapper_missing")
+              refs = set(USES_RE.findall(head[INTEGRITY_WRAPPER].decode("utf-8", "replace")))
+              if not refs:
+                  fail("pin_missing")
+              if len(refs) != 1:
+                  fail("pin_ambiguous", "refs=" + ",".join(sorted(refs)))
+              ref = refs.pop().lower()
+              if not SHA_RE.match(ref):
+                  fail("pin_not_sha", f"ref={ref}")
+              print(ref)
+
+
+          def profile_names(profile_file):
+              names = []
+              with open(profile_file, encoding="utf-8") as handle:
+                  for line in handle.read().splitlines():
+                      entry = line.strip()
+                      if entry and not entry.startswith("#"):
+                          names.append(entry)
+              return names
+
+
+          def compare(base_dir, head_dir, rendered_dir, profile_file, release_sha):
+              base, _ = load_tree(base_dir)
+              head, _ = load_tree(head_dir)
+              managed = set(profile_names(profile_file))
+              if not managed:
+                  fail("profile_empty")
+              managed.add(INTEGRITY_WRAPPER)
+              # The updater is bootstrap-only: the sync never creates it, so it is
+              # managed once either tree has it (deleting it is a change).
+              if UPDATER_WRAPPER in base or UPDATER_WRAPPER in head:
+                  managed.add(UPDATER_WRAPPER)
+              else:
+                  managed.discard(UPDATER_WRAPPER)
+              problems = []
+              for name in sorted(managed):
+                  expected_path = os.path.join(rendered_dir, name)
+                  if not os.path.isfile(expected_path):
+                      problems.append(f"template_missing file={name} release={release_sha}")
+                      continue
+                  with open(expected_path, "rb") as handle:
+                      expected = handle.read()
+                  actual = head.get(name)
+                  if actual is None:
+                      problems.append(f"missing file={name}")
+                  elif actual != expected:
+                      problems.append(f"modified file={name}")
+              for line in problems:
+                  print(line)
+              print(f"checked={len(managed)} problems={len(problems)}")
+              if problems:
+                  sys.exit(1)
+
+
+          def main(argv):
+              if len(argv) == 4 and argv[0] == "extract":
+                  extract(argv[1], argv[2], argv[3])
+              elif len(argv) == 3 and argv[0] == "detect":
+                  detect(argv[1], argv[2])
+              elif len(argv) == 2 and argv[0] == "pin":
+                  pin(argv[1])
+              elif len(argv) == 6 and argv[0] == "compare":
+                  compare(*argv[1:])
+              else:
+                  sys.exit(2)
+
+
+          if __name__ == "__main__":
+              main(sys.argv[1:])
+          WORKFLOW_INTEGRITY_PY
+
+          REPO_DIR="${WORK}/consumer.git"
+          git init -q --bare "${REPO_DIR}"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          consumer_fetch() {
+            git -C "${REPO_DIR}" -c "http.https://github.com/.extraheader=${AUTH_HEADER}" \
+              fetch -q --no-tags --depth 1 "https://github.com/${GITHUB_REPOSITORY}.git" "$1" 2>/dev/null
+          }
+
+          consumer_fetch "${HEAD_SHA}" || error_out head_fetch_failed
+          python3 -I "${INTEGRITY_PY}" extract "${REPO_DIR}" "${HEAD_SHA}" "${WORK}/head" || error_out head_unreadable
+
+          # A push that creates a branch, or whose old tip is gone, is
+          # compared with the default branch instead.
+          if [ -z "${BASE_SHA}" ] || ! consumer_fetch "${BASE_SHA}"; then
+            BASE_SHA=""
+            if consumer_fetch "refs/heads/${DEFAULT_BRANCH}"; then
+              BASE_SHA="$(git -C "${REPO_DIR}" rev-parse FETCH_HEAD)"
+            fi
+          fi
+          if [ -n "${BASE_SHA}" ]; then
+            python3 -I "${INTEGRITY_PY}" extract "${REPO_DIR}" "${BASE_SHA}" "${WORK}/base" || error_out base_unreadable
+          else
+            # No base to compare with: every managed candidate counts as changed.
+            mkdir -p "${WORK}/base"
+            echo '{}' > "${WORK}/base/.entry-modes.json"
+          fi
+
+          CHANGED="$(python3 -I "${INTEGRITY_PY}" detect "${WORK}/base" "${WORK}/head")" || error_out detect_failed
+          echo "WORKFLOW_INTEGRITY outcome=detect changed=${CHANGED:-none}"
+          echo "integrity_py=${INTEGRITY_PY}" >> "$GITHUB_OUTPUT"
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+          if [ -z "${CHANGED}" ]; then
+            echo "WORKFLOW_INTEGRITY outcome=skip reason=no_managed_wrapper_changed"
+            echo "outcome=skip" >> "$GITHUB_OUTPUT"
+            echo "reason=no_managed_wrapper_changed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
+          PIN_RESULT="$(python3 -I "${INTEGRITY_PY}" pin "${WORK}/head")"
+          PIN_RC=$?
+          set -e
+          if [ "${PIN_RC}" -ne 0 ]; then
+            echo "::error::WORKFLOW_INTEGRITY outcome=fail reason=${PIN_RESULT}"
+            echo "outcome=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=${PIN_RESULT%% *}" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "release_sha=${PIN_RESULT}" >> "$GITHUB_OUTPUT"
+          echo "outcome=" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch pinned coding-workflows release
+        id: fetch
+        if: steps.inputs.outputs.outcome == '' && steps.trees.outputs.outcome == ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORK: ${{ steps.inputs.outputs.work }}
+          RELEASE_SHA: ${{ steps.trees.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::WORKFLOW_INTEGRITY outcome=error reason=invalid_release_sha"; exit 1; }
+
+          # Same sparse shape as update_workflows.yml's fetch step: the signed
+          # sync manifest lists exactly the root entries plus
+          # workflow-templates/ and scripts/.
+          UPSTREAM_ROOT="${WORK}/upstream"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=${AUTH_HEADER}" clone -q --depth 1 --no-checkout \
+            --filter=blob:none --sparse "https://github.com/${INTEGRITY_UPSTREAM_REPO}.git" "${UPSTREAM_ROOT}" \
+            || { echo "::error::WORKFLOW_INTEGRITY outcome=error reason=release_clone_failed"; exit 1; }
+          git -C "${UPSTREAM_ROOT}" config "http.https://github.com/.extraheader" "${AUTH_HEADER}"
+          git -C "${UPSTREAM_ROOT}" fetch -q --force --no-tags --depth 1 origin "${RELEASE_SHA}" \
+            || { echo "::error::WORKFLOW_INTEGRITY outcome=fail reason=release_commit_missing sha=${RELEASE_SHA}"; exit 1; }
+          git -C "${UPSTREAM_ROOT}" checkout -q --detach "${RELEASE_SHA}"
+          git -C "${UPSTREAM_ROOT}" sparse-checkout set workflow-templates scripts
+          echo "upstream_root=${UPSTREAM_ROOT}" >> "$GITHUB_OUTPUT"
+
+      # Same checks as update_workflows.yml "Verify signed sync manifest"
+      # (#7128): release tag, release asset, Sigstore identity, then the
+      # commit and the exact file set. The verifier below is a byte-for-byte
+      # copy of that step's (tests/test_workflow_integrity.py pins it).
+      - name: Verify signed sync manifest
+        id: verify_manifest
+        if: steps.fetch.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORK: ${{ steps.inputs.outputs.work }}
+          UPSTREAM_ROOT: ${{ steps.fetch.outputs.upstream_root }}
+          UPSTREAM_SHA: ${{ steps.trees.outputs.release_sha }}
+          SYNC_UPSTREAM_REPO: shubhodeep1/coding-workflows
+        run: |
+          set -euo pipefail
+
+          SYNC_VERIFIER="${WORK}/sync_manifest_verify.py"
+          SYNC_ALLOWED_FILE="${WORK}/sync_allowed_consumer_paths.txt"
+
+          reject() {
+            echo "::error::WORKFLOW_INTEGRITY outcome=fail reason=$1${2:+ $2} release=${UPSTREAM_SHA}"
+            exit 1
+          }
+
+          cat > "${SYNC_VERIFIER}" <<'SYNC_VERIFY_PY'
+          """Inline sync-manifest verifier and staged-path policy (#7128).
+
+          Kept in update_workflows.yml on purpose: it must not import code from
+          the upstream tree it verifies. The glob matcher mirrors
+          scripts/build_sync_manifest.py::glob_to_regex (a test pins both).
+          """
+          import hashlib
+          import json
+          import os
+          import re
+          import stat
+          import sys
+
+          SCHEMA = "coding-workflows.sync-manifest.v1"
+          REPOSITORY = "shubhodeep1/coding-workflows"
+
+
+          def glob_to_regex(pattern):
+              parts = [("[^/]*" if char == "*" else re.escape(char)) for char in pattern]
+              return re.compile("^" + "".join(parts) + "$")
+
+
+          def fail(code, path=None):
+              print(code if path is None else f"{code} path={path}")
+              sys.exit(1)
+
+
+          def walk_tree(root):
+              found = {}
+              for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                  rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+                  if rel_dir == ".":
+                      dirnames[:] = [name for name in dirnames if name != ".git"]
+                  names = list(filenames)
+                  for name in list(dirnames):
+                      if os.path.islink(os.path.join(dirpath, name)):
+                          dirnames.remove(name)
+                          names.append(name)
+                  for name in names:
+                      full = os.path.join(dirpath, name)
+                      rel = name if rel_dir == "." else f"{rel_dir}/{name}"
+                      mode = os.lstat(full).st_mode
+                      if stat.S_ISLNK(mode):
+                          found[rel] = "symlink:" + os.readlink(full)
+                      elif stat.S_ISREG(mode):
+                          digest = hashlib.sha256()
+                          with open(full, "rb") as handle:
+                              for chunk in iter(lambda: handle.read(1 << 20), b""):
+                                  digest.update(chunk)
+                          found[rel] = digest.hexdigest()
+                      else:
+                          fail("ERR_SYNC_MANIFEST_FILE_MISMATCH", rel)
+              return found
+
+
+          def verify():
+              try:
+                  with open(os.environ["MANIFEST_FILE"], encoding="utf-8") as handle:
+                      manifest = json.load(handle)
+              except (OSError, KeyError, ValueError):
+                  fail("ERR_SYNC_MANIFEST_MISSING")
+              if not isinstance(manifest, dict):
+                  fail("ERR_SYNC_MANIFEST_MISSING")
+              if manifest.get("schema") != SCHEMA or manifest.get("repository") != REPOSITORY:
+                  fail("ERR_SYNC_MANIFEST_COMMIT_MISMATCH")
+              if manifest.get("commit") != os.environ.get("EXPECTED_COMMIT", "").lower():
+                  fail("ERR_SYNC_MANIFEST_COMMIT_MISMATCH")
+              if manifest.get("version") != os.environ.get("EXPECTED_VERSION", ""):
+                  fail("ERR_SYNC_MANIFEST_COMMIT_MISMATCH")
+              files = manifest.get("files")
+              allowed = manifest.get("allowed_consumer_paths")
+              if not isinstance(files, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
+                  fail("ERR_SYNC_MANIFEST_FILE_MISMATCH")
+              if not isinstance(allowed, list) or not allowed or not all(isinstance(item, str) and item for item in allowed):
+                  fail("ERR_SYNC_MANIFEST_FILE_MISMATCH")
+              found = walk_tree(os.environ["UPSTREAM_ROOT"])
+              for path in sorted(set(found) | set(files)):
+                  if found.get(path) != files.get(path):
+                      fail("ERR_SYNC_MANIFEST_FILE_MISMATCH", path)
+              with open(os.environ["ALLOWED_OUT"], "w", encoding="utf-8") as handle:
+                  handle.write("\n".join(allowed) + "\n")
+              print(len(files))
+
+
+          def check_paths(allowed_file, paths_file):
+              with open(allowed_file, encoding="utf-8") as handle:
+                  compiled = [glob_to_regex(line) for line in handle.read().splitlines() if line]
+              if not compiled:
+                  sys.exit(1)
+              with open(paths_file, "rb") as handle:
+                  paths = [item.decode("utf-8", "replace") for item in handle.read().split(b"\0") if item]
+              for path in paths:
+                  if not any(regex.match(path) for regex in compiled):
+                      print(path)
+                      sys.exit(3)
+
+
+          if __name__ == "__main__":
+              if len(sys.argv) == 2 and sys.argv[1] == "verify":
+                  verify()
+              elif len(sys.argv) == 4 and sys.argv[1] == "check-paths":
+                  check_paths(sys.argv[2], sys.argv[3])
+              else:
+                  sys.exit(2)
+          SYNC_VERIFY_PY
+
+          TAG_LIST="$(git -C "${UPSTREAM_ROOT}" ls-remote --tags origin 'refs/tags/v*')" \
+            || reject ERR_SYNC_MANIFEST_NO_VERSION_TAG "detail=ls_remote_failed"
+          SYNC_VERSION="$(printf '%s\n' "${TAG_LIST}" | while read -r tag_sha tag_ref; do
+              [ "${tag_sha,,}" = "${UPSTREAM_SHA}" ] || continue
+              [[ "${tag_ref}" =~ ^refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+)\^\{\}$ ]] || continue
+              echo "${BASH_REMATCH[1]}"
+            done | sort -V | tail -n 1)"
+          [ -n "${SYNC_VERSION}" ] || reject ERR_SYNC_MANIFEST_NO_VERSION_TAG
+
+          MANIFEST_DIR="${WORK}/sync-manifest"
+          mkdir -p "${MANIFEST_DIR}"
+          gh release download "${SYNC_VERSION}" --repo "${SYNC_UPSTREAM_REPO}" \
+            --pattern sync-manifest.json --dir "${MANIFEST_DIR}" >/dev/null 2>&1 \
+            || reject ERR_SYNC_MANIFEST_MISSING
+          MANIFEST_FILE="${MANIFEST_DIR}/sync-manifest.json"
+          { [ -f "${MANIFEST_FILE}" ] && [ ! -L "${MANIFEST_FILE}" ]; } || reject ERR_SYNC_MANIFEST_MISSING
+
+          VERIFY_HELP="$(gh attestation verify --help 2>&1 || true)"
+          if ! grep -q -- '--cert-identity-regex' <<<"${VERIFY_HELP}" || ! grep -q -- '--deny-self-hosted-runners' <<<"${VERIFY_HELP}"; then
+            reject ERR_SYNC_MANIFEST_SIGNATURE "reason=gh_flags_missing"
+          fi
+          if ! gh attestation verify "${MANIFEST_FILE}" \
+            --repo "${SYNC_UPSTREAM_REPO}" \
+            --cert-identity-regex '^https://github\.com/shubhodeep1/coding-workflows/\.github/workflows/(test-and-mark-stable|mark-stable)\.yml@refs/heads/stable$' \
+            --deny-self-hosted-runners >/dev/null; then
+            reject ERR_SYNC_MANIFEST_SIGNATURE
+          fi
+
+          set +e
+          VERIFY_RESULT="$(MANIFEST_FILE="${MANIFEST_FILE}" UPSTREAM_ROOT="${UPSTREAM_ROOT}" \
+            EXPECTED_COMMIT="${UPSTREAM_SHA}" EXPECTED_VERSION="${SYNC_VERSION}" \
+            ALLOWED_OUT="${SYNC_ALLOWED_FILE}" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -I "${SYNC_VERIFIER}" verify)"
+          VERIFY_RC=$?
+          set -e
+          if [ "${VERIFY_RC}" -ne 0 ]; then
+            VERIFY_CODE="${VERIFY_RESULT%% *}"
+            [[ "${VERIFY_CODE}" =~ ^ERR_SYNC_MANIFEST_[A-Z_]+$ ]] || VERIFY_CODE="ERR_SYNC_MANIFEST_FILE_MISMATCH"
+            reject "${VERIFY_CODE}" "${VERIFY_RESULT#"${VERIFY_CODE}"}"
+          fi
+          echo "version=${SYNC_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "WORKFLOW_INTEGRITY outcome=release_verified version=${SYNC_VERSION} commit=${UPSTREAM_SHA}"
+
+      - name: Compare managed wrappers with the pinned release
+        id: compare
+        if: steps.verify_manifest.outcome == 'success'
+        env:
+          WORK: ${{ steps.inputs.outputs.work }}
+          INTEGRITY_PY: ${{ steps.trees.outputs.integrity_py }}
+          UPSTREAM_ROOT: ${{ steps.fetch.outputs.upstream_root }}
+          RELEASE_SHA: ${{ steps.trees.outputs.release_sha }}
+          RELEASE_VERSION: ${{ steps.verify_manifest.outputs.version }}
+          SELECTED_PROFILE: ${{ vars.WORKFLOW_PROFILE != '' && vars.WORKFLOW_PROFILE || 'full' }}
+        run: |
+          set -euo pipefail
+
+          [[ "${SELECTED_PROFILE}" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "::error::WORKFLOW_INTEGRITY outcome=fail reason=workflow_profile_unknown"; exit 1; }
+          PROFILE_FILE="${UPSTREAM_ROOT}/workflow-templates/profiles/${SELECTED_PROFILE}.txt"
+          [ -f "${PROFILE_FILE}" ] || { echo "::error::WORKFLOW_INTEGRITY outcome=fail reason=workflow_profile_unknown profile=${SELECTED_PROFILE}"; exit 1; }
+
+          # Render exactly as the sync does, with the renderer from the
+          # verified release tree.
+          RENDERED_DIR="${WORK}/rendered"
+          mkdir -p "${RENDERED_DIR}"
+          RENDERER="${UPSTREAM_ROOT}/scripts/workflow_wrapper_refs.py"
+          shopt -s nullglob
+          for template in "${UPSTREAM_ROOT}"/workflow-templates/*.yml; do
+            if ! python3 "${RENDERER}" --input "${template}" --output "${RENDERED_DIR}/$(basename "${template}")" --sha "${RELEASE_SHA}"; then
+              echo "::error::WORKFLOW_INTEGRITY outcome=error reason=render_failed template=$(basename "${template}")"
+              exit 1
+            fi
+          done
+          shopt -u nullglob
+
+          set +e
+          COMPARE_OUT="$(python3 -I "${INTEGRITY_PY}" compare "${WORK}/base" "${WORK}/head" "${RENDERED_DIR}" "${PROFILE_FILE}" "${RELEASE_SHA}")"
+          COMPARE_RC=$?
+          set -e
+          printf '%s\n' "${COMPARE_OUT}" > "${WORK}/compare.txt"
+          while IFS= read -r problem; do
+            case "${problem}" in
+              modified\ file=*|missing\ file=*|template_missing\ file=*)
+                problem_file="${problem#* file=}"
+                problem_file="${problem_file%% *}"
+                echo "::error file=.github/workflows/${problem_file}::WORKFLOW_INTEGRITY outcome=fail reason=${problem%% *} file=${problem_file} release=${RELEASE_VERSION}"
+                ;;
+            esac
+          done <<<"${COMPARE_OUT}"
+          if [ "${COMPARE_RC}" -ne 0 ]; then
+            echo "WORKFLOW_INTEGRITY outcome=fail reason=wrapper_mismatch release=${RELEASE_VERSION} profile=${SELECTED_PROFILE}"
+            exit 1
+          fi
+          echo "WORKFLOW_INTEGRITY outcome=pass release=${RELEASE_VERSION} profile=${SELECTED_PROFILE} ${COMPARE_OUT##*$'\n'}"
+
+      - name: Publish integrity result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_FALLBACK_TOKEN: ${{ secrets.GH_PAT }}
+          WORK: ${{ steps.inputs.outputs.work }}
+          MODE: ${{ steps.inputs.outputs.mode }}
+          HEAD_SHA: ${{ steps.inputs.outputs.head_sha }}
+          EARLY_OUTCOME: ${{ steps.inputs.outputs.outcome }}
+          EARLY_REASON: ${{ steps.inputs.outputs.reason }}
+          TREES_OUTCOME: ${{ steps.trees.outputs.outcome }}
+          TREES_REASON: ${{ steps.trees.outputs.reason }}
+          CHANGED: ${{ steps.trees.outputs.changed }}
+          RELEASE_SHA: ${{ steps.trees.outputs.release_sha }}
+          RELEASE_VERSION: ${{ steps.verify_manifest.outputs.version }}
+          VERIFY_RESULT: ${{ steps.verify_manifest.outcome }}
+          COMPARE_RESULT: ${{ steps.compare.outcome }}
+        run: |
+          set -euo pipefail
+
+          if [ "${EARLY_OUTCOME}" = "skip" ] || [ "${TREES_OUTCOME}" = "skip" ]; then
+            STATE=success
+            DESCRIPTION="No managed workflow wrapper changed"
+          elif [ "${COMPARE_RESULT}" = "success" ]; then
+            STATE=success
+            DESCRIPTION="Managed wrappers match release ${RELEASE_VERSION}"
+          elif [ "${VERIFY_RESULT}" = "failure" ]; then
+            STATE=failure
+            DESCRIPTION="Pinned SHA ${RELEASE_SHA:0:12} is not a verified coding-workflows release"
+          elif [ "${TREES_OUTCOME}" = "fail" ]; then
+            STATE=failure
+            DESCRIPTION="Managed wrappers rejected: ${TREES_REASON}"
+          elif [ "${COMPARE_RESULT}" = "failure" ]; then
+            STATE=failure
+            DESCRIPTION="Managed wrappers differ from release ${RELEASE_VERSION}"
+          else
+            STATE=error
+            DESCRIPTION="Integrity check could not finish (${EARLY_REASON:-${TREES_REASON:-release verification}})"
+          fi
+
+          {
+            echo "## Workflow wrapper integrity"
+            echo ""
+            echo "- Result: \`${STATE}\` (${DESCRIPTION})"
+            echo "- Changed managed wrappers: \`${CHANGED:-none}\`"
+            echo "- Pinned release: \`${RELEASE_VERSION:-unknown}\` (\`${RELEASE_SHA:-none}\`)"
+            if [ -n "${WORK:-}" ] && [ -s "${WORK}/compare.txt" ]; then
+              echo ""
+              echo '```'
+              cat "${WORK}/compare.txt"
+              echo '```'
+            fi
+            if [ "${STATE}" != "success" ]; then
+              echo ""
+              echo "Managed wrappers may change only through the coding-workflows sync"
+              echo "(the auto/update-workflows-* pull request) or the daily restore pull request."
+              echo "Restore the files to the release copy instead of editing them."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [ "${MODE}" = "pull_request" ] && [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID:-0}"
+            post_status() {
+              GH_TOKEN="$1" gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+                -f "state=${STATE}" \
+                -f "context=${INTEGRITY_STATUS_CONTEXT}" \
+                -f "description=${DESCRIPTION:0:140}" \
+                -f "target_url=${RUN_URL}" >/dev/null
+            }
+            if ! post_status "${GH_TOKEN:-}"; then
+              if [ -z "${STATUS_FALLBACK_TOKEN:-}" ] || ! post_status "${STATUS_FALLBACK_TOKEN}"; then
+                echo "::error::WORKFLOW_INTEGRITY outcome=error reason=status_post_failed"
+                exit 1
+              fi
+            fi
+          fi
+
+          echo "WORKFLOW_INTEGRITY outcome=final state=${STATE} mode=${MODE:-none}"
+          [ "${STATE}" = "success" ]

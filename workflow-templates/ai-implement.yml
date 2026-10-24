@@ -1,6 +1,5 @@
-# IMPORTANT: This file is managed by coding-workflows and may be overwritten
-# automatically when upstream templates change. To opt out of auto-updates,
-# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
 name: AI Implement
 on:
   issue_comment:
@@ -174,7 +173,9 @@ jobs:
     needs: verify-automated-approval
     # Same opt-in as ai-plan.yml: with vars.AI_PIPELINE_APPROVER_LOGIN set,
     # an automated /approved counts only from that bot and only when its
-    # signature verified; trusted users cannot pass the automation marker.
+    # signature verified; trusted users cannot pass the automation marker,
+    # except the repository owner's own account (pipeline auto-approvals are
+    # posted with GH_PAT, which arrives as the owner, a User).
     if: >-
       !cancelled() &&
       github.event_name == 'issue_comment' &&
@@ -198,6 +199,14 @@ jobs:
           startsWith(github.event.comment.body, '/approved') &&
           contains(github.event.comment.body, '[auto-approved-by-plan]') &&
           needs.verify-automated-approval.outputs.approved == 'true'
+        ) ||
+        (
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.type == 'User' &&
+          github.event.comment.author_association == 'OWNER' &&
+          github.event.comment.user.login == github.repository_owner &&
+          startsWith(github.event.comment.body, '/approved') &&
+          contains(github.event.comment.body, '[auto-approved-by-plan]')
         )
       )
     uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@stable

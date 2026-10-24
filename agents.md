@@ -2897,9 +2897,9 @@ Cycle-local caches that must not be re-fetched per iteration:
 ## Workflow install profiles
 
 PROFILE.default=full
-PROFILE.name=core manifest=workflow-templates/profiles/core.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate-clarify-respond.yml
-PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,ai-sync-labels.yml,review_rb_judge_dispatch.yml,unblock_judge_dispatch.yml
-PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-check-failure-triage.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-security-audit.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,ai-workflow-failure-heal.yml,review_rb_judge_dispatch.yml,unblock_judge_dispatch.yml
+PROFILE.name=core manifest=workflow-templates/profiles/core.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate-clarify-respond.yml,ai-workflow-integrity.yml
+PROFILE.name=standard manifest=workflow-templates/profiles/standard.txt wrappers=ai-clarify.yml,ai-plan.yml,ai-implement.yml,ai-review.yml,ai-issue-pr-status.yml,ai-cancel-on-pr-close.yml,ai-orchestrate.yml,ai-orchestrate-poll.yml,ai-orchestrate-clarify-respond.yml,ai-validate.yml,ai-sync-labels.yml,review_rb_judge_dispatch.yml,unblock_judge_dispatch.yml,ai-workflow-integrity.yml
+PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-cancel-on-pr-close.yml,ai-check-failure-triage.yml,ai-clarify.yml,ai-implement.yml,ai-issue-pr-status.yml,ai-memory-maintenance.yml,ai-orchestrate-clarify-respond.yml,ai-orchestrate-poll.yml,ai-orchestrate.yml,ai-plan.yml,ai-review.yml,ai-security-audit.yml,ai-sync-labels.yml,ai-update-workflows.yml,ai-validate.yml,ai-workflow-failure-heal.yml,ai-workflow-integrity.yml,review_rb_judge_dispatch.yml,unblock_judge_dispatch.yml
 
 ## Immutable consumer wrapper pins
 
@@ -4915,6 +4915,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/workflow-failure-heal-intake.yml
 .github/workflows/workflow-log-analysis.yml
 .github/workflows/workflow_failure_heal.yml
+.github/workflows/workflow_integrity.yml
 .github/workflows/workspace-cache-maintenance.yml
 ```
 <!-- TREE:END id=workflows -->
@@ -4939,6 +4940,7 @@ workflow-templates/ai-sync-labels.yml
 workflow-templates/ai-update-workflows.yml
 workflow-templates/ai-validate.yml
 workflow-templates/ai-workflow-failure-heal.yml
+workflow-templates/ai-workflow-integrity.yml
 workflow-templates/review_rb_judge_dispatch.yml
 workflow-templates/unblock_judge_dispatch.yml
 ```
