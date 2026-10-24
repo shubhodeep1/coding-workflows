@@ -735,6 +735,52 @@ editor_stall_fallback_applies()
 	return 0
 }
 
+# Closed failure_class token for the EDITOR_ATTEMPT_RESULT line, derived only
+# from <exit_code> <stall_state> <stdout_bytes>, in priority order. String
+# comparisons only, so non-numeric input cannot fail under set -e. Log-only.
+editor_attempt_result_failure_class()
+{
+	local rc="${1-}"
+	local stall="${2-}"
+	local out_bytes="${3-0}"
+	if [ "${rc}" = "0" ]; then
+		case "${out_bytes}" in
+			''|*[!0-9]*|0) echo "empty_output" ;;
+			*)
+				case "${out_bytes}" in
+					*[1-9]*) echo "ok" ;;
+					*) echo "empty_output" ;;
+				esac
+				;;
+		esac
+		return 0
+	fi
+	if [ "${stall}" = "killed" ]; then
+		echo "stall_killed"
+		return 0
+	fi
+	case "${rc}" in
+		78) echo "workspace_safety_violation" ;;
+		79) echo "config_bootstrap" ;;
+		80) echo "claude_capacity" ;;
+		124|137|143) echo "timeout" ;;
+		*) echo "exit_nonzero" ;;
+	esac
+	return 0
+}
+
+# Prints the model slug when it only uses [A-Za-z0-9._/:-], otherwise
+# "unknown", so a slug cannot inject a newline or workflow command.
+editor_attempt_result_sanitize_model()
+{
+	local raw="${1-}"
+	case "${raw}" in
+		''|*[!A-Za-z0-9._/:-]*) echo "unknown" ;;
+		*) printf '%s\n' "${raw}" ;;
+	esac
+	return 0
+}
+
 autofix_resume_same_head_active()
 {
 	autofix_resume_truthy "${AUTOFIX_RESUME_RESTORED:-false}" || return 1
@@ -2255,6 +2301,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   emit_editor_substate "LaunchingAgentProcess" "${attempt}"
   emit_editor_substate "InitializingSession" "${attempt}"
   emit_editor_substate "StreamingTurn" "${attempt}"
+  # Empty on failure (not 0), so a failed read logs duration_secs=0, not the epoch.
+  editor_attempt_started_at="$(date +%s 2>/dev/null || true)"
   (
     trap '' PIPE
     PATH="${EDITOR_CODEX_PATH}" run_editor_codex_attempt "${attempt_prompt_file}" "${tmp_output}" "${_hb_fifo}" "${hb_file}" "${stall_status_file}"
@@ -2406,6 +2454,52 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       editor_prev_attempt_stall_killed=1
       ;;
   esac
+
+  # EDITOR_ATTEMPT_RESULT: one structured line per attempt (log-only). Prints
+  # byte counts, fixed tokens and a sanitized model slug, never output text.
+  editor_attempt_now="$(date +%s 2>/dev/null || true)"
+  editor_attempt_duration=0
+  case "${editor_attempt_started_at:-}" in
+    ''|*[!0-9]*) ;;
+    *)
+      case "${editor_attempt_now}" in
+        ''|*[!0-9]*) ;;
+        *)
+          if [ "${editor_attempt_now}" -gt "${editor_attempt_started_at}" ]; then
+            editor_attempt_duration=$((editor_attempt_now - editor_attempt_started_at))
+          fi
+          ;;
+      esac
+      ;;
+  esac
+  editor_attempt_stdout_bytes="$(wc -c 2>/dev/null < "${tmp_output}" || echo 0)"
+  editor_attempt_stdout_bytes="$(printf '%s' "${editor_attempt_stdout_bytes}" | tr -d '[:space:]' || echo 0)"
+  case "${editor_attempt_stdout_bytes}" in ''|*[!0-9]*) editor_attempt_stdout_bytes=0 ;; esac
+  editor_attempt_stderr_bytes="$(wc -c 2>/dev/null < "${tmp_err}" || echo 0)"
+  editor_attempt_stderr_bytes="$(printf '%s' "${editor_attempt_stderr_bytes}" | tr -d '[:space:]' || echo 0)"
+  case "${editor_attempt_stderr_bytes}" in ''|*[!0-9]*) editor_attempt_stderr_bytes=0 ;; esac
+  case "${stall_state:-}" in
+    observed|killed) editor_attempt_stall_token="${stall_state}" ;;
+    *) editor_attempt_stall_token="none" ;;
+  esac
+  if grep -q '^Changes made:' "${tmp_output}" 2>/dev/null; then
+    editor_attempt_summary_present=true
+  else
+    editor_attempt_summary_present=false
+  fi
+  # case, not the `= "claude"` test: tests/test_review_autofix_claude_fixer_mode.py
+  # pins that literal to the single engine dispatch in run_editor_codex_attempt.
+  editor_attempt_engine=codex
+  case "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" in
+    claude) editor_attempt_engine=claude ;;
+  esac
+  editor_attempt_model_token="$(editor_attempt_result_sanitize_model "${EDITOR_ATTEMPT_MODEL:-}" || echo unknown)"
+  editor_attempt_failure_class="$(editor_attempt_result_failure_class "${cmd_rc}" "${editor_attempt_stall_token}" "${editor_attempt_stdout_bytes}" || echo exit_nonzero)"
+  printf 'EDITOR_ATTEMPT_RESULT attempt=%s/%s model=%s engine=%s duration_secs=%s exit_code=%s stall_state=%s stdout_bytes=%s stderr_bytes=%s summary_present=%s failure_class=%s\n' \
+    "${attempt}" "${editor_max_attempts}" "${editor_attempt_model_token}" "${editor_attempt_engine}" \
+    "${editor_attempt_duration}" "${cmd_rc}" "${editor_attempt_stall_token}" \
+    "${editor_attempt_stdout_bytes}" "${editor_attempt_stderr_bytes}" \
+    "${editor_attempt_summary_present}" "${editor_attempt_failure_class}" || true
 
   if [ "${cmd_rc}" -eq 79 ]; then
     echo "Editor attempt ${attempt}: OpenCode configuration/bootstrap failure; aborting without retry."
