@@ -26,6 +26,12 @@ Inputs:
                           Reads stdin when omitted.
   --allowlist-out PATH    Optional: write the normalized allowlist (one entry
                           per line) so the caller can surface it in the alert.
+  --issue-number NUMBER   Optional, with --issue-body-file: also allow the
+                          issue's own `changelog.d/<NUMBER>-<slug>.md` and
+                          `agents.d/<NUMBER>-<slug>.md` fragments, which
+                          CLAUDE.md §20/§30 require, even when the
+                          files_touched list omits them. Never applies to
+                          --allowlist-file scopes.
   --emit-automation-grant PATH --issue-meta-file PATH --pipeline-login LOGIN
                           [--origin-repo OWNER/NAME]
                           Snapshot trusted-author exact automation paths. A
@@ -493,9 +499,33 @@ def is_agents_fragment(path: str) -> bool:
 	return bool(AGENTS_FRAGMENT_RE.match(path))
 
 
-def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = True) -> bool:
-	"""True when a staged path is auto-allowed or covered by any allowlist entry."""
+# The issue's own changelog / agents fragments. CLAUDE.md §20 and §30 require
+# one `changelog.d/<issue-or-pr>-<slug>.md` (and an `agents.d/` fragment for
+# agents-file additions) per behaviour change, so an issue-body files_touched
+# list always covers the fragments named after the issue itself. Without this
+# an exact list that omits them blocks the commit (consumer
+# tele-funtoken-msg-scoring#4815, run 40055496344) or, since #7986, holds the
+# plan for a human. Only the issue's own number is allowed, only top-level
+# `.md` files, and only for issue-body lists: explicit scopes (`ai:scope:`
+# globs, the verified heal scope) are unchanged.
+def is_own_issue_fragment(path: str, issue_number: object) -> bool:
+	"""True for ``changelog.d/<N>-<slug>.md`` or ``agents.d/<N>-<slug>.md``."""
+	number = str(issue_number or "").strip()
+	if not number.isdecimal() or number.startswith("0"):
+		return False
+	return bool(re.fullmatch(r"(?:changelog|agents)\.d/" + number + r"-[A-Za-z0-9][A-Za-z0-9._-]*\.md", path))
+
+
+def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = True,
+	own_fragment_issue: object = None) -> bool:
+	"""True when a staged path is auto-allowed or covered by any allowlist entry.
+
+	``own_fragment_issue`` (an issue number) also allows that issue's own
+	changelog / agents fragments (is_own_issue_fragment).
+	"""
 	if allow_lockfiles and is_lockfile(path):
+		return True
+	if own_fragment_issue is not None and is_own_issue_fragment(path, own_fragment_issue):
 		return True
 	for entry in allowlist:
 		if entry_matches(entry, path):
@@ -505,7 +535,8 @@ def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = Tr
 	return False
 
 
-def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[str], *, allow_lockfiles: bool = True) -> tuple[str, list[str], list[str]]:
+def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[str], *, allow_lockfiles: bool = True,
+	own_fragment_issue: object = None) -> tuple[str, list[str], list[str]]:
 	"""Classify staged paths against an explicit allowlist using the shared matcher.
 
 	Returns (status, allowlist, out_of_scope) where status is one of
@@ -520,7 +551,8 @@ def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[s
 		path = normalize_path(raw)
 		if not path:
 			continue
-		if not path_in_scope(path, allowlist, allow_lockfiles=allow_lockfiles):
+		if not path_in_scope(path, allowlist, allow_lockfiles=allow_lockfiles,
+				own_fragment_issue=own_fragment_issue):
 			out_of_scope.append(path)
 
 	if out_of_scope:
@@ -528,16 +560,20 @@ def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[s
 	return STATUS_IN_SCOPE, allowlist, []
 
 
-def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: list[str] | None = None, allow_lockfiles: bool = True) -> tuple[str, list[str], list[str]]:
+def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: list[str] | None = None, allow_lockfiles: bool = True,
+	issue_number: object = None) -> tuple[str, list[str], list[str]]:
 	"""Classify the staged change set against issue-body or explicit allowlists.
 
 	Returns (status, allowlist, out_of_scope) where status is one of
 	STATUS_IN_SCOPE / STATUS_SKIP_NO_ALLOWLIST / STATUS_OUT_OF_SCOPE.
+	``issue_number`` allows the issue's own changelog / agents fragments, for
+	an issue-body list only (never for explicit ``allowlist_entries``).
 	"""
 	if allowlist_entries is not None:
 		return evaluate_allowlist(allowlist_entries, staged_paths, allow_lockfiles=allow_lockfiles)
 	raw_allowlist = extract_files_touched(issue_body or "")
-	return evaluate_allowlist(raw_allowlist or [], staged_paths, allow_lockfiles=allow_lockfiles)
+	return evaluate_allowlist(raw_allowlist or [], staged_paths, allow_lockfiles=allow_lockfiles,
+		own_fragment_issue=issue_number)
 
 
 # --- Plan auto-approval gate (issue #6769) ---------------------------------
@@ -821,7 +857,8 @@ def _issue_on_heal_route(issue_body: str, labels: object) -> bool:
 	return "ai:workflow-heal" in names or bool(_HEAL_ROUTE_FP_RE.search(issue_body or ""))
 
 
-def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: object = None) -> list[str]:
+def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: object = None,
+	issue_number: object = None) -> list[str]:
 	"""Exact files in a plan's Files section that the issue's files_touched list misses.
 
 	Uses the implement guard's matcher (path_in_scope: lockfiles and agents.d
@@ -838,7 +875,8 @@ def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: ob
 	allowlist = normalize_allowlist(extract_files_touched(issue_body or "") or [])
 	if not allowlist:
 		return []
-	return [path for path in extract_plan_file_paths(plan_text) if not path_in_scope(path, allowlist)]
+	return [path for path in extract_plan_file_paths(plan_text)
+		if not path_in_scope(path, allowlist, own_fragment_issue=issue_number)]
 
 
 def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
@@ -931,8 +969,11 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 			if issue_meta is None:
 				with open(issue_meta_file, encoding="utf-8") as handle:
 					issue_meta = json.load(handle)
+			# The issue's own changelog / agents fragments are allowed, as the
+			# implement guard allows them, so an auto-heal plan that adds the
+			# required fragment is not parked for a human.
 			outside = plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
-				issue_meta.get("labels"))
+				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number"))
 			if outside:
 				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside
 	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
@@ -1117,7 +1158,8 @@ def main(argv: list[str] | None = None) -> int:
 	staged_paths = _read_staged(args.staged_file or None)
 	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
 
-	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries, allow_lockfiles=not args.strict_allowlist)
+	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries,
+		allow_lockfiles=not args.strict_allowlist, issue_number=args.issue_number or None)
 
 	if args.allowlist_out:
 		try:

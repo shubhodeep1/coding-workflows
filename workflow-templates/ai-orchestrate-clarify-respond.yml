@@ -12,14 +12,20 @@ permissions:
   id-token: write
 jobs:
   respond:
+    # Bot-posted clarification questions count only from the dedicated bot in
+    # vars.AI_PIPELINE_APPROVER_LOGIN (opt-in hardened automation). Comments
+    # posted with GITHUB_TOKEN never trigger workflows, so no shared bot
+    # login is accepted. ai:auto-heal-source is a consumer-owned label.
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.pull_request == null &&
+      !contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source') &&
       (
         (
           github.event.comment.user.type == 'Bot' &&
-          github.event.comment.user.login == 'github-actions[bot]'
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN
         ) ||
         (
           github.event.comment.user.type == 'User' &&
@@ -28,4 +34,9 @@ jobs:
       ) &&
       contains(github.event.comment.body, 'Clarification required')
     uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@stable
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

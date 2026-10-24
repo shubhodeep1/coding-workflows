@@ -67,7 +67,8 @@ def test_orchestrator_wrapper_templates_match_reusable_workflow_targets() -> Non
 	for template_name, expectation in TEMPLATE_EXPECTATIONS.items():
 		template_text = _read(TEMPLATES_DIR / template_name)
 		assert expectation["uses"] in template_text, template_name
-		assert "secrets: inherit" in template_text, template_name
+		assert "secrets: inherit" not in template_text, template_name
+		assert "GH_PAT: ${{ secrets.GH_PAT }}" in template_text, template_name
 		for snippet in expectation["snippets"]:
 			assert snippet in template_text, template_name
 

@@ -6,29 +6,204 @@ on:
   issue_comment:
     types: [created]
 permissions:
+  # verify-automated-approval reads the originating plan run.
+  actions: read
   contents: write
   issues: write
   pull-requests: write
   # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
   id-token: write
 jobs:
-  implement:
+  # Hardened automation only (vars.AI_PIPELINE_APPROVER_LOGIN set): checks
+  # the HMAC envelope ai-plan.yml's sign-automated-approval job posted, the
+  # originating plan run, the plan digest and that the target ref has not
+  # moved. AI_PIPELINE_APPROVAL_SECRET stays in this job.
+  verify-automated-approval:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.pull_request == null &&
+      github.event.comment.user.type == 'Bot' &&
+      vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+      github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN &&
+      contains(github.event.comment.body, '[auto-approved-by-plan]')
+    runs-on: ubuntu-latest
+    outputs:
+      approved: ${{ steps.verify.outputs.approved }}
+    steps:
+      - id: verify
+        name: Verify signed plan approval
+        env:
+          APPROVAL_BODY: ${{ github.event.comment.body }}
+          APPROVAL_COMMENT_ID: ${{ github.event.comment.id }}
+          APPROVAL_SECRET: ${{ secrets.AI_PIPELINE_APPROVAL_SECRET }}
+          APPROVER_LOGIN: ${{ vars.AI_PIPELINE_APPROVER_LOGIN }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import hmac
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write("approved=false\n")
+
+          def reject(reason):
+              print(f"::warning::Signed auto-approval rejected: {reason}")
+              raise SystemExit(0)
+
+          token = os.environ.get("GH_TOKEN", "")
+          secret = os.environ.get("APPROVAL_SECRET", "")
+          approver = os.environ.get("APPROVER_LOGIN", "")
+          repo = os.environ["REPOSITORY"]
+          issue_number = int(os.environ["ISSUE_NUMBER"])
+          if not token or not secret or not approver:
+              reject("required credentials are unset")
+
+          marker_re = re.compile(
+              r"<!-- ai-plan-approval:v1 issue=(\d+) "
+              r"plan_sha256=([0-9a-f]{64}) run_id=(\d+) "
+              r"target_ref=([A-Za-z0-9._/-]+) target_sha=([0-9a-f]{40}) "
+              r"sig=([0-9a-f]{64}) -->"
+          )
+          matches = marker_re.findall(os.environ.get("APPROVAL_BODY", ""))
+          if len(matches) != 1:
+              reject("approval envelope is missing or ambiguous")
+          issue_text, plan_digest, run_text, ref_name, target_sha, signature = matches[0]
+          if int(issue_text) != issue_number or ".." in ref_name:
+              reject("approval envelope is bound to a different issue or invalid ref")
+          run_id = int(run_text)
+          canonical = (
+              f"approval-v1\nrepo={repo}\nissue={issue_number}"
+              f"\nplan_sha256={plan_digest}\nrun_id={run_id}"
+              f"\ntarget_ref={ref_name}\ntarget_sha={target_sha}"
+          )
+          expected = hmac.new(
+              secret.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256
+          ).hexdigest()
+          if not hmac.compare_digest(signature, expected):
+              reject("signature mismatch")
+
+          def request(path):
+              req = urllib.request.Request(
+                  f"https://api.github.com{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  return json.load(response), response.headers
+
+          def paginated(path):
+              results = []
+              next_path = path
+              while next_path:
+                  page, headers = request(next_path)
+                  results.extend(page)
+                  next_path = ""
+                  for link in headers.get("Link", "").split(","):
+                      if 'rel="next"' in link:
+                          next_url = link.split(";", 1)[0].strip(" <>")
+                          parsed = urllib.parse.urlsplit(next_url)
+                          next_path = parsed.path
+                          if parsed.query:
+                              next_path += "?" + parsed.query
+                          break
+              return results
+
+          # Event payloads do not carry workflow-run provenance, the current ref
+          # SHA, or prior issue comments, so these three REST resources are required.
+          try:
+              run, _ = request(f"/repos/{repo}/actions/runs/{run_id}")
+              run_path = str(run.get("path") or "").split("@", 1)[0]
+              if (
+                  run_path != ".github/workflows/ai-plan.yml"
+                  or run.get("event") != "issue_comment"
+                  or run.get("status") not in {"in_progress", "completed"}
+                  or (
+                      run.get("status") == "completed"
+                      and run.get("conclusion") != "success"
+                  )
+              ):
+                  reject("originating plan workflow run is not valid")
+              encoded_ref = urllib.parse.quote(ref_name, safe="")
+              ref_data, _ = request(f"/repos/{repo}/git/ref/heads/{encoded_ref}")
+              if ref_data.get("object", {}).get("sha") != target_sha:
+                  reject("target ref advanced after approval")
+              comments = paginated(
+                  f"/repos/{repo}/issues/{issue_number}/comments?per_page=100"
+              )
+          except Exception as exc:
+              reject(f"provenance lookup failed ({type(exc).__name__})")
+
+          approval_comment_id = int(os.environ["APPROVAL_COMMENT_ID"])
+          plans = [
+              item
+              for item in comments
+              if int(item.get("id") or 0) < approval_comment_id
+              and item.get("user", {}).get("login") == approver
+              and item.get("user", {}).get("type") == "Bot"
+              and re.search(
+                  r"(?im)^\s*implementation\s+plan\b",
+                  str(item.get("body") or ""),
+              )
+          ]
+          if not plans:
+              reject("trusted implementation plan comment is missing")
+          actual_digest = hashlib.sha256(
+              str(plans[-1]["body"]).encode("utf-8")
+          ).hexdigest()
+          if not hmac.compare_digest(plan_digest, actual_digest):
+              reject("plan digest mismatch")
+
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write("approved=true\n")
+          print("Signed auto-approval verified")
+          PY
+
+  implement:
+    needs: verify-automated-approval
+    # Same opt-in as ai-plan.yml: with vars.AI_PIPELINE_APPROVER_LOGIN set,
+    # an automated /approved counts only from that bot and only when its
+    # signature verified; trusted users cannot pass the automation marker.
+    if: >-
+      !cancelled() &&
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      !contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source') &&
       (
         (
           github.event.comment.user.type == 'User' &&
           contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
-          startsWith(github.event.comment.body, '/approved')
+          startsWith(github.event.comment.body, '/approved') &&
+          (
+            vars.AI_PIPELINE_APPROVER_LOGIN == '' ||
+            !contains(github.event.comment.body, '[auto-approved-by-plan]')
+          )
         ) ||
         (
           github.event.comment.user.type == 'Bot' &&
-          github.event.comment.user.login == 'github-actions[bot]' &&
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN &&
           startsWith(github.event.comment.body, '/approved') &&
-          contains(github.event.comment.body, '[auto-approved-by-plan]')
+          contains(github.event.comment.body, '[auto-approved-by-plan]') &&
+          needs.verify-automated-approval.outputs.approved == 'true'
         )
       )
     uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@stable
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
