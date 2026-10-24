@@ -2457,7 +2457,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
 
   # EDITOR_ATTEMPT_RESULT: one structured line per attempt (log-only). Prints
   # byte counts, fixed tokens and a sanitized model slug, never output text.
-  editor_attempt_now="$(date +%s 2>/dev/null || echo 0)"
+  editor_attempt_now="$(date +%s 2>/dev/null || true)"
   editor_attempt_duration=0
   case "${editor_attempt_started_at:-}" in
     ''|*[!0-9]*) ;;

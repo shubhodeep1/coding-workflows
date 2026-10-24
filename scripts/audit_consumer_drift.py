@@ -254,7 +254,7 @@ def _load_named_profile_manifest_names(templates_dir: Path, profile: str) -> set
 
 
 def load_profile_manifests(templates_dir: Path) -> dict[str, set[str]]:
-	"""Return ``{profile: wrapper names}`` for every readable profile manifest."""
+	"""Return ``{profile: wrapper names}`` for every readable, non-empty profile manifest."""
 	manifests: dict[str, set[str]] = {}
 	for profile in WORKFLOW_PROFILE_NAMES:
 		names = _load_named_profile_manifest_names(templates_dir, profile)
