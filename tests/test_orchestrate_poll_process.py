@@ -1989,6 +1989,9 @@ if args[0] == 'issue' and len(args) >= 3 and args[1] == 'close':
 	for i, arg in enumerate(args):
 		if arg == '--comment' and i + 1 < len(args):
 			comment = args[i + 1]
+		elif arg == '-c' and i + 1 < len(args):
+			# Recorded apart from issue comments so existing comment counts hold.
+			store.setdefault('issue_close_short_comments', []).append({'issue': int(num), 'body': args[i + 1]})
 	if comment:
 		cid = store['next_comment_id']
 		store['next_comment_id'] += 1
@@ -14777,6 +14780,43 @@ def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 	assert standalone_state["phase_attempts"]["ai:review-blocked"] == 5
 	assert "ai:closed" in result["issues"]["501"]["labels"]
 	assert result["review_dispatches"] == []
+
+
+def test_standalone_stall_exhaustion_reports_phase_attempts_not_reset_counter():
+	"""tele-funtoken-msg-scoring#4786: the cap tripped on phase_attempts (5)
+	while stall_recovery_count read 0, and the close comment and CRITICAL
+	alert said "0 attempts". They must report the counter that tripped (the
+	alert is built from the same value; the harness does not capture
+	tg_send_msg)."""
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:awaiting-approval": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert "ai:closed" in result["issues"]["501"]["labels"]
+	close_comments = [
+		close_call["body"]
+		for close_call in result.get("issue_close_short_comments", [])
+		if close_call["issue"] == 501 and "standalone stall recovery exhausted" in close_call["body"]
+	]
+	assert close_comments, result.get("issue_close_short_comments")
+	assert "(5 attempts in 'ai:awaiting-approval' phase, limit 5;" in close_comments[-1]
+	assert "(0 attempts" not in close_comments[-1]
 
 
 def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
