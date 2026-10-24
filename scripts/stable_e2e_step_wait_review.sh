@@ -47,6 +47,71 @@ fi
 REVIEW_PHASE_STARTED_AT=$(date +%s)
 REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))
 echo "Review total wall-clock budget: ${REVIEW_PHASE_WALL_BUDGET_MINUTES} minutes"
+# BEGIN phase4 review deadline extension (#8004)
+# Run 39969947939 timed out at the base deadline six minutes after the
+# editor pushed, while the watched review run was still finishing. Past
+# the base deadline, keep polling only while the watched run is queued,
+# or in progress and active, and never past a ceiling that leaves room
+# for Phase 4b, Phase 6, Phase 7 and finalization (the Phase 4b cap
+# plus Phase 4b's own budget). The base deadline is never shortened;
+# without a recorded job start (or with a malformed budget) the ceiling
+# equals the base deadline, so nothing is extended.
+REVIEW_PHASE_BASE_DEADLINE="${REVIEW_PHASE_DEADLINE}"
+REVIEW_PHASE_DEADLINE_CEILING="${REVIEW_PHASE_DEADLINE}"
+REVIEW_PHASE_HANDOFF_PENDING=0
+REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
+if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
+    && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]] \
+    && [[ "${EDITOR_RETRY_BUDGET_MINUTES:-}" =~ ^[0-9]+$ ]] \
+    && [[ "${PHASE_TIMEOUT:-}" =~ ^[0-9]+$ ]] \
+    && [[ "${PHASE7_WAIT_BUDGET_MINUTES:-}" =~ ^[0-9]+$ ]] \
+    && [[ "${E2E_FINALIZATION_RESERVE_MINUTES:-}" =~ ^[0-9]+$ ]]; then
+  REVIEW_PHASE_DEADLINE_CEILING=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - EDITOR_RETRY_BUDGET_MINUTES - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60 ))
+  if [ "${REVIEW_PHASE_DEADLINE_CEILING}" -lt "${REVIEW_PHASE_BASE_DEADLINE}" ]; then
+    REVIEW_PHASE_DEADLINE_CEILING="${REVIEW_PHASE_BASE_DEADLINE}"
+  fi
+fi
+# Returns 0 when the loop may keep polling past the base deadline.
+# Reads the state of the run polled last (RUN_ID, RUN_STATUS, IDLE,
+# CURRENT_STEP_STARTED_AT); the inactivity and per-step stall checks
+# below still apply on every poll.
+review_phase_deadline_extension_allowed() {
+  local ext_now="${NOW:-}" ext_margin="${POLL_INTERVAL:-}" ext_run_id="${RUN_ID:-}"
+  local ext_status="${RUN_STATUS:-}" ext_idle="${IDLE:-}" ext_step_at="${CURRENT_STEP_STARTED_AT:-}"
+  local ext_inactivity="${INACTIVITY_LIMIT:-}" ext_step_limit="${STEP_INACTIVITY_LIMIT:-}"
+  local ext_step_epoch=0 ext_step_elapsed=0
+  [[ "$ext_now" =~ ^[0-9]+$ ]] || return 1
+  [ "${REVIEW_PHASE_DEADLINE_CEILING}" -gt "${REVIEW_PHASE_BASE_DEADLINE}" ] || return 1
+  # A poll and its sleep must end before the ceiling.
+  [[ "$ext_margin" =~ ^[0-9]+$ ]] || ext_margin=0
+  [ $((ext_now + ext_margin)) -lt "${REVIEW_PHASE_DEADLINE_CEILING}" ] || return 1
+  # One poll to find the successor of a just-dropped run or pin.
+  if [ "${REVIEW_PHASE_HANDOFF_PENDING:-0}" = "1" ]; then return 0; fi
+  [[ "$ext_run_id" =~ ^[0-9]+$ ]] || return 1
+  case ",${BAIT_UNCOVERED_RUN_IDS:-}," in
+    *",${ext_run_id},"*) return 1 ;;
+  esac
+  case "$ext_status" in
+    queued|pending|waiting|requested) return 0 ;;
+    in_progress) ;;
+    *) return 1 ;;
+  esac
+  if [[ "$ext_idle" =~ ^[0-9]+$ ]] && [[ "$ext_inactivity" =~ ^[0-9]+$ ]] && [ "$ext_idle" -lt "$ext_inactivity" ]; then
+    return 0
+  fi
+  if [ -n "$ext_step_at" ] && [[ "$ext_step_limit" =~ ^[0-9]+$ ]]; then
+    ext_step_epoch=$(date -d "$ext_step_at" +%s 2>/dev/null || echo 0)
+    [[ "$ext_step_epoch" =~ ^[0-9]+$ ]] || ext_step_epoch=0
+    if [ "$ext_step_epoch" -gt 0 ]; then
+      ext_step_elapsed=$((ext_now - ext_step_epoch))
+      if [ "$ext_step_elapsed" -ge 0 ] && [ "$ext_step_elapsed" -lt "$ext_step_limit" ]; then
+        return 0
+      fi
+    fi
+  fi
+  return 1
+}
+# END phase4 review deadline extension (#8004)
 LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
 PREV_STATE=""
 LAST_STEP_GUARD_RUN_ID=""
@@ -190,6 +255,7 @@ require_bait_review_coverage() {
   if [ "$BAIT_REVIEW_VERDICT" = "not_covered" ]; then
     echo "::warning::Review run ${RUN_ID} checked out a pre-bait head or had no checkout marker; not a review of the bait"
     BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
+    REVIEW_PHASE_HANDOFF_PENDING=1
     LAST_ACTIVITY=$NOW
     PREV_STATE=""
   elif [ "$RUN_STATUS" = "completed" ] && [ "${BAIT_REVIEW_COOLDOWN_SKIP:-0}" != "1" ]; then
@@ -201,6 +267,7 @@ require_bait_review_coverage() {
     if [ "${BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]}" -ge 3 ]; then
       echo "::warning::Review run ${RUN_ID} bait coverage stayed unverifiable; waiting for a bait-head review instead"
       BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
+      REVIEW_PHASE_HANDOFF_PENDING=1
       PREV_STATE=""
     fi
   fi
@@ -216,10 +283,18 @@ while true; do
   NOW=$(date +%s)
   IDLE=$((NOW - LAST_ACTIVITY))
   if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then
-    echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
-    echo "status=timeout" >> "$GITHUB_OUTPUT"
-    exit 1
+    if review_phase_deadline_extension_allowed; then
+      if [ "$REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED" = "0" ]; then
+        echo "E2E_REVIEW_DEADLINE_EXTENDED run=${RUN_ID:-none} status=${RUN_STATUS:-none} base=${REVIEW_PHASE_BASE_DEADLINE} ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+        REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1
+      fi
+    else
+      echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
+      echo "status=timeout" >> "$GITHUB_OUTPUT"
+      exit 1
+    fi
   fi
+  REVIEW_PHASE_HANDOFF_PENDING=0
 
   # Find the review workflow run for this PR's head branch
   PR_BRANCH="ai/issue-${ISSUE_NUMBER}"
@@ -369,6 +444,7 @@ while true; do
     RUN_STATUS=$(echo "$REVIEW_RUN" | jq -r '.status // "unknown"')
     RUN_CONCLUSION=$(echo "$REVIEW_RUN" | jq -r '.conclusion // "null"')
     RUN_ID=$(echo "$REVIEW_RUN" | jq -r '.id // "unknown"')
+    if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi
 
     echo "  Review run #${RUN_ID}: status=${RUN_STATUS}, conclusion=${RUN_CONCLUSION}"
 
@@ -406,6 +482,7 @@ while true; do
         if [ -n "${PIN_SHA:-}" ] && [ -n "${PIN_HEAD_NOW}" ] && [ "${PIN_HEAD_NOW}" != "${PIN_SHA}" ]; then
           echo "  ↪ PR head advanced past pin (${PIN_SHA:0:7} → ${PIN_HEAD_NOW:0:7}); advancing pin and polling successor run next iteration"
           PIN_SHA="${PIN_HEAD_NOW}"
+          REVIEW_PHASE_HANDOFF_PENDING=1
           LAST_ACTIVITY=$NOW
           PREV_STATE=""
           sleep "$POLL_INTERVAL"
