@@ -225,6 +225,8 @@ def test_fail_closed_handler_writes_harness_error_without_running_tests() -> Non
 			f"set_tracking_phase_label() {{ echo \"label $1\" >> {calls}; }}\n"
 			f"write_result_files() {{ echo \"result $1 $4\" >> {calls}; }}\n"
 			f"tg_notify() {{ echo \"tg $2\" >> {calls}; }}\n"
+			f"validation_owner_fixed() {{ echo \"owner $1\" >> {calls}; }}\n"
+			"validation_owner_comment_marker() { :; }\n"
 			+ handler.group(0)
 			+ "fail_closed_validation_sandbox 'selfcheck proc_environ_readable'\necho unreachable\n"
 		)
@@ -240,6 +242,7 @@ def test_fail_closed_handler_writes_harness_error_without_running_tests() -> Non
 		assert "label ai:validation-failed" in recorded
 		assert "result fail harness_error" in recorded
 		assert "tg ERROR" in recorded
+		assert "owner sandbox_unavailable" in recorded
 
 
 def test_validate_workflow_stages_sandbox_helper() -> None:

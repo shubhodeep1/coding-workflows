@@ -21,6 +21,7 @@ RUN_VALIDATION_REPO_CHECKS = REPO_ROOT / "scripts" / "run_validation_repo_checks
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 STAGE_WORKFLOW_SUPPORT = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
+HEAL_REPORT_JOB_HEADER = "\n  heal-report:\n"
 
 
 def _workflow_text() -> str:
@@ -481,8 +482,8 @@ def _renderer_dependency_step_script() -> str:
 
 
 def _validate_step_blocks() -> list[str]:
-	# Text slicing (no PyYAML dependency): one block per top-level job step.
-	steps_text = _workflow_text().split("\n    steps:\n", 1)[1]
+	# Text slicing (no PyYAML dependency): one block per step of the validate job.
+	steps_text = _workflow_text().split("\n    steps:\n", 1)[1].split(HEAL_REPORT_JOB_HEADER, 1)[0]
 	return [block for block in re.split(r"\n(?=      - name: )", steps_text) if "      - name: " in block]
 
 
@@ -1350,6 +1351,265 @@ def test_validate_workflow_lists_the_trusted_harness_infrastructure() -> None:
 	assert 'done < <(json_array_lines "self_repo_trusted_scripts")' in helper
 
 
+# --- Harness-owned validation failures (docs/plans/validation-failure-harness-routing-plan.md, Phase 1)
+
+
+def _heal_report_job_text() -> str:
+	wf = _workflow_text()
+	assert wf.count(HEAL_REPORT_JOB_HEADER) == 1
+	return wf.split(HEAL_REPORT_JOB_HEADER, 1)[1]
+
+
+def _heal_report_step_blocks() -> list[str]:
+	steps_text = _heal_report_job_text().split("\n    steps:\n", 1)[1]
+	return [block for block in re.split(r"\n(?=      - name: )", steps_text) if "      - name: " in block]
+
+
+def _named_block(blocks: list[str], name: str) -> str:
+	matches = [block for block in blocks if block.lstrip("\n").startswith(f"      - name: {name}\n")]
+	assert len(matches) == 1, name
+	return matches[0]
+
+
+def _block_run_script(block: str) -> str:
+	return textwrap.dedent(block.split("        run: |\n", 1)[1])
+
+
+HARNESS_STEP_OUTPUTS = ("failure_owner", "harness_report", "harness_stage", "harness_reason", "harness_fp")
+EXISTING_OUTPUTS = ("status", "raw_status", "summary", "failure_summary", "status_file", "metadata_file")
+
+
+def test_heal_report_job_needs_condition_and_permissions() -> None:
+	job = _heal_report_job_text()
+	header = job.split("\n    steps:\n", 1)[0]
+	assert "\n    needs: validate\n" in header
+	condition = header.split("\n    if: >-\n", 1)[1].split("\n    runs-on:", 1)[0]
+	for fragment in (
+		"always()",
+		"needs.validate.result == 'failure'",
+		"needs.validate.outputs.harness_report == 'true'",
+		"inputs.tracking_issue != '' && inputs.tracking_issue != '0'",
+		"!contains(fromJson('[\"false\"]'), vars.WORKFLOW_HEAL_ENABLED)",
+		"!contains(fromJson('[\"false\"]'), vars.VALIDATION_HARNESS_HEAL_ENABLED)",
+	):
+		assert fragment in condition, fragment
+	assert "\n    timeout-minutes: 10\n" in header
+	# Only the OIDC token for the report identity; GH_PAT does the work.
+	assert "\n    permissions:\n      id-token: write\n    env:\n" in header
+	assert header.count("permissions:") == 1
+	for line in (
+		"      GH_TOKEN: ${{ secrets.GH_PAT }}",
+		"      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}",
+		"      VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}",
+		"      WORKFLOW_HEAL_PHASE: validate",
+		"      WORKFLOW_HEAL_ISSUE_NUMBER: ${{ inputs.tracking_issue }}",
+		"      WORKFLOW_HEAL_VALIDATION_STAGE: ${{ needs.validate.outputs.harness_stage }}",
+		"      WORKFLOW_HEAL_VALIDATION_REASON: ${{ needs.validate.outputs.harness_reason }}",
+		"      WORKFLOW_HEAL_VALIDATION_FP: ${{ needs.validate.outputs.harness_fp }}",
+		"      VALIDATION_SIGNATURE_B64: ${{ needs.validate.outputs.harness_signature_b64 }}",
+	):
+		assert f"\n{line}\n" in header, line
+	names = [block.lstrip("\n").split("\n", 1)[0] for block in _heal_report_step_blocks()]
+	assert names == [
+		"      - name: Resolve workflow support ref",
+		"      - name: Checkout workflow support source",
+		"      - name: Report the harness-owned validation failure to workflow failure heal",
+	]
+	checkout = _named_block(_heal_report_step_blocks(), "Checkout workflow support source")
+	for line in (
+		"          repository: shubhodeep1/coding-workflows",
+		"          ref: ${{ env.SCRIPT_REF }}",
+		"          path: .codex-workflow-src",
+		"          persist-credentials: false",
+		"          sparse-checkout: scripts",
+	):
+		assert f"\n{line}\n" in checkout + "\n", line
+	report = _named_block(_heal_report_step_blocks(), "Report the harness-owned validation failure to workflow failure heal")
+	assert "${{" not in report
+	script = _block_run_script(report)
+	assert '=~ ^[0-9a-f]{40}$ ]]' in script and "git -C .codex-workflow-src rev-parse HEAD" in script and '"${SCRIPT_REF}"' in script
+	resolve = _named_block(_heal_report_step_blocks(), "Resolve workflow support ref")
+	assert r"coding-workflows/\.github/workflows/validate\.yml@[0-9a-f]{40}$" in resolve
+	assert r"coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$" in resolve
+	assert "implement\\.yml" not in resolve
+
+
+def test_validate_outputs_carry_harness_ownership_additively() -> None:
+	wf = _workflow_text()
+	call_outputs = wf.split("\n    outputs:\n", 1)[1].split("\nenv:\n", 1)[0]
+	job_outputs = wf.split("\n  validate:\n", 1)[1].split("\n    outputs:\n", 1)[1].split("\n\n", 1)[0]
+	for name in EXISTING_OUTPUTS:
+		assert f"        value: ${{{{ jobs.validate.outputs.{name} }}}}" in call_outputs, name
+		assert f"      {name}: ${{{{ steps.collect_status.outputs.{name} }}}}" in job_outputs, name
+	for name in HARNESS_STEP_OUTPUTS:
+		assert f"\n      {name}:\n" in call_outputs, name
+		assert f"        value: ${{{{ jobs.validate.outputs.{name} }}}}" in call_outputs, name
+		assert f"      {name}: ${{{{ steps.collect_status.outputs.{name} }}}}" in job_outputs, name
+	# The signature is internal to the run: a job output, not a workflow_call output.
+	assert "      harness_signature_b64: ${{ steps.collect_status.outputs.harness_signature_b64 }}" in job_outputs
+	assert "harness_signature_b64" not in call_outputs
+	collect = _step_block("collect_status")
+	for name in HARNESS_STEP_OUTPUTS + ("harness_signature_b64",):
+		assert f'            echo "{name}=${{{name}}}"' in collect, name
+
+
+def test_validate_step_passes_harness_heal_switch_and_stages_heal_helpers() -> None:
+	run_step = _step_block("validate_run")
+	assert "          VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}\n" in run_step
+	support = _step_block("support_staging")
+	preserve = support.split('"optional_preserve_scripts_after_schemas": [', 1)[1].split("]", 1)[0]
+	assert '"scripts/workflow_failure_heal.py"' in preserve
+	assert '"scripts/build_sync_manifest.py"' in preserve
+	assert 'echo "VALIDATE_SUPPORT_SHA sha=${support_sha}"' in support
+	assert 'echo "VALIDATE_SUPPORT_SHA=${support_sha}" >> "$GITHUB_ENV"' in support
+	# The existing support-ref log line is unchanged and comes first.
+	support_ref_line = 'echo "VALIDATE_SUPPORT_REF ref=${helper_ref} workflow_ref=${validate_workflow_ref:-unknown}"'
+	assert support_ref_line in support
+	assert support.index(support_ref_line) < support.index("VALIDATE_SUPPORT_SHA sha=")
+	# Only after the checkout is verified as the pinned commit.
+	assert support.index("is not the pinned commit") < support.index("VALIDATE_SUPPORT_SHA sha=")
+
+
+def _run_collect_status(tmp: Path, status: dict | None, signature: bytes | None = None, symlink: bool = False) -> dict[str, str]:
+	script = _block_run_script(_step_block("collect_status"))
+	assert "${{" not in script
+	runtime = tmp / "runtime"
+	runtime.mkdir()
+	if status is not None:
+		(runtime / "validation_status.json").write_text(json.dumps(status), encoding="utf-8")
+	signature_path = runtime / "validation_harness_signature.txt"
+	if signature is not None:
+		if symlink:
+			target = tmp / "elsewhere.txt"
+			target.write_bytes(signature)
+			signature_path.symlink_to(target)
+		else:
+			signature_path.write_bytes(signature)
+	output = tmp / "github_output"
+	output.write_text("", encoding="utf-8")
+	env = {**os.environ, "RUNTIME_DIR": str(runtime), "GITHUB_OUTPUT": str(output)}
+	subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
+	return dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines() if "=" in line)
+
+
+def test_collect_status_validates_harness_fields_and_fails_closed() -> None:
+	import base64
+
+	if shutil.which("jq") is None:
+		print("SKIP test_collect_status_validates_harness_fields_and_fails_closed: jq is not installed")
+		return
+	fp = "ab" * 32
+	good = {
+		"status": "fail",
+		"raw_status": "harness_error",
+		"summary": "s",
+		"failure_summary": "f",
+		"failure_owner": "harness",
+		"harness_report": True,
+		"harness_stage": "canary",
+		"harness_reason": "canary_failed",
+		"harness_fp": fp,
+	}
+	signature = b"canary failed: exit 2\nline two\n"
+	with tempfile.TemporaryDirectory() as raw:
+		out = _run_collect_status(Path(raw), good, signature)
+	assert out["failure_owner"] == "harness" and out["harness_report"] == "true"
+	assert (out["harness_stage"], out["harness_reason"], out["harness_fp"]) == ("canary", "canary_failed", fp)
+	assert base64.b64decode(out["harness_signature_b64"]) == signature
+	assert out["status"] == "fail"
+	with tempfile.TemporaryDirectory() as raw:
+		out = _run_collect_status(Path(raw), {**good, "failure_owner": "mixed"}, signature)
+	assert out["harness_report"] == "true"
+	cases = (
+		({**good, "harness_fp": "XYZ"}, signature, False, "harness"),
+		({**good, "failure_owner": "project"}, signature, False, "project"),
+		({**good, "failure_owner": "root;rm -rf"}, signature, False, "none"),
+		({**good, "harness_report": "true"}, signature, False, "harness"),
+		({**good, "harness_stage": "Bad Stage"}, signature, False, "harness"),
+	)
+	for status, sig, symlink, owner in cases:
+		with tempfile.TemporaryDirectory() as raw:
+			out = _run_collect_status(Path(raw), status, sig, symlink)
+		assert out["harness_report"] == "false", status
+		assert out["failure_owner"] == owner, status
+		assert out["harness_signature_b64"] == "", status
+	with tempfile.TemporaryDirectory() as raw:
+		out = _run_collect_status(Path(raw), good, signature, symlink=True)
+	assert out["harness_report"] == "true" and out["harness_signature_b64"] == ""
+	with tempfile.TemporaryDirectory() as raw:
+		out = _run_collect_status(Path(raw), good, b"x" * 1025)
+	assert out["harness_signature_b64"] == ""
+	# A missing status file keeps the existing error fallback and reports nothing.
+	with tempfile.TemporaryDirectory() as raw:
+		out = _run_collect_status(Path(raw), None)
+	assert (out["status"], out["raw_status"]) == ("error", "codex_failure")
+	assert out["failure_owner"] == "none" and out["harness_report"] == "false" and out["harness_fp"] == ""
+
+
+def _run_heal_report_step(tmp: Path, signature_b64: str, script_ref: str | None = None) -> tuple[subprocess.CompletedProcess, dict[str, str]]:
+	script = _block_run_script(_named_block(_heal_report_step_blocks(), "Report the harness-owned validation failure to workflow failure heal"))
+	support = tmp / ".codex-workflow-src"
+	(support / "scripts").mkdir(parents=True)
+	record = tmp / "reporter_env.txt"
+	reporter = support / "scripts" / "workflow_failure_heal_phase_report.sh"
+	reporter.write_text(
+		"#!/usr/bin/env bash\n"
+		f"out={record}\n"
+		': > "${out}"\n'
+		'for name in WORKFLOW_HEAL_PHASE WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE RUNTIME_DIR REPORT_WRAPPER_SHA; do\n'
+		'  printf "%s=%s\\n" "${name}" "${!name:-}" >> "${out}"\n'
+		"done\n"
+		'if [ -n "${WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE:-}" ]; then printf "SIG=%s\\n" "$(base64 -w0 < "${WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE}")" >> "${out}"; fi\n',
+		encoding="utf-8",
+	)
+	_git(support, "init", "-q")
+	_git(support, "add", "scripts")
+	_git(support, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "c")
+	head = _git(support, "rev-parse", "HEAD")
+	env = {
+		**os.environ,
+		"GIT_CONFIG_GLOBAL": os.devnull,
+		"SCRIPT_REF": script_ref if script_ref is not None else head,
+		"RUNNER_TEMP": str(tmp / "runner-temp"),
+		"WORKFLOW_HEAL_PHASE": "validate",
+		"VALIDATION_SIGNATURE_B64": signature_b64,
+	}
+	env.pop("GIT_DIR", None)
+	env.pop("GIT_WORK_TREE", None)
+	result = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
+	values: dict[str, str] = {}
+	if record.exists():
+		values = dict(line.split("=", 1) for line in record.read_text(encoding="utf-8").splitlines() if "=" in line)
+	values["_HEAD"] = head
+	return result, values
+
+
+def test_heal_report_step_decodes_signature_and_checks_the_pin() -> None:
+	import base64
+
+	signature = b"stage failed\nwith detail\n"
+	encoded = base64.b64encode(signature).decode()
+	with tempfile.TemporaryDirectory() as raw:
+		result, values = _run_heal_report_step(Path(raw), encoded)
+		assert result.returncode == 0, result.stderr
+		assert values["WORKFLOW_HEAL_PHASE"] == "validate"
+		assert values["REPORT_WRAPPER_SHA"] == values["_HEAD"]
+		assert values["RUNTIME_DIR"].endswith("/runner-temp/workflow-heal-phase-report")
+		assert values["WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE"].startswith(values["RUNTIME_DIR"])
+		assert base64.b64decode(values["SIG"]) == signature
+	with tempfile.TemporaryDirectory() as raw:
+		result, values = _run_heal_report_step(Path(raw), "$(touch pwned)AAAA")
+		assert result.returncode == 0, result.stderr
+		assert values["WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE"] == ""
+		assert "SIG" not in values
+		assert not (Path(raw) / "pwned").exists()
+	with tempfile.TemporaryDirectory() as raw:
+		result, values = _run_heal_report_step(Path(raw), encoded, script_ref="2" * 40)
+		assert result.returncode == 0, result.stderr
+		assert "WORKFLOW_HEAL_PHASE_REPORT skip reason=support_ref_mismatch" in result.stdout
+		assert "WORKFLOW_HEAL_PHASE" not in values
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
 	test_validate_workflow_bootstrap_lists_prompt_assembly_assets()
@@ -1399,6 +1659,11 @@ def main() -> int:
 	test_self_repo_harness_infrastructure_rejects_symlinked_parent_directory()
 	test_consumer_and_explicit_target_runs_keep_their_support_staging()
 	test_validate_workflow_lists_the_trusted_harness_infrastructure()
+	test_heal_report_job_needs_condition_and_permissions()
+	test_validate_outputs_carry_harness_ownership_additively()
+	test_validate_step_passes_harness_heal_switch_and_stages_heal_helpers()
+	test_collect_status_validates_harness_fields_and_fails_closed()
+	test_heal_report_step_decodes_signature_and_checks_the_pin()
 	return 0
 
 

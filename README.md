@@ -113,6 +113,7 @@ deployment fallback.
 | `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES` | No | `30` | orchestrate_poll | How long an item must carry its block label (or a project must have been failed) before the scan sends it to the judge. |
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
+| `UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED` | No | `true` | unblock_judge | A harness-owned unblock verdict (`target_repo: harness`, or instructions that name only harness paths) sends a workflow failure heal report and, for a project, a hold request instead of filing a fix-up. `false` restores the old behaviour; any value other than `true` turns it off. |
 | `UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS` | No | `24` | orchestrate_poll | The scan skips an escalated fix-up (one the judge marked `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->`, which every later judge run only skips) while its last judge run is younger than this, so it gets one judge run per day (for the scope re-grant check) instead of one per hour. `0` restores a run per `UNBLOCK_JUDGE_INFLIGHT_MINUTES`. |
 | `ORPHAN_FIXUP_CLOSE_ENABLED` | No | `true` | orchestrate_poll | Closes open unblock fix-up issues whose source issue is closed (`scripts/orphan_fixup_close.py`, run once per tick from the top of `run_unblock_scan`, also while `UNBLOCK_JUDGE_ENABLED=false`). A fix-up is the issue whose first body line is `<!-- ai:unblock-fixup:v1 item=<n> round=<k> -->`; it is closed as not planned with one comment ending in `<!-- ai:orphan-fixup-closed:v1 item=<n> parent=<p> root=<r> -->` when issue `<n>` is closed (any close reason) or is itself an open fix-up that closes in the same pass, so a whole chain goes at once. Only issues authored by the pipeline login, carrying no label other than `ai:blocked`, `ai:scope-blocked`, `ai:destructive-blocked`, `ai:needs-human`, `ai:unblock-closed`, `ai:security` or `ai:done`, with no `ai:orchestrator-tracking` / `ai:orchestrator-managed` label, no open or unreadable linked pull request (in any repository) and no earlier close (a reopened fix-up stays open, and so do the fix-ups under it) are closed. Every timeline is read before anything closes, so a failed read closes nothing that tick. Re-issues, `Accepted with this follow-up` issues and `Source issue` / `Parent issue` links are never matched. `false` turns the sweep off. Log prefix `ORPHAN_FIXUP_CLOSE`. |
 | `ORPHAN_FIXUP_CLOSE_DRY_RUN` | No | `false` | orchestrate_poll | `true` makes the orphan fix-up close log `outcome=would_close` for each fix-up it would close and change nothing. |
@@ -1992,6 +1993,20 @@ through `clarify → plan → implement → review`.
   fails the job; log lines are prefixed `WORKFLOW_HEAL_PHASE_REPORT`. Issues
   #6413, #6373 and #6392 failed planning four times each on 2026-10-05 and
   never reached heal, because only escalation labels did.
+- **Trigger (harness-owned validation failures):** the `heal-report` job of
+  the reusable `validate.yml` sends a `validation_failure` report when a failed
+  validation run is owned by the harness coding-workflows ships (see
+  "Runtime Validation Phase" > "Harness-owned failures"). The report is bound
+  to `validate.yml` through its OIDC identity, and the intake checks the run's
+  provenance (repository, failed conclusion, `[tracking:<N>]` run name) before
+  it reads anything. Each report ends in one outcome: `opened` (a heal issue
+  was filed), `duplicate` (an open heal issue already covers the fingerprint),
+  `already-fixed`, `bounced` (the diagnosis found no harness defect, so the
+  project's own fix-up path resumes) or `skipped`. The intake records it as the
+  last line of a tracking-issue comment,
+  `<!-- workflow-failure-heal:validation-route:v1 fp=<64 hex> outcome=<outcome> issue=<n|none> classification=<classification> run=<run id> -->`,
+  which the poller trusts only from the `GH_PAT` login.
+  `VALIDATION_HARNESS_HEAL_ENABLED=false` turns this route off.
 - **Reviewer failures name the failing phase:** if the `Run reviewer models`
   step fails, the editor never runs. `Post editor summary comment` names the failure `reviewers_failed` instead
   of `editor_empty_noop` (failure marker, fingerprint, cap reason, heal report
@@ -2642,6 +2657,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `1` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
 | `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` | `1` | Consecutive failed runs of one phase (clarify, plan or implement) on one issue before that workflow's `heal-report` job reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
+| `VALIDATION_HARNESS_HEAL_ENABLED` | `true` | Routes runtime validation failures owned by the validation harness to the workflow failure heal intake (`validate.yml`'s `heal-report` job, report kind `validation_failure`) instead of filing fix-up issues the project cannot act on. `false` skips the job and keeps the old behaviour of `scripts/validate_process.sh`. See [Harness-owned failures](#harness-owned-failures). |
 | `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` | `true` | Identical-failure fingerprint cap in the `gate` job of `review_autofix.yml`. Every review/autofix failure comment ends with a `<!-- review-autofix-failure:v1 head=… reason=… fp=… degraded=… run=… -->` marker, where `fp` fingerprints the failure reason plus the normalised stderr of the editor and Collect PR metadata stages. When the trailing markers for the current head (authored by the `GH_PAT` account) share one fingerprint `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` times, the gate logs `AUTOFIX_FINGERPRINT_CAP_TRIPPED`, skips the run (`skip_reason=fingerprint_cap`, no reviewer or editor call), and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked` (the PR itself when it has none), posts one `review-autofix-failure-cap:v1` comment, sends an `identical_failure_cap` heal report and a Telegram `DEBUG` notice (the review-blocked judge's outcome alert pages when a person is needed). Later dispatches on the same head log `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`, and the poller's noop-suspicious recovery sweep stops re-dispatching that head (it logs `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` and sends no retry WARNING); a push resets the count; `force_rb_judge` dispatches bypass it; lookup failures log `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED` and run normally. A failure reason listed in `NON_RETRYABLE_FAILURE_REASONS` in `scripts/workflow_failure_heal.py` (`conflict_resolver_sandbox_path_host_only`, `conflict_resolver_sandbox_path_unsupported`, `conflict_resolver_sandbox_support_missing`) trips the cap on its **first** marker (`non_retryable=true` in the tripped log line, gate output `fingerprint_cap_non_retryable`); the cap comment is then titled "non-retryable failure" and quotes the failed run's **First error** line. Markers also record the gate's verified review-support commit as `support=<sha>`; a non-retryable cap gets one more run (`AUTOFIX_FINGERPRINT_CAP_REARMED`) when the current support commit is on no trusted marker for the head yet, while fewer than 3 support commits are recorded on the head's markers (the original stop's commit included; `provider_unavailable` markers are not counted), and that run's own marker restores the cap (#6911). Set to `false` to stop evaluating the cap, including the non-retryable stop (the markers keep being written); with it off, the sweep re-dispatches a deterministic failure every 30 minutes (PR #6438: ~28 runs on one head). |
 | `REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED` | `true` | On a `force_rb_judge` dispatch of `review_autofix.yml`, the `gate` job reads the newest `review-autofix-failure:v1` marker that the `GH_PAT` account wrote for the current head under the current review-support version (one `GET /user` plus one paginated `GET /issues/{n}/comments`, the read the fingerprint cap would make; `force_rb_judge` runs skip the cap itself, and this check runs even when `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false`). When its reason is exactly `conflict_resolver_sandbox_path_host_only`, the gate exports `force_rb_judge_conflict_skip=true` and `codex-agent` skips Detect merge conflicts and both resolver steps, so the review-blocked judge runs instead of the resolver refusing again. Markers from another author, another head or an older support version, a newer marker with a different reason (including `provider_unavailable`, which the cap's count passes over), or a failed identity or comment read keep the conflict steps. Every decision logs `AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr= head= outcome=skip\|run reason= marker_reason=` (`reason=newest_reason_mismatch` when a newer outage marker blocks the skip). The resolver's host-only refusal and the review-blocked handoff are unchanged. Set to `false` to always run the conflict steps (issue #6743). |
 | `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` | `3` | Identical failures on one head that trip the fingerprint cap above. Non-numeric or `0` falls back to `3`. |
@@ -3703,6 +3719,92 @@ This phase starts only after the orchestrator judge returns `complete`.
 - Terminal failure labels are split by failure class: runtime semantic failures continue to use `ai:validation-failed`, while validate-workflow Codex/terminal execution failures use `ai:validate-failed` with `raw_status=codex_failure` and `AI_PHASE_FAILURE_V1` marker comments when tracking issue context exists.
 - Managed artifact contract: startup checks now enforce only managed artifacts (`scripts/validate_process.sh`, optional `scripts/validate_driver.sh`) and the transient `validation/validate.sh` rule. Repos may keep unrelated consumer scripts such as `scripts/validate_local.sh` without failing validation.
 
+### Harness-owned failures
+
+Some validation failures are caused by the validation harness that
+coding-workflows ships (the validate workflow, its scripts and the rendered
+`validation/` templates), not by the project being validated. Fix-up issues in
+the project cannot repair those, so `scripts/validate_process.sh` records who
+owns each failed run (plan `docs/plans/validation-failure-harness-routing-plan.md`,
+Phase 1):
+
+- **Ownership rule:** `harness` for a Layer 0 stage failure (sandbox, preflight,
+  canary, harness generation, engine unavailable), a `harness_error` diagnosis,
+  or a `needs_fixes` diagnosis whose files are all harness-managed; `project`
+  when every file is the project's own; `mixed` when both kinds are listed (the
+  project files still get fix-up issues); `none` otherwise. A failure the heal
+  intake already bounced back as not a harness defect is checked again before
+  it is reported a second time.
+- **Marker:** the harness-error comment on the tracking issue ends with
+  `<!-- validation-harness-owner:v1 fp=<64 hex> stage=<stage> reason=<reason> support=<40 hex> run=<run id> -->`,
+  where `support` is the commit the support scripts came from
+  (`VALIDATE_SUPPORT_SHA`).
+- **Outputs:** `validate.yml` exposes `failure_owner`, `harness_report`,
+  `harness_stage`, `harness_reason` and `harness_fp` as `workflow_call`
+  outputs, next to the existing ones. Each value is checked against a fixed
+  vocabulary or pattern before it becomes an output, and anything else turns
+  the report off.
+- **Report:** the reusable workflow's `heal-report` job runs after a failed
+  validate job whose `harness_report` output is `true`, for a tracking issue
+  other than `0`. It resolves its support ref like `implement.yml`'s
+  `heal-report` job (the caller's `validate.yml@<sha>` pin, `stable` otherwise),
+  checks the checkout HEAD, and runs `scripts/workflow_failure_heal_phase_report.sh`
+  with `WORKFLOW_HEAL_PHASE=validate`, which sends one `validation_failure`
+  report to the workflow failure heal intake. The error signature reaches that
+  job as a base64 job output (at most 1024 bytes) and is decoded into
+  `RUNNER_TEMP`. The job is granted only `id-token: write`; `GH_PAT` does the
+  work, and the reporter always exits 0.
+- **Switch:** `VALIDATION_HARNESS_HEAL_ENABLED` (default `true`). `false` skips
+  the `heal-report` job and keeps the old behaviour of `validate_process.sh`.
+
+### Harness hold
+
+A project whose runtime validation fails because of the validation harness
+coding-workflows ships waits for a harness fix instead of paging a person
+(Refs #7913, `docs/plans/validation-failure-harness-routing-plan.md` Phase 2).
+The poller (`scripts/orchestrate_poll_process.sh`) runs it; it makes no GitHub
+API call until the pinned validation workflow changes.
+
+- **Entry:** a validation run that fails with `raw_status=harness_error` while
+  the resume caps are not reached. The project stays `failed` with
+  `ai:validation-failed` and `ai:harness-broken`, recovery counters are left
+  unchanged, and the state field `validation_harness_hold` records the
+  fingerprint (from the trusted `validation-harness-owner:v1` marker, else a
+  `local:` hash of the reason), the harness pin and the start time. The
+  unblock judge can also ask for a hold with a trusted
+  `<!-- ai:unblock-harness-hold-request:v1 item=<N> ... fingerprint=<12 hex> ... -->`
+  comment on a failed project that carries `ai:validation-failed`; that hold
+  uses the fingerprint `judge:<12 hex>`. Each request comment is used once
+  (state `validation_harness_hold_requests_used`, last 50 ids).
+- **Resume:** each tick reads the consumer default branch's validation wrapper
+  pin locally. When the pin moved ahead of the hold's pin (`compare` status
+  `ahead`), validation is re-dispatched (cycle 1) with the recovery count kept.
+  When the heal intake opened or matched a heal issue, that issue must also be
+  closed as completed before the new pin's commit. Without a heal issue the
+  pin alone is enough.
+- **Bounce:** when the heal intake returns the failure to the project, the hold
+  ends and one validation recovery attempt is charged; with the recovery budget
+  spent the project is parked for a person.
+- **Not planned:** a heal issue closed as not planned ends the hold and parks
+  the project for a person.
+- **Caps:** `VALIDATION_HARNESS_MAX_RESUMES_PER_FP` (default `2`, `0` never
+  holds) resumes per fingerprint and `VALIDATION_HARNESS_MAX_RESUMES` (default
+  `4`) resumes in total per project. A failure past either cap takes the old
+  park path.
+- **Time limit:** a hold older than `VALIDATION_HARNESS_HOLD_MAX_DAYS` (default
+  `14`, `1`-`365`), or with a missing or invalid start time, ends and parks the
+  project for a person.
+- **Alerts:** WARNING when a project enters the hold, DEBUG when it resumes or
+  bounces with budget left, CRITICAL when a cap is reached or the hold ends
+  (expired, not planned, bounced with the budget spent).
+- **Unblock judge:** a held project is not offered to the unblock judge.
+- **Trust:** markers count only from `VALIDATION_HARNESS_ROUTE_LOGIN` (default:
+  the `GH_PAT` login).
+- **Switch:** `VALIDATION_HARNESS_HEAL_ENABLED=false` turns the hold off with
+  the rest of the harness routing; every harness error then takes the old park
+  path.
+- **Logs:** `VALIDATION_HARNESS_HOLD tracking_issue=<N> outcome=<outcome> fp=<fp> pin=<pin> heal_issue=<n|none> [reason=<reason>]`.
+
 ### Manual Reset: `/revalidate`
 
 When a tracking issue reaches `ai:validation-failed`, you can manually reset it by commenting `/revalidate` on the tracking issue. The next poller cycle will:
@@ -3713,6 +3815,8 @@ When a tracking issue reaches `ai:validation-failed`, you can manually reset it 
 4. Refresh the draft integration PR's managed `<!-- VALIDATION_STATUS_V1 -->` section to show that revalidation is in progress.
 5. Record a `revalidate_event.v1` audit entry in AI memory for the current actor + integration SHA.
 6. Dispatch a fresh validation run (cycle 1).
+
+`/revalidate` also clears an active [harness hold](#harness-hold) and keeps the `validation_harness_resumes` counters.
 
 Rapid repeats are deduplicated for 5 minutes per actor + integration SHA: if the same user posts `/revalidate` again against the same integration commit inside that window, the poller leaves state unchanged and replies that the earlier reset was already processed. This is useful after fixing the root cause manually (e.g. correcting a Docker config, adding a missing env var, or updating a dependency). There is no limit on how many times `/revalidate` can be used — the operator decides when to stop retrying.
 
@@ -3834,6 +3938,37 @@ and resolver chains, a failed project) now goes to the unblock judge
   off switch on code that ships on by default (`false` turns it off), and
   nobody is paged. Only a placeholder ending in `_UNSET_OPERATOR_STEP`, a
   value a person must supply, keeps the new code skipping until it is set.
+- **Harness routing** (Phase 3 of
+  `docs/plans/validation-failure-harness-routing-plan.md`). A `retry_budget`,
+  `descope`, `reissue`, `accept_with_followup` or `operator_step` verdict
+  carries `target_repo`: `consumer` (the default when it is missing) or
+  `harness`, for work that belongs in `shubhodeep1/coding-workflows`. A
+  backstop also checks the paths the instructions name against the harness
+  checkout and the repository: a verdict that names only harness-owned paths
+  is routed as `harness` whatever its field says. A harness verdict files no
+  fix-up. The judge posts a comment on the item, sends one workflow failure
+  heal report (an `issue`-kind `repository_dispatch` to coding-workflows with
+  the item's escalation label, the repository's recent failed runs and the
+  run's OIDC identity; the heal intake accepts `unblock_judge.yml` as the
+  reporter of `issue` reports), and, for a project's item, posts one
+  `<!-- ai:unblock-harness-hold-request:v1 ... -->` comment on the tracking
+  issue so the poller holds the project until the harness fix ships. A
+  DEBUG Telegram message follows; a failed report sends a WARNING and posts no
+  hold request. A `consumer` verdict that names both harness and project paths
+  keeps its fix-up and also sends the heal report for the harness part. Each
+  guarded verdict logs `UNBLOCK_TARGET_REPO_GUARD item= verdict=
+  outcome=consumer|harness|mixed|disabled paths=`. The routing never applies
+  in coding-workflows itself or to `ai:security` issues.
+  For a pull request item no heal report is sent (the intake binds an
+  `issue` report only to an issue); a WARNING asks a person to file it.
+  A report sent without the run's OIDC identity still requests the project
+  hold, because the intake files it by default; an intake that requires
+  report authentication drops it, so a WARNING asks a person to check that
+  the heal issue was filed.
+  `UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED=false` restores the old behaviour.
+  `WORKFLOW_HEAL_ENABLED=false` skips the heal report and the hold request
+  and sends a WARNING instead, because a person must then file the harness
+  change.
 - **Before a verdict.** Two deterministic exits run before the judge is asked.
   (1) A scope-blocked issue whose newest trusted rejection comes from the
   automation-path grant guard is re-checked with today's

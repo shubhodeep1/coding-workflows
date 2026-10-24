@@ -54,10 +54,12 @@ JSON schema:
       "title": "<issue title>",
       "body": "<full issue body for the AI pipeline>",
       "priority": <1-10>,
-      "depends_on": ["<local-id of existing issues if any>"]
+      "depends_on": ["<local-id of existing issues if any>"],
+      "files": ["<consumer-relative path this fix edits>"]
     }
   ],
-  "harness_fixes": "string"
+  "harness_fixes": "string",
+  "harness_files": ["<path the harness fix touches>"]
 }
 
 Status semantics:
@@ -72,6 +74,11 @@ Status semantics:
   `coding-workflows` harness (see classification tree below); explain the
   fix in `harness_fixes`; keep `fix_issues` empty.
 - `infeasible`: validation cannot proceed safely without non-local/external requirements.
+- `fix_issues[].files` (optional): the consumer-relative paths that fix edits.
+  Give it only when you know the files; omit it rather than guessing.
+- `harness_files` (optional): the harness-owned paths the harness fix touches,
+  such as `validation/...` files or synced workflow wrappers. Omit it rather
+  than guessing. Answers without either field stay valid.
 
 Classification decision tree (apply before status selection):
 

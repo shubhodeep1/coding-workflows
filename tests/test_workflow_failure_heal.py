@@ -8263,3 +8263,745 @@ def test_error_signature_ignores_which_engine_ran_the_attempt_loop() -> None:
 	# Unrelated messages that merely start with "Claude" keep their own fingerprint.
 	assert heal.normalize_error_line("::error::Claude pool at capacity (role RETRO)").startswith("::error::claude pool")
 	assert heal.normalize_error_line("##[warning]Claude capacity wait recorded").startswith("##[warning]claude capacity")
+
+
+# ---------------------------------------------------------------------------
+# validation_failure kind (docs/plans/validation-failure-harness-routing-plan.md, Phase 1)
+# ---------------------------------------------------------------------------
+
+_VAL_RUN_ID = "4242"
+_VAL_TRACKING = 77
+
+
+def _val_roots(tmp_path: Path) -> tuple[str, str]:
+	consumer = tmp_path / "consumer"
+	support = tmp_path / "support"
+	for rel in ("src/app.py", "validation/existing.sh"):
+		target = consumer / rel
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text("x\n")
+	for rel in ("scripts/foo.sh", "src/app.py"):
+		target = support / rel
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text("x\n")
+	return str(consumer), str(support)
+
+
+def _val_classify(tmp_path: Path, diagnosis, **kwargs) -> dict:
+	consumer, support = _val_roots(tmp_path)
+	params = {
+		"consumer_root": consumer,
+		"support_root": support,
+		"managed_paths": [".github/workflows/ai-validate.yml"],
+		"raw_status": "needs_fixes",
+		"signature": "boom",
+		"source_repo": CONSUMER_REPO,
+	}
+	params.update(kwargs)
+	return heal.classify_validation_owner(diagnosis, **params)
+
+
+def _val_payload(**overrides) -> dict:
+	params = {
+		"repo": CONSUMER_REPO,
+		"issue_number": _VAL_TRACKING,
+		"run_id": _VAL_RUN_ID,
+		"wrapper_sha": SHA_A,
+		"stage": "sandbox",
+		"reason": "sandbox_unavailable",
+		"signature": "rootless docker failed",
+		"workflow_name": "AI Validate [tracking:77]",
+		"reporter_run_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/{_VAL_RUN_ID}",
+	}
+	params.update(overrides)
+	return heal.build_validation_failure_payload(**params)
+
+
+def test_validation_failure_kind_is_registered() -> None:
+	assert "validation_failure" in heal.SOURCE_KINDS
+	assert "validation_failure" in heal.PROVENANCE_BOUND_KINDS
+	assert "validation_failure" not in heal.PROVENANCE_KINDS
+	assert heal.REPORT_IDENTITY_WORKFLOW_BY_KIND["validation_failure"] == ("validate.yml",)
+	assert heal.VALIDATION_STAGES == ("generate", "preflight", "sandbox", "canary", "run", "diagnose", "engine")
+	assert heal.VALIDATION_BOUNCED_REASON not in heal.VALIDATION_REASONS
+	assert set(heal.VALIDATION_REASON_STAGES) == set(heal.VALIDATION_REASONS)
+	assert set(heal.VALIDATION_REASON_STAGES.values()) <= set(heal.VALIDATION_STAGES)
+	# Existing kinds keep their order and bindings.
+	assert heal.SOURCE_KINDS[:7] == ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding")
+	assert heal.PROVENANCE_BOUND_KINDS[:3] == ("phase_failure", "autofix_failure", "workflow_run")
+	assert heal.REPORT_IDENTITY_WORKFLOW_BY_KIND["phase_failure"] == ("clarify.yml", "plan.yml", "implement.yml")
+
+
+@pytest.mark.parametrize("reason", heal.VALIDATION_FIXED_REASONS)
+def test_classify_validation_owner_layer0_is_harness(tmp_path: Path, reason: str) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["src/app.py"]}]}
+	result = _val_classify(tmp_path, diagnosis, fixed_reason=reason)
+	assert result["owner"] == "harness"
+	assert result["reason"] == reason
+	assert result["stage"] == heal.VALIDATION_REASON_STAGES[reason]
+	assert result["project_paths"] == [] and result["project_fix_ids"] == []
+	assert result["fingerprint"] == heal.validation_failure_fingerprint(result["stage"], reason, "boom")
+	# The explicit stage must agree with the reason.
+	assert _val_classify(tmp_path, None, fixed_reason=reason, fixed_stage=heal.VALIDATION_REASON_STAGES[reason])["owner"] == "harness"
+	with pytest.raises(ValueError):
+		_val_classify(tmp_path, None, fixed_reason=reason, fixed_stage="diagnose")
+
+
+def test_classify_validation_owner_rejects_unknown_fixed_reason(tmp_path: Path) -> None:
+	for reason in ("owner_paths", "diagnosis_harness", "bounced_repeat", "nope"):
+		with pytest.raises(ValueError):
+			_val_classify(tmp_path, None, fixed_reason=reason)
+	with pytest.raises(ValueError):
+		_val_classify(tmp_path, None, fixed_stage="sandbox")
+
+
+@pytest.mark.parametrize("fix_issues", [[], [{"id": "a", "files": ["src/app.py"]}], [{"id": "a"}]])
+def test_classify_validation_owner_harness_error_diagnosis(tmp_path: Path, fix_issues: list) -> None:
+	diagnosis = {"status": "harness_error", "fix_issues": fix_issues, "harness_files": ["validation/tests/a.sh"]}
+	result = _val_classify(tmp_path, diagnosis, raw_status="needs_fixes")
+	assert (result["owner"], result["reason"], result["stage"]) == ("harness", "diagnosis_harness", "diagnose")
+	assert "validation/tests/a.sh" in result["harness_paths"]
+	assert result["fingerprint"]
+
+
+def test_classify_validation_owner_all_harness_paths(tmp_path: Path) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [
+		{"id": "a", "files": ["validation/x.sh"]},
+		{"id": "b", "files": ["./.github/workflows/ai-validate.yml", "scripts/foo.sh"]},
+	]}
+	result = _val_classify(tmp_path, diagnosis)
+	assert (result["owner"], result["reason"], result["stage"]) == ("harness", "owner_paths", "diagnose")
+	assert result["harness_paths"] == ["validation/x.sh", ".github/workflows/ai-validate.yml", "scripts/foo.sh"]
+	assert result["project_paths"] == [] and result["project_fix_ids"] == []
+
+
+def test_classify_validation_owner_all_project_paths(tmp_path: Path) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["src/app.py"]}, {"id": "b", "files": ["src/new.py"]}]}
+	result = _val_classify(tmp_path, diagnosis)
+	assert result["owner"] == "project" and result["reason"] == "" and result["fingerprint"] == ""
+	assert result["project_paths"] == ["src/app.py", "src/new.py"]
+	assert result["project_fix_ids"] == ["a", "b"]
+
+
+def test_classify_validation_owner_mixed(tmp_path: Path) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [
+		{"id": "harness-1", "files": ["validation/x.sh"]},
+		{"id": "proj-1", "files": ["src/app.py", "validation/y.sh"]},
+		{"files": ["src/new.py"]},
+	]}
+	result = _val_classify(tmp_path, diagnosis)
+	assert (result["owner"], result["reason"], result["stage"]) == ("mixed", "mixed_harness_part", "diagnose")
+	assert result["project_fix_ids"] == ["proj-1", "index-2"]
+	assert result["harness_paths"] == ["validation/x.sh", "validation/y.sh"]
+	assert result["fingerprint"] == heal.validation_failure_fingerprint("diagnose", "mixed_harness_part", "boom")
+	# A harness path named only in harness_files also makes the result mixed.
+	only_files = _val_classify(tmp_path, {"status": "needs_fixes", "harness_files": ["validation/z.sh"], "fix_issues": [{"id": "a", "files": ["src/app.py"]}]})
+	assert only_files["owner"] == "mixed" and only_files["project_fix_ids"] == ["a"]
+
+
+def test_classify_validation_owner_missing_files_and_empty_issues(tmp_path: Path) -> None:
+	missing = _val_classify(tmp_path, {"status": "needs_fixes", "harness_files": ["validation/z.sh"], "fix_issues": [{"id": "a", "title": "t"}]})
+	assert missing["owner"] == "project" and missing["project_fix_ids"] == ["a"]
+	assert missing["harness_paths"] == ["validation/z.sh"]
+	# An empty fix_issues is never project-owned.
+	assert _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": []}, raw_status="harness_error")["reason"] == "diagnosis_harness"
+	for raw_status in ("needs_fixes", "", None):
+		assert _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": []}, raw_status=raw_status)["owner"] == "none"
+
+
+@pytest.mark.parametrize("bad_path", ["../../etc/passwd", "/etc/passwd", "src/../validation/x.sh", "a b.py", 7])
+def test_classify_validation_owner_invalid_path_is_project(tmp_path: Path, bad_path) -> None:
+	result = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": [bad_path]}]})
+	assert result["owner"] == "project" and result["project_fix_ids"] == ["a"]
+	assert result["harness_paths"] == [] and result["project_paths"] == []
+
+
+@pytest.mark.parametrize("diagnosis", [None, "", "not json", "[]", {"status": "pass"}, {"no": "status"}])
+def test_classify_validation_owner_without_usable_diagnosis(tmp_path: Path, diagnosis) -> None:
+	result = _val_classify(tmp_path, diagnosis, raw_status="harness_error")
+	assert result["owner"] == "none" and result["reason"] == "" and result["fingerprint"] == ""
+	# JSON text is parsed.
+	parsed = _val_classify(tmp_path, json.dumps({"status": "harness_error"}))
+	assert parsed["owner"] == "harness"
+
+
+def test_classify_validation_owner_bounce_guard(tmp_path: Path) -> None:
+	diagnosis = {"status": "harness_error"}
+	first = _val_classify(tmp_path, diagnosis)
+	bounced = _val_classify(tmp_path, diagnosis, bounced_fingerprints=["not-a-fp", first["fingerprint"].upper()])
+	assert bounced["owner"] == "none" and bounced["reason"] == "bounced_repeat"
+	assert bounced["fingerprint"] == first["fingerprint"] and bounced["stage"] == "diagnose"
+	assert _val_classify(tmp_path, diagnosis, bounced_fingerprints=["0" * 64])["owner"] == "harness"
+
+
+def test_validation_path_owner_rules(tmp_path: Path) -> None:
+	consumer, support = _val_roots(tmp_path)
+	owner = lambda path, managed=(): heal.validation_path_owner(path, consumer_root=consumer, support_root=support, managed_paths=managed)  # noqa: E731
+	assert owner("validation/existing.sh") == "harness"
+	assert owner("validation") == "harness"
+	assert owner(".github/workflows/ai-review.yml", managed={".github/workflows/ai-review.yml"}) == "harness"
+	assert owner("scripts/foo.sh") == "harness"  # only in the support checkout
+	assert owner("src/app.py") == "project"  # in both, not managed
+	assert owner("src/new.py") == "project"  # in neither
+	assert owner("validationx/a.sh") == "project"
+	assert owner("/abs/path") == "project"
+	assert owner(None) == "project"
+	# A symlinked parent directory in the support checkout is never followed.
+	elsewhere = tmp_path / "elsewhere"
+	(elsewhere / "inner").mkdir(parents=True)
+	(elsewhere / "inner" / "f.sh").write_text("x\n")
+	os.symlink(elsewhere, Path(support) / "linked")
+	assert owner("linked/inner/f.sh") == "project"
+	assert heal.classify_validation_paths(["src/app.py", "validation/a.sh", "src/app.py", "../x"], consumer_root=consumer, support_root=support, managed_paths=()) == (["validation/a.sh"], ["src/app.py"])
+
+
+def _val_support_repo(tmp_path: Path) -> Path:
+	root = tmp_path / "support-git"
+	(root / "workflow-templates").mkdir(parents=True)
+	(root / "workflow-templates" / "ai-validate.yml").write_text("name: AI Validate\n")
+	(root / "CLAUDE.md").write_text("rules\n")
+	env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+	for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(key, None)
+	for command in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-q", "-m", "base"]):
+		subprocess.run(command, cwd=root, check=True, env=env, capture_output=True)
+	return root
+
+
+def test_load_validation_managed_paths_reads_the_support_commit(tmp_path: Path) -> None:
+	root = _val_support_repo(tmp_path)
+	managed = heal.load_validation_managed_paths(str(root), "HEAD")
+	assert ".github/workflows/ai-validate.yml" in managed
+	sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+	assert heal.load_validation_managed_paths(str(root), sha) == managed
+	with pytest.raises(ValueError):
+		heal.load_validation_managed_paths(str(root), "--x")
+	with pytest.raises(ValueError):
+		heal.load_validation_managed_paths(str(tmp_path / "missing"), "HEAD")
+	with pytest.raises(ValueError):
+		heal.load_validation_managed_paths(str(tmp_path), "HEAD")  # not a git repository
+	consumer = tmp_path / "consumer-empty"
+	consumer.mkdir()
+	result = heal.classify_validation_owner({"status": "needs_fixes", "fix_issues": [{"id": "a", "files": [".github/workflows/ai-validate.yml"]}]},
+		consumer_root=str(consumer), support_root="", managed_paths=managed, raw_status="needs_fixes")
+	assert result["owner"] == "harness" and result["reason"] == "owner_paths"
+
+
+def test_validation_signature_normalisation_and_fingerprint() -> None:
+	base = "error in shubhodeep1/example-consumer at 0123abcd4567 Target branch: main <!-- x --> `cmd`"
+	normalized = heal.normalize_validation_signature(base, source_repo=CONSUMER_REPO)
+	assert CONSUMER_REPO not in normalized and "0123abcd4567" not in normalized
+	assert "<repo>" in normalized and "<sha>" in normalized
+	assert "Target branch:" not in normalized and "<!--" not in normalized and "`" not in normalized
+	assert heal.normalize_validation_signature(normalized, source_repo=CONSUMER_REPO) == normalized
+	long_text = ("abcdef1 " * 100) + "tail"
+	capped = heal.normalize_validation_signature(long_text)
+	assert len(capped) <= 200 and heal.normalize_validation_signature(capped) == capped
+	assert heal.normalize_validation_signature("") == "no-error-lines"
+	fp_a = heal.validation_failure_fingerprint("diagnose", "owner_paths", "failed at 1111111aaaa in org/one", source_repo="org/one")
+	fp_b = heal.validation_failure_fingerprint("diagnose", "owner_paths", "failed at 2222222bbbbbbb in org/two", source_repo="org/two")
+	assert fp_a == fp_b
+	assert fp_a == heal.fingerprint("validation-harness", "diagnose:owner_paths", "failed at <sha> in <repo>")
+	assert fp_a != heal.validation_failure_fingerprint("diagnose", "mixed_harness_part", "failed at 1111111aaaa in org/one", source_repo="org/one")
+	with pytest.raises(ValueError):
+		heal.validation_failure_fingerprint("nope", "owner_paths", "x")
+	with pytest.raises(ValueError):
+		heal.validation_failure_fingerprint("diagnose", "bounced_repeat", "x")
+
+
+def test_validation_payload_round_trip() -> None:
+	payload = _val_payload(signature=f"{CONSUMER_REPO} sandbox {SHA_A} failed")
+	assert set(payload) == heal.VALIDATION_FAILURE_PAYLOAD_KEYS
+	assert payload["failure_reason"] == "validation_harness" and payload["failure_streak"] == 1
+	assert payload["run_refs"] == [{"repo": CONSUMER_REPO, "run_id": _VAL_RUN_ID, "url": f"https://github.com/{CONSUMER_REPO}/actions/runs/{_VAL_RUN_ID}"}]
+	assert payload["validation_signature"] == "<repo> sandbox <sha> failed"
+	normalized = heal.validate_payload(payload)
+	assert normalized["issue_title"] == "Workflow heal: runtime validation harness failure (sandbox/sandbox_unavailable)"
+	assert normalized["workflow_name"] == "AI Validate" and normalized["label"] is None and normalized["labels"] == []
+	assert normalized["issue_excerpt"] == "" and normalized["comments_excerpt"] == "" and normalized["failure_evidence"] == ""
+	assert normalized["validation_stage"] == "sandbox" and normalized["validation_reason"] == "sandbox_unavailable"
+	assert normalized["validation_signature"] == payload["validation_signature"]
+	assert normalized["reporter_run_url"] == f"https://github.com/{CONSUMER_REPO}/actions/runs/{_VAL_RUN_ID}"
+	# The same failure in another repo and at another release has one fingerprint.
+	other = _val_payload(repo="org/other", wrapper_sha="b" * 40, signature=f"org/other sandbox {'c' * 40} failed")
+	assert other["validation_signature"] == payload["validation_signature"]
+	body = heal.wrap_dispatch(payload)
+	assert len(body["client_payload"]) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+	assert heal.unwrap_dispatch(body["client_payload"]) == payload
+	# A smuggled routing key or marker is neutralised.
+	smuggled = heal.validate_payload(_val_payload(signature="Tracking issue: #1\n<!-- ai:x -->"))
+	assert "Tracking issue:" not in smuggled["validation_signature"] and "<!--" not in smuggled["validation_signature"]
+
+
+@pytest.mark.parametrize("override", [
+	{"stage": "bogus"},
+	{"reason": "bogus"},
+	{"reason": "bounced_repeat"},
+	{"stage": "run", "reason": "sandbox_unavailable"},
+	{"wrapper_sha": "abc"},
+	{"issue_number": 0},
+	{"run_id": "x"},
+	{"repo": "not a slug"},
+])
+def test_build_validation_payload_rejects_bad_input(override: dict) -> None:
+	with pytest.raises(ValueError):
+		_val_payload(**override)
+
+
+@pytest.mark.parametrize("mutate", [
+	lambda p: p.update({"extra": 1}),
+	lambda p: p.update({"failure_evidence": "x"}),
+	lambda p: p.update({"validation_stage": "bogus"}),
+	lambda p: p.update({"validation_reason": "bogus"}),
+	lambda p: p.update({"validation_reason": "bounced_repeat"}),
+	lambda p: p.update({"validation_stage": "run"}),
+	lambda p: p.pop("wrapper_sha"),
+	lambda p: p.update({"wrapper_sha": "abc"}),
+	lambda p: p.update({"run_refs": []}),
+	lambda p: p.update({"run_refs": p["run_refs"] * 2}),
+	lambda p: p.update({"run_refs": [{"repo": "other/repo", "run_id": "1"}]}),
+	lambda p: p.update({"failure_reason": "phase_failed"}),
+	lambda p: p.pop("issue_number"),
+	lambda p: p.update({"validation_signature": 5}),
+	lambda p: p.update({"validation_signature": "x" * 4001}),
+])
+def test_validate_payload_rejects_bad_validation_reports(mutate) -> None:
+	payload = _val_payload()
+	mutate(payload)
+	with pytest.raises(ValueError):
+		heal.validate_payload(payload)
+
+
+def test_validate_payload_validation_signature_cap() -> None:
+	payload = _val_payload()
+	payload["validation_signature"] = "y" * 4000
+	assert len(heal.validate_payload(payload)["validation_signature"]) == 200
+
+
+def test_validation_report_identity_is_bound_to_validate_yml() -> None:
+	good = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/validate.yml@{SHA_A}")
+	assert _verify_id(_sign_test_jwt(good), kind="validation_failure")["ok"] is True
+	bad = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/implement.yml@{SHA_A}")
+	assert _verify_id(_sign_test_jwt(bad), kind="validation_failure")["reason"] == "job_workflow_ref_mismatch"
+	assert _verify_id(_sign_test_jwt(good), kind="phase_failure")["reason"] == "job_workflow_ref_mismatch"
+
+
+def _val_run(**overrides) -> dict:
+	run = {
+		"id": int(_VAL_RUN_ID),
+		"repository": {"full_name": CONSUMER_REPO},
+		"event": "workflow_dispatch",
+		"path": ".github/workflows/ai-validate.yml",
+		"status": "completed",
+		"conclusion": "failure",
+		"display_title": f"AI Validate [tracking:{_VAL_TRACKING}]",
+	}
+	run.update(overrides)
+	return run
+
+
+_VAL_JOBS = {"jobs": [{"name": "validate", "conclusion": "failure"}, {"name": "heal-report", "conclusion": None}]}
+
+
+def _val_provenance(payload=None, *, run=None, jobs=_VAL_JOBS, self_repo: str = SELF_REPO) -> dict:
+	return heal.verify_phase_report_provenance(payload if payload is not None else _val_payload(), run=_val_run() if run is None else run,
+		jobs=jobs, comments=None, self_repo=self_repo, trusted_author=None)
+
+
+def test_validation_report_provenance_accepts_the_failed_validation_run() -> None:
+	assert _val_provenance() == {"verified": True, "reason": "ok", "run_id": _VAL_RUN_ID}
+	assert _val_provenance(run=_val_run(status="in_progress", conclusion=None))["verified"] is True
+	assert _val_provenance(run=_val_run(conclusion="timed_out"))["verified"] is True
+	internal = _val_payload(repo=SELF_REPO)
+	run = _val_run(repository={"full_name": SELF_REPO}, path=".github/workflows/internal-validate.yml@refs/heads/main", display_title=f"Internal: AI Validate [tracking:{_VAL_TRACKING}]")
+	assert _val_provenance(internal, run=run)["verified"] is True
+	assert _val_provenance(run=_val_run(path=".github/workflows/internal-validate.yml"))["reason"] == "workflow_path_mismatch"
+
+
+@pytest.mark.parametrize(("run_overrides", "jobs", "reason"), [
+	({"id": 1}, _VAL_JOBS, "run_id_mismatch"),
+	({"repository": {"full_name": "other/repo"}}, _VAL_JOBS, "repo_mismatch"),
+	({"event": "schedule"}, _VAL_JOBS, "event_mismatch"),
+	({"path": ".github/workflows/ai-implement.yml"}, _VAL_JOBS, "workflow_path_mismatch"),
+	({"conclusion": "success"}, _VAL_JOBS, "run_not_failed"),
+	({}, None, "jobs_unavailable"),
+	({}, {"jobs": [{"name": "heal-report", "conclusion": "failure"}, {"name": "validate / heal-report", "conclusion": "failure"}]}, "no_failed_validation_job"),
+	({"display_title": "AI Validate [tracking:78]"}, _VAL_JOBS, "tracking_title_mismatch"),
+	({"display_title": "AI Validate [tracking:0]"}, _VAL_JOBS, "tracking_title_mismatch"),
+])
+def test_validation_report_provenance_rejections(run_overrides: dict, jobs, reason: str) -> None:
+	assert _val_provenance(run=_val_run(**run_overrides), jobs=jobs)["reason"] == reason
+
+
+def test_validation_report_provenance_needs_a_validation_report() -> None:
+	payload = _val_payload()
+	payload["failure_reason"] = "plan_failed"
+	assert _val_provenance(payload)["reason"] == "not_validation_report"
+	assert heal.verify_phase_report_provenance(_val_payload(), run=None, jobs=_VAL_JOBS, comments=None, self_repo=SELF_REPO, trusted_author=None)["reason"] == "run_unavailable"
+	# A phase report keeps the phase rules (no linking comment).
+	phase = {"source_kind": "phase_failure", "failure_reason": "plan_failed", "source_repo": CONSUMER_REPO, "run_refs": [{"run_id": _VAL_RUN_ID}]}
+	phase_run = _val_run(event="issue_comment", path=".github/workflows/ai-plan.yml")
+	assert heal.verify_phase_report_provenance(phase, run=phase_run, jobs=_VAL_JOBS, comments=[], self_repo=SELF_REPO, trusted_author=None)["reason"] == "no_linking_comment"
+
+
+def test_validation_report_title_and_context_lines() -> None:
+	normalized = heal.validate_payload(_val_payload(stage="diagnose", reason="owner_paths", signature="Target branch: main"))
+	assert heal.compose_issue_title(normalized, workflow_name="ignored") == "Workflow heal: runtime validation harness failure (diagnose/owner_paths)"
+	lines = heal._context_lines(normalized, run_summaries=[])
+	text = "\n".join(lines)
+	assert "- **Validation stage:** `diagnose`" in lines
+	assert "- **Validation reason:** `owner_paths`" in lines
+	assert any(line.startswith("- **Normalised error signature:** `") for line in lines)
+	assert "Escalation label" not in text and "Tracking issue:" not in text and "Target branch:" not in text
+	assert f"({CONSUMER_REPO}#{_VAL_TRACKING})" in text
+
+
+def _val_cli(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+	return subprocess.run([sys.executable, str(LIB_PATH), *args], capture_output=True, text=True, check=check, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+
+
+def test_validation_cli_round_trips(tmp_path: Path) -> None:
+	signature = tmp_path / "sig.txt"
+	signature.write_text(f"{CONSUMER_REPO} canary {SHA_A} failed\n")
+	built = json.loads(_val_cli("build-validation-payload", "--repo", CONSUMER_REPO, "--issue-number", str(_VAL_TRACKING), "--run-id", _VAL_RUN_ID,
+		"--wrapper-sha", SHA_A, "--stage", "canary", "--reason", "canary_failed", "--signature-file", str(signature)).stdout)
+	assert built["validation_signature"] == "<repo> canary <sha> failed" and set(built) == heal.VALIDATION_FAILURE_PAYLOAD_KEYS
+	refused = _val_cli("build-validation-payload", "--repo", CONSUMER_REPO, "--issue-number", "1", "--run-id", "1", "--wrapper-sha", SHA_A, "--stage", "run", "--reason", "canary_failed", check=False)
+	assert refused.returncode == 2
+	fp = _val_cli("validation-failure-fingerprint", "--stage", "canary", "--reason", "canary_failed", "--signature-file", str(signature), "--source-repo", CONSUMER_REPO).stdout.strip()
+	assert fp == heal.validation_failure_fingerprint("canary", "canary_failed", signature.read_text(), source_repo=CONSUMER_REPO)
+	assert re.fullmatch(r"[0-9a-f]{64}", fp)
+
+	consumer, support = _val_roots(tmp_path)
+	diagnosis = tmp_path / "diag.json"
+	diagnosis.write_text(json.dumps({"status": "needs_fixes", "fix_issues": [{"id": "a", "files": [".github/workflows/ai-validate.yml"]}]}))
+	managed_file = tmp_path / "managed.txt"
+	managed_file.write_text(".github/workflows/ai-validate.yml\n")
+	via_file = json.loads(_val_cli("classify-validation-owner", "--diagnosis-json", str(diagnosis), "--consumer-root", consumer, "--support-root", support,
+		"--managed-paths-file", str(managed_file), "--signature-file", str(signature), "--source-repo", CONSUMER_REPO).stdout)
+	assert via_file["owner"] == "harness" and via_file["reason"] == "owner_paths"
+	repo = _val_support_repo(tmp_path)
+	via_repo = json.loads(_val_cli("classify-validation-owner", "--diagnosis-json", str(diagnosis), "--consumer-root", consumer, "--support-root", str(repo),
+		"--support-commit", "HEAD", "--signature-file", str(signature), "--source-repo", CONSUMER_REPO).stdout)
+	assert via_repo["owner"] == "harness" and via_repo["fingerprint"] == via_file["fingerprint"]
+	# Managed paths needed but unavailable: the classifier fails instead of guessing.
+	failed = _val_cli("classify-validation-owner", "--diagnosis-json", str(diagnosis), "--consumer-root", consumer, "--support-root", str(repo), "--support-commit=--x", check=False)
+	assert failed.returncode == 2 and failed.stdout == ""
+	assert "support commit" in failed.stderr
+	# Layer 0 needs no managed paths.
+	fixed = json.loads(_val_cli("classify-validation-owner", "--consumer-root", consumer, "--fixed-reason", "sandbox_unavailable", "--support-commit=--x").stdout)
+	assert fixed["owner"] == "harness" and fixed["stage"] == "sandbox"
+	bounced_file = tmp_path / "bounced.txt"
+	bounced_file.write_text(fixed["fingerprint"] + "\n")
+	bounced = json.loads(_val_cli("classify-validation-owner", "--consumer-root", consumer, "--fixed-reason", "sandbox_unavailable", "--bounced-fingerprints-file", str(bounced_file)).stdout)
+	assert bounced["owner"] == "none" and bounced["reason"] == "bounced_repeat"
+	none = json.loads(_val_cli("classify-validation-owner", "--consumer-root", consumer, "--diagnosis-json", str(tmp_path / "missing.json")).stdout)
+	assert none["owner"] == "none"
+	phase_payload = tmp_path / "payload.json"
+	phase_payload.write_text(json.dumps(built))
+	run_file = tmp_path / "run.json"
+	run_file.write_text(json.dumps(_val_run(display_title=f"AI Validate [tracking:{_VAL_TRACKING}]")))
+	jobs_file = tmp_path / "jobs.json"
+	jobs_file.write_text(json.dumps(_VAL_JOBS))
+	verdict = json.loads(_val_cli("verify-phase-provenance", "--payload-json", str(phase_payload), "--run-json", str(run_file), "--jobs-json", str(jobs_file),
+		"--comments-json", str(tmp_path / "none.json"), "--self-repo", SELF_REPO, "--comment-author", "").stdout)
+	assert verdict == {"verified": True, "reason": "ok", "run_id": _VAL_RUN_ID}
+
+
+def test_load_validation_managed_paths_ignores_inherited_git_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	root = _val_support_repo(tmp_path)
+	other = tmp_path / "other-git"
+	other.mkdir()
+	subprocess.run(["git", "init", "-q"], cwd=other, check=True, capture_output=True)
+	monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+	monkeypatch.setenv("GIT_WORK_TREE", str(other))
+	assert ".github/workflows/ai-validate.yml" in heal.load_validation_managed_paths(str(root), "HEAD")
+
+
+def test_validation_signature_masks_bare_repo_name() -> None:
+	first = heal.normalize_validation_signature("failed in /home/runner/work/example-consumer/example-consumer/validation/a.sh", source_repo=CONSUMER_REPO)
+	second = heal.normalize_validation_signature("failed in /home/runner/work/other-app/other-app/validation/a.sh", source_repo="org/other-app")
+	assert first == second == "failed in /home/runner/work/<repo>/<repo>/validation/a.sh"
+	assert "example-consumer" not in first
+	# A longer name containing the repo name is kept, and the result is idempotent.
+	kept = heal.normalize_validation_signature("example-consumer-tools broke", source_repo=CONSUMER_REPO)
+	assert kept == "example-consumer-tools broke"
+	repo_named = heal.normalize_validation_signature("repo failed", source_repo="org/repo")
+	assert repo_named == "<repo> failed" and heal.normalize_validation_signature(repo_named, source_repo="org/repo") == repo_named
+	# Plain hex-letter words are not SHAs; full SHAs and digit-bearing runs are.
+	assert heal.normalize_validation_signature(f"defaced {SHA_A} abc1234") == "defaced <sha> <sha>"
+
+
+def test_classify_validation_owner_keeps_original_fix_issue_index(tmp_path: Path) -> None:
+	result = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": ["junk", {"files": ["validation/x.sh"]}, {"files": ["src/app.py"]}]})
+	assert result["owner"] == "mixed" and result["project_fix_ids"] == ["index-2"]
+
+
+def test_classify_validation_owner_truncated_lists_are_not_harness(tmp_path: Path) -> None:
+	many = [{"id": f"h{n}", "files": ["validation/x.sh"]} for n in range(heal.VALIDATION_MAX_FIX_ISSUES + 1)]
+	result = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": many})
+	assert result["owner"] == "none" and result["truncated"] is True and result["fingerprint"] == ""
+	files = ["validation/x.sh"] * heal.VALIDATION_MAX_FILES_PER_ISSUE + ["src/app.py"]
+	long_files = _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": files}]})
+	assert long_files["owner"] == "mixed" and long_files["project_fix_ids"] == ["a"] and long_files["truncated"] is True
+	assert _val_classify(tmp_path, {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["validation/x.sh"]}]})["truncated"] is False
+
+
+def test_classify_validation_owner_requires_consumer_root_for_paths(tmp_path: Path) -> None:
+	diagnosis = {"status": "needs_fixes", "fix_issues": [{"id": "a", "files": ["scripts/foo.sh"]}]}
+	for root in ("", str(tmp_path / "missing")):
+		with pytest.raises(ValueError):
+			_val_classify(tmp_path, diagnosis, consumer_root=root)
+	# Layer 0 and path-free diagnoses need no consumer root.
+	assert _val_classify(tmp_path, diagnosis, consumer_root="", fixed_reason="sandbox_unavailable")["owner"] == "harness"
+	assert _val_classify(tmp_path, {"status": "harness_error"}, consumer_root="")["owner"] == "harness"
+
+
+# --- validation_failure routing (validation-failure-harness-routing plan, Phase 1) ---
+
+VALIDATION_SIGNATURE = "validation_harness_sandbox.sh: rootless dockerd did not start in shubhodeep1/example-consumer"
+VALIDATION_JOB_LOG = (
+	"2026-10-22T10:00:00.000Z ##[group]Run bash scripts/validate_process.sh\n"
+	"2026-10-22T10:00:00.000Z ##[endgroup]\n"
+	"2026-10-22T10:00:01.000Z ::error::validation_harness_sandbox.sh: rootless dockerd did not start\n"
+	"2026-10-22T10:00:02.000Z ##[error]Process completed with exit code 1.\n"
+)
+VALIDATION_ROUTE_RE = re.compile(
+	r"<!-- workflow-failure-heal:validation-route:v1 fp=([0-9a-f]{64}) outcome=(opened|duplicate|already-fixed|bounced|skipped)"
+	r" issue=(none|[1-9][0-9]*) classification=([a-z-]+) run=([0-9]+) -->"
+)
+VALIDATION_TRACKING_COMMENTS = f"repos/{CONSUMER_REPO}/issues/42/comments"
+
+
+def _validation_payload(**overrides) -> dict:
+	payload = heal.build_validation_failure_payload(
+		repo=CONSUMER_REPO, issue_number=42, run_id="500", wrapper_sha=SHA_A, stage="sandbox", reason="sandbox_unavailable",
+		signature=VALIDATION_SIGNATURE, workflow_name="AI Validate", reporter_run_url=None,
+	)
+	payload.update(overrides)
+	return payload
+
+
+def _validation_fp() -> str:
+	return heal.validation_failure_fingerprint("sandbox", "sandbox_unavailable", VALIDATION_SIGNATURE, source_repo=CONSUMER_REPO)
+
+
+def _validation_run(**overrides) -> dict:
+	run = {
+		"id": 500, "repository": {"full_name": CONSUMER_REPO}, "event": "workflow_dispatch", "path": ".github/workflows/ai-validate.yml",
+		"status": "in_progress", "conclusion": None, "display_title": "AI Validate [tracking:42]", "head_sha": SHA_A,
+		"html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		"referenced_workflows": [{"path": f"{SELF_REPO}/.github/workflows/validate.yml@stable"}],
+	}
+	run.update(overrides)
+	return run
+
+
+def _validation_intake_state(**overrides) -> dict:
+	return _intake_state(**{
+		"jobs": {"500": [
+			{"id": 9201, "name": "validate / validate", "workflow_name": "AI Validate", "conclusion": "failure",
+				"steps": [{"name": "Run validation process", "conclusion": "failure"}]},
+			{"id": 9202, "name": "validate / heal-report", "workflow_name": "AI Validate", "conclusion": None, "steps": []},
+		]},
+		"job_logs": {"9201": VALIDATION_JOB_LOG},
+		"run_details": {"500": _validation_run()},
+		**overrides,
+	})
+
+
+def _assert_validation_route(result: subprocess.CompletedProcess[str], state: dict, outcome: str, *, issue: str = "none", classification: str) -> dict:
+	assert result.returncode == 0, result.stderr + result.stdout
+	comments = [c for c in state.get("comments_posted", []) if c["path"] == VALIDATION_TRACKING_COMMENTS]
+	assert len(comments) == 1, comments
+	last_line = comments[0]["body"].rstrip("\n").splitlines()[-1]
+	match = VALIDATION_ROUTE_RE.fullmatch(last_line)
+	assert match, last_line
+	assert match.groups() == (_validation_fp(), outcome, issue, classification, "500")
+	assert f"WORKFLOW_HEAL received kind=validation_failure outcome={outcome} fp={_validation_fp()}" in result.stdout
+	# Never an issue in the source (consumer) repository for this kind.
+	assert not [i for i in state.get("issues_created", []) if i.get("repo") == CONSUMER_REPO]
+	assert not [i for i in state.get("issues_composed", []) if i.get("repo") == CONSUMER_REPO]
+	return comments[0]
+
+
+def test_intake_validation_failure_fingerprint_and_self_repo_dedup_only() -> None:
+	signature = heal.normalize_validation_signature(VALIDATION_SIGNATURE, source_repo=CONSUMER_REPO)
+	assert "<repo>" in signature
+	assert _validation_fp() == heal.fingerprint("validation-harness", "sandbox:sandbox_unavailable", signature)
+	result, state, prompt = _run_intake(_validation_payload(), _validation_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL provenance_verified source={CONSUMER_REPO} kind=validation_failure issue=42 runs=1" in result.stdout
+	assert f"WORKFLOW_HEAL fingerprint fp={_validation_fp()} workflow=validation-harness step=sandbox:sandbox_unavailable" in result.stdout
+	assert "rootless dockerd did not start" in prompt and "Validation stage: sandbox  reason: sandbox_unavailable" in prompt
+	# Only coding-workflows' heal issues are listed (Q14); no comment list is read.
+	issue_lists = [call for call in state["calls"] if any(part.endswith("/issues") for part in call) and "--paginate" in call]
+	assert issue_lists and all(f"repos/{SELF_REPO}/issues" in call for call in issue_lists)
+	assert not [call for call in state["calls"] if VALIDATION_TRACKING_COMMENTS in call and "--method" in call]
+	# One run GET and one jobs GET (provenance, reused by the log collection).
+	for path in (f"repos/{CONSUMER_REPO}/actions/runs/500", f"repos/{CONSUMER_REPO}/actions/runs/500/jobs"):
+		assert len([call for call in state["calls"] if path in call]) == 1, path
+
+
+def _prepare_validation_scope_support(payload: dict):
+	def _setup(tmp: Path, work: Path) -> None:
+		remote = tmp / "remote.git"
+		subprocess.run(["git", "init", "--bare", "-q", str(remote)], check=True)
+		subprocess.run(["git", "init", "-q", "-b", "stable"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.name", "test"], cwd=work, check=True)
+		subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=work, check=True)
+		(work / ".github" / "workflows" / "validate.yml").write_text("name: validate\n", encoding="utf-8")
+		subprocess.run(["git", "add", "-f", ".github/workflows/validate.yml"], cwd=work, check=True)
+		subprocess.run(["git", "commit", "-qm", "support"], cwd=work, check=True)
+		subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=work, check=True)
+		subprocess.run(["git", "push", "-q", "origin", "stable"], cwd=work, check=True)
+		payload["wrapper_sha"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=work, check=True, capture_output=True, text=True).stdout.strip()
+	return _setup
+
+
+@pytest.mark.parametrize("diagnosis,classification", [
+	(DIAG_WORKFLOW_DEFECT, "workflow-defect"),
+	("## Classification\ninconclusive\n\n## Summary\nUnclear cause.\n", "inconclusive"),
+])
+def test_intake_validation_failure_opens_heal_issue_here(diagnosis: str, classification: str) -> None:
+	payload = _validation_payload()
+	result, state, _ = _run_intake(payload, _validation_intake_state(), diagnosis=diagnosis,
+		setup_git=_prepare_validation_scope_support(payload), extra_env=SCOPE_GUARD_ON)
+	assert "WORKFLOW_HEAL scope_guard outcome=verified" in result.stdout, result.stdout
+	assert [issue["repo"] for issue in state["issues_created"]] == [SELF_REPO]
+	assert "- **Target branch:** `stable`" in state["issues_created"][0]["body"]
+	comment = _assert_validation_route(result, state, "opened", issue="901", classification=classification)
+	assert f"https://github.com/{SELF_REPO}/issues/901" in comment["body"]
+
+
+@pytest.mark.parametrize("diagnosis,classification", [
+	(DIAG_CONSUMER_APP_SCOPE, "consumer-app-defect"),
+	("## Classification\nconsumer-config\n\n## Summary\nThe consumer has no Docker on its runner.\n", "consumer-config"),
+	("## Classification\ntransient\n\n## Summary\nA registry hiccup.\n", "transient"),
+	(DIAG_PR_SELF_INFLICTED, "pr-self-inflicted"),
+	(DIAG_BASE_SELF_INFLICTED, "base-self-inflicted"),
+])
+def test_intake_validation_failure_bounces_non_harness_verdicts(diagnosis: str, classification: str) -> None:
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(), diagnosis=diagnosis, extra_env=SCOPE_GUARD_ON)
+	comment = _assert_validation_route(result, state, "bounced", classification=classification)
+	assert f"`{classification}` (not a harness defect)" in comment["body"]
+	assert "issues_created" not in state and "issues_composed" not in state
+	assert f"WORKFLOW_HEAL no_issue classification={classification} kind=validation_failure outcome=bounced" in result.stdout
+
+
+def test_intake_validation_failure_duplicate_records_occurrence_and_routes() -> None:
+	state = _validation_intake_state(heal_issues=[_heal_issue(812, state="open", fp=_validation_fp())])
+	result, state, _ = _run_intake(_validation_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	comment = _assert_validation_route(result, state, "duplicate", issue="812", classification="none")
+	assert f"https://github.com/{SELF_REPO}/issues/812" in comment["body"]
+	assert [c["path"] for c in state["comments_posted"] if c["path"] != VALIDATION_TRACKING_COMMENTS] == [f"repos/{SELF_REPO}/issues/812/comments"]
+	assert "issues_created" not in state
+
+
+def test_intake_validation_failure_already_fixed_routes_without_issue() -> None:
+	compare = _compare(1, [(SHA_FIX, "AI implementation for issue #4350 (#4351)")])
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(compare=compare), diagnosis=DIAG_ALREADY_FIXED)
+	comment = _assert_validation_route(result, state, "already-fixed", classification="already-fixed")
+	assert "`already-fixed`" in comment["body"]
+	assert "issues_created" not in state
+
+
+def test_intake_validation_failure_skips_are_routed() -> None:
+	# Scope guard off (the test default): the issue is composed, not filed.
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	comment = _assert_validation_route(result, state, "skipped", classification="workflow-defect")
+	assert "`scope_guard_disabled`" in comment["body"]
+	# Budget exhausted: stops before diagnosis, so no classification.
+	other = _heal_issue(813, state="open", fp="9" * 64)
+	result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(heal_issues=[other]), diagnosis=DIAG_WORKFLOW_DEFECT,
+		extra_env={"WORKFLOW_HEAL_MAX_OPEN_ISSUES": "1"})
+	comment = _assert_validation_route(result, state, "skipped", classification="none")
+	assert "`budget_exhausted`" in comment["body"]
+	assert "issues_composed" not in state
+
+
+def test_intake_validation_failure_provenance_rejection_posts_nothing() -> None:
+	for run in (_validation_run(path=".github/workflows/ai-plan.yml"), _validation_run(display_title="AI Validate [tracking:43]"),
+			_validation_run(repository={"full_name": "someone/else"})):
+		result, state, _ = _run_intake(_validation_payload(), _validation_intake_state(run_details={"500": run}), diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL skip reason=provenance_rejected" in result.stdout
+		assert "comments_posted" not in state and "issues_created" not in state
+		assert "received kind=validation_failure" not in result.stdout
+		assert not [call for call in state["calls"] if any("/actions/jobs/" in part for part in call)]
+
+
+def _stage_validation_report(tmp: Path, *, flags: dict[str, str] | None = None) -> tuple[Path, Path, dict[str, str]]:
+	work, state_file, env = _stage_phase_report(tmp, comments=[])
+	signature_file = tmp / "signature.txt"
+	signature_file.write_text(VALIDATION_SIGNATURE + "\n", encoding="utf-8")
+	env.update({
+		"WORKFLOW_HEAL_PHASE": "validate",
+		"REPORT_WORKFLOW_NAME": "AI Validate",
+		"WORKFLOW_HEAL_VALIDATION_STAGE": "sandbox",
+		"WORKFLOW_HEAL_VALIDATION_REASON": "sandbox_unavailable",
+		"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": str(signature_file),
+		"WORKFLOW_HEAL_VALIDATION_FP": _validation_fp(),
+	})
+	env.update(flags or {})
+	return work, state_file, env
+
+
+def test_phase_report_validate_dispatches_one_validation_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-phase-validate-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_validation_report(tmp)
+		result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL_PHASE_REPORT dispatched issue=42 phase=validate stage=sandbox reason=sandbox_unavailable fp={_validation_fp()} run=500" in result.stdout
+		state = _state(state_file)
+		assert len(state["dispatches"]) == 1
+		dispatch = state["dispatches"][0]
+		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches" and dispatch["body"]["event_type"] == "workflow-failure-heal"
+		payload = heal.validate_payload(dispatch["body"]["client_payload"]["report"])
+		assert payload["source_kind"] == "validation_failure" and payload["issue_number"] == 42
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500"] and payload["wrapper_sha"] == SHA_A
+		assert heal.validation_failure_fingerprint(payload["validation_stage"], payload["validation_reason"], payload["validation_signature"]) == _validation_fp()
+		# No GitHub read at all: only the dispatch.
+		assert [call for call in state["calls"] if "--input" not in call] == []
+
+
+def test_phase_report_validate_skips_cleanly() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-phase-validate-link-") as link_dir:
+		target = Path(link_dir) / "real.txt"
+		target.write_text("x\n", encoding="utf-8")
+		link = Path(link_dir) / "link.txt"
+		link.symlink_to(target)
+		empty = Path(link_dir) / "empty.txt"
+		empty.write_text("", encoding="utf-8")
+		cases = [
+			({"VALIDATION_HARNESS_HEAL_ENABLED": "FALSE"}, "skip reason=disabled (VALIDATION_HARNESS_HEAL_ENABLED=false)"),
+			({"WORKFLOW_HEAL_VALIDATION_STAGE": ""}, "skip reason=missing_validation_context field=stage"),
+			({"WORKFLOW_HEAL_VALIDATION_REASON": "Bad Reason"}, "skip reason=missing_validation_context field=reason"),
+			({"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": ""}, "skip reason=missing_validation_context field=signature_file"),
+			({"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": str(link)}, "skip reason=missing_validation_context field=signature_file"),
+			({"WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE": str(empty)}, "skip reason=missing_validation_context field=signature_file"),
+			({"WORKFLOW_HEAL_VALIDATION_FP": "abc"}, "skip reason=missing_validation_context field=fp"),
+			({"WORKFLOW_HEAL_VALIDATION_FP": "0" * 64}, "skip reason=fingerprint_mismatch"),
+			({"WORKFLOW_HEAL_VALIDATION_REASON": "preflight_failed"}, "skip reason=payload_build_failed"),
+			({"REPORT_WRAPPER_SHA": ""}, "skip reason=payload_build_failed"),
+		]
+		for flags, expected in cases:
+			with tempfile.TemporaryDirectory(prefix="heal-phase-validate-skip-") as tmp_name:
+				work, state_file, env = _stage_validation_report(Path(tmp_name), flags=flags)
+				result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+				assert result.returncode == 0, (flags, result.stderr, result.stdout)
+				assert expected in result.stdout, (flags, result.stdout)
+				state = _state(state_file)
+				assert "dispatches" not in state and "calls" not in state, flags
+
+
+def test_intake_compose_payload_keys_match_validation_failure_keys() -> None:
+	# _compose_payload_file limits the compose payload to the keys the
+	# validation_failure validator accepts; keep its jq list in step.
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	body = text.split("_compose_payload_file()\n{", 1)[1].split("\n}\n", 1)[0]
+	match = re.search(r"jq '\{([^}]*)\}", body)
+	assert match, body
+	keys = {key.strip() for key in match.group(1).split(",")}
+	assert keys == set(heal.VALIDATION_FAILURE_PAYLOAD_KEYS)
