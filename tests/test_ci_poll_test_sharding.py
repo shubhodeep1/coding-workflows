@@ -61,6 +61,12 @@ GROUP_AWK_RE = re.compile(
 	r"""awk -v n="\$\{poll_group\}" -v total="\$\{poll_groups\}" '(?P<expr>[^']+)'"""
 )
 POLL_JOB_ID = "orchestrate-poll"
+SINGLE_FILE_MODULES_STEP = "Orchestrate poll single-file module tests"
+SINGLE_FILE_MODULES = (
+	"tests/test_orchestrate_poll_noop_suspicious_recovery.py",
+	"tests/test_state_snapshot.py",
+	"tests/test_run_substate_ledger.py",
+)
 
 
 def load_lint_job() -> dict:
@@ -294,15 +300,25 @@ class PollStepContractTest(unittest.TestCase):
 		self.assertNotIn(" rg ", self.run)
 
 	def test_the_three_single_file_modules_still_run(self) -> None:
-		group_zero_gate = self.run.index('if [ "${poll_group}" -eq 0 ]; then')
-		for module in (
-			"tests/test_orchestrate_poll_noop_suspicious_recovery.py",
-			"tests/test_state_snapshot.py",
-			"tests/test_run_substate_ledger.py",
-		):
-			self.assertIn(module, self.run)
-			self.assertEqual(self.run.count(module), 1)
-			self.assertLess(group_zero_gate, self.run.index(module), "single-file modules run once, in group 0")
+		"""Since #8080 they run once, in their own group-1 step, not in the sharded step."""
+		single_file_run = poll_job_step(SINGLE_FILE_MODULES_STEP)["run"]
+		positions = []
+		for module in SINGLE_FILE_MODULES:
+			with self.subTest(module=module):
+				self.assertNotIn(module, self.run)
+				self.assertEqual(single_file_run.count(module), 1)
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+			positions.append(single_file_run.index(module))
+		self.assertEqual(positions, sorted(positions), "single-file modules keep their order")
+		self.assertNotIn('if [ "${poll_group}" -eq 0 ]; then', self.run)
+
+	def test_no_group_zero_step_names_the_single_file_modules(self) -> None:
+		for step in load_poll_job()["steps"]:
+			if str(step.get("if", "")) != "strategy.job-index == 0":
+				continue
+			for module in SINGLE_FILE_MODULES:
+				with self.subTest(step=step.get("name"), module=module):
+					self.assertNotIn(module, step.get("run", ""))
 
 
 class JobBudgetTest(unittest.TestCase):
@@ -1100,6 +1116,8 @@ GROUP_PINNED_STEPS = {
 	"Isolated agent container tests (codex_isolated_exec.sh)": 2,
 	"Prebuilt sandbox image tests": 2,
 	"Review sandbox image build retry tests": 2,
+	# Moved from group 0 to group 1 in #8080.
+	"Orchestrate poll single-file module tests": 1,
 }
 POLL_JOB_UNGUARDED_STEPS = {
 	"Checkout repository",
