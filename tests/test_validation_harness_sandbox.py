@@ -2141,3 +2141,178 @@ def test_stage_copy_leaves_the_shared_readonly_screen_unchanged() -> None:
 	spec.loader.exec_module(module)
 	for name in (".npmrc", "web/.npmrc", ".env.example", ".env.sample", ".env.template"):
 		assert module.readonly_allowed(name) is False, name
+
+
+# Support helpers staged from their committed HEAD blob (#8065).
+def _git_commit(workspace: Path) -> None:
+	git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+	subprocess.run(
+		["git", "-C", str(workspace), "-c", "user.name=t", "-c", "user.email=t@x", "-c", "commit.gpgsign=false",
+			"commit", "-q", "-m", "fixture"],
+		check=True, env=git_env,
+	)
+
+
+def _stage_with_modes(helper_dir: Path, workspace: Path, *extra_args: str) -> tuple[dict[str, tuple[bytes, int]], str]:
+	result = subprocess.run(
+		["python3", "-I", "-c", _stage_program(), str(helper_dir), str(workspace), *extra_args],
+		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir)},
+	)
+	assert result.returncode == 0, result.stderr
+	members: dict[str, tuple[bytes, int]] = {}
+	with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r|") as archive:
+		for member in archive:
+			assert member.isreg(), member.name
+			handle = archive.extractfile(member)
+			assert handle is not None
+			members[member.name] = (handle.read(), member.mode)
+	return members, result.stderr.decode()
+
+
+def test_stage_copy_uses_head_bytes_over_a_modified_working_tree(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "committed\n")
+	_write(workspace, "scripts/other.sh", "committed other\n")
+	_git_add(workspace, "scripts/validate_process.sh", "scripts/other.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "overwritten by staging\n")
+	_write(workspace, "scripts/other.sh", "edited other\n")
+	members, stderr = _stage_with_modes(helper_dir, workspace, "head-support:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"][0] == b"committed\n"
+	# Paths not on the list keep the working-tree copy.
+	assert members["scripts/other.sh"][0] == b"edited other\n"
+	assert "VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=support_from_head path=scripts/validate_process.sh\n" in stderr
+	assert "committed" not in stderr, "logs must never carry file content"
+
+
+def test_stage_copy_without_head_support_args_keeps_the_working_tree(tmp_path: Path) -> None:
+	# The switch off means cmd_run passes no head-support arguments.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "committed\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "working tree\n")
+	members, stderr = _stage_with_modes(helper_dir, workspace)
+	assert members["scripts/validate_process.sh"][0] == b"working tree\n"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_falls_back_to_the_working_tree_for_untracked_helpers(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "tracked.txt", "x\n")
+	_git_add(workspace, "tracked.txt")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validation_harness_sandbox.sh", "untracked helper\n")
+	members, stderr = _stage_with_modes(helper_dir, workspace, "head-support:scripts/validation_harness_sandbox.sh")
+	assert members["scripts/validation_harness_sandbox.sh"][0] == b"untracked helper\n"
+	assert "outcome=ok reason=support_from_head " not in stderr
+	assert "outcome=skip reason=support_from_head_unavailable path=scripts/validation_harness_sandbox.sh\n" in stderr
+
+
+def test_stage_copy_falls_back_when_the_repository_has_no_commit(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "index only\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	members, stderr = _stage_with_modes(helper_dir, workspace, "head-support:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"][0] == b"index only\n"
+	assert "outcome=ok reason=support_from_head " not in stderr
+	assert "outcome=skip reason=support_from_head_unavailable path=scripts/validate_process.sh\n" in stderr
+
+
+def test_stage_copy_keeps_the_head_blob_mode(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "#!/bin/bash\n")
+	(workspace / "scripts/validate_process.sh").chmod(0o755)
+	_write(workspace, "scripts/templates/slot_manifest.schema.json", "{}\n")
+	(workspace / "scripts/templates/slot_manifest.schema.json").chmod(0o644)
+	_git_add(workspace, "scripts/validate_process.sh", "scripts/templates/slot_manifest.schema.json")
+	_git_commit(workspace)
+	(workspace / "scripts/validate_process.sh").chmod(0o644)
+	(workspace / "scripts/templates/slot_manifest.schema.json").chmod(0o755)
+	members, _ = _stage_with_modes(
+		helper_dir, workspace,
+		"head-support:scripts/validate_process.sh", "head-support:scripts/templates/slot_manifest.schema.json",
+	)
+	assert members["scripts/validate_process.sh"][1] == 0o755
+	assert members["scripts/templates/slot_manifest.schema.json"][1] == 0o644
+
+
+def test_stage_copy_refuses_a_committed_symlink_helper(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "target.txt", "target\n")
+	(workspace / "scripts").mkdir()
+	(workspace / "scripts" / "codex_isolated_workspace.py").symlink_to("../target.txt")
+	_git_add(workspace, "target.txt", "scripts/codex_isolated_workspace.py")
+	_git_commit(workspace)
+	members, stderr = _stage_with_modes(helper_dir, workspace, "head-support:scripts/codex_isolated_workspace.py")
+	assert "scripts/codex_isolated_workspace.py" not in members
+	assert "outcome=ok reason=support_from_head " not in stderr
+	assert "outcome=skip reason=support_from_head_unavailable path=scripts/codex_isolated_workspace.py\n" in stderr
+
+
+def test_stage_copy_overlay_wins_over_head_support(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_driver.sh", "committed driver\n")
+	_git_add(workspace, "scripts/validate_driver.sh")
+	_git_commit(workspace)
+	trusted = tmp_path / "trusted_driver.sh"
+	trusted.write_text("trusted driver\n", encoding="utf-8")
+	members, stderr = _stage_with_modes(
+		helper_dir, workspace,
+		"head-support:scripts/validate_driver.sh", f"scripts/validate_driver.sh={trusted}",
+	)
+	assert members["scripts/validate_driver.sh"][0] == b"trusted driver\n"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_ignores_unsafe_head_support_paths(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "a.sh", "committed\n")
+	_git_add(workspace, "a.sh")
+	_git_commit(workspace)
+	_write(workspace, "a.sh", "working\n")
+	members, stderr = _stage_with_modes(helper_dir, workspace, "head-support:../a.sh", "head-support:/a.sh")
+	assert members["a.sh"][0] == b"working\n"
+	assert "support_from_head" not in stderr
+
+
+@pytest.mark.parametrize("value,enabled,warns", (
+	(None, True, False),
+	("", True, False),
+	("TRUE", True, False),
+	("true", True, False),
+	("false", False, False),
+	("False", False, False),
+	("bogus-value", False, True),
+))
+def test_support_from_head_switch(tmp_path: Path, value, enabled, warns) -> None:
+	env = {"PATH": os.environ["PATH"]}
+	if value is not None:
+		env["VALIDATION_SANDBOX_SUPPORT_FROM_HEAD_ENABLED"] = value
+	out = subprocess.run(
+		["bash", "-c", f'source "{HELPER}"; sandbox_support_from_head_enabled'],
+		capture_output=True, text=True, env=env, timeout=30, cwd=tmp_path,
+	)
+	assert (out.returncode == 0) is enabled, out
+	assert ("reason=support_from_head_invalid_switch" in out.stderr) is warns, out.stderr
+	assert "bogus-value" not in out.stderr
+
+
+def test_cmd_run_passes_head_support_paths_after_the_driver_overlay() -> None:
+	text = HELPER.read_text(encoding="utf-8")
+	body = text.split("cmd_run()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "sandbox_log run ok staged" in body, "cmd_run slice is wrong"
+	overlay = body.index('overlays+=("scripts/validate_driver.sh=${SANDBOX_HELPER_DIR}/validate_driver.sh")')
+	gate = body.index("if sandbox_support_from_head_enabled; then")
+	assert overlay < gate
+	gated = body[gate:body.index("\n\tfi\n", gate)]
+	for path in (
+		"scripts/validate_process.sh",
+		"scripts/validation_harness_sandbox.sh",
+		"scripts/codex_isolated_workspace.py",
+		"scripts/templates/slot_manifest.schema.json",
+	):
+		assert path in gated, path
+	assert 'head_support_args+=("head-support:${head_support_path}")' in gated
+	assert body.count("head_support_args+=") == 1
+	assert 'python3 -I -c "${STAGE_PY}" "${SANDBOX_HELPER_DIR}" "${workspace}" "${head_support_args[@]}" "${overlays[@]}"' in body

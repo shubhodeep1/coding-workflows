@@ -898,6 +898,11 @@ for root in ("validation",):
 			for filename in filenames:
 				names.add(str((Path(dirpath) / filename).relative_to(workspace)))
 names.add(".ai/validate.yml")
+# `head-support:<path>` arguments name support helpers whose committed HEAD
+# blob is staged instead of the working-tree file (#8065). The prefix is
+# checked first, so a path is never read as a `dest=src` overlay.
+HEAD_SUPPORT_PREFIX = "head-support:"
+head_support_paths = set()
 overlays = {}
 # "HEAD:<path>" arguments name support files the host overwrote with trusted
 # copies; the screened copy takes their committed bytes instead (stage_from_head).
@@ -905,6 +910,13 @@ overlays = {}
 support_from_head = set()
 support_from_head_dirs = []
 for item in overlay_args:
+	if item.startswith(HEAD_SUPPORT_PREFIX):
+		requested = item[len(HEAD_SUPPORT_PREFIX):]
+		parts = Path(requested).parts
+		if requested and not requested.startswith("/") and ".." not in parts and "." not in parts \
+			and "//" not in requested and not requested.endswith("/") and all(c not in requested for c in "\0\n\r"):
+			head_support_paths.add(requested)
+		continue
 	if item.startswith("HEAD:") and "=" not in item:
 		head_name = item[len("HEAD:"):]
 		if head_name and not head_name.startswith("/") and ".." not in head_name.split("/"):
@@ -1051,9 +1063,66 @@ def add_npmrc(path, arcname):
 	out.addfile(member, io.BytesIO(data))
 	return None
 
+def head_blob(name):
+	"""Return (mode, bytes) of the regular HEAD blob at name, else None."""
+	git = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+	try:
+		listing = subprocess.run(
+			git + ["ls-tree", "-z", "HEAD", "--", name],
+			cwd=workspace, env=env, capture_output=True, timeout=60,
+		)
+		if listing.returncode != 0:
+			return None
+		records = [record for record in listing.stdout.split(b"\0") if record]
+		if len(records) != 1:
+			return None
+		meta, _, path = records[0].partition(b"\t")
+		fields = meta.split(b" ")
+		if len(fields) != 3 or path.decode("utf-8", "surrogateescape") != name:
+			return None
+		mode, kind, oid = (field.decode("ascii") for field in fields)
+		if kind != "blob" or mode not in ("100644", "100755") or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", oid):
+			return None
+		# Check the size first so an oversized blob is never read into memory.
+		size = subprocess.run(
+			git + ["cat-file", "-s", oid],
+			cwd=workspace, env=env, capture_output=True, timeout=60,
+		)
+		if size.returncode != 0 or not 0 <= int(size.stdout.strip()) <= 8 * 1024 * 1024:
+			return None
+		blob = subprocess.run(
+			git + ["cat-file", "blob", oid],
+			cwd=workspace, env=env, capture_output=True, timeout=60,
+		)
+		# A support helper is small; refuse an oversized blob (fall back).
+		if blob.returncode != 0 or len(blob.stdout) > 8 * 1024 * 1024:
+			return None
+		return mode, blob.stdout
+	except (OSError, subprocess.SubprocessError, ValueError):
+		return None
+
+def add_head_blob(name, mode, data):
+	member = tarfile.TarInfo(name)
+	member.size = len(data)
+	member.mode = 0o755 if mode == "100755" else 0o644
+	try:
+		member.mtime = int(os.lstat(workspace / name).st_mtime)
+	except OSError:
+		member.mtime = 0
+	out.addfile(member, io.BytesIO(data))
+
 for name in sorted(names):
 	if name in overlays:
 		continue
+	if name in head_support_paths and name in git_listed and readonly_allowed(name):
+		committed = head_blob(name)
+		if committed is not None:
+			add_head_blob(name, *committed)
+			stage_log("ok", "support_from_head", name)
+			continue
+		# Not a regular HEAD blob, or the git read failed: say so, then stage
+		# the working-tree copy as before.
+		stage_log("skip", "support_from_head_unavailable", name)
 	special = None
 	if not readonly_allowed(name):
 		special = stage_special_kind(name) if name in git_listed else None
@@ -1174,6 +1243,22 @@ cmd_ingest_logs()
 	sandbox_log copyback ok
 }
 
+# Off switch for staging support helpers from HEAD (#8065). Unset, empty or
+# `true` (any letter case) is on; `false` is off; any other value is off with
+# a warning that never prints the value. Defaulted here: validate.yml does
+# not forward it.
+sandbox_support_from_head_enabled()
+{
+	local value="${VALIDATION_SANDBOX_SUPPORT_FROM_HEAD_ENABLED-}"
+	value="${value,,}"
+	case "${value}" in
+		""|true) return 0 ;;
+		false) return 1 ;;
+	esac
+	printf '::warning::VALIDATION_HARNESS_SANDBOX phase=stage outcome=skip reason=support_from_head_invalid_switch\n' >&2
+	return 1
+}
+
 sandbox_work_dir()
 {
 	printf '%s/work/%s' "$(sandbox_home)" "${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
@@ -1210,7 +1295,7 @@ cmd_run()
 	require_sudo run
 	id -u "${VALIDATION_HARNESS_SANDBOX_USER}" >/dev/null 2>&1 || sandbox_fail run sandbox_user_missing
 	local home work workspace entry_rel stage_status extract_status harness_exit copyback_dest state_base pidfile started
-	local -a overlays=()
+	local -a overlays=() head_support_args=()
 	home="$(sandbox_home)"
 	work="$(sandbox_work_dir)"
 	workspace="$(pwd -P)"
@@ -1266,6 +1351,19 @@ cmd_run()
 		"HEAD:scripts/render_validation_templates.py"
 		"HEAD:workflow-templates/validation-harness/"
 	)
+	# Stage these support helpers from their committed HEAD blob, not from the
+	# working tree a staging step may have overwritten (#8065). Untracked or
+	# non-regular paths keep the working-tree copy; the overlay above wins.
+	if sandbox_support_from_head_enabled; then
+		local head_support_path
+		for head_support_path in \
+			scripts/validate_process.sh \
+			scripts/validation_harness_sandbox.sh \
+			scripts/codex_isolated_workspace.py \
+			scripts/templates/slot_manifest.schema.json; do
+			head_support_args+=("head-support:${head_support_path}")
+		done
+	fi
 
 	cmd_cleanup >/dev/null 2>&1 || true
 	ensure_pidns_state_dir run
@@ -1276,7 +1374,7 @@ cmd_run()
 	build_sandbox_env "${home}" "${work}/.tmp" "$(sandbox_docker_host)"
 	as_sandbox mkdir -p -- "${work}/.tmp" || sandbox_fail run work_dir_failed
 	set +e
-	python3 -I -c "${STAGE_PY}" "${SANDBOX_HELPER_DIR}" "${workspace}" "${overlays[@]}" "${support_from_head_args[@]}" \
+	python3 -I -c "${STAGE_PY}" "${SANDBOX_HELPER_DIR}" "${workspace}" "${head_support_args[@]}" "${overlays[@]}" "${support_from_head_args[@]}" \
 		| as_sandbox tar -x --no-same-owner --no-same-permissions -C "${work}" -f -
 	stage_status=("${PIPESTATUS[@]}")
 	set -e
