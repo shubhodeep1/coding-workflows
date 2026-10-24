@@ -2469,8 +2469,15 @@ jobs:
       # then carried the merge-train step (moved out in #7766), so this step
       # runs in group 3 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
+      # Moved from group 3, which took 15m08s of its 20 minutes on main (run
+      # 40112590944, budget-watch issue #8072); group 1 carries no moved-in
+      # steps since #7766, so it has the most headroom. Step timings were not
+      # readable from CI and not measurable in the implement sandbox (PyYAML
+      # was missing, so this step and the Claude engine judges step failed at
+      # collection), so the plan's default applied: only this step moved, and
+      # the two #7689 steps below stay in group 3.
       - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
-        if: strategy.job-index == 3
+        if: strategy.job-index == 1
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py
