@@ -16055,6 +16055,8 @@ def test_validation_harness_hold_invalid_since_expires():
 	for since in ("__missing__", "garbage", _hold_since(-365)):
 		result = _run_harness_tick(pin=_HARNESS_OWNER_SUPPORT, since=since)
 		_assert_harness_hold_expired(result, reason="since_invalid")
+		bodies = "\n".join(_harness_comment_bodies(result))
+		assert "start time" in bodies and "day limit" not in bodies, bodies
 
 
 def test_validation_harness_hold_bounce_wins_over_expiry():
@@ -16146,6 +16148,7 @@ def test_validation_harness_judge_hold_request_enters_hold():
 	)
 	warnings = [n for n in result["telegram_notifications"] if n["level"] == "WARNING" and "waiting for a harness fix" in n["message"]]
 	assert len(warnings) == 1, result["telegram_notifications"]
+	assert "harness_error" not in warnings[0]["message"], warnings[0]["message"]
 	assert _judge_line("held", pin=_HARNESS_OWNER_SUPPORT) in output, output
 	assert result["validation_dispatches"] == []
 	assert "ai:harness-broken" in result["tracking_labels"]
@@ -16169,6 +16172,15 @@ def test_validation_harness_judge_hold_request_used_once():
 	ls = result["latest_state"] or result["state_on_disk"]
 	assert "validation_harness_hold" not in ls
 	assert f"fp={_JUDGE_FP}" not in output
+
+	# A request at or below the highest consumed id was already seen, even
+	# after its own id left the 50-id list.
+	evicted = _run_judge_request(
+		[_judge_request_comment()], state_extra={"validation_harness_hold_requests_used": [3]},
+	)
+	ls_evicted = evicted["latest_state"] or evicted["state_on_disk"]
+	assert "validation_harness_hold" not in ls_evicted
+	assert f"fp={_JUDGE_FP}" not in evicted["stdout"] + evicted["stderr"]
 
 	# After an expiry the consumed request cannot re-enter the hold.
 	expired = _run_judge_request(
