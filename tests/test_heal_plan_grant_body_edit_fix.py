@@ -120,6 +120,30 @@ def test_gate_approves_plan_inside_heal_scope(tmp_path: Path) -> None:
 	assert not grant_out.exists()
 
 
+def test_gate_approves_the_issues_own_agents_fragment(tmp_path: Path) -> None:
+	# CLAUDE.md §30 requires an agents.d fragment; the marker never lists one (#8064).
+	record, code, _ = _gate(tmp_path, _plan("scripts/fix.py", "changelog.d/42-fix.md", "agents.d/42-fix.md"))
+	assert code == 0, record
+	assert record["decision"] == "approve" and record["reason"] == "heal_scope_verified"
+
+
+def test_gate_holds_another_issues_or_nested_agents_fragment(tmp_path: Path) -> None:
+	record, code, _ = _gate(tmp_path, _plan("scripts/fix.py", "agents.d/43-fix.md", "agents.d/42-x/fix.md", "agents.md"))
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED
+	assert record["reason"] == "heal_scope_plan_out_of_scope"
+	assert record["denied_paths"] == ["agents.d/43-fix.md", "agents.d/42-x/fix.md", "agents.md"]
+
+
+def test_heal_own_agents_fragment_entry_shape() -> None:
+	assert guard.heal_own_agents_fragment_entry("8064") == "agents.d/8064-*.md"
+	assert guard.heal_own_agents_fragment_entry(42) == "agents.d/42-*.md"
+	for bad in ("", None, "0", "042", "-1", "4 2", "42*", "1" * 11, "../1"):
+		assert guard.heal_own_agents_fragment_entry(bad) == "", bad
+	# The transfer validator and implement_heal_preflight.sh accept/emit this shape.
+	assert 'printf \'agents.d/%s-*.md\\n\' "${ISSUE_NUMBER}"' in (ROOT / "scripts/implement_heal_preflight.sh").read_text()
+	assert r'agents\.d/[1-9][0-9]{0,9}-\*\.md' in (ROOT / "scripts/review_untrusted_workspace.py").read_text()
+
+
 def test_gate_holds_out_of_scope_path(tmp_path: Path) -> None:
 	record, code, grant_out = _gate(tmp_path, _plan("scripts/fix.py", "scripts/other.sh", "README.md"))
 	assert code == guard.EXIT_AUTOMATION_UNGRANTED

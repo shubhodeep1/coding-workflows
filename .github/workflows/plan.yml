@@ -2726,10 +2726,12 @@ jobs:
                     (if ($safe | length) > 0 then ($safe[:50] | map("- `" + . + "`") | join("\n")) else "_(no plan paths could be read)_" end),
                     (if ($paths | length) > 50 then "- ... and \(($paths | length) - 50) more" else empty end),
                     (if $dropped > 0 then "_(\($dropped) unsafe character(s) removed for display)_" else empty end),
-                    (if any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
+                    (if $reason != "heal_scope_plan_out_of_scope" and any($paths[]; endswith("/") or test("[*?\\[]")) then "_(A directory entry ending in `/` or a glob entry (`*`, `?`, `[`) cannot be granted through `files_touched`; reply `/approved` instead.)_" else empty end),
                     "",
                     (if $reason == "plan_files_outside_files_touched"
                       then "To proceed, a maintainer either adds these paths to the `files_touched` list in the issue body or asks for a narrower plan, then replies `/approved`. `/approved` alone does not help: the implement-time `files_touched` guard would still refuse these files."
+                    elif $reason == "heal_scope_plan_out_of_scope"
+                      then "`/approved` alone does not help: implementation copies back and commits only files inside the heal scope marker of this issue (plus its own `agents.d/<issue>-*.md` fragment), so it would refuse these files. To proceed, a maintainer either asks for a plan inside the scope with `/reclarify`, or fixes the defect outside the heal pipeline (an interactive session or an ordinary issue) and closes this one. Do not edit the issue body: the scope of a workflow-heal issue comes from its scope marker, not `files_touched`, and an edit by anyone but the pipeline makes implementation refuse the issue."
                     elif ($heal == "true" or ($reason | startswith("heal_scope_")))
                       then "To proceed, a maintainer reviews the plan and replies `/approved`. Do not edit the issue body: the scope of a workflow-heal issue comes from its scope marker, not `files_touched`, and an edit by anyone but the pipeline makes implementation refuse the issue."
                       else "To proceed, a maintainer reviews the plan and replies `/approved`. When `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is `true`, a trusted OWNER/MEMBER/COLLABORATOR can instead add these exact paths to the `files_touched` list in the issue body (stall recovery re-checks the grant). The implement commit-time automation-path guard still applies either way." end),
@@ -2887,6 +2889,10 @@ jobs:
                     echo "The plan changes files outside the issue's \`files_touched\` list, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason}\`)."
                     echo "Plan files outside \`files_touched\`: \`${plan_gate_paths:-none}\`"
                     echo "A maintainer adds these paths to the issue's \`files_touched\` list or asks for a narrower plan, then replies \`/approved\`. \`/approved\` alone does not help: the implement-time \`files_touched\` guard would still refuse these files."
+                  elif [ "${plan_gate_reason:-}" = "heal_scope_plan_out_of_scope" ]; then
+                    echo "The plan changes files outside the verified workflow-heal scope, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason}\`)."
+                    echo "Plan files outside the heal scope: \`${plan_gate_paths:-none}\`"
+                    echo "\`/approved\` alone does not help: implementation enforces the heal scope marker of this issue. A maintainer asks for a plan inside the scope with \`/reclarify\`, or fixes the defect outside the heal pipeline."
                   else
                     echo "The plan lists automation paths, so no automatic \`/approved\` was posted (reason \`${plan_gate_reason:-plan_gate_error}\`)."
                     echo "Protected paths without an exact grant: \`${plan_gate_paths:-none}\`"
