@@ -1579,7 +1579,7 @@ What this means for operators: the run ids of preserved unlinked runs are in the
 
 - **The release gate's review wait stops probing a job log it cannot read.** After 3 failed fetches of `/actions/jobs/{id}/logs` in a row, the Phase 4 wait in `test-and-mark-stable.yml` skips that endpoint for 300 seconds; release run 35696603462 made 275 failed fetches in about an hour.
 
-Status and conclusion polling continue during the pause, and the log counts as empty, as it does after a failed fetch. A successful fetch resets the count. The pause covers all three job-log fetches of the wait: the live-log shortcut fetch, the log-size fetch and the bait-coverage check. During the pause that check logs `reason=live_log_cooldown`, does not count the skip toward the 3 unreadable checks that drop a completed run, and reads the log again once the pause ends.
+Status and conclusion polling continue during the pause, and the log counts as empty, as it does after a failed fetch. A successful fetch resets the count. The pause covers all three job-log fetches of the wait: the live-log shortcut fetch, the log-size fetch and the bait-coverage check. Status and conclusion polling continue during the pause, and the log counts as empty, as it does after a failed fetch. A successful fetch resets the count. The pause covers all three job-log fetches of the wait: the live-log shortcut fetch, the log-size fetch and the bait-coverage check. During the pause that check logs `reason=live_log_cooldown` for a run still in progress, does not count the skip toward the 3 unreadable checks that drop a completed run, and reads the log again once the pause ends. Once the watched run has completed, the check reads its job logs even during a pause, because they are finished logs rather than the live logs the pause throttles; release run 40005654539 timed out when a pause skipped the coverage read of a review run that had completed 22 seconds inside the Phase 4 budget.
 
 What this means for release operators: a review wait whose job logs cannot be read keeps polling the run's status, but sends far fewer failing log requests.
 
@@ -3420,7 +3420,7 @@ The same run's orchestrate-decompose timeout had a different cause: the dispatch
 
 `tests/test_test_and_mark_stable_plan_polling_guard.py` adds a regression test for an Implement run behind a full page of unrelated runs, plus tests for other issues' runs and the label-return log line.
 
-- **The release gate's Phase 4 review wait no longer gives up on a review run that is still working.** Once its 90-minute total budget runs out, "Phase 4: Wait for review & autofix to complete" keeps waiting while the watched review run is queued, or in progress and active. It never waits past the point that would leave too little time for Phase 4b, Phase 6, Phase 7 and finalization.
+- **The release gate's Phase 4 review wait no longer gives up on a review run that is still working.** Once its 90-minute total budget runs out, "Phase 4: Wait for review & autofix to complete" keeps waiting while the watched review run is queued, or in progress and active. The existing inactivity timeout (`REVIEW_TIMEOUT`, 60 minutes by default) still applies, so a run that stays queued with no activity for that long still ends the phase. It never waits past the point that would leave too little time for Phase 4b, Phase 6, Phase 7 and finalization.
 
 Run 39969947939 failed with `Review phase exceeded its 90-minute total wall-clock budget` six minutes after the editor had pushed its fix commit. The run being watched was in its last bookkeeping step, and the job still had about 80 minutes of unused budget. The bait-covering review can wait in the `pr-autofix-<PR>` concurrency group behind the review that ran when the PR opened, so a single Phase 4 can cover two review runs back to back.
 
@@ -3435,13 +3435,13 @@ Run 39969947939 failed with `Review phase exceeded its 90-minute total wall-cloc
 - Apart from the one handoff poll below, the wait is extended only while the run's ID is numeric, the run is not one already found not to cover the bait commit, and its status is `queued`, `pending`, `waiting` or `requested`, or `in_progress` with activity inside the inactivity window or a current step younger than the per-step stall cap. The inactivity timeout, the per-step stall cap and the bait-coverage checks are unchanged.
 - When the loop has just dropped the watched run (it did not review the bait commit, or its coverage could not be confirmed) or moved on from a cancelled run to the new PR head, it gets one more poll to find the next run, as long as the ceiling has not passed. That allowance is used up by the next deadline check, so if that poll finds no eligible run the phase times out. Before this, the check judged the dropped run and timed out before the queued bait-covering run was ever polled.
 - A poll past the base deadline starts only when it and its `POLL_INTERVAL` sleep still end before the ceiling.
-- The first extension logs `E2E_REVIEW_DEADLINE_EXTENDED run=<id> status=<status> base=<epoch> ceiling=<epoch>` once. The prefix is registered in `agents.d/8004-phase4-review-deadline-extension.md`.
+- The first extension logs `E2E_REVIEW_DEADLINE_EXTENDED run=<id> status=<status> base=<epoch> ceiling=<epoch>` once. The prefix is registered under "Stable log prefixes (contractual)" in `agents.md`.
 
 What this means for consumer repos: nothing. This only changes the release gate in coding-workflows, which consumer repos do not run.
 
 ### For contributors
 
-The extension logic sits between `# BEGIN/END phase4 review deadline extension (#8004)` in `.github/workflows/test-and-mark-stable.yml`. Tests: new cases in `tests/test_test_and_mark_stable_review_blocked_budget.py` run that block with a fixed clock.
+The extension logic sits between `# BEGIN/END phase4 review deadline extension (#8004)` in `scripts/stable_e2e_step_wait_review.sh`, the Phase 4 step body that `.github/workflows/test-and-mark-stable.yml` sources (#7991). Tests: new cases in `tests/test_test_and_mark_stable_review_blocked_budget.py` run that block with a fixed clock.
 
 - **Refused AI engine fallbacks now open heal issues.** Before this, the heal intake dropped every `engine_fallback` report as `scope_unavailable_no_runs`, after running the diagnosis model, because the report named no run to scope the issue to. A refusal in clarify, plan, orchestrate, security audit, validate or the poller therefore reached nobody except a Telegram WARNING.
 
