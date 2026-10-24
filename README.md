@@ -1277,15 +1277,19 @@ the other wrappers listed in
 contents API, diffs them against the
 [`workflow-templates/`](workflow-templates/) copies of the current `stable`
 release (read from the `stable` tag, not `main`) rendered with that release's
-SHA and renderer, and reports drift (including stale pins). For every drifted
-consumer it then opens, or refreshes, one restore pull request from the branch
+SHA and renderer, and reports drift (including stale pins). For every
+consumer whose managed wrappers differ from the release bytes (including
+differences the drift report ignores, such as trailing whitespace or the old
+managed header) it then opens, or refreshes, one restore pull request from the branch
 `auto/restore-managed-workflows` that puts each managed wrapper back to the
 exact release bytes; the body carries the marker
 `<!-- coding-workflows:restore-managed-workflows:v1 -->`, so reruns update the
 same pull request (and skip the push when nothing changed). A consumer with an
 open sync pull request (`auto/update-workflows-*` or `ai-sync/stable`) is
 skipped, because that pull request already restores every wrapper. The
-updater is never created by a restore pull request (it stays bootstrap-only).
+updater is never created by a restore pull request (it stays bootstrap-only),
+and an existing `auto/restore-managed-workflows` branch that the audit did not
+write is left alone (`reason=restore_branch_not_owned`).
 Each repository logs one `DRIFT_REPAIR repository=<r> outcome=created|updated|unchanged|skipped|error reason=<token>`
 line; the run summary and the Telegram alert list the results. Set
 `CONSUMER_DRIFT_REPAIR_ENABLED=false` in this repository to keep the alert
