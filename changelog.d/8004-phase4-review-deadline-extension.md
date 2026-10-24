@@ -6,11 +6,11 @@ Run 39969947939 failed with `Review phase exceeded its 90-minute total wall-cloc
 | The numbers that matter | Value |
 | --- | --- |
 | Phase 4 base budget (unchanged) | 90 minutes (`REVIEW_STEP_TIMEOUT` 75 + `REVIEW_PHASE_HANDOFF_BUDGET_MINUTES` 15) |
-| Latest point Phase 4 can still be waiting, with defaults | job start + 215 minutes (300 − 25 − 30 − 10 − 20) |
+| Latest point Phase 4 can still be waiting, with defaults | job start + 215 minutes (300 - 25 - 30 - 10 - 20) |
 | Job timeout (unchanged) | 300 minutes |
 | New GitHub API calls | 0 |
 
-- The ceiling is `E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES − EDITOR_RETRY_BUDGET_MINUTES − PHASE_TIMEOUT − PHASE7_WAIT_BUDGET_MINUTES − E2E_FINALIZATION_RESERVE_MINUTES) × 60`, never below the base deadline. This is the job-start cap Phase 4b already uses, and it also reserves Phase 4b's budget. With no recorded job start, nothing is extended.
+- The ceiling is `E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - EDITOR_RETRY_BUDGET_MINUTES - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60`, never below the base deadline. This is the job-start cap Phase 4b already uses, and it also reserves Phase 4b's budget. With no recorded job start, nothing is extended.
 - Apart from the one handoff poll below, the wait is extended only while the run's ID is numeric, the run is not one already found not to cover the bait commit, and its status is `queued`, `pending`, `waiting` or `requested`, or `in_progress` with activity inside the inactivity window or a current step younger than the per-step stall cap. The inactivity timeout, the per-step stall cap and the bait-coverage checks are unchanged.
 - When the loop has just dropped the watched run (it did not review the bait commit, or its coverage could not be confirmed) or moved on from a cancelled run to the new PR head, it gets one more poll to find the next run, as long as the ceiling has not passed. That allowance is used up by the next deadline check, so if that poll finds no eligible run the phase times out. Before this, the check judged the dropped run and timed out before the queued bait-covering run was ever polled.
 - A poll past the base deadline starts only when it and its `POLL_INTERVAL` sleep still end before the ceiling.

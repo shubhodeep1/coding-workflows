@@ -16,6 +16,7 @@ from runpy import run_path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
+from agents_doc import agents_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -809,6 +810,10 @@ def test_phase4_deadline_check_uses_extension_and_logs_once() -> None:
 	# The extension never bypasses the inactivity or per-step stall checks.
 	assert 'if [ $IDLE -ge $INACTIVITY_LIMIT ]; then' in step
 	assert 'REVIEW_STEP_TIMEOUT_MAX=90' in step
+	# The prefix stays registered as a stable log prefix (fragment or folded agents.md).
+	agents = agents_text()
+	assert "- `E2E_REVIEW_DEADLINE_EXTENDED`" in agents
+	assert "LOG_PREFIX.name=E2E_REVIEW_DEADLINE_EXTENDED" in agents
 
 
 def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:
