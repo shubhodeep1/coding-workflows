@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary_b.txt:2 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The decompose-run ID was incorrect in the provided PR.\n  WHY: The reviewer claims the test expects ID `40068500779` but the integration branch has the old ID. The source labels this SEVERITY: BLOCKER, mapped here to critical. The other reviewers found no issue and said the diff sets the required value.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Line 2 must be `decompose-run: 40068500779`.\n  expected_change_site: tests/e2e_smoke_canary_b.txt\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer concluded the diff applies the change and the requirement is satisfied, but it flagged the entry as a NIT while saying it could not confirm the ID against the task description.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary_b.txt:2 | severity=BLOCKER | confidence=5\n  PROBLEM: The decompose-run ID was incorrect in the provided PR.\n  WHY: The test will fail because it expects the specific ID `40068500779` to be present, but the current file content on the integration branch (based on the original issue description) has the old ID.\n- TASK_GAP:\n  Requirement: Line 2 must be `decompose-run: 40068500779`.\n  Expected change site: tests/e2e_smoke_canary_b.txt\n  Evidence of absence: The LAST RUN DIFF shows that the update to `tests/e2e_smoke_canary_b.txt` has been applied, but the requirement is to ensure this exact value is present. Since the PR diff indicates the change is applied, the task appears to be completed, but I must verify if this is the correct ID based on the task description. The requirement is satisfied by the current diff.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f6fab3988732cc70dec16654972d634a9b85c4e2d860c521b35c03a230ff26ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8061,
+    "run_id": "40076385102",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40076385102",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024081038_60a51b0c2d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8061,
+    "run_id": "40076385102"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-24T08:10:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
