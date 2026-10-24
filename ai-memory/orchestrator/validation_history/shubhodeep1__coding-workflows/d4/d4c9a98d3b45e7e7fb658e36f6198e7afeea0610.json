@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "## \u274c Runtime validation harness error Runtime validation of the integration branch orchestrator/project-7913 failed in exactly one repo check: `python3 tests/test_validate_process_template_mode.py`.",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": "harness_error",
+      "recorded_at": "2026-10-24T10:04:05Z",
+      "run_attempt": 1,
+      "run_id": 40083109127,
+      "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40083109127",
+      "source": "orchestrate_poll.mark_validation_failed"
+    }
+  ],
+  "integration_sha": "d4c9a98d3b45e7e7fb658e36f6198e7afeea0610",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
