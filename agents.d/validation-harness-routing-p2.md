@@ -1,0 +1,15 @@
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `VALIDATION_HARNESS_HOLD` (`scripts/orchestrate_poll_process.sh`, the validation harness hold of plan `docs/plans/validation-failure-harness-routing-plan.md` Phase 2: `tracking_issue= outcome=held|waiting|resumed|bounced|expired|capped|not_planned|skip|unknown fp=<64hex|local:<16hex>|judge:<12hex>|unknown> pin=<40hex|unknown> heal_issue=<n|none> [reason=]`; `skip` reasons `hold_active|not_validation_failure|identity_unavailable` come from the unblock judge's hold request, `expired` without a reason is the `VALIDATION_HARNESS_HOLD_MAX_DAYS` limit and `reason=since_invalid` a missing, unparseable or future `since`; also `::warning::VALIDATION_HARNESS_HOLD config=<name> outcome=default reason=invalid_value` for a bad tunable and `outcome=pin_unresolved|marker_lookup_failed|state_write_failed|hold_clear_failed|unblock_skip_write_failed` warnings)
+LOG_PREFIX.name=VALIDATION_HARNESS_HOLD
+
+<!-- agents: section="Orchestrator tracking-issue comment markers" -->
+The validation harness hold (plan `docs/plans/validation-failure-harness-routing-plan.md`, Phase 2) adds four markers on the tracking issue. Each is the last non-empty line of its comment. The poller writes the first three; it trusts the fourth only from `VALIDATION_HARNESS_ROUTE_LOGIN` (default the `GH_PAT` login).
+
+| Marker | Writer | Purpose |
+|---|---|---|
+| `<!-- validation-harness-hold:v1 fp=<fp> support=<40hex\|unknown> -->` | poller (`_validation_harness_hold_finish`) | The project entered the hold and waits for a harness fix; `fp` is the owner fingerprint, a `local:<16hex>` hash or `judge:<12hex>`. |
+| `<!-- validation-harness-resume:v1 fp=<fp> pin=<40hex> -->` | poller (`_validation_harness_hold_resume`) | Validation was re-dispatched after the pinned workflow moved ahead of the hold's pin; recovery counters were kept. |
+| `<!-- validation-harness-bounce:v1 fp=<fp> -->` | poller (`_validation_harness_hold_bounce`) | The heal intake returned the failure to the project; the hold ended and one recovery attempt was charged. |
+| `<!-- ai:unblock-harness-hold-request:v1 item=<N> ... fingerprint=<12hex> ... -->` | unblock judge (Phase 3) | Asks the poller to hold failed project `<N>` (with `ai:validation-failed`) for a harness fix under `fp=judge:<12hex>`. `item` must be the tracking issue, keys must not repeat, and other fields are ignored. |
+
+State: `validation_harness_hold` (`fp`, `support`, `heal_issue`, `outcome`, `since`, `reason`), `validation_harness_resumes` (`by_fp`, `total`; kept by `/revalidate`) and `validation_harness_hold_requests_used` (the last 50 consumed request comment ids; every pending trusted request is consumed whatever the outcome, and the list survives the end of a hold, so a request is used once). A hold older than `VALIDATION_HARNESS_HOLD_MAX_DAYS` (default 14) ends with the needs-human park and a CRITICAL alert; a bounce marker on the same tick wins over the time limit. A `judge:` hold counts as active on any validation failure, not only `raw_status=harness_error`.

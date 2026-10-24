@@ -15295,10 +15295,12 @@ validation_harness_local_fp() {
 }
 
 # 0 only while the switch is on, the project is failed and a hold is recorded.
+# A hold the unblock judge requested (fp `judge:<12 hex>`, P2c) counts on any
+# validation failure; every other hold needs raw_status=harness_error.
 validation_harness_hold_active() {
   [ "${VALIDATION_HARNESS_HEAL_ENABLED:-true}" != "false" ] || return 1
   [ -f "${STATE_FILE:-/dev/null}" ] || return 1
-  jq -e '(.status == "failed") and ((.validation_harness_hold | type) == "object") and (.validation_last_raw_status == "harness_error")' "${STATE_FILE}" >/dev/null 2>&1
+  jq -e '(.status == "failed") and ((.validation_harness_hold | type) == "object") and ((.validation_last_raw_status == "harness_error") or (((.validation_harness_hold.fp // "") | tostring) | startswith("judge:")))' "${STATE_FILE}" >/dev/null 2>&1
 }
 
 # Completion-status line for an active hold.
@@ -15315,9 +15317,16 @@ validation_harness_hold_status_line() {
 }
 
 # Labels, comment, completion status and alert of a project that entered the
-# harness hold. The state field was already written by mark_validation_failed.
+# harness hold. The state field was already written by mark_validation_failed
+# or, for source `judge`, by validation_harness_judge_hold_request.
+# Args: <reason> <fp> <support|unknown> [source: validation (default) | judge]
 _validation_harness_hold_finish() {
-  local vhf_reason="$1" vhf_fp="$2" vhf_support="$3"
+  local vhf_reason="$1" vhf_fp="$2" vhf_support="$3" vhf_source="${4:-validation}" vhf_cause
+  if [ "${vhf_source}" = "judge" ]; then
+    vhf_cause="The unblock judge found that this failure belongs to the validation harness coding-workflows ships and asked the poller to wait for a harness fix."
+  else
+    vhf_cause="The latest validation run reported \`raw_status=harness_error\`."
+  fi
   # Keep the project out of this tick's unblock scan too: the per-project
   # loop only records holds that were already active when the tick started.
   if [ -n "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE:-}" ]; then
@@ -15331,7 +15340,7 @@ _validation_harness_hold_finish() {
 
 ${vhf_reason}
 
-The latest validation run reported \`raw_status=harness_error\`. The project stays failed with \`ai:validation-failed\` and \`ai:harness-broken\`, and recovery counters were left unchanged. Validation resumes once a harness fix ships in the pinned workflow; \`/revalidate\` resumes it now.
+${vhf_cause} The project stays failed with \`ai:validation-failed\` and \`ai:harness-broken\`, and recovery counters were left unchanged. Validation resumes once a harness fix ships in the pinned workflow; \`/revalidate\` resumes it now.
 
 - Fingerprint: \`${vhf_fp}\`
 - Harness pin: \`${vhf_support}\`
@@ -15353,13 +15362,17 @@ The latest validation run reported \`raw_status=harness_error\`. The project sta
 # ---------------------------------------------------------------------------
 # Validation harness hold: per-tick check and resume (Refs #7913, plan
 # docs/plans/validation-failure-harness-routing-plan.md Phase 2 steps 2 and 4,
-# "Hold and resume (Phase 2, poller)" items 1-5). The time limit and the
-# judge hold request come with P2c.
+# "Hold and resume (Phase 2, poller)" items 1-5), plus the P2c time limit and
+# the unblock judge's hold request (validation_harness_judge_hold_request).
 #
-# Per held project per tick: the routing marker is read from COMMENTS and the
-# pin with a local `git show` (no API calls). Only after the pin changed does
-# the tick read the harness repo: at most one compare and one issue GET, both
-# memoized by key in the caches below (one poller process is one tick), plus
+# Per held project per tick: the routing marker is read from COMMENTS, the
+# time limit from the hold's `since` in the state file (a bounce still wins
+# over it), and the pin with a local `git show` (no API calls). A hold older
+# than VALIDATION_HARNESS_HOLD_MAX_DAYS, or with a missing, unparseable or
+# future `since`, ends with today's park and a CRITICAL alert before any API
+# read. Only after the pin changed does the tick read the harness repo: at
+# most one compare and one issue GET, both memoized by key in the caches below
+# (one poller process is one tick), plus
 # one pin-commit GET only when the compare lists fewer commits than it counts.
 # ---------------------------------------------------------------------------
 declare -gA _VALIDATION_HARNESS_COMPARE_CACHE=()  # "<support>...<pin>" -> "<status>|<committer date>" or "__error__"
@@ -15712,6 +15725,32 @@ validation_harness_hold_tick() {
     esac
   fi
 
+  # Time limit (P2c, Q8; state file only, no API call). A missing, unparseable
+  # or future `since` fails closed to expiry so a malformed hold cannot wait
+  # forever.
+  local vht_since vht_since_epoch vht_now_epoch vht_expired_reason=""
+  vht_since="$(jq -r '(.validation_harness_hold.since // "") | tostring' "${STATE_FILE}" 2>/dev/null || echo '')"
+  vht_now_epoch="$(date -u +%s)"
+  vht_since_epoch="$(_iso8601_to_epoch "${vht_since}" || echo '')"
+  if ! [[ "${vht_since_epoch}" =~ ^[0-9]+$ ]] || [ "${vht_since_epoch}" -gt "$((vht_now_epoch + 86400))" ]; then
+    vht_expired_reason="since_invalid"
+  elif [ "$((vht_now_epoch - vht_since_epoch))" -ge "$((10#${VALIDATION_HARNESS_HOLD_MAX_DAYS:-14} * 86400))" ]; then
+    vht_expired_reason="max_days"
+  fi
+  if [ -n "${vht_expired_reason}" ]; then
+    [[ "${vht_since}" =~ ^[0-9TZ:.+-]{1,40}$ ]] || vht_since="unknown"
+    if ! _validation_harness_hold_end_park "expired" "The harness hold reached the ${VALIDATION_HARNESS_HOLD_MAX_DAYS:-14}-day limit (held since ${vht_since}) without a harness fix shipping."; then
+      _validation_harness_hold_log "unknown" "${vht_fp}" "unknown" "${vht_issue}" "state_write_failed"
+      return 0
+    fi
+    if [ "${vht_expired_reason}" = "since_invalid" ]; then
+      _validation_harness_hold_log "expired" "${vht_fp}" "unknown" "${vht_issue}" "since_invalid"
+    else
+      _validation_harness_hold_log "expired" "${vht_fp}" "unknown" "${vht_issue}"
+    fi
+    return 10
+  fi
+
   # Step 2: pin (local read, no API call).
   if ! validation_harness_pin >/dev/null; then
     _validation_harness_hold_log "waiting" "${vht_fp}" "unknown" "${vht_issue}" "pin_unresolved"
@@ -15789,6 +15828,130 @@ validation_harness_hold_tick() {
   vht_rc=0
   _validation_harness_hold_resume "${vht_fp}" "${vht_pin}" "${vht_issue}" || vht_rc=$?
   return "${vht_rc}"
+}
+
+# Unblock judge hold request (Refs #7913, P2c). The judge (Phase 3) asks the
+# poller to hold a failed project for a harness fix with a tracking-issue
+# comment whose last non-empty line is
+#   <!-- ai:unblock-harness-hold-request:v1 item=<N> ... fingerprint=<12 hex> ... -->
+# Only comments by the route login count; item must be this tracking issue.
+# Requests are read from COMMENTS (no API call), and every pending trusted
+# request id is consumed once (state validation_harness_hold_requests_used,
+# last 50 ids) whatever the outcome, so a request never re-enters a hold that
+# expired or was cleared. Returns 10 when it entered a hold, otherwise 0.
+validation_harness_judge_hold_request() {
+  local vhq_login vhq_used vhq_pending vhq_count vhq_id vhq_ids vhq_fingerprint vhq_fp
+  local vhq_by_fp vhq_total vhq_support vhq_decision vhq_reason
+  [ "${VALIDATION_HARNESS_HEAL_ENABLED:-true}" != "false" ] || return 0
+  [ "${PROJECT_STATUS:-}" = "failed" ] || return 0
+  [ -f "${STATE_FILE:-/dev/null}" ] || return 0
+  validation_harness_route_login >/dev/null
+  vhq_login="$(validation_harness_route_login)"
+  if [ -z "${vhq_login}" ]; then
+    # Only worth a line when a request marker might be waiting.
+    if [[ "${COMMENTS:-}" == *"ai:unblock-harness-hold-request:v1"* ]]; then
+      echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=skip fp=unknown pin=unknown heal_issue=none reason=identity_unavailable"
+    fi
+    return 0
+  fi
+  vhq_used="$(jq -c '[(.validation_harness_hold_requests_used // []) | if type == "array" then .[] else empty end | select(type == "number" and . == floor and . > 0)]' "${STATE_FILE}" 2>/dev/null || echo '')"
+  # An unreadable list must not reopen consumed requests: act on nothing.
+  [ -n "${vhq_used}" ] || return 0
+  vhq_pending="$(printf '%s' "${COMMENTS:-[]}" | jq -c --arg login "${vhq_login}" --arg item "${TRACKING_NUM}" --argjson used "${vhq_used}" '
+    (if type == "array" then . else [] end)
+    | [ .[]
+        | select(type == "object" and ((.user.login // "") == $login))
+        | . as $c
+        | (($c.id // 0) | tonumber? // 0) as $id
+        | select($id > 0 and (($used | index($id)) == null))
+        | ((.body // "") | tostring | split("\n") | map(sub("\\s+$"; "")) | map(select(length > 0)) | last // "") as $last
+        | select($last | test("^<!-- ai:unblock-harness-hold-request:v1( [a-z_]+=[A-Za-z0-9._:#/-]{1,128})+ -->$"))
+        | ($last | sub("^<!-- ai:unblock-harness-hold-request:v1 "; "") | sub(" -->$"; "") | split(" ")
+            | map(capture("^(?<k>[a-z_]+)=(?<v>.+)$"))) as $fields
+        | select(($fields | map(.k) | length) == ($fields | map(.k) | unique | length))
+        | ($fields | from_entries) as $f
+        | select(($f.item // "") == $item)
+        | select(($f.fingerprint // "") | test("^[0-9a-f]{12}$"))
+        | {id: $id, fingerprint: $f.fingerprint, created_at: (($c.created_at // "") | tostring)}
+      ]
+    | sort_by(.created_at, .id)
+  ' 2>/dev/null || echo '[]')"
+  [ -n "${vhq_pending}" ] || vhq_pending='[]'
+  vhq_count="$(printf '%s' "${vhq_pending}" | jq -r 'length' 2>/dev/null || echo 0)"
+  [[ "${vhq_count}" =~ ^[0-9]+$ ]] && [ "${vhq_count}" -gt 0 ] || return 0
+  vhq_id="$(printf '%s' "${vhq_pending}" | jq -r 'last | .id | tostring' 2>/dev/null || echo '')"
+  vhq_fingerprint="$(printf '%s' "${vhq_pending}" | jq -r 'last | (.fingerprint // "")' 2>/dev/null || echo '')"
+  vhq_ids="$(printf '%s' "${vhq_pending}" | jq -c '[.[].id]' 2>/dev/null || echo '[]')"
+  if ! [[ "${vhq_id}" =~ ^[0-9]+$ ]] || ! [[ "${vhq_fingerprint}" =~ ^[0-9a-f]{12}$ ]]; then
+    return 0
+  fi
+  vhq_fp="judge:${vhq_fingerprint}"
+
+  vhq_decision="hold"
+  vhq_reason=""
+  if validation_harness_hold_active; then
+    vhq_decision="skip"
+    vhq_reason="hold_active"
+  elif ! has_label "${TRACKING_LABELS:-[]}" "ai:validation-failed" \
+    && ! has_label "${TRACKING_LABELS:-[]}" "ai:validate-failed"; then
+    vhq_decision="skip"
+    vhq_reason="not_validation_failure"
+  else
+    vhq_by_fp="$(jq -r --arg fp "${vhq_fp}" '(.validation_harness_resumes.by_fp[$fp] // 0) | tostring' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    vhq_total="$(jq -r '(.validation_harness_resumes.total // 0) | tostring' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    [[ "${vhq_by_fp}" =~ ^[0-9]{1,9}$ ]] || vhq_by_fp="0"
+    [[ "${vhq_total}" =~ ^[0-9]{1,9}$ ]] || vhq_total="0"
+    if [ "$((10#${vhq_by_fp}))" -ge "${VALIDATION_HARNESS_MAX_RESUMES_PER_FP:-2}" ] \
+      || [ "$((10#${vhq_total}))" -ge "${VALIDATION_HARNESS_MAX_RESUMES:-4}" ]; then
+      vhq_decision="capped"
+    fi
+  fi
+
+  vhq_support="unknown"
+  if [ "${vhq_decision}" = "hold" ]; then
+    validation_harness_pin >/dev/null || true
+    vhq_support="${_VALIDATION_HARNESS_PIN_VALUE:-}"
+    [[ "${vhq_support}" =~ ^[0-9a-f]{40}$ ]] || vhq_support="unknown"
+  fi
+
+  cp "${STATE_FILE}" "${STATE_FILE}.vhq_bak"
+  if ! { jq --argjson ids "${vhq_ids}" --arg decision "${vhq_decision}" --arg fp "${vhq_fp}" \
+      --arg support "${vhq_support}" --arg since "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --arg reason "unblock judge hold request (comment ${vhq_id})" '
+      ([(.validation_harness_hold_requests_used // []) | if type == "array" then .[] else empty end
+        | select(type == "number" and . == floor and . > 0)] + $ids) as $merged
+      | .validation_harness_hold_requests_used = (reduce $merged[] as $x ([]; if index([$x]) == null then . + [$x] else . end) | .[-50:])
+      | if $decision == "hold" then
+          .validation_harness_hold = {
+            fp: $fp,
+            support: (if $support == "unknown" then null else $support end),
+            heal_issue: null,
+            outcome: null,
+            since: $since,
+            reason: $reason
+          }
+        else . end
+    ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; } \
+    || ! post_state_comment; then
+    rm -f "${STATE_FILE}.tmp"
+    mv "${STATE_FILE}.vhq_bak" "${STATE_FILE}"
+    echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=unknown fp=${vhq_fp} pin=${vhq_support} heal_issue=none reason=state_write_failed"
+    return 0
+  fi
+  rm -f "${STATE_FILE}.vhq_bak"
+  case "${vhq_decision}" in
+    skip)
+      echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=skip fp=${vhq_fp} pin=unknown heal_issue=none reason=${vhq_reason}"
+      return 0
+      ;;
+    capped)
+      echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=capped fp=${vhq_fp} pin=unknown heal_issue=none"
+      return 0
+      ;;
+  esac
+  _validation_harness_hold_finish "The unblock judge asked the poller to hold this project for a harness fix (request comment ${vhq_id})." \
+    "${vhq_fp}" "${vhq_support}" "judge"
+  return 10
 }
 
 mark_validation_failed() {
@@ -25993,7 +26156,15 @@ This recovery runs once per project. Validation counters were kept (cycle ${VSP_
   # ---------------------------------------------------------------
   # Runs after /revalidate (which wins) and the stale-pin one-shot. Waiting
   # falls through to the remaining failed-project steps; acting ends the
-  # project's tick.
+  # project's tick. A trusted unblock-judge hold request (P2c) is honoured
+  # first, so a project it holds skips the tick check until the next tick.
+  if [ "${PROJECT_STATUS}" = "failed" ]; then
+    VHH_REQ_RC=0
+    validation_harness_judge_hold_request || VHH_REQ_RC=$?
+    if [ "${VHH_REQ_RC}" -eq 10 ]; then
+      continue
+    fi
+  fi
   if [ "${PROJECT_STATUS}" = "failed" ] && validation_harness_hold_active; then
     VHH_TICK_RC=0
     validation_harness_hold_tick || VHH_TICK_RC=$?
