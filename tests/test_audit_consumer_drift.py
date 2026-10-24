@@ -1220,6 +1220,34 @@ def test_repair_skips_a_checkout_with_a_symlinked_workflows_directory() -> None:
 		assert executor.gh_calls == []
 
 
+def test_repair_skips_a_checkout_whose_workflows_path_is_a_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-file-") as td:
+		tmp = Path(td)
+		repairer, executor, _rendered, _bare = _repair_fixture(tmp, [], {"ai-plan.yml": "x\n"})
+		work = tmp / "remotes" / "seed"
+		_run_git("rm", "-q", "-r", ".github/workflows", cwd=work)
+		(work / ".github").mkdir(exist_ok=True)
+		(work / ".github" / "workflows").write_text("not a directory\n", encoding="utf-8")
+		_run_git("add", "-A", cwd=work)
+		_run_git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "file", cwd=work)
+		_run_git("push", "-q", "origin", "HEAD:main", cwd=work)
+		result = repairer.repair("owner/repo", {"ai-plan.yml"})
+		assert result.outcome == "skipped" and result.reason == "unsafe_checkout", result
+		assert executor.gh_calls == []
+
+
+def test_profile_unknown_skip_is_reported_for_match_results() -> None:
+	class StubRepairer:
+		def repair(self, repository, profile_names):
+			assert profile_names is None
+			return drift_audit.RepairResult(repository=repository, outcome="skipped", reason="profile_unknown")
+
+	auditor = drift_audit.ConsumerDriftAuditor(expected_templates={}, max_diff_lines=5, executor=FakeExecutor([]))
+	results = [drift_audit.RepoAuditResult(repository="owner/repo", outcome="match")]
+	repairs = drift_audit.repair_drifted_repositories(auditor, StubRepairer(), results)
+	assert [(item.repository, item.reason) for item in repairs] == [("owner/repo", "profile_unknown")]
+
+
 def test_repair_restores_a_dangling_updater_symlink() -> None:
 	with tempfile.TemporaryDirectory(prefix="drift-repair-dangling-") as td:
 		tmp = Path(td)
@@ -1329,6 +1357,8 @@ def main() -> int:
 	test_repair_makes_no_api_call_when_bytes_already_match()
 	test_repair_restores_an_installed_updater_outside_the_profile()
 	test_repair_skips_a_checkout_with_a_symlinked_workflows_directory()
+	test_repair_skips_a_checkout_whose_workflows_path_is_a_file()
+	test_profile_unknown_skip_is_reported_for_match_results()
 	test_repair_restores_a_dangling_updater_symlink()
 	test_repair_skips_an_unknown_profile_without_cloning()
 	test_repair_reports_errors_without_raising()

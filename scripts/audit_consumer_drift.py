@@ -873,7 +873,14 @@ class DriftRepairer:
 			raise ValueError("default branch name is invalid")
 		# A committed symlink at .github or .github/workflows would redirect the
 		# wrapper writes below outside the clone.
-		if (checkout / ".github").is_symlink() or (checkout / ".github" / "workflows").is_symlink():
+		# A regular file at either path would make the writes below raise.
+		github_dir = checkout / ".github"
+		workflows_dir = github_dir / "workflows"
+		if (
+			github_dir.is_symlink() or workflows_dir.is_symlink()
+			or (github_dir.exists() and not github_dir.is_dir())
+			or (workflows_dir.exists() and not workflows_dir.is_dir())
+		):
 			print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=unsafe_checkout")
 			return RepairResult(repository=repository, outcome="skipped", reason="unsafe_checkout")
 
@@ -979,8 +986,9 @@ def repair_drifted_repositories(
 	CRLF ignored) while ai-workflow-integrity.yml accepts only exact bytes, so a
 	"match" can still fail the integrity check. Matching repositories are
 	therefore byte-checked too (one clone, no REST call when the bytes match);
-	their ``no_exact_drift`` and ``profile_unknown`` skips are left out of
-	the summary.
+	their ``no_exact_drift`` skips are left out of the summary. A
+	``profile_unknown`` skip is always reported: no byte check ran, so a
+	"match" can still hide drift the integrity check rejects.
 	"""
 	repairs: list[RepairResult] = []
 	for result in results:
@@ -991,7 +999,7 @@ def repair_drifted_repositories(
 		if auditor.profile_manifests is not None and profile != UNKNOWN_WORKFLOW_PROFILE:
 			profile_names = auditor.profile_manifests.get(profile)
 		repair = repairer.repair(result.repository, profile_names)
-		if result.outcome == "match" and repair.outcome == "skipped" and repair.reason in ("no_exact_drift", "profile_unknown"):
+		if result.outcome == "match" and repair.outcome == "skipped" and repair.reason == "no_exact_drift":
 			continue
 		repairs.append(repair)
 	return repairs
