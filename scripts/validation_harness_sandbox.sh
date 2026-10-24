@@ -1246,10 +1246,11 @@ cmd_run()
 		overlays+=("scripts/validate_driver.sh=${SANDBOX_HELPER_DIR}/validate_driver.sh")
 	fi
 	# Self-repo support staging writes trusted copies over these tracked files
-	# so the host runs only trusted code (#6865). Nothing inside the sandbox
-	# executes them (STAGE_PY imports codex_isolated_workspace from
-	# SANDBOX_HELPER_DIR), so the copy under test takes their committed HEAD
-	# bytes and the branch's own tests read the branch's code (#7913, #8064).
+	# so the host runs only trusted code (#6865). The sandbox machinery does
+	# not run them (STAGE_PY imports codex_isolated_workspace from
+	# SANDBOX_HELPER_DIR); only the branch's own tests, inside the
+	# credential-free sandbox, read or run them. So the copy under test takes
+	# their committed HEAD bytes and those tests see the branch's code (#7913, #8064).
 	# The renderer and the validation-harness templates are overwritten the
 	# same way; the harness tests are rendered on the host before staging, so
 	# their HEAD copies are only read by the branch's own tests. An entry
