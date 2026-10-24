@@ -957,10 +957,10 @@ def stage_from_head(path, arcname):
 	if not stat.S_ISREG(info.st_mode):
 		return False
 	git = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
-	tree = subprocess.run(git + ["ls-tree", "-z", "HEAD", "--", arcname], cwd=workspace, env=env, check=False, capture_output=True)
+	tree = subprocess.run(git + ["ls-tree", "-z", "HEAD", "--", arcname], cwd=workspace, env=env, check=False, capture_output=True, timeout=60)
 	if tree.returncode != 0:
 		# An unborn HEAD is a normal fallback; any other git failure is logged.
-		head = subprocess.run(git + ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], cwd=workspace, env=env, check=False, capture_output=True)
+		head = subprocess.run(git + ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], cwd=workspace, env=env, check=False, capture_output=True, timeout=60)
 		if head.returncode == 0:
 			stage_log("skip", "support_from_head_git_failed", arcname)
 		return False
@@ -973,11 +973,11 @@ def stage_from_head(path, arcname):
 		return False
 	# The blob is buffered whole, so a committed file over 8 MiB keeps the
 	# streamed working-tree read instead (same cap as review MAX_FILE).
-	size = subprocess.run(git + ["cat-file", "-s", fields[2].decode("ascii", "replace")], cwd=workspace, env=env, check=False, capture_output=True)
+	size = subprocess.run(git + ["cat-file", "-s", fields[2].decode("ascii", "replace")], cwd=workspace, env=env, check=False, capture_output=True, timeout=60)
 	if size.returncode != 0 or not size.stdout.strip().isdigit() or int(size.stdout) > 8 * 1024 * 1024:
 		stage_log("skip", "support_from_head_too_large" if size.returncode == 0 else "support_from_head_git_failed", arcname)
 		return False
-	blob = subprocess.run(git + ["cat-file", "blob", fields[2].decode("ascii", "replace")], cwd=workspace, env=env, check=False, capture_output=True)
+	blob = subprocess.run(git + ["cat-file", "blob", fields[2].decode("ascii", "replace")], cwd=workspace, env=env, check=False, capture_output=True, timeout=60)
 	if blob.returncode != 0:
 		stage_log("skip", "support_from_head_git_failed", arcname)
 		return False
@@ -1149,7 +1149,9 @@ for name in sorted(names):
 				stage_log("ok", "env_template_admitted", name)
 			else:
 				stage_log("skip", "env_template_not_regular", name)
-		elif (name in support_from_head or any(name.startswith(prefix) for prefix in support_from_head_dirs)) and stage_from_head(path, name):
+		# A head-support: path was already tried through head_blob above (and
+		# logged); do not read it from HEAD a second time.
+		elif name not in head_support_paths and (name in support_from_head or any(name.startswith(prefix) for prefix in support_from_head_dirs)) and stage_from_head(path, name):
 			pass
 		else:
 			add(path, name)
@@ -1295,7 +1297,7 @@ cmd_run()
 	require_sudo run
 	id -u "${VALIDATION_HARNESS_SANDBOX_USER}" >/dev/null 2>&1 || sandbox_fail run sandbox_user_missing
 	local home work workspace entry_rel stage_status extract_status harness_exit copyback_dest state_base pidfile started
-	local -a overlays=() head_support_args=()
+	local -a overlays=() head_support_args=() support_from_head_args=()
 	home="$(sandbox_home)"
 	work="$(sandbox_work_dir)"
 	workspace="$(pwd -P)"
@@ -1343,18 +1345,20 @@ cmd_run()
 	# validate_driver.sh is left out on purpose: the sandbox runs it, so it
 	# stays the trusted overlay above, and a branch that changes it together
 	# with tests that read it still sees the trusted driver.
-	local -a support_from_head_args=(
-		"HEAD:scripts/validate_process.sh"
-		"HEAD:scripts/validation_harness_sandbox.sh"
-		"HEAD:scripts/codex_isolated_workspace.py"
-		"HEAD:scripts/templates/slot_manifest.schema.json"
-		"HEAD:scripts/render_validation_templates.py"
-		"HEAD:workflow-templates/validation-harness/"
-	)
+	# VALIDATION_SANDBOX_SUPPORT_FROM_HEAD_ENABLED=false turns off both lists
+	# below, so the switch restores working-tree staging for every path.
 	# Stage these support helpers from their committed HEAD blob, not from the
 	# working tree a staging step may have overwritten (#8065). Untracked or
 	# non-regular paths keep the working-tree copy; the overlay above wins.
 	if sandbox_support_from_head_enabled; then
+		support_from_head_args+=(
+			"HEAD:scripts/validate_process.sh"
+			"HEAD:scripts/validation_harness_sandbox.sh"
+			"HEAD:scripts/codex_isolated_workspace.py"
+			"HEAD:scripts/templates/slot_manifest.schema.json"
+			"HEAD:scripts/render_validation_templates.py"
+			"HEAD:workflow-templates/validation-harness/"
+		)
 		local head_support_path
 		for head_support_path in \
 			scripts/validate_process.sh \

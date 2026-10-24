@@ -1838,7 +1838,7 @@ def _write(workspace: Path, name: str, text: str) -> None:
 	path.write_text(text, encoding="utf-8")
 
 
-def _stage_with_modes(helper_dir: Path, workspace: Path, *extra_args: str) -> tuple[dict[str, bytes], dict[str, int], str]:
+def _stage_with_mode_map(helper_dir: Path, workspace: Path, *extra_args: str) -> tuple[dict[str, bytes], dict[str, int], str]:
 	result = subprocess.run(
 		["python3", "-I", "-c", _stage_program(), str(helper_dir), str(workspace), *extra_args],
 		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir)},
@@ -1857,7 +1857,7 @@ def _stage_with_modes(helper_dir: Path, workspace: Path, *extra_args: str) -> tu
 
 
 def _stage(helper_dir: Path, workspace: Path, *extra_args: str) -> tuple[dict[str, bytes], str]:
-	members, _, stderr = _stage_with_modes(helper_dir, workspace, *extra_args)
+	members, _, stderr = _stage_with_mode_map(helper_dir, workspace, *extra_args)
 	return members, stderr
 
 
@@ -1954,7 +1954,7 @@ def test_stage_copy_support_from_head_preserves_executable_mode(tmp_path: Path) 
 	(workspace / "scripts" / "validate_process.sh").write_text("trusted\n", encoding="utf-8")
 	(workspace / "scripts" / "validate_process.sh").chmod(0o644)
 	_write(workspace, "scripts/templates/slot_manifest.schema.json", "{\"trusted\": true}\n")
-	members, modes, _ = _stage_with_modes(helper_dir, workspace, "HEAD:scripts/validate_process.sh", "HEAD:scripts/templates/slot_manifest.schema.json")
+	members, modes, _ = _stage_with_mode_map(helper_dir, workspace, "HEAD:scripts/validate_process.sh", "HEAD:scripts/templates/slot_manifest.schema.json")
 	assert members["scripts/validate_process.sh"] == b"#!/bin/bash\necho committed\n"
 	assert modes["scripts/validate_process.sh"] == 0o755
 	assert members["scripts/templates/slot_manifest.schema.json"] == b"{}\n"
@@ -2004,7 +2004,27 @@ def test_run_stages_exactly_the_support_paths_from_head() -> None:
 	]
 	assert "HEAD:scripts/validate_driver.sh" not in run, "the sandbox runs the driver, so it must stay the trusted overlay"
 	assert '"${overlays[@]}" "${support_from_head_args[@]}"' in run
-	assert run.index("local -a support_from_head_args=(") < run.index('python3 -I -c "${STAGE_PY}"')
+	assert run.index("support_from_head_args+=(") < run.index('python3 -I -c "${STAGE_PY}"')
+	# The off switch must cover the HEAD: list too, not only head-support:.
+	gate = run.index("if sandbox_support_from_head_enabled; then")
+	gated = run[gate:run.index("\n\tfi\n", gate)]
+	assert "support_from_head_args+=(" in gated
+	assert run.count("support_from_head_args+=") == 1
+	assert all(f'"HEAD:{path}"' in gated for path in listed)
+
+
+def test_stage_copy_head_support_path_is_not_read_from_head_twice(tmp_path: Path) -> None:
+	# A path on both lists is tried once (head_blob); its fallback logs one reason.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "x" * (8 * 1024 * 1024 + 1))
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "head-support:scripts/validate_process.sh", "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "outcome=skip reason=support_from_head_unavailable path=scripts/validate_process.sh" in stderr
+	assert "support_from_head_too_large" not in stderr
+	assert stderr.count("path=scripts/validate_process.sh") == 1
 
 
 def test_stage_copy_includes_untracked_files_that_are_not_ignored(tmp_path: Path) -> None:

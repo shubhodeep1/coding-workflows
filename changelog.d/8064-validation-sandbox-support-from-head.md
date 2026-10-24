@@ -7,6 +7,8 @@ Self-repo validation (tracking issue #7913, run 40083109127) failed because supp
 | --- | --- |
 | Support files staged from `HEAD` | 5, plus every tracked file under `workflow-templates/validation-harness/` |
 | Still the trusted overlay | `scripts/validate_driver.sh` |
-| New log reasons | `VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=support_from_head path=<path>`; `outcome=skip reason=support_from_head_git_failed` (git failed, working-tree copy staged); `outcome=skip reason=support_from_head_too_large` (`HEAD` blob over 8 MiB, working-tree copy staged) |
+| Log reasons | `VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=support_from_head path=<path>` (shared with #8065); new: `outcome=skip reason=support_from_head_git_failed` (git failed, working-tree copy staged); `outcome=skip reason=support_from_head_too_large` (`HEAD` blob over 8 MiB, working-tree copy staged) |
+
+`VALIDATION_SANDBOX_SUPPORT_FROM_HEAD_ENABLED=false` (from #8065) turns off this list too, so every support file is staged from the working tree again.
 
 What this means for operators: after this lands on `main`, post `/revalidate` on #7913; the project's files need no change. A branch that changes `scripts/validate_driver.sh` together with tests that read it still sees the trusted driver.
