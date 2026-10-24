@@ -829,10 +829,11 @@ jobs:
       # Before that it moved here from tests-release-and-log-analysis (20m16s,
       # run 39030079651, #7560), and earlier out of this job when it measured
       # 19.6 of its 20 minutes (2026-10-09). In orchestrate-poll it ran in
-      # group 1 only, because group 0 carries the fast-fail subset and the
-      # single-file modules. Budget-watch issue #7579: group 1 then took
-      # 15m13s of its 20 minutes (run 39047759102), and the step was split in
-      # place there, the way the workflow failure heal step was (#7387):
+      # group 1 only, because group 0 carried the fast-fail subset and (until
+      # #8080 moved them to group 1) the single-file modules. Budget-watch
+      # issue #7579: group 1 then took 15m13s of its 20 minutes (run
+      # 39047759102), and the step was split in place there, the way the
+      # workflow failure heal step was (#7387):
       # tests/test_review_merge_train.py runs in 3 local shards (split by test
       # function, parametrized cases together) and the five small modules run
       # in one more process beside them, on the runner's 4 cores. Every test
@@ -2348,13 +2349,6 @@ jobs:
             exit 1
           fi
 
-          # The single-file modules are not split; group 0 runs them once.
-          if [ "${poll_group}" -eq 0 ]; then
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
-          fi
-
       # Moved from tests-heal-plan-and-validation, which took 15m26s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7690). That run's
       # step timings were not readable, so the steps were chosen by timing each
@@ -2366,7 +2360,8 @@ jobs:
       # every other step 3s or less. Each test job has recorded about 15
       # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
       # #7677), while poll groups record about 5 minutes (#4707). Group 0
-      # carries the fast-fail subset and the single-file modules and group 1
+      # carries the fast-fail subset (the single-file modules ran there until
+      # #8080 moved them to group 1) and group 1
       # then carried the merge-train step (moved out in #7766), so this step
       # runs in group 2 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
@@ -2465,7 +2460,8 @@ jobs:
       # every other step 3s or less. Each test job has recorded about 15
       # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
       # #7677), while poll groups record about 5 minutes (#4707). Group 0
-      # carries the fast-fail subset and the single-file modules and group 1
+      # carries the fast-fail subset (the single-file modules ran there until
+      # #8080 moved them to group 1) and group 1
       # then carried the merge-train step (moved out in #7766), so this step
       # ran in group 3 only, once per CI run, until #8072 moved it to group 1
       # (below). It needs only checkout, Python 3.12 and the shared pip install,
@@ -2482,6 +2478,20 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py
+
+      # Moved out of the group-0 block of "Orchestrate poll process unit tests":
+      # orchestrate-poll (0) took 15m09s of its 20 minutes on main (run
+      # 40122910216, budget-watch issue #8080). Group 0 keeps the fast-fail
+      # subset by design; group 1 had carried only its slice and the unblock
+      # step (#8072), so it had the most headroom. Commands and order
+      # unchanged; they run once per CI run.
+      - name: Orchestrate poll single-file module tests
+        if: strategy.job-index == 1
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
 
       # Moved from tests-release-and-log-analysis, which took 17m51s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7689). Earlier
