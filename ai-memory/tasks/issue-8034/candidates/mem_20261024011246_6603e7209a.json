@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which area of the repository should this issue change?\nChoices:\nA) The review/autofix pipeline (`review_autofix.yml` and its `scripts/review_*` helpers)\nB) The orchestrator poller and project flow (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nC) The clarify/plan/implement phase workflows and their prompts\nD) Documentation only (README, docs/)\nE) None of these: describe the specific component and problem in a reply (RECOMMENDED)\nQ2: What kind of improvement is wanted?\nChoices:\nA) Fix a specific bug or failure you have seen; give the run link, issue or PR number, or error text (RECOMMENDED)\nB) Lower runtime or cost (GitHub API calls, model tokens, CI minutes); name the workflow or job\nC) Make it more reliable (fewer stalls, retries or human escalations); name the symptom\nD) A new feature or behaviour; describe the expected behaviour\nE) Clearer docs or logs only\nQ3: What would show that this issue is done?\nChoices:\nA) A concrete, testable result you state in your reply (for example \"run X no longer fails with Y\") (RECOMMENDED)\nB) A measurable target on a named metric (for example \"job Z finishes under N minutes\")\nC) No fixed target: close the issue, because it cannot be implemented as written",
+  "fingerprint": "9028e16db60dd944b18522feb2d2a37f78fc4ca8cbe2d2954878ff01a0463a5a",
+  "lineage": {
+    "issue_number": 8034,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40048141687",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40048141687",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261024011246_6603e7209a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8034,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40048141687"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8034 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-24T01:12:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
