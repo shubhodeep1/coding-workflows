@@ -5,13 +5,26 @@
   "entry_id": "processed_command_8039_6378260903_approved",
   "issue_number": 8039,
   "metadata": {
+    "branch": "ai/issue-8039",
+    "changed_files": [
+      "README.md",
+      "agents.d/validation-harness-routing-p2.md",
+      "changelog.d/validation-harness-routing-p2.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 8039,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8039",
+    "pr_number": 8042,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8042",
+    "run_attempt": "1",
+    "run_id": "40050631429",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40050631429"
   },
   "run_attempt": 1,
   "run_id": "40050631429",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-24T01:42:49Z",
+  "status": "completed",
+  "timestamp": "2026-10-24T02:04:00Z",
   "workflow": "implement"
 }
