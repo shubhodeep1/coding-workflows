@@ -780,6 +780,171 @@ def test_extract_recommended_answers_ignores_unmarked_comments() -> None:
 	assert out.strip() == "", out
 
 
+_STALL_ANSWER_HELPER_AND_STUBS = r"""
+extract_named_fn() {
+	awk -v fn="$1" '
+		BEGIN { in_fn=0 }
+		$0 ~ "^"fn"\\(\\)" { in_fn=1 }
+		in_fn { print }
+		in_fn && /^\}$/ { exit }
+	' "__POLLER__"
+}
+
+GH_CALLS_FILE="${COMMENTS_FIXTURE}.calls"
+gh_retry() { "$@"; }
+gh() { echo call >> "${GH_CALLS_FILE}"; cat "${COMMENTS_FIXTURE}"; }
+
+eval "$(extract_named_fn extract_recommended_answers)"
+eval "$(extract_named_fn stall_recovery_clarify_answer)"
+stall_recovery_clarify_answer "4815"
+echo "GH_CALLS=$(wc -l < "${GH_CALLS_FILE}" | tr -d ' ')"
+"""
+
+
+def _run_stall_recovery_clarify_answer(comments: list) -> tuple[str, str, str]:
+	"""Run the real stall_recovery_clarify_answer against a stubbed gh.
+
+	Returns (source, answer_text, stderr) and asserts the comments were
+	read exactly once (the RECOMMENDED fallback reuses the same read)."""
+	with tempfile.TemporaryDirectory() as tmp:
+		fixture = Path(tmp) / "comments.json"
+		fixture.write_text(json.dumps(comments), encoding="utf-8")
+		script = _STALL_ANSWER_HELPER_AND_STUBS.replace("__POLLER__", str(POLL_PROCESS))
+		env = dict(os.environ)
+		env["GITHUB_REPOSITORY"] = "owner/repo"
+		env["COMMENTS_FIXTURE"] = str(fixture)
+		env["RUNTIME_DIR"] = tmp
+		proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+	assert proc.returncode == 0, proc.stderr
+	lines = proc.stdout.rstrip("\n").split("\n")
+	assert lines[-1] == "GH_CALLS=1", proc.stdout
+	body = lines[:-1]
+	return body[0], "\n".join(body[1:]), proc.stderr
+
+
+_STALL_QUESTIONS = {
+	"id": 6370000000,
+	"created_at": "2026-10-23T10:00:00Z",
+	"user": {"login": "shubhodeep1"},
+	"author_association": "OWNER",
+	"body": (
+		"<!-- ai:clarification-questions -->\n"
+		"**Q1: Which fix?**\n\nChoices:\n"
+		"- **A** — Reduce to a warning (RECOMMENDED)\n"
+		"- **B** — Fix the caller\n\n"
+		"**Q2: Is the key set?**\n\nChoices:\n"
+		"- **A** — Unknown (RECOMMENDED)\n"
+		"- **B** — Yes\n"
+	),
+}
+
+
+def _pipeline_answer(comment_id: int, created_at: str, body: str, association: str = "OWNER") -> dict:
+	return {
+		"id": comment_id,
+		"created_at": created_at,
+		"user": {"login": "shubhodeep1"},
+		"author_association": association,
+		"body": body,
+	}
+
+
+def test_stall_recovery_reasserts_worker_answer_over_recommended() -> None:
+	# tele-funtoken-msg-scoring#4815: the clarify-respond worker answered
+	# Q1: B, Q2: A; stall recovery must repeat that, not post Q1: A.
+	worker = _pipeline_answer(
+		6377088072,
+		"2026-10-23T10:05:00Z",
+		"/answer [auto-answered-by-orchestrator]\n\n"
+		"Auto-answered by the orchestrator clarify-respond workflow.\n\n"
+		"DECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: B keeps fail-closed.\nQ2: unknown.\n",
+	)
+	source, text, stderr = _run_stall_recovery_clarify_answer([worker, _STALL_QUESTIONS])
+	assert source == "reasserted", (source, text)
+	assert "Q1: B" in text and "Q2: A" in text, text
+	assert "Q1: A" not in text, text
+	assert "RATIONALE:" in text, text
+	assert not text.startswith("/answer"), text
+	assert "[auto-answered-by-" not in text, text
+	assert "STALL_CLARIFY_ANSWER issue=4815 source=reasserted answer_comment=6377088072" in stderr
+
+
+def test_stall_recovery_reasserts_reframe_execution_plan() -> None:
+	# tele #4820: a REFRAME decision is not a letter; its execution plan
+	# must survive the re-assertion verbatim.
+	worker = _pipeline_answer(
+		6379288972,
+		"2026-10-23T10:05:00Z",
+		"/answer [auto-answered-by-orchestrator]\n\nDECISIONS:\nQ1: REFRAME\nQ2: B\n\n"
+		"EXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n"
+		"  replaces_acceptance_criterion: \"Identify the exact ERROR message\"\n",
+	)
+	source, text, _ = _run_stall_recovery_clarify_answer([_STALL_QUESTIONS, worker])
+	assert source == "reasserted"
+	assert "Q1: REFRAME" in text and "strategy: reframe" in text, text
+	assert "replaces_acceptance_criterion" in text, text
+
+
+def test_stall_recovery_keeps_one_line_plan_auto_answer() -> None:
+	# plan.yml posts `/answer Q1: A Q2: B [auto-answered-by-orchestrator]`.
+	one_line = _pipeline_answer(
+		6377000001, "2026-10-23T10:06:00Z", "/answer Q1: B Q2: B [auto-answered-by-orchestrator]"
+	)
+	source, text, _ = _run_stall_recovery_clarify_answer([one_line, _STALL_QUESTIONS])
+	assert source == "reasserted"
+	assert text == "Q1: B Q2: B", text
+
+
+def test_stall_recovery_ignores_answer_older_than_latest_questions() -> None:
+	# An answer to an earlier clarification round does not answer the
+	# current questions, so fall back to RECOMMENDED.
+	stale = _pipeline_answer(
+		6360000000,
+		"2026-10-22T10:00:00Z",
+		"/answer [auto-answered-by-orchestrator]\n\nDECISIONS:\nQ1: B\nQ2: B\n",
+	)
+	source, text, stderr = _run_stall_recovery_clarify_answer([_STALL_QUESTIONS, stale])
+	assert source == "recommended", (source, text)
+	assert text == "Q1: A\nQ2: A", text
+	assert "answer_comment=none" in stderr
+
+
+def test_stall_recovery_ignores_untrusted_or_unmarked_answers() -> None:
+	spoofed = _pipeline_answer(
+		6377000002,
+		"2026-10-23T10:07:00Z",
+		"/answer [auto-answered-by-orchestrator]\n\nDECISIONS:\nQ1: B\nQ2: B\n",
+		association="NONE",
+	)
+	unmarked = _pipeline_answer(6377000003, "2026-10-23T10:08:00Z", "/answer\n\nQ1: B\nQ2: B\n")
+	no_decision = _pipeline_answer(
+		6377000004,
+		"2026-10-23T10:09:00Z",
+		"/answer [auto-answered-by-poller]\n\n_Standalone stall recovery: clarification stalled. Proceeding with available context._",
+	)
+	source, text, _ = _run_stall_recovery_clarify_answer([no_decision, unmarked, spoofed, _STALL_QUESTIONS])
+	assert source == "recommended", (source, text)
+	assert text == "Q1: A\nQ2: A", text
+
+
+def test_stall_recovery_reports_none_without_questions() -> None:
+	source, text, _ = _run_stall_recovery_clarify_answer([])
+	assert source == "none" and text == "", (source, text)
+
+
+def test_stall_recovery_callers_use_reassert_helper() -> None:
+	# Both auto_respond_clarify paths must go through the helper, not call
+	# extract_recommended_answers directly.
+	text = _read(POLL_PROCESS)
+	assert text.count('="$(stall_recovery_clarify_answer "${issue_num}")"') == 2
+	callers = [
+		line for line in text.splitlines()
+		if '$(extract_recommended_answers "${issue_num}")' in line
+	]
+	# Only the helper's own fallback (no prefetched file) may call it bare.
+	assert len(callers) == 1, callers
+
+
 def test_prompt_template_documents_canonical_recommended_form() -> None:
 	plan_prompt = _read(PROMPT_PLAN)
 	clarify_prompt = _read(PROMPT_CLARIFY)
