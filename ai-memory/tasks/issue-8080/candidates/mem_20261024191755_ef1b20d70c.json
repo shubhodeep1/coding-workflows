@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should leave `orchestrate-poll (0)`?\nChoices:\nA) The three single-file modules (`test_orchestrate_poll_noop_suspicious_recovery.py`, `test_state_snapshot.py`, `test_run_substate_ledger.py`). Take them out of the group-0 block of \"Orchestrate poll process unit tests\" and run them unchanged in one new step, e.g. \"Orchestrate poll single-file module tests\". The matrix job name stays the same. (RECOMMENDED)\nB) The \"Orchestrate poll implementation-failed regression fast-fail\" step. Its name and body stay the same; only its `if:` group index changes, and the group-0 contract test is updated to match.\nC) Both A and B.\n**Note:** B and C change where the fast-fail hot path runs. Today that is group 0 by design.\nQ2: Where should the moved tests run?\nChoices:\nA) `orchestrate-poll` group 1 (`if: strategy.job-index == 1`). Since #8072 it carries only the unblock step, the fewest moved-in steps of any group. (RECOMMENDED)\nB) `orchestrate-poll` group 2, which already carries CI wiring guard part 2 and the three sandbox/isolation steps.\nC) The test job `tests-heal-plan-and-validation`, which has given up steps twice (#7690).\nD) Split them: if Q1 is C, the single-file modules go to group 1 and the fast-fail step goes to group 2.\n**Note:** D only applies if Q1 is C.",
+  "fingerprint": "170f79bd9208d19a637f18d82eb62939e7fd6ba2e774df97b25583820db109ae",
+  "lineage": {
+    "issue_number": 8080,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40124095199",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40124095199",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261024191755_ef1b20d70c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8080,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40124095199"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8080 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-24T19:17:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
