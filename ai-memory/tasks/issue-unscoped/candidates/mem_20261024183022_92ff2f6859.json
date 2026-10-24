@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:1174-1182 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `test_group_three_keeps_at_least_one_extra_step` asserts that group 3 must keep at least one guarded step, an invariant the linked issue does not state.\n  WHY: A later budget-watch fix that moves the last two group-3 steps would fail this test for no CI reason and need an extra test edit. Severity is NIT in all three reviewers, and there is no runtime defect today.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, the group-3-guarded steps (\"Orchestrator judges on the Claude engine tests (Phase 5c)\" at ci.yml:2504 and \"Validation harness sandbox tests\" at ci.yml:2510), in the orchestrate-poll matrix group 3 (lines 2480-2514)\n  confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: Only one of the three extra group-3 steps moved to group 1, and the other two still run in group 3. The partial move is documented in ci.yml:2473-2479 and the changelog fragment, because step timings were not readable. Group 3 was 908s against a 900s warning line before the move. The next budget-watch run is the only confirmation. Both reviewers rated this NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ci_poll_test_sharding.py:1174-1182 | severity=low (NIT) | confidence=3\n  PROBLEM: `MovedPollGroupThreeStepsContractTest.test_group_three_keeps_at_least_one_extra_step` fails if no step is guarded `strategy.job-index == 3`. The issue does not ask for that, and `ci.yml` has no such rule.\n  WHY: A later budget-watch fix that moves the last two group-3 steps would fail CI for no CI reason and would need an extra test edit. This is a maintenance cost only, not a defect today.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the group-3-guarded steps (\"Orchestrator judges on the Claude engine tests (Phase 5c)\" and \"Validation harness sandbox tests\").\n  Evidence of absence: Only one of the three extra group-3 steps moved. The other two still run in group 3. The comment above the moved step in `ci.yml` and the changelog fragment both state the reason: no step timings could be read from CI or the implement sandbox, so the plan's default applied. This is a documented, deliberate partial move, so it is not raised as a blocker. The next `budget-watch` run on `main` decides whether more must move.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:1174-1182 | severity=low (NIT) | confidence=3\n  PROBLEM: `test_group_three_keeps_at_least_one_extra_step` adds an artificial invariant that group 3 must stay populated after the move. The issue (#8072) only requires moving steps off group 3 to stop a timeout. The second assertion (the moved step is no longer in group 3) is reasonable, but the first is gratuitous.\n  WHY: A future PR that moves the remaining group-3 steps (`Orchestrator judges on the Claude engine tests (Phase 5c)` at ci.yml:2504 and `Validation harness sandbox tests` at ci.yml:2510) would hit a red CI on this test and need an extra edit. The CI benefit is none, because `GROUP_PINNED_STEPS` and `PollGroupPinnedStepsTest.test_moved_steps_run_once_in_their_group` already pin the moved step's group.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #8072, goal paragraph)\n  Expected change site: `.github/workflows/ci.yml` orchestrate-poll matrix group 3 (lines 2480-2514)\n  Evidence of absence: Only one of three group-3-guarded steps moved (the unblock judge step from ci.yml:2480 to group 1). `Orchestrator judges on the Claude engine tests (Phase 5c)` (ci.yml:2504) and `Validation harness sandbox tests` (ci.yml:2510) remain in group 3. The deferral is documented in ci.yml:2473-2479 and the changelog fragment because step timings were not readable. Group 3's pre-move duration was 908s against a 900s warning line, so removing only the unblock step (~28s per prior sandbox estimate) leaves roughly 880s of group-3 work. That is a thin margin that the issue's \"slowest steps\" wording may not have intended. The next budget-watch observation is the only way to confirm the move was sufficient.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ci_poll_test_sharding.py:1174-1182 | severity=low (NIT) | confidence=3\n  PROBLEM: The assertion `assertGreater(len(guarded), 0, \"the move must not empty group 3\")` in `test_group_three_keeps_at_least_one_extra_step` encodes a rule the linked issue does not state.\n  WHY: No runtime failure today, because ci.yml:2505 and ci.yml:2511 still guard two steps to group 3. A future budget-watch fix that moves them would fail this test and require editing it even though CI would remain correct. This is a spurious future test edit, not a CI defect.\n- HARDENING_SUGGESTIONS: tests/test_ci_poll_test_sharding.py, `test_group_three_keeps_at_least_one_extra_step` (line 1180). Reduce the assertion to `assertNotIn(name, guarded)` for each moved step and drop the `assertGreater` line (about 2 lines changed). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "35c6ea1e595224c18842843538d3533294744e3a48b1ba064fd511ce8af149f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8078,
+    "run_id": "40119415571",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40119415571",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024183022_92ff2f6859",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8078,
+    "run_id": "40119415571"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T18:30:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
