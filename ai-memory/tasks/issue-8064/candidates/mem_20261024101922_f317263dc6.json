@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The suggested fix touches files outside the frozen heal scope. How should this issue go ahead?\nChoices:\nA) A maintainer widens the scope so it also covers `scripts/validation_harness_sandbox.sh` and `agents.d/*.md`, by re-filing the heal or adding a trusted `files_touched` grant. Then implement the suggested fix as written: stage the four support paths from their `HEAD` blobs in the sandbox copy, keep the trusted `validate_driver.sh` overlay and the host-side override as they are, add regression tests in `tests/test_validation_harness_sandbox.py`, and add changelog and agents fragments. (RECOMMENDED)\nB) Stay inside the current scope. Change `validate.yml` so that self-repo validation runs the trusted helpers from `VALIDATE_HELPER_STAGE_DIR` and leaves the checkout's tracked support files at the branch's committed bytes. This is a wider change to the workflow's execution model and adds no `scripts/` edits. **Note:** this changes which copy of `validate_process.sh` the host runs. It needs extra care to keep the #6865 trust guarantee.\nC) Close this issue as not planned, and unblock #7913 another way, for example by waiving or revalidating after the project's final merge.",
+  "fingerprint": "d17f92827d6125d2f26e3eb6a5b627c88c9a1bb50d1cabb17d0951d9d492f46b",
+  "lineage": {
+    "issue_number": 8064,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40084954127",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40084954127",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261024101922_f317263dc6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8064,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40084954127"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8064 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-24T10:19:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
