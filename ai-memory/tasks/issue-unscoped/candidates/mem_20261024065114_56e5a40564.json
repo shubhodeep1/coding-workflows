@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When changing orchestration, validation, or stability workflows, inspect the related script and workflow together, then add or update tests for the specific routing, filtering, or budget behavior. Several merged changes paired workflow edits with targeted tests.",
+  "fingerprint": "4a2c2913177557b29405c6c491c7596ead6d7775d292b53e600fc941a47e7710",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40071279419",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40071279419",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8018",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8026",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8028",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8029",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8039",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8023",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8030",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8031",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8032",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8042"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261024065114_56e5a40564",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow automation changes in this repository are commonly implemented in shell scripts or GitHub Actions and guarded by focused Python contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-24T06:51:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
