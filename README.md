@@ -519,12 +519,18 @@ permissions:
 jobs:
   clarify:
     if: >-
-      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage') && !contains(toJson(github.event.issue.labels.*.name), 'ai:consumer-health') && !contains(toJson(github.event.issue.labels.*.name), 'ai:scheduled-validation-failed') && !contains(toJson(github.event.issue.labels.*.name), 'ai:heal-intake-queue')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
+      !contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source') &&
+      (
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage') && !contains(toJson(github.event.issue.labels.*.name), 'ai:consumer-health') && !contains(toJson(github.event.issue.labels.*.name), 'ai:scheduled-validation-failed') && !contains(toJson(github.event.issue.labels.*.name), 'ai:heal-intake-queue')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && vars.AI_ORCHESTRATOR_APP_LOGIN != '' && github.event.issue.user.login == vars.AI_ORCHESTRATOR_APP_LOGIN && contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-managed') && contains(github.event.issue.body, '<!-- ai-orchestrator-provenance:v1 ')))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && !contains(github.event.comment.body, 'To restart clarification reply:')))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:pr-dependency-released:"'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:partial-delivery-restart:"')))
+      )
     uses: shubhodeep1/coding-workflows/.github/workflows/clarify.yml@<40-character-release-sha> # stable
-    secrets: inherit
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
 ```
 
 **`.github/workflows/ai-plan.yml`** — Generates an implementation plan when you comment `/answer`
@@ -543,15 +549,24 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.pull_request == null &&
+      !contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source') &&
       (
         (
           github.event.comment.user.type == 'User' &&
           contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
-          startsWith(github.event.comment.body, '/answer')
+          startsWith(github.event.comment.body, '/answer') &&
+          (
+            vars.AI_PIPELINE_APPROVER_LOGIN == '' ||
+            (
+              !contains(github.event.comment.body, '[auto-answered-by-clarify]') &&
+              !contains(github.event.comment.body, '[auto-answered-by-orchestrator]')
+            )
+          )
         ) ||
         (
           github.event.comment.user.type == 'Bot' &&
-          github.event.comment.user.login == 'github-actions[bot]' &&
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN &&
           startsWith(github.event.comment.body, '/answer') &&
           (
             contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
@@ -560,7 +575,10 @@ jobs:
         )
       )
     uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@<40-character-release-sha> # stable
-    secrets: inherit
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
 ```
 
 **`.github/workflows/ai-implement.yml`** — Executes the plan and opens a PR when you comment `/approved`
@@ -580,22 +598,53 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.pull_request == null &&
+      !contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source') &&
       (
         (
           github.event.comment.user.type == 'User' &&
           contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
-          startsWith(github.event.comment.body, '/approved')
+          startsWith(github.event.comment.body, '/approved') &&
+          (
+            vars.AI_PIPELINE_APPROVER_LOGIN == '' ||
+            !contains(github.event.comment.body, '[auto-approved-by-plan]')
+          )
         ) ||
         (
           github.event.comment.user.type == 'Bot' &&
-          github.event.comment.user.login == 'github-actions[bot]' &&
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN &&
           startsWith(github.event.comment.body, '/approved') &&
           contains(github.event.comment.body, '[auto-approved-by-plan]')
         )
       )
     uses: shubhodeep1/coding-workflows/.github/workflows/implement.yml@<40-character-release-sha> # stable
-    secrets: inherit
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
 ```
+
+These examples forward only the secrets each reusable workflow declares; do
+not use `secrets: inherit`, which hands the shared workflow every repository
+secret. The shipped `workflow-templates/` do the same.
+
+Hardened automation (opt-in): set the repository variable
+`AI_PIPELINE_APPROVER_LOGIN` to the login of a dedicated GitHub App bot that
+posts the pipeline's automated comments, and the secret
+`AI_PIPELINE_APPROVAL_SECRET`. Then automated `/answer` and `/approved`
+comments are accepted only from that bot, a trusted user's comment carrying
+an automation marker (`[auto-answered-by-clarify]`,
+`[auto-answered-by-orchestrator]`, `[auto-approved-by-plan]`) no longer
+triggers plan or implement, and an automated `/approved` must carry an HMAC
+envelope that the template `ai-plan.yml` job `sign-automated-approval` signs
+and the template `ai-implement.yml` job `verify-automated-approval` checks
+(issue, plan digest, plan run and target ref/SHA). Use the shipped templates
+for this mode; the README examples above omit those two jobs. Likewise
+`AI_ORCHESTRATOR_APP_LOGIN` lets a dedicated app's issues (labelled
+`ai:orchestrator-managed`, carrying `<!-- ai-orchestrator-provenance:v1 `)
+enter clarify. With the variables unset nothing changes: comments posted
+with `GITHUB_TOKEN` never trigger workflows, so no shared bot login is
+accepted either way.
 
 A deliberate `BLOCKED: <reason>` verdict from the implementer (credentials, access, an
 approval, or a product decision the pipeline cannot supply) parks the issue in `ai:blocked`

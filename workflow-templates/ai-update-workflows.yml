@@ -54,4 +54,8 @@ jobs:
     uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable
     with:
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

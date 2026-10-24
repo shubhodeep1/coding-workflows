@@ -55,4 +55,9 @@ jobs:
       pr_skip_ai: false
       allow_workflow_edits: ${{ github.event.inputs.allow_workflow_edits == 'true' }}
       force_rb_judge: true
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

@@ -34,4 +34,9 @@ jobs:
       project_description: ${{ inputs.project_description }}
       engine: ${{ inputs.engine }}
       tracking_comment: ${{ inputs.tracking_comment }}
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
