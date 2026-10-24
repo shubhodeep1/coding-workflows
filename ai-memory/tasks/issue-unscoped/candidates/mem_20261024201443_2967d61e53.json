@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:4542 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The parenthetical \"(it also carries the fast-fail subset and the three single-file modules)\" describing `orchestrate-poll (0)` is now false, because this PR moved the single-file modules to group 1 and updated the adjacent bullet at line 4544.\n  WHY: Two adjacent agents.md bullets now state opposite facts, and agents.md is loaded as static context into agent prompts. The reviewer rated it SEVERITY: NIT, mapped here to low. anthropic_claude-sonnet-5_5 saw the same sentence but called it a cosmetic, historical nit and did not report it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR moves the single-file modules out of group 0 and annotates the comments that referenced the old placement (the \"ran there until #8080\" clarification).\n  expected_change_site: .github/workflows/ci.yml lines 832-833 (history comment above the \"Merge-train and gh_helpers rate-limit tests\" step in tests-hooks-and-orchestrator)\n  confidence=[4]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The diff has no hunk touching the line 832-833 comment, which still says group 0 carries the single-file modules. The other two comments (lines 2362-2363 and 2462-2463) were annotated. The reviewer rated it SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:4542 | severity=NIT | confidence=5\n  PROBLEM: The parenthetical \"(it also carries the fast-fail subset and the three single-file modules)\" describing `orchestrate-poll (0)` is now false, because this PR moved the single-file modules to group 1 and updated the adjacent bullet at line 4544.\n  WHY: It is not a runtime failure. The two adjacent agents.md bullets now state opposite facts, and agents.md is the canonical context source loaded into every agent prompt.\n- TASK_GAP (under TASK COMPLETENESS / INTENT GAPS): .github/workflows/ci.yml:832-833 | severity=NIT | confidence=4\n  Requirement: The PR annotates the comments that referenced the old group-0 placement of the single-file modules.\n  Expected change site: .github/workflows/ci.yml line 832-833 (history comment above the \"Merge-train and gh_helpers rate-limit tests\" step in tests-hooks-and-orchestrator)\n  Evidence of absence: The diff has no hunk touching the line 832-833 narration. It still says group 0 carries the single-file modules, while the comments at lines 2362-2363 and 2462-2463 were annotated.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7efbb9a61026920ff2b91d5b1ecceb6da258bded65bbb5c044e76e1e0dddabe8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8081,
+    "run_id": "40127119006",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40127119006",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024201443_2967d61e53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8081,
+    "run_id": "40127119006"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-24T20:14:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
