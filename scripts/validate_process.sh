@@ -206,10 +206,19 @@ case "$(printf '%s' "${VALIDATION_USE_TEMPLATES}" | tr '[:upper:]' '[:lower:]')"
     VALIDATION_USE_TEMPLATES_ENABLED="true"
     ;;
 esac
+# Project #7913 p4: remember whether the caller set VALIDATION_CYCLE, so
+# validation_cycle_resolve (below) derives it from the newest trusted
+# "Runtime validation dispatched" tracking comment only when it is unset.
+VALIDATION_CYCLE_EXPLICIT="false"
+VALIDATION_CYCLE_INVALID_ENV="false"
+if [ -n "${VALIDATION_CYCLE:-}" ]; then
+  VALIDATION_CYCLE_EXPLICIT="true"
+fi
 VALIDATION_CYCLE="${VALIDATION_CYCLE:-1}"
 if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ]; then
   echo "::warning::VALIDATION_CYCLE must be a positive integer (got: ${VALIDATION_CYCLE}); defaulting to 1."
   VALIDATION_CYCLE="1"
+  VALIDATION_CYCLE_INVALID_ENV="true"
 fi
 
 # Preflight pyflakes/ruff lint gate for embedded Python heredocs in
@@ -2780,6 +2789,80 @@ ${failure_summary}"
     "timestamp=${timestamp}"
 }
 
+# BEGIN validation cycle derivation (project #7913 p4)
+# Neither validate.yml nor the consumer ai-validate.yml wrapper passes
+# VALIDATION_CYCLE, so it used to stay 1 and the cross-cycle escalation
+# (cycle >= 3) never fired. When it is unset, take the cycle from the newest
+# "## 🧪 Runtime validation dispatched" tracking comment written by the
+# pipeline login (the poller posts "- Cycle: <N>" there). Comments by other
+# authors are ignored. Every failure falls back to cycle 1 (today's value).
+validation_cycle_resolve()
+{
+  local login="" items="" cycle="" status=""
+  if [ "${VALIDATION_CYCLE_EXPLICIT:-false}" = "true" ]; then
+    if [ "${VALIDATION_CYCLE_INVALID_ENV:-false}" = "true" ]; then
+      echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=invalid_env"
+    else
+      echo "VALIDATION_CYCLE_SOURCE source=env cycle=${VALIDATION_CYCLE}"
+    fi
+    return 0
+  fi
+  if ! is_tracking_run; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=not_tracking_run"
+    return 0
+  fi
+  if ! login="$(validation_owner_pipeline_login)"; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=login_unavailable"
+    return 0
+  fi
+  # GitHub API audit (unattended_system_instructions.md §14): the existing
+  # PRIOR_COMMENTS read further down runs only when the cycle is already above
+  # 1 and keeps bodies without authors, so it cannot supply the cycle or the
+  # author check. This is one paginated read per tracking run that has no
+  # explicit VALIDATION_CYCLE; the identity read above is memoized and shared
+  # with the owner routing block.
+  if ! items="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" --paginate \
+    --jq '.[] | select(((.body // "") | split("\n")[0] | sub("\r$"; "")) == "## 🧪 Runtime validation dispatched") | {login: (.user.login // ""), updated_at: (.updated_at // ""), body: (.body // "")} | @json' 2>/dev/null)"; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=comments_unavailable"
+    return 0
+  fi
+  # post_tracking_comment edits a repeated dispatch comment in place (after a
+  # /revalidate reset the id stays, updated_at moves), so the newest edit wins;
+  # sort_by is stable, so equal timestamps keep the creation order.
+  if ! status="$(printf '%s\n' "${items}" | jq -Rrn --arg login "${login}" '
+      [inputs | select(length > 0) | (try fromjson catch null)
+        | select(type == "object" and (.login // "") == $login)]
+      | sort_by(.updated_at // "" | tostring) as $trusted
+      | if ($trusted | length) == 0 then "none"
+        else ($trusted[-1].body // "" | tostring | split("\n")
+          | map(sub("[[:space:]]+$"; "")) | map(select(test("^- Cycle: [0-9]+$")))
+          | if length == 0 then "malformed" else ("cycle:" + (.[0] | sub("^- Cycle: "; ""))) end)
+        end' 2>/dev/null)"; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=comments_unavailable"
+    return 0
+  fi
+  case "${status}" in
+    none)
+      echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=no_dispatch_comment"
+      return 0
+      ;;
+    cycle:*)
+      cycle="${status#cycle:}"
+      ;;
+  esac
+  if ! [[ "${cycle}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=malformed_cycle"
+    return 0
+  fi
+  VALIDATION_CYCLE="${cycle}"
+  # A self-heal re-exec inherits the derived cycle instead of reading again.
+  export VALIDATION_CYCLE
+  echo "VALIDATION_CYCLE_SOURCE source=dispatch_comment cycle=${VALIDATION_CYCLE}"
+  return 0
+}
+validation_cycle_resolve || true
+# END validation cycle derivation
+
 fail_validate_codex_phase()
 {
   local failed_step_name="$1"
@@ -4480,8 +4563,34 @@ PRIOR_FAILURE_CONTEXT_FILE="${RUNTIME_DIR}/prior_validation_failures.txt"
 
 if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
 	echo "Cycle ${VALIDATION_CYCLE}: fetching prior validation failure context from tracking issue #${TRACKING_ISSUE_NUM}."
-  PRIOR_COMMENTS="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" \
-    --paginate --jq '[.[] | select(.body | test("Runtime validation"))] | .[-3:] | .[].body' 2>/dev/null || true)"
+  # Project #7913 p4: one read feeds both the LLM context (last three
+  # "Runtime validation" comments) and the cross-cycle escalation, which needs
+  # the fingerprint markers of cycles N-1 and N-2. Each cycle posts at least
+  # two matching comments (dispatch + result), so the cycle N-2 marker is
+  # older than the last three. PRIOR_FINGERPRINT_MARKERS keeps every marker
+  # the pipeline login posted since the current sequence started, i.e. since
+  # the newest trusted "Cycle: 1" dispatch comment (a /revalidate reset edits
+  # or re-posts it, moving updated_at). Markers by other authors, and markers
+  # from before a reset, never count. No pipeline login means no markers.
+  PRIOR_RUNTIME_COMMENTS_JSONL="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" \
+    --paginate --jq '.[] | select((.body // "") | test("Runtime validation")) | {login: (.user.login // ""), created_at: (.created_at // ""), updated_at: (.updated_at // ""), body: (.body // "")} | @json' 2>/dev/null || true)"
+  PRIOR_COMMENTS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
+    | jq -Rrn '[inputs | select(length > 0) | (try fromjson catch null) | objects | (.body // "") | strings] | .[-3:] | .[]' 2>/dev/null || true)"
+  PRIOR_FINGERPRINT_MARKERS=""
+  if PRIOR_MARKER_LOGIN="$(validation_owner_pipeline_login)"; then
+    PRIOR_FINGERPRINT_MARKERS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
+      | jq -Rrn --arg login "${PRIOR_MARKER_LOGIN}" '
+          [inputs | select(length > 0) | (try fromjson catch null) | objects
+            | select((.login // "") == $login)] as $trusted
+          | ([$trusted[] | select((.body // "" | tostring | split("\n")) as $l
+                | (($l[0] | sub("\r$"; "")) == "## 🧪 Runtime validation dispatched")
+                  and any($l[]; sub("[[:space:]]+$"; "") == "- Cycle: 1"))
+              | (.updated_at // "" | tostring)] | max // "") as $start
+          | $trusted[] | select((.created_at // "" | tostring) >= $start) | (.body // "" | tostring)' 2>/dev/null \
+      | grep -oE '<!-- validation-failure-fingerprint: [0-9a-f]+ cycle: [0-9]+ -->' || true)"
+  else
+    echo "::warning::Cross-cycle escalation: pipeline login unavailable; prior fingerprint markers are not trusted this run."
+  fi
   if [ -n "${PRIOR_COMMENTS}" ]; then
     {
       echo "IMPORTANT — PREVIOUS VALIDATION CYCLE FAILURES (cycle $((VALIDATION_CYCLE - 1))):"
@@ -5300,15 +5409,15 @@ fi
 if [ "${DIAG_STATUS}" = "needs_fixes" ] \
 	&& [ -n "${FAILURE_FINGERPRINT}" ] \
 	&& [ "${VALIDATION_CYCLE}" -ge 3 ] \
-	&& [ -n "${PRIOR_COMMENTS:-}" ]; then
+	&& [ -n "${PRIOR_FINGERPRINT_MARKERS:-}" ]; then
 	PREV_CYCLE_1="$((VALIDATION_CYCLE - 1))"
 	PREV_CYCLE_2="$((VALIDATION_CYCLE - 2))"
 	HIT_PREV_CYCLE_1=0
 	HIT_PREV_CYCLE_2=0
-	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" <<< "${PRIOR_COMMENTS:-}" 2>/dev/null; then
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" <<< "${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
 		HIT_PREV_CYCLE_1=1
 	fi
-	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" <<< "${PRIOR_COMMENTS:-}" 2>/dev/null; then
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" <<< "${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
 		HIT_PREV_CYCLE_2=1
 	fi
 	PRIOR_FINGERPRINT_HITS="$((HIT_PREV_CYCLE_1 + HIT_PREV_CYCLE_2))"
