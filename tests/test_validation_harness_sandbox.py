@@ -1961,7 +1961,25 @@ def test_stage_copy_support_from_head_preserves_executable_mode(tmp_path: Path) 
 	assert modes["scripts/templates/slot_manifest.schema.json"] == 0o644
 
 
-def test_run_stages_exactly_the_four_support_paths_from_head() -> None:
+def test_stage_copy_support_from_head_directory_prefix(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "workflow-templates/validation-harness/a.sh.j2", "committed a\n")
+	_write(workspace, "workflow-templates/validation-harness/_shared/b.sh.j2", "committed b\n")
+	_write(workspace, "workflow-templates/other.yml", "committed other\n")
+	_git_add(workspace, "workflow-templates/validation-harness/a.sh.j2", "workflow-templates/validation-harness/_shared/b.sh.j2", "workflow-templates/other.yml")
+	_git_commit(workspace)
+	_write(workspace, "workflow-templates/validation-harness/a.sh.j2", "trusted a\n")
+	_write(workspace, "workflow-templates/validation-harness/_shared/b.sh.j2", "trusted b\n")
+	_write(workspace, "workflow-templates/other.yml", "trusted other\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:workflow-templates/validation-harness/")
+	assert members["workflow-templates/validation-harness/a.sh.j2"] == b"committed a\n"
+	assert members["workflow-templates/validation-harness/_shared/b.sh.j2"] == b"committed b\n"
+	assert members["workflow-templates/other.yml"] == b"trusted other\n", "a prefix entry covers only its own directory"
+	assert "reason=support_from_head path=workflow-templates/validation-harness/a.sh.j2" in stderr
+	assert "support_from_head_git_failed" not in stderr
+
+
+def test_run_stages_exactly_the_support_paths_from_head() -> None:
 	run = _function_body("cmd_run")
 	listed = re.findall(r'"HEAD:([^"]+)"', run)
 	assert listed == [
@@ -1969,6 +1987,8 @@ def test_run_stages_exactly_the_four_support_paths_from_head() -> None:
 		"scripts/validation_harness_sandbox.sh",
 		"scripts/codex_isolated_workspace.py",
 		"scripts/templates/slot_manifest.schema.json",
+		"scripts/render_validation_templates.py",
+		"workflow-templates/validation-harness/",
 	]
 	assert "HEAD:scripts/validate_driver.sh" not in run, "the sandbox runs the driver, so it must stay the trusted overlay"
 	assert '"${overlays[@]}" "${support_from_head_args[@]}"' in run

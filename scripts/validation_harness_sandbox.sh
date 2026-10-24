@@ -901,12 +901,17 @@ names.add(".ai/validate.yml")
 overlays = {}
 # "HEAD:<path>" arguments name support files the host overwrote with trusted
 # copies; the screened copy takes their committed bytes instead (stage_from_head).
+# An entry ending in "/" covers every listed name under that directory.
 support_from_head = set()
+support_from_head_dirs = []
 for item in overlay_args:
 	if item.startswith("HEAD:") and "=" not in item:
 		head_name = item[len("HEAD:"):]
 		if head_name and not head_name.startswith("/") and ".." not in head_name.split("/"):
-			support_from_head.add(head_name)
+			if head_name.endswith("/"):
+				support_from_head_dirs.append(head_name)
+			else:
+				support_from_head.add(head_name)
 		continue
 	dest, _, src = item.partition("=")
 	overlays[dest] = src
@@ -942,6 +947,10 @@ def stage_from_head(path, arcname):
 	git = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
 	tree = subprocess.run(git + ["ls-tree", "-z", "HEAD", "--", arcname], cwd=workspace, env=env, check=False, capture_output=True)
 	if tree.returncode != 0:
+		# An unborn HEAD is a normal fallback; any other git failure is logged.
+		head = subprocess.run(git + ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], cwd=workspace, env=env, check=False, capture_output=True)
+		if head.returncode == 0:
+			stage_log("skip", "support_from_head_git_failed", arcname)
 		return False
 	records = [record for record in tree.stdout.split(b"\0") if record]
 	if len(records) != 1:
@@ -952,6 +961,7 @@ def stage_from_head(path, arcname):
 		return False
 	blob = subprocess.run(git + ["cat-file", "blob", fields[2].decode("ascii", "replace")], cwd=workspace, env=env, check=False, capture_output=True)
 	if blob.returncode != 0:
+		stage_log("skip", "support_from_head_git_failed", arcname)
 		return False
 	member = tarfile.TarInfo(arcname)
 	member.size = len(blob.stdout)
@@ -1064,7 +1074,7 @@ for name in sorted(names):
 				stage_log("ok", "env_template_admitted", name)
 			else:
 				stage_log("skip", "env_template_not_regular", name)
-		elif name in support_from_head and stage_from_head(path, name):
+		elif (name in support_from_head or any(name.startswith(prefix) for prefix in support_from_head_dirs)) and stage_from_head(path, name):
 			pass
 		else:
 			add(path, name)
@@ -1234,6 +1244,10 @@ cmd_run()
 	# executes them (STAGE_PY imports codex_isolated_workspace from
 	# SANDBOX_HELPER_DIR), so the copy under test takes their committed HEAD
 	# bytes and the branch's own tests read the branch's code (#7913, #8064).
+	# The renderer and the validation-harness templates are overwritten the
+	# same way; the harness tests are rendered on the host before staging, so
+	# their HEAD copies are only read by the branch's own tests. An entry
+	# ending in "/" covers every tracked file under that directory.
 	# validate_driver.sh is left out on purpose: the sandbox runs it, so it
 	# stays the trusted overlay above, and a branch that changes it together
 	# with tests that read it still sees the trusted driver.
@@ -1242,6 +1256,8 @@ cmd_run()
 		"HEAD:scripts/validation_harness_sandbox.sh"
 		"HEAD:scripts/codex_isolated_workspace.py"
 		"HEAD:scripts/templates/slot_manifest.schema.json"
+		"HEAD:scripts/render_validation_templates.py"
+		"HEAD:workflow-templates/validation-harness/"
 	)
 
 	cmd_cleanup >/dev/null 2>&1 || true
