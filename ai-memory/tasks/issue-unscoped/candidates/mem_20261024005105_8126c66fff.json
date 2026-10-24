@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/validate.yml:heal-report step `if` condition | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The condition `!contains(fromJson('[\"false\"]'), vars.VALIDATION_HARNESS_HEAL_ENABLED)` may fail if `vars.VALIDATION_HARNESS_HEAL_ENABLED` is not defined or is an unexpected value.\n  WHY: Reported as MAJOR. An undefined `vars.*` resolves to an empty string and `contains` might behave unexpectedly. Disputed by anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus and z-ai_glm-5_3-flash, who say this is the repo-wide idiom and an unset variable means enabled.\n- .github/workflows/validate.yml:heal-report step `run` script (REPORT_WRAPPER_SHA) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `REPORT_WRAPPER_SHA` from `git -C .codex-workflow-src rev-parse HEAD` can be empty if git fails, so the reporter runs with an empty value.\n  WHY: Severity disagreement: google_gemini-3_1-flash-lite said MAJOR and qwen_qwen3_7-plus said NIT. The reporter may mishandle an empty SHA, and the HEAD-mismatch guard only fires for a 40-hex `SCRIPT_REF`. Disputed by anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash, who say this path is unreachable or fails closed as a logged skip.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add `scripts/workflow_failure_heal.py` and `scripts/build_sync_manifest.py` to the staging manifest's optional preserve list.\n  expected_change_site: .github/workflows/validate.yml, `optional_preserve_scripts_after_schemas` list in the `support_staging` step\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Reported as BLOCKER. The reviewer says both scripts are missing from the list. Disputed by anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus and z-ai_glm-5_3-flash, who cite both scripts at validate.yml:695-696.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/validate.yml:heal-report step, `if` condition | severity=MAJOR | confidence=3\n  PROBLEM: The condition `!contains(fromJson('[\"false\"]'), vars.VALIDATION_HARNESS_HEAL_ENABLED)` may fail if `vars.VALIDATION_HARNESS_HEAL_ENABLED` is not defined or is an unexpected value.\n  WHY: An undefined `vars.*` resolves to an empty string, and `contains` might behave unexpectedly or return false. The reviewer says a check for explicit 'true' or a safer boolean check would be more robust.\n- .github/workflows/validate.yml:heal-report step, `run` script | severity=MAJOR | confidence=4\n  PROBLEM: `REPORT_WRAPPER_SHA` is resolved with `git -C .codex-workflow-src rev-parse HEAD`, which can result in an empty string if the directory is not a git repository or `git` fails.\n  WHY: The `bash \"${reporter}\"` call would then run with an empty `REPORT_WRAPPER_SHA`. If the reporter expects a non-empty SHA, it could produce misleading errors or fail.\n- TASK_GAP | severity=BLOCKER | confidence=5\n  Requirement: \"Add `scripts/workflow_failure_heal.py` and `scripts/build_sync_manifest.py` to the staging manifest's optional preserve list.\"\n  Expected change site: .github/workflows/validate.yml, `optional_preserve_scripts_after_schemas` list in the `support_staging` step.\n  Evidence of absence: The PR diff (and LAST RUN DIFF) shows these scripts are used in the `support_staging` step's manifest, but they are missing from the `optional_preserve_scripts_after_schemas` list within the same step in `.github/workflows/validate.yml`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/validate.yml:heal-report job, \"Report the harness-owned validation failure to workflow failure heal\" step, `REPORT_WRAPPER_SHA=\"$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)\"` | severity=NIT | confidence=3\n  PROBLEM: When `SCRIPT_REF` is not a 40-hex SHA (for example \"stable\") and the `.codex-workflow-src` checkout is not a valid git repository, `git rev-parse HEAD` fails and `REPORT_WRAPPER_SHA` becomes empty. The reporter then runs with an empty value.\n  WHY: The checkout step has `continue-on-error: true`, and the HEAD-mismatch guard only fires for a 40-hex `SCRIPT_REF`. The reporter may not handle an empty value gracefully. If it fails, the job exits non-zero, which breaks the documented promise that \"the reporter always exits 0\".\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8b323532a11a1450bfe012148f0ae5da13e2bf67622156559397fea5f80b78b0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8032,
+    "run_id": "40043977269",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40043977269",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024005105_8126c66fff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8032,
+    "run_id": "40043977269"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T00:51:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
