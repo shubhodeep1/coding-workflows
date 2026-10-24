@@ -398,3 +398,173 @@ TODO/FIXME/HACK markers: none in `scripts/*.sh`, `scripts/*.py` or `.github/work
 | Code modularization | `.github/workflows/review_autofix.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/forward-merge-stable-to-main.yml`, `scripts/tg_helpers.sh`, `scripts/gh_helpers.sh`, 13 workflows carrying the `gh_api_retry` shim | Medium |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `tests/test_workflow_file_size_limit.py`, `scripts/ci_budget_watch.py` | Small |
 | Medium/Low fixes | `.github/workflows/check_failure_triage.yml`, `.github/workflows/validate.yml`, `.github/workflows/review_autofix_sweep.yml`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/forward-merge-stable-to-main.yml`, `.github/workflows/clarify.yml`, `.github/workflows/pr6576-shard-followup.yml`, `.github/workflows/review_rb_judge_dispatch.yml`, `docs/scripts-pending-removal.md`, `scripts/tg_helpers.sh`, `scripts/orchestrate_poll_process.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-24)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means a static reading proves every precondition. The calls hit the same endpoint with identical arguments, filters and auth. They sit in the same step or function with no mutation in between. Error handling and retries stay the same, no concurrency boundary is crossed, and no cache contract changes. The implement stage may act on these without further review. `NEEDS_VERIFICATION` means the consolidation looks valid, but at least one precondition could not be proven from source alone. The listed checks must pass before anyone implements it. `RISKY_SKIP` means a hard trigger applies: pagination, retry or race-defence paths, auth or identity probes, rate-limit probes, `orchestrate_poll_process.sh` or judges, or log keys other code greps for. These are listed for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001** · `SAFE_TO_MERGE`
+- **Files and lines:** `.github/workflows/review_autofix.yml:1679` (pre-loop ensure), `:1681-1687` (per-issue loop), `:1689-1694` (no-issue else branch), fallback helper `:1613-1618`; shared helper `scripts/label_helpers.sh:206-223`.
+- **Endpoint:** `POST /repos/{owner}/{repo}/labels` (`gh label create`), same label `ai:review-blocked`, same repo.
+- **Current vs. proposed calls:** with N ≥ 1 linked issues, 1 + N creates today, N after the change. Under API-001 each create can cost up to 5 attempts. The no-issue path stays at 1.
+- **Evidence:** in the `fingerprint-cap-block` job, `Apply identical-failure cap outcome` (which runs `set -uo pipefail`, no `-e`, at `:1577`) runs
+  ```bash
+  ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
+  ```
+  and then calls `set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"` for each linked issue. Both forms of that helper first call `ensure_label_exists "<label>" "<repo>" || true` for the same label:
+  - shared helper: `label_helpers.sh:223`
+  - inline fallback: `review_autofix.yml:1615`
+
+  The pre-loop call therefore only matters on the else branch (`:1690`), which POSTs the label straight onto the PR.
+- **Proposed fix:** delete `:1679` and put `ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true` as the first line of the `else` branch, just before the PR label POST at `:1690`.
+- **Safety rationale:** both calls are in the same step and call the same function with the same label and repo, so color and description come from the same catalog or the same fallback. Nothing in between changes label state. Both calls end in `|| true`, so failure handling and `gh_retry` behaviour stay the same. The step's per-PR concurrency lock (`:1623-1625`) is not crossed, and no new log key is added or removed.
+- **Downstream signal:** in `review_autofix.yml`, move `ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true` from `:1679` into the `else` branch before `:1690`, and change nothing else.
+
+**MERGE-002** · `NEEDS_VERIFICATION`
+- **Files and lines:** `scripts/review_autofix_step_mark_ready_to_merge.sh:76` (pre-loop ensure) and `:77-81` (loop calling `set_issue_phase_label_resilient`). Fallbacks at `:15-29` and `:30-50`; shared `scripts/label_helpers.sh:195-196, 223`.
+- **Endpoint:** `POST /repos/{owner}/{repo}/labels` (`ai:ready-to-merge`).
+- **Current vs. proposed calls:** 1 + N today, N after the change.
+- **Evidence:** this is the same duplicate as MERGE-001. The difference is that `:76` has no `|| true`, and the script runs under `set -euo pipefail` (`:7`). With the shared helper loaded, `ensure_label_exists` returns 1 on a real create failure (`label_helpers.sh:195-196`), so today the step stops before any issue is labelled. The call inside `set_issue_phase_label_resilient` is `|| true`, so if `:76` is removed the step would continue and POST the labels.
+- **Proposed fix:** delete `:76`, but only after confirming that the fail-fast exit is not relied on.
+- **Safety rationale:** the merge changes error-handling semantics: a failed create aborts the step today and would not after the change. That breaks the SAFE_TO_MERGE "same failure semantics" precondition.
+- **Downstream signal:** before editing, confirm two things.
+  1. Nothing downstream depends on the `Mark linked issues ready to merge` step (`review_autofix.yml:4256-4264`) failing when label creation fails. Check the later steps' `if:` conditions and the step's `continue-on-error`.
+  2. The label POST at `label_helpers.sh:229` or `:226-239` succeeds against an existing label even when the create failed.
+
+  If both hold, delete `:76`.
+
+**MERGE-003** · `RISKY_SKIP`
+- **Files and lines:**
+  - `scripts/workflow_failure_heal_non_retryable_backfill.sh`: `:150` (`gh api user`), `:161` and `:229-260` (paginated GraphQL `pullRequests(states: OPEN, first: ≤10, orderBy: UPDATED_AT ASC) { … comments(last: 100) … }`), `:172-226` (totalCount plus window-skip calls).
+  - `scripts/review_security_hold_sweep.py`: `:47-60` and `:276-283` (paginated GraphQL `pullRequests(first:50, states:OPEN, orderBy: UPDATED_AT DESC) { … comments(last:100) … }`), `:203-216` (`gh api user` identity probe), `:178-186` (per-PR comment pagination).
+  - Both run as consecutive steps of the sweep job: `.github/workflows/review_autofix_sweep.yml:560-575` and `:600-609`.
+- **Endpoint:** GraphQL `repository.pullRequests` (two queries) and `GET /user` (two identity reads).
+- **Current vs. proposed calls:**
+  - Backfill: 1 + 1 + skip calls + ceil(MAX_PRS/10), which is 5 page calls at the default.
+  - Security hold: 0–1 identity calls + ceil(open/50) pages, plus per-PR comment pages.
+  - A single shared listing could in theory serve both.
+- **Evidence:** both steps list open PRs with their last 100 comments in the same job tick. The backfill header (`:39-40`) says "the sweep keeps no PR comment snapshot to reuse".
+- **Proposed fix (not authorised):** none for auto-implementation. A shared GraphQL page set written to `${RUNNER_TEMP}` would need one ordering, one page size and one token for both consumers.
+- **Safety rationale:** several hard triggers apply.
+  - Both are paginated, with different ordering (ASC vs DESC), page size and window rotation (`:165-226`).
+  - Both identity reads are auth probes: the security hold may use a separate `SECURITY_HOLD_FINDING_AUTHOR_TOKEN` (`:236-243`).
+  - The steps run under different `if:` gates, and the security step uses a different token (`GH_PAT || github.token`).
+- **Downstream signal:** do not auto-implement. A manual review must decide whether one ordering can serve both. The backfill's least-recently-updated rotation is deliberate (`:41-45`). It must also confirm that both consumers accept the same token's visibility before any shared snapshot is designed.
+
+**MERGE-004** · `RISKY_SKIP`
+- **Files and lines:** `scripts/check_failure_triage.sh:567` (raw `gh api`) and `:571` (`gh_retry gh api`, same URL).
+- **Endpoint:** `GET /repos/{owner}/{repo}/git/ref/heads/{ref}`.
+- **Current vs. proposed calls:** on success, 1 call either way. On a non-404 failure, 1 + up to 5 today, against 1 classified call with up to 5 attempts.
+- **Evidence:**
+  ```bash
+  if gh api "repos/${REPO}/git/ref/heads/${integration_ref_encoded}" >/dev/null 2>"${integration_ref_err_file}"; then
+  …
+  elif gh_retry gh api "repos/${REPO}/git/ref/heads/${integration_ref_encoded}" >/dev/null 2>&1; then
+  ```
+  The raw probe exists only to detect a 404 before retrying.
+- **Proposed fix (not authorised):** use one `gh_api_retry` call and branch on `GH_API_RETRY_LAST_STATUS=404`, as `review_autofix_sweep.yml:339-344` already does.
+- **Safety rationale:** this is a retry path, and the `integration_branch outcome=skip reason=branch_missing|lookup_failed` lines (`:570`, `:574`) are log output that triage consumers may grep.
+- **Downstream signal:** do not auto-implement. A manual review must confirm that `gh_api_retry` is always loaded in this script, which uses `gh_retry` today. It must also confirm that the 404 classification produces the same `branch_missing` and `lookup_failed` outcomes, and that no consumer parses the current reason tokens differently.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001** · `NEEDS_VERIFICATION`
+- **Files and lines:**
+  - `scripts/review_autofix_step_evaluate_gate.sh:187-207`: the gate GraphQL at `:190-196` sets `post_merge_linked_issues_cache_known=true` at `:198` but never exports it. Outputs are at `:1361-1363`.
+  - `.github/workflows/review_autofix.yml:756` (job `if:`) and `:850-869`: the dispatch job re-runs the GraphQL.
+- **Endpoint:** GraphQL `pullRequest.closingIssuesReferences(first: 50) { number labels(first: 100) }`. The query strings at `evaluate_gate.sh:194` and `review_autofix.yml:860` are byte-identical.
+- **Current vs. proposed calls:** for a merged PR with no closing references and non-empty title or body, 2 identical GraphQL calls today, 1 after the change.
+- **Evidence:** the job is skipped only when `post_merge_validate_context_definitely_empty == 'true'`, which requires an empty cache and empty PR text (`evaluate_gate.sh:202-206`). If the gate's read succeeded with `[]` and the PR text is non-empty, the job starts. At `:855`, `issue_nodes_json = "[]"` then triggers `gh_retry gh api graphql …` with the same query again before the body/title fallback.
+- **Proposed fix:** add a gate output `post_merge_linked_issues_cache_known` (written next to `:1362`), pass it into the job's `env:`, and wrap `review_autofix.yml:855-869` in `if [ "${issue_nodes_json}" = "[]" ] && [ "${POST_MERGE_LINKED_ISSUES_CACHE_KNOWN:-false}" != "true" ]`. A failed or unknown gate read keeps today's live retry.
+- **Safety rationale:** the two calls are in different jobs, so this crosses a job boundary. The gate uses raw `gh api graphql` with no retry, while the dispatch uses `gh_retry`. The cached value is therefore a snapshot from before the job hop, not a same-step merge.
+- **Downstream signal:** before editing, confirm three things.
+  1. `post_merge_linked_issues_cache_known` and the env name `POST_MERGE_LINKED_ISSUES_CACHE_KNOWN` do not collide with any existing identifier (search `.github/` and `scripts/`).
+  2. A merged PR's `closingIssuesReferences` cannot change between the gate and the dispatch job.
+  3. The consumer template copy of this job, if any, receives the new output (§8 default `false`).
+
+**REUSE-002** · `NEEDS_VERIFICATION`
+- **Files and lines:** `.github/workflows/review_autofix_sweep.yml:228-237` (paginated `GET /repos/{r}/pulls?state=open`, with `READ_TOKEN`) and `:285` (`GET /repos/{r}`, `--jq .default_branch`, with `READ_TOKEN`). The value is used at `:350` and `:376-380` for review-run provenance (#6629).
+- **Endpoint:** `GET /repos/{owner}/{repo}` and `GET /repos/{owner}/{repo}/pulls`.
+- **Current vs. proposed calls:** ceil(open/100) + 1 today, ceil(open/100) after the change.
+- **Evidence:** the line-285 read runs only after `total > 0` (`:273-276`), so at least one non-draft open PR is in the listing that was just fetched. Each PR object's `base.repo` names this repository, and the jq projection at `:230-237` drops it.
+- **Proposed fix:** capture `.base.repo.default_branch` from the raw listing, the first element after `add`, and validate it with the existing regex and `null` check at `:286`. Keep the exact `AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable` no-dispatch path when the value is missing.
+- **Safety rationale:** both calls use the same token in the same step with no mutation in between. However, `base.repo.default_branch` in the pulls-list payload has not been confirmed from repo evidence, and the comment at `:282-284` deliberately makes this a single provenance read with no fallback. `review_merge_train.sh:1137-1149` (`_mt_resolve_default_branch`) is the release-path equivalent. It is deliberately not covered here, because it sits in race-defended release code (RISKY_SKIP class).
+- **Downstream signal:** before editing, verify three things.
+  1. Against a live response, every open PR object from `repos/{r}/pulls` carries a non-null `base.repo.default_branch` equal to `repos/{r}.default_branch`.
+  2. `tests/` holds no fixture or contract test that pins the separate `repos/{r}` read.
+  3. The logged skip line and its keys stay unchanged. Coordinate with API-006, which edits the same lines (`:228`, `:285`).
+
+**REUSE-003** · `NEEDS_VERIFICATION`
+- **Files and lines:** `scripts/review_run_reviewers.sh:455-475`. A raw `gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state'` runs at `:464` when `PR_PAYLOAD_FILE` is older than 120s. The same file defines and uses `gh_review_pr_state` at `:16-17`, and the cached form is at `scripts/gh_helpers.sh:83-118`.
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{n}`.
+- **Current vs. proposed calls:** 1 per review round when the payload is stale, against 0–1, because the job-local cache is shared with the reviewer and editor watchdogs.
+- **Evidence:** the output filter is identical (`grep -xE 'open|closed|merged' || echo open`). `gh_review_pr_state` adds a flock-guarded job-local cache that stores only `open`, for 120s.
+- **Proposed fix:** replace `:464` with `preflight_state="$(gh_review_pr_state "${REPOSITORY}" "${PR_NUMBER}")"`.
+- **Safety rationale:** the preflight is a closed-PR short-circuit, a race-defence check. A cached `open` up to 120s old could let a fan-out start on a PR closed inside that window, so the result may differ from today's live read.
+- **Downstream signal:** before editing, confirm that no watchdog writes the cache before line 464 runs. If none does, the change saves nothing on the preflight and only seeds the cache for the watchdogs, which still saves 1 call per round. Also confirm that seeding is acceptable given the comment at `gh_helpers.sh:81-82` ("A cache entry is never used as merge authorization").
+
+**REUSE-004** · `RISKY_SKIP`
+- **Files and lines:** `scripts/review_merge_train.sh:800-806` (`_mt_find_marker_comment`: paginated `GET issues/{pr}/comments`, which returns bodies but emits only `id created_at`) and `:878-883` (`_mt_upsert_comment`: an extra `GET issues/comments/{id}` to compare the body before the PATCH). The caller passes the already-looked-up ID at `:993-999`.
+- **Endpoint:** `GET /repos/{r}/issues/{n}/comments` (paginated) and `GET /repos/{r}/issues/comments/{id}`.
+- **Current vs. proposed calls:** listing pages + 1 today, listing pages only after the change.
+- **Evidence:** the body comparison at `:880` uses data the listing already returned.
+- **Proposed fix (not authorised):** have `_mt_find_marker_comment` also emit a body digest, for example `\(.body | @base64)`, so the upsert can compare without a re-read.
+- **Safety rationale:** the source call is paginated, and the merge train explicitly defends against races (the bypass and marker logic at `:815-858`, the listing-shift retries at `:1125-1131`). The fresh GET is also a newer read than the listing (TOCTOU).
+- **Downstream signal:** do not auto-implement. A manual review must confirm that changing the `id created_at` output contract does not break `_mt_find_marker_comment_id` (`:808-813`) or the bypass check, which parses `created_at` positionally at `:963-964`.
+
+**REUSE-005** · `RISKY_SKIP`
+- **Files and lines:** `.github/workflows/review_autofix_sweep.yml:228-239` (open-PR snapshot written to `ci-cancelled-pr-snapshot.json`) and `scripts/ci_cancelled_rerun.py:117-145` (`current_pr_heads`: a second paginated `GET pulls?state=open`, same `github.token`). The snapshot is read at `:405`.
+- **Endpoint:** `GET /repos/{owner}/{repo}/pulls?state=open&per_page=100`.
+- **Current vs. proposed calls:** 2 paginated listings per tick today, 1 after the change (not recommended).
+- **Evidence:** the second listing is documented as intentional: `# The sweep's earlier /pulls listing predates review dispatch; … a failed/partial page cannot authorize a rerun.`
+- **Proposed fix:** none. It is recorded so the duplicate is not "fixed" by mistake.
+- **Safety rationale:** the call is paginated, it is a deliberate freshness re-read that guards rerun authorisation against head moves, and it runs in a separate step after review dispatches.
+- **Downstream signal:** do not auto-implement. Merging would let a stale head SHA authorise `rerun-failed-jobs` (`ci_cancelled_rerun.py:168`). Any change needs a design review of the freshness contract.
+
+### Dead Calls (DEAD-API-###)
+
+**DEAD-API-001** · `SAFE_TO_MERGE`
+- **Files and lines:** `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh:31` (pre-resolution ensure), `:33-55` (issue resolution, `exit 0` at `:52`) and `:57-61` (loop). Fallback helpers are at `:10-18` and `:19-29`, with the ensure at `:24`; shared ensure at `scripts/label_helpers.sh:223`.
+- **Endpoint:** `POST /repos/{owner}/{repo}/labels` (`ai:review-blocked`).
+- **Current vs. proposed calls:**
+  - No linked issues: 1 today, 0 after the change.
+  - N ≥ 1 linked issues: 1 + N today, N after the change.
+  - Under API-001 each create can cost up to 5 attempts.
+- **Evidence:**
+  ```bash
+  ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true
+  ```
+  runs before linked issues are known.
+  - With no linked issues, the script exits at `:52` without applying the label, so the create's result is never used.
+  - With linked issues, every `set_issue_phase_label_resilient` call (`:60`) re-runs `ensure_label_exists` for the same label: the shared helper at `label_helpers.sh:223`, or the fallback at `:24`.
+
+  The step runs on every `failure()` of codex-agent (`review_autofix.yml:5500-5501`), which makes it the most frequent of the duplicate-ensure sites.
+- **Proposed fix:** delete line 31.
+- **Safety rationale:** both calls are in the same step and call the same function with the same label and repo. Nothing in between changes label state. Both calls end in `|| true` under `set -euo pipefail`, so failure handling and `gh_retry` behaviour stay the same. No concurrency boundary is crossed, and no log key other code consumes is affected: the helper only emits `::debug::` or `::warning::` annotations.
+- **Downstream signal:** delete `ensure_label_exists "ai:review-blocked" "${REPOSITORY}" || true` at `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh:31`, and change nothing else.
+
+Considered and rejected:
+- The 12 inline `gh api rate_limit` budget probes (DUP-003) are not quota-wasting dead calls. `scripts/gh_helpers.sh:30` documents that `/rate_limit does not debit the primary REST allowance`, so consolidating them saves no quota.
+- The double `pulls/{n}` read at `test-and-mark-stable.yml:1750-1752` (`HEAD_A`/`HEAD_B`) is a deliberate stability check, not a duplicate.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — gh's real "already exists" stderr is not checked, and adding `already[ _-]?exists` to `_is_gh_permanent_failure` changes retry behaviour for every `gh_retry` caller. Net-new detail: DEAD-API-001 and MERGE-001/002 remove 1 duplicate create per invocation at three sites, so they cut the API-001 waste even before the regex or cache lands. Inside the per-issue `set_issue_phase_label_resilient` loops the cost multiplies (N creates of the same label), and only the proposed per-job cache removes that.
+- API-002: NEEDS_VERIFICATION — sourcing the shared helpers changes retry behaviour for `gh pr merge --auto` (`review_autofix.yml:1338`, `:1375`). Net-new detail: the `.codex-freshness-src` sparse checkout (`:1120-1123`) contains `scripts/gh_helpers.sh` but not `scripts/label_helpers.sh`, so the implement stage must add it to the sparse-checkout list before it can source `ensure_label_exists` from the verified commit.
+- API-003: RISKY_SKIP — paginated comment reads interleaved with DELETEs (the BUG-002 page-shift); a shared TSV cache would cross functions and a mutation boundary.
+- API-004: NEEDS_VERIFICATION — retrying an explicit `-X POST` cancel goes against the #6634 single-attempt rule. Confirm `gh_retry --idempotent` treats 409 (already completed) as permanent, so it does not retry.
+- API-005: NEEDS_VERIFICATION — the per-issue `gh issue view` loop (`review_autofix.yml:910-925`) could be batched, but labels must keep `labels(first:100)` parity with the gate query. Apply after REUSE-001 so the batch runs only on the body/title fallback path.
+- API-006: RISKY_SKIP — the `:228` change wraps a `--paginate` listing in a new retry wrapper, whose restart semantics after a failure mid-pages need manual review. It also edits the same lines as REUSE-002, so the two must be coordinated.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 2 | DEAD-API-001, MERGE-001 |
+| NEEDS_VERIFICATION | 4 | MERGE-002, REUSE-001, REUSE-002, REUSE-003 |
+| RISKY_SKIP | 4 | MERGE-003, MERGE-004, REUSE-004, REUSE-005 |
+
+### Implement-Stage Handoff
+- DEAD-API-001: delete the pre-resolution `ensure_label_exists` at `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh:31`. It runs on every failed codex-agent run.
+- MERGE-001: move `ensure_label_exists "ai:review-blocked" …` at `.github/workflows/review_autofix.yml:1679` into the no-issue `else` branch before `:1690`.
