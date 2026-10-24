@@ -1567,6 +1567,39 @@ The candidate issues are the same as before. When the batch cannot cover a label
 
 What this means for operators: the poller spends fewer GitHub API calls on every tick, and nothing else changes.
 
+- **The release gate workflow is back under its file size guard.** `.github/workflows/test-and-mark-stable.yml` had reached 441,071 bytes. The `budget-watch` job warns at 440,000 bytes, `tests/test_workflow_file_size_limit.py` fails at 480,000, and GitHub stops starting runs above 512,000 (#7991).
+
+The two largest step bodies in the `e2e-smoke-test` job now live in `scripts/`. They moved verbatim, so the gate behaves exactly as before:
+
+| Step | Script | Bytes moved |
+| --- | --- | --- |
+| Phase 4: Wait for review & autofix to complete (`wait-review`) | `scripts/stable_e2e_step_wait_review.sh` | about 48,600 |
+| Phase 4b: Verify editor restored canary (`verify-bait-removed`) | `scripts/stable_e2e_step_verify_bait_removed.sh` | about 34,000 |
+
+The workflow is now 361,147 bytes. Each step keeps its name, id, `if:` and `env:`. Its `run:` block sources the script from a copy taken from a sparse checkout pinned to the run's own commit (`github.sha`), never from the `main` checkout. A new step checks that checkout's commit and refuses symlinks before it copies the scripts to `RUNNER_TEMP`. If the scripts are missing or unverified, the step fails. No inputs, outputs or GitHub API calls change.
+
+What this means for consumer repos: nothing. This workflow runs only in coding-workflows.
+
+### For contributors
+
+Tests read the moved bodies through `expanded_test_and_mark_stable_text()` in `tests/review_autofix_step_scripts.py`, which puts them back inline. The registry `TEST_AND_MARK_STABLE_STEP_SCRIPTS` and `tests/test_test_and_mark_stable_step_scripts_contract.py` pin the wrapper and the pinned checkout. The contract test also requires the workflow to stay at or below 430,000 bytes.
+
+- **Each review editor attempt now logs one `EDITOR_ATTEMPT_RESULT` line.** It names the model, engine, duration, exit code, stall state, output byte counts, whether the summary was written, and a failure class, so an editor failure no longer shows only an opaque exit code.
+
+Four editor failures in the 2026-09-23 workflow analysis ended with exit code 226 and nothing in the step log saying why, which slowed triage of the repeated `editor_empty_noop` failures. `scripts/review_apply_fixes.sh` now prints, after each attempt's stall-state check and before the exit-code branches:
+
+`EDITOR_ATTEMPT_RESULT attempt=<n>/<max> model=<slug> engine=<claude|codex> duration_secs=<n> exit_code=<n> stall_state=<none|observed|killed> stdout_bytes=<n> stderr_bytes=<n> summary_present=<true|false> failure_class=<token>`
+
+`failure_class` is one of `ok`, `empty_output`, `stall_killed`, `workspace_safety_violation`, `config_bootstrap`, `claude_capacity`, `timeout` or `exit_nonzero`. The line carries counts and fixed tokens only, never editor output, and a model name with unexpected characters prints as `unknown`. An attempt whose sandbox transfer fails stops before this point and prints no line. Exit codes, retries and the model fallback are unchanged.
+
+What this means for consumer repos: after the next `@stable` sync, review/autofix logs show one `EDITOR_ATTEMPT_RESULT` line per editor attempt. Nothing to configure.
+
+- **The release gate's review wait stops probing a job log it cannot read.** After 3 failed fetches of `/actions/jobs/{id}/logs` in a row, the Phase 4 wait in `test-and-mark-stable.yml` skips that endpoint for 300 seconds; release run 35696603462 made 275 failed fetches in about an hour.
+
+Status and conclusion polling continue during the pause, and the log counts as empty, as it does after a failed fetch. A successful fetch resets the count. The pause covers all three job-log fetches of the wait: the live-log shortcut fetch, the log-size fetch and the bait-coverage check. During the pause that check logs `reason=live_log_cooldown` for a run still in progress, does not count the skip toward the 3 unreadable checks that drop a completed run, and reads the log again once the pause ends. Once the watched run has completed, the check reads its job logs even during a pause, because they are finished logs rather than the live logs the pause throttles; release run 40005654539 timed out when a pause skipped the coverage read of a review run that had completed 22 seconds inside the Phase 4 budget.
+
+What this means for release operators: a review wait whose job logs cannot be read keeps polling the run's status, but sends far fewer failing log requests.
+
 ### For contributors
 
 The helper is `_fetch_standalone_pipeline_label_issues_graphql` in `scripts/orchestrate_poll_process.sh`, next to `_fetch_standalone_marker_issues_graphql`. It reads `repository.issues(labels:)`, not `search`, because the search index can lag. Owner and name go in as `-f` variables, and the fixed label literals are checked against `^[A-Za-z0-9:._-]+$` before they are written into the query. The test fake answers the batch only when `mock_pipeline_label_graphql=True`; without it, every label takes the REST path as before.
@@ -3321,6 +3354,97 @@ On 2026-10-23, tele-funtoken-msg-scoring final PR #3933 (`orchestrator/project-3
 - The integration judge prompt now includes the last resolver failure and the judge's own previous diagnosis for the PR. Its "only lines from either merge side" rule is replaced by the resolver's synthesize rule.
 
 What this means for consumer repos: the next `@stable` sync stops an integration final PR from spending its whole `INTEGRATION_CONFLICT_LIFETIME_MAX` budget on a head nothing can fix. It now either merges past a `.ai/validate.yml` conflict or parks with a tracking comment that names the reason, the run and the paths. Re-apply any integration-branch changes to `.ai/validate.yml` that the take-base comment shows as dropped, if you still need them.
+
+- **Review/autofix no longer loses a finished edit cycle to a transient push failure.** The "Push all pending commits" step of `review_autofix.yml` now retries a GitHub server error, a `remote rejected ... (failed)` or a network drop up to 2 times, and stops retrying once the remote branch already shows the pushed commit.
+
+Before, the step retried only non-fast-forward rejections. Every other failure ended the run, so runs 35868679924 (GitHub `Internal Server Error`) and 35843269131 (`remote rejected ... (failed)`) committed a full edit cycle and then lost it at the push.
+
+- A failure is retried only when the push output matches a GitHub 5xx (`Internal Server Error`, `The requested URL returned error: 5xx`, `HTTP 5xx`), `remote rejected ... (failed)`, or a network error (`RPC failed`, `unexpected disconnect`, `early EOF`, `Connection reset`, `Could not resolve host`, `Operation timed out`).
+- Protected-branch and repository-rule rejections (`GH006`, `GH013`, `protected branch`, `push declined`, `repository rule`) are checked first and still fail at once.
+- Each retry waits 5 s, then 10 s, and reads the remote tip with `git ls-remote`, bounded by a 60 s timeout. When the tip already equals the local commit, the push counts as done; the tip is checked once more before giving up after the second retry. Otherwise the same plain push runs again; a remote that moved meanwhile goes through the existing fetch-and-merge path. Nothing is force-pushed or rebased, and the push output the step prints has any token in a URL replaced with `***`.
+- Each decision logs `AUTOFIX_PUSH_TRANSIENT_RETRY pr=<n> attempt=<i>/2 class=server_error|remote_rejected_failed|network outcome=retry|landed|gave_up`.
+- Switch: `AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED` (default `true`; `false` in any letter case restores the old behaviour).
+
+Tests: additions to `tests/test_review_autofix_review_pipeline_contract.py`, which run the step body against a fake `git`.
+
+- **`test-and-mark-stable.yml` now tags a release when dispatched with `skip_e2e=true`.** Before, that path always ended with the `release` and `sync-to-main` jobs skipped, so nothing was tagged even though the run reported success.
+
+The `release` job was gated on `success()`, which GitHub evaluates as false whenever any ancestor job was skipped, and `skip_e2e` skips every live e2e job. On 2026-10-23 run 39955031510 passed `validate` and concluded `success`, but the latest tag stayed v1.38.2. `release` now checks `!cancelled()` plus explicit `source`, `resolve-version` and `validate` results, and `sync-to-main` checks `!cancelled()` before its existing conditions.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Jobs whose gate changed | `release`, `sync-to-main` |
+| Still never tags | `gate_only` runs, `dry_run` runs, cancelled runs, any run where `validate` did not succeed |
+
+The release Telegram notification now counts a skipped e2e smoke test as passed on a `skip_e2e=true` run that is not a dry run, so a release that published is reported as SUCCEEDED (with `e2e ⊘`) instead of FAILED. The orphans, orchestrate, validate-fx, negative and alt-model icons on that line now show each job's result (`⊘` when skipped) instead of a fixed `✓`.
+
+What this means for operators: the documented emergency path ("Skip E2E test and only mark stable") works again. A full-gate run whose e2e jobs fail still skips `validate` and therefore still does not tag.
+
+- **The release gate's Phase 4 review wait no longer gives up on a review run that is still working.** Once its 90-minute total budget runs out, "Phase 4: Wait for review & autofix to complete" keeps waiting while the watched review run is queued, or in progress and active. The existing inactivity timeout (`REVIEW_TIMEOUT`, 60 minutes by default) still applies, so a run that stays queued with no activity for that long still ends the phase. It never waits past the point that would leave too little time for Phase 4b, Phase 6, Phase 7 and finalization.
+
+Run 39969947939 failed with `Review phase exceeded its 90-minute total wall-clock budget` six minutes after the editor had pushed its fix commit. The run being watched was in its last bookkeeping step, and the job still had about 80 minutes of unused budget. The bait-covering review can wait in the `pr-autofix-<PR>` concurrency group behind the review that ran when the PR opened, so a single Phase 4 can cover two review runs back to back.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Phase 4 base budget (unchanged) | 90 minutes (`REVIEW_STEP_TIMEOUT` 75 + `REVIEW_PHASE_HANDOFF_BUDGET_MINUTES` 15) |
+| Latest point Phase 4 can still be waiting, with defaults | job start + 215 minutes (300 - 25 - 30 - 10 - 20) |
+| Job timeout (unchanged) | 300 minutes |
+| New GitHub API calls | 0 |
+
+- The ceiling is `E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - EDITOR_RETRY_BUDGET_MINUTES - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60`, never below the base deadline. This is the job-start cap Phase 4b already uses, and it also reserves Phase 4b's budget. With no recorded job start, nothing is extended.
+- Apart from the one handoff poll below, the wait is extended only while the run's ID is numeric, the run is not one already found not to cover the bait commit, and its status is `queued`, `pending`, `waiting` or `requested`, or `in_progress` with activity inside the inactivity window or a current step younger than the per-step stall cap. The inactivity timeout, the per-step stall cap and the bait-coverage checks are unchanged.
+- When the loop has just dropped the watched run (it did not review the bait commit, or its coverage could not be confirmed) or moved on from a cancelled run to the new PR head, it gets one more poll to find the next run, as long as the ceiling has not passed. That allowance is used up by the next deadline check, so if that poll finds no eligible run the phase times out. Before this, the check judged the dropped run and timed out before the queued bait-covering run was ever polled.
+- A poll past the base deadline starts only when it and its `POLL_INTERVAL` sleep still end before the ceiling.
+- The first extension logs `E2E_REVIEW_DEADLINE_EXTENDED run=<id> status=<status> base=<epoch> ceiling=<epoch>` once. The prefix is registered in `agents.d/8004-phase4-review-deadline-extension.md`.
+
+What this means for consumer repos: nothing. This only changes the release gate in coding-workflows, which consumer repos do not run.
+
+### For contributors
+
+The extension logic sits between `# BEGIN/END phase4 review deadline extension (#8004)` in `scripts/stable_e2e_step_wait_review.sh`, the Phase 4 step body that `.github/workflows/test-and-mark-stable.yml` sources (#7991). Tests: new cases in `tests/test_test_and_mark_stable_review_blocked_budget.py` run that block with a fixed clock.
+
+- **The consumer drift audit no longer reports wrappers a consumer's install profile does not include.** A consumer installed with `WORKFLOW_PROFILE=core` or `standard` was reported as drifted for every `full`-only wrapper it rightly did not have.
+
+`scripts/audit_consumer_drift.py` now reads each consumer's `WORKFLOW_PROFILE` repository variable (unset means `full`, as in `update_workflows.yml`) and skips a missing wrapper that the profile's manifest in `workflow-templates/profiles/` does not list, logging `DRIFT_SCAN_SKIP ... reason=not_in_profile`. A wrapper the consumer has is still compared, whatever its profile. The variable must be exactly `core`, `standard` or `full`, as the updater requires. When the variable cannot be read or holds any other value (including a padded or mis-cased one such as ` Core `), or the profile's manifest is unreadable or lists no wrapper, the audit checks every wrapper as before. Each `DRIFT_SCAN_OK` line now ends with `compared=<n>`, and each result in the summary JSON has `templates_compared`, the number of wrappers actually compared for that consumer.
+
+- **Plans that change files outside `files_touched` are no longer auto-approved.** Before this, the automatic `/approved` checked only automation paths, so a plan that listed an ordinary file outside the issue's `files_touched` list was approved and its implementation run was then refused by the `files_touched` guard, latching `ai:scope-blocked`.
+
+`scripts/files_touched_scope_guard.py --plan-auto-approval-gate` now compares the exact files in the plan's "Files ... change" section with the issue's `files_touched` list, using the same matcher as the implement guard. A plan that names a file outside the list stays in `ai:awaiting-approval` with reason `plan_files_outside_files_touched`. This covers `plan.yml`'s "Auto-approve clear plan" step and the poller's stall-recovery approvals. The hold comment names the files and asks a maintainer to add them to `files_touched` or narrow the plan, because `/approved` alone would still hit the implement guard. The check is off whenever implement would not block (`ENFORCE_FILES_TOUCHED` not `true`, or `ALLOW_OUT_OF_SCOPE_FILES=true`) and can be switched off with the new repo variable `PLAN_FILES_TOUCHED_GATE_ENABLED=false`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Implementation run spent on tele-funtoken-msg-scoring #4795 before the scope block | 1 run (job 12:57–13:19 UTC on 2026-10-23), $4.67 of editor model time |
+| Files that plan added outside `files_touched` | 3 (`backend/tele_wallet_commands.py`, `backend/withdrawal_flow.py`, `tests/test_withdrawal_otp_hmac.py`) |
+| New repo variable | `PLAN_FILES_TOUCHED_GATE_ENABLED`, default `true` |
+
+What this means for operators: a plan that widens an issue's scope now waits for a person before any implementation run starts, instead of failing at commit time. Issues without a `files_touched` list are not affected.
+
+- **Stall recovery keeps the clarify-respond worker's answer, implement accepts the issue's own changelog fragment, and consumer templates stop forwarding every secret.** Two unattended-pipeline defects from consumer tele-funtoken-msg-scoring #4815 are fixed, plus a stale label on completed projects.
+
+When a clarification stalls after the clarify-respond worker already answered it, stall recovery now re-posts the worker's latest answer instead of the questions' RECOMMENDED letters. On #4815 the worker chose `Q1: B` and stall recovery replaced it with `Q1: A`; REFRAME answers and their execution plans are now repeated verbatim too. The RECOMMENDED fallback is used only when no trusted pipeline `/answer` is newer than the latest questions. Separately, an issue with an exact `files_touched` list can now commit its own `changelog.d/<issue>-<slug>.md` and `agents.d/<issue>-<slug>.md`, which the pipeline's rules require; the implement scope guard refused it on #4815 (run 40055496344), and the #7986 plan hold no longer parks such a plan for a human. Completed orchestrator projects also drop a leftover `ai:integration-backpressure` label (#4038).
+
+| The numbers that matter | Value |
+| --- | --- |
+| Comments read per stall answer | 1 (unchanged; the RECOMMENDED fallback reuses it) |
+| Fragment paths allowed outside `files_touched` | `changelog.d/<N>-*.md`, `agents.d/<N>-*.md` for issue N only |
+| New log lines | `STALL_CLARIFY_ANSWER`, `BACKPRESSURE_CLEARED ... reason=project_complete` |
+| Templates forwarding explicit secrets | 18 of 18 (was 1) |
+| New opt-in variables / secret | `AI_PIPELINE_APPROVER_LOGIN`, `AI_ORCHESTRATOR_APP_LOGIN` / `AI_PIPELINE_APPROVAL_SECRET` |
+
+Consumer workflow templates are now least-privilege. Every `workflow-templates/*.yml` wrapper forwards only the secrets its reusable workflow declares instead of all repository secrets, so a hardened consumer such as tele-funtoken-msg-scoring can turn template auto-updates back on. Hardened automation is opt-in: set `AI_PIPELINE_APPROVER_LOGIN` (a dedicated bot) and `AI_PIPELINE_APPROVAL_SECRET`, and automated `/answer` and `/approved` comments count only from that bot, with each automated approval HMAC-signed by `ai-plan.yml` and verified by `ai-implement.yml` before implementation starts. `AI_ORCHESTRATOR_APP_LOGIN` does the same for app-opened issues entering clarify. The unreachable `github-actions[bot]` branches are gone from the wrapper predicates.
+
+What this means for consumer repos: an issue the worker answered no longer flips to a different decision when planning is slow to start, and auto-heal issues with a protected scope can ship the changelog entry they are asked for. Explicit `ai:scope:` and heal scopes are unchanged, and a fragment named after another issue is still refused. Consumers that do not set the new variables see no behaviour change from the template update, apart from the shared workflows no longer receiving secrets they never declared.
+
+- **The standalone stall-recovery close comment and CRITICAL alert now report the real number of recovery attempts.** They used to say "0 attempts" when an issue was closed after five.
+
+The standalone loop in `scripts/orchestrate_poll_process.sh` caps recovery with two counters. `stall_recovery_count` resets every time the issue's phase label changes. `phase_attempts` keeps a running total for each phase. An issue that goes round in a loop (`/approved`, then the implement run fails and puts it back in `ai:awaiting-approval`) hits the `phase_attempts` cap while `stall_recovery_count` still reads 0. The close comment, the linked-PR close note and the Telegram alert all printed `stall_recovery_count`, so tele-funtoken-msg-scoring#4786 was closed with "(0 attempts)" after five auto-approvals. They now print whichever counter hit the cap, plus the limit and the phase. The comment also stops saying "over N minutes": that number is how long the issue was stuck this time, not how long all the attempts took.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Default cap (`MAX_STALL_RECOVERIES_PER_ISSUE`) | 5 |
+| New close comment | `Closing: standalone stall recovery exhausted (5 attempts in 'ai:awaiting-approval' phase, limit 5; stuck 65 minutes this time).` |
+
+What this means for operators: when the alert says an issue's recovery is exhausted, the attempt count is the number of stall-recovery actions taken in that phase (in `ai:awaiting-approval` these are the `/approved` comments; in other phases it also counts `/reclarify` retriggers, conflict-resolver dispatches and failed re-issues). When to close an issue is unchanged.
 
 ### For contributors
 
