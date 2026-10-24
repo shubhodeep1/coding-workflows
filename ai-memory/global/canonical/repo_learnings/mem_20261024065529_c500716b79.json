@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "For changes that alter workflow behavior, check whether the repository's agent documentation and changelog need corresponding updates; multiple merged workflow changes included both alongside implementation and tests. This is less clearly applicable to test-data-only changes.",
+  "fingerprint": "46a1774d263c32ec0778ace8c63462356c4e6475cae9f2f96e7cbd192d90df3b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40071279419",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40071279419",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8018",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8026",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8028",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8029",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8039",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8023",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8030",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8031",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8032",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8042"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261024065529_c500716b79",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Behavioral workflow changes are often accompanied by agent guidance and changelog entries.",
+  "timestamps": {
+    "created_at": "2026-10-24T06:55:29Z",
+    "promoted_at": "2026-10-24T06:57:37Z",
+    "superseded_at": null
+  }
+}
