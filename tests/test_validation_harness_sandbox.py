@@ -2052,7 +2052,8 @@ def test_stage_copy_falls_back_to_the_working_tree_for_untracked_helpers(tmp_pat
 	_write(workspace, "scripts/validation_harness_sandbox.sh", "untracked helper\n")
 	members, stderr = _stage_with_modes(helper_dir, workspace, "head-support:scripts/validation_harness_sandbox.sh")
 	assert members["scripts/validation_harness_sandbox.sh"][0] == b"untracked helper\n"
-	assert "support_from_head" not in stderr
+	assert "outcome=ok reason=support_from_head " not in stderr
+	assert "outcome=skip reason=support_from_head_unavailable path=scripts/validation_harness_sandbox.sh\n" in stderr
 
 
 def test_stage_copy_falls_back_when_the_repository_has_no_commit(tmp_path: Path) -> None:
@@ -2061,7 +2062,8 @@ def test_stage_copy_falls_back_when_the_repository_has_no_commit(tmp_path: Path)
 	_git_add(workspace, "scripts/validate_process.sh")
 	members, stderr = _stage_with_modes(helper_dir, workspace, "head-support:scripts/validate_process.sh")
 	assert members["scripts/validate_process.sh"][0] == b"index only\n"
-	assert "support_from_head" not in stderr
+	assert "outcome=ok reason=support_from_head " not in stderr
+	assert "outcome=skip reason=support_from_head_unavailable path=scripts/validate_process.sh\n" in stderr
 
 
 def test_stage_copy_keeps_the_head_blob_mode(tmp_path: Path) -> None:
@@ -2091,7 +2093,8 @@ def test_stage_copy_refuses_a_committed_symlink_helper(tmp_path: Path) -> None:
 	_git_commit(workspace)
 	members, stderr = _stage_with_modes(helper_dir, workspace, "head-support:scripts/codex_isolated_workspace.py")
 	assert "scripts/codex_isolated_workspace.py" not in members
-	assert "support_from_head" not in stderr
+	assert "outcome=ok reason=support_from_head " not in stderr
+	assert "outcome=skip reason=support_from_head_unavailable path=scripts/codex_isolated_workspace.py\n" in stderr
 
 
 def test_stage_copy_overlay_wins_over_head_support(tmp_path: Path) -> None:

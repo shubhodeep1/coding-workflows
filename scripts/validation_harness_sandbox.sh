@@ -1052,6 +1052,9 @@ for name in sorted(names):
 			add_head_blob(name, *committed)
 			stage_log("ok", "support_from_head", name)
 			continue
+		# Not a regular HEAD blob, or the git read failed: say so, then stage
+		# the working-tree copy as before.
+		stage_log("skip", "support_from_head_unavailable", name)
 	special = None
 	if not readonly_allowed(name):
 		special = stage_special_kind(name) if name in git_listed else None
