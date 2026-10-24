@@ -1979,6 +1979,18 @@ def test_stage_copy_support_from_head_directory_prefix(tmp_path: Path) -> None:
 	assert "support_from_head_git_failed" not in stderr
 
 
+def test_stage_copy_support_from_head_keeps_working_tree_for_oversized_blob(tmp_path: Path) -> None:
+	# The HEAD blob is buffered whole, so one over 8 MiB keeps the streamed working-tree read.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "x" * (8 * 1024 * 1024 + 1))
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "outcome=skip reason=support_from_head_too_large path=scripts/validate_process.sh" in stderr
+
+
 def test_run_stages_exactly_the_support_paths_from_head() -> None:
 	run = _function_body("cmd_run")
 	listed = re.findall(r'"HEAD:([^"]+)"', run)

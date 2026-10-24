@@ -959,6 +959,12 @@ def stage_from_head(path, arcname):
 	fields = meta.split(b" ")
 	if len(fields) != 3 or fields[1] != b"blob" or fields[0] not in (b"100644", b"100755") or tree_path.decode("utf-8", "surrogateescape") != arcname:
 		return False
+	# The blob is buffered whole, so a committed file over 8 MiB keeps the
+	# streamed working-tree read instead (same cap as review MAX_FILE).
+	size = subprocess.run(git + ["cat-file", "-s", fields[2].decode("ascii", "replace")], cwd=workspace, env=env, check=False, capture_output=True)
+	if size.returncode != 0 or not size.stdout.strip().isdigit() or int(size.stdout) > 8 * 1024 * 1024:
+		stage_log("skip", "support_from_head_too_large" if size.returncode == 0 else "support_from_head_git_failed", arcname)
+		return False
 	blob = subprocess.run(git + ["cat-file", "blob", fields[2].decode("ascii", "replace")], cwd=workspace, env=env, check=False, capture_output=True)
 	if blob.returncode != 0:
 		stage_log("skip", "support_from_head_git_failed", arcname)
