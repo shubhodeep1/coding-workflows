@@ -2482,8 +2482,9 @@ jobs:
       # Moved out of the group-0 block of "Orchestrate poll process unit tests":
       # orchestrate-poll (0) took 15m09s of its 20 minutes on main (run
       # 40122910216, budget-watch issue #8080). Group 0 keeps the fast-fail
-      # subset by design; group 1 carries only its slice and the unblock step
-      # (#8072). Commands and order unchanged; they run once per CI run.
+      # subset by design; group 1 had carried only its slice and the unblock
+      # step (#8072), so it had the most headroom. Commands and order
+      # unchanged; they run once per CI run.
       - name: Orchestrate poll single-file module tests
         if: strategy.job-index == 1
         run: |
