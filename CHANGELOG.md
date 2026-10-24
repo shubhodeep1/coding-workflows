@@ -3399,6 +3399,10 @@ Run 39969947939 failed with `Review phase exceeded its 90-minute total wall-cloc
 
 What this means for consumer repos: nothing. This only changes the release gate in coding-workflows, which consumer repos do not run.
 
+- **The validation sandbox now tests the committed copy of its support helpers.** When the validation harness builds its screened copy of the workspace, `scripts/validation_harness_sandbox.sh` now takes `scripts/validate_process.sh`, `scripts/validation_harness_sandbox.sh`, `scripts/codex_isolated_workspace.py` and `scripts/templates/slot_manifest.schema.json` from the commit (`HEAD`) instead of the working tree, where a support-staging step may have overwritten them. Each substitution logs `VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=support_from_head path=<path>`.
+
+Only regular committed files are used, and their file mode is kept. An untracked file, a symlink, or a repository with no commit falls back to the working-tree copy and logs `outcome=skip reason=support_from_head_unavailable path=<path>`, and the trusted `scripts/validate_driver.sh` overlay still takes precedence. `VALIDATION_SANDBOX_SUPPORT_FROM_HEAD_ENABLED=false` turns the change off; it is on when unset. Refs #8064.
+
 ### For contributors
 
 The extension logic sits between `# BEGIN/END phase4 review deadline extension (#8004)` in `scripts/stable_e2e_step_wait_review.sh`, the Phase 4 step body that `.github/workflows/test-and-mark-stable.yml` sources (#7991). Tests: new cases in `tests/test_test_and_mark_stable_review_blocked_budget.py` run that block with a fixed clock.
@@ -7848,6 +7852,24 @@ Consumer wrappers call the reusable workflows at a fixed release SHA, but ten of
 | `install-codex` pin | `91b30f6fba400686c5dded34423f88f1ea10e163` |
 
 What this means for consumer repos: after the next sync, a compromised or broken `main` or `stable` can no longer change what a pinned AI run executes. A pinned run whose support checkout fails now stops with a clear error instead of silently running newer code.
+
+- **Consumer repos can no longer change the coding-workflows managed workflow wrappers.** A new `ai-workflow-integrity.yml` check, a sync that ignores the old opt-out, and a daily restore pull request keep every wrapper equal to the signed release.
+
+Every install profile now ships `.github/workflows/ai-workflow-integrity.yml`. It runs on `pull_request_target` and on pushes, and fails any change to a managed wrapper (including `ai-update-workflows.yml` and itself) unless all managed wrappers are byte-identical to the templates of the signed release they pin; the verdict is the commit status `coding-workflows/workflow-integrity`. `ALLOW_WORKFLOW_EDITS=false` and `allow_workflow_edits: false` no longer stop wrapper updates: the sync logs `WORKFLOW_EDITS_OPT_OUT` and a deprecation warning, and still skips only the non-wrapper assets. The consumer drift audit runs daily instead of weekly, compares against the released templates, and opens or refreshes one restore pull request (`auto/restore-managed-workflows`) in each drifted consumer while keeping its Telegram alert. With `AI_PIPELINE_APPROVER_LOGIN` set, the repository owner's own account may again post the `[auto-answered-by-*]` and `[auto-approved-by-plan]` markers, since the pipeline posts them with `GH_PAT`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Required status context | `coding-workflows/workflow-integrity` |
+| Drift audit schedule | daily, 08:00 UTC (was Mondays) |
+| Restore branch | `auto/restore-managed-workflows` |
+| New log prefixes | `WORKFLOW_INTEGRITY`, `WORKFLOW_EDITS_OPT_OUT`, `DRIFT_REPAIR` |
+| New repo variable (this repo) | `CONSUMER_DRIFT_REPAIR_ENABLED` (default on) |
+
+What this means for consumer repos: merge the sync pull request that adds `ai-workflow-integrity.yml`, remove any `allow_workflow_edits: false` from `ai-update-workflows.yml`, and move wrapper changes upstream. Once the default branch has the check, a branch ruleset requires it; repository admins can still bypass.
+
+### For contributors
+
+The integrity checker and the copy of the sync-manifest verifier live inline in `.github/workflows/workflow_integrity.yml` (consumers pin that file, so it never imports code from the tree it judges); `tests/test_workflow_integrity.py` pins the verifier copy byte for byte. The sync's wrapper compare is now an exact `cmp -s`; the previous `diff --ignore-space-at-eol` is not a GNU diff option and reported every wrapper as updated on every run.
 
 ### For contributors
 
