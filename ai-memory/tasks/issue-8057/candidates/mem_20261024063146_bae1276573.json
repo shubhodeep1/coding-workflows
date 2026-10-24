@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data-file rewrite only.\n\n## Data structures affected\n`tests/e2e_smoke_canary.txt` currently has 3 lines:\n```\nstatus: ok\nrun_id: 26151428977\nupdated-by: ai-pipeline\n```\nIt must become exactly 2 lines:\n```\nstatus: ok\ndecompose-run: 40068500779\n```\n- Line 1 stays as it is.\n- Line 2 is replaced with `decompose-run: 40068500779`.\n- Line 3 is removed.\n- The file ends with one newline after line 2 (POSIX text-file convention). There is no blank third line and no trailing whitespace.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file instead of editing lines\n- Chosen: write the complete two-line content in one write.\n- Alternatives considered: replace line 2 and delete line 3 separately.\n- Why: one write guarantees the exact final content and leaves no leftover lines.\n\n## Security considerations\n- No trust boundaries, endpoints, credentials or money surfaces are involved.\n- The values come from the issue and are fixed literals.\n- Abuse cases: none.\n\n## Risks and edge cases\n- A smoke or e2e assertion may read `run_id:` or `updated-by:`. The issue's acceptance criteria require exactly two lines, so they win. The implementer should not edit any other file, even if such a reader exists.\n- If the file has CRLF line endings, it must be written as LF only.\n\n## Testing considerations\n- Check that `cat -A tests/e2e_smoke_canary.txt` shows exactly `status: ok$` and `decompose-run: 40068500779$`.\n- Check that `git diff --stat` lists only this one file.\n\n## Pre-execution self-check\nSingle-file change on `orchestrator/project-8054`. The planning ref matches the integration branch (`Integration branch mismatch: false`). The only path changed is the one listed in `files_touched`, and no automation paths are touched.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names exactly one file and its exact final content. It also forbids changes to any other file, so neither a wider nor a narrower scope fits.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "9c9442d2835466b4e30c2210e582ba579292279e1a048582ce288ac3053df5a8",
+  "lineage": {
+    "issue_number": 8057,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40070017574",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40070017574",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8057"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261024063146_bae1276573",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8057,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40070017574"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8057",
+  "timestamps": {
+    "created_at": "2026-10-24T06:31:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
