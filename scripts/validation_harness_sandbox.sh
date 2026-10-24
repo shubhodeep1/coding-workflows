@@ -1027,7 +1027,8 @@ def head_blob(name):
 			git + ["cat-file", "blob", oid],
 			cwd=workspace, env=env, capture_output=True, timeout=60,
 		)
-		if blob.returncode != 0:
+		# A support helper is small; refuse an oversized blob (fall back).
+		if blob.returncode != 0 or len(blob.stdout) > 8 * 1024 * 1024:
 			return None
 		return mode, blob.stdout
 	except (OSError, subprocess.SubprocessError, ValueError):
