@@ -1861,17 +1861,10 @@ def _stage(helper_dir: Path, workspace: Path, *extra_args: str) -> tuple[dict[st
 	return members, stderr
 
 
-def _git_commit(workspace: Path) -> None:
-	git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
-	subprocess.run(
-		["git", "-C", str(workspace), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "commit"],
-		check=True, env=git_env,
-	)
-
-
 # Self-repo support staging writes trusted copies over tracked support files
 # (#6865); the copy under test must still hold the branch's committed bytes so
-# the branch's own tests read its code (#7913, heal #8064).
+# the branch's own tests read its code (#7913, heal #8064). These tests use the
+# shared _git_commit helper defined with the #8065 tests below.
 def test_stage_copy_takes_support_files_from_head(tmp_path: Path) -> None:
 	helper_dir, workspace = _stage_workspace(tmp_path)
 	_write(workspace, "scripts/validate_process.sh", "committed\n")
@@ -2011,6 +2004,30 @@ def test_run_stages_exactly_the_support_paths_from_head() -> None:
 	assert "support_from_head_args+=(" in gated
 	assert run.count("support_from_head_args+=") == 1
 	assert all(f'"HEAD:{path}"' in gated for path in listed)
+
+
+def test_stage_copy_support_from_head_git_timeout_falls_back(tmp_path: Path) -> None:
+	# A hung git call is a git failure: log it and stage the working-tree copy.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "committed\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	program = _stage_program().replace(
+		"def _stage_from_head_git(git, info, arcname):\n",
+		"def _stage_from_head_git(git, info, arcname):\n\traise subprocess.TimeoutExpired(git, 60)\n",
+		1,
+	)
+	assert "raise subprocess.TimeoutExpired" in program
+	result = subprocess.run(
+		["python3", "-I", "-c", program, str(helper_dir), str(workspace), "HEAD:scripts/validate_process.sh"],
+		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir)},
+	)
+	assert result.returncode == 0, result.stderr
+	with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r|") as archive:
+		members = {m.name: archive.extractfile(m).read() for m in archive if m.isreg()}
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "outcome=skip reason=support_from_head_git_failed path=scripts/validate_process.sh" in result.stderr.decode()
 
 
 def test_stage_copy_head_support_path_is_not_read_from_head_twice(tmp_path: Path) -> None:

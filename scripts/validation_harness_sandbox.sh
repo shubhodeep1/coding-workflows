@@ -883,7 +883,7 @@ workspace = Path(workspace)
 env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
 listed = subprocess.run(
 	["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-	cwd=workspace, env=env, check=True, capture_output=True,
+	cwd=workspace, env=env, check=True, capture_output=True, timeout=60,
 ).stdout.split(b"\0")
 names = {item.decode("utf-8", "surrogateescape") for item in listed if item}
 # Staging-only admissions (env templates, .npmrc) apply only to names git lists
@@ -957,6 +957,15 @@ def stage_from_head(path, arcname):
 	if not stat.S_ISREG(info.st_mode):
 		return False
 	git = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+	try:
+		return _stage_from_head_git(git, info, arcname)
+	except (OSError, subprocess.SubprocessError):
+		# A git call that timed out or could not start is a git failure, like
+		# in head_blob: keep the working-tree read and say so.
+		stage_log("skip", "support_from_head_git_failed", arcname)
+		return False
+
+def _stage_from_head_git(git, info, arcname):
 	tree = subprocess.run(git + ["ls-tree", "-z", "HEAD", "--", arcname], cwd=workspace, env=env, check=False, capture_output=True, timeout=60)
 	if tree.returncode != 0:
 		# An unborn HEAD is a normal fallback; any other git failure is logged.
