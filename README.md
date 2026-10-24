@@ -1943,6 +1943,20 @@ through `clarify → plan → implement → review`.
   fails the job; log lines are prefixed `WORKFLOW_HEAL_PHASE_REPORT`. Issues
   #6413, #6373 and #6392 failed planning four times each on 2026-10-05 and
   never reached heal, because only escalation labels did.
+- **Trigger (harness-owned validation failures):** the `heal-report` job of
+  the reusable `validate.yml` sends a `validation_failure` report when a failed
+  validation run is owned by the harness coding-workflows ships (see
+  "Runtime Validation Phase" > "Harness-owned failures"). The report is bound
+  to `validate.yml` through its OIDC identity, and the intake checks the run's
+  provenance (repository, failed conclusion, `[tracking:<N>]` run name) before
+  it reads anything. Each report ends in one outcome: `opened` (a heal issue
+  was filed), `duplicate` (an open heal issue already covers the fingerprint),
+  `already-fixed`, `bounced` (the diagnosis found no harness defect, so the
+  project's own fix-up path resumes) or `skipped`. The intake records it as the
+  last line of a tracking-issue comment,
+  `<!-- workflow-failure-heal:validation-route:v1 fp=<64 hex> outcome=<outcome> issue=<n|none> classification=<classification> run=<run id> -->`,
+  which the poller trusts only from the `GH_PAT` login.
+  `VALIDATION_HARNESS_HEAL_ENABLED=false` turns this route off.
 - **Reviewer failures name the failing phase:** if the `Run reviewer models`
   step fails, the editor never runs. `Post editor summary comment` names the failure `reviewers_failed` instead
   of `editor_empty_noop` (failure marker, fingerprint, cap reason, heal report
@@ -2592,6 +2606,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `1` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
 | `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` | `1` | Consecutive failed runs of one phase (clarify, plan or implement) on one issue before that workflow's `heal-report` job reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
+| `VALIDATION_HARNESS_HEAL_ENABLED` | `true` | Routes runtime validation failures owned by the validation harness to the workflow failure heal intake (`validate.yml`'s `heal-report` job, report kind `validation_failure`) instead of filing fix-up issues the project cannot act on. `false` skips the job and keeps the old behaviour of `scripts/validate_process.sh`. See [Harness-owned failures](#harness-owned-failures). |
 | `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` | `true` | Identical-failure fingerprint cap in the `gate` job of `review_autofix.yml`. Every review/autofix failure comment ends with a `<!-- review-autofix-failure:v1 head=… reason=… fp=… degraded=… run=… -->` marker, where `fp` fingerprints the failure reason plus the normalised stderr of the editor and Collect PR metadata stages. When the trailing markers for the current head (authored by the `GH_PAT` account) share one fingerprint `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` times, the gate logs `AUTOFIX_FINGERPRINT_CAP_TRIPPED`, skips the run (`skip_reason=fingerprint_cap`, no reviewer or editor call), and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked` (the PR itself when it has none), posts one `review-autofix-failure-cap:v1` comment, sends an `identical_failure_cap` heal report and a Telegram `DEBUG` notice (the review-blocked judge's outcome alert pages when a person is needed). Later dispatches on the same head log `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`, and the poller's noop-suspicious recovery sweep stops re-dispatching that head (it logs `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` and sends no retry WARNING); a push resets the count; `force_rb_judge` dispatches bypass it; lookup failures log `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED` and run normally. A failure reason listed in `NON_RETRYABLE_FAILURE_REASONS` in `scripts/workflow_failure_heal.py` (`conflict_resolver_sandbox_path_host_only`, `conflict_resolver_sandbox_path_unsupported`, `conflict_resolver_sandbox_support_missing`) trips the cap on its **first** marker (`non_retryable=true` in the tripped log line, gate output `fingerprint_cap_non_retryable`); the cap comment is then titled "non-retryable failure" and quotes the failed run's **First error** line. Markers also record the gate's verified review-support commit as `support=<sha>`; a non-retryable cap gets one more run (`AUTOFIX_FINGERPRINT_CAP_REARMED`) when the current support commit is on no trusted marker for the head yet, while fewer than 3 support commits are recorded on the head's markers (the original stop's commit included; `provider_unavailable` markers are not counted), and that run's own marker restores the cap (#6911). Set to `false` to stop evaluating the cap, including the non-retryable stop (the markers keep being written); with it off, the sweep re-dispatches a deterministic failure every 30 minutes (PR #6438: ~28 runs on one head). |
 | `REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED` | `true` | On a `force_rb_judge` dispatch of `review_autofix.yml`, the `gate` job reads the newest `review-autofix-failure:v1` marker that the `GH_PAT` account wrote for the current head under the current review-support version (one `GET /user` plus one paginated `GET /issues/{n}/comments`, the read the fingerprint cap would make; `force_rb_judge` runs skip the cap itself, and this check runs even when `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED=false`). When its reason is exactly `conflict_resolver_sandbox_path_host_only`, the gate exports `force_rb_judge_conflict_skip=true` and `codex-agent` skips Detect merge conflicts and both resolver steps, so the review-blocked judge runs instead of the resolver refusing again. Markers from another author, another head or an older support version, a newer marker with a different reason (including `provider_unavailable`, which the cap's count passes over), or a failed identity or comment read keep the conflict steps. Every decision logs `AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr= head= outcome=skip\|run reason= marker_reason=` (`reason=newest_reason_mismatch` when a newer outage marker blocks the skip). The resolver's host-only refusal and the review-blocked handoff are unchanged. Set to `false` to always run the conflict steps (issue #6743). |
 | `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` | `3` | Identical failures on one head that trip the fingerprint cap above. Non-numeric or `0` falls back to `3`. |
@@ -3652,6 +3667,44 @@ This phase starts only after the orchestrator judge returns `complete`.
 - Terminal failure: validation dispatch failure, harness error, infeasible diagnosis, unknown diagnosis payload, closed fix-up issues, or cycle limit exceeded.
 - Terminal failure labels are split by failure class: runtime semantic failures continue to use `ai:validation-failed`, while validate-workflow Codex/terminal execution failures use `ai:validate-failed` with `raw_status=codex_failure` and `AI_PHASE_FAILURE_V1` marker comments when tracking issue context exists.
 - Managed artifact contract: startup checks now enforce only managed artifacts (`scripts/validate_process.sh`, optional `scripts/validate_driver.sh`) and the transient `validation/validate.sh` rule. Repos may keep unrelated consumer scripts such as `scripts/validate_local.sh` without failing validation.
+
+### Harness-owned failures
+
+Some validation failures are caused by the validation harness that
+coding-workflows ships (the validate workflow, its scripts and the rendered
+`validation/` templates), not by the project being validated. Fix-up issues in
+the project cannot repair those, so `scripts/validate_process.sh` records who
+owns each failed run (plan `docs/plans/validation-failure-harness-routing-plan.md`,
+Phase 1):
+
+- **Ownership rule:** `harness` for a Layer 0 stage failure (sandbox, preflight,
+  canary, harness generation, engine unavailable), a `harness_error` diagnosis,
+  or a `needs_fixes` diagnosis whose files are all harness-managed; `project`
+  when every file is the project's own; `mixed` when both kinds are listed (the
+  project files still get fix-up issues); `none` otherwise. A failure the heal
+  intake already bounced back as not a harness defect is checked again before
+  it is reported a second time.
+- **Marker:** the harness-error comment on the tracking issue ends with
+  `<!-- validation-harness-owner:v1 fp=<64 hex> stage=<stage> reason=<reason> support=<40 hex> run=<run id> -->`,
+  where `support` is the commit the support scripts came from
+  (`VALIDATE_SUPPORT_SHA`).
+- **Outputs:** `validate.yml` exposes `failure_owner`, `harness_report`,
+  `harness_stage`, `harness_reason` and `harness_fp` as `workflow_call`
+  outputs, next to the existing ones. Each value is checked against a fixed
+  vocabulary or pattern before it becomes an output, and anything else turns
+  the report off.
+- **Report:** the reusable workflow's `heal-report` job runs after a failed
+  validate job whose `harness_report` output is `true`, for a tracking issue
+  other than `0`. It resolves its support ref like `implement.yml`'s
+  `heal-report` job (the caller's `validate.yml@<sha>` pin, `stable` otherwise),
+  checks the checkout HEAD, and runs `scripts/workflow_failure_heal_phase_report.sh`
+  with `WORKFLOW_HEAL_PHASE=validate`, which sends one `validation_failure`
+  report to the workflow failure heal intake. The error signature reaches that
+  job as a base64 job output (at most 1024 bytes) and is decoded into
+  `RUNNER_TEMP`. The job is granted only `id-token: write`; `GH_PAT` does the
+  work, and the reporter always exits 0.
+- **Switch:** `VALIDATION_HARNESS_HEAL_ENABLED` (default `true`). `false` skips
+  the `heal-report` job and keeps the old behaviour of `validate_process.sh`.
 
 ### Manual Reset: `/revalidate`
 
