@@ -90,7 +90,11 @@ the issue changes observable behaviour, write exactly one fragment file at
 `<!-- changelog: fixed -->` names the section (`added`, `changed`,
 `deprecated`, `removed`, `fixed`, `security`; default `added`); everything
 after it is the entry body. Automation folds fragments into `CHANGELOG.md`
-and deletes them — do not fold them yourself.
+and deletes them — do not fold them yourself. Name the fragment after the
+issue you are implementing (`changelog.d/<this issue number>-<slug>.md`,
+and the same for `agents.d/`): the scope guard always allows the issue's
+own fragments even when `files_touched` does not list them, and refuses
+any other fragment path outside that list.
 
 agents.md discipline: never edit `agents.md` directly (or `AGENTS.md` in a
 consumer repo) — concurrent PRs collide on the same few sections. To
