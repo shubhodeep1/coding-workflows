@@ -10,4 +10,8 @@ permissions:
 jobs:
   maintenance:
     uses: shubhodeep1/coding-workflows/.github/workflows/memory_maintenance.yml@stable
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

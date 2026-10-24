@@ -1012,6 +1012,78 @@ def test_plan_files_outside_files_touched_uses_the_implement_matcher() -> None:
 	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body + scope_marker) == ["backend/withdrawal_flow.py"]
 
 
+def test_own_issue_fragments_are_allowed_for_issue_body_scopes() -> None:
+	"""Consumer tele-funtoken-msg-scoring#4815 (run 40055496344): an exact
+	files_touched list without changelog.d refused the fragment CLAUDE.md §20
+	requires. The issue's own changelog / agents fragments are always allowed."""
+	body = _body("backend/withdrawal_flow.py")
+	staged = ["backend/withdrawal_flow.py", "changelog.d/4815-link-retry.md", "agents.d/4815-link-retry.md"]
+	status, _allow, oos = guard.evaluate(body, staged, issue_number="4815")
+	assert status == guard.STATUS_IN_SCOPE and oos == [], oos
+	# Without the issue number (legacy callers): unchanged, still refused.
+	_status, _allow, oos = guard.evaluate(body, staged)
+	assert oos == ["changelog.d/4815-link-retry.md", "agents.d/4815-link-retry.md"]
+	# Another issue's fragment, a number prefix, nested paths, other
+	# extensions and other directories stay out of scope.
+	refused = ["changelog.d/4816-other.md", "changelog.d/48150-x.md", "changelog.d/4815.md",
+		"changelog.d/4815-x/y.md", "changelog.d/4815-x.sh", "docs/4815-x.md", "changelog.d/x-4815.md"]
+	_status, _allow, oos = guard.evaluate(body, refused, issue_number="4815")
+	assert oos == refused, oos
+	# Explicit scopes (ai:scope: globs, the verified heal scope) never get it.
+	_status, _allow, oos = guard.evaluate("", ["changelog.d/4815-x.md"], allowlist_entries=["backend/**"],
+		issue_number="4815")
+	assert oos == ["changelog.d/4815-x.md"]
+	# No files_touched list still skips.
+	assert guard.evaluate("no list", ["changelog.d/4815-x.md"], issue_number="4815")[0] == guard.STATUS_SKIP_NO_ALLOWLIST
+	for bad in ("", "abc", "0", "012", None, "-1"):
+		assert not guard.is_own_issue_fragment("changelog.d/012-x.md", bad), bad
+
+
+def test_cli_issue_number_allows_own_fragments() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		body_file = tdp / "body.txt"
+		body_file.write_text(_body("src/a.py"), encoding="utf-8")
+		staged_file = tdp / "staged.txt"
+		staged_file.write_text("src/a.py\nchangelog.d/77-fix.md\n", encoding="utf-8")
+		base = [sys.executable, str(GUARD_SCRIPT), "--issue-body-file", str(body_file), "--staged-file", str(staged_file)]
+		proc = subprocess.run(base + ["--issue-number", "77"], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_IN_SCOPE, proc.stdout
+		proc = subprocess.run(base, capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE and proc.stdout.strip() == "changelog.d/77-fix.md"
+		allow_file = tdp / "allow.txt"
+		allow_file.write_text("src/**\n", encoding="utf-8")
+		proc = subprocess.run([sys.executable, str(GUARD_SCRIPT), "--allowlist-file", str(allow_file),
+			"--staged-file", str(staged_file), "--issue-number", "77"], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE, proc.stdout
+
+
+def test_plan_gate_does_not_hold_for_own_issue_fragments() -> None:
+	"""#7986's hold must not park an auto-heal plan that adds the issue's own
+	changelog fragment (it would wait for a human)."""
+	saved = _with_env()
+	try:
+		plan = "## Files likely to change\n- `backend/a.py`\n- `changelog.d/42-a-fix.md`\n- `agents.d/42-a-fix.md`\n"
+		code, record = _run_plan_gate_cli(plan, "true", _owner_meta("backend/a.py"))
+		assert code == 0 and record["decision"] == "approve", record
+		other = plan.replace("changelog.d/42-a-fix.md", "changelog.d/43-a-fix.md")
+		code, record = _run_plan_gate_cli(other, "true", _owner_meta("backend/a.py"))
+		assert record["reason"] == "plan_files_outside_files_touched", record
+		assert record["denied_paths"] == ["changelog.d/43-a-fix.md"], record
+		# The direct helper takes the number from the caller.
+		assert guard.plan_files_outside_files_touched(plan, _body("backend/a.py"), issue_number=42) == []
+	finally:
+		_restore_env(saved)
+
+
+def test_issue_body_scope_callers_pass_issue_number() -> None:
+	for path in (IMPLEMENT, IMPLEMENT_COMMIT_SCRIPT):
+		text = path.read_text(encoding="utf-8")
+		start = text.index('"${scope_guard_extra_args[@]}" \\')
+		window = text[start:start + 200]
+		assert '--issue-number "${ISSUE_NUMBER:-}"' in window, (path, window)
+
+
 def test_plan_files_touched_gate_switches() -> None:
 	cases = (({}, True), ({"ENFORCE_FILES_TOUCHED": ""}, True), ({"ENFORCE_FILES_TOUCHED": "false"}, False),
 		# implement enforces only on exactly "true".

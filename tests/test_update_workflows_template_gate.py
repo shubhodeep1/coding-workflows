@@ -158,7 +158,10 @@ def test_template_stays_backward_compatible() -> None:
 	caller = _caller_job()
 	assert caller["uses"] == "shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable"
 	assert caller["with"] == {"allow_workflow_edits": "${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}"}
-	assert caller["secrets"] == "inherit"
+	# Least privilege: only the secrets the updater declares. The released
+	# v1.38.3 updater declares both (GH_PAT required, TG_BOT_SECRET optional),
+	# so a template synced ahead of the next release still starts.
+	assert caller["secrets"] == {"GH_PAT": "${{ secrets.GH_PAT }}", "TG_BOT_SECRET": "${{ secrets.TG_BOT_SECRET }}"}
 	# Consumer kill switch (plan Q49): unset means on, 'false' stops the job.
 	assert caller["if"] == "${{ vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false' }}"
 	text = TEMPLATE.read_text(encoding="utf-8")

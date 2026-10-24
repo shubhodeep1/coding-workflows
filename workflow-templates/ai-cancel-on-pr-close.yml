@@ -14,4 +14,7 @@ permissions:
 jobs:
   cancel:
     uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@stable
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
