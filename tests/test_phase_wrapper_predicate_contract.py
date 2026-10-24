@@ -51,11 +51,33 @@ def _assert_clauses(predicate: str, clauses: tuple[str, ...]) -> None:
 		assert clause in predicate, f"Predicate missing security-sensitive clause: {clause}"
 
 
+# The consumer ai-implement.yml template runs verify-automated-approval before
+# implement (hardened automation, vars.AI_PIPELINE_APPROVER_LOGIN). Its job
+# predicate is the canonical one plus exactly these wrapper-only clauses.
+IMPLEMENT_TEMPLATE_ONLY_CLAUSES = (
+	("!cancelled() && ", ""),
+	(
+		"contains(github.event.comment.body, '[auto-approved-by-plan]') && "
+		"needs.verify-automated-approval.outputs.approved == 'true'",
+		"contains(github.event.comment.body, '[auto-approved-by-plan]')",
+	),
+)
+
+
+def _without_template_only_clauses(wrapper_path: str, predicate: str) -> str:
+	if wrapper_path != "workflow-templates/ai-implement.yml":
+		return predicate
+	for clause, replacement in IMPLEMENT_TEMPLATE_ONLY_CLAUSES:
+		assert predicate.count(clause) == 1, f"{wrapper_path} lost wrapper-only clause {clause!r}"
+		predicate = predicate.replace(clause, replacement)
+	return predicate
+
+
 def test_internal_and_consumer_predicates_match_reusable_workflows() -> None:
 	for job_name, workflow_paths in PHASE_WORKFLOWS.items():
 		canonical = _normalized_job_predicate(workflow_paths[0], job_name)
 		for wrapper_path in workflow_paths[1:]:
-			actual = _normalized_job_predicate(wrapper_path, job_name)
+			actual = _without_template_only_clauses(wrapper_path, _normalized_job_predicate(wrapper_path, job_name))
 			assert actual == canonical, f"{wrapper_path} jobs.{job_name}.if drifted from {workflow_paths[0]}"
 
 
@@ -79,7 +101,14 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 			"github.event.issue.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.issue.author_association)",
 			"github.event.issue.user.type == 'Bot'",
-			"github.event.issue.user.login == 'github-actions[bot]'",
+			# Opt-in hardened automation: only the dedicated orchestrator app,
+			# with the managed label and provenance marker (GITHUB_TOKEN
+			# issues never trigger workflows, so no shared bot login).
+			"vars.AI_ORCHESTRATOR_APP_LOGIN != ''",
+			"github.event.issue.user.login == vars.AI_ORCHESTRATOR_APP_LOGIN",
+			"contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-managed')",
+			"contains(github.event.issue.body, '<!-- ai-orchestrator-provenance:v1 ')",
+			"!contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source')",
 			"github.event.issue.pull_request == null",
 			"github.event.comment.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)",
@@ -91,7 +120,7 @@ def test_clarify_predicate_preserves_opened_and_trusted_reclarify_routes() -> No
 	)
 	opened, reclarify = _canonical_predicate("clarify").split(" || (github.event_name == 'issue_comment'", 1)
 	assert "github.event.issue.user.type == 'User'" in opened
-	assert "github.event.issue.user.login == 'github-actions[bot]'" in opened
+	assert "github.event.issue.user.login == vars.AI_ORCHESTRATOR_APP_LOGIN" in opened
 	assert "github.event.comment.user.type == 'User'" in reclarify
 	assert "github.event.issue.author_association" not in reclarify
 
@@ -205,8 +234,11 @@ def test_plan_predicate_preserves_trusted_human_and_bot_answer_routes() -> None:
 			"github.event.comment.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)",
 			"github.event.comment.user.type == 'Bot'",
-			"github.event.comment.user.login == 'github-actions[bot]'",
+			"vars.AI_PIPELINE_APPROVER_LOGIN != ''",
+			"github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN",
 			"startsWith(github.event.comment.body, '/answer')",
+			# Hardened mode: trusted users cannot pass an automation marker.
+			"vars.AI_PIPELINE_APPROVER_LOGIN == '' || ( !contains(github.event.comment.body, '[auto-answered-by-clarify]') && !contains(github.event.comment.body, '[auto-answered-by-orchestrator]') )",
 			"'[auto-answered-by-clarify]'",
 			"'[auto-answered-by-orchestrator]'",
 		),
@@ -223,8 +255,10 @@ def test_implement_predicate_preserves_trusted_human_and_bot_approval_routes() -
 			"github.event.comment.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)",
 			"github.event.comment.user.type == 'Bot'",
-			"github.event.comment.user.login == 'github-actions[bot]'",
+			"vars.AI_PIPELINE_APPROVER_LOGIN != ''",
+			"github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN",
 			"startsWith(github.event.comment.body, '/approved')",
+			"vars.AI_PIPELINE_APPROVER_LOGIN == '' || !contains(github.event.comment.body, '[auto-approved-by-plan]')",
 			"'[auto-approved-by-plan]'",
 		),
 	)
@@ -238,7 +272,8 @@ def test_clarify_response_predicate_preserves_actor_and_content_guards() -> None
 			"github.event.action == 'created'",
 			"github.event.issue.pull_request == null",
 			"github.event.comment.user.type == 'Bot'",
-			"github.event.comment.user.login == 'github-actions[bot]'",
+			"vars.AI_PIPELINE_APPROVER_LOGIN != ''",
+			"github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN",
 			"github.event.comment.user.type == 'User'",
 			"contains(fromJson('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association)",
 			"contains(github.event.comment.body, 'Clarification required')",
@@ -570,6 +605,101 @@ def test_clarify_route_restarts_a_verified_release_as_automated() -> None:
 			outputs = dict(line.split("=", 1) for line in output_path.read_text(encoding="utf-8").splitlines() if "=" in line)
 			for key, value in expected.items():
 				assert outputs.get(key) == value, (association, login, key, outputs, result.stdout)
+
+
+# --- Least-privilege consumer templates (consumer tele-funtoken-msg-scoring) ---
+
+
+def _template_paths() -> list[Path]:
+	return sorted((REPO_ROOT / "workflow-templates").glob("*.yml"))
+
+
+def test_consumer_templates_forward_only_declared_secrets() -> None:
+	"""A template never hands the shared workflow every repository secret: it
+	forwards exactly the secrets the called reusable workflow declares."""
+	import re
+
+	checked = 0
+	for template in _template_paths():
+		text = template.read_text(encoding="utf-8")
+		assert "secrets: inherit" not in text, template.name
+		workflow = yaml.safe_load(text)
+		for job_name, job in workflow["jobs"].items():
+			uses = job.get("uses", "")
+			match = re.match(r"shubhodeep1/coding-workflows/\.github/workflows/([\w.-]+)@", uses)
+			if not match:
+				continue
+			reusable = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / match.group(1)).read_text(encoding="utf-8"))
+			on_block = reusable.get(True) or reusable.get("on")
+			declared = set((on_block.get("workflow_call") or {}).get("secrets") or {})
+			forwarded = job.get("secrets") or {}
+			assert isinstance(forwarded, dict), (template.name, job_name)
+			assert set(forwarded) == declared, (template.name, job_name, sorted(forwarded), sorted(declared))
+			for name, value in forwarded.items():
+				assert value == "${{ secrets.%s }}" % name, (template.name, name, value)
+			checked += 1
+	assert checked >= 17, checked
+
+
+def test_consumer_templates_accept_no_shared_actions_bot() -> None:
+	"""GITHUB_TOKEN comments and issues never trigger workflows, so the
+	shared github-actions[bot] login is never a trusted automation author."""
+	for template in _template_paths():
+		workflow = yaml.safe_load(template.read_text(encoding="utf-8"))
+		for job_name, job in workflow["jobs"].items():
+			assert "github-actions[bot]" not in str(job.get("if", "")), (template.name, job_name)
+
+
+def test_hardened_automation_signs_and_verifies_plan_approval() -> None:
+	plan_text = (REPO_ROOT / "workflow-templates" / "ai-plan.yml").read_text(encoding="utf-8")
+	implement_text = (REPO_ROOT / "workflow-templates" / "ai-implement.yml").read_text(encoding="utf-8")
+	plan = yaml.safe_load(plan_text)
+	implement = yaml.safe_load(implement_text)
+	sign = plan["jobs"]["sign-automated-approval"]
+	assert sign["needs"] == "plan"
+	assert "vars.AI_PIPELINE_APPROVER_LOGIN != ''" in sign["if"]
+	assert "needs.plan.result == 'success'" in sign["if"]
+	verify = implement["jobs"]["verify-automated-approval"]
+	assert "vars.AI_PIPELINE_APPROVER_LOGIN != ''" in verify["if"]
+	assert implement["jobs"]["implement"]["needs"] == "verify-automated-approval"
+	assert implement["permissions"].get("actions") == "read"
+	# The approval secret stays in the wrapper jobs; it is never forwarded
+	# to a reusable model job.
+	for workflow in (plan, implement):
+		for job in workflow["jobs"].values():
+			assert "AI_PIPELINE_APPROVAL_SECRET" not in (job.get("secrets") or {})
+	assert "APPROVAL_SECRET: ${{ secrets.AI_PIPELINE_APPROVAL_SECRET }}" in plan_text
+	assert "APPROVAL_SECRET: ${{ secrets.AI_PIPELINE_APPROVAL_SECRET }}" in implement_text
+	for field in ("issue", "plan_sha256", "run_id", "target_ref", "target_sha"):
+		assert f"{field}=" in plan_text and field in implement_text, field
+	assert "hmac.compare_digest(signature, expected)" in implement_text
+	assert 'run_path != ".github/workflows/ai-plan.yml"' in implement_text
+	assert "target ref advanced after approval" in implement_text
+	assert 'int(item.get("id") or 0) > trigger_comment_id' in plan_text
+
+	def canonical_lines(text: str) -> list[str]:
+		start = text.index("canonical = (")
+		end = text.index(")", text.index("target_sha={target_sha}", start))
+		return [line.strip() for line in text[start:end].splitlines()]
+
+	# Signer and verifier must build the exact same signed string.
+	assert canonical_lines(plan_text) == canonical_lines(implement_text)
+
+
+def test_hardened_automation_marker_exclusions_are_opt_in() -> None:
+	"""With vars.AI_PIPELINE_APPROVER_LOGIN unset the trusted-user branches
+	keep accepting the PAT-posted automation markers, as before; with it set
+	they reject them."""
+	plan = " ".join(yaml.safe_load((REPO_ROOT / "workflow-templates" / "ai-plan.yml").read_text(encoding="utf-8"))["jobs"]["plan"]["if"].split())
+	assert (
+		"vars.AI_PIPELINE_APPROVER_LOGIN == '' || ( !contains(github.event.comment.body, '[auto-answered-by-clarify]') && "
+		"!contains(github.event.comment.body, '[auto-answered-by-orchestrator]') )"
+	) in plan
+	implement = " ".join(yaml.safe_load((REPO_ROOT / "workflow-templates" / "ai-implement.yml").read_text(encoding="utf-8"))["jobs"]["implement"]["if"].split())
+	assert "vars.AI_PIPELINE_APPROVER_LOGIN == '' || !contains(github.event.comment.body, '[auto-approved-by-plan]')" in implement
+	for name in ("ai-clarify.yml", "ai-plan.yml", "ai-implement.yml", "ai-orchestrate-clarify-respond.yml"):
+		text = (REPO_ROOT / "workflow-templates" / name).read_text(encoding="utf-8")
+		assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source')" in text, name
 
 
 def main() -> int:

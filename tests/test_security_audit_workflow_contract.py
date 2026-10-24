@@ -825,7 +825,8 @@ def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> No
 	assert 'workflow_dispatch:' in content
 	assert 'uses: shubhodeep1/coding-workflows/.github/workflows/security-audit.yml@stable' in content
 	assert "ref: ${{ inputs.ref || '' }}" in content
-	assert 'secrets: inherit' in content
+	assert 'secrets: inherit' not in content
+	assert 'OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}' in content
 	manifest = (REPO_ROOT / "workflow-templates" / "profiles" / "full.txt").read_text(encoding="utf-8")
 	assert "ai-security-audit.yml" in manifest.splitlines()
 

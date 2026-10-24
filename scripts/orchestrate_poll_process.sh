@@ -17203,8 +17203,21 @@ STALL_EOF
       echo "  Auto-responding to clarification for issue #${issue_num}..."
       local recommended_answers
       local answer_body
-      recommended_answers="$(extract_recommended_answers "${issue_num}")"
-      if [ -n "${recommended_answers}" ]; then
+      local _clarify_answer_out _clarify_answer_source
+      _clarify_answer_out="$(stall_recovery_clarify_answer "${issue_num}")"
+      _clarify_answer_source="$(printf '%s\n' "${_clarify_answer_out}" | head -n 1)"
+      recommended_answers="$(printf '%s\n' "${_clarify_answer_out}" | tail -n +2)"
+      if [ "${_clarify_answer_source}" = "reasserted" ] && [ -n "${recommended_answers}" ]; then
+        # The clarify-respond worker (or an earlier recovery) already decided
+        # this round; repeat that decision instead of the RECOMMENDED letters.
+        answer_body="/answer [auto-answered-by-orchestrator]
+
+_Orchestrator stall recovery: this issue has been in clarification for
+too long. Re-asserting the pipeline's latest answer to these questions
+and proceeding with planning and implementation._
+
+${recommended_answers}"
+      elif [ -n "${recommended_answers}" ]; then
         answer_body="/answer [auto-answered-by-orchestrator]
 
 _Orchestrator stall recovery: this issue has been in clarification for
@@ -21800,8 +21813,19 @@ STALL_EOF
       auto_respond_clarify)
         local rec_answers
         local answer_body
-        rec_answers="$(extract_recommended_answers "${issue_num}")"
-        if [ -n "${rec_answers}" ]; then
+        local _std_clarify_answer_out _std_clarify_answer_source
+        _std_clarify_answer_out="$(stall_recovery_clarify_answer "${issue_num}")"
+        _std_clarify_answer_source="$(printf '%s\n' "${_std_clarify_answer_out}" | head -n 1)"
+        rec_answers="$(printf '%s\n' "${_std_clarify_answer_out}" | tail -n +2)"
+        if [ "${_std_clarify_answer_source}" = "reasserted" ] && [ -n "${rec_answers}" ]; then
+          # tele-funtoken-msg-scoring#4815: keep the worker's reasoned decision
+          # (including REFRAME execution plans) instead of the RECOMMENDED letters.
+          answer_body="/answer [auto-answered-by-poller]
+
+_Standalone stall recovery: clarification stalled. Re-asserting the pipeline's latest answer to these questions._
+
+${rec_answers}"
+        elif [ -n "${rec_answers}" ]; then
           answer_body="/answer [auto-answered-by-poller]
 
 _Standalone stall recovery: clarification stalled. Auto-selecting recommended answers._
@@ -22428,14 +22452,22 @@ fi
 # Fetches the latest clarification-questions comment for an issue and
 # parses (RECOMMENDED) choices to build a "Q1: A\nQ2: B\n..." answer
 # string.  Falls back to an empty string if no questions are found.
+# Optional second argument: a file holding the comments JSON a caller
+# already fetched (stall_recovery_clarify_answer), so the comments are
+# read once per recovery instead of twice (CLAUDE.md §15).
 extract_recommended_answers() {
   local issue_num="$1"
+  local prefetched_comments_file="${2:-}"
 
   # Fetch recent comments (50 is the same limit used by clarify.yml)
   local comments_json
-  comments_json="$(gh_retry gh api \
-    "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=50" \
-    2>/dev/null || echo "[]")"
+  if [ -n "${prefetched_comments_file}" ] && [ -f "${prefetched_comments_file}" ]; then
+    comments_json="$(cat "${prefetched_comments_file}" 2>/dev/null || echo "[]")"
+  else
+    comments_json="$(gh_retry gh api \
+      "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=50" \
+      2>/dev/null || echo "[]")"
+  fi
 
   # Find the latest clarification comment (HTML marker or legacy prefix).
   # Search from newest to oldest (direction=desc).
@@ -22509,6 +22541,110 @@ extract_recommended_answers() {
       }
     }
   '
+}
+
+# stall_recovery_clarify_answer <issue_number>
+#
+# The answer text an auto_respond_clarify stall recovery posts (both the
+# tracking-issue recover_stalled_issue path and standalone stall recovery).
+#
+# A stalled clarification is often one the clarify-respond worker already
+# answered: it posted `/answer [auto-answered-by-orchestrator]` with
+# reasoned DECISIONS (and, for REFRAME / DERIVE_FROM_REPO / SYNTHESIZE, an
+# EXECUTION PLAN), but `plan` never started. Posting the RECOMMENDED letters
+# then silently replaced that decision (tele-funtoken-msg-scoring#4815: the
+# worker picked `Q1: B`, stall recovery posted `Q1: A`). So when a trusted
+# pipeline `/answer` (`[auto-answered-by-orchestrator]` or
+# `[auto-answered-by-poller]`) that decides at least one `Q<n>` is newer than
+# the latest clarification-questions comment, its text is re-asserted
+# verbatim (minus the `/answer` command and marker), which keeps non-letter
+# answers and their execution plans intact. Only when no such answer exists
+# does it fall back to the RECOMMENDED letters.
+#
+# Trust: the same author rule as extract_recommended_answers ("...[bot]"
+# login or OWNER/MEMBER/COLLABORATOR association), so an outside commenter
+# cannot plant an answer for stall recovery to repeat.
+#
+# Output: the first line is the source, `reasserted`, `recommended` or
+# `none`; the remaining lines are the answer text (empty for `none`).
+# API calls: one comments read (the 50 newest, as extract_recommended_answers
+# already did), shared with the RECOMMENDED fallback. Fail-open: a failed
+# read yields `none`.
+# Log (stderr): STALL_CLARIFY_ANSWER issue=<N> source=<source> answer_comment=<id|none>
+stall_recovery_clarify_answer() {
+  local issue_num="$1"
+  local sra_comments_file="" sra_comments_json sra_pick sra_source sra_payload sra_answer_id
+  sra_comments_json="$(gh_retry gh api \
+    "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?sort=created&direction=desc&per_page=50" \
+    2>/dev/null || echo "[]")"
+  printf '%s' "${sra_comments_json}" | jq -e 'type == "array"' >/dev/null 2>&1 || sra_comments_json="[]"
+
+  sra_pick="$(printf '%s' "${sra_comments_json}" | jq -c '
+    def trusted:
+      ((.user.login // "") | test("\\[bot\\]$"))
+      or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"));
+    def sort_key: [(.created_at // ""), ((.id // 0) | tonumber? // 0)];
+    . as $all
+    | ([ $all[] | select(trusted and ((.body // "") | test("<!-- ai:clarification-questions -->|^Clarification required"))) ]
+        | max_by(sort_key)) as $questions
+    | if $questions == null then null else
+        ($questions | sort_key) as $qkey
+        | [ $all[]
+            | select(trusted)
+            | select(sort_key > $qkey)
+            | select((.body // "") | test("^/answer\\b[^\\n]*\\[auto-answered-by-(orchestrator|poller)\\]"))
+            | select((.body // "") | test("(^|\\n|\\s)\\*?\\*?Q[1-9][0-9]*\\*?\\*?\\s*:\\s*\\S"))
+          ]
+        | max_by(sort_key)
+      end
+    | if . == null then null else {id: (.id // 0), body: (.body // "")} end
+  ' 2>/dev/null || echo "null")"
+
+  sra_source="none"
+  sra_payload=""
+  sra_answer_id="none"
+  if [ -n "${sra_pick}" ] && [ "${sra_pick}" != "null" ]; then
+    sra_answer_id="$(printf '%s' "${sra_pick}" | jq -r '.id')"
+    # Drop the `/answer` command and the marker but keep anything a one-line
+    # answer carries between them (plan.yml posts
+    # `/answer Q1: A ... [auto-answered-by-orchestrator]`).
+    sra_payload="$(printf '%s' "${sra_pick}" | jq -r '
+      .body
+      | (split("\n")) as $lines
+      | ($lines[0]
+          | sub("^/answer\\s*"; "")
+          | gsub("\\s*\\[auto-answered-by-(orchestrator|poller)\\]\\s*"; " ")
+          | gsub("^\\s+|\\s+$"; "")) as $head
+      | ((if $head == "" then [] else [$head] end) + $lines[1:])
+      | join("\n")
+      | gsub("^\\s+|\\s+$"; "")
+    ' 2>/dev/null || true)"
+    if [ -n "${sra_payload}" ]; then
+      sra_source="reasserted"
+    else
+      sra_answer_id="none"
+    fi
+  fi
+  if [ "${sra_source}" = "none" ]; then
+    sra_comments_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/stall_clarify_answer_${issue_num}.XXXXXX.json" 2>/dev/null || true)"
+    if [ -n "${sra_comments_file}" ] && printf '%s' "${sra_comments_json}" > "${sra_comments_file}" 2>/dev/null; then
+      sra_payload="$(extract_recommended_answers "${issue_num}" "${sra_comments_file}")"
+    else
+      sra_payload="$(extract_recommended_answers "${issue_num}")"
+    fi
+    if [ -n "${sra_comments_file}" ]; then
+      rm -f "${sra_comments_file}" 2>/dev/null || true
+    fi
+    if [ -n "${sra_payload}" ]; then
+      sra_source="recommended"
+    fi
+  fi
+  echo "STALL_CLARIFY_ANSWER issue=${issue_num} source=${sra_source} answer_comment=${sra_answer_id}" >&2
+  printf '%s\n' "${sra_source}"
+  if [ -n "${sra_payload}" ]; then
+    printf '%s\n' "${sra_payload}"
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------
@@ -25336,6 +25472,20 @@ The poller will resume processing on the next cycle."
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     handle_comprehensive_release_callback_if_needed "${PROJECT_STATUS}" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     close_plan_split_source_if_needed "${PROJECT_STATUS}" "${COMMENTS:-[]}"
+    # reconcile_integration_backpressure_label only runs for active projects,
+    # so a label set during the project outlived its completion
+    # (tele-funtoken-msg-scoring#4038). A complete project has merged its
+    # integration branch, so the gate no longer applies: drop the label. Reads
+    # TRACKING_LABELS (no extra call); one write only while the label is on.
+    if [ "${PROJECT_STATUS}" = "complete" ] && has_label "${TRACKING_LABELS:-[]}" "ai:integration-backpressure"; then
+      if gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" \
+        --remove-label "ai:integration-backpressure" >/dev/null 2>&1; then
+        TRACKING_LABELS="$(printf '%s' "${TRACKING_LABELS:-[]}" | jq -c 'map(select(. != "ai:integration-backpressure"))' 2>/dev/null || echo '[]')"
+        echo "BACKPRESSURE_CLEARED tracking_issue=${TRACKING_NUM} reason=project_complete"
+      else
+        echo "::warning::[backpressure] failed to remove ai:integration-backpressure from completed project #${TRACKING_NUM}; retried next cycle." >&2
+      fi
+    fi
     # Retry only a trusted, comment-backed partial verdict while its first
     # occurrence is recent. Failed writes without a marker never start an
     # unbounded expensive verification loop on completed projects.

@@ -13157,6 +13157,43 @@ def test_integration_backpressure_blocks_merges_at_threshold_and_clears_below_it
 	assert "ai:integration-backpressure" not in second_completion_comment
 
 
+def test_completed_project_clears_stale_integration_backpressure_label() -> None:
+	"""tele-funtoken-msg-scoring#4038: the label set while the project ran
+	stayed on after completion, because reconcile_integration_backpressure_label
+	only runs for active projects."""
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-tracking", "ai:merged", "ai:integration-backpressure"],
+		issue_labels={10: ["ai:merged"]},
+	)
+	assert "ai:integration-backpressure" not in result["tracking_labels"]
+	log = result["stdout"] + result["stderr"]
+	assert "BACKPRESSURE_CLEARED tracking_issue=192 reason=project_complete" in log
+
+	# Without the label: nothing to do, no log line.
+	quiet = _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-tracking", "ai:merged"],
+		issue_labels={10: ["ai:merged"]},
+	)
+	assert "reason=project_complete" not in quiet["stdout"] + quiet["stderr"]
+
+	# A failed project keeps it (merges stay gated until a human acts).
+	failed = _run_poller(
+		state=_base_state(status="failed"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_labels=["ai:orchestrator-tracking", "ai:integration-backpressure"],
+		issue_labels={10: ["ai:merged"]},
+	)
+	assert "ai:integration-backpressure" in failed["tracking_labels"]
+
+
 def test_integration_backpressure_refreshes_after_first_merge_within_same_cycle():
 	state = _base_state(status="in_progress")
 	state["total_issues"] = 2
