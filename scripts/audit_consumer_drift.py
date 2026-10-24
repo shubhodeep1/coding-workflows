@@ -135,6 +135,8 @@ class RepoAuditResult:
 	drift_items: list[DriftItem] = field(default_factory=list)
 	error: str | None = None
 	error_detail: str | None = None
+	# Templates actually compared (profile skips excluded); None on error.
+	templates_compared: int | None = None
 
 
 class RepoFetchError(Exception):
@@ -612,6 +614,7 @@ class ConsumerDriftAuditor:
 		try:
 			available_files = self.fetch_workflow_directory_listing(repository)
 			drift_items: list[DriftItem] = []
+			compared_count = 0
 			for file_name, expected_text in sorted(self.expected_templates.items()):
 				# A wrapper the consumer's profile does not install is expected
 				# to be absent. A wrapper the consumer has is always compared.
@@ -626,6 +629,7 @@ class ConsumerDriftAuditor:
 						f"reason=not_in_profile profile={profile}"
 					)
 					continue
+				compared_count += 1
 				actual_text = self.fetch_workflow_content(
 					repository,
 					file_name,
@@ -673,8 +677,16 @@ class ConsumerDriftAuditor:
 			)
 
 		outcome = "drift" if drift_items else "match"
-		print(f"DRIFT_SCAN_OK repository={repository} outcome={outcome} drift_items={len(drift_items)}")
-		return RepoAuditResult(repository=repository, outcome=outcome, drift_items=drift_items)
+		print(
+			f"DRIFT_SCAN_OK repository={repository} outcome={outcome} drift_items={len(drift_items)} "
+			f"compared={compared_count}"
+		)
+		return RepoAuditResult(
+			repository=repository,
+			outcome=outcome,
+			drift_items=drift_items,
+			templates_compared=compared_count,
+		)
 
 	def audit_repositories(self, repositories: list[str]) -> list[RepoAuditResult]:
 		return [self.audit_repository(repository) for repository in repositories]

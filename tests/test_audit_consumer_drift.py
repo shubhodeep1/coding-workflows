@@ -853,6 +853,9 @@ def test_core_profile_skips_out_of_profile_wrappers() -> None:
 		assert result.outcome == "drift"
 		assert _missing_files(result) == {"ai-plan.yml"}
 		assert "profile=core manifest=loaded" in output.splitlines()[0]
+		# Only the core manifest's two wrappers are compared, not all five.
+		assert result.templates_compared == 2
+		assert "DRIFT_SCAN_OK repository=octo/demo outcome=drift drift_items=1 compared=2" in output
 		for name in ("ai-orchestrate.yml", "ai-security-audit.yml", "review_rb_judge_dispatch.yml"):
 			assert (
 				f"DRIFT_SCAN_SKIP repository=octo/demo file={name} reason=not_in_profile profile=core"
@@ -894,6 +897,7 @@ def test_full_profile_and_unset_variable_report_every_missing_wrapper() -> None:
 			)
 			assert _missing_files(result) == set(PROFILE_TEMPLATE_BODIES)
 			assert "profile=full" in output.splitlines()[0]
+			assert result.templates_compared == len(PROFILE_TEMPLATE_BODIES)
 			assert "DRIFT_SCAN_SKIP" not in output
 
 
