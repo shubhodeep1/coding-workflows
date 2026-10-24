@@ -598,6 +598,14 @@ unblock_send_heal_report()
 		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=runs_unavailable"
 		return 1
 	fi
+	# The reporter's own pre-dispatch check (workflow_failure_heal_report.sh):
+	# the intake drops a smoke fixture or its own workflow, so nothing to hold on.
+	detail="$(unblock_py "${heal_py}" skip-reason --payload-json "${payload}" --self-repo "${REPOSITORY}" 2>/dev/null | head -1 | tr -cd 'a-z_' || true)"
+	if [ -n "${detail}" ]; then
+		UNBLOCK_HEAL_SKIP_REASON="${detail}"
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=skip reason=${UNBLOCK_HEAL_SKIP_REASON}"
+		return 2
+	fi
 	rm -f "${identity}" "${dispatch}"
 	identity_status="$(unblock_py "${heal_py}" request-report-identity --out "${identity}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
 	identity_status="$(printf '%s' "${identity_status}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
@@ -618,11 +626,11 @@ unblock_send_heal_report()
 	if ! gh api -X POST "repos/${UNBLOCK_SOURCE_REPO}/dispatches" --input "${dispatch}" >/dev/null 2> "${RUNTIME_DIR}/heal_dispatch_error.txt"; then
 		detail="$(head -c 200 "${RUNTIME_DIR}/heal_dispatch_error.txt" 2>/dev/null | tr '\n' ' ' | tr -cd '\040-\176' \
 			| sed -E 's/gh[pousr]_[A-Za-z0-9_]{10,}/[redacted]/g; s/github_pat_[A-Za-z0-9_]{10,}/[redacted]/g; s/eyJ[A-Za-z0-9_-]{10,}(\.[A-Za-z0-9_-]*){0,2}/[redacted]/g')"
-		rm -f "${identity}" "${dispatch}"
+		rm -f "${identity}" "${dispatch}" "${RUNTIME_DIR}/heal_dispatch_error.txt"
 		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=dispatch_failed detail=${detail}"
 		return 1
 	fi
-	rm -f "${identity}" "${dispatch}"
+	rm -f "${identity}" "${dispatch}" "${RUNTIME_DIR}/heal_dispatch_error.txt"
 	unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=sent"
 	return 0
 }
@@ -675,7 +683,7 @@ unblock_run_ops()
 				else
 					heal_skip_reason="no_accepted_label"
 				fi
-				unblock_log "item=${ITEM} op=heal_report issue=${issue} label=$(jq -r ".ops[${idx}].label // empty" "${ops_file}" 2>/dev/null) outcome=skip reason=${heal_skip_reason}"
+				unblock_log "item=${ITEM} op=heal_report issue=$(printf '%s' "${issue}" | tr -cd '0-9' | cut -c1-20 | grep . || echo none) label=$(jq -r ".ops[${idx}].label // empty" "${ops_file}" 2>/dev/null | tr -cd 'A-Za-z0-9:._-' | cut -c1-80 | grep . || echo none) outcome=skip reason=${heal_skip_reason}"
 			elif [ "${op}" = "hold_request" ]; then
 				unblock_log "item=${ITEM} op=hold_request issue=${issue} outcome=skip reason=earlier_op_failed"
 			fi
@@ -911,7 +919,7 @@ PY
 				fi
 				if ! [[ "${issue}" =~ ^[1-9][0-9]*$ ]]; then
 					ops_failed="true"
-					unblock_log "item=${ITEM} op=hold_request outcome=failed reason=invalid_issue"
+					unblock_log "item=${ITEM} op=hold_request issue=$(printf '%s' "${issue}" | tr -cd '0-9' | cut -c1-20 | grep . || echo none) outcome=failed reason=invalid_issue"
 					continue
 				fi
 				body="$(jq -r ".ops[${idx}].body" "${ops_file}")"

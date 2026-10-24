@@ -4800,3 +4800,37 @@ def test_heal_report_missing_its_issue_field_sends_nothing_and_warns(tmp_path: P
 	assert not state.get("heal_dispatches") and not _hold_comments(state)
 	assert "op=heal_report issue=none label=ai:harness-broken outcome=skip reason=invalid_issue" in result.stdout
 	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "(invalid_issue)" in tg[0]
+
+
+def test_heal_report_for_a_smoke_fixture_is_skipped_and_posts_no_hold(tmp_path: Path) -> None:
+	# The reporter's skip-reason check: the intake drops a smoke fixture unfiled.
+	smoke = dict(HEAL_ISSUE, title="[E2E Smoke Test] Validation failed")
+	listing = json.dumps({"workflow_runs": [dict(json.loads(HEAL_RUN_LISTING)["workflow_runs"][0], display_title=smoke["title"])]})
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), item=smoke, FAKE_GH_RUN_LISTING=listing)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches") and not _hold_comments(state)
+	assert "op=heal_report issue=7 label=ai:harness-broken outcome=skip reason=smoke_test_fixture" in result.stdout
+	assert "op=hold_request issue=40 outcome=skip reason=no_heal_report" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "(smoke_test_fixture)" in tg[0]
+
+
+def test_hold_request_with_an_invalid_issue_logs_issue_none(tmp_path: Path) -> None:
+	ops = _heal_ops()
+	del ops["ops"][2]["issue"]
+	with _oidc_stub() as oidc_env:
+		result, state, _tg, _runtime = _run_heal_ops(tmp_path, ops, **oidc_env)
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert len(state.get("heal_dispatches", [])) == 1
+	assert "op=hold_request issue=none outcome=failed reason=invalid_issue" in result.stdout
+
+
+def test_earlier_failure_skip_logs_label_none_for_a_missing_label(tmp_path: Path) -> None:
+	ops = _heal_ops(sendable=False, label="", hold=False)
+	ops["ops"][0] = dict(FAILING_FIRST_COMMENT)
+	result, _state, _tg, _runtime = _run_heal_ops(tmp_path, ops, FAKE_GH_FAIL_EXPLANATION="1")
+	assert "op=heal_report issue=7 label=none outcome=skip reason=no_accepted_label" in result.stdout, result.stdout + result.stderr
+
+
+def test_dispatch_error_file_is_removed(tmp_path: Path) -> None:
+	_result, _state, _tg, runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), FAKE_GH_FAIL_HEAL_DISPATCH="1")
+	assert not (runtime / "heal_dispatch_error.txt").exists()
