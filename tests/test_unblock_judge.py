@@ -4564,8 +4564,8 @@ def test_workflow_heal_disabled_skips_report_and_hold_and_warns(tmp_path: Path) 
 	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), WORKFLOW_HEAL_ENABLED="FALSE")
 	assert "rc=0" in result.stdout, result.stdout + result.stderr
 	assert not state.get("heal_dispatches") and not _hold_comments(state)
-	assert "op=heal_report outcome=skip reason=workflow_heal_disabled" in result.stdout
-	assert "op=hold_request outcome=skip reason=no_heal_report" in result.stdout
+	assert "op=heal_report issue=7 label=ai:harness-broken outcome=skip reason=workflow_heal_disabled" in result.stdout
+	assert "op=hold_request issue=40 outcome=skip reason=no_heal_report" in result.stdout
 	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "WORKFLOW_HEAL_ENABLED=false" in tg[0]
 
 
@@ -4779,14 +4779,16 @@ def test_judge_mixed_verdict_keeps_the_fixup_and_sends_a_report(tmp_path: Path) 
 	assert state["created"]
 
 
-def test_unauthenticated_report_is_sent_but_posts_no_hold_and_warns(tmp_path: Path) -> None:
-	# No OIDC endpoint: an intake that requires report auth would drop the report.
+def test_unauthenticated_report_still_posts_the_hold_and_warns(tmp_path: Path) -> None:
+	# No OIDC endpoint: the default intake (WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false)
+	# still files the report, so the hold is posted; a WARNING covers an intake
+	# that requires report auth and would drop it.
 	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops())
 	assert "rc=0" in result.stdout, result.stdout + result.stderr
 	dispatches = state.get("heal_dispatches", [])
 	assert len(dispatches) == 1 and "report_identity" not in dispatches[0]["body"]["client_payload"]
-	assert not _hold_comments(state)
-	assert "op=hold_request issue=40 outcome=skip reason=report_unauthenticated" in result.stdout
+	assert len(_hold_comments(state)) == 1
+	assert "op=hold_request issue=40 outcome=posted" in result.stdout
 	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "without a report identity" in tg[0]
 
 
@@ -4796,5 +4798,5 @@ def test_heal_report_missing_its_issue_field_sends_nothing_and_warns(tmp_path: P
 	result, state, tg, _runtime = _run_heal_ops(tmp_path, ops)
 	assert "rc=0" in result.stdout, result.stdout + result.stderr
 	assert not state.get("heal_dispatches") and not _hold_comments(state)
-	assert "op=heal_report outcome=skip reason=invalid_issue" in result.stdout
+	assert "op=heal_report issue=none label=ai:harness-broken outcome=skip reason=invalid_issue" in result.stdout
 	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "(invalid_issue)" in tg[0]

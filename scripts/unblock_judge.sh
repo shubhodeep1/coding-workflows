@@ -503,8 +503,10 @@ unblock_project_terminal_recheck()
 # Returns 0 when dispatched, 2 when skipped (UNBLOCK_HEAL_SKIP_REASON set),
 # 1 when a step failed. The OIDC token and the dispatch body are removed in
 # every outcome and never printed. UNBLOCK_HEAL_UNAUTHENTICATED=true marks a
-# report sent without an OIDC identity, which an intake that requires report
-# auth drops, so the caller posts no project hold for it.
+# report sent without an OIDC identity: the default intake still files it
+# (WORKFLOW_HEAL_REQUIRE_REPORT_AUTH defaults to false), so the caller still
+# posts the project hold, but pages a WARNING because an intake that requires
+# report auth drops it.
 UNBLOCK_HEAL_SKIP_REASON=""
 UNBLOCK_HEAL_UNAUTHENTICATED=""
 unblock_send_heal_report()
@@ -537,7 +539,7 @@ unblock_send_heal_report()
 		esac
 	fi
 	if [ -n "${UNBLOCK_HEAL_SKIP_REASON}" ]; then
-		unblock_log "item=${ITEM} op=heal_report outcome=skip reason=${UNBLOCK_HEAL_SKIP_REASON}"
+		unblock_log "item=${ITEM} op=heal_report issue=$(printf '%s' "${issue}" | tr -cd '0-9' | cut -c1-20 | grep . || echo none) label=$(printf '%s' "${label}" | tr -cd 'A-Za-z0-9:._-' | cut -c1-80 | grep . || echo none) outcome=skip reason=${UNBLOCK_HEAL_SKIP_REASON}"
 		return 2
 	fi
 	issue_json="${RUNTIME_DIR}/item.json"
@@ -581,6 +583,8 @@ unblock_send_heal_report()
 	payload="${RUNTIME_DIR}/heal_payload.json"
 	identity="${RUNTIME_DIR}/heal_identity.jwt"
 	dispatch="${RUNTIME_DIR}/heal_dispatch.json"
+	# An interrupted run must not leave the OIDC token or the dispatch body behind.
+	trap 'rm -f "${RUNTIME_DIR}/heal_identity.jwt" "${RUNTIME_DIR}/heal_dispatch.json"' EXIT
 	if ! unblock_py "${heal_py}" build-issue-payload --repo "${REPOSITORY}" --kind issue --label "${label}" \
 		--issue-json "${issue_json}" --comments-json "${RUNTIME_DIR}/item_comments.json" --runs-json "${runs_json}" \
 		--wrapper-sha "${wrapper_sha}" --reporter-run-url "${run_url}" --pipeline-login "${UNBLOCK_LOGIN:-}" \
@@ -902,12 +906,7 @@ PY
 			hold_request)
 				# No hold without a sent report: nothing would ship the fix it waits for.
 				if [ "${heal_sent}" != "true" ]; then
-					unblock_log "item=${ITEM} op=hold_request outcome=skip reason=no_heal_report"
-					continue
-				fi
-				# A report without identity may be dropped unfiled; never hold on it.
-				if [ "${heal_unauth}" = "true" ]; then
-					unblock_log "item=${ITEM} op=hold_request issue=${issue} outcome=skip reason=report_unauthenticated"
+					unblock_log "item=${ITEM} op=hold_request issue=${issue} outcome=skip reason=no_heal_report"
 					continue
 				fi
 				if ! [[ "${issue}" =~ ^[1-9][0-9]*$ ]]; then
@@ -974,7 +973,7 @@ PY
 				if [ "${heal_unauth}" = "true" ] \
 					&& jq -e ".ops[${idx}].text // \"\" | startswith(\"Unblock judge routed #\")" "${ops_file}" >/dev/null 2>&1; then
 					heal_warned="true"
-					unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity, so no project hold was requested; check that the heal issue was filed (${REPOSITORY})."
+					unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity; a heal intake that requires report authentication drops it, so check that the heal issue was filed (${REPOSITORY})."
 					continue
 				fi
 				unblock_tg "$(jq -r ".ops[${idx}].level" "${ops_file}")" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
@@ -996,7 +995,7 @@ PY
 			unblock_tg "WARNING" "Unblock judge could not send the harness heal report for #${ITEM}; a person must file the harness change (${REPOSITORY})."
 		fi
 	elif [ "${heal_unauth}" = "true" ] && [ "${heal_warned}" != "true" ]; then
-		unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity; check that the heal issue was filed (${REPOSITORY})."
+		unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity; a heal intake that requires report authentication drops it, so check that the heal issue was filed (${REPOSITORY})."
 	fi
 	[ "${ops_failed}" != "true" ]
 }

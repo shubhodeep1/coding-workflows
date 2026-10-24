@@ -3912,9 +3912,10 @@ and resolver chains, a failed project) now goes to the unblock judge
   in coding-workflows itself or to `ai:security` issues.
   For a pull request item no heal report is sent (the intake binds an
   `issue` report only to an issue); a WARNING asks a person to file it.
-  A report sent without the run's OIDC identity requests no project hold,
-  because an intake that requires report authentication drops it; a WARNING
-  asks a person to check that the heal issue was filed.
+  A report sent without the run's OIDC identity still requests the project
+  hold, because the intake files it by default; an intake that requires
+  report authentication drops it, so a WARNING asks a person to check that
+  the heal issue was filed.
   `UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED=false` restores the old behaviour.
   `WORKFLOW_HEAL_ENABLED=false` skips the heal report and the hold request
   and sends a WARNING instead, because a person must then file the harness
