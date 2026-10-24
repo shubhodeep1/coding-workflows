@@ -25781,6 +25781,40 @@ def test_managed_auto_approve_posts_for_ordinary_plan() -> None:
 	assert "reason=automation_path_plan_hold" not in result["stdout"]
 
 
+def test_managed_auto_approve_holds_plan_outside_files_touched() -> None:
+	# Consumer #4795: the plan names a file the issue's files_touched list
+	# misses, so implement would refuse the commit. Stall recovery holds it.
+	body = "Fix it.\n\nfiles_touched:\n  - src/app.py\n"
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment()]},
+		issue_bodies={10: body},
+		issue_authors={10: {"login": "maintainer", "association": "OWNER"}},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=plan_files_outside_files_touched "
+		"outcome=defer issue=10 paths=README.md") in log
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+	holds = [c.get("body", "") for c in result["issues"]["10"]["comments"]
+		if "<!-- ai:automation-path-plan-hold:v1 issue=10 reason=plan_files_outside_files_touched source=poller " in c.get("body", "")]
+	assert len(holds) == 1, log
+	assert "the plan changes files outside the `files_touched` list of this issue" in holds[0]
+	assert "- `README.md`" in holds[0]
+	assert "`/approved` alone does not help" in holds[0]
+	# With enforcement off at implement, the plan is approved as before.
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_trusted_plan_comment()]},
+		issue_bodies={10: body},
+		issue_authors={10: {"login": "maintainer", "association": "OWNER"}},
+		env_overrides={"ENFORCE_FILES_TOUCHED": "false"},
+	)
+	assert _approved_bodies(result, "10"), result["stdout"] + result["stderr"]
+
+
 def test_managed_auto_approve_holds_without_trusted_plan_comment() -> None:
 	forged = _trusted_plan_comment(login="outsider")
 	result = _run_poller(

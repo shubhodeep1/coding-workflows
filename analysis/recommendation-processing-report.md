@@ -1504,3 +1504,38 @@ Processed: 2026-10-23
 - MERGE-002 / MERGE-004: rejected — the doc tags them RISKY_SKIP.
 - MERGE-003: already-implemented — clarify's comment read is paginated once and shared.
 - REUSE-001: rejected — it is a cross-step cache with low value.
+
+### `analysis/workflow-optimization-2026-09-23-3.md`
+Processed: 2026-10-23
+- Speed 1 (repeat same-head fingerprint guard): already-implemented — the identical-failure fingerprint cap is in place (`REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL`=3, support-bound markers, non-retryable re-arm, `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`). A second ledger-persisted counter was rejected: the trusted GH_PAT-authored PR markers are the durable state, and a second store adds divergence. Passing the gate snapshot to the cap job was also rejected, because the cap job's identity-verified read runs only after a trip.
+- Speed 2 (reviewer health circuit breaker): already-implemented — the `REVIEWER_CIRCUIT_BREAKER_ENABLED` health cache and failback chains, retryable versus non-retryable classes, and the `REVIEWER_MAX_STEPS` / `REVIEWER_TOOL_REPEAT_LIMIT` watchdog. Routing every later pass to failback after one stall was rejected: it reduces diversity, and `REVIEWER_HEALTH_OPEN_THRESHOLD` is tunable.
+- Speed 3 (shard CI lint): already-implemented — by the #4707 parallel job split with the `CI / lint` aggregate.
+- Speed 4 (reduce prompt payloads): rejected — there is no concrete, verifiable change, there is recall risk, and README trimming and pre-assembled static context already exist.
+- Speed 5 (ledger substate circuit breaker): already-implemented — the job-scoped breaker in `scripts/ledger_emit_substate.sh` (`LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED`).
+- Micro (gate phase workflows before dispatch): rejected — job-level predicates already gate, with phase-wrapper parity, and Actions creates the run before evaluating them.
+- Cost 1 / Cost 2: same verdicts as Speed 1 / Speed 2.
+- Cost 3: rejected — as Speed 4.
+- Cost 4 (deterministic pre-classification before xhigh heal diagnosis): rejected — WORKFLOW_HEAL now runs on Claude by default, deterministic routes already exist (identical_failure_cap, non-retryable routing), and pre-classification risks misrouting.
+- Cost 5 (trim memory retrieval): rejected — it is a micro-saving with quality risk.
+- Semble: informational — no action.
+- Serena probe telemetry: already-implemented — the `SERENA_PROBE` prefix.
+- Rel 1 (catalog lockstep): already-implemented — `scripts/stage_workflow_support.sh` stages `codex_model_catalog.json` from `.codex-workflow-src`, the verified support SHA that also supplies the writer.
+- Rel 2 (transient push retry): applied — bounded transient retry in `Push all pending commits` (`AUTOFIX_PUSH_TRANSIENT_RETRY`, `AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED`), with no force push.
+- Rel 3 (editor failure details): applied — one `EDITOR_ATTEMPT_RESULT` line per attempt in `scripts/review_apply_fixes.sh`, with no stderr content.
+- Rel 4 (zero-second failures): already-implemented — in part: the collector classifies 404/410 missing archives (`MISSING_LOG_ARCHIVE_MARKER`) and records `startup_failure`. Extra per-run jobs/annotation reads were rejected (§14: they add calls per run).
+- Rel 5 (support provenance): already-implemented — `SUPPORT_REF` / `VALIDATE_SUPPORT_REF` lines and fail-closed pin verification.
+- AI memory duration fields: already-implemented — in part (`exit_code`, `duration_ms`, `stderr_category`); the rest was rejected because nothing reads it.
+- GH API audit items and `GH_API_SUMMARY`: rejected — `GH_API_RETRY` already exists, and review-path read consolidation is broad and covered by prior reports.
+- Prompt-cache ordering: rejected — generic.
+- Orchestrator metrics list: rejected — no consumer.
+- BUG-001 (merge without --match-head-commit): already-implemented — every poller merge passes `--match-head-commit` (`ORCH_MERGE_HEAD_BOUND`), and `merge_with_followup` refuses when the SHA is empty.
+- BUG-002 (drift audit profiles): applied — the profile half (`DRIFT_SCAN_SKIP reason=not_in_profile`). The non-`ai-*` wrapper half was already implemented through the `profiles/full.txt` union.
+- API-001: rejected — RISKY_SKIP per the doc.
+- BATCH-001: rejected — NEEDS_VERIFICATION per the doc, and it is a daily job with low call volume.
+- BATCH-002 / BATCH-003: rejected — RISKY_SKIP.
+- DUP-001 / DUP-002 / DUP-003: rejected — refactor-only (§9) with support-staging risk; `build_semble_wrapper.sh` no longer carries the duplicated writer.
+- EXPR-001 / EXPR-002: rejected — obsolete; the `Stage workflow support files` and `Preflight destructive-commit guard` run bodies contain no `${{ }}`, and values pass through `env:`, so the expression length limit does not apply.
+- CONSIST-001: already-implemented — `resolve_integration_ref.sh` uses `gh_api_retry` and exits 75/2.
+- DEAD-001: already-implemented — `BRANCH_REBUILD_THRESHOLD_DECISION` logs `skip_reason` and `last_rebuild_at`.
+- MERGE-001 / MERGE-003 / MERGE-004 / MERGE-005 and REUSE-001: rejected — RISKY_SKIP per the doc.
+- MERGE-002: rejected — RISKY_SKIP, and also already-implemented: clarify's comment read is paginated once and shared.

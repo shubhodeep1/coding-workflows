@@ -967,6 +967,98 @@ def test_plan_gate_origin_repo_verifies_pipeline_source_chain() -> None:
 		guard.fetch_issue_with_gh = original
 
 
+# --- Plan files outside files_touched (consumer #4795) ---------------------
+
+_WIDENED_PLAN = ("## Files likely to change\n- `backend/withdrawal_flow.py`\n- `backend/poll.py`\n"
+	"- `package-lock.json`\n- `agents.d/1-x.md`\n- `src/` (directory, not checked)\n")
+
+
+def _with_env(**values):
+	names = ("ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "PLAN_FILES_TOUCHED_GATE_ENABLED")
+	saved = {name: os.environ.get(name) for name in names}
+	for name in names:
+		os.environ.pop(name, None)
+	os.environ.update(values)
+	return saved
+
+
+def _restore_env(saved) -> None:
+	for name, value in saved.items():
+		if value is None:
+			os.environ.pop(name, None)
+		else:
+			os.environ[name] = value
+
+
+def test_plan_files_outside_files_touched_uses_the_implement_matcher() -> None:
+	body = _body("backend/poll.py", "agents.md")
+	# Lockfiles and agents.d fragments (agents.md listed) are allowed as at
+	# implement; a directory token is not an exact file and is not checked.
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body) == ["backend/withdrawal_flow.py"]
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, _body("backend/")) == ["agents.d/1-x.md"]
+	# No list, an empty list or a malformed one: implement skips, so no check.
+	for skipped in ("no list here", "files_touched:\n", "files_touched:\nsee below\n- a.py\n"):
+		assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, skipped) == [], skipped
+	# A plan without a Files section names no exact files.
+	assert guard.plan_files_outside_files_touched("Change `backend/x.py`.", body) == []
+	# A heal-route issue (label or fingerprint marker, as implement decides):
+	# implement enforces its scope marker, not files_touched.
+	scope_marker = "\n<!-- ai:workflow-heal-scope:v1 paths=backend/poll.py runs=1 -->\n"
+	fp_marker = "\n<!-- workflow-failure-heal:fp=" + "a" * 64 + " -->\n"
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body + fp_marker) == []
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body, [{"name": "ai:workflow-heal"}]) == []
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body, ["ai:workflow-heal"]) == []
+	# The scope marker alone is not the heal route: implement enforces files_touched.
+	assert guard.plan_files_outside_files_touched(_WIDENED_PLAN, body + scope_marker) == ["backend/withdrawal_flow.py"]
+
+
+def test_plan_files_touched_gate_switches() -> None:
+	cases = (({}, True), ({"ENFORCE_FILES_TOUCHED": ""}, True), ({"ENFORCE_FILES_TOUCHED": "false"}, False),
+		# implement enforces only on exactly "true".
+		({"ENFORCE_FILES_TOUCHED": "TRUE"}, False), ({"ALLOW_OUT_OF_SCOPE_FILES": "true"}, False),
+		({"ALLOW_OUT_OF_SCOPE_FILES": "false"}, True), ({"PLAN_FILES_TOUCHED_GATE_ENABLED": "false"}, False),
+		({"PLAN_FILES_TOUCHED_GATE_ENABLED": "OFF"}, False), ({"PLAN_FILES_TOUCHED_GATE_ENABLED": "true"}, True))
+	for values, expected in cases:
+		saved = _with_env(**values)
+		try:
+			assert guard.plan_files_touched_gate_active() is expected, values
+		finally:
+			_restore_env(saved)
+
+
+def test_plan_gate_cli_holds_plan_outside_files_touched() -> None:
+	saved = _with_env()
+	try:
+		meta = _owner_meta("backend/poll.py", "agents.md")
+		code, record = _run_plan_gate_cli(_WIDENED_PLAN, "true", meta)
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED, record
+		assert record == {"decision": "hold", "reason": "plan_files_outside_files_touched", "protected_paths": [],
+			"denied_paths": ["backend/withdrawal_flow.py"], "log_paths": "backend/withdrawal_flow.py"}
+		code, record = _run_plan_gate_cli(_WIDENED_PLAN, "true", _owner_meta("backend/", "agents.md"))
+		assert code == 0 and record["decision"] == "approve", record
+		# No metadata (the poller cache had no body): no list to compare.
+		code, record = _run_plan_gate_cli(_WIDENED_PLAN, "true", None)
+		assert code == 0 and record["decision"] == "approve", record
+		# Unreadable metadata holds, like every other gate error.
+		assert _run_plan_gate_cli(_WIDENED_PLAN, "true", "{not json")[1]["reason"] == "plan_gate_error"
+		assert _run_plan_gate_cli(_WIDENED_PLAN, "true", "[]")[1]["reason"] == "plan_gate_error"
+	finally:
+		_restore_env(saved)
+
+
+def test_plan_gate_automation_hold_reason_wins_over_files_touched() -> None:
+	saved = _with_env()
+	try:
+		plan = "### Files likely to change\n- `scripts/a.sh`\n- `src/b.py`\n"
+		code, record = _run_plan_gate_cli(plan, "false", _owner_meta("scripts/a.sh"))
+		assert record["reason"] == "automation_path_plan_auto_approval_disabled", record
+		code, record = _run_plan_gate_cli(plan, "true", _owner_meta("scripts/a.sh"))
+		assert record["reason"] == "plan_files_outside_files_touched" and record["denied_paths"] == ["src/b.py"]
+		assert record["protected_paths"] == ["scripts/a.sh"]
+	finally:
+		_restore_env(saved)
+
+
 # --- Q82: a pipeline-authored derived issue inherits its source's trust ---
 
 PIPELINE = "pipeline[bot]"
