@@ -16220,6 +16220,10 @@ def test_validation_harness_judge_hold_request_caps_reached():
 		assert "validation_harness_hold" not in ls, output
 		assert ls["validation_harness_hold_requests_used"] == [2]
 		assert _judge_line("capped") in output, output
+		assert any(
+			n["level"] == "CRITICAL" and "harness resume cap is reached" in n["message"]
+			for n in result["telegram_notifications"]
+		), result["telegram_notifications"]
 
 
 def test_validation_harness_judge_hold_request_skips_active_hold_and_non_validation_failure():

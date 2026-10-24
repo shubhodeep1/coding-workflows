@@ -15961,6 +15961,8 @@ validation_harness_judge_hold_request() {
       ;;
     capped)
       echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=capped fp=${vhq_fp} pin=unknown heal_issue=none"
+      # README "Harness hold" Alerts: a reached cap pages a person.
+      tg_notify "Project #${TRACKING_NUM}: the unblock judge asked for a validation harness hold, but a harness resume cap is reached (fp=${vhq_fp}). The project stays failed; a person must repair it and run /revalidate." "CRITICAL" || true
       return 0
       ;;
   esac
