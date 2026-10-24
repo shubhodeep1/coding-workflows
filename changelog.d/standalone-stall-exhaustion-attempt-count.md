@@ -8,4 +8,4 @@ The standalone loop in `scripts/orchestrate_poll_process.sh` caps recovery with 
 | Default cap (`MAX_STALL_RECOVERIES_PER_ISSUE`) | 5 |
 | New close comment | `Closing: standalone stall recovery exhausted (5 attempts in 'ai:awaiting-approval' phase, limit 5; stuck 65 minutes this time).` |
 
-What this means for operators: when the alert says an issue's recovery is exhausted, the attempt count now matches the `/approved` or `/answer` comments on the issue. When to close an issue is unchanged.
+What this means for operators: when the alert says an issue's recovery is exhausted, the attempt count is the number of stall-recovery actions taken in that phase (in `ai:awaiting-approval` these are the `/approved` comments; in other phases it also counts `/reclarify` retriggers, conflict-resolver dispatches and failed re-issues). When to close an issue is unchanged.
