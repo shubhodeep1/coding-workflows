@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data-only change. Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly these three lines, in this order:\n\n```\nstatus: ok\nrun_id: alt-40068500779\nupdated-by: ai-pipeline\n```\n\nEnd the file with a single trailing newline, as text files in this repository normally do. Leave no extra blank lines and no leading or trailing spaces on any line.\n\n## Data structures affected\nOnly the canary text file. No schemas, state or other files change.\n\n## API or interface changes\nNone.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one existing file, gives its exact new content, and forbids changes to any other file. So the plan rewrites that one file in place. There is nothing to expand or reduce, and no helper or pattern applies beyond editing the file that already exists.\n\n## Decisions\n### D1 \u2014 Replace the whole file rather than patch selected lines\n- Chosen: overwrite the file so it holds exactly the three specified lines plus one trailing newline.\n- Alternatives considered: editing individual lines and keeping any other existing lines.\n- Why: the issue requires the content to be \"exactly\" these three lines. Overwriting the whole file guarantees nothing else is left behind.\n\n## Security considerations\n- Trust boundaries: none touched. The file is a static test fixture.\n- Authorization: no new endpoint or surface is added.\n- External input: none is read at runtime.\n- Abuse cases: none. The file contains no secrets, credentials or money state.\n\n## Risks and edge cases\n- If `tests/e2e_smoke_canary.txt` is missing on the planning ref, the implementer creates it with the same content. The issue says the file exists; I did not check this, so it is not a conflict.\n- Do not add a changelog or agents fragment. The issue says to modify only this one file, and this is a test fixture, not a behaviour change.\n- Line endings must be LF, not CRLF.\n\n## Testing considerations\n- Check that the file contains exactly the specified bytes: for example, `printf 'status: ok\\nrun_id: alt-40068500779\\nupdated-by: ai-pipeline\\n' | diff - tests/e2e_smoke_canary.txt` prints nothing.\n- Check that `git diff --stat` shows only `tests/e2e_smoke_canary.txt`.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "0fbb82b22026181a3c032370a9a8e23ba3e78cde6c3f16c9edf3fe7dd09bcee9",
+  "lineage": {
+    "issue_number": 8052,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40069169710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40069169710",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8052"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261024062033_c27c09ec9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8052,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40069169710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8052",
+  "timestamps": {
+    "created_at": "2026-10-24T06:20:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
