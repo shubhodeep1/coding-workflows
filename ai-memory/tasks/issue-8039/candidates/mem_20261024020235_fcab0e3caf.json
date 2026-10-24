@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8039,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8039\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8042\",\"pr_number\":8042,\"branch\":\"ai/issue-8039\",\"run_id\":\"40050631429\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40050631429\",\"changed_files\":[\"README.md\",\"agents.d/validation-harness-routing-p2.md\",\"changelog.d/validation-harness-routing-p2.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "23432e80ae84770eecc352c113b8b292aed30d129eff5b2de9be266dc4c3175a",
+  "lineage": {
+    "issue_number": 8039,
+    "parent_ids": [],
+    "pr_number": 8042,
+    "run_id": "40050631429",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40050631429",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8042"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261024020235_fcab0e3caf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8039,
+    "level": "run",
+    "pr_number": 8042,
+    "run_id": "40050631429"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8039: https://github.com/shubhodeep1/coding-workflows/pull/8042",
+  "timestamps": {
+    "created_at": "2026-10-24T02:02:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
