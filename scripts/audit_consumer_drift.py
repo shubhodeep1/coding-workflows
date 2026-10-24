@@ -811,16 +811,23 @@ class DriftRepairer:
 
 	def _managed_names(self, checkout: Path, profile_names: set[str] | None) -> list[str]:
 		local_dir = checkout / ".github" / "workflows"
+		# is_symlink() too: is_file() is False for a dangling symlink, which the
+		# integrity check still records (and rejects) as a present entry.
+		def present(name: str) -> bool:
+			path = local_dir / name
+			return path.is_file() or path.is_symlink()
+
 		if profile_names is None:
 			# Unknown profile: restore only wrappers the consumer already has.
-			names = {name for name in self.rendered_templates if (local_dir / name).is_file()}
+			names = {name for name in self.rendered_templates if present(name)}
 		else:
 			names = set(profile_names)
 		names.add(INTEGRITY_WRAPPER)
-		# The sync never creates the updater (bootstrap-only), so neither do we.
-		# When the consumer has it, it is managed whatever the profile lists:
-		# ai-workflow-integrity.yml compares it whenever either tree has it.
-		if (local_dir / UPDATER_WRAPPER).is_file():
+		# A restore pull request never adds the updater (bootstrap-only, the
+		# sync never creates it). When the consumer has it, it is managed
+		# whatever the profile lists: ai-workflow-integrity.yml compares it
+		# whenever either tree has it.
+		if present(UPDATER_WRAPPER):
 			names.add(UPDATER_WRAPPER)
 		else:
 			names.discard(UPDATER_WRAPPER)
@@ -850,6 +857,13 @@ class DriftRepairer:
 			return RepairResult(repository=repository, outcome="error", reason="repair_failed")
 
 	def _repair(self, repository: str, profile_names: set[str] | None) -> RepairResult:
+		if profile_names is None:
+			# Unknown profile (failed or invalid WORKFLOW_PROFILE read, or no
+			# manifest): the consumer's integrity check would require a profile
+			# manifest we cannot name, so a restore pull request could miss a
+			# wrapper and fail its own status. Skip; the next daily run retries.
+			print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=profile_unknown")
+			return RepairResult(repository=repository, outcome="skipped", reason="profile_unknown")
 		checkout = self.workdir / repository.replace("/", "__")
 		if checkout.exists():
 			raise ValueError(f"repair checkout already exists: {checkout}")
@@ -965,7 +979,8 @@ def repair_drifted_repositories(
 	CRLF ignored) while ai-workflow-integrity.yml accepts only exact bytes, so a
 	"match" can still fail the integrity check. Matching repositories are
 	therefore byte-checked too (one clone, no REST call when the bytes match);
-	their ``no_exact_drift`` skips are left out of the summary.
+	their ``no_exact_drift`` and ``profile_unknown`` skips are left out of
+	the summary.
 	"""
 	repairs: list[RepairResult] = []
 	for result in results:
@@ -976,7 +991,7 @@ def repair_drifted_repositories(
 		if auditor.profile_manifests is not None and profile != UNKNOWN_WORKFLOW_PROFILE:
 			profile_names = auditor.profile_manifests.get(profile)
 		repair = repairer.repair(result.repository, profile_names)
-		if result.outcome == "match" and repair.outcome == "skipped" and repair.reason == "no_exact_drift":
+		if result.outcome == "match" and repair.outcome == "skipped" and repair.reason in ("no_exact_drift", "profile_unknown"):
 			continue
 		repairs.append(repair)
 	return repairs
