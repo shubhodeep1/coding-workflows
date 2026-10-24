@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/standalone-stall-exhaustion-attempt-count.md:last paragraph | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The changelog says the reported attempt count matches the `/approved` or `/answer` comments on the issue, but `phase_attempts[phase]` counts every stall-recovery action in that phase.\n  WHY: Re-issue failures, `/reclarify` retriggers and judge runs also increment the counter, so outside the awaiting-approval and clarification phases the count will not equal a comment count. Nothing fails at runtime, and both reviewers rated it NIT, which maps to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/standalone-stall-exhaustion-attempt-count.md:last paragraph | severity=low | confidence=3\n  PROBLEM: The changelog line \"the attempt count now matches the `/approved` or `/answer` comments on the issue\" over-promises, because `phase_attempts[phase]` counts every stall-recovery action in the phase (see scripts/orchestrate_poll_process.sh around lines 22260-22266).\n  WHY: Nothing fails at runtime. Outside `ai:awaiting-approval` and `ai:clarification` the reported count will not equal a comment count. The reviewer rated it NIT.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/standalone-stall-exhaustion-attempt-count.md:final paragraph | severity=low | confidence=3\n  PROBLEM: The changelog claims the reported count matches the `/approved` or `/answer` comments, but `phase_attempts[phase]` is incremented on every stall-recovery action, including failed re-issues, judge runs and `/reclarify` retriggers.\n  WHY: Nothing breaks at runtime, but the note could mislead operators who count comments on issues closed in phases other than awaiting-approval or clarification. The reviewer rated it NIT.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "99127b4b3bf7500c03987e7f6b515867de8ef7d89483ac48481ca85e6f04b89d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8043,
+    "run_id": "40053080756",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40053080756",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024022946_d8be15f524",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8043,
+    "run_id": "40053080756"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-24T02:29:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
