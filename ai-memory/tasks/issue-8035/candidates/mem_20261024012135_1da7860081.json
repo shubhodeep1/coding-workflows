@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n\nNone. Only file content changes.\n\n## Data structures affected\n\nNone.\n\n## API or interface changes\n\nNone.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue spells out the exact final content of one existing file and forbids any other change. The complete change is the same as the minimal one, so this plan keeps the scope exactly as the issue states it.\n\n## Decisions\n\n### D1 \u2014 Replace the whole file\n- Chosen: Overwrite `tests/e2e_smoke_canary.txt` with exactly `status: ok\\nrun_id: 40047940209\\nupdated-by: ai-pipeline\\n`.\n- Alternatives considered: Editing only the lines that differ.\n- Why: The issue requires the file to be exactly these three lines. Replacing the whole file guarantees nothing old is left behind.\n\n## Security considerations\n\n- Trust boundaries: none touched. The file is static test data.\n- Authorization: no new endpoint or surface.\n- External input: the content is a fixed literal taken from the issue and is not executed.\n- Abuse cases: none. The file holds no secrets or money state.\n\n## Implementation steps\n\n1. Write the file with `printf 'status: ok\\nrun_id: 40047940209\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n2. Confirm that `git diff --stat` shows only this one file changed.\n\n## Risks and edge cases\n\n- The file must end with exactly one trailing newline: no CRLF line endings, no BOM, no extra blank line.\n- If the file is missing on the current ref, which would contradict the issue, create it with the same content in the existing `tests/` directory. Do not create any new directory.\n\n## Testing considerations\n\n- `cat -A tests/e2e_smoke_canary.txt` should show three lines, each ending in `$`.\n- `wc -l` on the file should report 3.\n- No other tests are affected.\n\n## Pre-execution self-check\n\nThe plan touches only the file the issue names, the content is fully specified, and nothing needs to be clarified.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "6b63ea8fb9e45269f6e9b83dbe5c99a2c77e63c375ed971bf2b9bcb1323df5eb",
+  "lineage": {
+    "issue_number": 8035,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40048668511",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40048668511",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8035"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261024012135_1da7860081",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8035,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40048668511"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8035",
+  "timestamps": {
+    "created_at": "2026-10-24T01:21:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
