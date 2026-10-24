@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The three single-file modules are a self-contained block in \"Orchestrate poll process unit tests\". It is gated by `if [ \"${poll_group}\" -eq 0 ]` at `.github/workflows/ci.yml:2351-2356` and runs only in group 0, so moving it lightens group 0 without touching the fast-fail hot path. Option B would move that hot path, which runs in group 0 by design (`ci.yml:2136-2138`). Option C would make the same trade-off and change more. The matrix job name `orchestrate-poll` and the existing step names stay the same.\nQ2: Group 1 now runs only its sharded slice plus the unblock step that #8072 moved in (`ci.yml:2480-2484`). Group 2 already runs CI wiring guard part 2 and three sandbox steps (`ci.yml:2373-2455`). Group 3 runs the two #7689 steps (`ci.yml:2504-2514`). So group 1 has the most headroom. `tests-heal-plan-and-validation` has hit its budget before (#7690), so it is a poor target.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both answers are letters. Notes for the implementer:\n- In `.github/workflows/ci.yml`, step \"Orchestrate poll process unit tests\": remove the group-0 block at lines 2351-2356, which runs `test_orchestrate_poll_noop_suspicious_recovery.py`, `test_state_snapshot.py` and `test_run_substate_ledger.py`.\n- Add one new step \"Orchestrate poll single-file module tests\" with `if: strategy.job-index == 1`, placed in the `orchestrate-poll` job next to the group-1 unblock step. It runs the same three `PYTHONDONTWRITEBYTECODE=1 python3 tests/<file>.py` commands, unchanged and in the same order, under `set -euo pipefail`. Above it, add a comment naming the budget-watch issue and run 40122910216 (15m09s of 20), in the style of the comments on the other moved steps.\n- Update the comments that say \"Group 0 carries the fast-fail subset and the single-file modules\" (`ci.yml` around lines 2368 and 2467) so they say where the modules run now.\n- `tests/test_ci_poll_test_sharding.py:297-305` asserts that the modules run inside the `poll_group -eq 0` gate. Change it to assert that the modules run once, in the new group-1 step, and no longer in the sharded step. Also check `tests/test_ci_job_split_contract.py`, which forbids a step running in two jobs, and confirm the new step is unique.\n- Keep `timeout-minutes` as it is. Do not add a new job and do not change `lint`'s `needs`.\n- Fix the matching text in the `agents.md` \"CI job layout\" paragraph by direct edit, because it corrects existing text. Do not add to that paragraph directly: any new text goes in an `agents.d/<issue>-<slug>.md` fragment. Add a `changelog.d/<issue>-<slug>.md` fragment.\n- Reversibility: to undo, move the three lines back under the group-0 gate and revert the contract test.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "b2bd9b84b2770fab4596ee812c890541948ac49ad1ed2c1260db7672d2774d92",
+  "lineage": {
+    "issue_number": 8080,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40124505773",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40124505773",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8080"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261024192558_c55b761787",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8080,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40124505773"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8080",
+  "timestamps": {
+    "created_at": "2026-10-24T19:25:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
