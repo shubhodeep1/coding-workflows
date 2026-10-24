@@ -47,6 +47,17 @@ jobs:
             contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
             contains(github.event.comment.body, '[auto-answered-by-orchestrator]')
           )
+        ) ||
+        (
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.type == 'User' &&
+          github.event.comment.author_association == 'OWNER' &&
+          github.event.comment.user.login == github.repository_owner &&
+          startsWith(github.event.comment.body, '/answer') &&
+          (
+            contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
+            contains(github.event.comment.body, '[auto-answered-by-orchestrator]')
+          )
         )
       )
     runs-on: ubuntu-latest

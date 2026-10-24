@@ -111,6 +111,14 @@ jobs:
           github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN &&
           startsWith(github.event.comment.body, '/approved') &&
           contains(github.event.comment.body, '[auto-approved-by-plan]')
+        ) ||
+        (
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.type == 'User' &&
+          github.event.comment.author_association == 'OWNER' &&
+          github.event.comment.user.login == github.repository_owner &&
+          startsWith(github.event.comment.body, '/approved') &&
+          contains(github.event.comment.body, '[auto-approved-by-plan]')
         )
       )
     runs-on: ubuntu-latest

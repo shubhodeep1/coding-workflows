@@ -11,3 +11,4 @@ ai-validate.yml
 ai-sync-labels.yml
 review_rb_judge_dispatch.yml
 unblock_judge_dispatch.yml
+ai-workflow-integrity.yml

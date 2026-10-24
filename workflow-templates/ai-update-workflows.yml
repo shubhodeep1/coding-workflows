@@ -29,11 +29,16 @@
 # refresh the pull request) and statuses (the verify job's commit status).
 #
 # Opting out:
-#   Set the ALLOW_WORKFLOW_EDITS repository variable to 'false' to prevent
-#   automatic updates. The workflow will still run but skip all changes.
+#   Managed wrappers cannot be opted out: ai-workflow-integrity.yml rejects
+#   any pull request or push that edits them, and the upstream drift audit
+#   opens a restore pull request for a drifted wrapper. Setting the
+#   ALLOW_WORKFLOW_EDITS repository variable to 'false' only skips the
+#   .claude/, CLAUDE.md, audit-gate, retired-file and changelog/agents asset
+#   steps; wrappers are still updated and the run logs a deprecation warning.
 #   Set the AI_WORKFLOW_AUTO_UPDATE_ENABLED repository variable to 'false' to
-#   stop the job entirely; unset (or any other value) means it runs. The gate
-#   lives here, so a sync of this file cannot erase the hold.
+#   stop the job entirely (wrappers then stay at their pinned release); unset
+#   (or any other value) means it runs. The gate lives here, so a sync of
+#   this file cannot erase the hold.
 #
 # IMPORTANT: This file is managed by coding-workflows and will be overwritten
 # by the update process. Do not add custom logic here.

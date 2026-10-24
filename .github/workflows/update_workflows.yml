@@ -5,7 +5,7 @@ name: Update Workflow Wrappers
   workflow_call:
     inputs:
       allow_workflow_edits:
-        description: "Allow automatic workflow wrapper updates"
+        description: "Sync non-wrapper assets (.claude/, CLAUDE.md, audit-gate, retired files, changelog/agents fragments); managed wrappers are always updated"
         required: false
         default: true
         type: boolean
@@ -25,7 +25,7 @@ name: Update Workflow Wrappers
   workflow_dispatch:
     inputs:
       allow_workflow_edits:
-        description: "Allow automatic workflow wrapper updates"
+        description: "Sync non-wrapper assets (.claude/, CLAUDE.md, audit-gate, retired files, changelog/agents fragments); managed wrappers are always updated"
         required: false
         default: true
         type: boolean
@@ -53,7 +53,15 @@ jobs:
   update-wrappers:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: ${{ inputs.allow_workflow_edits != false }}
+    # allow_workflow_edits (vars.ALLOW_WORKFLOW_EDITS) no longer skips this
+    # job: managed wrappers always follow the release (the consumer's
+    # ai-workflow-integrity.yml locks them). With it false, only the
+    # non-wrapper asset steps below are skipped; see "Report ignored
+    # wrapper opt-out". Exception: in coding-workflows itself (the release
+    # gate's smoke dispatch passes allow_workflow_edits=false against this
+    # repo) the job is still skipped, so a release rehearsal never syncs
+    # consumer wrappers into the source repository.
+    if: ${{ inputs.allow_workflow_edits != false || github.repository != 'shubhodeep1/coding-workflows' }}
     # Re-exported for the `verify` job (issue #7004). Additive only.
     outputs:
       delivery: ${{ steps.commit_push.outputs.delivery }}
@@ -72,6 +80,15 @@ jobs:
         with:
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 1
+
+      # Deprecation notice: ALLOW_WORKFLOW_EDITS=false used to skip the whole
+      # sync. The name and the allow_workflow_edits input stay (CLAUDE.md §6),
+      # but managed wrappers are now updated regardless.
+      - name: Report ignored wrapper opt-out
+        if: ${{ inputs.allow_workflow_edits == false }}
+        run: |
+          echo "WORKFLOW_EDITS_OPT_OUT outcome=ignored scope=managed_wrappers input=allow_workflow_edits value=false"
+          echo "::warning::ALLOW_WORKFLOW_EDITS=false no longer stops managed workflow wrapper updates; it only skips the .claude/, CLAUDE.md, audit-gate, retired-file and changelog/agents asset steps. Remove allow_workflow_edits: false from ai-update-workflows.yml."
 
       - name: Fetch latest workflow templates from coding-workflows@stable
         id: fetch
@@ -547,6 +564,7 @@ jobs:
 
       - name: Apply canonical audit-gate assets
         id: audit_gate
+        if: ${{ inputs.allow_workflow_edits != false }}
         run: |
           set -euo pipefail
 
@@ -601,6 +619,7 @@ jobs:
 
       - name: Sync .claude/ assets from upstream
         id: claude_sync
+        if: ${{ inputs.allow_workflow_edits != false }}
         run: |
           set -euo pipefail
 
@@ -662,6 +681,7 @@ jobs:
 
       - name: Remove retired upstream files
         id: retired_files
+        if: ${{ inputs.allow_workflow_edits != false }}
         run: |
           set -euo pipefail
 
@@ -720,6 +740,7 @@ jobs:
 
       - name: Sync top-level CLAUDE.md from upstream
         id: claude_md_sync
+        if: ${{ inputs.allow_workflow_edits != false }}
         run: |
           set -euo pipefail
 
@@ -763,6 +784,7 @@ jobs:
 
       - name: Sync changelog fragment assets from upstream
         id: changelog_sync
+        if: ${{ inputs.allow_workflow_edits != false }}
         run: |
           set -euo pipefail
 
@@ -801,6 +823,7 @@ jobs:
 
       - name: Assemble changelog fragments
         id: changelog_assemble
+        if: ${{ inputs.allow_workflow_edits != false }}
         run: |
           set -euo pipefail
 
@@ -833,6 +856,7 @@ jobs:
 
       - name: Assemble agents.md fragments
         id: agents_assemble
+        if: ${{ inputs.allow_workflow_edits != false }}
         run: |
           set -euo pipefail
 
@@ -976,8 +1000,11 @@ jobs:
               continue
             fi
 
-            # Compare content (ignore trailing whitespace differences)
-            if ! diff -q --strip-trailing-cr --ignore-space-at-eol "$upstream_file" "$local_file" >/dev/null 2>&1; then
+            # Exact byte comparison. The consumer's ai-workflow-integrity.yml
+            # accepts only byte-identical wrappers, and the former
+            # `diff --ignore-space-at-eol` (a git-only flag, GNU diff exits 2)
+            # counted every wrapper as updated on every run.
+            if ! cmp -s "$upstream_file" "$local_file"; then
               echo "Updating: ${filename}"
               cp "$upstream_file" "$local_file" || fail_with_reason "ERR_TEMPLATE_COPY_FAILED" "Failed to update workflow file ${local_file} from ${upstream_file}."
               TOTAL_UPDATED=$((TOTAL_UPDATED + 1))
@@ -1206,7 +1233,7 @@ jobs:
           BASE_SHA="$(git rev-parse HEAD)"
           CHECKED_OUT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
-          git commit -m "$(printf 'chore: update AI workflow wrappers from coding-workflows@stable\n\n%b\nAuto-applied by ai-update-workflows. To opt out, set the\nALLOW_WORKFLOW_EDITS repository variable to '\''false'\''.' "$COMMIT_BODY")"
+          git commit -m "$(printf 'chore: update AI workflow wrappers from coding-workflows@stable\n\n%b\nAuto-applied by ai-update-workflows. Managed wrappers always follow\nthe pinned release; ALLOW_WORKFLOW_EDITS='\''false'\'' only skips other assets.' "$COMMIT_BODY")"
 
           # Delivery selection. UPDATER_PR_DELIVERY_ENABLED=true (#6989/#7004)
           # selects the auto/update-workflows-<release-sha-12> pull request at
@@ -1272,7 +1299,7 @@ jobs:
                 exit 1
               fi
               MERGE_HEAD_SHA="$(git rev-parse HEAD)"
-              SYNC_PR_BODY="$(printf '%b\nAuto-applied by ai-update-workflows. To opt out, set the\nALLOW_WORKFLOW_EDITS repository variable to '\''false'\''.\n\n<!-- ai-sync:v1 version=%s commit=%s -->' "${COMMIT_BODY}" "${SYNC_VERSION:-unknown}" "${SYNC_UPSTREAM_SHA:-unknown}")"
+              SYNC_PR_BODY="$(printf '%b\nAuto-applied by ai-update-workflows. Managed wrappers always follow\nthe pinned release; ALLOW_WORKFLOW_EDITS='\''false'\'' only skips other assets.\n\n<!-- ai-sync:v1 version=%s commit=%s -->' "${COMMIT_BODY}" "${SYNC_VERSION:-unknown}" "${SYNC_UPSTREAM_SHA:-unknown}")"
               CREATED_PR="$(gh api -X POST "repos/${REPO}/pulls" \
                 -f title="chore: sync AI workflow wrappers from coding-workflows ${SYNC_VERSION:-stable}" \
                 -f head="${SYNC_BRANCH}" \
@@ -2283,6 +2310,9 @@ jobs:
           RELEASE_ROOT: ${{ steps.verify_release.outputs.release_root }}
           PARENT: ${{ steps.verify_topology.outputs.parent }}
           COMMIT_DATE: ${{ steps.verify_topology.outputs.commit_date }}
+          # Mirrors the update job: with allow_workflow_edits false the
+          # derived asset steps were skipped, so nothing is reproduced.
+          SYNC_NON_WRAPPER_ASSETS: ${{ inputs.allow_workflow_edits != false }}
         run: |
           set -euo pipefail
 
@@ -2303,6 +2333,11 @@ jobs:
           # The same attested scripts, with the same arguments the update job
           # used, run from a neutral directory against the PR's parent tree.
           cd "${WORK}"
+          if [ "${SYNC_NON_WRAPPER_ASSETS:-true}" != "true" ]; then
+            echo "UPDATER_PR_VERIFY derived assets not reproduced: allow_workflow_edits is false"
+            echo "base_tree=${BASE_TREE}" >> "${VERIFY_OUT}"
+            exit 0
+          fi
           GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/apply_audit_gate_assets.py" \
             --contract-root "${RELEASE_ROOT}/workflow-templates/audit-gate" \
             --repo-root "${BASE_TREE}" \
