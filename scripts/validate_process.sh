@@ -4572,7 +4572,7 @@ if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
   # the newest trusted "Cycle: 1" dispatch comment (a /revalidate reset edits
   # or re-posts it, moving updated_at). Markers by other authors, and markers
   # from before a reset, never count. No pipeline login means no markers.
-  PRIOR_RUNTIME_COMMENTS_JSONL="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" \
+  PRIOR_RUNTIME_COMMENTS_JSONL="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" \
     --paginate --jq '.[] | select((.body // "") | test("Runtime validation")) | {login: (.user.login // ""), created_at: (.created_at // ""), updated_at: (.updated_at // ""), body: (.body // "")} | @json' 2>/dev/null || true)"
   PRIOR_COMMENTS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
     | jq -Rrn '[inputs | select(length > 0) | (try fromjson catch null) | objects | (.body // "") | strings] | .[-3:] | .[]' 2>/dev/null || true)"
