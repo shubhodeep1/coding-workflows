@@ -4567,14 +4567,30 @@ if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
   # "Runtime validation" comments) and the cross-cycle escalation, which needs
   # the fingerprint markers of cycles N-1 and N-2. Each cycle posts at least
   # two matching comments (dispatch + result), so the cycle N-2 marker is
-  # older than the last three; PRIOR_FINGERPRINT_MARKERS keeps every marker.
+  # older than the last three. PRIOR_FINGERPRINT_MARKERS keeps every marker
+  # the pipeline login posted since the current sequence started, i.e. since
+  # the newest trusted "Cycle: 1" dispatch comment (a /revalidate reset edits
+  # or re-posts it, moving updated_at). Markers by other authors, and markers
+  # from before a reset, never count. No pipeline login means no markers.
   PRIOR_RUNTIME_COMMENTS_JSONL="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" \
-    --paginate --jq '.[] | select((.body // "") | test("Runtime validation")) | (.body // "") | @json' 2>/dev/null || true)"
+    --paginate --jq '.[] | select((.body // "") | test("Runtime validation")) | {login: (.user.login // ""), created_at: (.created_at // ""), updated_at: (.updated_at // ""), body: (.body // "")} | @json' 2>/dev/null || true)"
   PRIOR_COMMENTS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
-    | jq -Rrn '[inputs | select(length > 0) | (try fromjson catch null) | strings] | .[-3:] | .[]' 2>/dev/null || true)"
-  PRIOR_FINGERPRINT_MARKERS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
-    | jq -Rrn '[inputs | select(length > 0) | (try fromjson catch null) | strings] | .[]' 2>/dev/null \
-    | grep -oE '<!-- validation-failure-fingerprint: [0-9a-f]+ cycle: [0-9]+ -->' || true)"
+    | jq -Rrn '[inputs | select(length > 0) | (try fromjson catch null) | objects | (.body // "") | strings] | .[-3:] | .[]' 2>/dev/null || true)"
+  PRIOR_FINGERPRINT_MARKERS=""
+  if PRIOR_MARKER_LOGIN="$(validation_owner_pipeline_login)"; then
+    PRIOR_FINGERPRINT_MARKERS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
+      | jq -Rrn --arg login "${PRIOR_MARKER_LOGIN}" '
+          [inputs | select(length > 0) | (try fromjson catch null) | objects
+            | select((.login // "") == $login)] as $trusted
+          | ([$trusted[] | select((.body // "" | tostring | split("\n")) as $l
+                | (($l[0] | sub("\r$"; "")) == "## 🧪 Runtime validation dispatched")
+                  and any($l[]; sub("[[:space:]]+$"; "") == "- Cycle: 1"))
+              | (.updated_at // "" | tostring)] | max // "") as $start
+          | $trusted[] | select((.created_at // "" | tostring) >= $start) | (.body // "" | tostring)' 2>/dev/null \
+      | grep -oE '<!-- validation-failure-fingerprint: [0-9a-f]+ cycle: [0-9]+ -->' || true)"
+  else
+    echo "::warning::Cross-cycle escalation: pipeline login unavailable; prior fingerprint markers are not trusted this run."
+  fi
   if [ -n "${PRIOR_COMMENTS}" ]; then
     {
       echo "IMPORTANT — PREVIOUS VALIDATION CYCLE FAILURES (cycle $((VALIDATION_CYCLE - 1))):"
@@ -5393,15 +5409,15 @@ fi
 if [ "${DIAG_STATUS}" = "needs_fixes" ] \
 	&& [ -n "${FAILURE_FINGERPRINT}" ] \
 	&& [ "${VALIDATION_CYCLE}" -ge 3 ] \
-	&& [ -n "${PRIOR_COMMENTS:-}${PRIOR_FINGERPRINT_MARKERS:-}" ]; then
+	&& [ -n "${PRIOR_FINGERPRINT_MARKERS:-}" ]; then
 	PREV_CYCLE_1="$((VALIDATION_CYCLE - 1))"
 	PREV_CYCLE_2="$((VALIDATION_CYCLE - 2))"
 	HIT_PREV_CYCLE_1=0
 	HIT_PREV_CYCLE_2=0
-	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" <<< "${PRIOR_COMMENTS:-}"$'\n'"${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" <<< "${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
 		HIT_PREV_CYCLE_1=1
 	fi
-	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" <<< "${PRIOR_COMMENTS:-}"$'\n'"${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" <<< "${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
 		HIT_PREV_CYCLE_2=1
 	fi
 	PRIOR_FINGERPRINT_HITS="$((HIT_PREV_CYCLE_1 + HIT_PREV_CYCLE_2))"

@@ -470,7 +470,7 @@ def test_escalation_fires_at_derived_cycle_three() -> None:
 		FAILURE_FINGERPRINT="abc"
 		PRIOR_FINGERPRINT_HITS=0
 		ESCALATED_FROM_NEEDS_FIXES=false
-		PRIOR_COMMENTS='<!-- validation-failure-fingerprint: abc cycle: 1 -->
+		PRIOR_FINGERPRINT_MARKERS='<!-- validation-failure-fingerprint: abc cycle: 1 -->
 		<!-- validation-failure-fingerprint: abc cycle: 2 -->'
 		"""
 	) + _escalation_block() + 'echo "RESULT_STATUS=${DIAG_STATUS} ESCALATED=${ESCALATED_FROM_NEEDS_FIXES}"\n'
@@ -506,6 +506,10 @@ PAGE_STUBS = textwrap.dedent(
 	gh_retry() { "$@"; }
 	gh() {
 		local expr="" prev=""
+		if [ "${1:-}" = "api" ] && [ "${2:-}" = "user" ]; then
+			printf '%s\\n' "${STUB_LOGIN:-}"
+			return 0
+		fi
 		for arg in "$@"; do
 			if [ "${prev}" = "--jq" ]; then expr="${arg}"; fi
 			prev="${arg}"
@@ -513,41 +517,51 @@ PAGE_STUBS = textwrap.dedent(
 		jq -r "${expr}" "${STUB_PAGE_FILE}"
 	}
 	is_tracking_run() { [ "${TRACKING_ISSUE_NUM}" -gt 0 ]; }
+	compact_validation_summary_value() { printf '%s' "$1" | tr '\\r\\n' '  '; }
 	"""
 )
 
 
-def test_escalation_fires_through_production_prior_comments_fetch() -> None:
-	"""Cycle 3 sees five "Runtime validation" comments (dispatch + result per
-	cycle); the cycle-1 marker is older than the last three, yet escalation
-	must still fire through the real fetch."""
-	_need_tools()
-	fp = "0123456789abcdef"
-	page = [
-		{"user": {"login": PIPELINE_LOGIN}, "body": f"{DISPATCH_HEADER}\n\n- Cycle: 1"},
-		{"user": {"login": PIPELINE_LOGIN}, "body": f"## \U0001f9ea Runtime validation found fixable issues\n\nx\n<!-- validation-failure-fingerprint: {fp} cycle: 1 -->"},
-		{"user": {"login": PIPELINE_LOGIN}, "body": f"{DISPATCH_HEADER}\n\n- Cycle: 2"},
-		{"user": {"login": PIPELINE_LOGIN}, "body": f"## \U0001f9ea Runtime validation found fixable issues\n\ny\n<!-- validation-failure-fingerprint: {fp} cycle: 2 -->"},
-		{"user": {"login": PIPELINE_LOGIN}, "body": f"{DISPATCH_HEADER}\n\n- Cycle: 3"},
-	]
+def _page_comment(login: str, body: str, created_at: str, updated_at: str | None = None) -> dict:
+	return {
+		"user": {"login": login},
+		"created_at": created_at,
+		"updated_at": updated_at or created_at,
+		"body": body,
+	}
+
+
+def _failure_body(fp: str, cycle: int) -> str:
+	return (
+		"## \U0001f9ea Runtime validation found fixable issues\n\nx\n"
+		f"<!-- validation-failure-fingerprint: {fp} cycle: {cycle} -->"
+	)
+
+
+def _run_prior_fetch_and_escalation(page: list[dict], fp: str, login: str = PIPELINE_LOGIN) -> tuple[subprocess.CompletedProcess, str]:
 	root = Path(tempfile.mkdtemp(prefix="prior-fetch-"))
 	try:
+		runtime = root / "runtime"
+		runtime.mkdir()
 		page_file = root / "page.json"
 		page_file.write_text(json.dumps(page), encoding="utf-8")
 		env = {
 			"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
 			"HOME": str(root),
+			"RUNTIME_DIR": str(runtime),
 			"GITHUB_REPOSITORY": "acme/widgets",
 			"TRACKING_ISSUE_NUM": "7",
 			"VALIDATION_CYCLE": "3",
+			"STUB_LOGIN": login,
 			"STUB_PAGE_FILE": str(page_file),
 			"PRIOR_FAILURE_CONTEXT_FILE": str(root / "ctx.txt"),
 			"PRIOR_RESULT_JSON_FILE": str(root / "prior.json"),
 			"PRIOR_CONTAINER_LOGS_FILE": str(root / "logs.txt"),
 		}
+		prior_out = root / "prior_comments.txt"
 		script = root / "run.sh"
 		script.write_text(
-			"set -euo pipefail\n" + PAGE_STUBS + _prior_fetch_block()
+			"set -euo pipefail\n" + PAGE_STUBS + _owner_block() + _prior_fetch_block()
 			+ textwrap.dedent(
 				f"""\
 				DIAG_STATUS="needs_fixes"
@@ -558,18 +572,84 @@ def test_escalation_fires_through_production_prior_comments_fetch() -> None:
 			)
 			+ _escalation_block()
 			+ 'echo "RESULT_STATUS=${DIAG_STATUS} ESCALATED=${ESCALATED_FROM_NEEDS_FIXES}"\n'
-			+ 'printf "%s\\n" "${PRIOR_COMMENTS}" > "' + str(root / "prior_comments.txt") + '"\n',
+			+ 'printf "%s\\n" "${PRIOR_COMMENTS:-}" > "' + str(prior_out) + '"\n',
 			encoding="utf-8",
 		)
 		proc = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=120)
-		assert proc.returncode == 0, proc.stderr + proc.stdout
-		assert "RESULT_STATUS=harness_error ESCALATED=true" in proc.stdout, proc.stdout
-		prior = (root / "prior_comments.txt").read_text(encoding="utf-8")
-		# The LLM context still carries only the last three matching comments.
-		assert "cycle: 1 -->" not in prior, prior
-		assert "cycle: 2 -->" in prior and "- Cycle: 3" in prior, prior
+		prior = prior_out.read_text(encoding="utf-8") if prior_out.exists() else ""
+		return proc, prior
 	finally:
 		shutil.rmtree(root, ignore_errors=True)
+
+
+def test_escalation_fires_through_production_prior_comments_fetch() -> None:
+	"""Cycle 3 sees five "Runtime validation" comments (dispatch + result per
+	cycle); the cycle-1 marker is older than the last three, yet escalation
+	must still fire through the real fetch."""
+	_need_tools()
+	fp = "0123456789abcdef"
+	page = [
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 1", "2026-10-20T10:00:00Z"),
+		_page_comment(PIPELINE_LOGIN, _failure_body(fp, 1), "2026-10-20T10:10:00Z"),
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 2", "2026-10-20T11:00:00Z"),
+		_page_comment(PIPELINE_LOGIN, _failure_body(fp, 2), "2026-10-20T11:10:00Z"),
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 3", "2026-10-20T12:00:00Z"),
+	]
+	proc, prior = _run_prior_fetch_and_escalation(page, fp)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "RESULT_STATUS=harness_error ESCALATED=true" in proc.stdout, proc.stdout
+	# The LLM context still carries only the last three matching comments.
+	assert "cycle: 1 -->" not in prior, prior
+	assert "cycle: 2 -->" in prior and "- Cycle: 3" in prior, prior
+
+
+def test_forged_fingerprint_markers_do_not_escalate() -> None:
+	"""Markers in comments by anyone other than the pipeline login never count."""
+	_need_tools()
+	fp = "0123456789abcdef"
+	page = [
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 1", "2026-10-20T10:00:00Z"),
+		_page_comment("outsider", _failure_body(fp, 1), "2026-10-20T10:10:00Z"),
+		_page_comment("outsider", _failure_body(fp, 2), "2026-10-20T11:10:00Z"),
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 3", "2026-10-20T12:00:00Z"),
+	]
+	proc, _ = _run_prior_fetch_and_escalation(page, fp)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "RESULT_STATUS=needs_fixes ESCALATED=false" in proc.stdout, proc.stdout
+
+
+def test_markers_before_revalidate_reset_do_not_escalate() -> None:
+	"""A /revalidate reset edits the cycle-1 dispatch comment in place (newer
+	updated_at); markers posted before it belong to the old sequence."""
+	_need_tools()
+	fp = "0123456789abcdef"
+	page = [
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 1", "2026-10-20T10:00:00Z", "2026-10-21T09:00:00Z"),
+		_page_comment(PIPELINE_LOGIN, _failure_body(fp, 1), "2026-10-20T10:10:00Z"),
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 2", "2026-10-20T11:00:00Z"),
+		_page_comment(PIPELINE_LOGIN, _failure_body(fp, 2), "2026-10-20T11:10:00Z"),
+		_page_comment(PIPELINE_LOGIN, _failure_body("fedcba9876543210", 1), "2026-10-21T09:10:00Z"),
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 2", "2026-10-21T10:00:00Z"),
+		_page_comment(PIPELINE_LOGIN, _failure_body("fedcba9876543211", 2), "2026-10-21T10:10:00Z"),
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 3", "2026-10-21T11:00:00Z"),
+	]
+	proc, _ = _run_prior_fetch_and_escalation(page, fp)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "RESULT_STATUS=needs_fixes ESCALATED=false" in proc.stdout, proc.stdout
+
+
+def test_markers_unavailable_without_pipeline_login() -> None:
+	_need_tools()
+	fp = "0123456789abcdef"
+	page = [
+		_page_comment(PIPELINE_LOGIN, f"{DISPATCH_HEADER}\n\n- Cycle: 1", "2026-10-20T10:00:00Z"),
+		_page_comment(PIPELINE_LOGIN, _failure_body(fp, 1), "2026-10-20T10:10:00Z"),
+		_page_comment(PIPELINE_LOGIN, _failure_body(fp, 2), "2026-10-20T11:10:00Z"),
+	]
+	proc, _ = _run_prior_fetch_and_escalation(page, fp, login="")
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "RESULT_STATUS=needs_fixes ESCALATED=false" in proc.stdout, proc.stdout
+	assert "pipeline login unavailable" in proc.stdout
 
 
 def main() -> int:
