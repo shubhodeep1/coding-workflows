@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **The validation sandbox now tests the committed copy of its support helpers.** When the validation harness builds its screened copy of the workspace, `scripts/validation_harness_sandbox.sh` now takes `scripts/validate_process.sh`, `scripts/validation_harness_sandbox.sh`, `scripts/codex_isolated_workspace.py` and `scripts/templates/slot_manifest.schema.json` from the commit (`HEAD`) instead of the working tree, where a support-staging step may have overwritten them. Each substitution logs `VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=support_from_head path=<path>`.
+
+Only regular committed files are used, and their file mode is kept. An untracked file, a symlink, or a repository with no commit falls back to the working-tree copy, and the trusted `scripts/validate_driver.sh` overlay still takes precedence. `VALIDATION_SANDBOX_SUPPORT_FROM_HEAD_ENABLED=false` turns the change off; it is on when unset. Refs #8064.
