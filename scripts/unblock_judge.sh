@@ -502,13 +502,17 @@ unblock_project_terminal_recheck()
 # scripts/workflow_failure_heal_report.sh on the judge's already-read files.
 # Returns 0 when dispatched, 2 when skipped (UNBLOCK_HEAL_SKIP_REASON set),
 # 1 when a step failed. The OIDC token and the dispatch body are removed in
-# every outcome and never printed.
+# every outcome and never printed. UNBLOCK_HEAL_UNAUTHENTICATED=true marks a
+# report sent without an OIDC identity, which an intake that requires report
+# auth drops, so the caller posts no project hold for it.
 UNBLOCK_HEAL_SKIP_REASON=""
+UNBLOCK_HEAL_UNAUTHENTICATED=""
 unblock_send_heal_report()
 {
 	local ops_file="$1" idx="$2" issue label sendable heal_py issue_json runs_json payload identity dispatch identity_status wrapper_sha="" run_url="" detail
 	local -a wrap_args=()
 	UNBLOCK_HEAL_SKIP_REASON=""
+	UNBLOCK_HEAL_UNAUTHENTICATED=""
 	issue="$(jq -r ".ops[${idx}].issue // empty" "${ops_file}" 2>/dev/null)"
 	label="$(jq -r ".ops[${idx}].label // empty" "${ops_file}" 2>/dev/null)"
 	sendable="$(jq -r ".ops[${idx}].sendable // false" "${ops_file}" 2>/dev/null)"
@@ -550,7 +554,7 @@ unblock_send_heal_report()
 	# reporter of issue-kind reports, so the report would be dropped unfiled.
 	if jq -e '.pull_request' "${issue_json}" >/dev/null 2>&1; then
 		UNBLOCK_HEAL_SKIP_REASON="pull_request_item"
-		unblock_log "item=${ITEM} op=heal_report issue=${issue} outcome=skip reason=${UNBLOCK_HEAL_SKIP_REASON}"
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=skip reason=${UNBLOCK_HEAL_SKIP_REASON}"
 		return 2
 	fi
 	# API hygiene (CLAUDE.md §15): the judge's other run reads
@@ -561,7 +565,7 @@ unblock_send_heal_report()
 	runs_json="${RUNTIME_DIR}/heal_runs.json"
 	if ! gh api --method GET "repos/${REPOSITORY}/actions/runs" -F per_page=100 > "${runs_json}" 2>/dev/null \
 		|| ! jq -e 'type == "object"' "${runs_json}" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} op=heal_report issue=${issue} runs=unavailable"
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} runs=unavailable"
 		printf '{"workflow_runs":[]}' > "${runs_json}"
 	fi
 	# Release pin: consumer wrappers carry `uses: shubhodeep1/coding-workflows/...@<sha> # stable`.
@@ -593,12 +597,15 @@ unblock_send_heal_report()
 	rm -f "${identity}" "${dispatch}"
 	identity_status="$(unblock_py "${heal_py}" request-report-identity --out "${identity}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
 	identity_status="$(printf '%s' "${identity_status}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
-	unblock_log "item=${ITEM} op=heal_report issue=${issue} ${identity_status:-identity=absent reason=unknown}"
+	unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} ${identity_status:-identity=absent reason=unknown}"
 	wrap_args=(--payload-json "${payload}")
 	if [ -s "${identity}" ]; then
 		wrap_args+=(--report-identity-file "${identity}")
+	else
+		UNBLOCK_HEAL_UNAUTHENTICATED="true"
 	fi
-	if ! unblock_py "${heal_py}" wrap-dispatch "${wrap_args[@]}" > "${dispatch}" 2>/dev/null; then
+	# The dispatch body embeds the OIDC token: keep it owner-only until removed.
+	if ! ( umask 077; unblock_py "${heal_py}" wrap-dispatch "${wrap_args[@]}" > "${dispatch}" 2>/dev/null ); then
 		rm -f "${identity}" "${dispatch}"
 		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=wrap_failed"
 		return 1
@@ -648,7 +655,7 @@ unblock_log_target_repo_guard()
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0 heal_planned="false" heal_warned="false"
+	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0 heal_planned="false" heal_warned="false" heal_unauth="false"
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -664,7 +671,9 @@ unblock_run_ops()
 				else
 					heal_skip_reason="no_accepted_label"
 				fi
-				unblock_log "item=${ITEM} op=heal_report outcome=skip reason=${heal_skip_reason}"
+				unblock_log "item=${ITEM} op=heal_report issue=${issue} label=$(jq -r ".ops[${idx}].label // empty" "${ops_file}" 2>/dev/null) outcome=skip reason=${heal_skip_reason}"
+			elif [ "${op}" = "hold_request" ]; then
+				unblock_log "item=${ITEM} op=hold_request issue=${issue} outcome=skip reason=earlier_op_failed"
 			fi
 			continue
 		fi
@@ -883,6 +892,7 @@ PY
 				unblock_send_heal_report "${ops_file}" "${idx}" || heal_rc=$?
 				if [ "${heal_rc}" -eq 0 ]; then
 					heal_sent="true"
+					[ "${UNBLOCK_HEAL_UNAUTHENTICATED}" = "true" ] && heal_unauth="true"
 				elif [ "${heal_rc}" -eq 2 ]; then
 					heal_skip_reason="${UNBLOCK_HEAL_SKIP_REASON}"
 				else
@@ -893,6 +903,11 @@ PY
 				# No hold without a sent report: nothing would ship the fix it waits for.
 				if [ "${heal_sent}" != "true" ]; then
 					unblock_log "item=${ITEM} op=hold_request outcome=skip reason=no_heal_report"
+					continue
+				fi
+				# A report without identity may be dropped unfiled; never hold on it.
+				if [ "${heal_unauth}" = "true" ]; then
+					unblock_log "item=${ITEM} op=hold_request issue=${issue} outcome=skip reason=report_unauthenticated"
 					continue
 				fi
 				if ! [[ "${issue}" =~ ^[1-9][0-9]*$ ]]; then
@@ -956,6 +971,12 @@ PY
 					fi
 					continue
 				fi
+				if [ "${heal_unauth}" = "true" ] \
+					&& jq -e ".ops[${idx}].text // \"\" | startswith(\"Unblock judge routed #\")" "${ops_file}" >/dev/null 2>&1; then
+					heal_warned="true"
+					unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity, so no project hold was requested; check that the heal issue was filed (${REPOSITORY})."
+					continue
+				fi
 				unblock_tg "$(jq -r ".ops[${idx}].level" "${ops_file}")" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
 				;;
 			*)
@@ -974,6 +995,8 @@ PY
 		else
 			unblock_tg "WARNING" "Unblock judge could not send the harness heal report for #${ITEM}; a person must file the harness change (${REPOSITORY})."
 		fi
+	elif [ "${heal_unauth}" = "true" ] && [ "${heal_warned}" != "true" ]; then
+		unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM} without a report identity; check that the heal issue was filed (${REPOSITORY})."
 	fi
 	[ "${ops_failed}" != "true" ]
 }

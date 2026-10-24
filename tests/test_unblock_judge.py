@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
@@ -4488,7 +4489,8 @@ def _hold_comments(state: dict) -> list[dict]:
 
 
 def test_heal_report_dispatches_once_then_posts_the_hold_request(tmp_path: Path) -> None:
-	result, state, tg, runtime = _run_heal_ops(tmp_path, _heal_ops())
+	with _oidc_stub() as oidc_env:
+		result, state, tg, runtime = _run_heal_ops(tmp_path, _heal_ops(), **oidc_env)
 	assert "rc=0" in result.stdout, result.stdout + result.stderr
 	dispatches = state.get("heal_dispatches", [])
 	assert len(dispatches) == 1
@@ -4500,7 +4502,7 @@ def test_heal_report_dispatches_once_then_posts_the_hold_request(tmp_path: Path)
 	assert report["wrapper_sha"] == HEAL_PIN
 	assert report["reporter_run_url"] == "https://github.com/o/r/actions/runs/555"
 	assert [ref["run_id"] for ref in report["run_refs"]] == ["900"]
-	assert "report_identity" not in body["client_payload"]
+	assert body["client_payload"]["report_identity"] == _oidc_token()
 	assert state.get("run_listings") == 1
 	holds = _hold_comments(state)
 	assert len(holds) == 1
@@ -4511,15 +4513,20 @@ def test_heal_report_dispatches_once_then_posts_the_hold_request(tmp_path: Path)
 	assert not (runtime / "heal_identity.jwt").exists() and not (runtime / "heal_dispatch.json").exists()
 
 
-def test_heal_report_attaches_the_oidc_identity_without_printing_it(tmp_path: Path) -> None:
-	import http.server
-	import threading
-
+def _oidc_token() -> str:
 	def seg(value: dict) -> str:
 		return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
 
-	token = seg({"alg": "RS256", "typ": "JWT"}) + "." + seg({"sub": "repo:o/r"}) + "." + "c2lnbmF0dXJl"
-	assert heal_p3b.is_well_formed_jwt(token)
+	return seg({"alg": "RS256", "typ": "JWT"}) + "." + seg({"sub": "repo:o/r"}) + "." + "c2lnbmF0dXJl"
+
+
+@contextlib.contextmanager
+def _oidc_stub():
+	"""A loopback OIDC endpoint; yields the env that makes the judge attach a token."""
+	import http.server
+	import threading
+
+	token = _oidc_token()
 
 	class Handler(http.server.BaseHTTPRequestHandler):
 		def do_GET(self):  # noqa: N802
@@ -4536,10 +4543,16 @@ def test_heal_report_attaches_the_oidc_identity_without_printing_it(tmp_path: Pa
 	thread = threading.Thread(target=server.serve_forever, daemon=True)
 	thread.start()
 	try:
-		result, state, _tg, runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False),
-			ACTIONS_ID_TOKEN_REQUEST_URL=f"http://127.0.0.1:{server.server_address[1]}/token", ACTIONS_ID_TOKEN_REQUEST_TOKEN="req-token")
+		yield {"ACTIONS_ID_TOKEN_REQUEST_URL": f"http://127.0.0.1:{server.server_address[1]}/token", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "req-token"}
 	finally:
 		server.shutdown()
+
+
+def test_heal_report_attaches_the_oidc_identity_without_printing_it(tmp_path: Path) -> None:
+	token = _oidc_token()
+	assert heal_p3b.is_well_formed_jwt(token)
+	with _oidc_stub() as oidc_env:
+		result, state, _tg, runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), **oidc_env)
 	assert "rc=0" in result.stdout, result.stdout + result.stderr
 	dispatches = state.get("heal_dispatches", [])
 	assert len(dispatches) == 1 and dispatches[0]["body"]["client_payload"]["report_identity"] == token
@@ -4668,7 +4681,8 @@ def test_heal_report_without_a_matching_run_fails_and_posts_no_hold(tmp_path: Pa
 
 
 def test_failed_hold_after_a_sent_report_names_the_hold(tmp_path: Path) -> None:
-	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), FAKE_GH_FAIL_HARNESS_HOLD="1")
+	with _oidc_stub() as oidc_env:
+		result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), FAKE_GH_FAIL_HARNESS_HOLD="1", **oidc_env)
 	assert "rc=1" in result.stdout, result.stdout + result.stderr
 	assert len(state.get("heal_dispatches", [])) == 1
 	assert "op=hold_request issue=40 outcome=failed" in result.stdout
@@ -4697,7 +4711,8 @@ def test_mixed_route_with_failed_dispatch_warns(tmp_path: Path) -> None:
 
 
 def test_mixed_route_with_a_sent_report_does_not_warn(tmp_path: Path) -> None:
-	result, state, tg, _runtime = _run_heal_ops(tmp_path, _mixed_ops())
+	with _oidc_stub() as oidc_env:
+		result, state, tg, _runtime = _run_heal_ops(tmp_path, _mixed_ops(), **oidc_env)
 	assert "rc=0" in result.stdout, result.stdout + result.stderr
 	assert len(state.get("heal_dispatches", [])) == 1
 	assert tg == []
@@ -4713,7 +4728,7 @@ def test_mixed_route_skipped_after_an_earlier_failure_still_warns(tmp_path: Path
 	result, state, tg, _runtime = _run_heal_ops(tmp_path, ops, FAKE_GH_FAIL_EXPLANATION="1")
 	assert "rc=1" in result.stdout, result.stdout + result.stderr
 	assert not state.get("heal_dispatches")
-	assert "op=heal_report outcome=skip reason=earlier_op_failed" in result.stdout
+	assert "op=heal_report issue=7 label=ai:harness-broken outcome=skip reason=earlier_op_failed" in result.stdout
 	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "no heal report was sent (earlier_op_failed)" in tg[0]
 
 
@@ -4762,3 +4777,24 @@ def test_judge_mixed_verdict_keeps_the_fixup_and_sends_a_report(tmp_path: Path) 
 	assert "UNBLOCK_TARGET_REPO_GUARD item=7 verdict=descope outcome=mixed paths=validation/x.sh" in result.stdout, result.stdout + result.stderr
 	assert len(state.get("heal_dispatches", [])) == 1
 	assert state["created"]
+
+
+def test_unauthenticated_report_is_sent_but_posts_no_hold_and_warns(tmp_path: Path) -> None:
+	# No OIDC endpoint: an intake that requires report auth would drop the report.
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops())
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	dispatches = state.get("heal_dispatches", [])
+	assert len(dispatches) == 1 and "report_identity" not in dispatches[0]["body"]["client_payload"]
+	assert not _hold_comments(state)
+	assert "op=hold_request issue=40 outcome=skip reason=report_unauthenticated" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "without a report identity" in tg[0]
+
+
+def test_heal_report_missing_its_issue_field_sends_nothing_and_warns(tmp_path: Path) -> None:
+	ops = _heal_ops()
+	del ops["ops"][1]["issue"]
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, ops)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches") and not _hold_comments(state)
+	assert "op=heal_report outcome=skip reason=invalid_issue" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "(invalid_issue)" in tg[0]
