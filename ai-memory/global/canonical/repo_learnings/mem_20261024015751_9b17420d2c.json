@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.76,
+  "details": "Multiple merged runs changed these files, sometimes without other files in the change list. When a task concerns end-to-end smoke coverage, inspect the relevant canary text file as a likely input or configuration point before changing test code.",
+  "fingerprint": "0bb68f8f0697d0956dabfd5f7ad6ac1647d5bcdb87ae0ed438927dd520604b4e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40051117571",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40051117571",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8018",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8019",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8026",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8028",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8029",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8023",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8024",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8030",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8031",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8032"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261024015751_9b17420d2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "`tests/e2e_smoke_canary*.txt` files are recurring smoke-test change points.",
+  "timestamps": {
+    "created_at": "2026-10-24T01:57:51Z",
+    "promoted_at": "2026-10-24T01:59:22Z",
+    "superseded_at": null
+  }
+}
