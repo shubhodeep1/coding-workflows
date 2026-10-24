@@ -5,13 +5,28 @@
   "entry_id": "processed_command_8048_6380043764_approved",
   "issue_number": 8048,
   "metadata": {
+    "branch": "ai/issue-8048",
+    "changed_files": [
+      ".github/workflows/unblock_judge.yml",
+      "README.md",
+      "agents.d/validation-harness-routing-p3.md",
+      "changelog.d/validation-harness-routing-p3.md",
+      "scripts/unblock_judge.sh",
+      "scripts/workflow_failure_heal.py",
+      "tests/test_unblock_judge.py"
+    ],
+    "issue_number": 8048,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8048",
+    "pr_number": 8050,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8050",
+    "run_attempt": "1",
+    "run_id": "40063869266",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40063869266"
   },
   "run_attempt": 1,
   "run_id": "40063869266",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-24T04:52:37Z",
+  "status": "completed",
+  "timestamp": "2026-10-24T05:13:38Z",
   "workflow": "implement"
 }
