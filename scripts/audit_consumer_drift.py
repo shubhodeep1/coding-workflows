@@ -818,7 +818,11 @@ class DriftRepairer:
 			names = set(profile_names)
 		names.add(INTEGRITY_WRAPPER)
 		# The sync never creates the updater (bootstrap-only), so neither do we.
-		if not (local_dir / UPDATER_WRAPPER).is_file():
+		# When the consumer has it, it is managed whatever the profile lists:
+		# ai-workflow-integrity.yml compares it whenever either tree has it.
+		if (local_dir / UPDATER_WRAPPER).is_file():
+			names.add(UPDATER_WRAPPER)
+		else:
 			names.discard(UPDATER_WRAPPER)
 		return sorted(name for name in names if name in self.rendered_templates)
 
@@ -853,6 +857,11 @@ class DriftRepairer:
 		base_branch = self._git(["symbolic-ref", "--short", "HEAD"], cwd=checkout).stdout.strip()
 		if not re.fullmatch(r"[A-Za-z0-9._/-]+", base_branch):
 			raise ValueError("default branch name is invalid")
+		# A committed symlink at .github or .github/workflows would redirect the
+		# wrapper writes below outside the clone.
+		if (checkout / ".github").is_symlink() or (checkout / ".github" / "workflows").is_symlink():
+			print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=unsafe_checkout")
+			return RepairResult(repository=repository, outcome="skipped", reason="unsafe_checkout")
 
 		files: list[str] = []
 		for name in self._managed_names(checkout, profile_names):

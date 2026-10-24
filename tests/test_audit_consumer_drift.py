@@ -1186,6 +1186,40 @@ def test_repair_makes_no_api_call_when_bytes_already_match() -> None:
 		assert executor.gh_calls == []
 
 
+def test_repair_restores_an_installed_updater_outside_the_profile() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-updater-") as td:
+		tmp = Path(td)
+		replies = [
+			PlannedCall(prefix=("gh", "api", "-H"), stdout="[]"),
+			PlannedCall(prefix=("gh", "api", "-X", "POST"), stdout=json.dumps({"number": 4, "html_url": "u"})),
+		]
+		repairer, _executor, rendered, bare = _repair_fixture(tmp, replies, {"ai-update-workflows.yml": "name: edited updater\n"})
+		# core / standard manifests do not list the updater.
+		result = repairer.repair("owner/repo", {"ai-plan.yml"})
+		assert result.outcome == "created", result
+		assert "ai-update-workflows.yml" in result.files
+		branch_updater = _run_git("--git-dir", str(bare), "show", f"{drift_audit.RESTORE_BRANCH}:.github/workflows/ai-update-workflows.yml")
+		assert branch_updater + "\n" == rendered["ai-update-workflows.yml"]
+
+
+def test_repair_skips_a_checkout_with_a_symlinked_workflows_directory() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-symlink-") as td:
+		tmp = Path(td)
+		repairer, executor, _rendered, bare = _repair_fixture(tmp, [], {"ai-plan.yml": "x\n"})
+		work = tmp / "remotes" / "seed"
+		_run_git("rm", "-q", "-r", ".github/workflows", cwd=work)
+		(work / "elsewhere").mkdir()
+		(work / "elsewhere" / "keep.txt").write_text("k\n", encoding="utf-8")
+		(work / ".github").mkdir(exist_ok=True)
+		(work / ".github" / "workflows").symlink_to("../elsewhere")
+		_run_git("add", "-A", cwd=work)
+		_run_git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "symlink", cwd=work)
+		_run_git("push", "-q", "origin", "HEAD:main", cwd=work)
+		result = repairer.repair("owner/repo", {"ai-plan.yml"})
+		assert result.outcome == "skipped" and result.reason == "unsafe_checkout", result
+		assert executor.gh_calls == []
+
+
 def test_repair_reports_errors_without_raising() -> None:
 	with tempfile.TemporaryDirectory(prefix="drift-repair-error-") as td:
 		tmp = Path(td)
@@ -1263,6 +1297,8 @@ def main() -> int:
 	test_repair_skips_when_a_sync_pull_request_is_open()
 	test_repair_never_overwrites_a_restore_branch_it_did_not_write()
 	test_repair_makes_no_api_call_when_bytes_already_match()
+	test_repair_restores_an_installed_updater_outside_the_profile()
+	test_repair_skips_a_checkout_with_a_symlinked_workflows_directory()
 	test_repair_reports_errors_without_raising()
 	test_repair_credentials_stay_out_of_command_lines()
 	test_workflow_runs_daily_and_restores_from_the_stable_tree()

@@ -179,7 +179,15 @@ jobs:
           template_files = summary.get("template_files", [])
           drift_results = [item for item in results if item.get("outcome") == "drift"]
           error_results = [item for item in results if item.get("outcome") == "error"]
-          level = "WARNING" if drift_results or error_results else "DEBUG"
+          repairs = summary.get("repairs", [])
+          # A repository the audit reports as "match" can still differ in exact
+          # bytes (the integrity check compares bytes), so a restore pull request
+          # or a failed repair for it must raise the level too.
+          actionable_repairs = [
+              repair for repair in repairs
+              if not (repair.get("outcome") == "skipped" and repair.get("reason") in ("sync_pull_request_open", "no_exact_drift"))
+          ]
+          level = "WARNING" if drift_results or error_results or actionable_repairs else "DEBUG"
 
           lines = [
               "## Consumer Drift Audit",
@@ -210,7 +218,6 @@ jobs:
                       if diff_preview:
                           lines.extend(["", "```diff", diff_preview, "```"])
 
-          repairs = summary.get("repairs", [])
           if repairs:
               lines.extend(["", "### Restore pull requests"])
               for repair in repairs:
@@ -247,7 +254,7 @@ jobs:
           else:
               telegram_lines.extend(
                   [
-                      "Consumer wrapper drift audit detected drift or repository fetch errors.",
+                      "Consumer wrapper drift audit detected drift, repository fetch errors or restore pull request activity.",
                       (
                           f"Processed={totals.get('processed', 0)} "
                           f"Match={totals.get('match', 0)} Drift={totals.get('drift', 0)} "
