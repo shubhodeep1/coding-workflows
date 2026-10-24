@@ -2467,7 +2467,8 @@ jobs:
       # #7677), while poll groups record about 5 minutes (#4707). Group 0
       # carries the fast-fail subset and the single-file modules and group 1
       # then carried the merge-train step (moved out in #7766), so this step
-      # runs in group 3 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
+      # ran in group 3 only, once per CI run, until #8072 moved it to group 1
+      # (below). It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
       # Moved from group 3, which took 15m08s of its 20 minutes on main (run
       # 40112590944, budget-watch issue #8072); group 1 carries no moved-in

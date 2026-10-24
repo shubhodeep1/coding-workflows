@@ -1156,23 +1156,13 @@ MOVED_POLL_GROUP_THREE_STEPS = {
 class MovedPollGroupThreeStepsContractTest(unittest.TestCase):
 	"""The steps moved out of orchestrate-poll (3) run once, in group 1 (#8072)."""
 
-	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
-		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
-		for name in MOVED_POLL_GROUP_THREE_STEPS:
-			with self.subTest(step=name):
-				owners = [
-					job_id
-					for job_id, job in jobs.items()
-					for step in job.get("steps", [])
-					if step.get("name") == name
-				]
-				self.assertEqual(owners, [POLL_JOB_ID])
-
-	def test_each_step_is_guarded_to_its_new_group(self) -> None:
+	def test_each_step_matches_its_group_pin(self) -> None:
+		# Ownership and the `if:` guard are checked once, by
+		# PollGroupPinnedStepsTest from GROUP_PINNED_STEPS; this only keeps the
+		# two tables in step.
 		for name, (group, _modules) in MOVED_POLL_GROUP_THREE_STEPS.items():
 			with self.subTest(step=name):
-				self.assertEqual(poll_job_step(name)["if"], f"strategy.job-index == {group}")
-				self.assertLess(group, poll_group_count(), "guard names a group the matrix does not run")
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
 
 	def test_each_step_still_names_its_modules(self) -> None:
 		for name, (_group, modules) in MOVED_POLL_GROUP_THREE_STEPS.items():
