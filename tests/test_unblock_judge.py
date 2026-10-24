@@ -1247,6 +1247,9 @@ if method == "POST" and endpoint.endswith("/comments"):
 	if os.environ.get("FAKE_GH_FAIL_EXPLANATION") and f.get("body", "").startswith("Unblock judge could not act on `"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	if os.environ.get("FAKE_GH_FAIL_HARNESS_HOLD") and "ai:unblock-harness-hold-request:v1" in f.get("body", ""):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_HOLD") and " hold=" in f.get("body", ""):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
@@ -4417,10 +4420,13 @@ def test_unsafe_pr_reissue_metadata_still_reports_mixed_harness_part(harness_env
 
 # --- heal_report / hold_request execution (P3b, Refs #7913) ------------------
 
-HEAL_FP = "abcdef012345"
+HARNESS_HOLD_FP = "abcdef012345"
 HEAL_PIN = "c" * 40
 HEAL_ISSUE = {"number": 7, "state": "open", "title": "Validation failed", "body": "Harness broke",
 	"html_url": "https://github.com/o/r/issues/7", "labels": [{"name": "ai:harness-broken"}]}
+# A failed run whose title matches HEAL_ISSUE: the intake drops a report that names no run.
+HEAL_RUN_LISTING = json.dumps({"workflow_runs": [{"id": 900, "conclusion": "failure", "display_title": "Validation failed",
+	"name": "AI Validate", "html_url": "https://github.com/o/r/actions/runs/900", "created_at": "2026-10-04T10:00:00Z"}]})
 HEAL_SPEC = importlib.util.spec_from_file_location("workflow_failure_heal_p3b", ROOT / "scripts" / "workflow_failure_heal.py")
 heal_p3b = importlib.util.module_from_spec(HEAL_SPEC)
 HEAL_SPEC.loader.exec_module(heal_p3b)
@@ -4429,13 +4435,13 @@ HEAL_SPEC.loader.exec_module(heal_p3b)
 def _heal_ops(*, sendable: bool = True, label: str = "ai:harness-broken", hold: bool = True) -> dict:
 	ops: list[dict] = [
 		{"op": "comment", "issue": 7, "body": "The unblock judge found this work belongs in the harness."},
-		{"op": "heal_report", "issue": 7, "kind": "issue", "label": label, "sendable": sendable, "fingerprint": HEAL_FP,
+		{"op": "heal_report", "issue": 7, "kind": "issue", "label": label, "sendable": sendable, "fingerprint": HARNESS_HOLD_FP,
 			"reason": "target_repo", "harness_paths": ["validation/x.sh"], "project_paths": []},
 	]
 	if hold:
-		ops.append({"op": "hold_request", "issue": 40, "fingerprint": HEAL_FP,
+		ops.append({"op": "hold_request", "issue": 40, "fingerprint": HARNESS_HOLD_FP,
 			"body": f"Unblock judge: harness-owned failure on #7; hold requested until the harness fix ships.\n\n"
-			f"<!-- ai:unblock-harness-hold-request:v1 item=7 fingerprint={HEAL_FP} -->"})
+			f"<!-- ai:unblock-harness-hold-request:v1 item=7 fingerprint={HARNESS_HOLD_FP} -->"})
 	ops.append({"op": "telegram", "level": "DEBUG", "text": "Unblock judge routed #7 (validation-failed) to a harness heal report; no fix-up filed."})
 	return {"ops": ops}
 
@@ -4468,7 +4474,7 @@ def _run_heal_ops(tmp_path: Path, ops: dict, **env_extra):
 		env.pop(name, None)
 	env.update(REPOSITORY="o/r", ITEM="7", ITEM_KIND="issue", SUPPORT_DIR=str(ROOT), TARGET_DIR=str(tmp_path / "target"),
 		RUNTIME_DIR=str(runtime), UNBLOCK_LOGIN="pipeline-bot", GITHUB_RUN_ID="555", JUDGE_SCRIPT=str(JUDGE),
-		OPS_FILE=str(ops_file), FAKE_TG=str(alerts))
+		OPS_FILE=str(ops_file), FAKE_TG=str(alerts), FAKE_GH_RUN_LISTING=HEAL_RUN_LISTING)
 	env.update(env_extra)
 	program = ('source "$JUDGE_SCRIPT"; unblock_tg() { printf "%s|%s\\n" "$1" "$2" >> "$FAKE_TG"; }; '
 		'unblock_run_ops "$OPS_FILE"; echo "rc=$?"')
@@ -4493,11 +4499,12 @@ def test_heal_report_dispatches_once_then_posts_the_hold_request(tmp_path: Path)
 	assert report["source_kind"] == "issue" and report["label"] == "ai:harness-broken"
 	assert report["wrapper_sha"] == HEAL_PIN
 	assert report["reporter_run_url"] == "https://github.com/o/r/actions/runs/555"
+	assert [ref["run_id"] for ref in report["run_refs"]] == ["900"]
 	assert "report_identity" not in body["client_payload"]
 	assert state.get("run_listings") == 1
 	holds = _hold_comments(state)
 	assert len(holds) == 1
-	assert holds[0]["body"].rstrip().splitlines()[-1] == f"<!-- ai:unblock-harness-hold-request:v1 item=7 fingerprint={HEAL_FP} -->"
+	assert holds[0]["body"].rstrip().splitlines()[-1] == f"<!-- ai:unblock-harness-hold-request:v1 item=7 fingerprint={HARNESS_HOLD_FP} -->"
 	assert "op=heal_report issue=7 label=ai:harness-broken outcome=sent" in result.stdout
 	assert "op=hold_request issue=40 outcome=posted" in result.stdout
 	assert tg == ["DEBUG|Unblock judge routed #7 (validation-failed) to a harness heal report; no fix-up filed. (o/r)"]
@@ -4603,7 +4610,8 @@ def _harness_judge_env(tmp_path: Path) -> dict:
 	target = tmp_path / "target"
 	(target / "src").mkdir(parents=True)
 	(target / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
-	return {"TARGET_DIR": str(target), "GITHUB_RUN_ID": "555"}
+	return {"TARGET_DIR": str(target), "GITHUB_RUN_ID": "555", "FAKE_GH_RUN_LISTING": HEAL_RUN_LISTING, "WORKFLOW_HEAL_ENABLED": "true",
+		"ACTIONS_ID_TOKEN_REQUEST_URL": "", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": ""}
 
 
 def test_judge_harness_verdict_sends_a_report_and_files_no_fixup(tmp_path: Path) -> None:
@@ -4649,3 +4657,47 @@ def test_guard_log_reports_a_mixed_route(tmp_path: Path) -> None:
 	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, env=env, check=False)
 	assert result.stdout.splitlines() == [
 		"UNBLOCK_TARGET_REPO_GUARD item=7 verdict=descope outcome=mixed paths=validation/x.sh,scripts/ab.sh", "end"]
+
+
+def test_heal_report_without_a_matching_run_fails_and_posts_no_hold(tmp_path: Path) -> None:
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), FAKE_GH_RUN_LISTING='{"workflow_runs": []}')
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches") and not _hold_comments(state)
+	assert "outcome=failed reason=runs_unavailable" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|Unblock judge could not send the harness heal report for #7")
+
+
+def test_failed_hold_after_a_sent_report_names_the_hold(tmp_path: Path) -> None:
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), FAKE_GH_FAIL_HARNESS_HOLD="1")
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert len(state.get("heal_dispatches", [])) == 1
+	assert "op=hold_request issue=40 outcome=failed" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|Unblock judge sent the harness heal report for #7, but a later write")
+
+
+def _mixed_ops() -> dict:
+	return {"ops": [
+		{"op": "comment", "issue": 7, "body": "/approved"},
+		{"op": "heal_report", "issue": 7, "kind": "issue", "label": "ai:harness-broken", "sendable": True, "fingerprint": HARNESS_HOLD_FP,
+			"reason": "mixed_harness_part", "harness_paths": ["validation/x.sh"], "project_paths": ["src/app.py"]},
+	]}
+
+
+def test_mixed_route_with_heal_disabled_still_warns(tmp_path: Path) -> None:
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _mixed_ops(), WORKFLOW_HEAL_ENABLED="false")
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "WORKFLOW_HEAL_ENABLED=false" in tg[0] and "harness-owned part in #7" in tg[0]
+
+
+def test_mixed_route_with_failed_dispatch_warns(tmp_path: Path) -> None:
+	result, _state, tg, _runtime = _run_heal_ops(tmp_path, _mixed_ops(), FAKE_GH_FAIL_HEAL_DISPATCH="1")
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert len(tg) == 1 and tg[0].startswith("WARNING|Unblock judge could not send the harness heal report for #7")
+
+
+def test_mixed_route_with_a_sent_report_does_not_warn(tmp_path: Path) -> None:
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _mixed_ops())
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert len(state.get("heal_dispatches", [])) == 1
+	assert tg == []

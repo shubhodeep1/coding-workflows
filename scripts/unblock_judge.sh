@@ -574,6 +574,12 @@ unblock_send_heal_report()
 		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=build_failed"
 		return 1
 	fi
+	# The intake skips a report that names no run without filing anything
+	# (#7424), so a run-less report counts as failed: no hold, and a WARNING.
+	if ! jq -e '((.run_refs // []) | length) > 0' "${payload}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=runs_unavailable"
+		return 1
+	fi
 	rm -f "${identity}" "${dispatch}"
 	identity_status="$(unblock_py "${heal_py}" request-report-identity --out "${identity}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
 	identity_status="$(printf '%s' "${identity_status}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
@@ -589,7 +595,8 @@ unblock_send_heal_report()
 	fi
 	# One attempt: a repository_dispatch is a create, so it is never retried.
 	if ! gh api -X POST "repos/${UNBLOCK_SOURCE_REPO}/dispatches" --input "${dispatch}" >/dev/null 2> "${RUNTIME_DIR}/heal_dispatch_error.txt"; then
-		detail="$(head -c 200 "${RUNTIME_DIR}/heal_dispatch_error.txt" 2>/dev/null | tr '\n' ' ' | tr -cd '\040-\176')"
+		detail="$(head -c 200 "${RUNTIME_DIR}/heal_dispatch_error.txt" 2>/dev/null | tr '\n' ' ' | tr -cd '\040-\176' \
+			| sed -E 's/gh[pousr]_[A-Za-z0-9_]{10,}/[redacted]/g; s/github_pat_[A-Za-z0-9_]{10,}/[redacted]/g; s/eyJ[A-Za-z0-9_-]{10,}(\.[A-Za-z0-9_-]*){0,2}/[redacted]/g')"
 		rm -f "${identity}" "${dispatch}"
 		unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=dispatch_failed detail=${detail}"
 		return 1
@@ -631,7 +638,7 @@ unblock_log_target_repo_guard()
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0
+	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0 heal_planned="false" heal_warned="false"
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -851,6 +858,7 @@ PY
 					|| { ops_failed="true"; unblock_log "item=${ITEM} op=dispatch_review pr=${number} outcome=failed"; }
 				;;
 			heal_report)
+				heal_planned="true"
 				heal_rc=0
 				unblock_send_heal_report "${ops_file}" "${idx}" || heal_rc=$?
 				if [ "${heal_rc}" -eq 0 ]; then
@@ -904,13 +912,19 @@ PY
 						fi
 					elif jq -e 'any(.ops[]; .op == "heal_report")' "${ops_file}" >/dev/null 2>&1; then
 						# Harness routing: the verdict is already recorded, so this is the only page.
-						unblock_tg "WARNING" "Unblock judge could not send the harness heal report for #${ITEM}; a write failed and the item stays blocked (${REPOSITORY})."
+						heal_warned="true"
+						if [ "${heal_sent}" = "true" ]; then
+							unblock_tg "WARNING" "Unblock judge sent the harness heal report for #${ITEM}, but a later write (such as the project hold request) failed; the item stays blocked (${REPOSITORY})."
+						else
+							unblock_tg "WARNING" "Unblock judge could not send the harness heal report for #${ITEM}; a write failed and the item stays blocked (${REPOSITORY})."
+						fi
 					fi
 					continue
 				fi
 				if [ "${heal_sent}" != "true" ] && [ -n "${heal_skip_reason}" ] && [ "${heal_skip_reason}" != "no_accepted_label" ] \
 					&& jq -e ".ops[${idx}].text // \"\" | startswith(\"Unblock judge routed #\")" "${ops_file}" >/dev/null 2>&1; then
 					# The planned DEBUG says a report was sent; it was not, so a person must act.
+					heal_warned="true"
 					if [ "${heal_skip_reason}" = "workflow_heal_disabled" ]; then
 						unblock_tg "WARNING" "Unblock judge found #${ITEM} harness-owned, but WORKFLOW_HEAL_ENABLED=false, so no heal report was sent; a person must file the harness change (${REPOSITORY})."
 					else
@@ -925,6 +939,18 @@ PY
 				;;
 		esac
 	done
+	# A mixed route plans no telegram op of its own, so a report that was not
+	# sent (skipped or failed) would otherwise page nobody.
+	if [ "${heal_planned}" = "true" ] && [ "${heal_sent}" != "true" ] && [ "${heal_warned}" != "true" ] \
+		&& [ "${heal_skip_reason}" != "no_accepted_label" ]; then
+		if [ "${heal_skip_reason}" = "workflow_heal_disabled" ]; then
+			unblock_tg "WARNING" "Unblock judge found a harness-owned part in #${ITEM}, but WORKFLOW_HEAL_ENABLED=false, so no heal report was sent; a person must file the harness change (${REPOSITORY})."
+		elif [ -n "${heal_skip_reason}" ]; then
+			unblock_tg "WARNING" "Unblock judge found a harness-owned part in #${ITEM}, but no heal report was sent (${heal_skip_reason}); a person must file the harness change (${REPOSITORY})."
+		else
+			unblock_tg "WARNING" "Unblock judge could not send the harness heal report for #${ITEM}; a person must file the harness change (${REPOSITORY})."
+		fi
+	fi
 	[ "${ops_failed}" != "true" ]
 }
 
