@@ -420,7 +420,9 @@ REPORT_IDENTITY_CLOCK_SKEW_SECONDS = 60
 DEFAULT_REPORT_MAX_AGE_SECONDS = 3600
 REPORT_IDENTITY_MIN_RSA_BITS = 2048
 REPORT_IDENTITY_WORKFLOW_BY_KIND = {
-	"issue": ("workflow_failure_heal.yml",),
+	# unblock_judge.yml: the unblock judge's harness heal report (Phase 3 of
+	# docs/plans/validation-failure-harness-routing-plan.md), issue-kind only.
+	"issue": ("workflow_failure_heal.yml", "unblock_judge.yml"),
 	"pull_request": ("workflow_failure_heal.yml",),
 	"autofix_failure": ("review_autofix.yml",),
 	# The heal-report job of the clarify / plan / implement reusable workflows.

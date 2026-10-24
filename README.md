@@ -113,6 +113,7 @@ deployment fallback.
 | `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES` | No | `30` | orchestrate_poll | How long an item must carry its block label (or a project must have been failed) before the scan sends it to the judge. |
 | `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
 | `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
+| `UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED` | No | `true` | unblock_judge | A harness-owned unblock verdict (`target_repo: harness`, or instructions that name only harness paths) sends a workflow failure heal report and, for a project, a hold request instead of filing a fix-up. `false` restores the old behaviour; any value other than `true` turns it off. |
 | `UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS` | No | `24` | orchestrate_poll | The scan skips an escalated fix-up (one the judge marked `<!-- ai:unblock-fixup-escalated:v1 item=<n> -->`, which every later judge run only skips) while its last judge run is younger than this, so it gets one judge run per day (for the scope re-grant check) instead of one per hour. `0` restores a run per `UNBLOCK_JUDGE_INFLIGHT_MINUTES`. |
 | `ORPHAN_FIXUP_CLOSE_ENABLED` | No | `true` | orchestrate_poll | Closes open unblock fix-up issues whose source issue is closed (`scripts/orphan_fixup_close.py`, run once per tick from the top of `run_unblock_scan`, also while `UNBLOCK_JUDGE_ENABLED=false`). A fix-up is the issue whose first body line is `<!-- ai:unblock-fixup:v1 item=<n> round=<k> -->`; it is closed as not planned with one comment ending in `<!-- ai:orphan-fixup-closed:v1 item=<n> parent=<p> root=<r> -->` when issue `<n>` is closed (any close reason) or is itself an open fix-up that closes in the same pass, so a whole chain goes at once. Only issues authored by the pipeline login, carrying no label other than `ai:blocked`, `ai:scope-blocked`, `ai:destructive-blocked`, `ai:needs-human`, `ai:unblock-closed`, `ai:security` or `ai:done`, with no `ai:orchestrator-tracking` / `ai:orchestrator-managed` label, no open or unreadable linked pull request (in any repository) and no earlier close (a reopened fix-up stays open, and so do the fix-ups under it) are closed. Every timeline is read before anything closes, so a failed read closes nothing that tick. Re-issues, `Accepted with this follow-up` issues and `Source issue` / `Parent issue` links are never matched. `false` turns the sweep off. Log prefix `ORPHAN_FIXUP_CLOSE`. |
 | `ORPHAN_FIXUP_CLOSE_DRY_RUN` | No | `false` | orchestrate_poll | `true` makes the orphan fix-up close log `outcome=would_close` for each fix-up it would close and change nothing. |
@@ -3937,6 +3938,37 @@ and resolver chains, a failed project) now goes to the unblock judge
   off switch on code that ships on by default (`false` turns it off), and
   nobody is paged. Only a placeholder ending in `_UNSET_OPERATOR_STEP`, a
   value a person must supply, keeps the new code skipping until it is set.
+- **Harness routing** (Phase 3 of
+  `docs/plans/validation-failure-harness-routing-plan.md`). A `retry_budget`,
+  `descope`, `reissue`, `accept_with_followup` or `operator_step` verdict
+  carries `target_repo`: `consumer` (the default when it is missing) or
+  `harness`, for work that belongs in `shubhodeep1/coding-workflows`. A
+  backstop also checks the paths the instructions name against the harness
+  checkout and the repository: a verdict that names only harness-owned paths
+  is routed as `harness` whatever its field says. A harness verdict files no
+  fix-up. The judge posts a comment on the item, sends one workflow failure
+  heal report (an `issue`-kind `repository_dispatch` to coding-workflows with
+  the item's escalation label, the repository's recent failed runs and the
+  run's OIDC identity; the heal intake accepts `unblock_judge.yml` as the
+  reporter of `issue` reports), and, for a project's item, posts one
+  `<!-- ai:unblock-harness-hold-request:v1 ... -->` comment on the tracking
+  issue so the poller holds the project until the harness fix ships. A
+  DEBUG Telegram message follows; a failed report sends a WARNING and posts no
+  hold request. A `consumer` verdict that names both harness and project paths
+  keeps its fix-up and also sends the heal report for the harness part. Each
+  guarded verdict logs `UNBLOCK_TARGET_REPO_GUARD item= verdict=
+  outcome=consumer|harness|mixed|disabled paths=`. The routing never applies
+  in coding-workflows itself or to `ai:security` issues.
+  For a pull request item no heal report is sent (the intake binds an
+  `issue` report only to an issue); a WARNING asks a person to file it.
+  A report sent without the run's OIDC identity still requests the project
+  hold, because the intake files it by default; an intake that requires
+  report authentication drops it, so a WARNING asks a person to check that
+  the heal issue was filed.
+  `UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED=false` restores the old behaviour.
+  `WORKFLOW_HEAL_ENABLED=false` skips the heal report and the hold request
+  and sends a WARNING instead, because a person must then file the harness
+  change.
 - **Before a verdict.** Two deterministic exits run before the judge is asked.
   (1) A scope-blocked issue whose newest trusted rejection comes from the
   automation-path grant guard is re-checked with today's

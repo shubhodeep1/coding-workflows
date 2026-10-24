@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
@@ -1182,6 +1183,17 @@ endpoint = next((a for a in args[1:] if a == "user" or a.startswith("repos/")), 
 jq = args[args.index("--jq") + 1] if "--jq" in args else ""
 if endpoint == "user":
 	done("pipeline-bot")
+if endpoint == "repos/o/r/actions/runs":
+	state["run_listings"] = state.get("run_listings", 0) + 1
+	done(os.environ.get("FAKE_GH_RUN_LISTING", '{"workflow_runs": []}'))
+if endpoint.endswith("/dispatches"):
+	if os.environ.get("FAKE_GH_FAIL_HEAL_DISPATCH"):
+		json.dump(state, open(state_path, "w"))
+		print("gh: Server Error (HTTP 500)", file=sys.stderr)
+		sys.exit(1)
+	body = json.load(open(args[args.index("--input") + 1]))
+	state.setdefault("heal_dispatches", []).append({"endpoint": endpoint, "body": body})
+	done()
 if endpoint.startswith("repos/o/r/actions/runs/") and "/artifacts?" in endpoint:
 	done(os.environ.get("FAKE_GH_ARTIFACTS", '{"artifacts": []}'))
 if endpoint == "repos/o/r/actions/artifacts/202/zip" and os.environ.get("FAKE_GH_ZIP"):
@@ -1234,6 +1246,9 @@ if method == "GET" and endpoint == "repos/o/r/pulls":
 	done(json.dumps(merged[f.get("head", "")]) if f.get("head", "") in merged else "")
 if method == "POST" and endpoint.endswith("/comments"):
 	if os.environ.get("FAKE_GH_FAIL_EXPLANATION") and f.get("body", "").startswith("Unblock judge could not act on `"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	if os.environ.get("FAKE_GH_FAIL_HARNESS_HOLD") and "ai:unblock-harness-hold-request:v1" in f.get("body", ""):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	if os.environ.get("FAKE_GH_FAIL_HOLD") and " hold=" in f.get("body", ""):
@@ -4402,3 +4417,420 @@ def test_unsafe_pr_reissue_metadata_still_reports_mixed_harness_part(harness_env
 	ctx.update(pr_trusted=True, pr_source_present=True, pr_source_metadata_unsafe=True)
 	ops = actions.plan(_verdict("reissue", stop="review-autofix-failed", instructions="edit src/app.py and validation/x.sh"), ctx)
 	assert [op["op"] for op in ops] == ["comment", "telegram", "heal_report"]
+
+
+# --- heal_report / hold_request execution (P3b, Refs #7913) ------------------
+
+HARNESS_HOLD_FP = "abcdef012345"
+HEAL_PIN = "c" * 40
+HEAL_ISSUE = {"number": 7, "state": "open", "title": "Validation failed", "body": "Harness broke",
+	"html_url": "https://github.com/o/r/issues/7", "labels": [{"name": "ai:harness-broken"}]}
+# A failed run whose title matches HEAL_ISSUE: the intake drops a report that names no run.
+HEAL_RUN_LISTING = json.dumps({"workflow_runs": [{"id": 900, "conclusion": "failure", "display_title": "Validation failed",
+	"name": "AI Validate", "html_url": "https://github.com/o/r/actions/runs/900", "created_at": "2026-10-04T10:00:00Z"}]})
+HEAL_SPEC = importlib.util.spec_from_file_location("workflow_failure_heal_p3b", ROOT / "scripts" / "workflow_failure_heal.py")
+heal_p3b = importlib.util.module_from_spec(HEAL_SPEC)
+HEAL_SPEC.loader.exec_module(heal_p3b)
+
+
+def _heal_ops(*, sendable: bool = True, label: str = "ai:harness-broken", hold: bool = True) -> dict:
+	ops: list[dict] = [
+		{"op": "comment", "issue": 7, "body": "The unblock judge found this work belongs in the harness."},
+		{"op": "heal_report", "issue": 7, "kind": "issue", "label": label, "sendable": sendable, "fingerprint": HARNESS_HOLD_FP,
+			"reason": "target_repo", "harness_paths": ["validation/x.sh"], "project_paths": []},
+	]
+	if hold:
+		ops.append({"op": "hold_request", "issue": 40, "fingerprint": HARNESS_HOLD_FP,
+			"body": f"Unblock judge: harness-owned failure on #7; hold requested until the harness fix ships.\n\n"
+			f"<!-- ai:unblock-harness-hold-request:v1 item=7 fingerprint={HARNESS_HOLD_FP} -->"})
+	ops.append({"op": "telegram", "level": "DEBUG", "text": "Unblock judge routed #7 (validation-failed) to a harness heal report; no fix-up filed."})
+	return {"ops": ops}
+
+
+def _run_heal_ops(tmp_path: Path, ops: dict, item: dict | None = None, **env_extra):
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	gh = bin_dir / "gh"
+	gh.write_text(FAKE_GH, encoding="utf-8")
+	gh.chmod(0o755)
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps({"calls": [], "comments": [], "labels_added": [], "labels_removed": [], "patched": [],
+		"created": [], "dispatched": [], "issues": {"7": item or HEAL_ISSUE}, "item_comments": []}), encoding="utf-8")
+	runtime = tmp_path / "rt"
+	runtime.mkdir()
+	(runtime / "item.json").write_text(json.dumps(item or HEAL_ISSUE), encoding="utf-8")
+	(runtime / "item_comments.json").write_text("[]", encoding="utf-8")
+	(runtime / "labels.json").write_text(json.dumps(["ai:harness-broken"]), encoding="utf-8")
+	workflows = tmp_path / "target" / ".github" / "workflows"
+	workflows.mkdir(parents=True)
+	(workflows / "ai-plan.yml").write_text(
+		f"jobs:\n  plan:\n    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@{HEAL_PIN} # stable\n", encoding="utf-8")
+	ops_file = tmp_path / "ops.json"
+	ops_file.write_text(json.dumps(ops), encoding="utf-8")
+	alerts = tmp_path / "tg.txt"
+	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_STATE=str(state_file), PYTHONDONTWRITEBYTECODE="1")
+	for name in ("WORKFLOW_HEAL_ENABLED", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GH_TOKEN", "TG_BOT_SECRET"):
+		env.pop(name, None)
+	env.update(REPOSITORY="o/r", ITEM="7", ITEM_KIND="issue", SUPPORT_DIR=str(ROOT), TARGET_DIR=str(tmp_path / "target"),
+		RUNTIME_DIR=str(runtime), UNBLOCK_LOGIN="pipeline-bot", GITHUB_RUN_ID="555", JUDGE_SCRIPT=str(JUDGE),
+		OPS_FILE=str(ops_file), FAKE_TG=str(alerts), FAKE_GH_RUN_LISTING=HEAL_RUN_LISTING)
+	env.update(env_extra)
+	program = ('source "$JUDGE_SCRIPT"; unblock_tg() { printf "%s|%s\\n" "$1" "$2" >> "$FAKE_TG"; }; '
+		'unblock_run_ops "$OPS_FILE"; echo "rc=$?"')
+	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, env=env, check=False)
+	tg = alerts.read_text(encoding="utf-8").splitlines() if alerts.exists() else []
+	return result, json.loads(state_file.read_text(encoding="utf-8")), tg, runtime
+
+
+def _hold_comments(state: dict) -> list[dict]:
+	return [c for c in state["comments"] if c["endpoint"] == "repos/o/r/issues/40/comments"]
+
+
+def test_heal_report_dispatches_once_then_posts_the_hold_request(tmp_path: Path) -> None:
+	with _oidc_stub() as oidc_env:
+		result, state, tg, runtime = _run_heal_ops(tmp_path, _heal_ops(), **oidc_env)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	dispatches = state.get("heal_dispatches", [])
+	assert len(dispatches) == 1
+	assert dispatches[0]["endpoint"] == "repos/shubhodeep1/coding-workflows/dispatches"
+	body = dispatches[0]["body"]
+	assert body["event_type"] == "workflow-failure-heal"
+	report = body["client_payload"]["report"]
+	assert report["source_kind"] == "issue" and report["label"] == "ai:harness-broken"
+	assert report["wrapper_sha"] == HEAL_PIN
+	assert report["reporter_run_url"] == "https://github.com/o/r/actions/runs/555"
+	assert [ref["run_id"] for ref in report["run_refs"]] == ["900"]
+	assert body["client_payload"]["report_identity"] == _oidc_token()
+	assert state.get("run_listings") == 1
+	holds = _hold_comments(state)
+	assert len(holds) == 1
+	assert holds[0]["body"].rstrip().splitlines()[-1] == f"<!-- ai:unblock-harness-hold-request:v1 item=7 fingerprint={HARNESS_HOLD_FP} -->"
+	assert "op=heal_report issue=7 label=ai:harness-broken outcome=sent" in result.stdout
+	assert "op=hold_request issue=40 outcome=posted" in result.stdout
+	assert tg == ["DEBUG|Unblock judge routed #7 (validation-failed) to a harness heal report; no fix-up filed. (o/r)"]
+	assert not (runtime / "heal_identity.jwt").exists() and not (runtime / "heal_dispatch.json").exists()
+
+
+def _oidc_token() -> str:
+	def seg(value: dict) -> str:
+		return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
+
+	return seg({"alg": "RS256", "typ": "JWT"}) + "." + seg({"sub": "repo:o/r"}) + "." + "c2lnbmF0dXJl"
+
+
+@contextlib.contextmanager
+def _oidc_stub():
+	"""A loopback OIDC endpoint; yields the env that makes the judge attach a token."""
+	import http.server
+	import threading
+
+	token = _oidc_token()
+
+	class Handler(http.server.BaseHTTPRequestHandler):
+		def do_GET(self):  # noqa: N802
+			payload = json.dumps({"value": token}).encode()
+			self.send_response(200)
+			self.send_header("Content-Type", "application/json")
+			self.end_headers()
+			self.wfile.write(payload)
+
+		def log_message(self, *_args):
+			return
+
+	server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+	thread = threading.Thread(target=server.serve_forever, daemon=True)
+	thread.start()
+	try:
+		yield {"ACTIONS_ID_TOKEN_REQUEST_URL": f"http://127.0.0.1:{server.server_address[1]}/token", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "req-token"}
+	finally:
+		server.shutdown()
+
+
+def test_heal_report_attaches_the_oidc_identity_without_printing_it(tmp_path: Path) -> None:
+	token = _oidc_token()
+	assert heal_p3b.is_well_formed_jwt(token)
+	with _oidc_stub() as oidc_env:
+		result, state, _tg, runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), **oidc_env)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	dispatches = state.get("heal_dispatches", [])
+	assert len(dispatches) == 1 and dispatches[0]["body"]["client_payload"]["report_identity"] == token
+	assert token not in result.stdout and token not in result.stderr
+	assert not (runtime / "heal_identity.jwt").exists() and not (runtime / "heal_dispatch.json").exists()
+
+
+def test_workflow_heal_disabled_skips_report_and_hold_and_warns(tmp_path: Path) -> None:
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), WORKFLOW_HEAL_ENABLED="FALSE")
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches") and not _hold_comments(state)
+	assert "op=heal_report issue=7 label=ai:harness-broken outcome=skip reason=workflow_heal_disabled" in result.stdout
+	assert "op=hold_request issue=40 outcome=skip reason=no_heal_report" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "WORKFLOW_HEAL_ENABLED=false" in tg[0]
+
+
+def test_failed_dispatch_skips_the_hold_and_pages(tmp_path: Path) -> None:
+	result, state, tg, runtime = _run_heal_ops(tmp_path, _heal_ops(), FAKE_GH_FAIL_HEAL_DISPATCH="1")
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert not _hold_comments(state)
+	assert "outcome=failed reason=dispatch_failed detail=gh: Server Error (HTTP 500)" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|Unblock judge could not send the harness heal report for #7")
+	assert not (runtime / "heal_dispatch.json").exists()
+
+
+def test_unsendable_heal_report_sends_nothing_and_does_not_fail(tmp_path: Path) -> None:
+	ops = _heal_ops(sendable=False, label="")
+	ops["ops"][-1] = {"op": "telegram", "level": "WARNING", "text": "Unblock judge found #7 (blocked) harness-owned, but it has no escalation label for a heal report; a person must file the harness change."}
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, ops)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches") and not _hold_comments(state)
+	assert "reason=no_accepted_label" in result.stdout and "reason=no_heal_report" in result.stdout
+	assert tg == ["WARNING|" + ops["ops"][-1]["text"] + " (o/r)"]
+
+
+def test_heal_report_refuses_a_label_the_intake_does_not_accept(tmp_path: Path) -> None:
+	result, state, _tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(label="ai:blocked", hold=False))
+	assert "rc=0" in result.stdout
+	assert not state.get("heal_dispatches")
+	assert "reason=label_not_accepted" in result.stdout
+
+
+def test_heal_report_is_skipped_in_the_source_repository(tmp_path: Path) -> None:
+	result, state, _tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), REPOSITORY="shubhodeep1/coding-workflows")
+	assert not state.get("heal_dispatches")
+	assert "reason=self_repo" in result.stdout
+
+
+def test_unblock_judge_may_attest_issue_reports_only() -> None:
+	by_kind = heal_p3b.REPORT_IDENTITY_WORKFLOW_BY_KIND
+	assert "unblock_judge.yml" in by_kind["issue"] and "workflow_failure_heal.yml" in by_kind["issue"]
+	assert by_kind["pull_request"] == ("workflow_failure_heal.yml",)
+	assert all("unblock_judge.yml" not in files for kind, files in by_kind.items() if kind != "issue")
+
+
+def test_unblock_judge_workflow_wires_the_harness_switches() -> None:
+	text = (ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8")
+	# No permissions block: the job keeps the caller's id-token: write grant.
+	assert "permissions:" not in text
+	step = text.split("      - name: Judge the blocked item\n", 1)[1]
+	assert "          UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED: ${{ vars.UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED || 'true' }}\n" in step
+	assert "          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}\n" in step
+	for path in ("workflow-templates/unblock_judge_dispatch.yml", ".github/workflows/unblock_judge_dispatch.yml"):
+		assert "id-token: write" in (ROOT / path).read_text(encoding="utf-8"), path
+
+
+def _harness_judge_env(tmp_path: Path) -> dict:
+	target = tmp_path / "target"
+	(target / "src").mkdir(parents=True)
+	(target / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+	return {"TARGET_DIR": str(target), "GITHUB_RUN_ID": "555", "FAKE_GH_RUN_LISTING": HEAL_RUN_LISTING, "WORKFLOW_HEAL_ENABLED": "true",
+		"ACTIONS_ID_TOKEN_REQUEST_URL": "", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": ""}
+
+
+def test_judge_harness_verdict_sends_a_report_and_files_no_fixup(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	item = dict(HEAL_ISSUE, labels=[{"name": "ai:blocked"}, {"name": "ai:harness-broken"}])
+	verdict = {"verdict": "descope", "reason": "the harness check is wrong", "instructions": "fix the harness", "target_repo": "harness"}
+	result, state = _judge(tmp_path, item, verdict=verdict, **_harness_judge_env(tmp_path))
+	assert "UNBLOCK_TARGET_REPO_GUARD item=7 verdict=descope outcome=harness" in result.stdout, result.stdout + result.stderr
+	assert len(state.get("heal_dispatches", [])) == 1
+	assert not state["created"]
+
+
+def test_judge_consumer_verdict_without_harness_paths_sends_nothing(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	verdict = {"verdict": "descope", "reason": "narrower", "instructions": "do the narrower thing"}
+	result, state = _judge(tmp_path, dict(ISSUE), verdict=verdict, **_harness_judge_env(tmp_path))
+	assert "UNBLOCK_TARGET_REPO_GUARD item=7 verdict=descope outcome=consumer paths=none" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+
+
+def test_judge_guard_switch_off_logs_disabled(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	item = dict(HEAL_ISSUE, labels=[{"name": "ai:blocked"}, {"name": "ai:harness-broken"}])
+	verdict = {"verdict": "descope", "reason": "r", "instructions": "fix the harness", "target_repo": "harness"}
+	result, state = _judge(tmp_path, item, verdict=verdict, UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED="false", **_harness_judge_env(tmp_path))
+	assert "UNBLOCK_TARGET_REPO_GUARD item=7 verdict=descope outcome=disabled" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+
+
+def test_guard_log_reports_a_mixed_route(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the guard log")
+	ops = tmp_path / "ops.json"
+	ops.write_text(json.dumps({"ops": [{"op": "create_issue"}, {"op": "heal_report", "reason": "mixed_harness_part",
+		"harness_paths": ["validation/x.sh", "scripts/a b.sh"]}]}), encoding="utf-8")
+	env = dict(os.environ, JUDGE_SCRIPT=str(JUDGE), OPS_FILE=str(ops), ITEM="7", RUNTIME_DIR=str(tmp_path / "rt"))
+	env.pop("UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED", None)
+	program = ('source "$JUDGE_SCRIPT"; unblock_log_target_repo_guard "$OPS_FILE" descope; '
+		'unblock_log_target_repo_guard "$OPS_FILE" auto_answer; echo end')
+	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, env=env, check=False)
+	assert result.stdout.splitlines() == [
+		"UNBLOCK_TARGET_REPO_GUARD item=7 verdict=descope outcome=mixed paths=validation/x.sh,scripts/ab.sh", "end"]
+
+
+def test_heal_report_without_a_matching_run_fails_and_posts_no_hold(tmp_path: Path) -> None:
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), FAKE_GH_RUN_LISTING='{"workflow_runs": []}')
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches") and not _hold_comments(state)
+	assert "outcome=failed reason=runs_unavailable" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|Unblock judge could not send the harness heal report for #7")
+
+
+def test_failed_hold_after_a_sent_report_names_the_hold(tmp_path: Path) -> None:
+	with _oidc_stub() as oidc_env:
+		result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), FAKE_GH_FAIL_HARNESS_HOLD="1", **oidc_env)
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert len(state.get("heal_dispatches", [])) == 1
+	assert "op=hold_request issue=40 outcome=failed" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|Unblock judge sent the harness heal report for #7, but a later write")
+
+
+def _mixed_ops() -> dict:
+	return {"ops": [
+		{"op": "comment", "issue": 7, "body": "/approved"},
+		{"op": "heal_report", "issue": 7, "kind": "issue", "label": "ai:harness-broken", "sendable": True, "fingerprint": HARNESS_HOLD_FP,
+			"reason": "mixed_harness_part", "harness_paths": ["validation/x.sh"], "project_paths": ["src/app.py"]},
+	]}
+
+
+def test_mixed_route_with_heal_disabled_still_warns(tmp_path: Path) -> None:
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _mixed_ops(), WORKFLOW_HEAL_ENABLED="false")
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "WORKFLOW_HEAL_ENABLED=false" in tg[0] and "harness-owned part in #7" in tg[0]
+
+
+def test_mixed_route_with_failed_dispatch_warns(tmp_path: Path) -> None:
+	result, _state, tg, _runtime = _run_heal_ops(tmp_path, _mixed_ops(), FAKE_GH_FAIL_HEAL_DISPATCH="1")
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert len(tg) == 1 and tg[0].startswith("WARNING|Unblock judge could not send the harness heal report for #7")
+
+
+def test_mixed_route_with_a_sent_report_does_not_warn(tmp_path: Path) -> None:
+	with _oidc_stub() as oidc_env:
+		result, state, tg, _runtime = _run_heal_ops(tmp_path, _mixed_ops(), **oidc_env)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert len(state.get("heal_dispatches", [])) == 1
+	assert tg == []
+
+
+# A first write the fake gh fails with FAKE_GH_FAIL_EXPLANATION, so later ops see ops_failed.
+FAILING_FIRST_COMMENT = {"op": "comment", "issue": 7, "body": "Unblock judge could not act on `x`."}
+
+
+def test_mixed_route_skipped_after_an_earlier_failure_still_warns(tmp_path: Path) -> None:
+	ops = _mixed_ops()
+	ops["ops"][0] = dict(FAILING_FIRST_COMMENT)
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, ops, FAKE_GH_FAIL_EXPLANATION="1")
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+	assert "op=heal_report issue=7 label=ai:harness-broken outcome=skip reason=earlier_op_failed" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "no heal report was sent (earlier_op_failed)" in tg[0]
+
+
+def test_earlier_failure_keeps_the_no_label_warning(tmp_path: Path) -> None:
+	ops = _heal_ops(sendable=False, label="", hold=False)
+	no_label = "Unblock judge found #7 (blocked) harness-owned, but it has no escalation label for a heal report; a person must file the harness change."
+	ops["ops"][0] = dict(FAILING_FIRST_COMMENT)
+	ops["ops"][-1] = {"op": "telegram", "level": "WARNING", "text": no_label}
+	result, _state, tg, _runtime = _run_heal_ops(tmp_path, ops, FAKE_GH_FAIL_EXPLANATION="1")
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert tg == ["WARNING|" + no_label + " (o/r)"]
+
+
+def test_heal_disabled_without_a_label_pages_once(tmp_path: Path) -> None:
+	ops = _heal_ops(sendable=False, label="", hold=False)
+	ops["ops"][-1] = {"op": "telegram", "level": "WARNING", "text": "Unblock judge found #7 (blocked) harness-owned, but it has no escalation label for a heal report; a person must file the harness change."}
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, ops, WORKFLOW_HEAL_ENABLED="false")
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+	assert "reason=no_accepted_label" in result.stdout
+	assert len(tg) == 1 and "no escalation label" in tg[0]
+
+
+def test_heal_report_for_a_pull_request_is_skipped_and_warns(tmp_path: Path) -> None:
+	pr_item = dict(HEAL_ISSUE, pull_request={"url": "https://api.github.com/repos/o/r/pulls/7"})
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), item=pr_item)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+	assert "outcome=skip reason=pull_request_item" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "(pull_request_item)" in tg[0]
+
+
+def test_shell_accepted_labels_match_the_planner() -> None:
+	text = JUDGE.read_text(encoding="utf-8")
+	line = next(row for row in text.splitlines() if row.strip().startswith("ai:needs-human|") and row.strip().endswith(") ;;"))
+	shell_labels = set(line.strip()[: -len(") ;;")].split("|"))
+	assert shell_labels == set(actions.HEAL_REPORT_LABELS)
+
+
+def test_judge_mixed_verdict_keeps_the_fixup_and_sends_a_report(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	item = dict(HEAL_ISSUE, labels=[{"name": "ai:blocked"}, {"name": "ai:harness-broken"}])
+	verdict = {"verdict": "descope", "reason": "narrower", "instructions": "Drop the check in src/app.py and fix validation/x.sh"}
+	result, state = _judge(tmp_path, item, verdict=verdict, **_harness_judge_env(tmp_path))
+	assert "UNBLOCK_TARGET_REPO_GUARD item=7 verdict=descope outcome=mixed paths=validation/x.sh" in result.stdout, result.stdout + result.stderr
+	assert len(state.get("heal_dispatches", [])) == 1
+	assert state["created"]
+
+
+def test_unauthenticated_report_still_posts_the_hold_and_warns(tmp_path: Path) -> None:
+	# No OIDC endpoint: the default intake (WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false)
+	# still files the report, so the hold is posted; a WARNING covers an intake
+	# that requires report auth and would drop it.
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops())
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	dispatches = state.get("heal_dispatches", [])
+	assert len(dispatches) == 1 and "report_identity" not in dispatches[0]["body"]["client_payload"]
+	assert len(_hold_comments(state)) == 1
+	assert "op=hold_request issue=40 outcome=posted" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "without a report identity" in tg[0]
+
+
+def test_heal_report_missing_its_issue_field_sends_nothing_and_warns(tmp_path: Path) -> None:
+	ops = _heal_ops()
+	del ops["ops"][1]["issue"]
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, ops)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches") and not _hold_comments(state)
+	assert "op=heal_report issue=none label=ai:harness-broken outcome=skip reason=invalid_issue" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "(invalid_issue)" in tg[0]
+
+
+def test_heal_report_for_a_smoke_fixture_is_skipped_and_posts_no_hold(tmp_path: Path) -> None:
+	# The reporter's skip-reason check: the intake drops a smoke fixture unfiled.
+	smoke = dict(HEAL_ISSUE, title="[E2E Smoke Test] Validation failed")
+	listing = json.dumps({"workflow_runs": [dict(json.loads(HEAL_RUN_LISTING)["workflow_runs"][0], display_title=smoke["title"])]})
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(), item=smoke, FAKE_GH_RUN_LISTING=listing)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches") and not _hold_comments(state)
+	assert "op=heal_report issue=7 label=ai:harness-broken outcome=skip reason=smoke_test_fixture" in result.stdout
+	assert "op=hold_request issue=40 outcome=skip reason=no_heal_report" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "(smoke_test_fixture)" in tg[0]
+
+
+def test_hold_request_with_an_invalid_issue_logs_issue_none(tmp_path: Path) -> None:
+	ops = _heal_ops()
+	del ops["ops"][2]["issue"]
+	with _oidc_stub() as oidc_env:
+		result, state, _tg, _runtime = _run_heal_ops(tmp_path, ops, **oidc_env)
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert len(state.get("heal_dispatches", [])) == 1
+	assert "op=hold_request issue=none outcome=failed reason=invalid_issue" in result.stdout
+
+
+def test_earlier_failure_skip_logs_label_none_for_a_missing_label(tmp_path: Path) -> None:
+	ops = _heal_ops(sendable=False, label="", hold=False)
+	ops["ops"][0] = dict(FAILING_FIRST_COMMENT)
+	result, _state, _tg, _runtime = _run_heal_ops(tmp_path, ops, FAKE_GH_FAIL_EXPLANATION="1")
+	assert "op=heal_report issue=7 label=none outcome=skip reason=no_accepted_label" in result.stdout, result.stdout + result.stderr
+
+
+def test_dispatch_error_file_is_removed(tmp_path: Path) -> None:
+	_result, _state, _tg, runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), FAKE_GH_FAIL_HEAL_DISPATCH="1")
+	assert not (runtime / "heal_dispatch_error.txt").exists()
