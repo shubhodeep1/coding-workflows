@@ -690,8 +690,8 @@ jobs:
       - name: Validate prerequisites
         run: |
           set -euo pipefail
-          # Phase 4b caps its queue-time deadline extension against the
-          # job's start, so the serial budget below still holds.
+          # Phase 4 (#8004) and Phase 4b cap their deadline extensions
+          # against the job's start, so the serial budget below still holds.
           echo "E2E_JOB_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           if [ -z "${GH_TOKEN}" ]; then
             echo "::error::GH_PAT secret is required for E2E tests (GITHUB_TOKEN cannot trigger downstream workflows)"
