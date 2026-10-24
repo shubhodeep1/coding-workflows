@@ -1023,6 +1023,13 @@ def head_blob(name):
 		mode, kind, oid = (field.decode("ascii") for field in fields)
 		if kind != "blob" or mode not in ("100644", "100755") or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", oid):
 			return None
+		# Check the size first so an oversized blob is never read into memory.
+		size = subprocess.run(
+			git + ["cat-file", "-s", oid],
+			cwd=workspace, env=env, capture_output=True, timeout=60,
+		)
+		if size.returncode != 0 or not 0 <= int(size.stdout.strip()) <= 8 * 1024 * 1024:
+			return None
 		blob = subprocess.run(
 			git + ["cat-file", "blob", oid],
 			cwd=workspace, env=env, capture_output=True, timeout=60,
