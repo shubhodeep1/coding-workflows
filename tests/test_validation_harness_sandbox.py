@@ -1838,20 +1838,141 @@ def _write(workspace: Path, name: str, text: str) -> None:
 	path.write_text(text, encoding="utf-8")
 
 
-def _stage(helper_dir: Path, workspace: Path) -> tuple[dict[str, bytes], str]:
+def _stage_with_modes(helper_dir: Path, workspace: Path, *extra_args: str) -> tuple[dict[str, bytes], dict[str, int], str]:
 	result = subprocess.run(
-		["python3", "-I", "-c", _stage_program(), str(helper_dir), str(workspace)],
+		["python3", "-I", "-c", _stage_program(), str(helper_dir), str(workspace), *extra_args],
 		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir)},
 	)
 	assert result.returncode == 0, result.stderr
 	members: dict[str, bytes] = {}
+	modes: dict[str, int] = {}
 	with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r|") as archive:
 		for member in archive:
 			assert member.isreg(), member.name
 			handle = archive.extractfile(member)
 			assert handle is not None
 			members[member.name] = handle.read()
-	return members, result.stderr.decode()
+			modes[member.name] = member.mode
+	return members, modes, result.stderr.decode()
+
+
+def _stage(helper_dir: Path, workspace: Path, *extra_args: str) -> tuple[dict[str, bytes], str]:
+	members, _, stderr = _stage_with_modes(helper_dir, workspace, *extra_args)
+	return members, stderr
+
+
+def _git_commit(workspace: Path) -> None:
+	git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+	subprocess.run(
+		["git", "-C", str(workspace), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "commit"],
+		check=True, env=git_env,
+	)
+
+
+# Self-repo support staging writes trusted copies over tracked support files
+# (#6865); the copy under test must still hold the branch's committed bytes so
+# the branch's own tests read its code (#7913, heal #8064).
+def test_stage_copy_takes_support_files_from_head(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "committed\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"committed\n"
+	assert "VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=support_from_head path=scripts/validate_process.sh\n" in stderr
+	assert "committed" not in stderr and "trusted" not in stderr, "logs must never carry file content"
+	# Without the HEAD: argument the working-tree bytes are staged, as before.
+	members, stderr = _stage(helper_dir, workspace)
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_keeps_the_trusted_driver_overlay(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_driver.sh", "branch driver\n")
+	_git_add(workspace, "scripts/validate_driver.sh")
+	_git_commit(workspace)
+	trusted = tmp_path / "trusted_driver.sh"
+	trusted.write_text("trusted driver\n", encoding="utf-8")
+	members, stderr = _stage(helper_dir, workspace, f"scripts/validate_driver.sh={trusted}", "HEAD:scripts/validate_driver.sh")
+	assert members["scripts/validate_driver.sh"] == b"trusted driver\n", "the overlay must win over a HEAD: entry"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_support_from_head_falls_back_for_untracked_symlink_and_unborn(tmp_path: Path) -> None:
+	# Unborn HEAD: nothing committed yet, the working-tree copy is staged.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "working\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"working\n"
+	assert "support_from_head" not in stderr
+	# Untracked listed path: staged from the working tree.
+	_write(workspace, "base.txt", "base\n")
+	_git_add(workspace, "base.txt")
+	subprocess.run(["git", "-C", str(workspace), "rm", "-q", "--cached", "scripts/validate_process.sh"], check=True,
+		env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+	_git_commit(workspace)
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"working\n"
+	assert "support_from_head" not in stderr
+	# Committed as a symlink: never staged from HEAD, and add() drops the symlink.
+	(workspace / "scripts" / "validate_process.sh").unlink()
+	os.symlink("../base.txt", workspace / "scripts" / "validate_process.sh")
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert "scripts/validate_process.sh" not in members
+	assert "support_from_head" not in stderr
+	# A working-tree regular file over a HEAD symlink still never reads the HEAD entry.
+	(workspace / "scripts" / "validate_process.sh").unlink()
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_support_from_head_ignores_unsafe_arguments(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "committed\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:", "HEAD:/etc/passwd", "HEAD:scripts/../scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_support_from_head_preserves_executable_mode(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "#!/bin/bash\necho committed\n")
+	(workspace / "scripts" / "validate_process.sh").chmod(0o755)
+	_write(workspace, "scripts/templates/slot_manifest.schema.json", "{}\n")
+	_git_add(workspace, "scripts/validate_process.sh", "scripts/templates/slot_manifest.schema.json")
+	_git_commit(workspace)
+	(workspace / "scripts" / "validate_process.sh").write_text("trusted\n", encoding="utf-8")
+	(workspace / "scripts" / "validate_process.sh").chmod(0o644)
+	_write(workspace, "scripts/templates/slot_manifest.schema.json", "{\"trusted\": true}\n")
+	members, modes, _ = _stage_with_modes(helper_dir, workspace, "HEAD:scripts/validate_process.sh", "HEAD:scripts/templates/slot_manifest.schema.json")
+	assert members["scripts/validate_process.sh"] == b"#!/bin/bash\necho committed\n"
+	assert modes["scripts/validate_process.sh"] == 0o755
+	assert members["scripts/templates/slot_manifest.schema.json"] == b"{}\n"
+	assert modes["scripts/templates/slot_manifest.schema.json"] == 0o644
+
+
+def test_run_stages_exactly_the_four_support_paths_from_head() -> None:
+	run = _function_body("cmd_run")
+	listed = re.findall(r'"HEAD:([^"]+)"', run)
+	assert listed == [
+		"scripts/validate_process.sh",
+		"scripts/validation_harness_sandbox.sh",
+		"scripts/codex_isolated_workspace.py",
+		"scripts/templates/slot_manifest.schema.json",
+	]
+	assert "HEAD:scripts/validate_driver.sh" not in run, "the sandbox runs the driver, so it must stay the trusted overlay"
+	assert '"${overlays[@]}" "${support_from_head_args[@]}"' in run
+	assert run.index("local -a support_from_head_args=(") < run.index('python3 -I -c "${STAGE_PY}"')
 
 
 def test_stage_copy_includes_untracked_files_that_are_not_ignored(tmp_path: Path) -> None:

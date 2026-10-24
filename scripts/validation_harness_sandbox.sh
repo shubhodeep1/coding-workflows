@@ -899,7 +899,15 @@ for root in ("validation",):
 				names.add(str((Path(dirpath) / filename).relative_to(workspace)))
 names.add(".ai/validate.yml")
 overlays = {}
+# "HEAD:<path>" arguments name support files the host overwrote with trusted
+# copies; the screened copy takes their committed bytes instead (stage_from_head).
+support_from_head = set()
 for item in overlay_args:
+	if item.startswith("HEAD:") and "=" not in item:
+		head_name = item[len("HEAD:"):]
+		if head_name and not head_name.startswith("/") and ".." not in head_name.split("/"):
+			support_from_head.add(head_name)
+		continue
 	dest, _, src = item.partition("=")
 	overlays[dest] = src
 
@@ -915,6 +923,42 @@ def add(path, arcname):
 	member.mtime = int(info.st_mtime)
 	with open(path, "rb", opener=lambda p, f: os.open(p, f | os.O_NOFOLLOW)) as handle:
 		out.addfile(member, handle)
+	return True
+
+def stage_from_head(path, arcname):
+	"""Stage the HEAD blob of a tracked regular file instead of its working-tree bytes.
+
+	Returns False (nothing staged) when the working-tree entry is not a regular
+	file, HEAD does not hold the path as a regular blob (untracked, symlink,
+	submodule, unborn HEAD), or git fails; the caller then keeps the
+	working-tree read. cat-file reads the raw object, so no filter runs.
+	"""
+	try:
+		info = os.lstat(path)
+	except OSError:
+		return False
+	if not stat.S_ISREG(info.st_mode):
+		return False
+	git = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+	tree = subprocess.run(git + ["ls-tree", "-z", "HEAD", "--", arcname], cwd=workspace, env=env, check=False, capture_output=True)
+	if tree.returncode != 0:
+		return False
+	records = [record for record in tree.stdout.split(b"\0") if record]
+	if len(records) != 1:
+		return False
+	meta, _, tree_path = records[0].partition(b"\t")
+	fields = meta.split(b" ")
+	if len(fields) != 3 or fields[1] != b"blob" or fields[0] not in (b"100644", b"100755") or tree_path.decode("utf-8", "surrogateescape") != arcname:
+		return False
+	blob = subprocess.run(git + ["cat-file", "blob", fields[2].decode("ascii", "replace")], cwd=workspace, env=env, check=False, capture_output=True)
+	if blob.returncode != 0:
+		return False
+	member = tarfile.TarInfo(arcname)
+	member.size = len(blob.stdout)
+	member.mode = 0o755 if fields[0] == b"100755" else 0o644
+	member.mtime = int(info.st_mtime)
+	out.addfile(member, io.BytesIO(blob.stdout))
+	stage_log("ok", "support_from_head", arcname)
 	return True
 
 # Staging-only admissions. Real env files (.env, .env.local, ...) and every
@@ -1020,6 +1064,8 @@ for name in sorted(names):
 				stage_log("ok", "env_template_admitted", name)
 			else:
 				stage_log("skip", "env_template_not_regular", name)
+		elif name in support_from_head and stage_from_head(path, name):
+			pass
 		else:
 			add(path, name)
 	except OSError:
@@ -1183,6 +1229,20 @@ cmd_run()
 	if [ -f "${SANDBOX_HELPER_DIR}/validate_driver.sh" ]; then
 		overlays+=("scripts/validate_driver.sh=${SANDBOX_HELPER_DIR}/validate_driver.sh")
 	fi
+	# Self-repo support staging writes trusted copies over these tracked files
+	# so the host runs only trusted code (#6865). Nothing inside the sandbox
+	# executes them (STAGE_PY imports codex_isolated_workspace from
+	# SANDBOX_HELPER_DIR), so the copy under test takes their committed HEAD
+	# bytes and the branch's own tests read the branch's code (#7913, #8064).
+	# validate_driver.sh is left out on purpose: the sandbox runs it, so it
+	# stays the trusted overlay above, and a branch that changes it together
+	# with tests that read it still sees the trusted driver.
+	local -a support_from_head_args=(
+		"HEAD:scripts/validate_process.sh"
+		"HEAD:scripts/validation_harness_sandbox.sh"
+		"HEAD:scripts/codex_isolated_workspace.py"
+		"HEAD:scripts/templates/slot_manifest.schema.json"
+	)
 
 	cmd_cleanup >/dev/null 2>&1 || true
 	ensure_pidns_state_dir run
@@ -1193,7 +1253,7 @@ cmd_run()
 	build_sandbox_env "${home}" "${work}/.tmp" "$(sandbox_docker_host)"
 	as_sandbox mkdir -p -- "${work}/.tmp" || sandbox_fail run work_dir_failed
 	set +e
-	python3 -I -c "${STAGE_PY}" "${SANDBOX_HELPER_DIR}" "${workspace}" "${overlays[@]}" \
+	python3 -I -c "${STAGE_PY}" "${SANDBOX_HELPER_DIR}" "${workspace}" "${overlays[@]}" "${support_from_head_args[@]}" \
 		| as_sandbox tar -x --no-same-owner --no-same-permissions -C "${work}" -f -
 	stage_status=("${PIPESTATUS[@]}")
 	set -e
