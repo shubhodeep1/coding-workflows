@@ -358,6 +358,118 @@ def test_review_apply_fixes_attempt_loop_stall_ignored_when_off_or_claude() -> N
 		assert not any("stall-killed" in line for line in lines), env
 
 
+ATTEMPT_RESULT_TOKENS = {
+	"ok",
+	"empty_output",
+	"stall_killed",
+	"workspace_safety_violation",
+	"config_bootstrap",
+	"claude_capacity",
+	"timeout",
+	"exit_nonzero",
+}
+ATTEMPT_RESULT_PRINTF = "printf 'EDITOR_ATTEMPT_RESULT attempt="
+
+
+def _attempt_result_block() -> str:
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	start = text.index("  # EDITOR_ATTEMPT_RESULT: one structured line per attempt")
+	end = text.index('  if [ "${cmd_rc}" -eq 79 ]; then', start)
+	return text[start:end]
+
+
+def test_editor_attempt_result_line_precedes_exit_branches() -> None:
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	assert text.count(ATTEMPT_RESULT_PRINTF) == 1
+	line_pos = text.index(ATTEMPT_RESULT_PRINTF)
+	started = text.index('editor_attempt_started_at="$(date +%s')
+	launch = text.index('run_editor_codex_attempt "${attempt_prompt_file}"')
+	assert started < launch
+	stall_parse = text.index('read_codex_stall_guard_state "${stall_status_file}"')
+	assert started < stall_parse < line_pos
+	for branch in (
+		'if [ "${cmd_rc}" -eq 79 ]; then',
+		'if [ "${cmd_rc}" -eq 80 ]; then',
+		'if [ "${cmd_rc}" -eq 78 ]; then',
+		'if [ "${cmd_rc}" -eq 0 ]; then',
+	):
+		assert line_pos < text.index(branch, stall_parse), branch
+	assert (
+		"EDITOR_ATTEMPT_RESULT attempt=%s/%s model=%s engine=%s duration_secs=%s "
+		"exit_code=%s stall_state=%s stdout_bytes=%s stderr_bytes=%s "
+		"summary_present=%s failure_class=%s\\n"
+	) in text
+
+
+def test_editor_attempt_result_failure_class_tokens_closed() -> None:
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	body = _function_body(text, "editor_attempt_result_failure_class")
+	assert set(re.findall(r'echo "([a-z_]+)"', body)) == ATTEMPT_RESULT_TOKENS
+	cases = [
+		(("0", "none", "10"), "ok"),
+		(("0", "none", "0"), "empty_output"),
+		(("0", "killed", "0"), "empty_output"),
+		(("0", "none", ""), "empty_output"),
+		(("0", "none", "abc"), "empty_output"),
+		(("1", "killed", "5"), "stall_killed"),
+		(("78", "none", "5"), "workspace_safety_violation"),
+		(("79", "none", "0"), "config_bootstrap"),
+		(("80", "observed", "0"), "claude_capacity"),
+		(("124", "none", "0"), "timeout"),
+		(("137", "none", "0"), "timeout"),
+		(("143", "none", "0"), "timeout"),
+		(("2", "none", "0"), "exit_nonzero"),
+		(("226", "none", "9"), "exit_nonzero"),
+		(("abc", "none", "9"), "exit_nonzero"),
+	]
+	for args, expected in cases:
+		quoted = " ".join(f"'{a}'" for a in args)
+		result = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + body + f"editor_attempt_result_failure_class {quoted}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, (args, result)
+		assert result.stdout.strip() == expected, (args, result.stdout)
+
+
+def test_editor_attempt_result_model_sanitizer() -> None:
+	text = REVIEW_APPLY_FIXES.read_text(encoding="utf-8")
+	body = _function_body(text, "editor_attempt_result_sanitize_model")
+	for value, expected in (
+		("openai/gpt-6-sol", "openai/gpt-6-sol"),
+		("vendor/model:free", "vendor/model:free"),
+		("a b", "unknown"),
+		("x$(id)", "unknown"),
+		("::error::x y", "unknown"),
+		("ab\ncd", "unknown"),
+		("", "unknown"),
+	):
+		result = subprocess.run(
+			["bash", "-c", body + 'editor_attempt_result_sanitize_model "$1"', "_", value],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, (value, result)
+		assert result.stdout == expected + "\n", (value, result.stdout)
+
+
+def test_editor_attempt_result_prints_no_output_content() -> None:
+	block = _attempt_result_block()
+	printf_stmt = block[block.index(ATTEMPT_RESULT_PRINTF):]
+	for forbidden in ("tmp_output", "tmp_err", "$(cat", "$(<", "cat ", "head ", "tail "):
+		assert forbidden not in printf_stmt, forbidden
+	assert "cat " not in block and "head " not in block and "tail " not in block
+	# The only uses of the output files are byte counts and a header probe.
+	refs = re.findall(r".*\$\{tmp_(?:output|err)\}.*", block)
+	assert len(refs) == 3, refs
+	for ref in refs:
+		assert ('wc -c 2>/dev/null <' in ref and '|| echo 0' in ref) or "grep -q '^Changes made:'" in ref, ref
+	assert "editor_attempt_result_sanitize_model" in block
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	for func in test_funcs:

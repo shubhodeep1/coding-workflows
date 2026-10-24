@@ -352,7 +352,27 @@ def test_release_gate_only_mode_contract() -> None:
 	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_only"]["default"] is False
 	assert gate["on"]["workflow_dispatch"]["inputs"]["gate_cycle_id"]["default"] == ""
 	assert "[cycle:{0}]" in gate["run-name"]
-	assert gate["jobs"]["release"]["if"] == "${{ success() && !inputs.gate_only }}"
+	release_if = gate["jobs"]["release"]["if"]
+	assert "!inputs.gate_only" in release_if
+	# skip_e2e skips every live e2e job; success() would then be false for
+	# release even though validate passed, so the gate checks results directly.
+	assert "success()" not in release_if
+	assert release_if.startswith("!cancelled() &&")
+	for needed in ("source", "resolve-version", "validate"):
+		assert f"needs.{needed}.result == 'success'" in release_if
+	assert gate["jobs"]["sync-to-main"]["if"].startswith("!cancelled() &&")
+	# The notify step must not report a skip_e2e release as FAILED.
+	notify_step = next(
+		step for job in gate["jobs"].values() for step in job.get("steps", [])
+		if step.get("name") == "Send Telegram notification"
+	)
+	assert notify_step["env"]["SKIP_E2E"] == "${{ inputs.skip_e2e }}"
+	assert '[ "$E2E" = "skipped" ] && [ "${SKIP_E2E:-}" = "true" ] && [ "${DRY_RUN:-}" != "true" ]' in notify_step["run"]
+	assert 'if [ "$e2e_ok" = "true" ] && [ "$SCRIPTS" = "success" ]' in notify_step["run"]
+	# Skipped supplemental jobs must show their own result, not a fixed check mark.
+	assert 'skipped) echo "⊘"' in notify_step["run"]
+	for result_var in ("ORPHANS", "ORCHESTRATE_DECOMPOSE", "VALIDATE_STANDALONE", "CLARIFY_REJECTS", "ALT_MODEL"):
+		assert f'$(_result_icon "${result_var}")' in notify_step["run"]
 	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
 	source_run = gate["jobs"]["source"]["steps"][0]["run"]
 	assert gate["jobs"]["source"]["steps"][0]["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"

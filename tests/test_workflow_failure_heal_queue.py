@@ -104,15 +104,16 @@ def test_lost_ticket() -> None:
 
 
 def test_position_cli(tmp_path: Path) -> None:
-	# The CLI measures ticket age against the wall clock, so these fixtures are
-	# stamped from the real current time (as _live_ticket does), not from NOW.
-	cli_now = datetime.now(timezone.utc)
+	# The CLI measures ticket ages against the real clock and has no time
+	# override, so its fixtures are dated from the wall clock, not NOW.
+	wall_now = datetime.now(timezone.utc)
 	comments = tmp_path / "comments.json"
-	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5, now=cli_now)], [_ticket(20, 200, age_seconds=1, now=cli_now)]]), encoding="utf-8")
+	comments.write_text(json.dumps([[_ticket(10, 101, age_seconds=5, now=wall_now)], [_ticket(20, 200, age_seconds=1, now=wall_now)]]), encoding="utf-8")
 	runs = tmp_path / "runs.json"
 	runs.write_text(json.dumps({"101": {"status": "completed"}}), encoding="utf-8")
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-	base = [sys.executable, str(SCRIPTS_DIR / "workflow_failure_heal.py"), "heal-queue", "position", "--comments-json", str(comments), "--ticket-id", "20", "--login", LOGIN]
+	base = [sys.executable, str(SCRIPTS_DIR / "workflow_failure_heal.py"), "heal-queue", "position", "--comments-json", str(comments), "--ticket-id", "20", "--login", LOGIN,
+		"--lease-seconds", "10800"]
 	waiting = json.loads(subprocess.run(base, capture_output=True, text=True, env=env, check=True).stdout)
 	assert waiting["status"] == "wait" and waiting["holder"]["run_id"] == "101"
 	going = json.loads(subprocess.run([*base, "--runs-json", str(runs)], capture_output=True, text=True, env=env, check=True).stdout)
