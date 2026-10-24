@@ -1236,6 +1236,38 @@ def test_repair_skips_a_checkout_whose_workflows_path_is_a_file() -> None:
 		assert executor.gh_calls == []
 
 
+def test_repair_skips_a_checkout_with_a_directory_at_a_wrapper_path() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-wrapper-dir-") as td:
+		tmp = Path(td)
+		repairer, executor, _rendered, _bare = _repair_fixture(tmp, [], {"ai-workflow-integrity.yml": "x\n"})
+		work = tmp / "remotes" / "seed"
+		(work / ".github" / "workflows" / "ai-plan.yml").mkdir()
+		(work / ".github" / "workflows" / "ai-plan.yml" / "inner.txt").write_text("i\n", encoding="utf-8")
+		_run_git("add", "-A", cwd=work)
+		_run_git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "dir", cwd=work)
+		_run_git("push", "-q", "origin", "HEAD:main", cwd=work)
+		result = repairer.repair("owner/repo", {"ai-plan.yml"})
+		assert result.outcome == "skipped" and result.reason == "unsafe_checkout", result
+		assert executor.gh_calls == []
+
+
+def test_repair_credentials_only_go_to_github() -> None:
+	import os
+
+	previous = os.environ.get("GH_TOKEN")
+	os.environ["GH_TOKEN"] = "secret-token-value"
+	try:
+		auditor = drift_audit.ConsumerDriftAuditor(expected_templates={}, max_diff_lines=5, executor=FakeExecutor([]))
+		repairer = drift_audit.DriftRepairer(auditor=auditor, rendered_templates={}, stable_sha=CURRENT_STABLE_SHA, git_base_url="https://example.com", workdir=Path(tempfile.gettempdir()))
+		env = repairer._git_env()
+	finally:
+		if previous is None:
+			os.environ.pop("GH_TOKEN", None)
+		else:
+			os.environ["GH_TOKEN"] = previous
+	assert env == {"GIT_TERMINAL_PROMPT": "0"}
+
+
 def test_profile_unknown_skip_is_reported_for_match_results() -> None:
 	class StubRepairer:
 		def repair(self, repository, profile_names):
@@ -1358,6 +1390,8 @@ def main() -> int:
 	test_repair_restores_an_installed_updater_outside_the_profile()
 	test_repair_skips_a_checkout_with_a_symlinked_workflows_directory()
 	test_repair_skips_a_checkout_whose_workflows_path_is_a_file()
+	test_repair_skips_a_checkout_with_a_directory_at_a_wrapper_path()
+	test_repair_credentials_only_go_to_github()
 	test_profile_unknown_skip_is_reported_for_match_results()
 	test_repair_restores_a_dangling_updater_symlink()
 	test_repair_skips_an_unknown_profile_without_cloning()

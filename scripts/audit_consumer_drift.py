@@ -779,7 +779,8 @@ class DriftRepairer:
 		# The credential travels in the environment, never on the command
 		# line, so a CommandFailure message cannot leak it.
 		token = os.environ.get("GH_TOKEN", "")
-		if not token or not self.git_base_url.startswith("https://"):
+		# Only github.com receives the credential, whatever --git-base-url says.
+		if not token or self.git_base_url != "https://github.com":
 			return {"GIT_TERMINAL_PROMPT": "0"}
 		header = base64.b64encode(f"x-access-token:{token}".encode()).decode()
 		return {
@@ -884,8 +885,15 @@ class DriftRepairer:
 			print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=unsafe_checkout")
 			return RepairResult(repository=repository, outcome="skipped", reason="unsafe_checkout")
 
+		managed = self._managed_names(checkout, profile_names)
+		# A directory at a wrapper path would make write_bytes raise
+		# IsADirectoryError on every daily run; report it as unsafe instead.
+		if any((workflows_dir / name).is_dir() and not (workflows_dir / name).is_symlink() for name in managed):
+			print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=unsafe_checkout")
+			return RepairResult(repository=repository, outcome="skipped", reason="unsafe_checkout")
+
 		files: list[str] = []
-		for name in self._managed_names(checkout, profile_names):
+		for name in managed:
 			target = checkout / ".github" / "workflows" / name
 			expected = self.rendered_templates[name].encode("utf-8")
 			if target.is_symlink() or not target.is_file() or target.read_bytes() != expected:
