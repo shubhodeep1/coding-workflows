@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The canary file must have exactly two lines: `status: ok` and `decompose-run: 40068500779`, and \"No other file is changed.\"\n  expected_change_site: `tests/e2e_smoke_canary_spec.txt` (the spec template), `scripts/review_apply_fixes.sh` (the writer at lines 1996 and 2005), and tests that validate the canary format\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The PR only changes `tests/e2e_smoke_canary.txt`, `tests/e2e_smoke_canary_spec.txt` still contains the old 3-line format (`status: ok`, `run_id: __RUN_ID__`, `updated-by: ai-pipeline`), `scripts/review_apply_fixes.sh` still writes the old 3-line format at lines 1996 and 2005, test `test_editor_smoke_deterministic_writes_canonical_3line_spec` validates the old 3-line format, so the next Phase 4b smoke test run will overwrite the canary back to the old format.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The issue specifies the canary file must have exactly two lines: `status: ok` and `decompose-run: 40068500779`, and states \"No other file is changed.\"\n  Expected change site: `tests/e2e_smoke_canary_spec.txt` (the spec template), `scripts/review_apply_fixes.sh` (the writer at lines 1996 and 2005), and tests that validate the canary format\n  Evidence of absence: The PR only changes `tests/e2e_smoke_canary.txt`. The spec file `tests/e2e_smoke_canary_spec.txt` still contains the old 3-line format (`status: ok`, `run_id: __RUN_ID__`, `updated-by: ai-pipeline`). The script `scripts/review_apply_fixes.sh` still writes the old 3-line format at lines 1996 and 2005. The test `test_editor_smoke_deterministic_writes_canonical_3line_spec` validates the old 3-line format. The next Phase 4b smoke test run will overwrite the canary back to the old 3-line format, undoing this change.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "839105116f9a380f2d1e0184d671942cb0d1b2a8b086935a6eae6c2ec3f7cb30",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8062,
+    "run_id": "40071885207",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40071885207",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024071457_1c1712065e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8062,
+    "run_id": "40071885207"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-24T07:14:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
