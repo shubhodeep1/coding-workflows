@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Changes to workflow YAML or validation scripts have repeatedly been paired with targeted tests for the specific behavior, such as routing, bootstrap, escalation, and review budgets. When planning workflow changes, look for the nearest contract test and extend it rather than relying only on broad CI coverage.",
+  "fingerprint": "1c21b6b14e2abc27fb5bee1e8b68acd6b3f61abf3e6119a60336c3dfbfa9da71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40051117571",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40051117571",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8018",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8019",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8026",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8028",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8029",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8023",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8024",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8030",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8031",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8032"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261024015128_8828508da2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and validation behavior is commonly protected by focused contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-24T01:51:28Z",
+    "promoted_at": "2026-10-24T01:53:17Z",
+    "superseded_at": null
+  }
+}
