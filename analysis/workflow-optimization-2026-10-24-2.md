@@ -497,3 +497,158 @@ Large bodies checked and **excluded** because they contain no `${{ }}`: `impleme
 | Code modularization | 11 workflows (support-ref resolver), 8 workflows (support staging), `scripts/stage_workflow_support.sh`, new composite actions under `.github/actions/`, `scripts/label_helpers.sh` and its shims, `test-and-mark-stable.yml`, `comprehensive-test-and-release.yml`, related contract tests | Large |
 | Expression size reduction | `.github/workflows/orchestrate_poll.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml` | Small |
 | Medium/Low fixes | `.github/workflows/implement.yml`, `.github/workflows/test-and-mark-stable.yml`, `scripts/stable_e2e_step_wait_review.sh`, `scripts/review_autofix_step_post_commit_retrigger.sh`, `scripts/review_collect_pr_metadata.sh`, `scripts/gh_helpers.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-24)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: the implement stage may apply the fix without further review. Every precondition holds: same endpoint or a strict field subset, identical filters, pagination and auth, the same function or step, no mutation in between, identical error and retry behaviour, no concurrency boundary crossed, and any cache contract kept.
+- **`NEEDS_VERIFICATION`**: the fix looks correct, but static reading cannot prove every precondition. The named verification steps must pass first.
+- **`RISKY_SKIP`**: listed for visibility only and must not be auto-implemented. The call sits in a retry or stall-recovery path, an identity or rate-limit probe, a paginated read, `orchestrate_poll_process.sh`, a path that defends against races, or a path whose log keys would change.
+
+### Consolidation Candidates (MERGE-###)
+
+#### MERGE-001 — The reclarify sweep reads `GET /rate_limit` twice per poll tick
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh:44` (`replay_failed_reclarify_commands`) and `scripts/orchestrate_poll_process.sh:157` (`detect_unrouted_blocked_comments`). Both are called back-to-back at `:209-211` under `RECLARIFY_REQUEUE_SWEEP_ONLY=true`, from the step `.github/workflows/orchestrate_poll.yml:900-925`, which runs on every cron tick.
+- **Calls:** currently 2 per tick; proposed 1.
+- **Endpoint:** `GET /rate_limit`.
+- **Evidence:**
+  ```bash
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || return 0
+  ...
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || budget=""
+  ```
+  The two functions handle a failed read differently. The first returns silently. The second logs `RECLARIFY_UNROUTED outcome=skip reason=budget_low remaining=...`.
+- **Proposed fix:** read once inside the `RECLARIFY_REQUEUE_SWEEP_ONLY` block (`:209`) and pass the value to both functions as an optional argument, keeping the live read as a fallback when the argument is empty.
+- **Safety rationale:** both calls are rate-limit probes, they sit in `orchestrate_poll_process.sh`, and the second read is fresher by design because the replay loop can POST comments in between.
+- **Downstream signal:** do not auto-implement. `/rate_limit` reads do not count against the core quota, so the saving is one round trip per tick, not budget. A human must decide whether a post-replay budget reading is still needed and must keep the `reason=budget_low` log line.
+
+#### MERGE-002 — Two label-scoped issue listings in the same sweep
+- **Safety tag:** `RISKY_SKIP`
+- **Files:** `scripts/orchestrate_poll_process.sh:46-47` (`--label ai:reclarify-requeue --json number --limit 1000`) and `:162-163` (`--label ai:blocked --json number,labels --limit 1000`).
+- **Calls:** currently 2 listings per tick (each paginated by `gh` at `--limit 1000`); proposed 1 aliased GraphQL query (`requeue: issues(labels:["ai:reclarify-requeue"], states:OPEN, first:100)`, `blocked: issues(labels:["ai:blocked"], states:OPEN, first:100){nodes{number labels}}`).
+- **Endpoints:** `GET /repos/{o}/{r}/issues?labels=...`, issued twice.
+- **Evidence:** both functions run in one process (`:210-211`) on the same repo, with only the label filter differing. The blocked set explicitly excludes `ai:reclarify-requeue` issues (`:167`), so the two sets are related but neither is a subset of the other.
+- **Proposed fix:** one aliased GraphQL query modelled on `_fetch_candidate_issue_details_graphql`, with its result passed to both functions.
+- **Safety rationale:** three skip triggers apply:
+  - `--limit 1000` paginates.
+  - The code sits in `orchestrate_poll_process.sh`.
+  - The fix moves the reads from the REST core bucket to the GraphQL bucket, but the `budget` gates at `:44`/`:157` check only `core.remaining`, so the gate would no longer protect the call.
+- **Downstream signal:** do not auto-implement. This needs a manual decision on a GraphQL budget gate and on `first:100` page boundaries compared with `--limit 1000`.
+
+#### MERGE-003 — `_has_active_autofix_run` lists runs once per workflow file
+- **Safety tag:** `RISKY_SKIP`
+- **Files:**
+  - Loop: `scripts/orchestrate_poll_process.sh:23007-23020`.
+  - Callers: `:12897`, `:12976` and `:23429`.
+  - Existing single-call pattern: `_direct_inflight_review_run_on_branch` at `:16039-16043`.
+- **Calls:** currently 3 `gh run list --workflow <file> --branch <ref> --limit 5` per invocation, plus the PR-named lookup at `:23034`. Inference: `gh run list --workflow` also resolves the workflow file through the API first, so it may be up to 6 requests. Proposed: 1 branch-scoped `gh run list --branch <ref> --json status,name,workflowName`, plus the unchanged PR-named lookup.
+- **Endpoints:** `GET /repos/{o}/{r}/actions/workflows/{file}/runs?branch=...`, three times.
+- **Evidence:**
+  ```bash
+  for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
+      active="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+          --workflow "${wf_candidate}" \
+          --branch "${head_ref}" \
+  ```
+  The header of the sibling helper (`:15966-15972`) already justifies "a single branch-scoped `gh run list` ... rather than the 3-call per-workflow loop".
+- **Proposed fix:** have `_has_active_autofix_run` reuse the listing and name filter from `_direct_inflight_review_run_on_branch` (`:16054-16063`), keeping the PR-named fallback.
+- **Safety rationale:** this is `orchestrate_poll_process.sh` on a path that defends against duplicate dispatch races. The comment at `:12973-12974` says the dispatch helper "checks again afterward to cover a concurrent start". The change would also replace file-path matching with display-name matching, which can miss renamed consumer workflows (`:15983-15993`).
+- **Downstream signal:** do not auto-implement. A human must confirm that every consumer repo's review workflow display names match the name filter at `:16061-16063`, or must keep a file-path match, before the three calls are collapsed.
+
+#### MERGE-004 — `review_enable_auto_merge.sh` reads PR labels and PR metadata separately
+- **Safety tag:** `RISKY_SKIP`
+- **Files:**
+  - `scripts/review_enable_auto_merge.sh:155`: paginated `issues/{n}/labels?per_page=100`.
+  - `:221`: full `pulls/{n}`.
+  - `:100`: `pulls/{n}` `.head.sha`, used only on the early-exit paths at `:112` and `:158`.
+- **Calls:** currently 2 or more on the main path (label pages plus the PR read) and 2 or more on the e2e-label path (label pages plus the head read). Proposed: 1 `pulls/{n}` read placed before `:155`, supplying `.labels[].name`, `.head.ref` and `.head.sha`.
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}/labels` (paginated) and `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** the comment at `:98-99` acknowledges the split ("The full PR-metadata call below is unreachable on these intentional early-exit paths"). The labels read is paginated on purpose: the comment at `:144-153` cites PRs with more than 30 labels and Copilot review #3 on PR #1823.
+- **Safety rationale:** the labels read paginates, and merging would change the logged warning text on failure (`:168` compared with `:224`). Neither static reading nor the repo shows whether the `labels` array in a REST `pulls/{n}` response is complete for PRs with many labels.
+- **Downstream signal:** do not auto-implement. A human must confirm from GitHub REST docs that the `labels` array in `pulls/{n}` is not truncated. They must also accept the change in log text and keep fail-closed `exit 0` on every path.
+
+### Redundant Re-Fetch (REUSE-###)
+
+#### REUSE-001 — `GET /user` read up to 3 times in one implement job
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:**
+  - `.github/workflows/implement.yml:856` ("Hand off CI-triage issue whose PR is no longer open", conditional).
+  - `:2092` ("Fetch issue metadata", runs on every non-skipped job).
+  - `:2424` ("Unblock judge bulk-delete override", only when the `override=bulk_delete -->` marker is present).
+  - Every step uses `GH_TOKEN: ${{ secrets.GH_PAT }}` (`:807`, `:2040`, `:2418`) in job `implement`.
+- **Calls:** currently up to 3; proposed 1, with a live fallback when the cached value is empty.
+- **Endpoint:** `GET /user`.
+- **Evidence:** `:2092` sets `pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"` but never exports it. `:2424` repeats `pipeline_login="$(gh api user --jq '.login' 2>/dev/null || true)"`. The comment at `:2089-2091` explains only why `:2092` cannot reuse `:2424`; nothing covers the reverse direction.
+- **Proposed fix:** after `:2092`, validate the login against `^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$` (the regex `clarify.yml:765` uses) and write it to a new GITHUB_ENV key. Before choosing a name, check that it is not already used in `implement.yml` or the staged helpers. At `:2424`, use that key and fall back to the live call when it is empty, so the `UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=login_unavailable` path is unchanged.
+- **Safety rationale:** same endpoint, token and job, and a token's identity cannot change mid-job. But the calls are in different steps, which fails the same-step precondition. The login also decides trust for a marker that lifts the bulk-delete guard, so the cached value must not be writable by any step in between.
+- **Downstream signal:** before implementing, confirm two things.
+  1. No step between `:2092` and `:2424` runs branch-controlled code that can append to `$GITHUB_ENV`. The editor runs later, at `:2801`.
+  2. The validated login is written only when it matches the regex.
+
+#### REUSE-002 — First hop of the no-op ancestor walk re-reads the current issue body
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:**
+  - Walk: `.github/workflows/implement.yml:5556-5557`.
+  - Cached snapshot: written at `:208-210`, and refreshed at `:2279`, to `ISSUE_META_FILE`/`ISSUE_BODY_FILE`, which `:300-301` export to the job env.
+- **Calls:** currently 1 issue GET for hop 1 (where `current=${ISSUE_NUMBER}`); proposed 0 for hop 1. Later hops are unchanged.
+- **Endpoint:** `GET /repos/{o}/{r}/issues/{n}`.
+- **Evidence:**
+  ```bash
+  current="${ISSUE_NUMBER}"
+  for hop in $(seq 1 "${threshold}"); do
+    parent_body="$(gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+  ```
+  On the first iteration this reads the same issue whose body `:2279` has already written to `ISSUE_META_FILE`. Only the `Re-issued from #N` line is used (`:5558`).
+- **Proposed fix:** on `hop == 1`, read `.body` from `ISSUE_META_FILE` after checking that `.number` matches `ISSUE_NUMBER` (the `issue_meta_matches_issue` shape at `:2047-2056`). Fall back to the live GET when the check fails.
+- **Safety rationale:** the files live under `/tmp/codex-implement-${GITHUB_RUN_ID}`, and the Codex editor runs between `:2279` and `:5405` (`:2801`). The output decides whether the issue is closed with `ai:closed`. Same endpoint, but trust in the file is unproven.
+- **Downstream signal:** before implementing, confirm the editor sandbox cannot write `RUNTIME_DIR`. If it can, keep the live read. This complements the Deep Audit's API-002 and is independent of it.
+
+#### REUSE-003 — Review-blocked judge re-reads PR state it fetched moments earlier
+- **Safety tag:** `RISKY_SKIP`
+- **Files:**
+  - `scripts/review_rb_judge.sh:1927` (`_guard_pr_meta`, full `pulls/{n}`, unset at `:1940`).
+  - `:2345` (`PR_STATE` from `pulls/{n}` `.state`, on the `fix` + `IS_FINAL` "treating as merge" path).
+- **Calls:** currently 2 on that path; proposed 1, by keeping `.state` from `:1927` in a new variable.
+- **Endpoint:** `GET /repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** between `:1927` and `:2345` this script only posts comments (`:1955`, `:2089`, `:2101`); no merge, push or close runs on this path.
+- **Safety rationale:** the comment at `:1917-1923` says `:1927` exists to catch an asynchronous auto-merge race, and the script runs inside a retry-once wrapper (`review_autofix.yml:4385-4390`). That is a race-defending path inside a retry path.
+- **Downstream signal:** do not auto-implement. The saving is one call on a rare terminal path. A human must accept that `:2345` would no longer see a state change in the seconds after `:1927`.
+
+### Dead Calls (DEAD-API-###)
+No findings.
+
+I checked these and none is dead:
+- `implement.yml:2321-2323`: only runs when `ISSUE_META_FILE` fails to parse.
+- `review_autofix_step_mark_ready_to_merge.sh:62` and `review_rb_judge.sh:1139`: only run when the cached PR text is empty.
+- `workflow_failure_heal_report.sh:210` and `clarify.yml:820`: already reuse an earlier login.
+
+Each one is a fail-open fallback whose result is used when it runs.
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — the `scripts/label_helpers.sh:163-197` path has no cache, which I confirmed.
+  - Net-new: each workflow step is a new shell, so a per-process `_ENSURED_LABELS_CACHE` saves calls only when the same label is ensured twice in one step. One such case is `set_issue_phase_label_resilient` (`:223`) after a caller's own `ensure_label_exists`. Savings per run are smaller than the call-site counts suggest.
+- API-002: RISKY_SKIP — the walk uses `--paginate` (`implement.yml:5561`).
+  - Net-new: a GraphQL `comments(last:N)` window would change a full-history scan into a partial one, so a no-op marker older than N would be missed. See REUSE-002 for the safe part.
+- API-003: RISKY_SKIP — this is in `orchestrate_poll_process.sh:46-58`, and the header at `:37-41` describes the live per-issue read as intended.
+- API-004: RISKY_SKIP — paginated reads (`:23713-23714`) in `orchestrate_poll_process.sh`, with state comments written within the same cycle.
+- API-005: RISKY_SKIP — this is the stall-recovery gate at `orchestrate_poll_process.sh:19868-19873`.
+- BATCH-001: RISKY_SKIP — a per-row loop at `orchestrate_poll_process.sh:7948`, followed by a paginated comments read at `:7961`. I agree with the GraphQL batching direction, but it needs manual review.
+- BATCH-002: NEEDS_VERIFICATION — confirmed at `.github/workflows/orchestrate_poll.yml:288`, `:301-306` and `:366-371`.
+  - Net-new detail, part 1 — downstream file shapes:
+    - `provider_outage_trackers.json` is read at `:1141-1143` with REST field names `.pull_request` and `.author_association`.
+    - `tracking_issues.json` is read as `.labels[].name` at `:1045`/`:1048`, by `--tracking-issues-file` at `:1859`, and at `orchestrate_poll_process.sh:5826`, `:21011` and `:23672`.
+
+    A merged GraphQL response must be reshaped to those exact formats.
+  - Net-new detail, part 2 — failure behaviour: the outage listing fails open (`:294-296`). The tracking listing is unguarded under `set -euo pipefail` (`:274`, `:301`), so its failure fails the step. One merged call cannot keep both behaviours without per-alias error handling.
+- **Reviewed but not agreed — API-006:** the premise is contradicted. `implement.yml:207-210` already writes the precheck payload to `${RUNTIME_DIR}/issue_meta.json`. The runtime dir is created at `:196-197`, the same path exported at `:287`/`:300`. `:974` and `:2058` fetch only when that file is invalid. No change is needed.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 5 | MERGE-001, MERGE-002, MERGE-003, MERGE-004, REUSE-003 |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
