@@ -663,3 +663,189 @@ Correction: the Low row lists 24 IDs, not 23, so the total is 35 findings. The I
 | Code modularization | ~16 (9 workflows with git-auth blocks, `validate.yml`, `scripts/workspace_init.sh`, `scripts/gh_helpers.sh`, `scripts/tg_helpers.sh`, `scripts/label_helpers.sh`, 2 `review_autofix_step_*.sh`, plus a new `scripts/git_auth_helpers.sh`, `scripts/stage_workflow_support.sh` and `docs/INVENTORY.md`) | Large |
 | Expression size reduction | 3 (`.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`, `tests/test_workflow_file_size_limit.py`) | Small |
 | Medium/Low fixes | ~9 (`implement.yml`, `review_autofix.yml`, `lint-pr-body-auto-close.yml`, `cancel_on_pr_close.yml`, `scripts/review_collect_pr_metadata.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/tg_helpers.sh`, `agents.d/*` fragments for new prefixes) | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-24)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`**: all five preconditions were proven by reading the code. The calls hit the same endpoint (or a strict field subset) with the same filters and auth scope. They run in the same step or process with nothing in between that changes the response. The merge keeps the same error and retry behaviour, crosses no concurrency boundary, and keeps any documented cache contract. The implement stage may apply these without further review.
+- **`NEEDS_VERIFICATION`**: the change looks correct, but at least one precondition can't be proven from static reading. The named check must pass first.
+- **`RISKY_SKIP`**: a hard trigger applies: a retry, backoff or polling loop; pagination; an auth or identity probe; `orchestrate_poll_process.sh`; a race-defence re-read; or a change to log output. These are listed only so they are visible. They must not be implemented automatically.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001**: `RISKY_SKIP`
+- **Files:**
+  - `scripts/review_enable_auto_merge.sh:155` (labels read)
+  - `scripts/review_enable_auto_merge.sh:221` (full PR read)
+  - `scripts/review_enable_auto_merge.sh:100` (head-SHA read; runs on the e2e path after `:157`)
+- **Call count:**
+  - Auto-merge path: 2 now → 1 proposed.
+  - `e2e-smoke-test` path: 2 now (`:155` + `:100`) → 1 proposed.
+- **Endpoints:** `GET repos/{o}/{r}/issues/{n}/labels?per_page=100` (paginated), `GET repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** both reads run in the same process. Between them there are only reads and early `exit 0`s.
+  ```bash
+  if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' 2>"${_label_err_file}")"; then
+  ...
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+  ```
+  The pull object already contains `.labels[]` and `.head.sha`. The comment at `:144-153` justifies pagination by the 30-per-page default of the labels endpoint, a concern that does not apply to the pull object.
+- **Proposed fix:**
+  - Move the `:221` fetch above `:155`.
+  - Derive `PR_LABELS_RAW` with `jq -r '.labels[]?.name'`.
+  - On the e2e branch, compare `.head.sha` from the same payload instead of calling `reviewed_head_is_current_for_labels`.
+- **Safety rationale:** `:155` uses `--paginate` (a hard trigger). The two calls also fail with different `::warning::` texts (`:168` and `:224`), so merging them changes observable log output.
+- **Downstream signal:** do not auto-implement. Manual review must confirm three things:
+  1. No consumer greps the `Could not fetch labels for PR` warning at `:168`.
+  2. REST `pulls/{n}` returns every label on a PR carrying more than 30.
+  3. Losing the separate head-freshness read on the e2e path is acceptable. It moves the freshness point about 0–1 s earlier.
+
+**MERGE-002**: `RISKY_SKIP`
+- **Files:**
+  - `scripts/promote_main_cycle.sh:820-832`: idle-wait loop, `runs?per_page=30`.
+  - `scripts/promote_main_cycle.sh:855`: pre-dispatch baseline, `runs?event=workflow_dispatch&per_page=50`.
+- **Call count:** at least 2 now → 1 proposed (the last idle poll reused as the baseline).
+- **Endpoint:** `GET repos/{o}/{r}/actions/workflows/{gate}/runs`.
+- **Evidence:** the same endpoint is read twice back to back. The only work between the reads is `pin_freeze` and `require_stable_branch_ancestor` (`:837-854`). The filters are not a strict subset: `:821` has no `event=` filter and asks for 30 rows, while `:855` filters on `workflow_dispatch` and asks for 50.
+- **Proposed fix:** have the final idle-wait iteration request `per_page=50` and save its response. Derive `before_gate_ids` from it with `select(.event=="workflow_dispatch")`.
+- **Safety rationale:** both calls sit in dispatch-polling code. `:855` is the race baseline that `:872` uses to identify this cycle's gate run. Without the `event=` filter, the 50-row window can miss an older dispatch run, and that would misattribute the gate run.
+- **Downstream signal:** do not auto-implement. A human must confirm the gate workflow never has more than 50 non-dispatch runs inside the window, and must accept that the baseline snapshot moves earlier than `pin_freeze`.
+
+**MERGE-003**: `NEEDS_VERIFICATION`
+- **File:** `.github/workflows/review_autofix.yml:910-949`. The per-issue `gh issue view` is at `:914`, inside "Dispatch standalone validate for orchestrator short-circuit issues".
+- **Call count:** N now (one per fallback-resolved issue) → 1 aliased GraphQL call proposed.
+- **Endpoint:** REST `GET repos/{o}/{r}/issues/{n}` (labels, via `gh issue view --json labels`) → GraphQL `repository{ iN: issue(number:N){ labels(first:100){nodes{name}} } }`.
+- **Evidence:** labels are unknown only on the body/title fallback path (`:903` sets `labels: null`). Each such issue then costs one read:
+  ```bash
+  if issue_labels="$(gh_retry gh issue view "${issue_number}" --repo "${REPOSITORY}" --json labels --jq '.labels[].name' 2>/dev/null)"; then
+  ```
+  The closing-references path already gets labels in its own GraphQL call (`:856-861`).
+- **Proposed fix:** before the loop, when any row has `labels_known != true`, make one aliased GraphQL call. Use the `_fetch_candidate_issue_details_graphql` pattern in `scripts/orchestrate_poll_process.sh` and the `_fetch_linked_issue_bodies_graphql` shape (`scripts/review_collect_pr_metadata.sh:87-181`). Merge the labels into `issue_nodes_json`. If the batch fails, fall back to the existing per-issue read.
+- **Safety rationale:** error semantics change. Today a failure marks only one issue `validation_label_unknown` (`:921-923`); a batch failure would affect all of them unless the per-item fallback is kept. The loop also mutates state between reads (`gh issue edit --remove-label` at `:946`), although only on other issues.
+- **Downstream signal:**
+  1. Confirm the fallback path can return more than one issue in practice: grep the `post-merge-validate-dispatch` logs for `Found linked issues via PR body/title fallback:` with two or more numbers.
+  2. Confirm the per-issue fallback keeps the existing `validation_label_unknown` semantics.
+  3. If the fallback count is almost always 1, drop this finding: the saving is nil.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001**: `SAFE_TO_MERGE`
+- **File:** `scripts/workflow_failure_heal_intake.sh`
+  - `:975`: first `/user` read, stored in `PROVENANCE_LOGIN`.
+  - `:1449-1455`: second `/user` read, into `HEAL_TRUSTED_AUTHOR`.
+  - `:1288` and `:1615-1616`: existing reuse precedents.
+- **Call count:** `autofix_failure` reports that carry a numeric `source_gen` make 2 calls now → 1 proposed. Other report kinds are unchanged.
+- **Endpoint:** `GET /user`.
+- **Evidence:**
+  - `:974-976` reads `/user` for every non-`workflow_run` report except cross-repo `phase_failure` reports.
+  - `:1288` forwards it as `PHASE_COMMENT_AUTHOR` only for `phase_failure`.
+  - `:1450` reads only `PHASE_COMMENT_AUTHOR`, so an `autofix_failure` report reads `/user` a second time:
+    ```bash
+    HEAL_TRUSTED_AUTHOR="${PHASE_COMMENT_AUTHOR:-}"
+    if [ -z "${HEAL_TRUSTED_AUTHOR}" ]; then
+    	# §14 audit: heal issue lists identify issue authors, not the token's
+    	# account; the only other /user read is for self-repo phase reports.
+    	HEAL_TRUSTED_AUTHOR="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
+    ```
+  - The audit comment is wrong: `:975` also runs for `autofix_failure`.
+  - The same file already reuses the value at `:1615`: `recovery_login="${PROVENANCE_LOGIN:-}"`, with the comment "Every candidate below is a /user result for the intake's own token."
+  - A grep of the script found no `GH_TOKEN=` or `export GH_TOKEN`. Both reads run at script top level, not in a function or subshell (`:948-1015` and `:1448-1459`).
+- **Proposed fix:**
+  - At `:1450`, use `HEAL_TRUSTED_AUTHOR="${PHASE_COMMENT_AUTHOR:-${PROVENANCE_LOGIN:-}}"`.
+  - Keep the `:1454` live read as the fallback when both are empty.
+  - Correct the comment at `:1452-1453`.
+- **Safety rationale:** all preconditions hold:
+  - Same endpoint and token, in the same process and step.
+  - No mutation between the reads can change `/user`.
+  - An empty or failed `:975` read (`|| true`) still falls through to the unchanged `:1454` read, so the failure path and retry behaviour are the same.
+  - No log key changes.
+  - The file already does this exact reuse at `:1615`.
+- **Downstream signal:** in `scripts/workflow_failure_heal_intake.sh:1450`, replace `"${PHASE_COMMENT_AUTHOR:-}"` with `"${PHASE_COMMENT_AUTHOR:-${PROVENANCE_LOGIN:-}}"` and update the §14 comment at `:1452-1453`. Leave `:1454` in place as the fallback.
+
+**REUSE-002**: `NEEDS_VERIFICATION` (extends API-002)
+- **Files:**
+  - `.github/workflows/implement.yml:5549-5550`: hop 1 of the ancestor no-op walk.
+  - `.github/workflows/implement.yml:2683`: "Recheck security dependency before edits" writes `ISSUE_META_FILE`.
+  - `.github/workflows/implement.yml:6093`: precedent for reading `ISSUE_META_FILE` after Codex runs.
+- **Call count:** 2 × threshold now (4 at the default) → 2 × threshold − 1 (3). This is independent of API-002's GraphQL rewrite.
+- **Endpoint:** `GET repos/{o}/{r}/issues/{ISSUE_NUMBER}` (`.body`).
+- **Evidence:** hop 1 starts at `current="${ISSUE_NUMBER}"` (`:5548`) and calls `gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""'` (`:5550`). The same job, `implement` (`:92-7058`), already holds a fresh snapshot of that issue in `ISSUE_META_FILE`. It is exported at `:294` and rewritten at `:2683`, and the PR-create step already trusts it (`:6091-6094`).
+- **Proposed fix:** for `hop == 1` only, read `.body` from `ISSUE_META_FILE`. Accept it only after the existing `issue_meta_matches_issue` check (`.number == ISSUE_NUMBER`, as defined at `:2041-2050`). Otherwise fall back to the live read. Leave hops 2 and later unchanged.
+- **Safety rationale:** precondition 2 is unproven. The snapshot is in `/tmp/codex-implement-${GITHUB_RUN_ID}` (`:190`), and the Codex editor runs between `:2683` and `:5550`. A tampered body could forge `Re-issued from #N`, which steers which ancestor is counted and can close the issue `ai:closed` (`:5565-5566`).
+- **Downstream signal:**
+  1. Confirm the isolated Codex agent cannot write `${RUNTIME_DIR}/issue_meta.json`. Check the sandbox mounts in "Run Codex implementation" (`:2833+`) against `agents.md` "Isolated Codex agents".
+  2. Confirm no step between `:2683` and `:5398` rewrites `ISSUE_META_FILE`.
+  3. Apply the change only if both hold.
+
+**REUSE-003**: `RISKY_SKIP` (extends BATCH-002)
+- **Files:**
+  - `scripts/orchestrate_poll_process.sh:9284`: timeline read.
+  - `scripts/orchestrate_poll_process.sh:9301-9313`: per-PR `_fetch_pr_json` used only for `.state` and `.merged_at`.
+  - `scripts/gh_helpers.sh:1711-1713` and `:1743-1745`: the timeline helper's existing enrichment.
+- **Call count:** N + P + P(files) now → N + P(files, closed and merged PRs only). It removes the P state reads before any GraphQL batching.
+- **Endpoints:** GraphQL `timelineItems(CROSS_REFERENCED_EVENT)`; REST `GET pulls/{n}`.
+- **Evidence:** `gh_issue_timeline_with_cross_refs` already returns `.source.issue.state`, `.merged_at`, `.merged` and `lookup_failed` for each cross-referenced PR. Its GraphQL query asks for `number state mergedAt`. `_issue_cross_ref_pr_numbers_unique` (`:4473-4488`) throws those fields away and keeps only `.number`. Then `:9302-9304` fetches the full PR just to read the same two fields.
+- **Proposed fix:** add a sibling of `_issue_cross_ref_pr_numbers_unique` that emits `number<TAB>state<TAB>merged<TAB>lookup_failed` from the same timeline response. Evaluate the "any open PR → return" rule at `:9310` from those fields. Call `_fetch_pr_json` only when `lookup_failed == true` or the state is empty.
+- **Safety rationale:** the code is in `orchestrate_poll_process.sh`, and the timeline's PR state can lag the REST pull object, which the superseded-by-main gate relies on (an upstream-race defence). `:9315` is also paginated.
+- **Downstream signal:** do not auto-implement. A human must check how far GraphQL `PullRequest.state` can lag REST `pulls/{n}.state` right after a merge. Then decide whether a stale `OPEN` reading, which returns early and leaves `SYNC_SUPERSEDED_CONFIDENT=true`, is acceptable for this gate.
+
+**REUSE-004**: `RISKY_SKIP` (extends BATCH-001 and BUG-003)
+- **Files:**
+  - `scripts/orchestrate_poll_process.sh:25856`: wave-reconcile timeline read for every `ISSUE_NUMS` issue.
+  - `scripts/orchestrate_poll_process.sh:26129`: ready-to-merge timeline re-read through `_issue_cross_ref_pr_number_last`.
+  - `scripts/orchestrate_poll_process.sh:4455-4471`: `_issue_timeline_with_cross_refs_json`, which has no cache.
+- **Call count:** R extra timeline calls per tick now (R = ready-to-merge issues) → 0 with a per-tick memo.
+- **Endpoint:** GraphQL `issue.timelineItems`, with REST `issues/{n}/timeline` plus per-PR reads as the fallback.
+- **Evidence:** both sites call `_issue_timeline_with_cross_refs_json` for the same issue in the same tick, and that function always goes to the network. The `:26129` loop iterates `WAVE_STATUS` issues with `status == "ready-to-merge"`; those are very likely a subset of the current-wave `ISSUE_NUMS` (inference). BUG-003 lists 9 more `_issue_cross_ref_pr_number_last` sites (`:18114`, `:21493`, `:21599`, `:21910`, `:22670`, `:26275`, `:26421`, `:29011`, `:29596`) with the same pattern.
+- **Proposed fix:** add an associative-array memo keyed by issue inside `_issue_timeline_with_cross_refs_json`, cleared at the start of each project iteration, in the style of `_current_wave_details_json` (`:25812`). A failed fetch is cached as a miss so the next caller fails open.
+- **Safety rationale:** the code is in `orchestrate_poll_process.sh`. The `:26126` loop runs in a pipe subshell (BUG-004), so a memo filled there would not survive. Squash merges at `:26207` also add cross-reference events within the tick, and a stale memo would hide them from later callers (`:26275`, `:26421`).
+- **Downstream signal:** do not auto-implement. Land the BUG-003 helper (`_issue_implementation_pr_number`) and the BUG-004 subshell fix first. Then a human must decide, per call site, whether that site may read a timeline taken before this tick's merges and label edits.
+
+**REUSE-005**: `RISKY_SKIP`
+- **Files:**
+  - `.github/workflows/review_autofix.yml:2240`: "Check PR state (defense-in-depth)", full `pulls/{n}` payload.
+  - `scripts/review_collect_pr_metadata.sh:231`: "Collect PR metadata" (`review_autofix.yml:2655`), full `pulls/{n}` payload again.
+  - `review_autofix.yml:5366`: a third read before the failure alerts.
+- **Call count:** 2 per run now in steps 2229 → 2655, plus 1 on failure. Proposed: no change.
+- **Endpoint:** `GET repos/{o}/{r}/pulls/{n}`.
+- **Evidence:** both reads fetch the whole pull object in the same codex-agent job. `:2240` uses only `.labels`, `.state` and `.merged`. The collector's copy feeds `PR_PAYLOAD_FILE`, whose `.head.sha` is compared at `:2850` to verify the checkout.
+- **Why it stays:** several minutes of setup (OpenCode install, Semble, memory) separate the two reads. BUG-001 shows that a PR merging in that window is a real failure mode. Reusing the `:2240` payload would make the `:2850` head check stale. The step's own name, "defense-in-depth", marks it as an intentional re-read.
+- **Safety rationale:** the code path explicitly defends against an upstream race (PR merged or pushed mid-run).
+- **Downstream signal:** do not merge. It is listed so future passes don't propose it. If anything, BUG-001 argues for one more liveness read before the fetch at `:2912`, not fewer.
+
+**REUSE-006**: `RISKY_SKIP` (corrects the report's "GH API Call Audit" inference)
+- **Files:**
+  - `.github/workflows/check-failure-triage-historical.yml:75-78` (dedup), `:97` (`pulls/{n}`), `:107` (`actions/runs/{id}`), `:123` (job-log probe).
+  - `scripts/check_failure_triage.sh:462` (`pulls/{n}`), `:672-677` (dedup), `:896`, `:900`, `:921` (run, job and log reads in historical mode).
+- **Call count:** PR read 2 → 1, run read 2 → 1, and the job log is downloaded twice when available.
+- **Evidence:**
+  - The report infers that "moving the dedup check before the job-log probe would save 1 call". The dedup is already the first call: `:75` runs before `:97`, `:107` and `:123`.
+  - The real duplication is across jobs. The guard job (`GH_TOKEN: ${{ github.token }}`, `:60`) reads the PR, the run and the full job-log body (`> /dev/null`, `:123`). The triage script then reads all three again (`:462`, `:896`, `:921`).
+  - The workflow is pinned to one historical run (`group: check-triage-historical-37922279826`, `:24`, and `historical_run_id: "37922279826"`, `:348`). It is a single-use path.
+- **Safety rationale:**
+  - The reads cross a job boundary.
+  - They use a different auth scope: the guard uses `github.token`; the script's token was not verified here.
+  - `:123` is an existence probe whose 404/410 result drives the `repro` matrix.
+  - The script's re-reads are deliberate fail-closed bindings ("Bind the run and job … before reading any log", `:894-895`).
+- **Downstream signal:** do not auto-implement. The only optional, manual change is to replace the `:123` full-log download with a header-only probe; that changes the probe semantics and needs owner review. Treat the report's suggestion as already satisfied.
+
+### Dead Calls (DEAD-API-###)
+No findings. I traced the fetched values to their consumers for the calls examined in this pass, including `review_conflict_prepare.sh:1264` (`INTEGRATION_TRACKING_TITLE`/`BODY`, used at `:1497-1539`). Every result examined is consumed downstream.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: RISKY_SKIP — in `orchestrate_poll_process.sh` (`:25841-25893`), and the replacement GraphQL batch would need `body` plus paging; REUSE-004 adds a per-tick timeline memo as a cheaper first step.
+- BATCH-002: RISKY_SKIP — in `orchestrate_poll_process.sh`, and `pulls/{n}/files` is paginated (`:9315`); REUSE-003 adds that the per-PR state probe repeats data the timeline already returns.
+- BATCH-003: RISKY_SKIP — changes pagination (`hasNextPage` → cursor walk at `gh_helpers.sh:1782-1786`) and would change the emission of the grep-able `rate_limit_audit_fallback … reason=timeline_has_next_page` key.
+- API-001: RISKY_SKIP — the inventory read sits inside the `while ! gh pr create` retry loop (`implement.yml:6114-6195`) and is paginated (`:6132`).
+- API-002: RISKY_SKIP — the per-hop comments read is paginated (`:5554`), and `comments(last:100)` would change page semantics; REUSE-002 gives a non-paginated hop-1 reduction tagged NEEDS_VERIFICATION.
+- API-003: NEEDS_VERIFICATION — not a merge (call count unchanged), but switching to `gh_retry --idempotent` changes retry semantics; check how `gh_retry` treats the 409 that `POST …/runs/{id}/cancel` returns for an already-completed run before applying.
+
+### Summary Counts
+Counts cover only this pass's MERGE and REUSE findings. Section 2 cross-references are listed above.
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 1 | REUSE-001 |
+| NEEDS_VERIFICATION | 2 | MERGE-003, REUSE-002 |
+| RISKY_SKIP | 6 | MERGE-001, MERGE-002, REUSE-003, REUSE-004, REUSE-005, REUSE-006 |
+
+### Implement-Stage Handoff
+- REUSE-001: in `scripts/workflow_failure_heal_intake.sh:1450`, fall back to `PROVENANCE_LOGIN` before the live `/user` read at `:1454`, and correct the §14 comment at `:1452-1453`. This saves 1 `/user` call per `autofix_failure` heal report that carries a `source_gen`.
