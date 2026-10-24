@@ -3910,6 +3910,8 @@ and resolver chains, a failed project) now goes to the unblock judge
   guarded verdict logs `UNBLOCK_TARGET_REPO_GUARD item= verdict=
   outcome=consumer|harness|mixed|disabled paths=`. The routing never applies
   in coding-workflows itself or to `ai:security` issues.
+  For a pull request item no heal report is sent (the intake binds an
+  `issue` report only to an issue); a WARNING asks a person to file it.
   `UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED=false` restores the old behaviour.
   `WORKFLOW_HEAL_ENABLED=false` skips the heal report and the hold request
   and sends a WARNING instead, because a person must then file the harness

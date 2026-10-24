@@ -513,12 +513,14 @@ unblock_send_heal_report()
 	label="$(jq -r ".ops[${idx}].label // empty" "${ops_file}" 2>/dev/null)"
 	sendable="$(jq -r ".ops[${idx}].sendable // false" "${ops_file}" 2>/dev/null)"
 	heal_py="${SUPPORT_DIR}/scripts/workflow_failure_heal.py"
-	if [ "$(printf '%s' "${WORKFLOW_HEAL_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
+	# no_accepted_label first: the planner already pages for it, so a second
+	# skip reason must not add another WARNING after the ops.
+	if [ "${sendable}" != "true" ] || [ -z "${label}" ]; then
+		UNBLOCK_HEAL_SKIP_REASON="no_accepted_label"
+	elif [ "$(printf '%s' "${WORKFLOW_HEAL_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" = "false" ]; then
 		UNBLOCK_HEAL_SKIP_REASON="workflow_heal_disabled"
 	elif [ "${REPOSITORY}" = "${UNBLOCK_SOURCE_REPO}" ]; then
 		UNBLOCK_HEAL_SKIP_REASON="self_repo"
-	elif [ "${sendable}" != "true" ] || [ -z "${label}" ]; then
-		UNBLOCK_HEAL_SKIP_REASON="no_accepted_label"
 	elif [ ! -f "${heal_py}" ] || [ -L "${heal_py}" ]; then
 		UNBLOCK_HEAL_SKIP_REASON="helper_missing"
 	elif ! [[ "${issue}" =~ ^[1-9][0-9]*$ ]]; then
@@ -542,6 +544,14 @@ unblock_send_heal_report()
 			unblock_log "item=${ITEM} op=heal_report issue=${issue} label=${label} outcome=failed reason=issue_read_failed"
 			return 1
 		fi
+	fi
+	# A pull request: the intake binds an issue-kind report only to an issue
+	# (kind_mismatch otherwise) and accepts unblock_judge.yml only as the
+	# reporter of issue-kind reports, so the report would be dropped unfiled.
+	if jq -e '.pull_request' "${issue_json}" >/dev/null 2>&1; then
+		UNBLOCK_HEAL_SKIP_REASON="pull_request_item"
+		unblock_log "item=${ITEM} op=heal_report issue=${issue} outcome=skip reason=${UNBLOCK_HEAL_SKIP_REASON}"
+		return 2
 	fi
 	# API hygiene (CLAUDE.md §15): the judge's other run reads
 	# (unblock_select_run_log) fetch single runs by id; none lists runs. The
@@ -646,6 +656,16 @@ unblock_run_ops()
 		if [ "${ops_failed}" = "true" ] && [ "${op}" != "close" ] && [ "${op}" != "telegram" ] \
 			&& ! { [ "${op}" = "add_labels" ] && [ "${close_succeeded}" = "true" ] && [ "${ITEM_KIND}" = "pr" ] \
 				&& jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and ((.ops[3].text // "") | startswith("Unblock judge closed untrusted PR #"))' "${ops_file}" >/dev/null 2>&1; }; then
+			if [ "${op}" = "heal_report" ]; then
+				# A heal report skipped after an earlier failure still needs its page.
+				heal_planned="true"
+				if [ "$(jq -r ".ops[${idx}].sendable // false" "${ops_file}" 2>/dev/null)" = "true" ]; then
+					heal_skip_reason="earlier_op_failed"
+				else
+					heal_skip_reason="no_accepted_label"
+				fi
+				unblock_log "item=${ITEM} op=heal_report outcome=skip reason=${heal_skip_reason}"
+			fi
 			continue
 		fi
 		case "${op}" in
@@ -910,6 +930,10 @@ PY
 						else
 							unblock_tg "WARNING" "Operator handoff for #${ITEM} is incomplete: a write failed and the verdict will not be retried; the item stays blocked (${REPOSITORY})."
 						fi
+					elif jq -e ".ops[${idx}].text // \"\" | contains(\"has no escalation label for a heal report\")" "${ops_file}" >/dev/null 2>&1; then
+						# The planner's own no-label WARNING names the real cause; keep it.
+						heal_warned="true"
+						unblock_tg "WARNING" "$(jq -r ".ops[${idx}].text" "${ops_file}") (${REPOSITORY})"
 					elif jq -e 'any(.ops[]; .op == "heal_report")' "${ops_file}" >/dev/null 2>&1; then
 						# Harness routing: the verdict is already recorded, so this is the only page.
 						heal_warned="true"

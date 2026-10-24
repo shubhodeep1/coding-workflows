@@ -4446,7 +4446,7 @@ def _heal_ops(*, sendable: bool = True, label: str = "ai:harness-broken", hold: 
 	return {"ops": ops}
 
 
-def _run_heal_ops(tmp_path: Path, ops: dict, **env_extra):
+def _run_heal_ops(tmp_path: Path, ops: dict, item: dict | None = None, **env_extra):
 	if not shutil.which("jq"):
 		pytest.skip("jq is required for the unblock judge fixture")
 	bin_dir = tmp_path / "bin"
@@ -4456,10 +4456,10 @@ def _run_heal_ops(tmp_path: Path, ops: dict, **env_extra):
 	gh.chmod(0o755)
 	state_file = tmp_path / "state.json"
 	state_file.write_text(json.dumps({"calls": [], "comments": [], "labels_added": [], "labels_removed": [], "patched": [],
-		"created": [], "dispatched": [], "issues": {"7": HEAL_ISSUE}, "item_comments": []}), encoding="utf-8")
+		"created": [], "dispatched": [], "issues": {"7": item or HEAL_ISSUE}, "item_comments": []}), encoding="utf-8")
 	runtime = tmp_path / "rt"
 	runtime.mkdir()
-	(runtime / "item.json").write_text(json.dumps(HEAL_ISSUE), encoding="utf-8")
+	(runtime / "item.json").write_text(json.dumps(item or HEAL_ISSUE), encoding="utf-8")
 	(runtime / "item_comments.json").write_text("[]", encoding="utf-8")
 	(runtime / "labels.json").write_text(json.dumps(["ai:harness-broken"]), encoding="utf-8")
 	workflows = tmp_path / "target" / ".github" / "workflows"
@@ -4701,3 +4701,64 @@ def test_mixed_route_with_a_sent_report_does_not_warn(tmp_path: Path) -> None:
 	assert "rc=0" in result.stdout, result.stdout + result.stderr
 	assert len(state.get("heal_dispatches", [])) == 1
 	assert tg == []
+
+
+# A first write the fake gh fails with FAKE_GH_FAIL_EXPLANATION, so later ops see ops_failed.
+FAILING_FIRST_COMMENT = {"op": "comment", "issue": 7, "body": "Unblock judge could not act on `x`."}
+
+
+def test_mixed_route_skipped_after_an_earlier_failure_still_warns(tmp_path: Path) -> None:
+	ops = _mixed_ops()
+	ops["ops"][0] = dict(FAILING_FIRST_COMMENT)
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, ops, FAKE_GH_FAIL_EXPLANATION="1")
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+	assert "op=heal_report outcome=skip reason=earlier_op_failed" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "no heal report was sent (earlier_op_failed)" in tg[0]
+
+
+def test_earlier_failure_keeps_the_no_label_warning(tmp_path: Path) -> None:
+	ops = _heal_ops(sendable=False, label="", hold=False)
+	no_label = "Unblock judge found #7 (blocked) harness-owned, but it has no escalation label for a heal report; a person must file the harness change."
+	ops["ops"][0] = dict(FAILING_FIRST_COMMENT)
+	ops["ops"][-1] = {"op": "telegram", "level": "WARNING", "text": no_label}
+	result, _state, tg, _runtime = _run_heal_ops(tmp_path, ops, FAKE_GH_FAIL_EXPLANATION="1")
+	assert "rc=1" in result.stdout, result.stdout + result.stderr
+	assert tg == ["WARNING|" + no_label + " (o/r)"]
+
+
+def test_heal_disabled_without_a_label_pages_once(tmp_path: Path) -> None:
+	ops = _heal_ops(sendable=False, label="", hold=False)
+	ops["ops"][-1] = {"op": "telegram", "level": "WARNING", "text": "Unblock judge found #7 (blocked) harness-owned, but it has no escalation label for a heal report; a person must file the harness change."}
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, ops, WORKFLOW_HEAL_ENABLED="false")
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+	assert "reason=no_accepted_label" in result.stdout
+	assert len(tg) == 1 and "no escalation label" in tg[0]
+
+
+def test_heal_report_for_a_pull_request_is_skipped_and_warns(tmp_path: Path) -> None:
+	pr_item = dict(HEAL_ISSUE, pull_request={"url": "https://api.github.com/repos/o/r/pulls/7"})
+	result, state, tg, _runtime = _run_heal_ops(tmp_path, _heal_ops(hold=False), item=pr_item)
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert not state.get("heal_dispatches")
+	assert "outcome=skip reason=pull_request_item" in result.stdout
+	assert len(tg) == 1 and tg[0].startswith("WARNING|") and "(pull_request_item)" in tg[0]
+
+
+def test_shell_accepted_labels_match_the_planner() -> None:
+	text = JUDGE.read_text(encoding="utf-8")
+	line = next(row for row in text.splitlines() if row.strip().startswith("ai:needs-human|") and row.strip().endswith(") ;;"))
+	shell_labels = set(line.strip()[: -len(") ;;")].split("|"))
+	assert shell_labels == set(actions.HEAL_REPORT_LABELS)
+
+
+def test_judge_mixed_verdict_keeps_the_fixup_and_sends_a_report(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	item = dict(HEAL_ISSUE, labels=[{"name": "ai:blocked"}, {"name": "ai:harness-broken"}])
+	verdict = {"verdict": "descope", "reason": "narrower", "instructions": "Drop the check in src/app.py and fix validation/x.sh"}
+	result, state = _judge(tmp_path, item, verdict=verdict, **_harness_judge_env(tmp_path))
+	assert "UNBLOCK_TARGET_REPO_GUARD item=7 verdict=descope outcome=mixed paths=validation/x.sh" in result.stdout, result.stdout + result.stderr
+	assert len(state.get("heal_dispatches", [])) == 1
+	assert state["created"]
