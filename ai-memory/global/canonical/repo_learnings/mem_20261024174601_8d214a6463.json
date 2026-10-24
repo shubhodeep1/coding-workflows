@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "When changing validation or orchestration behavior, check the relevant scripts and GitHub Actions workflows alongside their focused tests. Related changes often also update an `agents.d/` note and a `changelog.d/` entry, so include those conventions when planning the work.",
+  "fingerprint": "8fc9947b971699c9624ea80bdd3482226817a434fa4a6154e992a9d2f3f26281",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40116975242",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40116975242",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8039",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8048",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8057",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8058",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8065",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8042",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8050",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8061",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8062",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8068"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261024174601_8d214a6463",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow-routing changes in this repository commonly span implementation, tests, and agent/changelog documentation.",
+  "timestamps": {
+    "created_at": "2026-10-24T17:46:01Z",
+    "promoted_at": "2026-10-24T17:47:47Z",
+    "superseded_at": null
+  }
+}

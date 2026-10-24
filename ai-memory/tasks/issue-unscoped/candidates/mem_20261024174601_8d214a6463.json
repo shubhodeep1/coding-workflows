@@ -38,11 +38,11 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "candidate",
+  "status": "promoted",
   "summary": "Workflow-routing changes in this repository commonly span implementation, tests, and agent/changelog documentation.",
   "timestamps": {
     "created_at": "2026-10-24T17:46:01Z",
-    "promoted_at": null,
+    "promoted_at": "2026-10-24T17:47:47Z",
     "superseded_at": null
   }
 }
