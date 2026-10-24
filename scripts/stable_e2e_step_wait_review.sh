@@ -174,6 +174,7 @@ review_run_checked_out_bait() {
   local coverage_log="" coverage_checked="" coverage_status="" coverage_display="none"
   local coverage_verdict="unknown" coverage_reason="jobs_unavailable"
   local coverage_read=0 coverage_failed=0 coverage_cooldown=0
+  local coverage_run_completed=0
   BAIT_REVIEW_COOLDOWN_SKIP=0
   if ! [[ "$coverage_run_id" =~ ^[0-9]+$ ]]; then
     BAIT_REVIEW_VERDICT="unknown"
@@ -189,13 +190,22 @@ review_run_checked_out_bait() {
   else
     coverage_jobs=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${coverage_run_id}/jobs?per_page=10" || echo "")
   fi
+  # A completed run's job logs are finished logs, not the in-progress
+  # live logs the cooldown throttles, so its terminal check always reads
+  # them (3 unreadable checks still drop the run). Release run
+  # 40005654539: review run 40013411279 completed 22s inside the
+  # Phase 4 budget, but a cooldown tripped by its in-progress
+  # codex-agent log skipped this read and the phase timed out.
+  if [ "${RUN_STATUS:-}" = "completed" ] && [ "${RUN_ID:-}" = "$coverage_run_id" ]; then
+    coverage_run_completed=1
+  fi
   if [ -n "$coverage_jobs" ] && printf '%s' "$coverage_jobs" | jq -e '(.jobs | type == "array") and (.jobs | length > 0) and (.total_count == null or .total_count <= (.jobs | length))' >/dev/null 2>&1; then
     while IFS= read -r coverage_job_id; do
       coverage_log="$(mktemp)"
       # Live-log cooldown: a skipped fetch leaves the verdict unknown
       # (reason=live_log_cooldown) and is not a strike, so the log is
-      # read again after the pause.
-      if ! live_log_fetch_allowed; then
+      # read again after the pause. Never skipped for a completed run.
+      if [ "$coverage_run_completed" -eq 0 ] && ! live_log_fetch_allowed; then
         coverage_failed=1
         coverage_cooldown=1
       elif ! gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${coverage_job_id}/logs" > "$coverage_log"; then
