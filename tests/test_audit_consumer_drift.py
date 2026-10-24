@@ -1162,6 +1162,30 @@ def test_repair_skips_when_a_sync_pull_request_is_open() -> None:
 		assert _run_git("--git-dir", str(bare), "branch", "--list", drift_audit.RESTORE_BRANCH) == ""
 
 
+def test_repair_never_overwrites_a_restore_branch_it_did_not_write() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-foreign-") as td:
+		tmp = Path(td)
+		repairer, _executor, _rendered, bare = _repair_fixture(tmp, [PlannedCall(prefix=("gh", "api", "-H"), stdout="[]")], {"ai-plan.yml": "x\n"})
+		before = _run_git("--git-dir", str(bare), "rev-parse", "main")
+		_run_git("--git-dir", str(bare), "update-ref", f"refs/heads/{drift_audit.RESTORE_BRANCH}", before)
+		result = repairer.repair("owner/repo", {"ai-plan.yml"})
+		assert result.outcome == "skipped", result
+		assert result.reason == "restore_branch_not_owned"
+		assert _run_git("--git-dir", str(bare), "rev-parse", drift_audit.RESTORE_BRANCH) == before
+
+
+def test_repair_makes_no_api_call_when_bytes_already_match() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-match-") as td:
+		tmp = Path(td)
+		templates_dir = tmp / "probe"
+		_write_templates(templates_dir, {"ai-workflow-integrity.yml": "name: AI Workflow Integrity\njobs:\n  integrity:\n    uses: shubhodeep1/coding-workflows/.github/workflows/workflow_integrity.yml@stable\n", "ai-plan.yml": "name: AI Plan\njobs:\n  plan:\n    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable\n"})
+		exact = drift_audit.load_rendered_templates(templates_dir, CURRENT_STABLE_SHA)
+		repairer, executor, _rendered, _bare = _repair_fixture(tmp, [], exact)
+		result = repairer.repair("owner/repo", {"ai-plan.yml"})
+		assert result.outcome == "skipped" and result.reason == "no_exact_drift", result
+		assert executor.gh_calls == []
+
+
 def test_repair_reports_errors_without_raising() -> None:
 	with tempfile.TemporaryDirectory(prefix="drift-repair-error-") as td:
 		tmp = Path(td)
@@ -1237,6 +1261,8 @@ def main() -> int:
 	test_repair_opens_one_restore_pull_request_with_exact_release_bytes()
 	test_repair_refreshes_existing_pull_request_and_skips_identical_runs()
 	test_repair_skips_when_a_sync_pull_request_is_open()
+	test_repair_never_overwrites_a_restore_branch_it_did_not_write()
+	test_repair_makes_no_api_call_when_bytes_already_match()
 	test_repair_reports_errors_without_raising()
 	test_repair_credentials_stay_out_of_command_lines()
 	test_workflow_runs_daily_and_restores_from_the_stable_tree()

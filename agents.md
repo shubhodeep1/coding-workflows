@@ -4915,6 +4915,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/workflow-failure-heal-intake.yml
 .github/workflows/workflow-log-analysis.yml
 .github/workflows/workflow_failure_heal.yml
+.github/workflows/workflow_integrity.yml
 .github/workflows/workspace-cache-maintenance.yml
 ```
 <!-- TREE:END id=workflows -->
@@ -4939,6 +4940,7 @@ workflow-templates/ai-sync-labels.yml
 workflow-templates/ai-update-workflows.yml
 workflow-templates/ai-validate.yml
 workflow-templates/ai-workflow-failure-heal.yml
+workflow-templates/ai-workflow-integrity.yml
 workflow-templates/review_rb_judge_dispatch.yml
 workflow-templates/unblock_judge_dispatch.yml
 ```

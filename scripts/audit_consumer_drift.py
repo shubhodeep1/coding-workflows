@@ -712,6 +712,7 @@ SYNC_PR_BRANCH_PREFIX = "auto/update-workflows-"
 SYNC_FALLBACK_BRANCH = "ai-sync/stable"
 INTEGRITY_WRAPPER = "ai-workflow-integrity.yml"
 UPDATER_WRAPPER = "ai-update-workflows.yml"
+RESTORE_COMMIT_SUBJECT = "chore: restore managed workflow wrappers to coding-workflows stable"
 RESTORE_COMMIT_AUTHOR = ("coding-workflows drift audit", "41898282+github-actions[bot]@users.noreply.github.com")
 
 
@@ -748,10 +749,11 @@ class RepairResult:
 class DriftRepairer:
 	"""Open or refresh one restore pull request per drifted consumer.
 
-	API budget per drifted repository (§15): one paginated-to-one-page
-	``GET pulls?state=open`` read (answers both "is a sync PR open" and "does
-	our restore PR exist"), then at most one ``POST pulls`` or ``PATCH
-	pulls/<n>``. Git traffic (clone, ls-remote, fetch, push) uses the git
+	API budget per repository (§15): none when the cloned wrappers already
+	match the release bytes; otherwise one ``GET pulls?state=open`` listing
+	(one page per 100 open pull requests, at most 10; answers both "is a sync
+	PR open" and "does our restore PR exist"), then at most one ``POST pulls``
+	or ``PATCH pulls/<n>``. Git traffic (clone, ls-remote, fetch, push) uses the git
 	protocol, not the REST API. Every failure is reported per repository and
 	never stops the audit (fail open).
 	"""
@@ -791,13 +793,21 @@ class DriftRepairer:
 		return self.executor.run(["git", *args], cwd=cwd, check=check, env_overrides=self._git_env())
 
 	def _open_pulls(self, repository: str) -> list[dict[str, Any]]:
-		proc = self.auditor._run_gh_api(f"repos/{repository}/pulls?state=open&per_page=100")
-		if proc.returncode != 0:
-			raise RepoFetchError(repository, "open pull request listing failed: " + _compact_command_output(proc.stdout, proc.stderr))
-		payload = json.loads(proc.stdout or "[]")
-		if not isinstance(payload, list):
-			raise RepoFetchError(repository, "open pull request listing did not return an array")
-		return [item for item in payload if isinstance(item, dict)]
+		# Follows pages (at most 10) so a consumer with more than 100 open
+		# pull requests still has its sync and restore pull requests found.
+		pulls: list[dict[str, Any]] = []
+		for page in range(1, 11):
+			suffix = "" if page == 1 else f"&page={page}"
+			proc = self.auditor._run_gh_api(f"repos/{repository}/pulls?state=open&per_page=100{suffix}")
+			if proc.returncode != 0:
+				raise RepoFetchError(repository, "open pull request listing failed: " + _compact_command_output(proc.stdout, proc.stderr))
+			payload = json.loads(proc.stdout or "[]")
+			if not isinstance(payload, list):
+				raise RepoFetchError(repository, "open pull request listing did not return an array")
+			pulls.extend(item for item in payload if isinstance(item, dict))
+			if len(payload) < 100:
+				return pulls
+		raise RepoFetchError(repository, "open pull request listing exceeded 10 pages")
 
 	def _managed_names(self, checkout: Path, profile_names: set[str] | None) -> list[str]:
 		local_dir = checkout / ".github" / "workflows"
@@ -836,20 +846,6 @@ class DriftRepairer:
 			return RepairResult(repository=repository, outcome="error", reason="repair_failed")
 
 	def _repair(self, repository: str, profile_names: set[str] | None) -> RepairResult:
-		pulls = self._open_pulls(repository)
-		existing = None
-		for pull in pulls:
-			head = pull.get("head") or {}
-			ref = str(head.get("ref") or "")
-			head_repo = ((head.get("repo") or {}).get("full_name") or "")
-			if head_repo != repository:
-				continue
-			if ref.startswith(SYNC_PR_BRANCH_PREFIX) or ref == SYNC_FALLBACK_BRANCH:
-				print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=sync_pull_request_open pr={pull.get('number')}")
-				return RepairResult(repository=repository, outcome="skipped", reason="sync_pull_request_open", pr_number=pull.get("number"), pr_url=pull.get("html_url"))
-			if ref == RESTORE_BRANCH and RESTORE_MARKER in str(pull.get("body") or ""):
-				existing = pull
-
 		checkout = self.workdir / repository.replace("/", "__")
 		if checkout.exists():
 			raise ValueError(f"repair checkout already exists: {checkout}")
@@ -872,13 +868,27 @@ class DriftRepairer:
 			print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=no_exact_drift")
 			return RepairResult(repository=repository, outcome="skipped", reason="no_exact_drift")
 
+		pulls = self._open_pulls(repository)
+		existing = None
+		for pull in pulls:
+			head = pull.get("head") or {}
+			ref = str(head.get("ref") or "")
+			head_repo = ((head.get("repo") or {}).get("full_name") or "")
+			if head_repo != repository:
+				continue
+			if ref.startswith(SYNC_PR_BRANCH_PREFIX) or ref == SYNC_FALLBACK_BRANCH:
+				print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=sync_pull_request_open pr={pull.get('number')}")
+				return RepairResult(repository=repository, outcome="skipped", reason="sync_pull_request_open", pr_number=pull.get("number"), pr_url=pull.get("html_url"))
+			if ref == RESTORE_BRANCH and RESTORE_MARKER in str(pull.get("body") or ""):
+				existing = pull
+
 		self._git(["add", "--", *[f".github/workflows/{name}" for name in files]], cwd=checkout)
 		author_name, author_email = RESTORE_COMMIT_AUTHOR
 		self._git(
 			[
 				"-c", f"user.name={author_name}", "-c", f"user.email={author_email}",
 				"commit", "--quiet", "--no-verify", "-m",
-				f"chore: restore managed workflow wrappers to coding-workflows stable\n\nRelease commit: {self.stable_sha}",
+				f"{RESTORE_COMMIT_SUBJECT}\n\nRelease commit: {self.stable_sha}",
 			],
 			cwd=checkout,
 		)
@@ -888,6 +898,12 @@ class DriftRepairer:
 		push_needed = True
 		if remote_sha:
 			self._git(["fetch", "--quiet", "--depth", "1", "--no-tags", "origin", remote_sha], cwd=checkout)
+			# Overwrite the fixed branch only when its tip is a restore commit
+			# this audit wrote; a consumer's own branch of that name is kept.
+			tip = self._git(["log", "-1", "--format=%ae%n%s", "FETCH_HEAD"], cwd=checkout).stdout.split("\n")
+			if tip[:1] != [RESTORE_COMMIT_AUTHOR[1]] or not (tip[1:2] or [""])[0].startswith(RESTORE_COMMIT_SUBJECT):
+				print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=restore_branch_not_owned")
+				return RepairResult(repository=repository, outcome="skipped", reason="restore_branch_not_owned", files=files)
 			old_tree = self._git(["rev-parse", "FETCH_HEAD^{tree}"], cwd=checkout).stdout.strip()
 			new_tree = self._git(["rev-parse", "HEAD^{tree}"], cwd=checkout).stdout.strip()
 			push_needed = old_tree != new_tree
@@ -934,16 +950,26 @@ def repair_drifted_repositories(
 	repairer: DriftRepairer,
 	results: list[RepoAuditResult],
 ) -> list[RepairResult]:
-	"""Run the repairer for every drifted repository; error results are skipped."""
+	"""Run the repairer for every drifted or matching repository; errors are skipped.
+
+	The audit compares normalized text (managed header, trailing whitespace and
+	CRLF ignored) while ai-workflow-integrity.yml accepts only exact bytes, so a
+	"match" can still fail the integrity check. Matching repositories are
+	therefore byte-checked too (one clone, no REST call when the bytes match);
+	their ``no_exact_drift`` skips are left out of the summary.
+	"""
 	repairs: list[RepairResult] = []
 	for result in results:
-		if result.outcome != "drift":
+		if result.outcome not in ("drift", "match"):
 			continue
 		profile = auditor.fetch_workflow_profile(result.repository)
 		profile_names = None
 		if auditor.profile_manifests is not None and profile != UNKNOWN_WORKFLOW_PROFILE:
 			profile_names = auditor.profile_manifests.get(profile)
-		repairs.append(repairer.repair(result.repository, profile_names))
+		repair = repairer.repair(result.repository, profile_names)
+		if result.outcome == "match" and repair.outcome == "skipped" and repair.reason == "no_exact_drift":
+			continue
+		repairs.append(repair)
 	return repairs
 
 

@@ -5,7 +5,7 @@ name: Update Workflow Wrappers
   workflow_call:
     inputs:
       allow_workflow_edits:
-        description: "Allow automatic workflow wrapper updates"
+        description: "Sync non-wrapper assets (.claude/, CLAUDE.md, audit-gate, retired files, changelog/agents fragments); managed wrappers are always updated"
         required: false
         default: true
         type: boolean
@@ -25,7 +25,7 @@ name: Update Workflow Wrappers
   workflow_dispatch:
     inputs:
       allow_workflow_edits:
-        description: "Allow automatic workflow wrapper updates"
+        description: "Sync non-wrapper assets (.claude/, CLAUDE.md, audit-gate, retired files, changelog/agents fragments); managed wrappers are always updated"
         required: false
         default: true
         type: boolean
@@ -57,7 +57,11 @@ jobs:
     # job: managed wrappers always follow the release (the consumer's
     # ai-workflow-integrity.yml locks them). With it false, only the
     # non-wrapper asset steps below are skipped; see "Report ignored
-    # wrapper opt-out".
+    # wrapper opt-out". Exception: in coding-workflows itself (the release
+    # gate's smoke dispatch passes allow_workflow_edits=false against this
+    # repo) the job is still skipped, so a release rehearsal never syncs
+    # consumer wrappers into the source repository.
+    if: ${{ inputs.allow_workflow_edits != false || github.repository != 'shubhodeep1/coding-workflows' }}
     # Re-exported for the `verify` job (issue #7004). Additive only.
     outputs:
       delivery: ${{ steps.commit_push.outputs.delivery }}

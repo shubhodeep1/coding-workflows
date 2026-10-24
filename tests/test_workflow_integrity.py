@@ -298,7 +298,8 @@ ASSET_STEPS = (
 def test_sync_updates_wrappers_even_when_edits_are_opted_out() -> None:
 	jobs = yaml.safe_load(UPDATE_WORKFLOWS.read_text(encoding="utf-8"))["jobs"]
 	update = jobs["update-wrappers"]
-	assert "if" not in update
+	# Skipped only in the source repository (release smoke dispatch); consumers always sync wrappers.
+	assert update["if"] == "${{ inputs.allow_workflow_edits != false || github.repository != 'shubhodeep1/coding-workflows' }}"
 	steps = {step["name"]: step for step in update["steps"]}
 	notice = steps["Report ignored wrapper opt-out"]
 	assert notice["if"] == "${{ inputs.allow_workflow_edits == false }}"

@@ -101,6 +101,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/workflow-failure-heal-intake.yml` — GitHub Actions workflow: Workflow Failure Heal Intake.
 - `.github/workflows/workflow-log-analysis.yml` — GitHub Actions workflow: Workflow Log Analysis.
 - `.github/workflows/workflow_failure_heal.yml` — GitHub Actions workflow: AI Workflow Failure Heal (Reusable).
+- `.github/workflows/workflow_integrity.yml` — GitHub Actions workflow: Workflow Wrapper Integrity (Reusable; consumer-side check that managed wrappers match the signed release they pin).
 - `.github/workflows/workspace-cache-maintenance.yml` — GitHub Actions workflow: Workspace Cache Maintenance.
 
 ## Scripts
