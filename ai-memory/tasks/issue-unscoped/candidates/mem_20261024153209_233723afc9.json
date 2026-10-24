@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:2718, 2724-2725 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The sibling heal reasons `heal_scope_unverified` and `heal_scope_check_unavailable` (produced at plan.yml:2775 and plan.yml:2783) still fall through to the generic `heal_scope_*` branch, which tells maintainers to reply `/approved`, and the directory/glob note at plan.yml:2718 still says \"cannot be granted through `files_touched`; reply `/approved` instead\".\n  WHY: implement's heal preflight (`scripts/implement_heal_preflight.sh:80`, `scripts/implement_heal_preflight.sh:124`) refuses these statuses whatever the maintainer approves, so following the comment leaves the issue blocked, the same loop the PR removed for `heal_scope_plan_out_of_scope`. The source labels this a NIT, which maps to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:2718, 2724-2725 | severity=low | confidence=4\n  PROBLEM: The sibling heal reasons `heal_scope_unverified` and `heal_scope_check_unavailable` (produced at plan.yml:2775 and plan.yml:2783) still fall through to the generic `heal_scope_*` branch, which tells maintainers to reply `/approved`, and the directory/glob note at plan.yml:2718 still says \"cannot be granted through `files_touched`; reply `/approved` instead\".\n  WHY: implement's heal preflight (`scripts/implement_heal_preflight.sh:80`, `scripts/implement_heal_preflight.sh:124`) refuses these statuses whatever the maintainer approves, so following the comment leaves the issue blocked. The source labels this a NIT, which maps to low.\n- HARDENING_SUGGESTIONS (2 related items, no severity or confidence stated):\n  - scripts/validation_harness_sandbox.sh STAGE_PY, stage_from_head (line ~948): `git ls-tree` / `cat-file` run without a timeout, so a hung git could block staging indefinitely. Suggested fix: wrap the three git calls in `subprocess.run(..., timeout=30)`.\n  - scripts/validation_harness_sandbox.sh STAGE_PY, stage_from_head size check (line ~965): a `cat-file -s` that exits 0 with non-numeric output is logged as `support_from_head_too_large`. Suggested fix: log a non-numeric size as `support_from_head_git_failed`.\n  - HARDENING_RISK_SCORE: 1\n- Note: The reviewer refuted the gemini BLOCKER about scope entry handling. `scripts/review_untrusted_workspace.py:461-466` routes scope entries through `entry_matches` (`scripts/files_touched_scope_guard.py:479-487`), which matches globs via `_path_glob_matches` (`:452-476`). The test at `tests/test_heal_isolated_editor.py:506` covers it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\nNote: The reviewer refuted the gemini cross-pollination claim that `review_untrusted_workspace.py:946` treats the `agents.d/42-*.md` scope entry as a literal filename. `tests/test_heal_isolated_editor.py:506-523` shows the transfer matches by glob.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nNote: The reviewer refuted the gemini BLOCKER at `scripts/review_untrusted_workspace.py:946`. `transfer()` at `scripts/review_untrusted_workspace.py:466` uses `entry_matches` (`files_touched_scope_guard.py:479-484`), which handles globs. The test at `tests/test_heal_isolated_editor.py:506` exercises this path.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "321a32fce9b6f9e2dd0283845901f1dd9dc76dfc8c62b4a906940b474f21da19",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8067,
+    "run_id": "40104957702",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40104957702",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024153209_233723afc9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8067,
+    "run_id": "40104957702"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-24T15:32:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
