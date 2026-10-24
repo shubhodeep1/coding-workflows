@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import difflib
+import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -270,6 +273,7 @@ def load_profile_manifests(templates_dir: Path) -> dict[str, set[str]]:
 def load_expected_templates(
 	templates_dir: Path,
 	stable_sha: str | None = None,
+	renderer: Any = None,
 ) -> dict[str, str]:
 	if not templates_dir.is_dir():
 		raise ValueError(f"templates directory not found: {templates_dir}")
@@ -286,7 +290,7 @@ def load_expected_templates(
 		path = templates_dir / name
 		template_text = path.read_text(encoding="utf-8")
 		if stable_sha is not None:
-			template_text = pin_reusable_workflow_refs(template_text, stable_sha)
+			template_text = (renderer or pin_reusable_workflow_refs)(template_text, stable_sha)
 		templates[path.name] = normalize_workflow_text(template_text)
 
 	if not templates:
@@ -692,6 +696,257 @@ class ConsumerDriftAuditor:
 		return [self.audit_repository(repository) for repository in repositories]
 
 
+# ── Restore pull requests (daily repair) ──────────────────────────────────
+#
+# For each drifted consumer the audit opens, or refreshes, one pull request
+# that puts every managed wrapper back to the stable release copy, byte for
+# byte (the consumer's ai-workflow-integrity.yml accepts nothing else). The
+# head branch is fixed and the body carries RESTORE_MARKER, so a rerun
+# updates the same pull request instead of opening another. A consumer with
+# an open sync pull request is skipped: that pull request already restores
+# every wrapper.
+
+RESTORE_BRANCH = "auto/restore-managed-workflows"
+RESTORE_MARKER = "<!-- coding-workflows:restore-managed-workflows:v1 -->"
+SYNC_PR_BRANCH_PREFIX = "auto/update-workflows-"
+SYNC_FALLBACK_BRANCH = "ai-sync/stable"
+INTEGRITY_WRAPPER = "ai-workflow-integrity.yml"
+UPDATER_WRAPPER = "ai-update-workflows.yml"
+RESTORE_COMMIT_AUTHOR = ("coding-workflows drift audit", "41898282+github-actions[bot]@users.noreply.github.com")
+
+
+def load_rendered_templates(templates_dir: Path, stable_sha: str, renderer: Any = None) -> dict[str, str]:
+	"""Return ``{name: rendered text}`` for every ``*.yml`` template, unnormalized."""
+	render = renderer or pin_reusable_workflow_refs
+	rendered: dict[str, str] = {}
+	for path in sorted(templates_dir.glob("*.yml")):
+		if path.is_file():
+			rendered[path.name] = render(path.read_text(encoding="utf-8"), stable_sha)
+	return rendered
+
+
+def load_renderer(renderer_path: Path) -> Any:
+	"""Load ``pin_reusable_workflow_refs`` from a release's workflow_wrapper_refs.py."""
+	spec = importlib.util.spec_from_file_location("release_workflow_wrapper_refs", renderer_path)
+	if spec is None or spec.loader is None:
+		raise ValueError(f"cannot load renderer: {renderer_path}")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module.pin_reusable_workflow_refs
+
+
+@dataclass
+class RepairResult:
+	repository: str
+	outcome: str
+	reason: str = ""
+	files: list[str] = field(default_factory=list)
+	pr_number: int | None = None
+	pr_url: str | None = None
+
+
+class DriftRepairer:
+	"""Open or refresh one restore pull request per drifted consumer.
+
+	API budget per drifted repository (§15): one paginated-to-one-page
+	``GET pulls?state=open`` read (answers both "is a sync PR open" and "does
+	our restore PR exist"), then at most one ``POST pulls`` or ``PATCH
+	pulls/<n>``. Git traffic (clone, ls-remote, fetch, push) uses the git
+	protocol, not the REST API. Every failure is reported per repository and
+	never stops the audit (fail open).
+	"""
+
+	def __init__(
+		self,
+		*,
+		auditor: "ConsumerDriftAuditor",
+		rendered_templates: dict[str, str],
+		stable_sha: str,
+		executor: CommandExecutor | None = None,
+		git_base_url: str = "https://github.com",
+		workdir: Path | None = None,
+	) -> None:
+		self.auditor = auditor
+		self.rendered_templates = rendered_templates
+		self.stable_sha = stable_sha
+		self.executor = executor or auditor.executor
+		self.git_base_url = git_base_url.rstrip("/")
+		self.workdir = workdir or Path(tempfile.mkdtemp(prefix="drift-repair-"))
+
+	def _git_env(self) -> dict[str, str]:
+		# The credential travels in the environment, never on the command
+		# line, so a CommandFailure message cannot leak it.
+		token = os.environ.get("GH_TOKEN", "")
+		if not token or not self.git_base_url.startswith("https://"):
+			return {"GIT_TERMINAL_PROMPT": "0"}
+		header = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+		return {
+			"GIT_TERMINAL_PROMPT": "0",
+			"GIT_CONFIG_COUNT": "1",
+			"GIT_CONFIG_KEY_0": f"http.{self.git_base_url}/.extraheader",
+			"GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {header}",
+		}
+
+	def _git(self, args: list[str], *, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+		return self.executor.run(["git", *args], cwd=cwd, check=check, env_overrides=self._git_env())
+
+	def _open_pulls(self, repository: str) -> list[dict[str, Any]]:
+		proc = self.auditor._run_gh_api(f"repos/{repository}/pulls?state=open&per_page=100")
+		if proc.returncode != 0:
+			raise RepoFetchError(repository, "open pull request listing failed: " + _compact_command_output(proc.stdout, proc.stderr))
+		payload = json.loads(proc.stdout or "[]")
+		if not isinstance(payload, list):
+			raise RepoFetchError(repository, "open pull request listing did not return an array")
+		return [item for item in payload if isinstance(item, dict)]
+
+	def _managed_names(self, checkout: Path, profile_names: set[str] | None) -> list[str]:
+		local_dir = checkout / ".github" / "workflows"
+		if profile_names is None:
+			# Unknown profile: restore only wrappers the consumer already has.
+			names = {name for name in self.rendered_templates if (local_dir / name).is_file()}
+		else:
+			names = set(profile_names)
+		names.add(INTEGRITY_WRAPPER)
+		# The sync never creates the updater (bootstrap-only), so neither do we.
+		if not (local_dir / UPDATER_WRAPPER).is_file():
+			names.discard(UPDATER_WRAPPER)
+		return sorted(name for name in names if name in self.rendered_templates)
+
+	def _body(self, files: list[str], version_hint: str) -> str:
+		listed = "\n".join(f"- `.github/workflows/{name}`" for name in files)
+		return (
+			"Restores the coding-workflows managed workflow wrappers to the stable release "
+			f"(`{version_hint}`).\n\n"
+			"These files changed outside the coding-workflows sync. Managed wrappers are locked: "
+			"`ai-workflow-integrity.yml` rejects any other content, so merge this pull request "
+			"instead of editing them by hand. Changes the consumer needs belong upstream in "
+			"`shubhodeep1/coding-workflows`.\n\n"
+			f"Files restored:\n{listed}\n\n"
+			"Opened by the daily consumer drift audit (`audit_consumer_drift.yml`). It refreshes "
+			"this pull request while the drift remains.\n\n"
+			f"{RESTORE_MARKER}\n"
+		)
+
+	def repair(self, repository: str, profile_names: set[str] | None) -> RepairResult:
+		try:
+			return self._repair(repository, profile_names)
+		except (RepoFetchError, CommandFailure, json.JSONDecodeError, OSError, ValueError) as exc:
+			detail = _sanitize_log_value(getattr(exc, "detail", None) or str(exc))[:300]
+			print(f"DRIFT_REPAIR repository={repository} outcome=error reason=repair_failed detail={detail}")
+			return RepairResult(repository=repository, outcome="error", reason="repair_failed")
+
+	def _repair(self, repository: str, profile_names: set[str] | None) -> RepairResult:
+		pulls = self._open_pulls(repository)
+		existing = None
+		for pull in pulls:
+			head = pull.get("head") or {}
+			ref = str(head.get("ref") or "")
+			head_repo = ((head.get("repo") or {}).get("full_name") or "")
+			if head_repo != repository:
+				continue
+			if ref.startswith(SYNC_PR_BRANCH_PREFIX) or ref == SYNC_FALLBACK_BRANCH:
+				print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=sync_pull_request_open pr={pull.get('number')}")
+				return RepairResult(repository=repository, outcome="skipped", reason="sync_pull_request_open", pr_number=pull.get("number"), pr_url=pull.get("html_url"))
+			if ref == RESTORE_BRANCH and RESTORE_MARKER in str(pull.get("body") or ""):
+				existing = pull
+
+		checkout = self.workdir / repository.replace("/", "__")
+		if checkout.exists():
+			raise ValueError(f"repair checkout already exists: {checkout}")
+		self._git(["clone", "--quiet", "--depth", "1", "--no-tags", f"{self.git_base_url}/{repository}.git", str(checkout)])
+		base_branch = self._git(["symbolic-ref", "--short", "HEAD"], cwd=checkout).stdout.strip()
+		if not re.fullmatch(r"[A-Za-z0-9._/-]+", base_branch):
+			raise ValueError("default branch name is invalid")
+
+		files: list[str] = []
+		for name in self._managed_names(checkout, profile_names):
+			target = checkout / ".github" / "workflows" / name
+			expected = self.rendered_templates[name].encode("utf-8")
+			if target.is_symlink() or not target.is_file() or target.read_bytes() != expected:
+				if target.is_symlink():
+					target.unlink()
+				target.parent.mkdir(parents=True, exist_ok=True)
+				target.write_bytes(expected)
+				files.append(name)
+		if not files:
+			print(f"DRIFT_REPAIR repository={repository} outcome=skipped reason=no_exact_drift")
+			return RepairResult(repository=repository, outcome="skipped", reason="no_exact_drift")
+
+		self._git(["add", "--", *[f".github/workflows/{name}" for name in files]], cwd=checkout)
+		author_name, author_email = RESTORE_COMMIT_AUTHOR
+		self._git(
+			[
+				"-c", f"user.name={author_name}", "-c", f"user.email={author_email}",
+				"commit", "--quiet", "--no-verify", "-m",
+				f"chore: restore managed workflow wrappers to coding-workflows stable\n\nRelease commit: {self.stable_sha}",
+			],
+			cwd=checkout,
+		)
+
+		remote = self._git(["ls-remote", "--heads", "origin", f"refs/heads/{RESTORE_BRANCH}"], cwd=checkout).stdout.split()
+		remote_sha = remote[0] if remote else ""
+		push_needed = True
+		if remote_sha:
+			self._git(["fetch", "--quiet", "--depth", "1", "--no-tags", "origin", remote_sha], cwd=checkout)
+			old_tree = self._git(["rev-parse", "FETCH_HEAD^{tree}"], cwd=checkout).stdout.strip()
+			new_tree = self._git(["rev-parse", "HEAD^{tree}"], cwd=checkout).stdout.strip()
+			push_needed = old_tree != new_tree
+		if push_needed:
+			self._git(
+				["push", "--quiet", f"--force-with-lease=refs/heads/{RESTORE_BRANCH}:{remote_sha}", "origin", f"HEAD:refs/heads/{RESTORE_BRANCH}"],
+				cwd=checkout,
+			)
+
+		title = "Restore coding-workflows managed workflow wrappers"
+		body = self._body(files, self.stable_sha[:12])
+		if existing is not None:
+			number = existing.get("number")
+			if not push_needed and str(existing.get("body") or "") == body:
+				print(f"DRIFT_REPAIR repository={repository} outcome=unchanged reason=up_to_date pr={number} files={','.join(files)}")
+				return RepairResult(repository=repository, outcome="unchanged", reason="up_to_date", files=files, pr_number=number, pr_url=existing.get("html_url"))
+			proc = self.executor.run(
+				["gh", "api", "-X", "PATCH", f"repos/{repository}/pulls/{number}", "-f", f"title={title}", "-f", f"body={body}"],
+				check=False,
+			)
+			if proc.returncode != 0:
+				raise RepoFetchError(repository, "restore pull request update failed: " + _compact_command_output(proc.stdout, proc.stderr))
+			print(f"DRIFT_REPAIR repository={repository} outcome=updated reason=drift pr={number} files={','.join(files)}")
+			return RepairResult(repository=repository, outcome="updated", reason="drift", files=files, pr_number=number, pr_url=existing.get("html_url"))
+
+		proc = self.executor.run(
+			[
+				"gh", "api", "-X", "POST", f"repos/{repository}/pulls",
+				"-f", f"title={title}", "-f", f"head={RESTORE_BRANCH}", "-f", f"base={base_branch}", "-f", f"body={body}",
+			],
+			check=False,
+		)
+		if proc.returncode != 0:
+			raise RepoFetchError(repository, "restore pull request creation failed: " + _compact_command_output(proc.stdout, proc.stderr))
+		created = json.loads(proc.stdout or "{}")
+		number = created.get("number") if isinstance(created, dict) else None
+		url = created.get("html_url") if isinstance(created, dict) else None
+		print(f"DRIFT_REPAIR repository={repository} outcome=created reason=drift pr={number} files={','.join(files)}")
+		return RepairResult(repository=repository, outcome="created", reason="drift", files=files, pr_number=number, pr_url=url)
+
+
+def repair_drifted_repositories(
+	auditor: ConsumerDriftAuditor,
+	repairer: DriftRepairer,
+	results: list[RepoAuditResult],
+) -> list[RepairResult]:
+	"""Run the repairer for every drifted repository; error results are skipped."""
+	repairs: list[RepairResult] = []
+	for result in results:
+		if result.outcome != "drift":
+			continue
+		profile = auditor.fetch_workflow_profile(result.repository)
+		profile_names = None
+		if auditor.profile_manifests is not None and profile != UNKNOWN_WORKFLOW_PROFILE:
+			profile_names = auditor.profile_manifests.get(profile)
+		repairs.append(repairer.repair(result.repository, profile_names))
+	return repairs
+
+
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument(
@@ -723,6 +978,22 @@ def parse_args() -> argparse.Namespace:
 		default=25,
 		help="Maximum number of diff-preview lines to retain per file",
 	)
+	parser.add_argument(
+		"--repair",
+		action="store_true",
+		help="Open or refresh a restore pull request in every drifted repository",
+	)
+	parser.add_argument(
+		"--renderer",
+		type=Path,
+		default=None,
+		help="workflow_wrapper_refs.py of the release the templates come from (default: the local copy)",
+	)
+	parser.add_argument(
+		"--git-base-url",
+		default="https://github.com",
+		help="Git host base URL for restore pull request clones and pushes",
+	)
 	return parser.parse_args()
 
 
@@ -734,8 +1005,10 @@ def main() -> int:
 
 	try:
 		repositories = load_target_repositories(args.consumer_repos)
-		expected_templates = load_expected_templates(args.templates_dir, args.stable_sha)
-	except (OSError, ValueError) as exc:
+		renderer = load_renderer(args.renderer) if args.renderer is not None else None
+		expected_templates = load_expected_templates(args.templates_dir, args.stable_sha, renderer)
+		rendered_templates = load_rendered_templates(args.templates_dir, args.stable_sha, renderer) if args.repair else {}
+	except (OSError, ValueError, AttributeError) as exc:
 		print(f"ERROR: {exc}", file=sys.stderr)
 		return 1
 
@@ -746,6 +1019,14 @@ def main() -> int:
 	)
 	results = auditor.audit_repositories(repositories)
 	summary = summarize_results(results, sorted(expected_templates))
+	if args.repair:
+		repairer = DriftRepairer(
+			auditor=auditor,
+			rendered_templates=rendered_templates,
+			stable_sha=args.stable_sha.lower(),
+			git_base_url=args.git_base_url,
+		)
+		summary["repairs"] = [asdict(item) for item in repair_drifted_repositories(auditor, repairer, results)]
 
 	try:
 		write_summary(summary, args.output)

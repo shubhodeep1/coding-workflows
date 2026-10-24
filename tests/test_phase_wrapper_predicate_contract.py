@@ -241,6 +241,9 @@ def test_plan_predicate_preserves_trusted_human_and_bot_answer_routes() -> None:
 			"vars.AI_PIPELINE_APPROVER_LOGIN == '' || ( !contains(github.event.comment.body, '[auto-answered-by-clarify]') && !contains(github.event.comment.body, '[auto-answered-by-orchestrator]') )",
 			"'[auto-answered-by-clarify]'",
 			"'[auto-answered-by-orchestrator]'",
+			# Hardened mode: the repository owner's own account (GH_PAT) may post the marker.
+			"github.event.comment.author_association == 'OWNER'",
+			"github.event.comment.user.login == github.repository_owner",
 		),
 	)
 
@@ -260,6 +263,9 @@ def test_implement_predicate_preserves_trusted_human_and_bot_approval_routes() -
 			"startsWith(github.event.comment.body, '/approved')",
 			"vars.AI_PIPELINE_APPROVER_LOGIN == '' || !contains(github.event.comment.body, '[auto-approved-by-plan]')",
 			"'[auto-approved-by-plan]'",
+			# Hardened mode: the repository owner's own account (GH_PAT) may post the marker.
+			"github.event.comment.author_association == 'OWNER'",
+			"github.event.comment.user.login == github.repository_owner",
 		),
 	)
 

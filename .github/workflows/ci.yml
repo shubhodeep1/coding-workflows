@@ -479,6 +479,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_audit_upstream_report.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_integrity.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py

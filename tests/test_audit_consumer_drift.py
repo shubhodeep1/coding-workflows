@@ -1033,6 +1033,179 @@ def test_load_profile_manifests_reads_repo_manifests() -> None:
 	assert drift_audit._load_named_profile_manifest_names(REPO_ROOT / "workflow-templates", "../full") is None
 
 
+# ── Restore pull requests (daily repair) ─────────────────────────────────
+
+
+class HybridExecutor:
+	"""Runs git for real; answers gh calls from a queue of planned replies."""
+
+	def __init__(self, gh_replies: list[PlannedCall]) -> None:
+		self.real = drift_audit.CommandExecutor()
+		self.gh_replies = gh_replies
+		self.gh_calls: list[list[str]] = []
+
+	def run(self, command, *, cwd=None, check=True, env_overrides=None, input_text=None, timeout=300):
+		if command[0] == "git":
+			return self.real.run(command, cwd=cwd, check=check, env_overrides=env_overrides, timeout=timeout)
+		self.gh_calls.append(list(command))
+		assert self.gh_replies, f"unexpected gh call: {command}"
+		plan = self.gh_replies.pop(0)
+		assert tuple(command[: len(plan.prefix)]) == plan.prefix, (plan.prefix, command)
+		return subprocess.CompletedProcess(command, plan.returncode, stdout=plan.stdout, stderr=plan.stderr)
+
+
+def _run_git(*args: str, cwd: Path | None = None) -> str:
+	return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _consumer_remote(root: Path, repository: str, files: dict[str, str]) -> Path:
+	bare = root / f"{repository}.git"
+	bare.parent.mkdir(parents=True, exist_ok=True)
+	_run_git("init", "-q", "--bare", "-b", "main", str(bare))
+	work = root / "seed"
+	_run_git("clone", "-q", str(bare), str(work))
+	(work / ".github" / "workflows").mkdir(parents=True)
+	for name, body in files.items():
+		(work / ".github" / "workflows" / name).write_text(body, encoding="utf-8")
+	_run_git("add", "-A", cwd=work)
+	_run_git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "seed", cwd=work)
+	_run_git("push", "-q", "origin", "HEAD:main", cwd=work)
+	return bare
+
+
+def _repair_fixture(tmp: Path, gh_replies: list[PlannedCall], consumer_files: dict[str, str]):
+	templates_dir = tmp / "workflow-templates"
+	canonical = {
+		"ai-plan.yml": "name: AI Plan\njobs:\n  plan:\n    uses: shubhodeep1/coding-workflows/.github/workflows/plan.yml@stable\n",
+		"ai-workflow-integrity.yml": "name: AI Workflow Integrity\njobs:\n  integrity:\n    uses: shubhodeep1/coding-workflows/.github/workflows/workflow_integrity.yml@stable\n",
+		"ai-update-workflows.yml": "name: AI Update Workflows\njobs:\n  update:\n    uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable\n",
+	}
+	_write_templates(templates_dir, canonical)
+	rendered = drift_audit.load_rendered_templates(templates_dir, CURRENT_STABLE_SHA)
+	remote_root = tmp / "remotes"
+	bare = _consumer_remote(remote_root, "owner/repo", consumer_files)
+	executor = HybridExecutor(gh_replies)
+	auditor = drift_audit.ConsumerDriftAuditor(
+		expected_templates={},
+		max_diff_lines=5,
+		executor=executor,
+		gh_api_max_attempts=1,
+	)
+	repairer = drift_audit.DriftRepairer(
+		auditor=auditor,
+		rendered_templates=rendered,
+		stable_sha=CURRENT_STABLE_SHA,
+		executor=executor,
+		git_base_url=f"file://{remote_root}",
+		workdir=tmp / "work",
+	)
+	(tmp / "work").mkdir()
+	return repairer, executor, rendered, bare
+
+
+def test_repair_opens_one_restore_pull_request_with_exact_release_bytes() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-open-") as td:
+		tmp = Path(td)
+		replies = [
+			PlannedCall(prefix=("gh", "api", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/pulls?state=open&per_page=100"), stdout="[]"),
+			PlannedCall(prefix=("gh", "api", "-X", "POST", "repos/owner/repo/pulls"), stdout=json.dumps({"number": 7, "html_url": "https://example/pr/7"})),
+		]
+		repairer, executor, rendered, bare = _repair_fixture(tmp, replies, {"ai-plan.yml": "name: hand edited\n"})
+		result = repairer.repair("owner/repo", {"ai-plan.yml", "ai-update-workflows.yml"})
+		assert result.outcome == "created", result
+		assert result.pr_number == 7
+		# The updater was never installed, so it is not created.
+		assert result.files == ["ai-plan.yml", "ai-workflow-integrity.yml"]
+		branch_plan = _run_git("--git-dir", str(bare), "show", f"{drift_audit.RESTORE_BRANCH}:.github/workflows/ai-plan.yml")
+		assert branch_plan + "\n" == rendered["ai-plan.yml"]
+		post = executor.gh_calls[-1]
+		assert "head=auto/restore-managed-workflows" in post
+		assert "base=main" in post
+		body = next(arg for arg in post if arg.startswith("body="))
+		assert drift_audit.RESTORE_MARKER in body
+		assert not executor.gh_replies
+
+
+def test_repair_refreshes_existing_pull_request_and_skips_identical_runs() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-refresh-") as td:
+		tmp = Path(td)
+		first = [
+			PlannedCall(prefix=("gh", "api", "-H"), stdout="[]"),
+			PlannedCall(prefix=("gh", "api", "-X", "POST"), stdout=json.dumps({"number": 9, "html_url": "u"})),
+		]
+		repairer, executor, rendered, bare = _repair_fixture(tmp, first, {"ai-plan.yml": "name: edited\n"})
+		created = repairer.repair("owner/repo", {"ai-plan.yml"})
+		body = next(arg for arg in executor.gh_calls[-1] if arg.startswith("body="))[len("body="):]
+		existing = [{
+			"number": 9,
+			"html_url": "u",
+			"body": body,
+			"head": {"ref": drift_audit.RESTORE_BRANCH, "repo": {"full_name": "owner/repo"}},
+		}]
+		shutil_rmtree(tmp / "work" / "owner__repo")
+		executor.gh_replies.append(PlannedCall(prefix=("gh", "api", "-H"), stdout=json.dumps(existing)))
+		again = repairer.repair("owner/repo", {"ai-plan.yml"})
+		assert created.outcome == "created"
+		assert again.outcome == "unchanged", again
+		assert again.pr_number == 9
+		assert not executor.gh_replies
+
+
+def test_repair_skips_when_a_sync_pull_request_is_open() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-sync-") as td:
+		tmp = Path(td)
+		pulls = [{"number": 3, "html_url": "s", "body": "", "head": {"ref": "auto/update-workflows-0123456789ab", "repo": {"full_name": "owner/repo"}}}]
+		repairer, executor, _rendered, bare = _repair_fixture(tmp, [PlannedCall(prefix=("gh", "api", "-H"), stdout=json.dumps(pulls))], {"ai-plan.yml": "x\n"})
+		result = repairer.repair("owner/repo", {"ai-plan.yml"})
+		assert result.outcome == "skipped"
+		assert result.reason == "sync_pull_request_open"
+		assert _run_git("--git-dir", str(bare), "branch", "--list", drift_audit.RESTORE_BRANCH) == ""
+
+
+def test_repair_reports_errors_without_raising() -> None:
+	with tempfile.TemporaryDirectory(prefix="drift-repair-error-") as td:
+		tmp = Path(td)
+		repairer, _executor, _rendered, _bare = _repair_fixture(tmp, [PlannedCall(prefix=("gh", "api", "-H"), returncode=1, stderr="HTTP 403")], {"ai-plan.yml": "x\n"})
+		result = repairer.repair("owner/repo", {"ai-plan.yml"})
+		assert result.outcome == "error"
+		assert result.reason == "repair_failed"
+
+
+def test_repair_credentials_stay_out_of_command_lines() -> None:
+	import os
+
+	previous = os.environ.get("GH_TOKEN")
+	os.environ["GH_TOKEN"] = "secret-token-value"
+	try:
+		auditor = drift_audit.ConsumerDriftAuditor(expected_templates={}, max_diff_lines=5, executor=FakeExecutor([]))
+		repairer = drift_audit.DriftRepairer(auditor=auditor, rendered_templates={}, stable_sha=CURRENT_STABLE_SHA, workdir=Path(tempfile.gettempdir()))
+		env = repairer._git_env()
+	finally:
+		if previous is None:
+			os.environ.pop("GH_TOKEN", None)
+		else:
+			os.environ["GH_TOKEN"] = previous
+	assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+	assert "secret-token-value" not in env["GIT_CONFIG_VALUE_0"]
+	assert env["GIT_CONFIG_VALUE_0"].startswith("AUTHORIZATION: basic ")
+
+
+def test_workflow_runs_daily_and_restores_from_the_stable_tree() -> None:
+	workflow_text = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "- cron: '0 8 * * *'" in workflow_text
+	assert "git archive FETCH_HEAD workflow-templates scripts/workflow_wrapper_refs.py" in workflow_text
+	assert '--templates-dir "${STABLE_TREE}/workflow-templates"' in workflow_text
+	assert '--renderer "${STABLE_TREE}/scripts/workflow_wrapper_refs.py"' in workflow_text
+	assert "CONSUMER_DRIFT_REPAIR_ENABLED: ${{ vars.CONSUMER_DRIFT_REPAIR_ENABLED || 'true' }}" in workflow_text
+	assert "### Restore pull requests" in workflow_text
+
+
+def shutil_rmtree(path: Path) -> None:
+	import shutil
+
+	shutil.rmtree(path)
+
+
 def main() -> int:
 	test_load_target_repositories_deduplicates_and_validates()
 	test_expected_templates_render_current_stable_sha_and_detect_stale_pin()
@@ -1061,8 +1234,15 @@ def main() -> int:
 	test_profile_is_cached_per_repository()
 	test_default_auditor_makes_no_profile_call()
 	test_load_profile_manifests_reads_repo_manifests()
+	test_repair_opens_one_restore_pull_request_with_exact_release_bytes()
+	test_repair_refreshes_existing_pull_request_and_skips_identical_runs()
+	test_repair_skips_when_a_sync_pull_request_is_open()
+	test_repair_reports_errors_without_raising()
+	test_repair_credentials_stay_out_of_command_lines()
+	test_workflow_runs_daily_and_restores_from_the_stable_tree()
 	return 0
 
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
