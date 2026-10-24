@@ -133,9 +133,16 @@ def _bait_functions() -> str:
 	return textwrap.dedent(step[start:end])
 
 
-def _run_bait_harness(polls: int, cooldown_until: int) -> tuple[str, str]:
+def _run_bait_harness(
+	polls: int,
+	cooldown_until: int,
+	run_status: str = "completed",
+	log_body: str | None = None,
+) -> tuple[str, str]:
 	bash = shutil.which("bash")
 	assert bash is not None
+	# None: every job-log fetch fails. Otherwise the fetch prints log_body.
+	logs_case = "return 1" if log_body is None else f"printf '%s\\n' '{log_body}'"
 	harness = (
 		"set -euo pipefail\n"
 		"ELAPSED=0\n"
@@ -144,13 +151,13 @@ def _run_bait_harness(polls: int, cooldown_until: int) -> tuple[str, str]:
 		"gh_api_safe_quiet_print() {\n"
 		'  case "$1" in\n'
 		"    */jobs\\?per_page=10) printf '%s' '{\"total_count\":1,\"jobs\":[{\"id\":7,\"status\":\"completed\",\"conclusion\":\"success\"}]}' ;;\n"
-		"    */logs) return 1 ;;\n"
+		f"    */logs) {logs_case} ;;\n"
 		"    *) return 1 ;;\n"
 		"  esac\n"
 		"}\n"
 		"sleep() { :; }\n"
 		"TEST_REPO=o/r BAIT_SHA=$(printf 'b%.0s' $(seq 40)) PIN_SHA=x RUN_ID=42\n"
-		"RUN_STATUS=completed JOBS_JSON='' POLL_INTERVAL=10 NOW=0 LAST_ACTIVITY=0 PREV_STATE=''\n"
+		f"RUN_STATUS={run_status} JOBS_JSON='' POLL_INTERVAL=10 NOW=0 LAST_ACTIVITY=0 PREV_STATE=''\n"
 		"REVIEW_RUN='{\"head_sha\":\"old\"}'\n"
 		"BAIT_UNCOVERED_RUN_IDS=''\n"
 		"declare -A BAIT_REVIEW_COVERAGE_CACHE=()\n"
@@ -168,13 +175,33 @@ def test_bait_coverage_cooldown_skip_does_not_exclude_run() -> None:
 	if shutil.which("bash") is None or shutil.which("jq") is None:
 		# Reported as skipped (not passed): this is the only end-to-end check.
 		raise unittest.SkipTest("bash or jq is not installed")
-	# Cooldown active for all 5 polls (ELAPSED 0..40 < 1000): no strike.
-	out, _ = _run_bait_harness(5, 1000)
+	# In-progress run, cooldown active for all 5 polls (ELAPSED 0..40 <
+	# 1000): the read is skipped and is not a strike.
+	out, _ = _run_bait_harness(5, 1000, run_status="in_progress")
 	assert "reason=live_log_cooldown" in out
 	assert "UNCOVERED=\n" in out
 	# No cooldown: three real failed reads still exclude the run.
 	out, _ = _run_bait_harness(3, 0)
 	assert "reason=logs_unavailable" in out
+	assert "UNCOVERED=42\n" in out
+
+
+def test_completed_run_coverage_reads_log_during_cooldown() -> None:
+	if shutil.which("bash") is None or shutil.which("jq") is None:
+		raise unittest.SkipTest("bash or jq is not installed")
+	# Release run 40005654539: the watched review run completed inside
+	# the budget, but the cooldown skipped its coverage read and the
+	# phase timed out. A completed run's log is read despite the pause.
+	bait = "b" * 40
+	out, _ = _run_bait_harness(1, 1000, log_body=f"Captured INITIAL_HEAD_SHA={bait}")
+	assert "verdict=covered" in out
+	assert "reason=bait_sha" in out
+	assert "live_log_cooldown" not in out
+	# Unreadable completed-run logs still count as strikes during a
+	# pause, so the run is dropped after 3 instead of pinning Phase 4.
+	out, _ = _run_bait_harness(3, 1000)
+	assert "reason=logs_unavailable" in out
+	assert "live_log_cooldown" not in out
 	assert "UNCOVERED=42\n" in out
 
 

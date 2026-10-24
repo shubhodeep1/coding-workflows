@@ -23186,11 +23186,20 @@ REISSUE_EOF
 		took_action="true"
 		;;
       skip)
-        close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${recovery_count})."
+        # Report the counter that tripped the cap. recovery_count resets on
+        # every phase change, so an issue that oscillates (approve ->
+        # implement fails -> awaiting-approval) is capped by the lifetime
+        # phase_attempts counter while recovery_count still reads 0
+        # (tele-funtoken-msg-scoring#4786 was closed as "0 attempts").
+        local _std_exhausted_attempts="${recovery_count}"
+        if [ "${phase_attempts_count}" -gt "${_std_exhausted_attempts}" ]; then
+          _std_exhausted_attempts="${phase_attempts_count}"
+        fi
+        close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
         ensure_label_exists "ai:closed"
         gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:closed' 2>/dev/null || true
-        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${recovery_count} attempts over ${elapsed_minutes} minutes in '${phase}' phase)." 2>/dev/null || true
-        tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${recovery_count} attempts). Issue closed with ai:closed." "CRITICAL"
+        gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time)." 2>/dev/null || true
+        tg_notify_issue "${issue_num}" "Standalone stall recovery exhausted for issue #${issue_num} (${_std_exhausted_attempts} attempts in '${phase}', limit ${effective_max_recoveries}). Issue closed with ai:closed." "CRITICAL"
         STALL_RECOVERY_SHOULD_INCREMENT="false"
         took_action="true"
         ;;
