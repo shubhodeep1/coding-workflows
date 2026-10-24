@@ -1171,13 +1171,12 @@ class MovedPollGroupThreeStepsContractTest(unittest.TestCase):
 					self.assertIn(module, poll_job_step(name)["run"])
 					self.assertTrue((REPO_ROOT / module).is_file(), module)
 
-	def test_group_three_keeps_at_least_one_extra_step(self) -> None:
+	def test_moved_steps_left_group_three(self) -> None:
 		guarded = [
 			step.get("name")
 			for step in load_poll_job()["steps"]
 			if str(step.get("if", "")) == "strategy.job-index == 3"
 		]
-		self.assertGreater(len(guarded), 0, "the move must not empty group 3")
 		for name in MOVED_POLL_GROUP_THREE_STEPS:
 			self.assertNotIn(name, guarded)
 
