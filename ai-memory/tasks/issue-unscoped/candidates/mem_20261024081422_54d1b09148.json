@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: Requirement: \"Line 1 is `status: ok`. Line 2 is `decompose-run: 40068500779`. No other file is changed.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: none \u2014 the PR diff (last_run_diff.patch) rewrites the file to exactly `status: ok` and `decompose-run: 40068500779`, removes `run_id` and `updated-by`, pr_changed_files.txt lists only tests/e2e_smoke_canary.txt, and zero failed check-runs on head 4544d229. The issue's files_touched scope is respected.\n  ISSUE_CONFIDENCE: 5 (reviewer states the gap is not present; delivery matches the spec fully)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "92a466e9de6e04ee152ed2b98813ff2fd3c5d3e291c66189e055d5055ee34f28",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8062,
+    "run_id": "40076383481",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40076383481",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261024081422_54d1b09148",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8062,
+    "run_id": "40076383481"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-24T08:14:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
