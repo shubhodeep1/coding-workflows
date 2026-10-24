@@ -1,0 +1,1 @@
+{"actor": "shubhodeep1", "entry_id": "run_event_20261024192700_64de2a7cd5", "event_type": "phase_started", "issue_number": 8080, "message": "Planning phase started for issue #8080", "metadata": {}, "pr_number": null, "run_id": "40125004159", "schema_version": "run_ledger_entry.v1", "status": "ok", "timestamp": "2026-10-24T19:27:00Z", "workflow": "plan"}
