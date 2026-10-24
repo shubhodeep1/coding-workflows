@@ -3707,6 +3707,54 @@ Phase 1):
 - **Switch:** `VALIDATION_HARNESS_HEAL_ENABLED` (default `true`). `false` skips
   the `heal-report` job and keeps the old behaviour of `validate_process.sh`.
 
+### Harness hold
+
+A project whose runtime validation fails because of the validation harness
+coding-workflows ships waits for a harness fix instead of paging a person
+(Refs #7913, `docs/plans/validation-failure-harness-routing-plan.md` Phase 2).
+The poller (`scripts/orchestrate_poll_process.sh`) runs it; it makes no GitHub
+API call until the pinned validation workflow changes.
+
+- **Entry:** a validation run that fails with `raw_status=harness_error` while
+  the resume caps are not reached. The project stays `failed` with
+  `ai:validation-failed` and `ai:harness-broken`, recovery counters are left
+  unchanged, and the state field `validation_harness_hold` records the
+  fingerprint (from the trusted `validation-harness-owner:v1` marker, else a
+  `local:` hash of the reason), the harness pin and the start time. The
+  unblock judge can also ask for a hold with a trusted
+  `<!-- ai:unblock-harness-hold-request:v1 item=<N> ... fingerprint=<12 hex> ... -->`
+  comment on a failed project that carries `ai:validation-failed`; that hold
+  uses the fingerprint `judge:<12 hex>`. Each request comment is used once
+  (state `validation_harness_hold_requests_used`, last 50 ids).
+- **Resume:** each tick reads the consumer default branch's validation wrapper
+  pin locally. When the pin moved ahead of the hold's pin (`compare` status
+  `ahead`), validation is re-dispatched (cycle 1) with the recovery count kept.
+  When the heal intake opened or matched a heal issue, that issue must also be
+  closed as completed before the new pin's commit. Without a heal issue the
+  pin alone is enough.
+- **Bounce:** when the heal intake returns the failure to the project, the hold
+  ends and one validation recovery attempt is charged; with the recovery budget
+  spent the project is parked for a person.
+- **Not planned:** a heal issue closed as not planned ends the hold and parks
+  the project for a person.
+- **Caps:** `VALIDATION_HARNESS_MAX_RESUMES_PER_FP` (default `2`, `0` never
+  holds) resumes per fingerprint and `VALIDATION_HARNESS_MAX_RESUMES` (default
+  `4`) resumes in total per project. A failure past either cap takes the old
+  park path.
+- **Time limit:** a hold older than `VALIDATION_HARNESS_HOLD_MAX_DAYS` (default
+  `14`, `1`-`365`), or with a missing or invalid start time, ends and parks the
+  project for a person.
+- **Alerts:** WARNING when a project enters the hold, DEBUG when it resumes or
+  bounces with budget left, CRITICAL when a cap is reached or the hold ends
+  (expired, not planned, bounced with the budget spent).
+- **Unblock judge:** a held project is not offered to the unblock judge.
+- **Trust:** markers count only from `VALIDATION_HARNESS_ROUTE_LOGIN` (default:
+  the `GH_PAT` login).
+- **Switch:** `VALIDATION_HARNESS_HEAL_ENABLED=false` turns the hold off with
+  the rest of the harness routing; every harness error then takes the old park
+  path.
+- **Logs:** `VALIDATION_HARNESS_HOLD tracking_issue=<N> outcome=<outcome> fp=<fp> pin=<pin> heal_issue=<n|none> [reason=<reason>]`.
+
 ### Manual Reset: `/revalidate`
 
 When a tracking issue reaches `ai:validation-failed`, you can manually reset it by commenting `/revalidate` on the tracking issue. The next poller cycle will:
@@ -3717,6 +3765,8 @@ When a tracking issue reaches `ai:validation-failed`, you can manually reset it 
 4. Refresh the draft integration PR's managed `<!-- VALIDATION_STATUS_V1 -->` section to show that revalidation is in progress.
 5. Record a `revalidate_event.v1` audit entry in AI memory for the current actor + integration SHA.
 6. Dispatch a fresh validation run (cycle 1).
+
+`/revalidate` also clears an active [harness hold](#harness-hold) and keeps the `validation_harness_resumes` counters.
 
 Rapid repeats are deduplicated for 5 minutes per actor + integration SHA: if the same user posts `/revalidate` again against the same integration commit inside that window, the poller leaves state unchanged and replies that the earlier reset was already processed. This is useful after fixing the root cause manually (e.g. correcting a Docker config, adding a missing env var, or updating a dependency). There is no limit on how many times `/revalidate` can be used — the operator decides when to stop retrying.
 

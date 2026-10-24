@@ -15380,6 +15380,14 @@ _HARNESS_OWNER_FP = "a" * 64
 _HARNESS_OWNER_SUPPORT = "b" * 40
 
 
+def _hold_since(days_ago: float) -> str:
+	return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - days_ago * 86400))
+
+
+# A hold `since` inside the default 14-day limit (P2c); older holds expire.
+_HOLD_SINCE_FRESH = _hold_since(1)
+
+
 def _harness_owner_comment(*, run: int = 7101, login: str = _HARNESS_ROUTE_LOGIN, fp: str = _HARNESS_OWNER_FP) -> dict:
 	return {
 		"body": (
@@ -15525,7 +15533,7 @@ def test_revalidate_clears_validation_harness_hold_and_keeps_resumes():
 	state["validation_last_raw_status"] = "harness_error"
 	state["validation_harness_hold"] = {
 		"fp": _HARNESS_OWNER_FP, "support": None, "heal_issue": None,
-		"outcome": None, "since": "2026-01-01T00:00:00Z", "reason": "harness",
+		"outcome": None, "since": _HOLD_SINCE_FRESH, "reason": "harness",
 	}
 	state["validation_harness_resumes"] = {"by_fp": {_HARNESS_OWNER_FP: 1}, "total": 1}
 	result = _run_poller(
@@ -15549,7 +15557,7 @@ def _harness_held_failed_state(with_hold: bool = True) -> dict:
 	if with_hold:
 		state["validation_harness_hold"] = {
 			"fp": "local:0123456789abcdef", "support": None, "heal_issue": None,
-			"outcome": None, "since": "2026-01-01T00:00:00Z", "reason": "harness",
+			"outcome": None, "since": _HOLD_SINCE_FRESH, "reason": "harness",
 		}
 	return state
 
@@ -15764,14 +15772,18 @@ def _run_harness_tick(
 	*, pin: str | None = _HOLD_PIN_NEW, support: str | None = _HARNESS_OWNER_SUPPORT,
 	comments: list | None = None, compare_status: str = "ahead", heal: dict | None = None,
 	recovery: int = 1, env: dict | None = None, store: dict | None = None,
-	fail_dispatch: bool = False,
+	fail_dispatch: bool = False, since: str | None = None, fp: str = _HARNESS_OWNER_FP,
+	raw_status: str = "harness_error",
 ) -> dict:
 	state = _harness_held_failed_state()
 	state["validation_recovery_count"] = recovery
+	state["validation_last_raw_status"] = raw_status
 	state["validation_harness_hold"] = {
-		"fp": _HARNESS_OWNER_FP, "support": support, "heal_issue": None,
-		"outcome": None, "since": "2026-01-01T00:00:00Z", "reason": "harness",
+		"fp": fp, "support": support, "heal_issue": None,
+		"outcome": None, "since": _HOLD_SINCE_FRESH if since is None else since, "reason": "harness",
 	}
+	if since == "__missing__":
+		del state["validation_harness_hold"]["since"]
 	extra: dict = {}
 	if pin:
 		extra["git_show_blobs"] = {
@@ -16035,6 +16047,278 @@ def test_validation_harness_hold_tick_runs_after_stale_pin_block_and_documents_a
 	for fn in ("_validation_harness_hold_compare() {", "_validation_harness_hold_issue_state() {"):
 		body = _extract_bash_function(script, fn)
 		assert "§14/§15 API budget" in body and "memoized" in body
+
+
+# ---------------------------------------------------------------------------
+# Tests: validation harness hold time limit and judge hold request (Refs #7913, P2c)
+# ---------------------------------------------------------------------------
+
+_JUDGE_FINGERPRINT = "abcdef012345"
+_JUDGE_FP = f"judge:{_JUDGE_FINGERPRINT}"
+
+
+def _assert_harness_hold_expired(result: dict, *, reason: str | None = None) -> None:
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", output
+	assert "validation_harness_hold" not in ls, output
+	assert result["validation_dispatches"] == [], output
+	assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" in output
+	assert any(
+		n["level"] == "CRITICAL" and "hold ended (expired)" in n["message"] for n in result["telegram_notifications"]
+	), result["telegram_notifications"]
+	assert any("## ❌ Runtime validation harness hold ended" in b for b in _harness_comment_bodies(result))
+	assert _hold_line("expired", pin="unknown", reason=reason) in output, output
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+
+
+def test_validation_harness_hold_expires_after_max_days():
+	result = _run_harness_tick(since=_hold_since(15))
+	_assert_harness_hold_expired(result)
+	assert "14-day limit" in "\n".join(_harness_comment_bodies(result))
+
+
+def test_validation_harness_hold_within_max_days_keeps_waiting():
+	result = _run_harness_tick(pin=_HARNESS_OWNER_SUPPORT, since=_hold_since(13))
+	output = result["stdout"] + result["stderr"]
+	assert _hold_line("waiting", pin=_HARNESS_OWNER_SUPPORT, reason="pin_unchanged") in output, output
+	assert "outcome=expired" not in output
+	_assert_harness_still_held(result)
+
+	short = _run_harness_tick(
+		pin=_HARNESS_OWNER_SUPPORT, since=_hold_since(2), env={"VALIDATION_HARNESS_HOLD_MAX_DAYS": "1"},
+	)
+	_assert_harness_hold_expired(short)
+
+
+def test_validation_harness_hold_invalid_since_expires():
+	for since in ("__missing__", "garbage", _hold_since(-365)):
+		result = _run_harness_tick(pin=_HARNESS_OWNER_SUPPORT, since=since)
+		_assert_harness_hold_expired(result, reason="since_invalid")
+		bodies = "\n".join(_harness_comment_bodies(result))
+		assert "start time" in bodies and "day limit" not in bodies, bodies
+
+
+def test_validation_harness_hold_bounce_wins_over_expiry():
+	result = _run_harness_tick(
+		comments=[_harness_route_comment(outcome="bounced", classification="consumer-app-defect")],
+		since=_hold_since(30),
+	)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert ls["validation_recovery_count"] == 2
+	assert "outcome=bounced" in output
+	assert "outcome=expired" not in output
+	assert not any("hold ended (expired)" in n["message"] for n in result["telegram_notifications"])
+
+
+def _judge_request_comment(
+	*, item: str = "192", fingerprint: str = _JUDGE_FINGERPRINT, login: str = _HARNESS_ROUTE_LOGIN,
+	extra: str = "", trailer: str = "",
+) -> dict:
+	return {
+		"body": (
+			"The unblock judge found a harness defect.\n"
+			f"<!-- ai:unblock-harness-hold-request:v1 item={item} stop=validation-failed "
+			f"fingerprint={fingerprint} round=1{extra} -->\n{trailer}"
+		),
+		"user": {"login": login},
+		"author_association": "OWNER",
+	}
+
+
+def _run_judge_request(
+	comments: list, *, state_extra: dict | None = None, labels: list | None = None,
+	env: dict | None = None, with_hold: dict | None = None,
+) -> dict:
+	state = _harness_held_failed_state(with_hold=False)
+	state["validation_last_raw_status"] = "tests_failed"
+	state["validation_recovery_count"] = 2
+	if with_hold is not None:
+		state["validation_harness_hold"] = with_hold
+	state.update(state_extra or {})
+	overrides = {
+		"VALIDATION_HARNESS_ROUTE_LOGIN": _HARNESS_ROUTE_LOGIN,
+		"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false",
+		"CWS_DEFAULT_BRANCH": "main",
+	}
+	overrides.update(env or {})
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"] if labels is None else labels,
+		tracking_comments=comments,
+		capture_telegram_calls=True,
+		env_overrides=overrides,
+		mock_store_extra={
+			"git_show_blobs": {
+				_HOLD_WRAPPER_PATH: (
+					"jobs:\n  v:\n    uses: shubhodeep1/coding-workflows/.github/workflows/"
+					f"validate.yml@{_HARNESS_OWNER_SUPPORT} # stable\n"
+				),
+			},
+		},
+	)
+
+
+def _judge_line(outcome: str, *, pin: str = "unknown", reason: str | None = None) -> str:
+	line = f"VALIDATION_HARNESS_HOLD tracking_issue=192 outcome={outcome} fp={_JUDGE_FP} pin={pin} heal_issue=none"
+	return line + (f" reason={reason}" if reason else "")
+
+
+def test_validation_harness_judge_hold_request_enters_hold():
+	result = _run_judge_request([_judge_request_comment()])
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", output
+	hold = ls["validation_harness_hold"]
+	assert hold["fp"] == _JUDGE_FP
+	assert hold["support"] == _HARNESS_OWNER_SUPPORT
+	assert hold["heal_issue"] is None and hold["outcome"] is None
+	assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", hold["since"])
+	assert ls["validation_harness_hold_requests_used"] == [2]
+	assert ls["validation_last_raw_status"] == "tests_failed"
+	hold_comments = [b for b in _harness_comment_bodies(result) if "## ⏸ Runtime validation waiting for a harness fix" in b]
+	assert len(hold_comments) == 1, output
+	assert "The unblock judge found that this failure belongs to the validation harness" in hold_comments[0]
+	assert hold_comments[0].rstrip().splitlines()[-1] == (
+		f"<!-- validation-harness-hold:v1 fp={_JUDGE_FP} support={_HARNESS_OWNER_SUPPORT} -->"
+	)
+	warnings = [n for n in result["telegram_notifications"] if n["level"] == "WARNING" and "waiting for a harness fix" in n["message"]]
+	assert len(warnings) == 1, result["telegram_notifications"]
+	assert "harness_error" not in warnings[0]["message"], warnings[0]["message"]
+	assert _judge_line("held", pin=_HARNESS_OWNER_SUPPORT) in output, output
+	assert result["validation_dispatches"] == []
+	assert "ai:harness-broken" in result["tracking_labels"]
+
+
+def test_validation_harness_judge_hold_request_untrusted_author_ignored():
+	result = _run_judge_request([_judge_request_comment(login="outsider")])
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"] or result["state_on_disk"]
+	assert "validation_harness_hold" not in ls
+	assert not ls.get("validation_harness_hold_requests_used")
+	assert f"fp={_JUDGE_FP}" not in output
+	assert not any("<!-- validation-harness-hold:v1" in b for b in _harness_comment_bodies(result))
+
+
+def test_validation_harness_judge_hold_request_used_once():
+	result = _run_judge_request(
+		[_judge_request_comment()], state_extra={"validation_harness_hold_requests_used": [2]},
+	)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"] or result["state_on_disk"]
+	assert "validation_harness_hold" not in ls
+	assert f"fp={_JUDGE_FP}" not in output
+
+	# A request at or below the highest consumed id was already seen, even
+	# after its own id left the 50-id list.
+	evicted = _run_judge_request(
+		[_judge_request_comment()], state_extra={"validation_harness_hold_requests_used": [3]},
+	)
+	ls_evicted = evicted["latest_state"] or evicted["state_on_disk"]
+	assert "validation_harness_hold" not in ls_evicted
+	assert f"fp={_JUDGE_FP}" not in evicted["stdout"] + evicted["stderr"]
+
+	# After an expiry the consumed request cannot re-enter the hold.
+	expired = _run_judge_request(
+		[_judge_request_comment()],
+		state_extra={"validation_harness_hold_requests_used": [2]},
+		with_hold={
+			"fp": _JUDGE_FP, "support": _HARNESS_OWNER_SUPPORT, "heal_issue": None,
+			"outcome": None, "since": _hold_since(20), "reason": "judge",
+		},
+	)
+	out2 = expired["stdout"] + expired["stderr"]
+	assert "outcome=expired" in out2, out2
+	assert "validation_harness_hold" not in expired["latest_state"]
+	assert _judge_line("held", pin=_HARNESS_OWNER_SUPPORT) not in out2
+
+
+def test_validation_harness_judge_hold_request_ignores_bad_markers():
+	for comment in (
+		_judge_request_comment(item="193"),
+		_judge_request_comment(fingerprint="abcdef01234"),
+		_judge_request_comment(extra=" item=192"),
+		_judge_request_comment(trailer="A later line.\n"),
+	):
+		result = _run_judge_request([comment])
+		ls = result["latest_state"] or result["state_on_disk"]
+		assert "validation_harness_hold" not in ls, comment["body"]
+		assert not ls.get("validation_harness_hold_requests_used"), comment["body"]
+
+
+def test_validation_harness_judge_hold_request_caps_reached():
+	for resumes in ({"by_fp": {_JUDGE_FP: 2}, "total": 2}, {"by_fp": {}, "total": 4}):
+		result = _run_judge_request(
+			[_judge_request_comment()], state_extra={"validation_harness_resumes": resumes},
+		)
+		output = result["stdout"] + result["stderr"]
+		ls = result["latest_state"]
+		assert "validation_harness_hold" not in ls, output
+		assert ls["validation_harness_hold_requests_used"] == [2]
+		assert _judge_line("capped") in output, output
+		assert any(
+			n["level"] == "CRITICAL" and "harness resume cap is reached" in n["message"]
+			for n in result["telegram_notifications"]
+		), result["telegram_notifications"]
+
+
+def test_validation_harness_judge_hold_request_skips_active_hold_and_non_validation_failure():
+	active = _run_judge_request(
+		[_judge_request_comment()],
+		state_extra={"validation_last_raw_status": "harness_error"},
+		with_hold={
+			"fp": _HARNESS_OWNER_FP, "support": _HARNESS_OWNER_SUPPORT, "heal_issue": None,
+			"outcome": None, "since": _HOLD_SINCE_FRESH, "reason": "harness",
+		},
+	)
+	output = active["stdout"] + active["stderr"]
+	ls = active["latest_state"]
+	assert ls["validation_harness_hold"]["fp"] == _HARNESS_OWNER_FP, output
+	assert ls["validation_harness_hold_requests_used"] == [2]
+	assert _judge_line("skip", reason="hold_active") in output, output
+
+	other = _run_judge_request([_judge_request_comment()], labels=["ai:needs-human"])
+	out2 = other["stdout"] + other["stderr"]
+	ls2 = other["latest_state"]
+	assert "validation_harness_hold" not in ls2, out2
+	assert ls2["validation_harness_hold_requests_used"] == [2]
+	assert _judge_line("skip", reason="not_validation_failure") in out2, out2
+
+
+def test_validation_harness_judge_hold_request_switch_off():
+	result = _run_judge_request([_judge_request_comment()], env={"VALIDATION_HARNESS_HEAL_ENABLED": "false"})
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"] or result["state_on_disk"]
+	assert "validation_harness_hold" not in ls
+	assert "validation_harness_hold_requests_used" not in ls
+	assert "VALIDATION_HARNESS_HOLD tracking_issue=192 outcome=" not in output
+	assert not any("<!-- validation-harness-hold:v1" in b for b in _harness_comment_bodies(result))
+
+
+def test_validation_harness_judge_hold_resumes_on_pin_ahead():
+	result = _run_harness_tick(fp=_JUDGE_FP, raw_status="tests_failed")
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert "validation_harness_hold" not in ls
+	assert ls["validation_harness_resumes"] == {"by_fp": {_JUDGE_FP: 1}, "total": 1}
+	assert len(result["validation_dispatches"]) == 1, output
+	assert "outcome=resumed" in output
+
+
+def test_validation_harness_judge_hold_request_runs_before_tick_check():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	stale = script.index("# Stale validation-wrapper pin — one-shot automatic recovery (#7138)")
+	request = script.index("validation_harness_judge_hold_request || VHH_REQ_RC=$?")
+	tick = script.index("validation_harness_hold_tick || VHH_TICK_RC=$?")
+	assert stale < request < tick
+	body = _extract_bash_function(script, "validation_harness_judge_hold_request() {")
+	assert "gh " not in body and "_safe_gh_jq" not in body
+	assert ".[-50:]" in body
 
 
 def test_validation_fixing_label_collects_active_fix_issue_ids_from_comment():
