@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Several merged changes to workflow scripts or automation included both an `agents.d/` document and a `changelog.d/` entry. When changing operational workflow behavior, check whether the repository's documentation and changelog conventions call for updating these alongside code and tests.",
+  "fingerprint": "deb950bfb388ac22253f199571a25e6c459f56b35982e9b1a37a5867ded53891",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40051117571",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40051117571",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8018",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8019",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8026",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8028",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8029",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8023",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8024",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8030",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8031",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8032"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261024015447_7816c47693",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Substantive workflow changes often include an agents.d note and a changelog.d entry.",
+  "timestamps": {
+    "created_at": "2026-10-24T01:54:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
