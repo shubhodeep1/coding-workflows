@@ -1539,3 +1539,37 @@ Processed: 2026-10-23
 - DEAD-001: already-implemented — `BRANCH_REBUILD_THRESHOLD_DECISION` logs `skip_reason` and `last_rebuild_at`.
 - MERGE-001 / MERGE-003 / MERGE-004 / MERGE-005 and REUSE-001: rejected — RISKY_SKIP per the doc.
 - MERGE-002: rejected — RISKY_SKIP, and also already-implemented: clarify's comment read is paginated once and shared.
+
+### `analysis/workflow-optimization-2026-09-25.md`
+Processed: 2026-10-25
+- SEC-001 / SEC-002 (gh_helpers.sh log redaction): applied — issue #8095: `gh_retry` and `gh_api_json_to_file` no longer print request-body arguments or raw response text on failure.
+- BUG-003 (merge-probe unknown sibling state): applied — issue #8096: a failed sibling-PR lookup is cached as unknown, not as an empty list, and the merge is deferred until the lookup succeeds.
+- Executive 4 / Rel 4 / Cost 1, failure-class part: applied — issue #8097: one `REVIEWER_ATTEMPT_RESULT` line per OpenCode reviewer attempt, with `empty_structured_output` and `provider_request_invalid` classes.
+- Rel 3 / Speed 3, diagnostic part: applied — `tests/test_assemble_prompt.py` reports the template name, the first differing byte offset, the lengths and the hashes when assembled and legacy prompt bytes differ; byte equality is unchanged.
+- Executive 1 / Speed 2 / Rel 1 (missing `pre_assembled_static.txt`): already-implemented — every `git clean` in `scripts/review_autofix_step_merge_topology_gate.sh` excludes the file (`-e pre_assembled_static.txt`), and `review_autofix_step_preflight_required_files.sh` checks it.
+- Executive 2 / Speed 1 / Rel 2 (substate timeout storm): already-implemented — the job-scoped circuit breaker in `scripts/ledger_emit_substate.sh` (`circuit_open`) skips later substates after the first timeout or auth failure.
+- Shortening the `LEDGER_EMIT_TIMEOUT_SECONDS` default to 10-15 s: rejected — the breaker already limits the cost to one wait per job, memory writes push to a git branch with retries, and there is no evidence a short timeout keeps them reliable.
+- Moving the strict-render test earlier in CI: rejected — obsolete since CI became parallel jobs (#4707).
+- Executive 5 and Orchestrator health skip reasons: already-implemented — `AI_PHASE_GATE_V1` gate/reason lines.
+- Orchestrator health, fingerprint-cap terminal handoff: already-implemented — the `fingerprint-cap-block` job, the `ai:review-blocked` label, the cap comment and the heal report.
+- Rel 4, bytecode artefacts: already-implemented — `__pycache__` is excluded in `review_untrusted_workspace.py`, and the helpers run with `PYTHONDONTWRITEBYTECODE`.
+- Rel 4, manifest and workspace-guard classes for the editor: already-implemented — `EDITOR_ATTEMPT_RESULT` `failure_class`.
+- Rel 4, supplying only one reasoning control: rejected — not reproducible; `scripts/write_opencode_config.sh` writes only `reasoning.effort` and no `max_tokens`, and the new `provider_request_invalid` class will surface any recurrence.
+- `CONTEXT_BUDGET_WARN`: already-implemented — already emitted pre-flight.
+- Close-cleanup unlinked-run logging: already-implemented — `cancel_on_pr_close` lists the preserved unlinked runs.
+- Speed 4 (poller timing), Cost 2 (reasoning trials), Cost 3 (extra cache logging; prefix bytes are already logged), Rel 5 (startup annotations), Semble probe separation, AI memory health counters, check-run and API request counters, and queue latency: rejected — measurement-only proposals with no failure behind them, or collector-side work.
+- Cost 4 (Semble overflow trimming): rejected — medium quality risk that needs a review-quality comparison.
+- Cost 5 (Serena): rejected — informational only, nothing to change.
+- BUG-001: already-implemented — `_parse_pages` in `collect_pr_check_runs_context.py` raises on empty or malformed output, and the result ends as `api_error`.
+- BUG-002: already-implemented — the sweep skips dispatch on an incomplete active-run snapshot (`AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE`).
+- BUG-004: already-implemented — reviews are dispatched from the default branch with `[pr:<N>]` run names and are matched by PR number.
+- BUG-005: already-implemented — the pass-1 summariser runs only when `pass1_successful` is above 0.
+- BUG-006: rejected — `MERGE_TRAIN_MAX_OLDER_PRS` is a documented API-budget bound in the `review_merge_train.sh` header; returning 'incomplete' would hold trains deeper than 20 PRs, which needs an owner decision.
+- BUG-007: already-implemented — `review_collect_pr_metadata.sh` fails closed on an unresolved default branch.
+- BUG-008: already-implemented — follow-up issue creation is a single attempt, and `gh_retry` makes one attempt for non-idempotent creates.
+- EXPR-001: already-implemented — the `implement.yml` 'Stage workflow support files' step passes vars through `env:`, its `run:` body has no `${{ }}`, and `tests/test_workflow_file_size_limit.py` guards the limit.
+- API-001 / API-002 / API-003, BATCH-001 / BATCH-002 and MERGE-002: rejected — tagged RISKY_SKIP by the doc itself (pagination, retry and race-sensitive paths); API-002 is largely superseded by the `gh_api_retry` classifier.
+- MERGE-001 and REUSE-001: rejected — NEEDS_VERIFICATION; coverage equivalence for the release guard and the cross-job freshness contract cannot be verified statically.
+- DUP-001 / DUP-002 / DUP-003: rejected — refactor-only; new shared helpers would have to be staged into every support and sandbox list, risking missing-helper failures.
+- DEAD-001: rejected — removing identifiers needs explicit approval (naming immutability).
+- SHELL-001: rejected — needs a per-code triage of about 40 warnings across many scripts before the gate is raised; out of scope for an automated change.
