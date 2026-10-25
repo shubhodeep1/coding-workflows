@@ -19657,7 +19657,11 @@ _fetch_standalone_pipeline_label_issues_graphql() {
 # stall-recovery/cache state.  It is consumed by the merged-PR
 # stall-recovery guard (ENABLE_STALL_MERGED_PR_GUARD) to avoid firing
 # /reclarify (and friends) on issues whose work has already been
-# merged.
+# merged.  Only pull requests in this repository count
+# (`repository.nameWithOwner == GITHUB_REPOSITORY`, the same rule as
+# _fetch_linked_pr_status_graphql): a cross-repository PR whose body
+# closes this issue, or a PR node without a repository, gives no
+# `linked_pr` (fail closed).
 #
 # Trade-off: we fetch `comments(last: 100)` which covers only the 100
 # newest comments rather than the full pagination walk the REST path
@@ -19717,6 +19721,7 @@ _fetch_candidate_issue_details_graphql() {
                   ... on PullRequest {
                     number state merged
                     labels(first: 100) { nodes { name } }
+                    repository { nameWithOwner }
 	                    mergedAt
 	                    headRefName
 	                    baseRefName
@@ -19751,7 +19756,7 @@ _fetch_candidate_issue_details_graphql() {
       continue
     fi
 
-    batch_transformed="$(printf '%s' "${batch_resp}" | jq -c '
+    batch_transformed="$(printf '%s' "${batch_resp}" | jq -c --arg repo "${owner}/${name}" '
       (.data.repository // {}) | to_entries | map(
         select(.value != null and (.value.number? != null)) | {
           key: (.value.number | tostring),
@@ -19776,6 +19781,7 @@ _fetch_candidate_issue_details_graphql() {
                 | select(.willCloseTarget == true and (.source // null) != null)
                 | .source
                 | select(.__typename == "PullRequest")
+                | select((.repository.nameWithOwner // "") == $repo)
                   | {
                       number: .number,
                       state: .state,
