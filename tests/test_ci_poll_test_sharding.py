@@ -1349,6 +1349,20 @@ class UnblockStepShardingContractTest(unittest.TestCase):
 				self.assertTrue(pattern.search(f"{module}::test_a"))
 		self.assertFalse(pattern.search("3 tests collected in 0.1s"))
 
+	def test_module_array_matches_table_and_filter(self) -> None:
+		# The array, the grep filter and the table must name the same modules,
+		# or a module named in only one of them silently runs no tests.
+		array = re.search(r"ub_modules=\((?P<mods>[^)]*)\)", self.run)
+		self.assertIsNotNone(array)
+		modules = array.group("mods").split()
+		self.assertEqual(modules, list(UNBLOCK_STEP_MODULES))
+		pattern = re.compile(
+			re.search(r"grep -E '(?P<pattern>[^']+)' /tmp/unblock_step_collect\.log", self.run).group("pattern")
+		)
+		for module in modules:
+			with self.subTest(module=module):
+				self.assertTrue(pattern.search(f"{module}::test_a"))
+
 	def test_every_process_is_reaped_before_any_is_judged(self) -> None:
 		self.assertLess(self.run.index('wait "${ub_pid}"'), self.run.index("ub_ids=()"))
 		self.assertLess(self.run.index('wait "${ub_pid}"'), self.run.index('.rc" 2>/dev/null'))

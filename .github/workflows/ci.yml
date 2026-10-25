@@ -2502,7 +2502,7 @@ jobs:
       # needs only checkout, Python 3.12 and the shared pip install, which
       # every matrix group has. Name and body unchanged.
       # Sharded in place, not moved (#8150): orchestrate-poll (4) took 15m13s
-      # of its 20 minutes on main (run 40198222187). This step had moved four
+      # of its 20 minutes on main (run 40198222187). This step had moved three
       # times (#8072, #8091, #8118) and each group it landed in then reached
       # about 15 to 17 minutes, and no other CI job has the roughly 11 minutes
       # of headroom it needs. That cost is an estimate from group totals
