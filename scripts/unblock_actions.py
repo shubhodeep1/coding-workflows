@@ -659,7 +659,7 @@ def _harness_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
 	# so say so and page a person instead of claiming a report is on its way.
 	sendable = bool(heal["label"])
 	status = (
-		" A workflow-failure heal report is being sent, and the item stays blocked until the harness fix ships."
+		" A workflow-failure heal report is being requested (if it cannot be sent, a WARNING asks a person to file the harness change), and the item stays blocked until the harness fix ships."
 		if sendable else
 		" No workflow-failure heal report could be sent because this item has no escalation label the heal intake accepts;"
 		" a person must file the harness change. The item stays blocked until the harness fix ships."

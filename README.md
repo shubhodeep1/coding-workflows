@@ -3793,7 +3793,11 @@ API call until the pinned validation workflow changes.
   park path.
 - **Time limit:** a hold older than `VALIDATION_HARNESS_HOLD_MAX_DAYS` (default
   `14`, `1`-`365`), or with a missing or invalid start time, ends and parks the
-  project for a person.
+  project for a person. The limit also applies while `ENABLE_VALIDATION` is off.
+- **coding-workflows itself:** its validation wrapper calls
+  `validate.yml@promote-candidate` (a branch, not a commit), so no pin can be
+  read and a harness error there takes the old park path
+  (`outcome=skip reason=self_repo`).
 - **Alerts:** WARNING when a project enters the hold, DEBUG when it resumes or
   bounces with budget left, CRITICAL when a cap is reached or the hold ends
   (expired, not planned, bounced with the budget spent).

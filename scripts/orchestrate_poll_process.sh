@@ -15665,9 +15665,16 @@ _validation_harness_hold_resume() {
     return 0
   fi
   rm -f "${STATE_FILE}.vhh_bak"
+  # dispatch_validation_if_needed also returns 0 when it defers (capacity
+  # wait, wave gate, phase cap); the project is then `validating` and a later
+  # tick's validating branch dispatches cycle 1, so say which happened.
+  local vhr_dispatch_note="validation is re-dispatched (cycle 1)"
+  if ! jq -e '(.validation_last_dispatch_cycle // 0) == 1' "${STATE_FILE}" >/dev/null 2>&1; then
+    vhr_dispatch_note="validation (cycle 1) is queued and dispatched on a later tick once the dispatch gate allows it"
+  fi
   post_tracking_comment "## ▶️ Runtime validation resumed after a harness fix
 
-The pinned validation workflow moved to \`${vhr_pin}\`, which contains the harness fix, so validation is re-dispatched (cycle 1). Validation recovery counters were kept.
+The pinned validation workflow moved to \`${vhr_pin}\`, which contains the harness fix, so ${vhr_dispatch_note}. Validation recovery counters were kept.
 
 <!-- validation-harness-resume:v1 fp=${vhr_fp} pin=${vhr_pin} -->"
   tg_notify "Project #${TRACKING_NUM}: validation resumed after a harness fix (pin=${vhr_pin})." "DEBUG"
@@ -15692,14 +15699,18 @@ validation_harness_hold_tick() {
     opened|duplicate|already-fixed|bounced|skipped) ;;
     *) vht_outcome="" ;;
   esac
-  if [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
-    _validation_harness_hold_log "waiting" "${vht_fp}" "unknown" "${vht_issue}" "validation_disabled"
-    return 0
-  fi
+  # With validation switched off, skip the routing marker (a bounce would
+  # re-dispatch validation) but still apply the time limit below, so a hold
+  # never outlives VALIDATION_HARNESS_HOLD_MAX_DAYS.
+  local vht_validation_on="true"
+  [ "${ENABLE_VALIDATION:-true}" = "true" ] || vht_validation_on="false"
 
   # Step 1: routing marker (from COMMENTS, no API call).
-  validation_harness_route_login >/dev/null
-  vht_marker="$(validation_harness_marker route "${vht_fp}")"
+  vht_marker=""
+  if [ "${vht_validation_on}" = "true" ]; then
+    validation_harness_route_login >/dev/null
+    vht_marker="$(validation_harness_marker route "${vht_fp}")"
+  fi
   if [ -n "${vht_marker}" ]; then
     vht_m_outcome="$(printf '%s' "${vht_marker}" | jq -r '.outcome // ""' 2>/dev/null || echo '')"
     vht_m_issue="$(printf '%s' "${vht_marker}" | jq -r '.issue // ""' 2>/dev/null || echo '')"
@@ -15757,6 +15768,11 @@ validation_harness_hold_tick() {
       _validation_harness_hold_log "expired" "${vht_fp}" "unknown" "${vht_issue}"
     fi
     return 10
+  fi
+
+  if [ "${vht_validation_on}" != "true" ]; then
+    _validation_harness_hold_log "waiting" "${vht_fp}" "unknown" "${vht_issue}" "validation_disabled"
+    return 0
   fi
 
   # Step 2: pin (local read, no API call).
@@ -16025,7 +16041,12 @@ mark_validation_failed() {
     # the state comment posted below; switch off or caps reached keep the
     # existing park path unchanged.
     local harness_hold_entered="false" harness_hold_fp="" harness_hold_support="unknown"
-    if [ "${VALIDATION_HARNESS_HEAL_ENABLED:-true}" != "false" ]; then
+    if [ "${VALIDATION_HARNESS_HEAL_ENABLED:-true}" != "false" ] && [ "${GITHUB_REPOSITORY:-}" = "shubhodeep1/coding-workflows" ]; then
+      # coding-workflows itself calls validate.yml@promote-candidate (a branch,
+      # not a commit), so validation_harness_pin never resolves here and a hold
+      # could only end by /revalidate or the time limit: keep the park path.
+      echo "VALIDATION_HARNESS_HOLD tracking_issue=${TRACKING_NUM} outcome=skip fp=unknown pin=unknown heal_issue=none reason=self_repo"
+    elif [ "${VALIDATION_HARNESS_HEAL_ENABLED:-true}" != "false" ]; then
       local harness_hold_run_id="" harness_hold_owner="" harness_hold_by_fp="0" harness_hold_total="0"
       validation_harness_route_login >/dev/null
       harness_hold_run_id="$(jq -r '(.validation_last_run_id // "") | tostring' "${STATE_FILE}" 2>/dev/null || echo '')"

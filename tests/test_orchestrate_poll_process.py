@@ -16136,6 +16136,36 @@ def test_validation_harness_hold_invalid_since_expires():
 		assert "start time" in bodies and "day limit" not in bodies, bodies
 
 
+def test_validation_harness_hold_expires_while_validation_is_disabled():
+	result = _run_harness_tick(since=_hold_since(15), env={"ENABLE_VALIDATION": "false"})
+	output = result["stdout"] + result["stderr"]
+	assert "outcome=expired" in output, output
+	assert "validation_harness_hold" not in result["latest_state"]
+	assert result["validation_dispatches"] == []
+	fresh = _run_harness_tick(pin=_HARNESS_OWNER_SUPPORT, env={"ENABLE_VALIDATION": "false"})
+	out2 = fresh["stdout"] + fresh["stderr"]
+	assert _hold_line("waiting", pin="unknown", reason="validation_disabled") in out2, out2
+	_assert_harness_still_held(fresh)
+
+
+def test_validation_harness_hold_skipped_in_the_source_repository():
+	result = _run_harness_hold_poller(
+		comments=[_harness_owner_comment()],
+		env={"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows"},
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "validation_harness_hold" not in result["latest_state"], output
+	assert "outcome=skip fp=unknown pin=unknown heal_issue=none reason=self_repo" in output
+	assert not any("<!-- validation-harness-hold:v1" in b for b in _harness_comment_bodies(result))
+
+
+def test_validation_harness_hold_resume_comment_names_a_deferred_dispatch():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	resume = _extract_bash_function(script, "_validation_harness_hold_resume() {")
+	assert "(.validation_last_dispatch_cycle // 0) == 1" in resume
+	assert "is queued and dispatched on a later tick" in resume
+
+
 def test_validation_harness_hold_bounce_wins_over_expiry():
 	result = _run_harness_tick(
 		comments=[_harness_route_comment(outcome="bounced", classification="consumer-app-defect")],

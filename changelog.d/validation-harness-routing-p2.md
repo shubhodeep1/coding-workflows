@@ -1,7 +1,7 @@
 <!-- changelog: changed -->
 - **A project held for a harness fix now pages a person after 14 days, and the unblock judge can ask for a hold.** Refs #7913.
 
-A project whose runtime validation failed because of the validation harness waits for a harness fix instead of paging a person. Until now nothing ended that wait if no fix shipped. The poller now ends a hold older than `VALIDATION_HARNESS_HOLD_MAX_DAYS` (default 14): it parks the project in the needs-human digest and sends one CRITICAL alert. A hold with a missing or invalid start time ends the same way. A bounce from the heal intake on the same tick still wins.
+A project whose runtime validation failed because of the validation harness waits for a harness fix instead of paging a person. Until now nothing ended that wait if no fix shipped. The poller now ends a hold older than `VALIDATION_HARNESS_HOLD_MAX_DAYS` (default 14): it parks the project in the needs-human digest and sends one CRITICAL alert. A hold with a missing or invalid start time ends the same way. A bounce from the heal intake on the same tick still wins. The limit also applies while `ENABLE_VALIDATION` is off. In coding-workflows itself, whose validation wrapper is pinned to a branch rather than a commit, a harness error is parked as before instead of held.
 
 The poller also honours a hold request from the unblock judge: a `<!-- ai:unblock-harness-hold-request:v1 item=<N> ... fingerprint=<12 hex> ... -->` comment on a failed tracking issue that carries `ai:validation-failed`, from the pipeline login only. The project is held under `fp=judge:<12 hex>` with the same resume caps and time limit, and each request comment is used once. Nothing posts this comment yet; the judge side comes in a later phase.
 
