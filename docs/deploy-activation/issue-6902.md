@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:49-51`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
-- Last note: Step 1 (Mac prereqs) done. Next: operator verifies each consumer's ai-update-workflows.yml ran after 2026-10-24T18:29Z.
+- Last note: Step 6 partial: 8/13 consumers synced after v1.40.0; diagnosing tele-funtoken-msg-scoring (run skipped) and 4 consumers with 404 on ai-update-workflows.yml.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -23,6 +23,10 @@
 4. [x] Dispatch to consumers — done 2026-10-25 (already satisfied): same run, step "Notify consumer repos via repository_dispatch" succeeded and logged a dispatch to all 13 registered consumers with no warnings
 5. [x] Confirm the 50 PRs are in `@stable` — done 2026-10-25: all 50 merged to `main`; GitHub compare `<merge_commit>...stable` returned `ahead`, `behind_by=0` for every one
 6. [ ] Verify each consumer's updater ran on or after the v1.40.0 dispatch (operator, consumers not attached to the session)
+   - 2026-10-25 operator check, `schedule` runs on 2026-10-25, success: digital_pa, fun-token-multi-chain, binance-blessings,
+     multi-user-ai-agent, bitsafe.io, hylifegroup.com, radateeree-resort.com, drhyg_ecommerce_automation (8/13)
+   - skipped: tele-funtoken-msg-scoring (run 40161515398; job `if: vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false'`)
+   - HTTP 404 on `ai-update-workflows.yml`: btc_sweeper, atlas-bridge.gd, mongo-explorer, fbc_shutdown
 7. [ ] Bootstrap `ai-update-workflows.yml` on any consumer that never had it (only if step 6 finds one)
 8. [ ] Verify LIVE
 
@@ -30,3 +34,5 @@
 - The local clone is shallow, so `git merge-base --is-ancestor` reported false negatives; containment was checked with the GitHub compare API instead.
 - `main` is 13 commits ahead of `stable`. The latest `test-and-mark-stable.yml` run (40147488993, 2026-10-25T00:38Z) passed validation but skipped `release`. This does not affect the 50 PRs, which are all already in v1.40.0.
 - Consumer repos are not attached to this cloud session (HTTP 403), so step 6 runs on the operator's machine.
+- 2026-10-25: operator answered Q1: A. Once verified, tick the release/sync line in the latest #6211 `project-6902` comment and the
+  release/sync line of the 50 `pr-*` entries (no other lines). No ticks made yet: step 6 is not verified.
