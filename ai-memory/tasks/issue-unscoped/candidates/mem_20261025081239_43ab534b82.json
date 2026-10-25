@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/deploy-activate.md:87 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The \"make the same tick in it\" re-tick copies a tick onto a newer pipeline comment by step title, without checking that the newer entry's instructions or source SHA still match the verified step.\n  WHY: `scripts/operator_step_issue.py` `upsert` (lines 342-361) appends a new entry whenever the rendered entry changes, so a changed step with the same title could be marked done without verification. Both reviewers rated it MAJOR. anthropic_claude-sonnet-5_5 judged the same concern speculative and did not report it.\n- workflow-templates/.claude/commands/deploy-activate.md:96 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The template copy has the same unconditional \"same tick\" re-tick of a higher-id comment, applied by step title only.\n  WHY: This is the same defect as in the live copy. A newer entry with changed instructions could be marked complete without verification. Both reviewers rated it MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/deploy-activate.md:87; workflow-templates/.claude/commands/deploy-activate.md:96 | severity=MAJOR | confidence=4\n  PROBLEM: The command copies a tick to a newer entry based on its step title, without verifying that the newer entry's instructions still match the work that was confirmed.\n  WHY: `scripts/operator_step_issue.py:342-361` appends a new entry comment when an upsert's rendered entry changes. A newer entry with the same title but changed instructions would be marked complete without verification.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/commands/deploy-activate.md:87 | severity=MAJOR | confidence=4\n  PROBLEM: The re-tick is unconditional and title-scoped only. `upsert` appends a new entry comment whenever the newest entry differs from a freshly rendered one (lines 360-361). The command never compares the newer entry's instructions or its `<!-- ai:operator-step:source-sha=... -->` line against the verified runbook step.\n  WHY: A newer entry with changed instruction B would show as done without being executed or verified, since `_authoritative_entry_comments` (`scripts/operator_step_issue.py:376-390`) reads only the newest entry. The \"Never tick a step that was not verified\" guard does not cover this. Suggested mitigation: re-tick only when the newer entry's instructions or source SHA match the verified step.\n- workflow-templates/.claude/commands/deploy-activate.md:96 | severity=MAJOR | confidence=4\n  PROBLEM: Same unconditional \"same tick\" defect as in the live copy.\n  WHY: Identical to the live copy.\n- .claude/commands/deploy-activate.md:87 | severity=MAJOR | confidence=4\n  PROBLEM: The unconditional re-tick of a concurrently arriving higher-id comment is the same defect, seen through the race lens. The superseding-comment window can carry a stale verification onto new entry content.\n  WHY: `upsert` appends a new comment on any rendered-entry difference, which is the concurrent-write case this bullet targets.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "33188ca09b9d35a996b6deb98f2a9b1af29a9a5c2fad79bb99e5d0d9c4215428",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8108,
+    "run_id": "40174884767",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40174884767",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025081239_43ab534b82",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8108,
+    "run_id": "40174884767"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T08:12:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
