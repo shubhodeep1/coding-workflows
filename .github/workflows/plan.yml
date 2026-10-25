@@ -167,6 +167,9 @@ jobs:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          HOLD_EVENT_NAME: ${{ github.event_name }}
+          HOLD_COMMENT_LOGIN: ${{ github.event.comment.user.login }}
+          HOLD_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -288,9 +291,23 @@ jobs:
           if [ "${resolver_rc}" -eq 3 ] && grep -Eq 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" 2>/dev/null; then
             resolver_pr_not_open=true
           fi
+          # Issue #7516 / heal of btc_sweeper#223 (run 40202986616): the
+          # reason=label_missing refusal is deterministic. Clarify holds the
+          # issue on it, but the unblock judge's /answer then sends the held
+          # item to plan, and failing the job here only re-files plan_failed
+          # heal reports. Plan holds the issue the same way clarify does: the
+          # same marker (deduplicated on the GH_PAT login), ai:blocked, and
+          # SKIP_PLAN=true. Routing is still refused, nothing plans on the
+          # default branch, and every other exit 3 still fails the job.
+          resolver_label_missing=false
+          if [ "${resolver_rc}" -eq 3 ] && grep -Eq "^::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=${issue_number} (pr=([0-9]+|none) )?outcome=refused reason=label_missing$" "${resolver_err_file}" 2>/dev/null; then
+            resolver_label_missing=true
+          fi
           if [ -s "${resolver_err_file}" ]; then
             if [ "${resolver_pr_not_open}" = "true" ]; then
               sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            elif [ "${resolver_label_missing}" = "true" ]; then
+              sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::warning::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
             else
               cat "${resolver_err_file}" >&2
             fi
@@ -322,6 +339,95 @@ jobs:
             echo "ref=" >> "$GITHUB_OUTPUT"
             echo "resolver_status=failed" >> "$GITHUB_OUTPUT"
             echo "pr_not_open=true" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_label_missing}" = "true" ]; then
+            hold_repo="${{ github.repository }}"
+            hold_marker="<!-- ai:integration-ref-label-missing:v1 issue=${issue_number} -->"
+            hold_fail() {
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=hold_failed reason=$1 issue=${issue_number}; refusing to fall back to the default branch."
+              exit 1
+            }
+            hold_skip_plan() {
+              {
+                echo "label_missing_hold=true"
+                echo "ref="
+                echo "resolver_status=failed"
+              } >> "$GITHUB_OUTPUT"
+              echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
+            }
+            hold_login="$(gh api user --jq .login 2>/dev/null || true)"
+            if ! [[ "${hold_login}" =~ ^[A-Za-z0-9](-?[A-Za-z0-9])*(\[bot\])?$ ]]; then
+              hold_fail identity_unavailable
+            fi
+            # Defence in depth, as in clarify: make no GH_PAT write for a
+            # comment that is neither from a trusted association nor from the
+            # GH_PAT login; skip planning without holding.
+            if [ "${HOLD_EVENT_NAME:-}" = "issue_comment" ] \
+              && ! [[ "${HOLD_COMMENT_ASSOCIATION:-}" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]] \
+              && [ "${HOLD_COMMENT_LOGIN:-}" != "${hold_login}" ]; then
+              hold_skip_plan
+              echo "::warning::INTEGRATION_REF_RESOLVE outcome=skip reason=label_missing_untrusted_comment issue=${issue_number}; no comment or label written."
+              exit 0
+            fi
+            hold_comments_file="${resolver_stage_root}/hold_comments.json"
+            if ! gh api --paginate --slurp "repos/${hold_repo}/issues/${issue_number}/comments?per_page=100" > "${hold_comments_file}" 2>/dev/null; then
+              hold_fail comments_unavailable
+            fi
+            # Count the marker only on comments by the GH_PAT login, and only
+            # as the comment's last line. Clarify posts the same marker, so the
+            # two phases deduplicate each other and clarify's /reclarify
+            # release retires a hold either phase posted.
+            hold_present="$(python3 -I -B -c '
+          import json, sys
+          path, login, marker = sys.argv[1:4]
+          with open(path, encoding="utf-8") as fh:
+              pages = json.load(fh)
+          if not isinstance(pages, list):
+              raise SystemExit(1)
+          count = 0
+          for page in pages:
+              for comment in (page if isinstance(page, list) else [page]):
+                  if not isinstance(comment, dict):
+                      continue
+                  user = comment.get("user") or {}
+                  if not isinstance(user, dict) or user.get("login") != login:
+                      continue
+                  body = comment.get("body") or ""
+                  if isinstance(body, str) and body.rstrip().endswith(marker):
+                      count += 1
+          print(count)
+          ' "${hold_comments_file}" "${hold_login}" "${hold_marker}" 2>/dev/null || true)"
+            if ! [[ "${hold_present}" =~ ^[0-9]+$ ]]; then
+              hold_fail comments_unavailable
+            fi
+            hold_comment_state=present
+            if [ "${hold_present}" -eq 0 ]; then
+              hold_run_url="${GITHUB_SERVER_URL:-https://github.com}/${hold_repo}/actions/runs/${GITHUB_RUN_ID}"
+              hold_body="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n\n%s' \
+                "**Planning is on hold: CI-triage routing refused (\`reason=label_missing\`).**" \
+                "This issue carries the check-failure-triage markers but not the \`ai:check-triage\` label. On an \`ai:orchestrator-managed\` issue, the canonical \`- Tracking issue: #N\` line is missing as well. The integration-ref resolver cannot verify a branch, so planning does not fall back to the default branch." \
+                "To fix it, either restore \`ai:check-triage\` and remove \`ai:orchestrator-managed\`, or, only when the issue keeps \`ai:orchestrator-managed\`, add the canonical tracking line to the issue body. Then comment \`/reclarify\` to run clarify again. The issue is labelled \`ai:blocked\` until then." \
+                "Run: ${hold_run_url}" \
+                "_Posted by the plan workflow._" \
+                "${hold_marker}")"
+              if ! gh api -X POST "repos/${hold_repo}/issues/${issue_number}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+                hold_fail comment_failed
+              fi
+              hold_comment_state=posted
+            fi
+            # Adding a label is idempotent, so one retry is safe.
+            if ! gh api -X POST "repos/${hold_repo}/issues/${issue_number}/labels" -f 'labels[]=ai:blocked' >/dev/null 2>&1 \
+              && ! { sleep 2; gh api -X POST "repos/${hold_repo}/issues/${issue_number}/labels" -f 'labels[]=ai:blocked' >/dev/null 2>&1; }; then
+              hold_fail label_failed
+            fi
+            # Best effort: this run has not added ai:planning, but an earlier
+            # run may have. A failure (404 when absent) never fails the step.
+            hold_planning_label=absent
+            if gh api -X DELETE "repos/${hold_repo}/issues/${issue_number}/labels/ai:planning" >/dev/null 2>&1; then
+              hold_planning_label=removed
+            fi
+            hold_skip_plan
+            echo "::warning::INTEGRATION_REF_RESOLVE outcome=held reason=label_missing issue=${issue_number} comment=${hold_comment_state} label=applied planning_label=${hold_planning_label} phase=plan"
+            exit 0
           elif [ "${resolver_rc}" -eq 3 ]; then
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
