@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:49-51`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
-- Last note: Step 6 partial: 8/13 consumers synced after v1.40.0; diagnosing tele-funtoken-msg-scoring (run skipped) and 4 consumers with 404 on ai-update-workflows.yml.
+- Last note: Step 6 partial (8/13). Reading tele-funtoken-msg-scoring's wrapper and consumer GH_PAT presence; Q2/Q3 open on bootstrapping 4 repos.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -27,6 +27,10 @@
      multi-user-ai-agent, bitsafe.io, hylifegroup.com, radateeree-resort.com, drhyg_ecommerce_automation (8/13)
    - skipped: tele-funtoken-msg-scoring (run 40161515398; job `if: vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false'`)
    - HTTP 404 on `ai-update-workflows.yml`: btc_sweeper, atlas-bridge.gd, mongo-explorer, fbc_shutdown
+   - 2026-10-25 diagnosis: tele-funtoken-msg-scoring has `AI_WORKFLOW_AUTO_UPDATE_ENABLED` unset but every run since
+     2026-10-24 (dispatch and schedule) skipped, at ~04:20 not 04:00, so its wrapper likely differs from the template.
+     btc_sweeper and atlas-bridge.gd have 7 legacy `ai-*` wrappers and no updater; mongo-explorer and fbc_shutdown have
+     no `ai-*` workflows at all (registered but never seeded). Bootstrap choices asked as Q2/Q3.
 7. [ ] Bootstrap `ai-update-workflows.yml` on any consumer that never had it (only if step 6 finds one)
 8. [ ] Verify LIVE
 
