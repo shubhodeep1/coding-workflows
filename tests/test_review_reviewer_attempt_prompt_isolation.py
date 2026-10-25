@@ -41,7 +41,10 @@ This test pins the two halves of the fix across the OpenCode cutover:
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
@@ -119,3 +122,126 @@ def test_empty_effective_prompt_is_guarded_before_launch() -> None:
 	assert "reviewer_effective_prompt_file" not in command_block, (
 		"prompt content/path must remain stdin-only and must not be embedded in OpenCode argv"
 	)
+
+
+# ---------------------------------------------------------------------------
+# REVIEWER_ATTEMPT_RESULT log line (#8097)
+# ---------------------------------------------------------------------------
+
+
+NO_TEXT_LINE = "OpenCode structured reviewer output contained no text events."
+
+
+def _extract_shell_function(text: str, name: str) -> str:
+	start = text.find(f"{name}() {{\n")
+	assert start != -1, f"function {name} not found"
+	end = text.find("\n}\n", start)
+	assert end != -1, f"function {name} has no closing brace"
+	return text[start : end + 3]
+
+
+def _run_class(tmp_path: Path, rc: str, wd: str, stderr: str | None, stall: str) -> str:
+	fn = _extract_shell_function(_script_text(), "reviewer_attempt_result_failure_class")
+	stderr_path = tmp_path / "stderr.txt"
+	if stderr is not None:
+		stderr_path.write_text(stderr, encoding="utf-8")
+	script = f'set -euo pipefail\n{fn}\nreviewer_attempt_result_failure_class "$1" "$2" "$3" "$4"\n'
+	proc = subprocess.run(
+		["bash", "-c", script, "x", rc, wd, str(stderr_path), stall],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert proc.returncode == 0, proc.stderr
+	lines = proc.stdout.splitlines()
+	assert len(lines) == 1, proc.stdout
+	return lines[0]
+
+
+def _run_line(*args: str) -> str:
+	fn = _extract_shell_function(_script_text(), "reviewer_attempt_result_line")
+	script = f'set -euo pipefail\n{fn}\nreviewer_attempt_result_line "$@"\n'
+	proc = subprocess.run(
+		["bash", "-c", script, "x", *args],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.count("\n") == 1, proc.stdout
+	return proc.stdout.rstrip("\n")
+
+
+@pytest.mark.parametrize(
+	("rc", "wd", "stderr", "stall", "expected"),
+	[
+		("0", "", "", "", "ok"),
+		("0", "", NO_TEXT_LINE + "\n", "", "empty_structured_output"),
+		("1", "", "noise\n" + NO_TEXT_LINE + "\n", "", "empty_structured_output"),
+		("143", "max_steps", "", "", "max_steps"),
+		("1", "", "", "killed", "stall_guard"),
+		("1", "idle_timeout", "", "", "timeout"),
+		("1", "max_wall", "", "", "timeout"),
+		("124", "", "", "", "timeout"),
+		("137", "", "", "", "timeout"),
+		("143", "tool_repeat", "", "", "tool_repeat"),
+		("1", "", "HTTP 429 Too Many Requests\n", "", "rate_limit"),
+		("1", "", "503 Service Unavailable\n", "", "server_error"),
+		("1", "", "error: HTTP 400 from provider\n", "", "provider_request_invalid"),
+		("1", "", '{"type":"invalid_request_error"}\n', "", "provider_request_invalid"),
+		(
+			"1",
+			"",
+			"reasoning.effort is not allowed together with max_tokens\n",
+			"",
+			"provider_request_invalid",
+		),
+		("1", "", "something unrelated at line 400\n", "", "exit_nonzero"),
+		("1", "", None, "", "exit_nonzero"),
+		("garbage", "", None, "", "ok"),
+	],
+)
+def test_reviewer_attempt_result_failure_class(tmp_path, rc, wd, stderr, stall, expected):
+	assert _run_class(tmp_path, rc, wd, stderr, stall) == expected
+
+
+def test_reviewer_attempt_result_never_leaks_stderr(tmp_path) -> None:
+	sentinel = "SENTINEL_SECRET_abc"
+	cls = _run_class(tmp_path, "1", "", f"HTTP 400 {sentinel}\n", "")
+	assert sentinel not in cls
+	line = _run_line("pass2", "slot_a", "1", "openai/gpt-6-luna", "1", "5", "none", "", cls)
+	assert sentinel not in line
+	assert line == (
+		"REVIEWER_ATTEMPT_RESULT pass=pass2 slot=slot_a attempt=1 model=openai/gpt-6-luna "
+		"exit_code=1 duration_secs=5 wd_reason=none stall_state=none "
+		"failure_class=provider_request_invalid"
+	)
+
+
+@pytest.mark.parametrize("model", ["bad model", "x;rm -rf", "$(id)", "a\nb", "", "`id`"])
+def test_reviewer_attempt_result_unsafe_model_prints_unknown(model) -> None:
+	line = _run_line("pass1", "s", "2", model, "1", "3", "max_wall", "observed", "timeout")
+	assert " model=unknown " in line
+	assert "\n" not in line
+
+
+def test_reviewer_attempt_result_line_defaults() -> None:
+	line = _run_line("", "", "", "", "x", "-4", "", "weird", "Bad Class!")
+	assert line == (
+		"REVIEWER_ATTEMPT_RESULT pass=unknown slot=unknown attempt=0 model=unknown "
+		"exit_code=0 duration_secs=0 wd_reason=none stall_state=none failure_class=exit_nonzero"
+	)
+
+
+def test_reviewer_attempt_result_emitted_after_classifier_only_in_opencode_path() -> None:
+	text = _script_text()
+	classifier = text.find(
+		'REVIEWER_ATTEMPT_RETRYABLE_CLASS="$(reviewer_classify_retryable_failure'
+	)
+	assert classifier != -1
+	call = text.find('"$(reviewer_attempt_result_failure_class ', classifier)
+	outcome = text.find('REVIEWER_ATTEMPT_OUTCOME="retryable_failure"', classifier)
+	assert classifier < call < outcome
+	pool = _extract_shell_function(text, "run_pool_reviewer")
+	assert "REVIEWER_ATTEMPT_RESULT" not in pool
+	assert "reviewer_attempt_result_" not in pool
