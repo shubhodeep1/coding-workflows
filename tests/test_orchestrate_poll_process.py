@@ -621,10 +621,12 @@ def _write_exec(path: Path, body: str) -> None:
 # and calls `curl_gh_api`, which runs `curl` with no time limit. Without this
 # shim a poller test sent a live HTTPS request to api.github.com, and a slow
 # network hung tests past the harness timeout (CI run 40182895760). The shim
-# records each call (Authorization header values redacted) to
+# records each call (Authorization header, -u/--user and -b/--cookie values
+# redacted; option and header names matched case-insensitively) to
 # ${CURL_CALL_CAPTURE}, prints nothing and exits 7 ("couldn't connect"), the
 # same fast failure a runner without network gives.
 _POLLER_CURL_SHIM = r'''#!/usr/bin/env bash
+shopt -s nocasematch
 curl_shim_args=()
 curl_shim_redact_next=false
 curl_shim_redact_user=false
@@ -646,6 +648,9 @@ for curl_shim_arg in "$@"; do
 		-u|--user) curl_shim_redact_user=true ;;
 		--user=*) curl_shim_arg="--user=[redacted]" ;;
 		-u?*) curl_shim_arg="-u[redacted]" ;;
+		-b|--cookie) curl_shim_redact_user=true ;;
+		--cookie=*) curl_shim_arg="--cookie=[redacted]" ;;
+		-b?*) curl_shim_arg="-b[redacted]" ;;
 	esac
 	curl_shim_args+=("${curl_shim_arg}")
 done
@@ -28244,6 +28249,17 @@ def test_poller_curl_shim_fails_fast_and_redacts_authorization() -> None:
 		assert logged == ["-s -H Authorization: [redacted] --header=Authorization: [redacted] -u [redacted] --user=[redacted] https://api.github.com/x"]
 		assert "secret-value" not in curl_shim_log.read_text(encoding="utf-8")
 		assert "pass-value" not in curl_shim_log.read_text(encoding="utf-8")
+		# Header names are case-insensitive, and cookie values are redacted too.
+		curl_shim_log.unlink()
+		completed = subprocess.run(
+			["curl", "-H", "AUTHORIZATION: token upper-value", "-b", "sid=cookie-value", "--cookie=sid=cookie2", "https://api.github.com/x"],
+			env=curl_shim_env,
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+		assert completed.returncode == 7
+		assert curl_shim_log.read_text(encoding="utf-8").splitlines() == ["-H Authorization: [redacted] -b [redacted] --cookie=[redacted] https://api.github.com/x"]
 		# A curl the test already supplied is kept.
 		(curl_shim_bin / "curl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 		_write_poller_curl_shim(curl_shim_bin)
