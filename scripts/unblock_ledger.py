@@ -85,6 +85,9 @@ verdict, 2 unreadable input):
       and print the normalised verdict. With --sandbox-check, instructions a
       fix-up would run in the network-less implement sandbox are refused with
       `sandbox_incompatible:<id>` (SANDBOX_INCOMPATIBLE_PATTERNS).
+      `target_repo` (`consumer` | `harness`) is kept for the instruction
+      verdicts (TARGET_REPO_VERDICTS); a missing or empty value becomes
+      `consumer`, any other value refuses the verdict.
   rejection --item <n> --stop <id> --comments-file <path> --trusted-login <login>
       Find the latest trusted, unused guard rejection on the blocked item.
   protected-rejection --item <n> --comments-file <path> --trusted-login <login>
@@ -306,6 +309,11 @@ SANDBOX_INCOMPATIBLE_PATTERNS = (
 	("gh_cli", re.compile(r"\bgh\s+(api|pr|issue|run|repo|release|workflow|label|auth|secret|search|status|gist|codespace)\b", re.IGNORECASE)),
 )
 SANDBOX_CHECKED_VERDICTS = ("retry_budget", "descope", "reissue", "accept_with_followup", "operator_step")
+# Where the change an instruction verdict asks for belongs: `consumer` (this
+# repository) or `harness` (shubhodeep1/coding-workflows, which
+# scripts/unblock_actions.py routes to a heal report instead of a fix-up).
+TARGET_REPOS = ("consumer", "harness")
+TARGET_REPO_VERDICTS = SANDBOX_CHECKED_VERDICTS
 
 
 class UsageError(Exception):
@@ -1106,6 +1114,13 @@ def validate(
 			verdict.get("operator_instructions"), "operator_instructions", flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX)
 		)
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
+	if name in TARGET_REPO_VERDICTS:
+		target_repo = verdict.get("target_repo")
+		if target_repo is None or target_repo == "":
+			target_repo = "consumer"
+		if not isinstance(target_repo, str) or target_repo not in TARGET_REPOS:
+			raise UsageError("target_repo must be 'consumer' or 'harness'")
+		normalised["target_repo"] = target_repo
 	# Only the fix-up specification is checked: operator_instructions are
 	# written for a person and `answer` is a reply, neither runs in the sandbox.
 	if sandbox_check and name in SANDBOX_CHECKED_VERDICTS:

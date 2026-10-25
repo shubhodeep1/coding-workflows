@@ -35,9 +35,10 @@
 #   ALLOW_WORKFLOW_EDITS repository variable to 'false' only skips the
 #   .claude/, CLAUDE.md, audit-gate, retired-file and changelog/agents asset
 #   steps; wrappers are still updated and the run logs a deprecation warning.
-#   Set the AI_WORKFLOW_AUTO_UPDATE_ENABLED repository variable to 'false' to
-#   stop the job entirely (wrappers then stay at their pinned release); unset
-#   (or any other value) means it runs. The gate lives here, so a sync of
+#   Holding updates: this job runs by default. To hold wrapper updates, set
+#   the AI_WORKFLOW_AUTO_UPDATE_ENABLED repository variable to 'false' (any
+#   letter case); wrappers then stay at their pinned release. Unset, empty
+#   or any other value means the job runs. The gate lives here, so a sync of
 #   this file cannot erase the hold.
 #
 # IMPORTANT: This file is managed by coding-workflows and will be overwritten

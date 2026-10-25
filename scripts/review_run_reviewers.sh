@@ -3966,6 +3966,132 @@ reviewer_classify_retryable_failure() {
   return 1
 }
 
+# Log-only failure class for the REVIEWER_ATTEMPT_RESULT line (#8097).
+# Never changes retry/failback decisions; always prints one class, exits 0.
+reviewer_attempt_result_failure_class() {
+  local cmd_rc="${1:-}"
+  local wd_reason="${2:-}"
+  local stderr_file="${3:-}"
+  local stall_state="${4:-}"
+  local has_stderr=false
+  local no_text=false
+
+  case "${cmd_rc}" in
+    ''|*[!0-9]*) cmd_rc=0 ;;
+  esac
+  if [ -n "${stderr_file}" ] && [ -s "${stderr_file}" ]; then
+    has_stderr=true
+    # The marker is appended with a trailing newline but may be glued onto an
+    # unterminated last stderr line, so anchor it to line end, not the whole line.
+    if grep -Eq 'OpenCode structured reviewer output contained no text events\.$' "${stderr_file}" 2>/dev/null; then
+      no_text=true
+    fi
+  fi
+
+  if [ "${cmd_rc}" = "0" ] && [ "${no_text}" = false ]; then
+    printf 'ok\n'; return 0
+  fi
+  if [ "${wd_reason}" = "max_steps" ]; then
+    printf 'max_steps\n'; return 0
+  fi
+  if [ "${stall_state}" = "killed" ]; then
+    printf 'stall_guard\n'; return 0
+  fi
+  case "${wd_reason}" in
+    idle_timeout|max_wall)
+      printf 'timeout\n'; return 0
+      ;;
+    tool_repeat)
+      # A tool_repeat kill SIGTERMs OpenCode (rc 143, and a clean rc 0 is
+      # forced to 143), so check the reason before the rc-based timeout to
+      # keep this class reachable.
+      printf 'tool_repeat\n'; return 0
+      ;;
+  esac
+  case "${cmd_rc}" in
+    124|137|142|143)
+      printf 'timeout\n'; return 0
+      ;;
+  esac
+  if [ "${has_stderr}" = true ]; then
+    if grep -Eiq '(^|[^0-9])429([^0-9]|$)|too many requests|rate limit' "${stderr_file}" 2>/dev/null; then
+      printf 'rate_limit\n'; return 0
+    fi
+    if grep -Eiq '(^|[^0-9])(500|502|503|504|520|521|522|523|524|525|526|527|529|530)([^0-9]|$)|internal server error|bad gateway|service unavailable|gateway timeout|server error' "${stderr_file}" 2>/dev/null; then
+      printf 'server_error\n'; return 0
+    fi
+    if grep -Eiq '(http|status|status_code|"code"|error[ _]code)[^0-9a-z]{0,16}400([^0-9]|$)|bad request|invalid_request' "${stderr_file}" 2>/dev/null; then
+      printf 'provider_request_invalid\n'; return 0
+    fi
+    if grep -Fq 'reasoning.effort' "${stderr_file}" 2>/dev/null && grep -Fq 'max_tokens' "${stderr_file}" 2>/dev/null; then
+      printf 'provider_request_invalid\n'; return 0
+    fi
+  fi
+  # The no-text marker is appended for any attempt without a text event,
+  # including watchdog kills, stalls and provider errors, so it only names
+  # the class when no more specific cause matched above.
+  if [ "${no_text}" = true ]; then
+    printf 'empty_structured_output\n'; return 0
+  fi
+  printf 'exit_nonzero\n'
+  return 0
+}
+
+# Builds the sanitized REVIEWER_ATTEMPT_RESULT line (#8097). Reads no files.
+reviewer_attempt_result_line() {
+  local pass="${1:-}"
+  local slot="${2:-}"
+  local attempt="${3:-}"
+  local model="${4:-}"
+  local exit_code="${5:-}"
+  local duration="${6:-}"
+  local wd_reason="${7:-}"
+  local stall_state="${8:-}"
+  local failure_class="${9:-}"
+  local token_re='^[A-Za-z0-9._/:-]+$'
+
+  [[ "${pass}" =~ ${token_re} ]] || pass="unknown"
+  [[ "${slot}" =~ ${token_re} ]] || slot="unknown"
+  [[ "${model}" =~ ${token_re} ]] || model="unknown"
+  [[ "${wd_reason}" =~ ${token_re} ]] || wd_reason="none"
+  [[ "${attempt}" =~ ^[0-9]+$ ]] || attempt="0"
+  [[ "${exit_code}" =~ ^[0-9]+$ ]] || exit_code="0"
+  [[ "${duration}" =~ ^[0-9]+$ ]] || duration="0"
+  case "${stall_state}" in
+    observed|killed) ;;
+    *) stall_state="none" ;;
+  esac
+  [[ "${failure_class}" =~ ^[a-z_]+$ ]] || failure_class="exit_nonzero"
+
+  printf 'REVIEWER_ATTEMPT_RESULT pass=%s slot=%s attempt=%s model=%s exit_code=%s duration_secs=%s wd_reason=%s stall_state=%s failure_class=%s\n' \
+    "${pass}" "${slot}" "${attempt}" "${model}" "${exit_code}" "${duration}" "${wd_reason}" "${stall_state}" "${failure_class}"
+  return 0
+}
+
+# Logs REVIEWER_ATTEMPT_RESULT for an attempt that fails before OpenCode
+# launches (config, bootstrap, empty prompt), so every attempt gets a line
+# (#8097). Reads the caller's locals via dynamic scoping; log only.
+reviewer_attempt_result_emit_prelaunch() {
+  local prelaunch_rc="${1:-1}"
+  local prelaunch_end=""
+  local prelaunch_duration=0
+  local prelaunch_text=""
+
+  prelaunch_end="$(date +%s 2>/dev/null || echo 0)"
+  if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${prelaunch_end}" =~ ^[0-9]+$ ]] && [ "${prelaunch_end}" -ge "${start_time}" ]; then
+    prelaunch_duration=$(( prelaunch_end - start_time ))
+  fi
+  prelaunch_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${prelaunch_rc}" "${prelaunch_duration}" "none" "none" "exit_nonzero" 2>/dev/null || true)"
+  if [ -n "${prelaunch_text}" ]; then
+    if [ -n "${log_file:-}" ]; then
+      printf '%s\n' "${prelaunch_text}" | tee -a "${log_file}" || true
+    else
+      printf '%s\n' "${prelaunch_text}" || true
+    fi
+  fi
+  return 0
+}
+
 reviewer_log_advance_action() {
   local next_action="$1"
   local next_attempt="${2:-}"
@@ -4112,6 +4238,10 @@ execute_reviewer_attempt() {
   local reviewer_base_prompt_bytes=0
   local reviewer_effective_prompt_bytes=0
   local reviewer_materialize_rc=0
+  local reviewer_attempt_result_class=""
+  local reviewer_attempt_result_end=""
+  local reviewer_attempt_result_duration=0
+  local reviewer_attempt_result_text=""
 
   REVIEWER_ATTEMPT_OUTCOME="failed"
   REVIEWER_ATTEMPT_RETRYABLE_CLASS=""
@@ -4143,6 +4273,7 @@ execute_reviewer_attempt() {
     --config-path "${reviewer_opencode_config_path}" \
     --serena off; then
     echo "Reviewer slot ${slot_model} (${effective_model}) failed to generate its OpenCode config on ${attempt_label}." | tee -a "${log_file}" >&2
+    reviewer_attempt_result_emit_prelaunch 1 || true
     REVIEWER_ATTEMPT_OUTCOME="failed"
     REVIEWER_ATTEMPT_CMD_RC=1
     return 0
@@ -4151,6 +4282,7 @@ execute_reviewer_attempt() {
     "${reviewer_opencode_config_path}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
     reviewer_terminal_alert_emitted=true
     echo "Reviewer slot ${slot_model} (${effective_model}) failed OpenCode bootstrap validation on ${attempt_label}." | tee -a "${log_file}" >&2
+    reviewer_attempt_result_emit_prelaunch 1 || true
     REVIEWER_ATTEMPT_OUTCOME="failed"
     REVIEWER_ATTEMPT_CMD_RC=1
     return 0
@@ -4318,6 +4450,7 @@ execute_reviewer_attempt() {
   fi
   if [ ! -s "${reviewer_effective_prompt_file}" ]; then
     echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is still empty after fallback on ${attempt_label}; refusing to launch OpenCode with empty stdin." | tee -a "${log_file}" >&2
+    reviewer_attempt_result_emit_prelaunch 1 || true
     kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
     emit_reviewer_substate "Failed" "${attempt_number}"
     rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}" "${wd_reason_file}" "${stall_status_file}" "${tmp_output}" "${tmp_structured_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
@@ -4430,6 +4563,21 @@ execute_reviewer_attempt() {
   esac
 
   if [ "${cmd_rc}" -eq 0 ] && [ -s "${tmp_output}" ]; then
+    # #8097: successful and silent-retry attempts log their result line too.
+    reviewer_attempt_result_class="$(reviewer_attempt_result_failure_class "${cmd_rc}" "${wd_reason}" "${tmp_stderr}" "${stall_state}" 2>/dev/null || echo exit_nonzero)"
+    reviewer_attempt_result_end="$(date +%s 2>/dev/null || echo 0)"
+    reviewer_attempt_result_duration=0
+    if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${reviewer_attempt_result_end}" =~ ^[0-9]+$ ]] && [ "${reviewer_attempt_result_end}" -ge "${start_time}" ]; then
+      reviewer_attempt_result_duration=$(( reviewer_attempt_result_end - start_time ))
+    fi
+    reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" 2>/dev/null || true)"
+    if [ -n "${reviewer_attempt_result_text}" ]; then
+      if [ -n "${log_file:-}" ]; then
+        printf '%s\n' "${reviewer_attempt_result_text}" | tee -a "${log_file}" || true
+      else
+        printf '%s\n' "${reviewer_attempt_result_text}" || true
+      fi
+    fi
     if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then
       cat "${tmp_stderr}" >> "${log_file}"
       echo "Reviewer slot ${slot_model} (${effective_model}) produced no findings or explicit NONE on ${attempt_label}; retrying." | tee -a "${log_file}"
@@ -4492,6 +4640,20 @@ execute_reviewer_attempt() {
   fi
 
   REVIEWER_ATTEMPT_RETRYABLE_CLASS="$(reviewer_classify_retryable_failure "${cmd_rc}" "${wd_reason}" "${tmp_stderr}" "${stall_state}" || true)"
+  reviewer_attempt_result_class="$(reviewer_attempt_result_failure_class "${cmd_rc}" "${wd_reason}" "${tmp_stderr}" "${stall_state}" 2>/dev/null || echo exit_nonzero)"
+  reviewer_attempt_result_end="$(date +%s 2>/dev/null || echo 0)"
+  reviewer_attempt_result_duration=0
+  if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${reviewer_attempt_result_end}" =~ ^[0-9]+$ ]] && [ "${reviewer_attempt_result_end}" -ge "${start_time}" ]; then
+    reviewer_attempt_result_duration=$(( reviewer_attempt_result_end - start_time ))
+  fi
+  reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" 2>/dev/null || true)"
+  if [ -n "${reviewer_attempt_result_text}" ]; then
+    if [ -n "${log_file:-}" ]; then
+      printf '%s\n' "${reviewer_attempt_result_text}" | tee -a "${log_file}" || true
+    else
+      printf '%s\n' "${reviewer_attempt_result_text}" || true
+    fi
+  fi
   if [ -n "${REVIEWER_ATTEMPT_RETRYABLE_CLASS}" ]; then
     echo "Reviewer slot ${slot_model} (${effective_model}) failure classified as retryable (${REVIEWER_ATTEMPT_RETRYABLE_CLASS}) on ${attempt_label}." | tee -a "${log_file}"
     REVIEWER_ATTEMPT_OUTCOME="retryable_failure"

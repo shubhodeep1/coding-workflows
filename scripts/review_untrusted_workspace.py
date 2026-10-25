@@ -941,7 +941,9 @@ def main():
 			scope = None
 			if len(sys.argv) == 7:
 				scope = Path(sys.argv[6]).read_text(encoding="utf-8").splitlines()
-				if not scope or any(not entry or entry not in ("tests/**", "changelog.d/*.md") and not re.fullmatch(r"[A-Za-z0-9_./-]+", entry) for entry in scope):
+				# Besides the marker's two globs, the issue's own agents.md
+				# fragment glob that implement_heal_preflight.sh adds (#8064).
+				if not scope or any(not entry or entry not in ("tests/**", "changelog.d/*.md") and not re.fullmatch(r"[A-Za-z0-9_./-]+", entry) and not re.fullmatch(r"agents\.d/[1-9][0-9]{0,9}-\*\.md", entry) for entry in scope):
 					raise ValueError("out of heal scope")
 			transfer(host, workspace, manifest, scope)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:

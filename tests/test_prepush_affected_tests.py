@@ -527,7 +527,7 @@ def test_hook_falls_back_when_the_guard_module_is_missing(tmp_path):
 
 
 def test_hook_internal_error_fails_open(monkeypatch, capsys):
-	monkeypatch.setattr(gate, "evaluate_hook", lambda payload: (_ for _ in ()).throw(RuntimeError("boom")))
+	monkeypatch.setattr(gate, "hook_decision", lambda payload: (_ for _ in ()).throw(RuntimeError("boom")))
 	assert gate.cmd_hook(json.dumps({"tool_name": "Bash"})) == 0
 	out = json.loads(capsys.readouterr().out)
 	assert "internal error" in out["systemMessage"] and "hookSpecificOutput" not in out
@@ -788,3 +788,68 @@ def test_hook_asks_when_the_guard_cannot_resolve_push_options(tmp_path, command)
 	out = _hook(_push(root, command), {"TMPDIR": str(tmp_path)})
 	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
 	assert "Could not resolve which refs" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# --- Auto mode ----------------------------------------------------------------
+
+def _auto(payload: dict, mode: str = "auto") -> dict:
+	return {**payload, "permission_mode": mode}
+
+
+def test_hook_denies_a_missing_stamp_in_auto_mode(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)})
+	decision = out["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "deny"
+	reason = decision["permissionDecisionReason"]
+	assert gate.STAMP_COMMAND in reason and "nothing ran" in reason and "tell the user" in reason
+	# The session cannot set the hook's environment, so the off switch is not offered.
+	assert "CLAUDE_PREPUSH_TEST_GATE=off" not in reason
+
+
+@pytest.mark.parametrize("mode", ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "Auto", None])
+def test_hook_still_asks_for_a_missing_stamp_outside_auto_mode(tmp_path, mode):
+	root = _repo(tmp_path, {"a.txt": ""})
+	payload = _push(root) if mode is None else _auto(_push(root), mode)
+	out = _hook(payload, {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_hook_auto_mode_keeps_passing_stamps_silent_and_failures_asking(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, "pass")
+	assert _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)}) == {}
+	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
+	out = _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "tests/test_broken.py" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("command", ["git push --tags origin", "git push --all origin", "git push origin no-such-branch:main"])
+def test_hook_auto_mode_still_asks_when_a_person_must_decide(tmp_path, command):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root, command)), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_hook_auto_mode_asks_when_a_missing_stamp_comes_with_a_human_finding(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_git(root, "branch", "other")
+	_commit(root, {"a.txt": "changed\n"})
+	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
+	out = _hook(_auto(_push(root, "git push origin HEAD && git push origin other")), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "No pre-push test stamp" in reason and "tests/test_broken.py" in reason
+
+
+def test_hook_auto_mode_off_switch_still_allows(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	assert _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path), "CLAUDE_PREPUSH_TEST_GATE": "off"}) == {}
+
+
+def test_evaluate_hook_keeps_its_two_value_contract(tmp_path, monkeypatch):
+	monkeypatch.setenv("TMPDIR", str(tmp_path))
+	root = _repo(tmp_path, {"a.txt": ""})
+	ask, message = gate.evaluate_hook(_auto(_push(root)))
+	assert "No pre-push test stamp" in ask and message == ""

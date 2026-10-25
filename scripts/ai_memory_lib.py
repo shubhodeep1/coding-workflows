@@ -3321,6 +3321,11 @@ def _redact_memory_push_stderr(stderr: str) -> str:
     return text.strip()
 
 
+def _memory_persist_elapsed_ms(started: float) -> int:
+    """Milliseconds since a time.monotonic() start, never negative."""
+    return max(0, int((time.monotonic() - started) * 1000))
+
+
 def persist_memory_operation(
     repo_root: Path,
     *,
@@ -3335,8 +3340,13 @@ def persist_memory_operation(
 
     repo_root = repo_root.resolve()
     with _file_lock(f"ai-memory-{repo_root}-{memory_branch}"):
+        # Phase timings (clone_ms / write_ms / push_ms) are additive telemetry
+        # only; they never change control flow, retries or exceptions.
+        clone_started = time.monotonic()
         clone_dir = _clone_for_memory_branch(repo_root, memory_branch)
+        clone_ms = _memory_persist_elapsed_ms(clone_started)
         try:
+            write_started = time.monotonic()
             memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
             ensure_memory_layout(memory_root)
 
@@ -3350,17 +3360,23 @@ def persist_memory_operation(
             _run_git(clone_dir, ["add", str(memory_root.relative_to(clone_dir))])
 
             if _run_git(clone_dir, ["diff", "--cached", "--quiet"], check=False).returncode == 0:
+                write_ms = _memory_persist_elapsed_ms(write_started)
                 return {
                     "did_commit": False,
                     "did_push": False,
                     "commit_sha": None,
                     "push_attempts": 0,
                     "operation_result": op_result,
+                    "clone_ms": clone_ms,
+                    "write_ms": write_ms,
+                    "push_ms": 0,
                 }
 
             _run_git(clone_dir, ["commit", "-m", commit_message])
             _run_git(clone_dir, ["rev-parse", "HEAD"])
+            write_ms = _memory_persist_elapsed_ms(write_started)
 
+            push_started = time.monotonic()
             for attempt in range(1, push_retries + 1):
                 push = _run_git(
                     clone_dir,
@@ -3369,12 +3385,16 @@ def persist_memory_operation(
                 )
                 if push.returncode == 0:
                     pushed_commit_sha = _run_git(clone_dir, ["rev-parse", "HEAD"]).stdout.strip()
+                    push_ms = _memory_persist_elapsed_ms(push_started)
                     return {
                         "did_commit": True,
                         "did_push": True,
                         "commit_sha": pushed_commit_sha,
                         "push_attempts": attempt,
                         "operation_result": op_result,
+                        "clone_ms": clone_ms,
+                        "write_ms": write_ms,
+                        "push_ms": push_ms,
                     }
 
                 # Credential/permission failures (run 35665803378: nine writes

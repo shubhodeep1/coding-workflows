@@ -373,7 +373,7 @@ def test_reroute_keeps_ignored_staged_helpers_the_base_tracks(tmp_path):
 # Issue #7477: "Resolve integration ref" now tolerates reason=pr_not_open and
 # exports pr_not_open=true; the checkout is then the default branch. The step
 # must close the issue, plan on the PR's base, or skip planning.
-PR_NOT_OPEN_ENV = {"PLAN_PR_NOT_OPEN": "true"}
+PR_NOT_OPEN_ENV = {"PLAN_PR_NOT_OPEN": "true", "GITHUB_RUN_ID": "99"}
 
 
 def _origin_with_branches(tmp_path, default_branch, base_branch=None):
@@ -420,15 +420,57 @@ def test_pr_not_open_plans_on_default_base(tmp_path):
 	assert not any(call[:2] == ["issue", "close"] for call in calls)
 
 
+def _assert_plan_blocked_handoff(calls, pr="6976"):
+	# Issue #7995: the skip must move the issue off ai:planning, or stall
+	# recovery re-posts /answer every hour and planning skips forever.
+	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
+	assert edit[edit.index("--add-label") + 1] == "ai:blocked"
+	assert edit[edit.index("--remove-label") + 1] == "ai:planning"
+	assert not any(call[:2] == ["issue", "close"] for call in calls)
+	posts = [call for call in calls if call[0] == "api" and call[1].endswith("/comments") and "-f" in call]
+	assert len(posts) == 1
+	body = posts[0][posts[0].index("-f") + 1]
+	assert body.rstrip().endswith(f"<!-- ai:plan-pr-not-open:v1 pr={pr} run=99 -->")
+
+
 def test_pr_not_open_closed_unmerged_skips_planning(tmp_path):
 	proc, calls, github_env = _run_step(tmp_path, merged=False,
 		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main"})
 	output = proc.stdout + proc.stderr
 	assert proc.returncode == 0, output
 	assert "SKIP_PLAN=true" in github_env
-	assert "outcome=skip reason=pr_not_open_unresolved detail=pr_closed_unmerged" in proc.stdout
+	assert "outcome=skip reason=pr_not_open_unresolved detail=pr_closed_unmerged pr=6976 label=applied comment=posted" in proc.stdout
 	assert output.count("::warning::") == 1, output
-	assert not any(call[:2] in (["issue", "close"], ["issue", "edit"]) for call in calls)
+	_assert_plan_blocked_handoff(calls)
+
+
+def test_pr_not_open_handoff_label_failure_posts_no_comment(tmp_path):
+	proc, calls, github_env = _run_step(tmp_path, merged=False,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "FAKE_EDIT_FAIL": "1"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "label=failed comment=skipped" in proc.stdout
+	assert not [call for call in calls if call[0] == "api" and call[1].endswith("/comments") and "-f" in call]
+
+
+def test_pr_not_open_handoff_comment_failure_is_logged(tmp_path):
+	# The label landed but the marker comment failed: the log must say so.
+	proc, calls, github_env = _run_step(tmp_path, merged=False,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "FAKE_COMMENT_FAIL": "1"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "label=applied comment=failed" in proc.stdout
+	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
+	assert edit[edit.index("--add-label") + 1] == "ai:blocked"
+
+
+def test_pr_not_open_handoff_uses_the_resolver_pr_before_the_classifier(tmp_path):
+	# "disabled" exits before the classifier runs, so only the ref step's PR is known.
+	proc, calls, _ = _run_step(tmp_path, env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main",
+		"PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED": "off", "PLAN_PR_NOT_OPEN_PR": "6976"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "detail=disabled pr=6976" in proc.stdout
+	_assert_plan_blocked_handoff(calls)
 
 
 def test_closed_unmerged_without_pr_not_open_still_plans(tmp_path):
@@ -462,6 +504,8 @@ def test_pr_not_open_unverifiable_skips_planning(tmp_path, variant, detail):
 	assert f"outcome=skip reason=pr_not_open_unresolved detail={detail}" in proc.stdout
 	assert output.count("::warning::") == 1, output
 	assert not any(call[:2] == ["issue", "close"] for call in calls)
+	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
+	assert edit[edit.index("--add-label") + 1] == "ai:blocked"
 
 
 def test_pr_not_open_failed_reroute_skips(tmp_path):
@@ -472,8 +516,8 @@ def test_pr_not_open_failed_reroute_skips(tmp_path):
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "SKIP_PLAN=true" in github_env
 	assert "PLAN_REROUTED_REF" not in github_env
-	assert "outcome=skip reason=reroute_failed" in proc.stdout
-	assert not any(call[:2] == ["issue", "close"] for call in calls)
+	assert "outcome=skip reason=pr_not_open_unresolved detail=reroute_failed" in proc.stdout
+	_assert_plan_blocked_handoff(calls)
 
 
 def test_pr_not_open_invalid_base_ref_skips(tmp_path):
