@@ -249,7 +249,8 @@ exit 0
 # Issue #7516: a fake `gh` for the clarify label_missing hold. Every call's
 # argv is written NUL-separated to $FAKE_GH_DIR/call_<n>. FAKE_GH_LOGIN is the
 # `api user` login, FAKE_GH_COMMENTS_JSON the comment read and
-# FAKE_GH_FAIL=user|comments|comment_post|label_post fails that call.
+# FAKE_GH_FAIL=user|comments|comment_post|label_post|label_delete fails that
+# call (label_delete is plan's best-effort ai:planning removal).
 _FAKE_GH = """#!/usr/bin/env bash
 n="$(ls "$FAKE_GH_DIR" | wc -l | tr -d ' ')"
 printf '%s\\0' "$@" > "$FAKE_GH_DIR/call_$((n + 1))"
@@ -266,6 +267,7 @@ case "$method $endpoint" in
   "GET repos/"*"/comments"*) [ "${FAKE_GH_FAIL:-}" = comments ] && exit 1; echo "${FAKE_GH_COMMENTS_JSON:-[[]]}" ;;
   "POST repos/"*"/comments") [ "${FAKE_GH_FAIL:-}" = comment_post ] && exit 1; echo '{}' ;;
   "POST repos/"*"/labels") [ "${FAKE_GH_FAIL:-}" = label_post ] && exit 1; echo '[]' ;;
+  "DELETE repos/"*"/labels/"*) [ "${FAKE_GH_FAIL:-}" = label_delete ] && exit 1; echo '[]' ;;
   *) exit 1 ;;
 esac
 exit 0
@@ -620,8 +622,9 @@ def test_clarify_label_missing_hold_fails_closed_on_write_errors() -> None:
 
 
 def test_label_missing_hold_is_clarify_only_and_exact() -> None:
-	"""Every other exit-3 refusal still fails clarify, and no other phase
-	holds: they all fail without a GitHub write."""
+	"""Clarify and plan hold (#7516, heal of btc_sweeper#223); every other
+	exit-3 refusal still fails them, and every other phase fails without a
+	GitHub write."""
 	others = (
 		"::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=label_missing_extra",
 		"::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=7 outcome=refused reason=branch_missing",
@@ -629,11 +632,12 @@ def test_label_missing_hold_is_clarify_only_and_exact() -> None:
 		"note: outcome=refused reason=label_missing",
 		"",
 	)
-	for line in others:
-		rc, out, gh_output, calls = _run_refctx_gh("clarify.yml", "ok", "true", _label_missing_env(line))
-		assert rc != 0, f"{line!r}\n{out}"
-		assert "label_missing_hold" not in gh_output and calls == [], f"{line!r}: {calls!r}"
-	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS - {"clarify.yml"}):
+	for workflow_name in ("clarify.yml", "plan.yml"):
+		for line in others:
+			rc, out, gh_output, calls = _run_refctx_gh(workflow_name, "ok", "true", _label_missing_env(line))
+			assert rc != 0, f"{workflow_name} {line!r}\n{out}"
+			assert "label_missing_hold" not in gh_output and calls == [], f"{workflow_name} {line!r}: {calls!r}"
+	for workflow_name in sorted(REQUIRED_RESOLVER_WORKFLOWS - {"clarify.yml", "plan.yml"}):
 		rc, out, gh_output, calls = _run_refctx_gh(workflow_name, "ok", "true", _label_missing_env())
 		assert rc != 0 and "ref=" not in gh_output, f"{workflow_name}\n{out}"
 		assert calls == [], f"{workflow_name}: {calls!r}"
@@ -787,6 +791,135 @@ def test_clarify_label_missing_hold_writes_nothing_for_untrusted_comment() -> No
 		assert rc == 0 and len(_posts(calls)) == 2, (trusted, calls)
 
 
+def _deletes(calls: list[list[str]]) -> list[list[str]]:
+	return [c for c in calls if "DELETE" in c]
+
+
+def _assert_plan_held(label: str, rc: int, out: str, gh_output: str, env_text: str) -> None:
+	assert rc == 0, f"{label}\n{out}"
+	for line in ("label_missing_hold=true\n", "ref=\n", "resolver_status=failed\n"):
+		assert line in gh_output, f"{label}: {gh_output!r}"
+	assert "SKIP_PLAN=true" in env_text, f"{label}: {env_text!r}"
+	assert "::error::" not in out, f"{label}\n{out}"
+
+
+def test_plan_label_missing_refusal_holds_issue() -> None:
+	"""Heal of btc_sweeper#223 (run 40202986616): the unblock judge's /answer
+	sent clarify's label_missing hold to plan, which failed the job and filed
+	a plan_failed heal report. Plan now holds the issue like clarify does."""
+	for line in (_LABEL_MISSING_LINE, "::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=5 pr=none outcome=refused reason=label_missing"):
+		rc, out, gh_output, env_text, calls = _run_refctx_core("plan.yml", "ok", "true", _label_missing_env(line))
+		_assert_plan_held(line, rc, out, gh_output, env_text)
+		assert "::warning::CI_TRIAGE_PR_BRANCH_ROUTING issue=5" in out, out
+		assert "INTEGRATION_REF_RESOLVE outcome=held reason=label_missing issue=5 comment=posted label=applied" in out, out
+		assert "planning_label=removed phase=plan" in out, out
+		posts = _posts(calls)
+		assert len(posts) == 2, calls
+		assert posts[0][posts[0].index("POST") + 1] == "repos/consumer/repo/issues/5/comments", posts
+		body = _post_body(posts[0])
+		assert body.rstrip().endswith(_LABEL_MISSING_MARKER), body
+		assert "Planning is on hold" in body and "_Posted by the plan workflow._" in body, body
+		assert not any(l.lstrip().startswith("/reclarify") for l in body.splitlines()), body
+		assert "labels[]=ai:blocked" in posts[1], posts
+		deletes = _deletes(calls)
+		assert len(deletes) == 1, calls
+		assert deletes[0][deletes[0].index("DELETE") + 1] == "repos/consumer/repo/issues/5/labels/ai:planning", deletes
+		assert calls.index(posts[1]) < calls.index(deletes[0]), calls
+
+
+def test_plan_label_missing_hold_dedups_on_trusted_marker() -> None:
+	trusted = '[[{"user":{"login":"pipeline-bot"},"body":"text\\n%s\\n"}]]' % _LABEL_MISSING_MARKER
+	rc, out, gh_output, env_text, calls = _run_refctx_core("plan.yml", "ok", "true", _label_missing_env(FAKE_GH_COMMENTS_JSON=trusted))
+	_assert_plan_held("trusted", rc, out, gh_output, env_text)
+	posts = _posts(calls)
+	assert len(posts) == 1 and "labels[]=ai:blocked" in posts[0], calls
+	assert "comment=present" in out, out
+	released = "<!-- ai:integration-ref-label-missing:v1 issue=5 released -->"
+	for name, comments in (
+		("forged", '[[{"user":{"login":"someone-else"},"body":"%s"}]]' % _LABEL_MISSING_MARKER),
+		("released", '[[{"user":{"login":"pipeline-bot"},"body":"text\\n%s"}]]' % released),
+	):
+		rc, out, gh_output, env_text, calls = _run_refctx_core("plan.yml", "ok", "true", _label_missing_env(FAKE_GH_COMMENTS_JSON=comments))
+		_assert_plan_held(name, rc, out, gh_output, env_text)
+		assert len(_posts(calls)) == 2 and "comment=posted" in out, (name, calls)
+
+
+def test_plan_label_missing_hold_fails_closed_on_write_errors() -> None:
+	reasons = {
+		"user": "identity_unavailable",
+		"comments": "comments_unavailable",
+		"comment_post": "comment_failed",
+		"label_post": "label_failed",
+	}
+	cases = [(f, r, {"FAKE_GH_FAIL": f}) for f, r in reasons.items()]
+	cases.append(("bad_json", "comments_unavailable", {"FAKE_GH_COMMENTS_JSON": "not json"}))
+	for name, reason, extra in cases:
+		rc, out, gh_output, env_text, _calls = _run_refctx_core("plan.yml", "ok", "true", _label_missing_env(**extra))
+		assert rc != 0, f"{name}\n{out}"
+		assert "label_missing_hold" not in gh_output and "ref=" not in gh_output, f"{name}: {gh_output!r}"
+		assert "SKIP_PLAN" not in env_text, f"{name}: {env_text!r}"
+		assert f"INTEGRATION_REF_RESOLVE outcome=hold_failed reason={reason} issue=5" in out, out
+	rc, out, gh_output, env_text, _calls = _run_refctx_core("plan.yml", "ok", "true", _label_missing_env(FAKE_GH_FAIL="label_delete"))
+	_assert_plan_held("label_delete", rc, out, gh_output, env_text)
+	assert "planning_label=absent phase=plan" in out, out
+
+
+def test_plan_label_missing_hold_writes_nothing_for_untrusted_comment() -> None:
+	untrusted = {"HOLD_EVENT_NAME": "issue_comment", "HOLD_COMMENT_LOGIN": "outsider", "HOLD_COMMENT_ASSOCIATION": "NONE"}
+	rc, out, gh_output, env_text, calls = _run_refctx_core("plan.yml", "ok", "true", _label_missing_env(**untrusted))
+	_assert_plan_held("untrusted", rc, out, gh_output, env_text)
+	assert not _posts(calls) and not _deletes(calls), calls
+	assert "reason=label_missing_untrusted_comment" in out, out
+	for trusted in (
+		{"HOLD_EVENT_NAME": "issue_comment", "HOLD_COMMENT_LOGIN": "outsider", "HOLD_COMMENT_ASSOCIATION": "MEMBER"},
+		{"HOLD_EVENT_NAME": "issue_comment", "HOLD_COMMENT_LOGIN": "pipeline-bot", "HOLD_COMMENT_ASSOCIATION": "NONE"},
+	):
+		rc, out, gh_output, env_text, calls = _run_refctx_core("plan.yml", "ok", "true", _label_missing_env(**trusted))
+		_assert_plan_held(str(trusted), rc, out, gh_output, env_text)
+		assert len(_posts(calls)) == 2, (trusted, calls)
+
+
+def test_plan_label_missing_fixture_holds() -> None:
+	"""Drive plan's step with the refusal the real resolver emits for the
+	label_missing fixtures (the managed child one has #223's shape)."""
+	resolver = REPO_ROOT / "scripts" / "resolve_integration_ref.sh"
+	for name in ("label_missing.json", "managed_child_without_tracking_line_label_missing.json"):
+		fixture_path = CI_TRIAGE_FIXTURE_DIR / name
+		fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+		assert fixture["expected_exit_code"] == 3 and fixture["expected_error_reason"] == "label_missing", name
+		self_test = subprocess.run(
+			["bash", str(resolver), "--self-test-case", str(fixture_path)],
+			capture_output=True, text=True, timeout=120,
+		)
+		assert self_test.returncode == 0, f"{name}\n{self_test.stdout}{self_test.stderr}"
+		(issue_number,) = fixture["issues"].keys()
+		body = fixture["issues"][issue_number].get("body") or ""
+		# Same PR selection as the resolver's classifier.
+		markers = re.findall(r"check-failure-triage:pr=([^\s>]*)", body)
+		pr = markers[0] if len(markers) == 1 and re.fullmatch(r"[1-9][0-9]{0,9}", markers[0]) else "none"
+		line = f"::error::CI_TRIAGE_PR_BRANCH_ROUTING issue={issue_number} pr={pr} outcome=refused reason=label_missing"
+		rc, out, gh_output, env_text, calls = _run_refctx_core("plan.yml", "ok", "true",
+			_label_missing_env(line, ISSUE_NUMBER=issue_number))
+		_assert_plan_held(name, rc, out, gh_output, env_text)
+		assert f"outcome=held reason=label_missing issue={issue_number}" in out, out
+		assert len(_posts(calls)) == 2, (name, calls)
+
+
+def test_plan_steps_after_refctx_skip_on_skip_plan() -> None:
+	wf = _workflow_text("plan.yml")
+	for name in (
+		"Fetch issue comments",
+		"Validate planning phase label",
+		"Check and claim /answer command",
+		"Run Codex planning",
+		"Post implementation plan",
+		"Auto-approve clear plan",
+	):
+		step = _step_text(wf, name)
+		cond = next((l for l in step.splitlines() if l.startswith("        if: ")), "")
+		assert "env.SKIP_PLAN != 'true'" in cond, f"{name}: {cond!r}"
+
+
 def main() -> int:
 	test_checkout_workflows_are_all_classified()
 	test_allowlist_entries_have_rationale()
@@ -806,6 +939,12 @@ def main() -> int:
 	test_clarify_always_steps_tolerate_missing_setup()
 	test_clarify_reclarify_releases_label_missing_hold_block()
 	test_clarify_label_missing_hold_writes_nothing_for_untrusted_comment()
+	test_plan_label_missing_refusal_holds_issue()
+	test_plan_label_missing_hold_dedups_on_trusted_marker()
+	test_plan_label_missing_hold_fails_closed_on_write_errors()
+	test_plan_label_missing_hold_writes_nothing_for_untrusted_comment()
+	test_plan_label_missing_fixture_holds()
+	test_plan_steps_after_refctx_skip_on_skip_plan()
 	return 0
 
 
