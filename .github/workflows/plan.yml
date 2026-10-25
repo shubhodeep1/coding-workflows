@@ -1159,6 +1159,9 @@ jobs:
                   echo "PLAN_REROUTED_REF=${base_ref}" >> "$GITHUB_ENV"
                   log "source=${source_issue} pr=${pr_number} outcome=rerouted from=${head_ref:-default} to=${base_ref}"
                 else
+                  # A PR that is no longer open usually has a deleted base, so
+                  # a retry fails again: hand it off instead (#7995).
+                  [ "${pr_not_open}" = "true" ] && pr_not_open_unresolved reroute_failed
                   # Never plan on the merged PR's former head (#7185): skip
                   # this run and let stall recovery retry it.
                   echo "::warning::Could not check out ${base_ref} for planning; skipping planning this run."

@@ -505,8 +505,8 @@ def test_pr_not_open_failed_reroute_skips(tmp_path):
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert "SKIP_PLAN=true" in github_env
 	assert "PLAN_REROUTED_REF" not in github_env
-	assert "outcome=skip reason=reroute_failed" in proc.stdout
-	assert not any(call[:2] == ["issue", "close"] for call in calls)
+	assert "outcome=skip reason=pr_not_open_unresolved detail=reroute_failed" in proc.stdout
+	_assert_plan_blocked_handoff(calls)
 
 
 def test_pr_not_open_invalid_base_ref_skips(tmp_path):
