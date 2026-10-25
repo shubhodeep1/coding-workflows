@@ -2079,15 +2079,17 @@ jobs:
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
     # (about 20 minutes on 4 local shards). Each matrix group runs one
-    # quarter of it on CI_POLL_TEST_SHARDS local shards, about 5 minutes
-    # measured (#4707); 20 leaves room for a cold runner, whose shards can
-    # be slower than a warm one's.
+    # fifth of it on CI_POLL_TEST_SHARDS local shards; 20 minutes leaves
+    # room for a cold runner, whose shards can be slower than a warm one's.
+    # The matrix grew from 4 to 5 groups after group 0 took 16m45s of its
+    # 20 minutes (run 40165437476, budget-watch issue #8113). Group 4 runs
+    # only its slice; every group-pinned step keeps its group.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
       fail-fast: false
       matrix:
-        poll-group: [0, 1, 2, 3]
+        poll-group: [0, 1, 2, 3, 4]
     timeout-minutes: 20
     steps:
       - name: Checkout repository
