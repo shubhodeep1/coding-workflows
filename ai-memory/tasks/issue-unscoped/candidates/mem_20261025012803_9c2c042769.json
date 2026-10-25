@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.87,
+  "details": "Changes that move poll steps between groups touch both `.github/workflows/ci.yml` and `tests/test_ci_poll_test_sharding.py`. When adjusting shard assignments, keep the workflow configuration and its sharding tests in sync.",
+  "fingerprint": "edee8296c41e6af6282d1402e5ddc8b31c70747cf629be7728a2e7fec581832d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40150427055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40150427055",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8048",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8057",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8065",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8072",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8080",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8050",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8062",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8068",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8078",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8081"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261025012803_9c2c042769",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "CI poll-test shard assignments and their regression tests should be updated together.",
+  "timestamps": {
+    "created_at": "2026-10-25T01:28:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
