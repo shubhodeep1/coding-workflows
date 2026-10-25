@@ -61,6 +61,12 @@ GROUP_AWK_RE = re.compile(
 	r"""awk -v n="\$\{poll_group\}" -v total="\$\{poll_groups\}" '(?P<expr>[^']+)'"""
 )
 POLL_JOB_ID = "orchestrate-poll"
+SINGLE_FILE_MODULES_STEP = "Orchestrate poll single-file module tests"
+SINGLE_FILE_MODULES = (
+	"tests/test_orchestrate_poll_noop_suspicious_recovery.py",
+	"tests/test_state_snapshot.py",
+	"tests/test_run_substate_ledger.py",
+)
 
 
 def load_lint_job() -> dict:
@@ -294,15 +300,25 @@ class PollStepContractTest(unittest.TestCase):
 		self.assertNotIn(" rg ", self.run)
 
 	def test_the_three_single_file_modules_still_run(self) -> None:
-		group_zero_gate = self.run.index('if [ "${poll_group}" -eq 0 ]; then')
-		for module in (
-			"tests/test_orchestrate_poll_noop_suspicious_recovery.py",
-			"tests/test_state_snapshot.py",
-			"tests/test_run_substate_ledger.py",
-		):
-			self.assertIn(module, self.run)
-			self.assertEqual(self.run.count(module), 1)
-			self.assertLess(group_zero_gate, self.run.index(module), "single-file modules run once, in group 0")
+		"""Since #8080 they run once, in their own group-1 step, not in the sharded step."""
+		single_file_run = poll_job_step(SINGLE_FILE_MODULES_STEP)["run"]
+		positions = []
+		for module in SINGLE_FILE_MODULES:
+			with self.subTest(module=module):
+				self.assertNotIn(module, self.run)
+				self.assertEqual(single_file_run.count(module), 1)
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+			positions.append(single_file_run.index(module))
+		self.assertEqual(positions, sorted(positions), "single-file modules keep their order")
+		self.assertNotIn('if [ "${poll_group}" -eq 0 ]; then', self.run)
+
+	def test_no_group_zero_step_names_the_single_file_modules(self) -> None:
+		for step in load_poll_job()["steps"]:
+			if str(step.get("if", "")) != "strategy.job-index == 0":
+				continue
+			for module in SINGLE_FILE_MODULES:
+				with self.subTest(step=step.get("name"), module=module):
+					self.assertNotIn(module, step.get("run", ""))
 
 
 class JobBudgetTest(unittest.TestCase):
@@ -1095,10 +1111,13 @@ class MergeTrainStepContractTest(unittest.TestCase):
 # Without its guard such a step would run in all four groups.
 GROUP_PINNED_STEPS = {
 	"Regression tests wired by the CI wiring guard (part 2)": 2,
-	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 3,
+	# Moved from group 3 to group 1 in #8072.
+	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 1,
 	"Isolated agent container tests (codex_isolated_exec.sh)": 2,
 	"Prebuilt sandbox image tests": 2,
 	"Review sandbox image build retry tests": 2,
+	# Moved from group 0 to group 1 in #8080.
+	"Orchestrate poll single-file module tests": 1,
 }
 POLL_JOB_UNGUARDED_STEPS = {
 	"Checkout repository",
@@ -1135,6 +1154,49 @@ class PollGroupPinnedStepsTest(unittest.TestCase):
 				continue
 			with self.subTest(step=step_name):
 				self.assertRegex(str(step.get("if", "")), guard_re)
+
+
+# Steps moved out of orchestrate-poll (3), which took 15m08s of its 20 minutes
+# (run 40112590944, budget-watch issue #8072): step name -> (new matrix group,
+# module paths its body names). Group 1 carries no moved-in steps since #7766.
+MOVED_POLL_GROUP_THREE_STEPS = {
+	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": (
+		1,
+		(
+			"tests/test_unblock_judge.py",
+			"tests/test_unblock_scan.py",
+			"tests/test_orphan_fixup_close.py",
+		),
+	),
+}
+
+
+class MovedPollGroupThreeStepsContractTest(unittest.TestCase):
+	"""The steps moved out of orchestrate-poll (3) run once, in group 1 (#8072)."""
+
+	def test_each_step_matches_its_group_pin(self) -> None:
+		# Ownership and the `if:` guard are checked once, by
+		# PollGroupPinnedStepsTest from GROUP_PINNED_STEPS; this only keeps the
+		# two tables in step.
+		for name, (group, _modules) in MOVED_POLL_GROUP_THREE_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_group, modules) in MOVED_POLL_GROUP_THREE_STEPS.items():
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertIn(module, poll_job_step(name)["run"])
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+
+	def test_moved_steps_left_group_three(self) -> None:
+		guarded = [
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 3"
+		]
+		for name in MOVED_POLL_GROUP_THREE_STEPS:
+			self.assertNotIn(name, guarded)
 
 
 # Steps moved from tests-release-and-log-analysis (budget-watch issue #7689):

@@ -11,7 +11,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UPDATE_WORKFLOWS = REPO_ROOT / ".github" / "workflows" / "update_workflows.yml"
 TEMPLATE = REPO_ROOT / "workflow-templates" / "ai-update-workflows.yml"
-ORIGINAL_COMMIT = "git commit -m \"$(printf 'chore: update AI workflow wrappers from coding-workflows@stable\\n\\n%b\\nAuto-applied by ai-update-workflows. To opt out, set the\\nALLOW_WORKFLOW_EDITS repository variable to '\\''false'\\''.' \"$COMMIT_BODY\")\""
+ORIGINAL_COMMIT = "git commit -m \"$(printf 'chore: update AI workflow wrappers from coding-workflows@stable\\n\\n%b\\nAuto-applied by ai-update-workflows. Managed wrappers always follow\\nthe pinned release; ALLOW_WORKFLOW_EDITS='\\''false'\\'' only skips other assets.' \"$COMMIT_BODY\")\""
 
 
 def text() -> str:

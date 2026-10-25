@@ -125,6 +125,12 @@ fi
 
 scope_file="${RUNNER_TEMP:-/tmp}/heal-scope-${GITHUB_RUN_ID:-local}.txt"
 printf '%s' "${verified}" | jq -r '.paths[]' > "${scope_file}"
+# The issue's own agents.md fragment (CLAUDE.md §30, #8064): the marker only
+# carries tests/** and changelog.d/*.md. Same entry as the heal plan gate's
+# heal_own_agents_fragment_entry; review_untrusted_workspace.py accepts it.
+if [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+	printf 'agents.d/%s-*.md\n' "${ISSUE_NUMBER}" >> "${scope_file}"
+fi
 chmod 0444 "${scope_file}"
 # The support checkout is separate from the editor's writable source copy.
 support="${GITHUB_WORKSPACE:?}/.codex-workflow-src"

@@ -1,6 +1,5 @@
-# IMPORTANT: This file is managed by coding-workflows and may be overwritten
-# automatically when upstream templates change. To opt out of auto-updates,
-# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
 name: AI Plan
 on:
   issue_comment:
@@ -17,7 +16,9 @@ jobs:
     # /answer comments are accepted only from that bot, and trusted users can
     # no longer trigger plan with an automation marker. Unset, behaviour is
     # unchanged (comments posted with GITHUB_TOKEN never trigger workflows, so
-    # the old github-actions[bot] branch was unreachable).
+    # the old github-actions[bot] branch was unreachable). In hardened mode the
+    # repository owner's own account may still post the marker: pipeline
+    # auto-answers are posted with GH_PAT, which arrives as the owner (a User).
     # ai:auto-heal-source is a consumer-owned label for auto-heal source
     # issues that never enter the pipeline themselves.
     if: >-
@@ -42,6 +43,17 @@ jobs:
           github.event.comment.user.type == 'Bot' &&
           vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
           github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN &&
+          startsWith(github.event.comment.body, '/answer') &&
+          (
+            contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
+            contains(github.event.comment.body, '[auto-answered-by-orchestrator]')
+          )
+        ) ||
+        (
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.type == 'User' &&
+          github.event.comment.author_association == 'OWNER' &&
+          github.event.comment.user.login == github.repository_owner &&
           startsWith(github.event.comment.body, '/answer') &&
           (
             contains(github.event.comment.body, '[auto-answered-by-clarify]') ||
