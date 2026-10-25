@@ -696,3 +696,124 @@ TODO, FIXME and HACK markers: none in `scripts/*.sh`, `scripts/*.py` or `.github
 | Code modularization | About 18 (the 14 workflows with support-ref blocks, `scripts/orchestrate_poll_process.sh`, `scripts/tg_helpers.sh`, the new `scripts/stable_e2e_step_wait_phase.sh`, `tests/test_workflow_support_ref_follows_pin.py`) | Large |
 | Expression size reduction | 4 (`.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, the new `scripts/implement_baseline_refctx.py`, `tests/test_workflow_file_size_limit.py`) | Small |
 | Medium/Low fixes | About 11 (`scripts/label_helpers.sh`, `scripts/tg_helpers.sh`, `scripts/ai_memory.py`, `scripts/gh_helpers.sh`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/implement.yml`, `.github/workflows/sync_ai_labels.yml`, the `pr6576-shard-followup` workflow, script and test, `docs/scripts-pending-removal.md`, `README.md`) | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-25)
+
+### Safety Tag Legend
+`SAFE_TO_MERGE` means the downstream implement stage can apply the fix without further review. Every SAFE_TO_MERGE precondition was confirmed by reading the code: same endpoint and filters, same function, no mutation in between, same error handling, no concurrency boundary, cache contract preserved. `NEEDS_VERIFICATION` means the fix is probably correct but depends on facts that static reading cannot settle; the listed checks must pass before anyone acts. `RISKY_SKIP` means at least one hard trigger applies: a retry or backoff loop, an auth or permission probe, pagination, a rate-limit-sensitive path, `orchestrate_poll_process.sh` or a judge, code that explicitly defends against races, or log keys that other code greps. These are listed for visibility only and must not be auto-implemented. This pass found no SAFE_TO_MERGE items.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001**: auto-merge label gate and PR-metadata read can share one `pulls/{n}` response
+- **Tag:** `RISKY_SKIP`
+- **Files:**
+  - `scripts/review_enable_auto_merge.sh:154-170`: paginated labels read.
+  - `scripts/review_enable_auto_merge.sh:221-228`: full PR metadata read.
+  - `scripts/review_enable_auto_merge.sh:91-109` (`reviewed_head_is_current_for_labels`): head-only PR read at line 100, reached from the e2e branch at line 158.
+- **Endpoints:** `GET /repos/{o}/{r}/issues/{n}/labels?per_page=100` (`--paginate`) and `GET /repos/{o}/{r}/pulls/{n}`.
+- **Calls:**
+  - Normal path: 1+P label pages plus 1 PR read, where P is usually 0. That is 2 calls, and 1 after the change.
+  - e2e path: 1 labels read plus 1 head read, so 2 calls, and 1 after the change.
+  - `ENABLE_AUTO_MERGE != true` path: unchanged at 1.
+- **Evidence:** the pull-request object carries `labels`, `head.sha`, `head.ref` and `base.ref`. The script reads the labels on their own first, then the full PR object:
+  ```bash
+  if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' 2>"${_label_err_file}")"; then
+  ...
+  if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+  ```
+  The comment at lines 98-99 shows the author already avoided one duplicate. The remaining one is the labels read, which comes before the metadata read.
+- **Proposed fix:**
+  1. Move the `_ORCH_PR_META_JSON` fetch above the e2e guard.
+  2. Derive `PR_LABELS_RAW` from `.labels[].name` in that response.
+  3. On the e2e path, compare `.head.sha` from the same response against `INITIAL_HEAD_SHA` instead of calling `reviewed_head_is_current_for_labels`.
+  4. Keep the paginated REST labels read as a fallback when the label array has 100 or more entries.
+- **Safety rationale:** the labels call uses `--paginate`, which is a RISKY_SKIP trigger. The comments at lines 144-153 record a past page-2 miss (Copilot review #3 on PR #1823). This is also a fail-closed gate that protects against the e2e auto-merge race.
+- **Downstream signal:** do not auto-implement. A human must first confirm that `GET /pulls/{n}` `.labels` is never truncated for PRs with many labels; the GitHub docs do not say. They must also confirm that the reorder keeps both fail-closed exits (lines 165-169 and 221-225), with their current `::warning::` text, which operators may grep.
+
+**MERGE-002**: phase-label swap reads labels with a separate GET even though the label write responses return the label set
+- **Tag:** `RISKY_SKIP`
+- **Files:**
+  - `scripts/label_helpers.sh:240-312` (`set_issue_phase_label_resilient`): GET at 243-244, POST at 283-284, DELETEs at 298-299.
+  - `scripts/review_rb_judge.sh:954-1023` (`_resilient_phase_swap`): GET at 959-960, POST at 986-987, DELETEs at 993, reconciliation GET at 997-998.
+- **Endpoints:** `GET /issues/{n}/labels` (`--paginate`), `POST /issues/{n}/labels`, `DELETE /issues/{n}/labels/{name}`.
+- **Calls:**
+  - `set_issue_phase_label_resilient`: 2+D, where D is the number of stale phase labels deleted. With the change, 1+D: the POST response replaces the GET.
+  - `_resilient_phase_swap` with a non-terminal target: 3+D. With the change, 2+D when D ≥ 1: the last DELETE response replaces the reconciliation GET. The first GET has to stay, because it decides the terminal-label no-op before any write (lines 977-984).
+- **Evidence:** the [GitHub labels REST docs](https://docs.github.com/en/rest/issues/labels) show both `POST /issues/{n}/labels` and `DELETE /issues/{n}/labels/{name}` returning a label array. The older docs say DELETE returns the labels left on the issue. Neither page says outright that the POST response holds every label on the issue.
+- **Proposed fix:**
+  - In `set_issue_phase_label_resilient`, POST first, compute `_stale` from the POST response, and fall back to today's GET only when that response cannot be parsed.
+  - In `_resilient_phase_swap`, read terminal precedence from the last successful DELETE response, and keep the GET when D = 0 or a DELETE failed.
+- **Safety rationale:** both GETs use `--paginate`. The rb-judge reconciliation GET exists to resolve a documented race between the terminal `ai:merged` label and the ready label (comments at lines 968-976, incident tele-funtoken-msg-scoring#4379). Both are RISKY_SKIP triggers.
+- **Downstream signal:** do not auto-implement. Manual review needs two things:
+  1. A live probe showing that the POST and DELETE responses return the full current label set, including on issues with more than 30 labels.
+  2. Confirmation that the "Never downgrade a terminal phase" guarantee still holds when the reconciliation read comes from a DELETE response, whose snapshot is taken before the DELETE commits.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001**: heal reconcile sends a blind `DELETE ai:merge-queued` even though the label state is already on disk
+- **Tag:** `NEEDS_VERIFICATION`
+- **Files:**
+  - `scripts/workflow_failure_heal_pr_reconcile.sh:243-247`: the `pulls?head=` list is written to `PULLS_FILE`.
+  - `scripts/workflow_failure_heal_pr_reconcile.sh:274`: the loop's jq extracts only number, head ref, head sha and base ref.
+  - `scripts/workflow_failure_heal_pr_reconcile.sh:117-136` (`_close_heal`): the unconditional DELETE at line 128.
+- **Endpoints:** `GET /repos/{o}/{r}/pulls?state=open&head=…` (already made) and `DELETE /repos/{o}/{r}/issues/{pr}/labels/ai:merge-queued`.
+- **Calls:** 5 writes per closed heal PR (comment, PATCH, DELETE, comment, PATCH). With the change, 4 when the label is absent, which is presumably the usual case. 5 when it is present.
+- **Evidence:**
+  ```bash
+  gh_retry gh api --method DELETE "repos/${REPO}/issues/${heal_pr}/labels/ai:merge-queued" >/dev/null 2>&1 || true
+  ```
+  Each pull object in `PULLS_FILE` already carries `labels[]`, but line 274 drops them. When the label is absent, the DELETE returns 404, which `gh_retry` classifies as permanent (`gh_helpers.sh:194`), so it costs one call per close with nothing to show for it.
+- **Proposed fix:**
+  1. Add a 5th TSV column at line 274: `((.labels // []) | map(.name) | index("ai:merge-queued") != null)`.
+  2. Pass it to `_close_heal` as a new 5th argument. Use a unique local name such as `heal_has_merge_queued`.
+  3. Skip the line-128 DELETE only when that value is `false`.
+  4. Keep the DELETE when the value is empty or unknown.
+- **Safety rationale:** the error behaviour is unchanged because line 128 is already `|| true`. However, the `PULLS_FILE` snapshot is taken before `_retarget_heal`'s git work, which can take minutes, so a label added concurrently by the merge train would be missed. That is why this cannot be SAFE_TO_MERGE.
+- **Downstream signal:** before implementing, check two things:
+  1. Confirm in `scripts/review_merge_train.sh` whether `release` (run from `cancel_on_pr_close.yml:419-427`) clears `ai:merge-queued` from closed PRs. If it does, the stale-snapshot gap is covered there.
+  2. Grep `scripts/` and `.github/workflows/` for anything that adds `ai:merge-queued` to a PR whose head is `ai/issue-*` while its heal issue is open. If nothing does, the snapshot is sufficient.
+
+**REUSE-002**: the terminal `fix` branch of the review-blocked judge re-reads PR state shortly after the post-LLM guard read
+- **Tag:** `RISKY_SKIP`
+- **Files:**
+  - `scripts/review_rb_judge.sh:1918-1940`: the guard read `_guard_pr_meta` at line 1927, which is unset at line 1940.
+  - `scripts/review_rb_judge.sh:2330-2345`: `fix)` with `IS_FINAL=true`, which reads `.state` again at line 2345.
+- **Endpoint:** `GET /repos/{o}/{r}/pulls/{n}`.
+- **Calls:** 2 reads on this path. With the change, 1, by keeping `.state` from the line-1927 response.
+- **Evidence:** the line-1927 response already contains `.state`. Between 1927 and 2345 the script makes no PR state change of its own. It only posts a comment (lines 2030 onward) and runs the head-SHA checks (lines 1978-1998).
+- **Proposed fix:** before the `unset` at line 1940, store `RB_GUARD_PR_STATE` (a new, non-clashing name) from `_guard_pr_meta`. At line 2345, use it in place of the new read, falling back to the live read when it is empty.
+- **Safety rationale:** this is a judge path. The guard read exists explicitly to defend against an asynchronous auto-merge completing while the judge runs (comment at lines 1918-1923), so it is a RISKY_SKIP trigger. The saving is also tiny: one call, on retry-exhausted `fix` verdicts only.
+- **Downstream signal:** do not auto-implement. A reviewer must decide whether the seconds between line 1927 and line 2345 (comment post, `rb_security_severity_block`) are a race window worth a fresh read. The `merge)` branch's polling read at lines 2223-2244 is a retry loop and must stay untouched in any case.
+
+### Dead Calls (DEAD-API-###)
+No findings. These were checked and found to be consumed:
+- the `.comments` count read in `scripts/tg_helpers.sh:207-213`;
+- the heal-issue list in `scripts/workflow_failure_heal_pr_reconcile.sh:96-102`;
+- `default_branch` in `scripts/unblock_judge.sh:352`, which is used at line 358;
+- the variable/secret probes in `scripts/unblock_judge.sh:308-309`, a permission probe that is used at line 310;
+- the `user` identity reads in `scripts/unblock_judge.sh:1345` and `scripts/orchestrate_poll_process.sh:51`, both auth probes and both consumed.
+
+### Cross-References to Deep Audit Section
+- API-001: RISKY_SKIP — the fix changes the retry/backoff loop in `curl_gh_api` (`gh_helpers.sh:1479-1512`). Confirmed: the non-rate-limit branch at lines 1503-1509 retries every non-2xx status, and the header at lines 1454-1455 still says "sleeps 30 s". New detail: line 1483 maps curl transport failures to `000`, which must stay retryable, so the early return should cover only `400|401|404|422`.
+- API-002: NEEDS_VERIFICATION — new detail. `gh_retry --idempotent` (`gh_helpers.sh:1169`) makes the cancel POST retryable. But HTTP 409 is not in `_is_gh_permanent_failure` (`gh_helpers.sh:194`), and cancelling a run that has already completed returns 409 "Cannot cancel a workflow run that is completed" ([observed 409 in technote-space/auto-cancel-redundant-workflow#68](https://github.com/technote-space/auto-cancel-redundant-workflow/issues/68); GitHub also returns it for orphaned queued runs, see [community #210234](https://github.com/orgs/community/discussions/210234)). With the flag alone, every snapshot-stale run would cost 5 attempts, about 15s of backoff, and a `::error::` line (lines 1220-1236). Before shipping, either treat `HTTP 409` as non-retryable at the call site (`cancel_on_pr_close.yml:370-379`), or confirm the stderr text and add a call-site-local check. Do not widen `_is_gh_permanent_failure` for all callers.
+- API-003: RISKY_SKIP — this is in `orchestrate_poll_process.sh`. The header at lines 37-41 calls it a deliberate "live issue read" under a trust-gated replay design. It has also been raised in at least 5 earlier reports (for example `analysis/workflow-optimization-2026-10-16.md:502` and `-10-23-5.md:438`), so per DEBT-001 it needs a tracking issue, not another re-audit.
+- API-004: RISKY_SKIP — the code addresses a computed last page (`per_page=100&page=${last_page}`, `tg_helpers.sh:213-217`), which counts as manual pagination. New details for any later manual implementation:
+  - Callers use the REST numeric `.id` for the PATCH (`tg_helpers.sh:253-256`, `266`, `321-326`, `335`). A GraphQL replacement must map `databaseId`→`id` and return `[{id, body}]`.
+  - The change moves this load from the REST core bucket to the GraphQL points bucket.
+- BATCH-001: RISKY_SKIP — this is in `orchestrate_poll_process.sh`. New details:
+  - `_fetch_issue_labels_batch_graphql` is a live fetch, not a cache (`4447-4459`), so the "Re-read labels since we may have changed them" intent (line 29289) is kept.
+  - The existing `_wave_issue_nums_json` (`26980-26982`) is built before review-blocked handling, and reissues can change wave membership. The input must therefore be rebuilt from `${ISSUE_NUMS}` plus the state-file read at line 29301, not reused.
+  - Today a failed per-issue read becomes `[]` (line 29290). The batch-plus-backfill version must keep that same `|| echo '[]'` fallback, so `orchestrate_lib.py check-wave-status` sees the same input.
+- BATCH-002: RISKY_SKIP — this is in `orchestrate_poll_process.sh` (`7095-7111`, `29425-29441`), and its unknown-state handling is a fail-safe defer.
+- BATCH-003: RISKY_SKIP — this is in `orchestrate_poll_process.sh`, and the fix needs a REST-shaped adapter at five call sites with different field needs.
+- BATCH-004: NEEDS_VERIFICATION — new safety detail. REST `pulls?head=<owner>:ai/issue-<n>` (`workflow_failure_heal_pr_reconcile.sh:243`) restricts results to this owner's branch. GraphQL `pullRequests(headRefName:)` does **not** filter by the head repository owner, so a fork PR with the same branch name would match. The aliased query must also select `headRepository{nameWithOwner}`, and drop non-matching nodes before line 250. N is usually 1, so the benefit is minimal.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 3 | REUSE-001, API-002 (cross-ref), BATCH-004 (cross-ref) |
+| RISKY_SKIP | 9 | MERGE-001, MERGE-002, REUSE-002, API-001 (cross-ref), API-003 (cross-ref), API-004 (cross-ref), BATCH-001 (cross-ref), BATCH-002 (cross-ref), BATCH-003 (cross-ref) |
+
+### Implement-Stage Handoff
+- No SAFE_TO_MERGE findings in this pass.
