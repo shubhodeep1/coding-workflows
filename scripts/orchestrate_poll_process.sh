@@ -1763,11 +1763,39 @@ fi
 # Populated lazily on first probe in each poll cycle.
 declare -gA _MERGE_PROBE_CACHE_JSON=()
 declare -gA _MERGE_PROBE_CACHE_FETCHED=()
+# Per-branch sibling lookup state: "known" when `gh pr list` succeeded
+# and returned a JSON array, "unknown" otherwise (#8096).
+declare -gA _MERGE_PROBE_CACHE_STATE=()
+_MERGE_PROBE_FAIL_CLOSED_SWITCH_WARNED=""
+
+# _merge_probe_sibling_lookup_fail_closed_enabled — returns 0 when an
+# unknown sibling lookup must block the probe (exit 2), 1 for the old
+# fail-open behaviour. MERGE_PROBE_SIBLING_LOOKUP_FAIL_CLOSED_ENABLED:
+# unset, empty or `true` (any case) on; `false` off; anything else off
+# with one warning that never prints the value.
+_merge_probe_sibling_lookup_fail_closed_enabled()
+{
+	local v="${MERGE_PROBE_SIBLING_LOOKUP_FAIL_CLOSED_ENABLED:-true}"
+	v="${v,,}"
+	case "${v}" in
+		true) return 0 ;;
+		false) return 1 ;;
+	esac
+	if [ -z "${_MERGE_PROBE_FAIL_CLOSED_SWITCH_WARNED}" ]; then
+		echo "::warning::MERGE_PROBE_SIBLING_LOOKUP_FAIL_CLOSED_ENABLED has an invalid value; sibling lookup failures fall back to fail-open." >&2
+		_MERGE_PROBE_FAIL_CLOSED_SWITCH_WARNED="1"
+	fi
+	return 1
+}
 
 # _merge_probe_refresh — populate the sibling-PR cache for a given
 # integration branch. Performs exactly one `gh pr list` API call per
 # integration branch per cycle and a single batched `git fetch` for
-# all sibling head refs.
+# all sibling head refs. Records _MERGE_PROBE_CACHE_STATE[<branch>]:
+# "known" when the lookup succeeded and returned a JSON array,
+# "unknown" otherwise (failed command, empty or non-array output); the
+# batched fetch is skipped when the state is "unknown". The branch is
+# marked fetched either way, so there is still one call per cycle.
 #
 # Usage: _merge_probe_refresh <integration_branch>
 _merge_probe_refresh()
@@ -1779,17 +1807,25 @@ _merge_probe_refresh()
 		return 0
 	fi
 
-	local prs_json
-	prs_json="$(gh_retry gh pr list \
+	local prs_json=""
+	local lookup_state="unknown"
+	if prs_json="$(gh_retry gh pr list \
 		--repo "${GITHUB_REPOSITORY}" \
 		--state open \
 		--base "${integration_branch}" \
 		--json number,headRefName,headRefOid \
-		--limit 100 2>/dev/null || echo '[]')"
-	if ! printf '%s' "${prs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+		--limit 100 2>/dev/null)" \
+		&& printf '%s' "${prs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+		lookup_state="known"
+	else
 		prs_json='[]'
 	fi
 	_MERGE_PROBE_CACHE_JSON["${integration_branch}"]="${prs_json}"
+	_MERGE_PROBE_CACHE_STATE["${integration_branch}"]="${lookup_state}"
+	if [ "${lookup_state}" != "known" ]; then
+		_MERGE_PROBE_CACHE_FETCHED["${integration_branch}"]="1"
+		return 0
+	fi
 
 	# Batched fetch of all sibling head refs + the integration branch.
 	# Ignore failures — a failed fetch means the probe will be best-effort.
@@ -1808,7 +1844,9 @@ _merge_probe_refresh()
 # probe_sibling_merge_conflicts — returns 0 when the candidate PR can
 # be merged without conflicts against every other open sibling PR
 # targeting the same integration branch, 1 when a conflict is
-# detected. On conflict, prints the conflicting sibling PR number and
+# detected, 2 when the sibling PR lookup was unavailable this cycle
+# (MERGE_PROBE_SIBLING_LOOKUP_FAIL_CLOSED_ENABLED=false restores the
+# old fail-open result, 0). On conflict, prints the conflicting sibling PR number and
 # the colliding paths to stdout for caller logging AND records a
 # telemetry event on the ai-memory branch so the next orchestrator
 # run's planner guard can promote these paths to "learned hot"
@@ -1838,6 +1876,10 @@ probe_sibling_merge_conflicts()
 	fi
 
 	_merge_probe_refresh "${integration_branch}"
+	if [ "${_MERGE_PROBE_CACHE_STATE[${integration_branch}]:-unknown}" != "known" ] && _merge_probe_sibling_lookup_fail_closed_enabled; then
+		echo "  [merge-probe] Sibling PR lookup for ${integration_branch} unavailable; cannot probe PR #${candidate_pr} this tick."
+		return 2
+	fi
 	local prs_json="${_MERGE_PROBE_CACHE_JSON[${integration_branch}]:-[]}"
 
 	local candidate_ref="refs/remotes/origin/${candidate_head_ref}"
@@ -27277,7 +27319,13 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
           # the merge lands, so the loser never enters an autofix
           # rebase loop.
           if [ -n "${RTM_INTEGRATION_BRANCH}" ] && [ -n "${_rtm_head_ref}" ] && [ "${_rtm_head_ref}" != "null" ]; then
-            if ! probe_sibling_merge_conflicts "${RTM_PR}" "${_rtm_head_ref}" "${RTM_INTEGRATION_BRANCH}"; then
+            _rtm_probe_rc=0
+            probe_sibling_merge_conflicts "${RTM_PR}" "${_rtm_head_ref}" "${RTM_INTEGRATION_BRANCH}" || _rtm_probe_rc=$?
+            if [ "${_rtm_probe_rc}" -eq 2 ]; then
+              echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} this tick: sibling lookup unavailable (not counted toward MAX_MERGE_DEFERRALS)."
+              continue
+            fi
+            if [ "${_rtm_probe_rc}" -ne 0 ]; then
               _rtm_defer_count="$(_bump_merge_deferral_count "${WAVE_IDX}" "${rtm_issue}")"
               [[ "${_rtm_defer_count}" =~ ^[0-9]+$ ]] || _rtm_defer_count=0
               echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — sibling conflict detected."
