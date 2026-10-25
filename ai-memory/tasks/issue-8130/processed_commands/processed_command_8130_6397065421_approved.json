@@ -5,13 +5,25 @@
   "entry_id": "processed_command_8130_6397065421_approved",
   "issue_number": 8130,
   "metadata": {
+    "branch": "ai/issue-8130",
+    "changed_files": [
+      "changelog.d/8130-memory-write-timing-telemetry.md",
+      "scripts/ai_memory.py",
+      "scripts/ai_memory_lib.py",
+      "tests/test_ai_memory_cli.py"
+    ],
+    "issue_number": 8130,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8130",
+    "pr_number": 8135,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8135",
+    "run_attempt": "1",
+    "run_id": "40189060707",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40189060707"
   },
   "run_attempt": 1,
   "run_id": "40189060707",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-25T11:32:12Z",
+  "status": "completed",
+  "timestamp": "2026-10-25T11:53:34Z",
   "workflow": "implement"
 }
