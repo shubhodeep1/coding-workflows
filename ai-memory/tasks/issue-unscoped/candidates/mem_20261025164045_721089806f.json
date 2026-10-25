@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2501-2503 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The older #8118 comment paragraph says \"Name and body unchanged\", but this PR rewrites the step's `run:` body directly below it.\n  WHY: It is a comment-only inconsistency that could mislead a reader and does not fail at runtime (reported as NIT).\n- changelog.d/8150-orchestrate-poll-unblock-step-sharded.md:1-16 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: No correctness defect found in the restructured changelog fragment (reported as a NIT-level note).\n  WHY: The move history and table rows check out against the earlier changelog fragments and the shipped ci.yml step, and no fact was dropped or invented.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, step \"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)\" (to be added to a different CI job)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR keeps the step in orchestrate-poll (4) with `if: strategy.job-index == 4` and rewrites its body into 4 local pytest shards, and no diff hunk adds the step to another job. Severity disagreement: openai_gpt-6-luna rated it MAJOR (confidence 5), while the other three rated it NIT (confidence 2). Those three call it a documented, plan-approved deviation, recorded in the ci.yml comment and the changelog fragment. Their stated reasons: the step has moved three times (#8072, #8091, #8118), no job has about 11 minutes of headroom, and the hard limits still hold.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:2501-2503 | severity=low (NIT) | confidence=4\n  PROBLEM: The older #8118 comment paragraph says \"Name and body unchanged\", but this PR rewrites the step's `run:` body directly below it.\n  WHY: It is a comment-only inconsistency that could mislead a reader and does not fail at runtime.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, with the unblock step added to a different CI job.\n  Evidence of absence: The PR keeps the step in group 4 (`if: strategy.job-index == 4`) and rewrites its body to run in 4 local pytest shards, and no diff hunk adds the step to another job. The deviation was approved in the plan and documented in the `ci.yml` comment and the changelog fragment. The issue's hard limits still hold.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- All other lenses: NONE. The reviewer found no defect in the shard split or the new tests.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, moving the \"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)\" step from orchestrate-poll (4) into another job's steps\n  Evidence of absence: The PR keeps the step in group 4 (`if: strategy.job-index == 4`) and shards its three modules across four local pytest processes, and no diff hunk adds the step to any other CI job. It is a documented, user-approved deviation (ci.yml comment lines 2504-2514, changelog.d/8150-orchestrate-poll-unblock-step-sharded.md). The issue's three hard limits are satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the \"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)\" step.\n  Evidence of absence: The PR keeps the step in `orchestrate-poll (4)` with `if: strategy.job-index == 4` and replaces its original single pytest command with four local shards. No diff moves the step unchanged into another job.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/8150-orchestrate-poll-unblock-step-sharded.md:1-16 | severity=low (NIT) | confidence=2\n  PROBLEM: No correctness defect found in the restructured fragment.\n  WHY: n/a. The move history and table rows check out against the earlier changelog fragments and the shipped ci.yml step, and no fact was dropped or invented.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, the orchestrate-poll matrix step \"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)\" (moved unchanged into another job)\n  Evidence of absence: The step keeps `if: strategy.job-index == 4` and its body is rewritten in place to shard 4 pytest processes, and no step is added to another job. The reviewer calls this a deliberate, documented deviation, with the approved plan and the ci.yml comment (lines 2504-2513) and changelog fragment recording why. No change requested.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1e03d4c5e94765b53c9d6dacffe391d717c8b1f401640de3db95f414f5e3e926",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8152,
+    "run_id": "40211098619",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40211098619",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025164045_721089806f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8152,
+    "run_id": "40211098619"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T16:40:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
