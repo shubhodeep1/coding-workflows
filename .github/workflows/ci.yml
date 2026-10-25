@@ -2083,7 +2083,8 @@ jobs:
     # room for a cold runner, whose shards can be slower than a warm one's.
     # The matrix grew from 4 to 5 groups after group 0 took 16m45s of its
     # 20 minutes (run 40165437476, budget-watch issue #8113). Group 4 runs
-    # only its slice; every group-pinned step keeps its group.
+    # its slice and, since #8118, the unblock judge step; every other
+    # group-pinned step keeps its group.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
@@ -2486,11 +2487,22 @@ jobs:
       # The single-file modules cost more (test_run_substate_ledger.py alone
       # took 139s locally), but group 0 ran 15m09s with them, so they stay in
       # group 1; group 1 may still finish near the 15-minute budget-watch
-      # threshold. Group 0 keeps the fast-fail subset. This step runs in group
-      # 0 only, once per CI run, and needs only checkout, Python 3.12 and the
-      # shared pip install, which every matrix group has. Name and body unchanged.
+      # threshold. Group 0 keeps the fast-fail subset. This step then ran in
+      # group 0 only, once per CI run, until #8118 moved it on to group 4.
+      # Name and body unchanged.
+      # Moved from group 0 to group 4: orchestrate-poll (0) took 17m01s of its
+      # 20 minutes on main (run 40175309052, budget-watch issue #8118). Group 0
+      # carried its slice, the fast-fail subset (11 test_implementation_failed_*
+      # tests) and this step (#8091); group 4 runs only its slice (#8113), so
+      # it has the most headroom. Step timings were not readable, so the move
+      # is an estimate from group totals, not a measurement; the
+      # analysis/workflow-optimization-2026-10-24-2.md table recorded this
+      # step at 860s in a failing run (40065164413). This step now runs in
+      # group 4 only, once per CI run, and
+      # needs only checkout, Python 3.12 and the shared pip install, which
+      # every matrix group has. Name and body unchanged.
       - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
-        if: strategy.job-index == 0
+        if: strategy.job-index == 4
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py
