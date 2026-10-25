@@ -834,6 +834,9 @@ _gh_cmd_log_summary()
 	local _ghsum_n="${#_ghsum_args[@]}"
 	if [ "${1:-}" = "gh" ] && [ "${2:-}" = "api" ]; then
 		_ghsum_words="gh api"; _ghsum_api=1; _ghsum_rest_start=2
+	elif [ "${1:-}" = "_safe_gh_jq" ]; then
+		# `gh_retry _safe_gh_jq <endpoint> …` passes the wrapper name first.
+		_ghsum_words="_safe_gh_jq gh api"; _ghsum_api=1; _ghsum_rest_start=1
 	elif [ "${1:-}" = "gh" ]; then
 		_ghsum_words="gh"
 		local _ghsum_i=1 _ghsum_count=0

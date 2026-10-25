@@ -205,6 +205,8 @@ def _run_line(*args: str) -> str:
 			"provider_request_invalid",
 		),
 		("1", "", "something unrelated at line 400\n", "", "exit_nonzero"),
+		("1", "", "process exited with exit code 400\n", "", "exit_nonzero"),
+		("1", "", '{"error":{"code":400}}\n', "", "provider_request_invalid"),
 		("1", "", None, "", "exit_nonzero"),
 		("garbage", "", None, "", "ok"),
 	],

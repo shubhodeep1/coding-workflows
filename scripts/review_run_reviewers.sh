@@ -4020,7 +4020,7 @@ reviewer_attempt_result_failure_class() {
     if grep -Eiq '(^|[^0-9])(500|502|503|504|520|521|522|523|524|525|526|527|529|530)([^0-9]|$)|internal server error|bad gateway|service unavailable|gateway timeout|server error' "${stderr_file}" 2>/dev/null; then
       printf 'server_error\n'; return 0
     fi
-    if grep -Eiq '(http|status|status_code|code)[^0-9a-z]{0,16}400([^0-9]|$)|bad request|invalid_request' "${stderr_file}" 2>/dev/null; then
+    if grep -Eiq '(http|status|status_code|"code"|error[ _]code)[^0-9a-z]{0,16}400([^0-9]|$)|bad request|invalid_request' "${stderr_file}" 2>/dev/null; then
       printf 'provider_request_invalid\n'; return 0
     fi
     if grep -Fq 'reasoning.effort' "${stderr_file}" 2>/dev/null && grep -Fq 'max_tokens' "${stderr_file}" 2>/dev/null; then

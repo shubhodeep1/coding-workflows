@@ -546,6 +546,14 @@ def test_summary_keeps_flag_names_without_glued_values(tmp_path: Path) -> None:
 	assert _summary(tmp_path, "gh", "api", "graphql", "-f", f"query={SECRET}") == "gh api graphql (flags: -f)"
 
 
+def test_summary_names_endpoint_for_safe_gh_jq_wrapper(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "_safe_gh_jq", f"repos/o/r/pulls/7?q={SECRET}", "--jq", f".{SECRET}")
+	assert out == "_safe_gh_jq gh api repos/o/r/pulls/7 (flags: --jq)"
+	assert _summary(tmp_path, "_safe_gh_jq", "--paginate", "--slurp", "repos/o/r/x") == (
+		"_safe_gh_jq gh api repos/o/r/x (flags: --paginate --slurp)"
+	)
+
+
 def test_summary_of_other_commands_and_positionals(tmp_path: Path) -> None:
 	assert _summary(tmp_path, "curl", f"https://x/{SECRET}", "-H", SECRET) == "curl (flags: -H)"
 	assert _summary(tmp_path, "evil;cmd", SECRET) == "<command>"
