@@ -164,6 +164,8 @@ def test_verified_steps_are_ticked_in_the_human_steps_issue(command: Path) -> No
 		"`github-actions[bot]`, or an OWNER, MEMBER or COLLABORATOR of the repository",
 		"highest-id entry comment written by the pipeline account",
 		"ignore comments by anyone else",
+		"Read every page of the tracker's comments, as the pipeline does, before choosing the highest-id entry comment",
+		"list the key's comments again (every page)",
 		"first line, trimmed, is exactly `<!-- ai:operator-step:v1 -->`",
 		"Count a comment as an entry comment only when its first line, trimmed, is exactly",
 		"an external PR's entries are in that repository's own tracker",
