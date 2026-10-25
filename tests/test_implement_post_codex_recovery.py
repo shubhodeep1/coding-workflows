@@ -6173,6 +6173,111 @@ def test_restore_tracked_symlink_leaves_unchanged_links_alone() -> None:
 		assert _changed_paths(repo) == []
 
 
+# --- Issue #8121: keep pipeline Python bytecode out of consumer implement commits ---
+# Host steps import the helpers "Stage workflow support files" copies into a
+# consumer's scripts/ (memory_helpers.sh -> ai_memory.py -> ai_memory_lib.py ...).
+# Bytecode written next to them landed in scripts/__pycache__/, the commit paths
+# staged it, and the automation-path guard blocked the issue as ai:scope-blocked
+# (mongo-explorer#42, run 40179480717).
+
+_PYCACHE_GITIGNORE_PRINTF = "printf '%s\\n' \"${_fetched_scripts[@]}\" __pycache__/ .gitignore"
+
+
+def _workflow_top_level_env() -> dict[str, str]:
+	env: dict[str, str] = {}
+	in_env = False
+	for line in _workflow_text().splitlines():
+		if line.startswith("env:"):
+			in_env = True
+			continue
+		if not in_env:
+			continue
+		if line and not line.startswith(" ") and not line.startswith("#"):
+			break
+		match = re.match(r"^  ([A-Z0-9_]+):\s*(.*?)\s*$", line)
+		if match:
+			env[match.group(1)] = match.group(2).strip('"').strip("'")
+	return env
+
+
+def test_implement_workflow_disables_python_bytecode_writes() -> None:
+	env = _workflow_top_level_env()
+	assert env, "top-level env: block not found in implement.yml"
+	assert env.get("PYTHONDONTWRITEBYTECODE") == "1", env.get("PYTHONDONTWRITEBYTECODE")
+
+
+def test_generated_scripts_gitignore_excludes_pycache() -> None:
+	script = _extract_run_script("Stage workflow support files")
+	assert _PYCACHE_GITIGNORE_PRINTF in script
+
+
+def _extract_scripts_gitignore_generation(script: str) -> str:
+	end_marker = "} > scripts/.gitignore\nfi\n"
+	end = script.index(end_marker) + len(end_marker)
+	start = script.rindex('if [ "${is_self_repo}" = "false" ]; then', 0, end)
+	return script[start:end]
+
+
+def _extract_staging_block(text: str) -> str:
+	start = text.index("add_u_excludes=(':!node_modules'")
+	reset_line = 'git reset -q HEAD -- "scripts/${fetched_script}"'
+	reset_at = text.index(reset_line, start)
+	end = text.index("\nfi\n", reset_at) + len("\nfi\n")
+	return text[start:end]
+
+
+def test_preflight_and_commit_staging_skip_scripts_pycache() -> None:
+	generation = _extract_scripts_gitignore_generation(_extract_run_script("Stage workflow support files"))
+	stagings = {
+		"preflight": _extract_staging_block(_extract_run_script("Preflight destructive-commit guard")),
+		"commit": _extract_staging_block(_implement_commit_script_text()),
+	}
+	planned = ".github/workflows/claude-auto-review.yml"
+	for label, staging in stagings.items():
+		with tempfile.TemporaryDirectory() as tmp_dir:
+			repo = Path(tmp_dir) / "repo"
+			_bootstrap_git_repo(repo)
+			(repo / planned).parent.mkdir(parents=True)
+			(repo / planned).write_text("name: review\n", encoding="utf-8")
+			_git(["git", "add", planned], cwd=repo)
+			_git(["git", "commit", "-m", "planned file"], cwd=repo)
+			(repo / planned).write_text("name: review\non: push\n", encoding="utf-8")
+			scripts_dir = repo / "scripts"
+			(scripts_dir / "__pycache__").mkdir(parents=True)
+			(scripts_dir / "ai_memory.py").write_text("print('helper')\n", encoding="utf-8")
+			(scripts_dir / "ai_memory_lib.py").write_text("X = 1\n", encoding="utf-8")
+			(scripts_dir / "__pycache__" / "ai_memory_lib.cpython-312.pyc").write_bytes(b"\x00bytecode")
+			(scripts_dir / "consumer_tool.sh").write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+			script = (
+				"set -euo pipefail\n"
+				"is_self_repo=false\n"
+				"_fetched_scripts=(ai_memory.py ai_memory_lib.py)\n"
+				"is_virtual_cleanup_path() { return 1; }\n"
+				+ generation
+				+ staging
+				+ "git diff --cached --name-only\n"
+			)
+			result = _run_shell_script(
+				script,
+				cwd=repo,
+				env={
+					"GITHUB_REPOSITORY": "owner/consumer",
+					"GIT_CONFIG_GLOBAL": "/dev/null",
+					"GIT_CONFIG_NOSYSTEM": "1",
+				},
+			)
+			assert result.returncode == 0, f"{label}: {result.stderr}"
+			staged = set(result.stdout.split())
+			assert "scripts/consumer_tool.sh" in staged, f"{label}: {staged}"
+			assert planned in staged, f"{label}: {staged}"
+			assert not any(p.startswith("scripts/__pycache__/") for p in staged), f"{label}: {staged}"
+			assert "scripts/ai_memory.py" not in staged, f"{label}: {staged}"
+			assert "scripts/ai_memory_lib.py" not in staged, f"{label}: {staged}"
+			assert "scripts/.gitignore" not in staged, f"{label}: {staged}"
+			gitignore = (scripts_dir / ".gitignore").read_text(encoding="utf-8").splitlines()
+			assert "__pycache__/" in gitignore, f"{label}: {gitignore}"
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
