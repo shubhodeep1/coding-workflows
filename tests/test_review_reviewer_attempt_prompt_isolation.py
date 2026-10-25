@@ -256,3 +256,39 @@ def test_reviewer_attempt_result_emitted_on_success_path() -> None:
 	call = text.find('"$(reviewer_attempt_result_failure_class ', success_gate)
 	emit = text.find('reviewer_attempt_result_text="$(reviewer_attempt_result_line ', success_gate)
 	assert success_gate < call < emit < silent < success
+
+
+def test_reviewer_attempt_result_emitted_on_prelaunch_failures() -> None:
+	text = _script_text()
+	attempt = _extract_shell_function(text, "execute_reviewer_attempt")
+	for marker in (
+		"failed to generate its OpenCode config on",
+		"failed OpenCode bootstrap validation on",
+		"refusing to launch OpenCode with empty stdin",
+	):
+		pos = attempt.find(marker)
+		assert pos != -1, marker
+		ret = attempt.find("return 0", pos)
+		emit = attempt.find("reviewer_attempt_result_emit_prelaunch 1", pos)
+		assert pos < emit < ret, marker
+
+
+def test_reviewer_attempt_result_prelaunch_helper_line(tmp_path) -> None:
+	text = _script_text()
+	line_fn = _extract_shell_function(text, "reviewer_attempt_result_line")
+	emit_fn = _extract_shell_function(text, "reviewer_attempt_result_emit_prelaunch")
+	log = tmp_path / "slot.log"
+	script = (
+		f"set -euo pipefail\n{line_fn}\n{emit_fn}\n"
+		'output_prefix=pass1 safe_name=slot_b attempt_number=2 effective_model="bad model" '
+		f'log_file="{log}" start_time=""\n'
+		"reviewer_attempt_result_emit_prelaunch 1\n"
+	)
+	proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stderr
+	expected = (
+		"REVIEWER_ATTEMPT_RESULT pass=pass1 slot=slot_b attempt=2 model=unknown "
+		"exit_code=1 duration_secs=0 wd_reason=none stall_state=none failure_class=exit_nonzero"
+	)
+	assert proc.stdout.strip() == expected
+	assert log.read_text(encoding="utf-8").strip() == expected

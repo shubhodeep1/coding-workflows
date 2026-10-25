@@ -4063,6 +4063,30 @@ reviewer_attempt_result_line() {
   return 0
 }
 
+# Logs REVIEWER_ATTEMPT_RESULT for an attempt that fails before OpenCode
+# launches (config, bootstrap, empty prompt), so every attempt gets a line
+# (#8097). Reads the caller's locals via dynamic scoping; log only.
+reviewer_attempt_result_emit_prelaunch() {
+  local prelaunch_rc="${1:-1}"
+  local prelaunch_end=""
+  local prelaunch_duration=0
+  local prelaunch_text=""
+
+  prelaunch_end="$(date +%s 2>/dev/null || echo 0)"
+  if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${prelaunch_end}" =~ ^[0-9]+$ ]] && [ "${prelaunch_end}" -ge "${start_time}" ]; then
+    prelaunch_duration=$(( prelaunch_end - start_time ))
+  fi
+  prelaunch_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${prelaunch_rc}" "${prelaunch_duration}" "none" "none" "exit_nonzero" 2>/dev/null || true)"
+  if [ -n "${prelaunch_text}" ]; then
+    if [ -n "${log_file:-}" ]; then
+      printf '%s\n' "${prelaunch_text}" | tee -a "${log_file}" || true
+    else
+      printf '%s\n' "${prelaunch_text}" || true
+    fi
+  fi
+  return 0
+}
+
 reviewer_log_advance_action() {
   local next_action="$1"
   local next_attempt="${2:-}"
@@ -4244,6 +4268,7 @@ execute_reviewer_attempt() {
     --config-path "${reviewer_opencode_config_path}" \
     --serena off; then
     echo "Reviewer slot ${slot_model} (${effective_model}) failed to generate its OpenCode config on ${attempt_label}." | tee -a "${log_file}" >&2
+    reviewer_attempt_result_emit_prelaunch 1 || true
     REVIEWER_ATTEMPT_OUTCOME="failed"
     REVIEWER_ATTEMPT_CMD_RC=1
     return 0
@@ -4252,6 +4277,7 @@ execute_reviewer_attempt() {
     "${reviewer_opencode_config_path}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
     reviewer_terminal_alert_emitted=true
     echo "Reviewer slot ${slot_model} (${effective_model}) failed OpenCode bootstrap validation on ${attempt_label}." | tee -a "${log_file}" >&2
+    reviewer_attempt_result_emit_prelaunch 1 || true
     REVIEWER_ATTEMPT_OUTCOME="failed"
     REVIEWER_ATTEMPT_CMD_RC=1
     return 0
@@ -4419,6 +4445,7 @@ execute_reviewer_attempt() {
   fi
   if [ ! -s "${reviewer_effective_prompt_file}" ]; then
     echo "::warning::Reviewer slot ${slot_model} (${effective_model}, safe_name=${safe_name:-unset}) effective prompt file is still empty after fallback on ${attempt_label}; refusing to launch OpenCode with empty stdin." | tee -a "${log_file}" >&2
+    reviewer_attempt_result_emit_prelaunch 1 || true
     kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
     emit_reviewer_substate "Failed" "${attempt_number}"
     rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}" "${wd_reason_file}" "${stall_status_file}" "${tmp_output}" "${tmp_structured_output}" "${tmp_stderr}" "${reviewer_attempt_prompt_file}"
