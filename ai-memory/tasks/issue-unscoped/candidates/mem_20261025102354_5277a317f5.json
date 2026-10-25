@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nHardening suggestion (not a finding): scripts/review_run_reviewers.sh, reviewer_attempt_result_failure_class 400 pattern (~line 4023). Unquoted object-style stderr such as `{ code: 400 }` or `code=400` no longer maps to provider_request_invalid. Suggested fix: add the alternative `|[{,] *code[:=] *400([^0-9]|$)`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nHardening suggestion (not a finding): scripts/review_run_reviewers.sh line 4023, `provider_request_invalid` grep pattern. Unquoted object-style stderr such as `{ code: 400, message: ... }` or `code=400` falls to `exit_nonzero`. This is a log-line-only degradation. Suggested fix: add `[{,] *code[:=] *400([^0-9]|$)`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9074e522756f13e05d51696a8ca11354c74cc03f52ccefbd274310394c423dff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8099,
+    "run_id": "40181502655",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40181502655",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025102354_5277a317f5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8099,
+    "run_id": "40181502655"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T10:23:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
