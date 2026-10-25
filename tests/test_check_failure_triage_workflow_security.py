@@ -1250,7 +1250,8 @@ def _run_collect_stage(
 	``MOCK_HIST_JOB`` and the job log from ``MOCK_HIST_LOG_FILE`` (404 when
 	unset); ``MOCK_TRIAGE_ISSUES`` replaces the empty triage-issue list.
 	``MOCK_TRIAGE_LIST_FAIL`` (any non-empty value) makes the triage-issue
-	listing fail with HTTP 502 (#8126).
+	listing fail with HTTP 502 (#8126). ``MOCK_TRIAGE_RAW_PAGE`` is a raw API
+	page that the stub runs through the script's own ``--jq`` filter.
 	``inspect(runtime_dir, env)`` runs before the temp dir is removed.
 
 	``pr_payload_overrides`` replaces top-level PR payload keys."""
@@ -1306,6 +1307,12 @@ case "$*" in
   "api repos/owner/repo/issues/41") jq -n --rawfile body "${MOCK_PARENT_BODY_FILE}" '{number: 41, body: $body}' ;;
   "api --paginate --method GET repos/owner/repo/issues "*)
     if [ -n "${MOCK_TRIAGE_LIST_FAIL:-}" ]; then echo 'gh: Server Error (HTTP 502)' >&2; exit 1; fi
+    if [ -n "${MOCK_TRIAGE_RAW_PAGE+set}" ]; then
+      triage_jq=""; triage_prev=""
+      for triage_arg in "$@"; do [ "${triage_prev}" = "--jq" ] && triage_jq="${triage_arg}"; triage_prev="${triage_arg}"; done
+      printf '%s' "${MOCK_TRIAGE_RAW_PAGE}" | jq -c "${triage_jq}" || exit 1
+      exit 0
+    fi
     printf '%s\\n' "${MOCK_TRIAGE_ISSUES:-${MOCK_OPEN_TRIAGE:-[]}}" ;;
   "api --allow-escape-sequences repos/owner/repo/actions/runs/37")
     [ -n "${MOCK_HIST_RUN:-}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
@@ -2896,6 +2903,28 @@ class CheckFailureTriageDedupFailClosedTests(unittest.TestCase):
 			parent_body="", calls_path=calls, extra_env={"MOCK_OPEN_TRIAGE": '{"number": 1}'},
 		)
 		self._assert_fail_closed(proc, outputs, metadata, calls)
+
+	def test_raw_object_page_fails_closed(self) -> None:
+		# The real --jq projection turns "{}" into "[]"; the filter must reject it.
+		for raw in ("{}", '{"a": {}}'):
+			with self.subTest(raw=raw):
+				calls: list[str] = []
+				proc, outputs, metadata = _run_collect_stage(
+					parent_body="", calls_path=calls, extra_env={"MOCK_TRIAGE_RAW_PAGE": raw},
+				)
+				self._assert_fail_closed(proc, outputs, metadata, calls)
+
+	def test_empty_output_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", calls_path=calls, extra_env={"MOCK_TRIAGE_RAW_PAGE": ""},
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+
+	def test_raw_empty_array_page_proceeds(self) -> None:
+		proc, outputs, _metadata = _run_collect_stage(parent_body="", extra_env={"MOCK_TRIAGE_RAW_PAGE": "[]"})
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(outputs.get("ready"), "true")
 
 	def test_valid_empty_listing_proceeds(self) -> None:
 		proc, outputs, metadata = _run_collect_stage(parent_body="", extra_env={"MOCK_OPEN_TRIAGE": "[]"})

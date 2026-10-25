@@ -671,14 +671,19 @@ if [ "${HISTORICAL_MODE}" = "true" ]; then
 fi
 # Issue #8126 (BUG-001): a listing we could not read never counts as "no
 # duplicate". The paginated call, the page merge and the array check each have
-# to succeed; otherwise no issue is filed and the run fails visibly.
+# to succeed; otherwise no issue is filed and the run fails visibly. The raw
+# page must be an array: the projection always wraps its output in [...], so
+# the later array check alone would let a "{}" page read as an empty listing.
 triage_dedup_list_ok=true
 OPEN_TRIAGE=""
 if ! TRIAGE_DEDUP_PAGES="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
 	-f state="${TRIAGE_DEDUP_STATE}" \
 	-f labels="${TRIAGE_LABEL}" \
 	-F per_page=100 \
-	--jq '[.[] | select(.pull_request | not) | {number, body: (.body // "")}]' 2>/dev/null)"; then
+	--jq 'if type == "array" then [.[] | select(.pull_request | not) | {number, body: (.body // "")}] else error("not_an_array") end' 2>/dev/null)"; then
+	triage_dedup_list_ok=false
+elif [ -z "${TRIAGE_DEDUP_PAGES//[[:space:]]/}" ]; then
+	# A working call prints at least one page ("[]" when empty); no output is not proof.
 	triage_dedup_list_ok=false
 elif ! OPEN_TRIAGE="$(printf '%s' "${TRIAGE_DEDUP_PAGES}" | jq -s 'add // []' 2>/dev/null)"; then
 	triage_dedup_list_ok=false
