@@ -20344,6 +20344,129 @@ def test_linked_pr_graphql_queries_request_full_label_page():
 	assert "labels(first: 100) { nodes { name } }" in linked_status_helper
 
 
+def _candidate_details_cross_repo_pr_node(number, repo, *, state="OPEN", merged=False, head_ref="feature", base_ref="main", merge_oid=None):
+	source = {
+		"__typename": "PullRequest",
+		"number": number,
+		"state": state,
+		"merged": merged,
+		"labels": {"nodes": []},
+		"mergedAt": "2026-10-01T00:00:00Z" if merged else None,
+		"headRefName": head_ref,
+		"baseRefName": base_ref,
+		"headRefOid": "b" * 40,
+		"mergeable": "MERGEABLE",
+		"mergeStateStatus": "CLEAN",
+		"mergeCommit": {"oid": merge_oid} if merge_oid else None,
+		"commits": {"nodes": [{"commit": {"pushedDate": None, "committedDate": "2026-10-01T00:00:00Z"}}]},
+	}
+	if repo is not None:
+		source["repository"] = {"nameWithOwner": repo}
+	return {"willCloseTarget": True, "source": source}
+
+
+def _candidate_details_cross_repo_issue(number, timeline_nodes):
+	return {
+		"number": number,
+		"state": "OPEN",
+		"body": f"issue {number}",
+		"author": {"login": "someone"},
+		"authorAssociation": "OWNER",
+		"labels": {"nodes": [{"name": "ai:done"}], "pageInfo": {"hasNextPage": False}},
+		"comments": {"nodes": [{
+			"databaseId": number * 100,
+			"body": "hello",
+			"createdAt": "2026-10-01T00:00:00Z",
+			"authorAssociation": "OWNER",
+			"author": {"login": "someone"},
+		}]},
+		"timelineItems": {"nodes": timeline_nodes},
+	}
+
+
+def test_candidate_issue_details_linked_pr_ignores_cross_repo_prs():
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	# The module's custom runner does not inject pytest fixtures such as
+	# tmp_path, so the test owns its temporary directory.
+	with tempfile.TemporaryDirectory() as _candidate_tmp:
+		_run_candidate_details_cross_repo_filter(Path(_candidate_tmp))
+
+
+def _run_candidate_details_cross_repo_filter(tmp_path: Path) -> None:
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = source.index("_fetch_candidate_issue_details_graphql() {")
+	body = source[start:source.index("\n}\n", start) + 2]
+
+	same_repo = _candidate_details_cross_repo_pr_node(
+		77,
+		"owner/repo",
+		state="CLOSED",
+		merged=True,
+		head_ref="ai/issue-10",
+		base_ref="orchestrator/project-1",
+		merge_oid="a" * 40,
+	)
+	# The foreign PR is newer (later in the timeline), so without the
+	# repository filter `last` would pick it.
+	foreign = _candidate_details_cross_repo_pr_node(88, "other-owner/other-repo", head_ref="evil")
+	no_repo = _candidate_details_cross_repo_pr_node(99, None, head_ref="hidden")
+	fixture = {
+		"data": {
+			"repository": {
+				"i0": _candidate_details_cross_repo_issue(10, [same_repo, foreign]),
+				"i1": _candidate_details_cross_repo_issue(11, [foreign]),
+				"i2": _candidate_details_cross_repo_issue(12, [no_repo]),
+			}
+		}
+	}
+	fixture_path = tmp_path / "graphql.json"
+	fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+	calls_path = tmp_path / "calls.txt"
+	script = (
+		"set -euo pipefail\n"
+		"export GITHUB_REPOSITORY=owner/repo\n"
+		'gh_retry() { printf \'%s\\n\' "$*" >> "$CALLS"; cat "$FIXTURE"; }\n'
+		+ body
+		+ "\n_fetch_candidate_issue_details_graphql '[10, 11, 12]'\n"
+	)
+	env = dict(os.environ, CALLS=str(calls_path), FIXTURE=str(fixture_path))
+	proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+
+	out = json.loads(proc.stdout)
+	linked = out["10"]["linked_pr"]
+	assert linked["number"] == 77
+	assert linked["merged"] is True
+	assert linked["head_ref"] == "ai/issue-10"
+	assert linked["merge_commit_sha"] == "a" * 40
+	assert set(linked) == {
+		"number", "state", "merged", "labels", "merged_at", "merge_commit_sha",
+		"head_ref", "base_ref", "head_sha", "mergeable", "merge_state_status", "headPushedAt",
+	}
+	assert out["11"]["linked_pr"] is None
+	assert out["12"]["linked_pr"] is None
+	assert out["10"]["labels"] == ["ai:done"]
+	assert out["10"]["comments"] and out["10"]["comments"][0]["id"] == 1000
+
+	call_lines = [line for line in calls_path.read_text(encoding="utf-8").splitlines() if line.startswith("gh ")]
+	assert len(call_lines) == 1
+	assert "graphql" in call_lines[0]
+	assert "repository { nameWithOwner }" in calls_path.read_text(encoding="utf-8")
+
+
+def test_candidate_and_linked_status_helpers_share_repo_filter():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	candidate_helper = script.split("_fetch_candidate_issue_details_graphql()", 1)[1].split("_fetch_linked_pr_status_graphql()", 1)[0]
+	linked_status_helper = script.split("_fetch_linked_pr_status_graphql()", 1)[1].split("_single_issue_linked_pr_status_graphql()", 1)[0]
+	repo_filter = 'select((.repository.nameWithOwner // "") == $repo)'
+	for helper in (candidate_helper, linked_status_helper):
+		assert "repository { nameWithOwner }" in helper
+		assert '--arg repo "${owner}/${name}"' in helper
+		assert repo_filter in helper
+	assert candidate_helper.index('select(.__typename == "PullRequest")') < candidate_helper.index(repo_filter)
+
+
 def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
