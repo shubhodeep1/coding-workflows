@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/deploy-activate.md:86 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The \"Find the entries while planning (Procedure 2)\" bullet says the tracker body \"starts with\" `<!-- ai:operator-step:v1 -->`. The helper `find_issues` in scripts/operator_step_issue.py:223 requires the stripped first line to equal the marker exactly. The same text is in workflow-templates/.claude/commands/deploy-activate.md:95.\n  WHY: A session following the command can select a tracker that the pipeline's `upsert` and `tick` never read, so it ticks entries the pipeline ignores. Severity is NIT or unstated across reviewers, and the findings are treated as low. The google_gemini-3_1-flash-lite reviewer gave no severity.\n- .claude/commands/deploy-activate.md:86 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The `pr-<N>` key is not limited to a PR of this repository. The Activation Log section accepts PRs in other repositories (`pr-<repo>-<N>`), and the pipeline writes `pr-<N>` into the tracker of the repository it verified (scripts/activation_verify.sh:351). The same text is in workflow-templates/.claude/commands/deploy-activate.md:95.\n  WHY: For an external PR the command looks up `pr-<N>` in this repository's tracker, where the number may belong to an unrelated PR. It then maps and ticks the wrong entry, and the real entry in the other repository's tracker is never read.\n- .claude/commands/deploy-activate.md:86 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The entry-comment definition (\"a comment that starts `<!-- ai:operator-step:entry key=<key> -->`\") is looser than `_authoritative_entry_comments` (scripts/operator_step_issue.py:376-390), which requires the first line to match `ENTRY_RE` exactly.\n  WHY: A session can accept a comment that the pipeline's entry lookup would not treat as authoritative.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/commands/deploy-activate.md (same text in workflow-templates/.claude/commands/deploy-activate.md), \"Find the entries while planning (Procedure 2)\" bullet | severity=NIT | confidence=3\n  PROBLEM: \"Starts with\" is looser than `find_issues` (scripts/operator_step_issue.py:223), which requires the stripped first line to equal `MARKER` exactly.\n  WHY: A session could pick a hand-edited issue that `upsert` and `tick` never read. This needs a malformed marker line in a trusted issue, so it is unlikely.\n- .claude/commands/deploy-activate.md (same text in workflow-templates/.claude/commands/deploy-activate.md), same bullet, \"`pr-<N>` for a PR\" | severity=NIT | confidence=3\n  PROBLEM: The key is not limited to a PR of this repository, although the Activation Log section accepts PRs in other repositories as `pr-<repo>-<N>`.\n  WHY: For an external PR, the command looks up `pr-<N>` in this repository's tracker and may tick the wrong entry. The real entry in the other repository's tracker is never read.\n- HARDENING_SUGGESTIONS: change \"body starts with\" to \"first line, stripped, equals\". Add \"(a PR of this repository only; skip keys for external PRs)\" after `pr-<N>` (about 2 lines per file). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/commands/deploy-activate.md, \"Find the entries while planning (Procedure 2)\" bullet | confidence=4\n  PROBLEM: The documentation says the tracker body \"starts with\" the marker, but `find_issues` requires the first line to match the marker exactly.\n  WHY: An operator might create a tracker with text before the marker, or on the same line. The model could then report that no tracker exists, or select an incorrect one, and miss ticks in the intended issue.\n- workflow-templates/.claude/commands/deploy-activate.md, same bullet | confidence=4\n  PROBLEM: Same as above.\n  WHY: Same as above.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/deploy-activate.md:86; workflow-templates/.claude/commands/deploy-activate.md:95, \"whose body starts with `<!-- ai:operator-step:v1 -->`\" | severity=NIT | confidence=4\n  PROBLEM: The tracker-selection instruction accepts a body that merely starts with the marker. The pipeline requires the first line, after trimming whitespace, to equal the marker exactly (`scripts/operator_step_issue.py:223`).\n  WHY: A trusted, labeled issue whose first line is `<!-- ai:operator-step:v1 --> extra` can be selected by a session following this instruction, though the pipeline excludes it. The command can then tick an entry the pipeline does not recognize.\n- HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/commands/deploy-activate.md:86 (same text at workflow-templates/.claude/commands/deploy-activate.md:95), \"Take the keys that match the reference: `pr-<N>` for a PR\" | severity=NIT | confidence=3\n  PROBLEM: The `pr-<N>` key is not qualified to a PR of the repository whose tracker is being listed. The pipeline writes `key=\"pr-${PR_NUMBER}\"` into the tracker of the repository that ran activation-verify (scripts/activation_verify.sh:351).\n  WHY: For an external PR reference, such as `owner2/repoB#37` run from this checkout, the command finds this repository's `pr-37` entry and edits the wrong entry comment via `mcp__github__update_issue_comment`. The real entry in the external repository stays unticked.\n- .claude/commands/deploy-activate.md:86 (same text at workflow-templates/.claude/commands/deploy-activate.md:95), \"whose body starts with `<!-- ai:operator-step:v1 -->`\" and the section intro | severity=NIT | confidence=3\n  PROBLEM: The selection wording is looser than `find_issues` (scripts/operator_step_issue.py:223), which requires the first line, stripped, to equal the marker exactly. The same looseness applies to the entry-comment definition, while `_authoritative_entry_comments` (scripts/operator_step_issue.py:376-390) requires the first line to match `ENTRY_RE` exactly.\n  WHY: A model can select a tracker whose first line only starts with the marker. The pipeline's `upsert` and `tick` never read that issue, so ticks land in a tracker the pipeline never sees.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bce894451ea3a7fe58366d88c66f0e4840fa26c47b1ae2b021fb619d74259bd5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8108,
+    "run_id": "40169380478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40169380478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025065943_7feedbd8a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8108,
+    "run_id": "40169380478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T06:59:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
