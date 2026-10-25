@@ -676,11 +676,14 @@ fi
 # the later array check alone would let a "{}" page read as an empty listing.
 triage_dedup_list_ok=true
 OPEN_TRIAGE=""
-if ! TRIAGE_DEDUP_PAGES="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
+# rc= in the failure line tells a rate-limit stop (75) from other API errors.
+triage_dedup_rc=0
+TRIAGE_DEDUP_PAGES="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
 	-f state="${TRIAGE_DEDUP_STATE}" \
 	-f labels="${TRIAGE_LABEL}" \
 	-F per_page=100 \
-	--jq 'if type == "array" then [.[] | select(.pull_request | not) | {number, body: (.body // "")}] else error("not_an_array") end' 2>/dev/null)"; then
+	--jq 'if type == "array" then [.[] | select(.pull_request | not) | {number, body: (.body // "")}] else error("not_an_array") end' 2>/dev/null)" || triage_dedup_rc=$?
+if [ "${triage_dedup_rc}" -ne 0 ]; then
 	triage_dedup_list_ok=false
 elif [ -z "${TRIAGE_DEDUP_PAGES//[[:space:]]/}" ]; then
 	# A working call prints at least one page ("[]" when empty); no output is not proof.
@@ -691,7 +694,7 @@ elif ! printf '%s' "${OPEN_TRIAGE}" | jq -e 'type == "array"' >/dev/null 2>&1; t
 	triage_dedup_list_ok=false
 fi
 if [ "${triage_dedup_list_ok}" != "true" ]; then
-	log "error reason=dedup_list_failed fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	log "error reason=dedup_list_failed fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY} rc=${triage_dedup_rc}"
 	exit 1
 fi
 EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${FP}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"

@@ -2879,6 +2879,7 @@ class CheckFailureTriageDedupFailClosedTests(unittest.TestCase):
 			parent_body="", calls_path=calls, extra_env={"MOCK_TRIAGE_LIST_FAIL": "1"},
 		)
 		self._assert_fail_closed(proc, outputs, metadata, calls)
+		self.assertIn(" rc=1", proc.stdout)
 		self.assertTrue(any("-f state=open" in call for call in calls if "repos/owner/repo/issues " in call), calls)
 
 	def test_failed_listing_in_historical_mode_fails_closed(self) -> None:
@@ -2935,7 +2936,7 @@ class CheckFailureTriageDedupFailClosedTests(unittest.TestCase):
 
 	def test_source_contract(self) -> None:
 		text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
-		fail_log = 'log "error reason=dedup_list_failed fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"'
+		fail_log = 'log "error reason=dedup_list_failed fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY} rc=${triage_dedup_rc}"'
 		self.assertIn(fail_log, text)
 		self.assertLess(text.index(fail_log), text.index("gh issue create"))
 		self.assertIn("jq -e 'type == \"array\"'", text)
