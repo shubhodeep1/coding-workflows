@@ -245,3 +245,14 @@ def test_reviewer_attempt_result_emitted_after_classifier_only_in_opencode_path(
 	pool = _extract_shell_function(text, "run_pool_reviewer")
 	assert "REVIEWER_ATTEMPT_RESULT" not in pool
 	assert "reviewer_attempt_result_" not in pool
+
+
+def test_reviewer_attempt_result_emitted_on_success_path() -> None:
+	text = _script_text()
+	success_gate = text.find('if [ "${cmd_rc}" -eq 0 ] && [ -s "${tmp_output}" ]; then')
+	assert success_gate != -1
+	silent = text.find('REVIEWER_ATTEMPT_OUTCOME="silent_retry"', success_gate)
+	success = text.find('REVIEWER_ATTEMPT_OUTCOME="success"', success_gate)
+	call = text.find('"$(reviewer_attempt_result_failure_class ', success_gate)
+	emit = text.find('reviewer_attempt_result_text="$(reviewer_attempt_result_line ', success_gate)
+	assert success_gate < call < emit < silent < success

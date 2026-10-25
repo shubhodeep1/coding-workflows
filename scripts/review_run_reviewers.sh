@@ -4003,8 +4003,9 @@ reviewer_attempt_result_failure_class() {
       printf 'timeout\n'; return 0
       ;;
     tool_repeat)
-      # The watchdog forces rc 143 for tool_repeat kills, so check the
-      # reason before the rc-based timeout to keep this class reachable.
+      # A tool_repeat kill SIGTERMs OpenCode (rc 143, and a clean rc 0 is
+      # forced to 143), so check the reason before the rc-based timeout to
+      # keep this class reachable.
       printf 'tool_repeat\n'; return 0
       ;;
   esac
@@ -4530,6 +4531,21 @@ execute_reviewer_attempt() {
   esac
 
   if [ "${cmd_rc}" -eq 0 ] && [ -s "${tmp_output}" ]; then
+    # #8097: successful and silent-retry attempts log their result line too.
+    reviewer_attempt_result_class="$(reviewer_attempt_result_failure_class "${cmd_rc}" "${wd_reason}" "${tmp_stderr}" "${stall_state}" 2>/dev/null || echo exit_nonzero)"
+    reviewer_attempt_result_end="$(date +%s 2>/dev/null || echo 0)"
+    reviewer_attempt_result_duration=0
+    if [[ "${start_time:-}" =~ ^[0-9]+$ ]] && [[ "${reviewer_attempt_result_end}" =~ ^[0-9]+$ ]] && [ "${reviewer_attempt_result_end}" -ge "${start_time}" ]; then
+      reviewer_attempt_result_duration=$(( reviewer_attempt_result_end - start_time ))
+    fi
+    reviewer_attempt_result_text="$(reviewer_attempt_result_line "${output_prefix:-}" "${safe_name:-}" "${attempt_number:-}" "${effective_model:-}" "${cmd_rc}" "${reviewer_attempt_result_duration}" "${wd_reason}" "${stall_state}" "${reviewer_attempt_result_class}" 2>/dev/null || true)"
+    if [ -n "${reviewer_attempt_result_text}" ]; then
+      if [ -n "${log_file:-}" ]; then
+        printf '%s\n' "${reviewer_attempt_result_text}" | tee -a "${log_file}" || true
+      else
+        printf '%s\n' "${reviewer_attempt_result_text}" || true
+      fi
+    fi
     if [ "${REVIEWER_ATTEMPT_SILENT}" = "true" ] && nag_reminder_enabled; then
       cat "${tmp_stderr}" >> "${log_file}"
       echo "Reviewer slot ${slot_model} (${effective_model}) produced no findings or explicit NONE on ${attempt_label}; retrying." | tee -a "${log_file}"
