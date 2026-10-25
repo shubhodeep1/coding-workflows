@@ -250,7 +250,8 @@ exit 0
 # argv is written NUL-separated to $FAKE_GH_DIR/call_<n>. FAKE_GH_LOGIN is the
 # `api user` login, FAKE_GH_COMMENTS_JSON the comment read and
 # FAKE_GH_FAIL=user|comments|comment_post|label_post|label_delete fails that
-# call (label_delete is plan's best-effort ai:planning removal).
+# call (label_delete is plan's best-effort ai:planning removal;
+# label_delete_404 fails it the way gh reports a missing label).
 _FAKE_GH = """#!/usr/bin/env bash
 n="$(ls "$FAKE_GH_DIR" | wc -l | tr -d ' ')"
 printf '%s\\0' "$@" > "$FAKE_GH_DIR/call_$((n + 1))"
@@ -267,7 +268,9 @@ case "$method $endpoint" in
   "GET repos/"*"/comments"*) [ "${FAKE_GH_FAIL:-}" = comments ] && exit 1; echo "${FAKE_GH_COMMENTS_JSON:-[[]]}" ;;
   "POST repos/"*"/comments") [ "${FAKE_GH_FAIL:-}" = comment_post ] && exit 1; echo '{}' ;;
   "POST repos/"*"/labels") [ "${FAKE_GH_FAIL:-}" = label_post ] && exit 1; echo '[]' ;;
-  "DELETE repos/"*"/labels/"*) [ "${FAKE_GH_FAIL:-}" = label_delete ] && exit 1; echo '[]' ;;
+  "DELETE repos/"*"/labels/"*) [ "${FAKE_GH_FAIL:-}" = label_delete ] && exit 1
+    if [ "${FAKE_GH_FAIL:-}" = label_delete_404 ]; then echo '{"message":"Label does not exist"}'; echo 'gh: Label does not exist (HTTP 404)' >&2; exit 1; fi
+    echo '[]' ;;
   *) exit 1 ;;
 esac
 exit 0
@@ -863,6 +866,10 @@ def test_plan_label_missing_hold_fails_closed_on_write_errors() -> None:
 	rc, out, gh_output, env_text, _calls = _run_refctx_core("plan.yml", "ok", "true", _label_missing_env(FAKE_GH_FAIL="label_delete"))
 	_assert_plan_held("label_delete", rc, out, gh_output, env_text)
 	assert "planning_label=failed phase=plan" in out, out
+	# gh reports the HTTP status on stderr; a 404 means the label was absent.
+	rc, out, gh_output, env_text, _calls = _run_refctx_core("plan.yml", "ok", "true", _label_missing_env(FAKE_GH_FAIL="label_delete_404"))
+	_assert_plan_held("label_delete_404", rc, out, gh_output, env_text)
+	assert "planning_label=absent phase=plan" in out, out
 
 
 def test_plan_label_missing_hold_writes_nothing_for_untrusted_comment() -> None:
