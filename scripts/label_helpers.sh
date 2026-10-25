@@ -152,6 +152,15 @@ declare -A _AI_LABEL_DESCS=(
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
 
+# Process-local cache of labels confirmed to exist, keyed "<repo>|<label>".
+# Holds only confirmed outcomes (create succeeded, or GitHub said the label
+# already exists); failures are never cached. Guarded so re-sourcing keeps
+# the existing cache. Subshells ($(...), pipelines) get a copy that is
+# discarded, so they may repeat one create; that is acceptable.
+if [[ "$(declare -p _AI_LABEL_ENSURED_CACHE 2>/dev/null)" != "declare -A"* ]]; then
+	declare -gA _AI_LABEL_ENSURED_CACHE=()
+fi
+
 # ensure_label_exists <label_name> [repo]
 #
 # Creates the label if it does not already exist.  Idempotent — safe to
@@ -171,6 +180,12 @@ ensure_label_exists() {
 		return 1
 	fi
 
+	local _label_cache_key="${repo}|${label_name}"
+	if [ -n "${_AI_LABEL_ENSURED_CACHE["${_label_cache_key}"]+x}" ]; then
+		echo "::debug::ensure_label_exists: label '${label_name}' already ensured in this process for '${repo}', skipping API call." >&2
+		return 0
+	fi
+
 	local _label_err_file
 	_label_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
 
@@ -180,6 +195,7 @@ ensure_label_exists() {
 		--description "${description}" \
 		>/dev/null 2>"${_label_err_file}"; then
 		[ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
+		_AI_LABEL_ENSURED_CACHE["${_label_cache_key}"]=1
 		return 0
 	fi
 
@@ -188,6 +204,7 @@ ensure_label_exists() {
 	[ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
 
 	if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|already_exists'; then
+		_AI_LABEL_ENSURED_CACHE["${_label_cache_key}"]=1
 		echo "::debug::ensure_label_exists: label already exists, skipping '${label_name}'." >&2
 		return 0
 	fi

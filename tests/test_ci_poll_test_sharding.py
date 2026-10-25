@@ -61,6 +61,12 @@ GROUP_AWK_RE = re.compile(
 	r"""awk -v n="\$\{poll_group\}" -v total="\$\{poll_groups\}" '(?P<expr>[^']+)'"""
 )
 POLL_JOB_ID = "orchestrate-poll"
+SINGLE_FILE_MODULES_STEP = "Orchestrate poll single-file module tests"
+SINGLE_FILE_MODULES = (
+	"tests/test_orchestrate_poll_noop_suspicious_recovery.py",
+	"tests/test_state_snapshot.py",
+	"tests/test_run_substate_ledger.py",
+)
 
 
 def load_lint_job() -> dict:
@@ -227,7 +233,7 @@ class PollStepContractTest(unittest.TestCase):
 	def test_group_index_and_count_come_from_the_matrix(self) -> None:
 		self.assertEqual(self.step["env"]["CI_POLL_TEST_GROUP_INDEX"], "${{ strategy.job-index }}")
 		self.assertEqual(self.step["env"]["CI_POLL_TEST_GROUP_COUNT"], "${{ strategy.job-total }}")
-		self.assertEqual(load_poll_job()["strategy"]["matrix"]["poll-group"], [0, 1, 2, 3])
+		self.assertEqual(load_poll_job()["strategy"]["matrix"]["poll-group"], [0, 1, 2, 3, 4])
 		self.assertIs(load_poll_job()["strategy"]["fail-fast"], False)
 
 	def test_shards_read_the_group_slice_not_the_whole_subset(self) -> None:
@@ -294,15 +300,25 @@ class PollStepContractTest(unittest.TestCase):
 		self.assertNotIn(" rg ", self.run)
 
 	def test_the_three_single_file_modules_still_run(self) -> None:
-		group_zero_gate = self.run.index('if [ "${poll_group}" -eq 0 ]; then')
-		for module in (
-			"tests/test_orchestrate_poll_noop_suspicious_recovery.py",
-			"tests/test_state_snapshot.py",
-			"tests/test_run_substate_ledger.py",
-		):
-			self.assertIn(module, self.run)
-			self.assertEqual(self.run.count(module), 1)
-			self.assertLess(group_zero_gate, self.run.index(module), "single-file modules run once, in group 0")
+		"""Since #8080 they run once, in their own group-1 step, not in the sharded step."""
+		single_file_run = poll_job_step(SINGLE_FILE_MODULES_STEP)["run"]
+		positions = []
+		for module in SINGLE_FILE_MODULES:
+			with self.subTest(module=module):
+				self.assertNotIn(module, self.run)
+				self.assertEqual(single_file_run.count(module), 1)
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+			positions.append(single_file_run.index(module))
+		self.assertEqual(positions, sorted(positions), "single-file modules keep their order")
+		self.assertNotIn('if [ "${poll_group}" -eq 0 ]; then', self.run)
+
+	def test_no_group_zero_step_names_the_single_file_modules(self) -> None:
+		for step in load_poll_job()["steps"]:
+			if str(step.get("if", "")) != "strategy.job-index == 0":
+				continue
+			for module in SINGLE_FILE_MODULES:
+				with self.subTest(step=step.get("name"), module=module):
+					self.assertNotIn(module, step.get("run", ""))
 
 
 class JobBudgetTest(unittest.TestCase):
@@ -1092,14 +1108,22 @@ class MergeTrainStepContractTest(unittest.TestCase):
 
 # Steps moved into single orchestrate-poll groups from tests-heal-plan-and-validation
 # (#7690) and from tests-hooks-and-orchestrator (budget-watch issue #7798).
-# Without its guard such a step would run in all four groups.
+# Without its guard such a step would run in every group.
 GROUP_PINNED_STEPS = {
 	"Regression tests wired by the CI wiring guard (part 2)": 2,
-	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 3,
+	# Moved from group 3 to group 1 in #8072, to group 0 in #8091, and to
+	# group 4 in #8118.
+	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 4,
 	"Isolated agent container tests (codex_isolated_exec.sh)": 2,
 	"Prebuilt sandbox image tests": 2,
 	"Review sandbox image build retry tests": 2,
+	# Moved from group 0 to group 1 in #8080.
+	"Orchestrate poll single-file module tests": 1,
 }
+# The only steps pinned to the last matrix group (#8118).
+LAST_GROUP_PINNED_STEPS = (
+	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)",
+)
 POLL_JOB_UNGUARDED_STEPS = {
 	"Checkout repository",
 	"Setup Python",
@@ -1136,6 +1160,248 @@ class PollGroupPinnedStepsTest(unittest.TestCase):
 			with self.subTest(step=step_name):
 				self.assertRegex(str(step.get("if", "")), guard_re)
 
+	def test_last_group_runs_its_slice_and_only_the_unblock_step(self) -> None:
+		"""Group 4 was added for capacity (#8113); #8118 moved one step into it.
+
+		A later move into group 4 must update LAST_GROUP_PINNED_STEPS on purpose.
+		"""
+		self.assertEqual(poll_group_count(), 5)
+		last_group = poll_group_count() - 1
+		last_group_guard = f"strategy.job-index == {last_group}"
+		guarded_last = set()
+		for step in load_poll_job()["steps"]:
+			guard = str(step.get("if", ""))
+			with self.subTest(step=step.get("name")):
+				if guard == last_group_guard:
+					guarded_last.add(step.get("name"))
+				if not guard:
+					self.assertIn(step.get("name"), POLL_JOB_UNGUARDED_STEPS)
+		self.assertEqual(guarded_last, set(LAST_GROUP_PINNED_STEPS))
+		self.assertEqual(
+			{name for name, group in GROUP_PINNED_STEPS.items() if group == last_group},
+			set(LAST_GROUP_PINNED_STEPS),
+		)
+
+
+# Steps moved out of orchestrate-poll (3), which took 15m08s of its 20 minutes
+# (run 40112590944, budget-watch issue #8072): step name -> (new matrix group,
+# module paths its body names). The step went to group 1 in #8072; group 1
+# then took 16m09s of its 20 minutes (run 40150026157, budget-watch issue
+# #8091), so it moved on to group 0. Group 0 then took 17m01s of its 20
+# minutes (run 40175309052, budget-watch issue #8118), so it moved on to
+# group 4.
+MOVED_POLL_GROUP_THREE_STEPS = {
+	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": (
+		4,
+		(
+			"tests/test_unblock_judge.py",
+			"tests/test_unblock_scan.py",
+			"tests/test_orphan_fixup_close.py",
+		),
+	),
+}
+
+
+class MovedPollGroupThreeStepsContractTest(unittest.TestCase):
+	"""The steps moved out of orchestrate-poll (3) run once, in group 4 (#8072, #8091, #8118)."""
+
+	def test_each_step_matches_its_group_pin(self) -> None:
+		# Ownership and the `if:` guard are checked once, by
+		# PollGroupPinnedStepsTest from GROUP_PINNED_STEPS; this only keeps the
+		# two tables in step.
+		for name, (group, _modules) in MOVED_POLL_GROUP_THREE_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_group, modules) in MOVED_POLL_GROUP_THREE_STEPS.items():
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertIn(module, poll_job_step(name)["run"])
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+
+	def test_moved_steps_left_group_three(self) -> None:
+		guarded = [
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 3"
+		]
+		for name in MOVED_POLL_GROUP_THREE_STEPS:
+			self.assertNotIn(name, guarded)
+
+	def test_moved_steps_left_group_zero(self) -> None:
+		guarded = [
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 0"
+		]
+		for name in MOVED_POLL_GROUP_THREE_STEPS:
+			self.assertNotIn(name, guarded)
+
+	def test_moved_steps_left_group_one(self) -> None:
+		guarded = [
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 1"
+		]
+		for name in MOVED_POLL_GROUP_THREE_STEPS:
+			self.assertNotIn(name, guarded)
+
+
+
+UNBLOCK_STEP_NAME = "Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)"
+UNBLOCK_STEP_MODULES = MOVED_POLL_GROUP_THREE_STEPS[UNBLOCK_STEP_NAME][1]
+UNBLOCK_STEP_AWK_RE = re.compile(
+	r"""awk -v n="\$\{ub_shard\}" -v total="\$\{ub_shards\}" '(?P<expr>[^']+)'"""
+)
+
+
+def run_unblock_step_judge(step_run: str, files: dict[int, dict[str, str]]) -> subprocess.CompletedProcess:
+	"""Run the unblock step's judgment part against fake shard files.
+
+	`files` maps a shard index to the files it left (`txt`, `log`, `rc`).
+	The cut starts after the reap loop and ends at the final exit, so the
+	shipped shell is exercised, pointed at a temp dir.
+	"""
+	start = step_run.index("ub_ids=()")
+	end = step_run.index("\nfi\n", step_run.index("unblock step shards failed")) + len("\nfi\n")
+	with tempfile.TemporaryDirectory(prefix="test_ub_judge_") as tmp:
+		for shard, shard_files in files.items():
+			for suffix, content in shard_files.items():
+				Path(tmp, f"unblock_step_shard_{shard}.{suffix}").write_text(content, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/unblock_step_", f"{tmp}/unblock_step_")
+		return subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nub_shards=4\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+
+class UnblockStepShardingContractTest(unittest.TestCase):
+	"""The unblock step runs its three modules in local shards (#8150).
+
+	orchestrate-poll (4) took 15m13s of its 20 minutes (run 40198222187)
+	after three moves of this step. It now stays in group 4, by name, guard
+	and modules, and splits its test functions across 4 processes. Every
+	test must still run exactly once, and a shard that fails or records no
+	exit code must fail the step.
+	"""
+
+	def setUp(self) -> None:
+		self.step = poll_job_step(UNBLOCK_STEP_NAME)
+		self.run = self.step["run"]
+
+	def green(self) -> dict[int, dict[str, str]]:
+		return {n: {"txt": f"t{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+
+	def test_step_keeps_its_group_and_pin_tables(self) -> None:
+		self.assertEqual(self.step["if"], "strategy.job-index == 4")
+		self.assertEqual(GROUP_PINNED_STEPS[UNBLOCK_STEP_NAME], 4)
+		self.assertIn(UNBLOCK_STEP_NAME, LAST_GROUP_PINNED_STEPS)
+
+	def test_body_names_modules_and_shard_count(self) -> None:
+		for module in UNBLOCK_STEP_MODULES:
+			with self.subTest(module=module):
+				self.assertIn(module, self.run)
+		self.assertIn("ub_shards=4", self.run)
+		self.assertIn('--collect-only -q -p no:cacheprovider "${ub_modules[@]}"', self.run)
+		self.assertIn("No tests collected from the unblock step modules.", self.run)
+		self.assertIn("Test collection failed for the unblock step modules.", self.run)
+
+	def test_partition_expression_is_a_true_partition(self) -> None:
+		match = UNBLOCK_STEP_AWK_RE.search(self.run)
+		self.assertIsNotNone(match)
+		expression = match.group("expr").strip()
+		self.assertEqual(expression, "NR % total == n")
+		names = [f"tests/test_x.py::test_{i:03d}" for i in range(97)]
+		for total in range(1, 7):
+			with self.subTest(shards=total):
+				collected: list[str] = []
+				for n in range(total):
+					collected.extend(ShardPartitionTest.shard(self, names, total, n, expression))
+				self.assertCountEqual(collected, names)
+
+	def test_partition_covers_the_real_test_functions(self) -> None:
+		import ast
+
+		names: list[str] = []
+		for module in UNBLOCK_STEP_MODULES:
+			tree = ast.parse((REPO_ROOT / module).read_text(encoding="utf-8"))
+			names.extend(
+				f"{module}::{node.name}"
+				for node in ast.walk(tree)
+				if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+			)
+		self.assertGreater(len(names), 0)
+		expression = UNBLOCK_STEP_AWK_RE.search(self.run).group("expr").strip()
+		collected: list[str] = []
+		for n in range(4):
+			collected.extend(ShardPartitionTest.shard(self, names, 4, n, expression))
+		self.assertCountEqual(collected, names)
+
+	def test_collect_filter_matches_each_module_prefix(self) -> None:
+		match = re.search(r"grep -E '(?P<pattern>[^']+)' /tmp/unblock_step_collect\.log", self.run)
+		self.assertIsNotNone(match)
+		pattern = re.compile(match.group("pattern"))
+		for module in UNBLOCK_STEP_MODULES:
+			with self.subTest(module=module):
+				self.assertTrue(pattern.search(f"{module}::test_a"))
+		self.assertFalse(pattern.search("3 tests collected in 0.1s"))
+
+	def test_module_array_matches_table_and_filter(self) -> None:
+		# The array, the grep filter and the table must name the same modules,
+		# or a module named in only one of them silently runs no tests.
+		array = re.search(r"ub_modules=\((?P<mods>[^)]*)\)", self.run)
+		self.assertIsNotNone(array)
+		modules = array.group("mods").split()
+		self.assertEqual(modules, list(UNBLOCK_STEP_MODULES))
+		pattern = re.compile(
+			re.search(r"grep -E '(?P<pattern>[^']+)' /tmp/unblock_step_collect\.log", self.run).group("pattern")
+		)
+		for module in modules:
+			with self.subTest(module=module):
+				self.assertTrue(pattern.search(f"{module}::test_a"))
+
+	def test_every_process_is_reaped_before_any_is_judged(self) -> None:
+		self.assertLess(self.run.index('wait "${ub_pid}"'), self.run.index("ub_ids=()"))
+		self.assertLess(self.run.index('wait "${ub_pid}"'), self.run.index('.rc" 2>/dev/null'))
+
+	def test_all_green_passes(self) -> None:
+		result = run_unblock_step_judge(self.run, self.green())
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("failed", result.stdout)
+
+	def test_failing_shard_fails_the_step_with_prefixed_tail(self) -> None:
+		files = self.green()
+		files[1] = {"txt": "t1\n", "log": "::error::forged\nFAILED x\n", "rc": "1\n"}
+		result = run_unblock_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::unblock step shards failed: 1\n", result.stdout)
+		tail = result.stdout[result.stdout.index("shard 1 failed; last 40 log lines"):]
+		self.assertIn("| ::error::forged", tail)
+		self.assertNotIn("\n::error::forged", tail)
+
+	def test_missing_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[2] = {"txt": "t2\n", "log": "partial\n"}
+		result = run_unblock_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::unblock step shards failed: 2\n", result.stdout)
+
+	def test_non_numeric_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[0] = {"txt": "t0\n", "log": "ok\n", "rc": "zero\n"}
+		result = run_unblock_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::unblock step shards failed: 0\n", result.stdout)
+
+	def test_empty_shard_is_skipped(self) -> None:
+		files = self.green()
+		del files[3]
+		result = run_unblock_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("shard 3", result.stdout)
 
 # Steps moved from tests-release-and-log-analysis (budget-watch issue #7689):
 # step name -> (matrix group that runs it, module paths its body names).
@@ -1156,8 +1422,9 @@ MOVED_RELEASE_STEPS = {
 class MovedReleaseStepsContractTest(unittest.TestCase):
 	"""Steps moved into the idle poll groups run once per CI run (#7689).
 
-	`orchestrate-poll` is a 4-way matrix, so each moved step needs a
-	single-group guard: without it the step runs four times, and a guard
+	`orchestrate-poll` is a multi-group matrix (5 groups since #8113), so each
+	moved step needs a single-group guard: without it the step runs in every
+	group, and a guard
 	naming a group the matrix no longer has would silently never run it.
 	"""
 

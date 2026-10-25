@@ -151,9 +151,15 @@ def _commit(cwd: Path, text: str, message: str) -> str:
 
 
 def _set_identity(cwd: Path) -> None:
-	_git(cwd, "config", "user.name", "Test")
-	_git(cwd, "config", "user.email", "test@example.com")
-	_git(cwd, "config", "commit.gpgsign", "false")
+	# Also turns off git's automatic housekeeping (see _leftover_branch_scenario).
+	for config_key, config_value in (
+		("user.name", "Test"),
+		("user.email", "test@example.com"),
+		("commit.gpgsign", "false"),
+		("gc.auto", "0"),
+		("maintenance.auto", "false"),
+	):
+		_git(cwd, "config", config_key, config_value)
 
 
 def _leftover_branch_scenario(tmp: Path, depth: int = 0) -> dict[str, str | Path]:
@@ -167,6 +173,12 @@ def _leftover_branch_scenario(tmp: Path, depth: int = 0) -> dict[str, str | Path
 	_git(tmp, "init", "-q", "--bare", "-b", "main", str(remote))
 	# Mirror the consumer ruleset's non_fast_forward rule: no force pushes.
 	_git(remote, "config", "receive.denyNonFastForwards", "true")
+	# Disable git's auto-gc and auto-maintenance in the throwaway repos. Both
+	# can detach (setsid) and keep writing under objects/ after the push
+	# returns, racing TemporaryDirectory cleanup with '[Errno 39] Directory not
+	# empty' (CI run 39953571733 on PR #7922; earlier run 38343038127).
+	for config_key, config_value in (("gc.auto", "0"), ("maintenance.auto", "false"), ("receive.autogc", "false")):
+		_git(remote, "config", config_key, config_value)
 	seed = tmp / "seed"
 	_git(tmp, "clone", "-q", str(remote), str(seed))
 	_set_identity(seed)
@@ -309,6 +321,20 @@ def test_push_keeps_rebase_when_helper_is_not_staged() -> None:
 		assert "implement_stale_branch_check.sh is not staged" in output
 		tip = _git(scenario["remote"], "rev-parse", "refs/heads/ai/issue-7")
 		assert _is_ancestor(scenario["remote"], scenario["old_tip"], tip)
+
+
+def test_throwaway_repos_disable_git_auto_housekeeping() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		scenario = _leftover_branch_scenario(tmp)
+		expected = {
+			scenario["remote"]: {"gc.auto": "0", "maintenance.auto": "false", "receive.autogc": "false"},
+			scenario["workspace"]: {"gc.auto": "0", "maintenance.auto": "false"},
+			tmp / "seed": {"gc.auto": "0", "maintenance.auto": "false"},
+		}
+		for repo, settings in expected.items():
+			for config_key, config_value in settings.items():
+				assert _git(repo, "config", "--get", config_key) == config_value, (repo, config_key)
 
 
 def test_helper_is_staged_with_the_other_support_scripts() -> None:
