@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n**Implementation plan: issue #8154 (follow-up from #7995). Audit of `tests/test_workflow_failure_heal_queue.py` for tickets dated from the fixed NOW but checked by a command that reads the real clock**\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/test_workflow_failure_heal_queue.py\nScope-mode justification: The issue asks for an audit of one test file and a fix only where a test dates tickets from the fixed `NOW` and then passes them to a command that reads the real clock. It also says: if no such test exists, change no code and say so in the summary. I did the audit while planning (results below) and found no such test. So this plan keeps the issue's scope and expects no file change. Widening it (for example adding a `--now` option to `heal-queue position`) would touch the lease logic the issue says to leave alone.\n\nPlanning ref: `main` @ `684b1928fdfa1d0dbff097fbf361a9b26994df3b`.\n\n## Audit result (done while planning, for the implementer to confirm)\n\n`NOW = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)` is set at line 32. Each subprocess call that touches the queue:\n\n1. **`test_position_cli`** (lines 106-130). It calls `workflow_failure_heal.py heal-queue position` three times. Every ticket is built with `_ticket(..., now=wall)`, where `wall = datetime.now(timezone.utc)`. This is the #7994 fix, already in place. It also calls `heal-queue ticket`, which renders a body and reads no clock. **Correct.**\n2. **Tests that run `workflow_failure_heal_queue.sh` through `_run_queue`** (lines 243-346):\n   - `test_empty_queue_enters_at_once_and_release_deletes_the_ticket`: the ticket is created by the mock `gh`, which dates it from the real clock (line 156). The release run reuses those comments. **Correct.**\n   - `test_waits_for_the_holder_then_enters`, `test_completed_holder_is_cleared_without_waiting` and the `max_wait` case of `test_never_drops_the_report_when_the_queue_is_unusable`: all use `_live_ticket` (line 255), which is dated from `datetime.now(timezone.utc)`. **Correct.**\n   - The other cases (`creates_the_queue_issue`, the remaining `never_drops` cases, `disabled_queue_and_ticketless_release`) start with no tickets, or only with tickets the mock posts at the real time. **Correct.**\n3. **Tests that use `NOW`** (lines 51-102: `test_ticket_round_trip...`, `test_first_ticket_goes...`, `test_only_well_formed...`, `test_stale_tickets...`, `test_lost_ticket`). These call `heal.heal_queue_position(..., now=NOW)` in-process through `_position`, so the tickets and the clock both use the fixed time. **Correct**, no subprocess involved.\n4. **`--now` option:** `heal-queue` has no `--now` option (`scripts/workflow_failure_heal.py`, lines 7179-7189), so there is nothing to pass one to. The two `--now` options in that file belong to `non-retryable-backfill-candidates` and `verify-report-identity`, which this file does not call.\n5. **Other test files:** `tests/test_workflow_failure_heal.py` only mentions this file in a comment (line 308) and makes no `heal-queue` call. It is outside the issue's scope anyway.\n\nConclusion: no test in this file pairs NOW-dated tickets with a real-clock command.\n\n## Files likely to change\n\nNone expected. The only file that could change is `tests/test_workflow_failure_heal_queue.py`, and only if the implementer finds a case this audit missed.\n\n## Functions or modules to implement\n\nNone. The implementer should:\n1. Re-run the audit above with `grep -n \"NOW\\|datetime.now\\|subprocess\\|_run_queue\\|_live_ticket\" tests/test_workflow_failure_heal_queue.py` and confirm each item.\n2. Run `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal_queue.py -q` (or run the file directly, the way CI does) as a check.\n3. If the audit holds, make no commit. State in the summary: \"Check found nothing: every subprocess call to `heal-queue` and `workflow_failure_heal_queue.sh` in `tests/test_workflow_failure_heal_queue.py` uses tickets dated from the real clock (`wall` / `_live_ticket` / the mock `gh`); NOW-dated tickets are used only with in-process `heal_queue_position(now=NOW)`.\"\n4. Only if a real mismatch turns up: date those tickets from `datetime.now(timezone.utc)`, the same way `test_position_cli` / `_live_ticket` do. Do not skip tests, remove them or loosen assertions.\n\n## Data structures affected\n\nNone.\n\n## API or interface changes\n\nNone. The lease logic in `scripts/workflow_failure_heal.py` and `scripts/workflow_failure_heal_queue.sh` stays as it is, as the issue requires.\n\n## Decisions\n\n### D1 \u2014 Treat the audit as complete and make no code change\n- Chosen: Make no file change. Report in the summary that the check found nothing.\n- Alternatives considered: Add a `--now` option to `heal-queue position` so tests could pin the clock; switch the in-process tests from `NOW` to the real clock as a precaution.\n- Why: The issue says to change nothing when no mismatch exists and not to touch the lease logic. The in-process `NOW` tests pass `now=NOW` explicitly, so they cannot go stale. Adding `--now` would change a CLI surface with nothing to fix.\n\n## Security considerations\n\nNo trust boundary, endpoint, credential or external input is touched. This is a read-only check of a test file. It does not involve money state.\n\n## Potential risks or edge cases\n\n- If the implementer edits nothing, the implement phase may report a no-op. That is the outcome the issue asks for, so the PR body or summary has to say so explicitly.\n- If a future change sends a NOW-dated `_ticket` into `_run_queue`, the test will start failing about three hours after `NOW`. That is outside this issue.\n- No conflicts found between the issue text and the code. The names it cites (`test_position_cli`, `_live_ticket`, `heal-queue position` / `ticket`, `workflow_failure_heal_queue.sh`) all exist as described.\n\n## Testing considerations\n\n- Run `tests/test_workflow_failure_heal_queue.py` once to confirm it passes against the real clock today.\n- No new tests needed.\n\n## Self-check\n\nThe plan matches the issue: audit, fix only real mismatches, otherwise no change plus a note in the summary. The audit is grounded in the lines read on `main`, and nothing touches the lease logic.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "2662cd75f177b019b5e4338ec6e44daec3155ba156c399bd863ee02cee0f46b7",
+  "lineage": {
+    "issue_number": 8154,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40219255277",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40219255277",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8154"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261025181050_35cfd243f7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8154,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40219255277"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8154",
+  "timestamps": {
+    "created_at": "2026-10-25T18:10:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
