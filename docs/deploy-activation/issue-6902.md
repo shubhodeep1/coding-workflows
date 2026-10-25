@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:49-51`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
-- Last note: Step 6 partial (8/13). Reading tele-funtoken-msg-scoring's wrapper and consumer GH_PAT presence; Q2/Q3 open on bootstrapping 4 repos.
+- Last note: Step 6 partial (8/13). tele-funtoken stuck on v1.38.3 pin + ALLOW_WORKFLOW_EDITS=false gate; Q2/Q3/Q4 open.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -31,6 +31,11 @@
      2026-10-24 (dispatch and schedule) skipped, at ~04:20 not 04:00, so its wrapper likely differs from the template.
      btc_sweeper and atlas-bridge.gd have 7 legacy `ai-*` wrappers and no updater; mongo-explorer and fbc_shutdown have
      no `ai-*` workflows at all (registered but never seeded). Bootstrap choices asked as Q2/Q3.
+   - 2026-10-25: all 5 outliers have the `GH_PAT` secret. tele-funtoken's wrapper matches the template but pins
+     `update_workflows.yml@2820e97e43bd` (v1.38.3), whose `update-wrappers` job has
+     `if: inputs.allow_workflow_edits != false`; run 40161515398 skipped both inner jobs, so the repo very likely has
+     `ALLOW_WORKFLOW_EDITS=false`. Current stable (`8164dcf9593d`) removed that gate, but the repo cannot reach it
+     because the old pin skips the run. Fix choice asked as Q4.
 7. [ ] Bootstrap `ai-update-workflows.yml` on any consumer that never had it (only if step 6 finds one)
 8. [ ] Verify LIVE
 
