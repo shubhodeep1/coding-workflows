@@ -669,12 +669,26 @@ TRIAGE_DEDUP_STATE=open
 if [ "${HISTORICAL_MODE}" = "true" ]; then
 	TRIAGE_DEDUP_STATE=all
 fi
-OPEN_TRIAGE="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
+# Issue #8126 (BUG-001): a listing we could not read never counts as "no
+# duplicate". The paginated call, the page merge and the array check each have
+# to succeed; otherwise no issue is filed and the run fails visibly.
+triage_dedup_list_ok=true
+OPEN_TRIAGE=""
+if ! TRIAGE_DEDUP_PAGES="$(gh_retry gh api --paginate --method GET "repos/${REPO}/issues" \
 	-f state="${TRIAGE_DEDUP_STATE}" \
 	-f labels="${TRIAGE_LABEL}" \
 	-F per_page=100 \
-	--jq '[.[] | select(.pull_request | not) | {number, body: (.body // "")}]' 2>/dev/null \
-	| jq -s 'add // []' 2>/dev/null || echo '[]')"
+	--jq '[.[] | select(.pull_request | not) | {number, body: (.body // "")}]' 2>/dev/null)"; then
+	triage_dedup_list_ok=false
+elif ! OPEN_TRIAGE="$(printf '%s' "${TRIAGE_DEDUP_PAGES}" | jq -s 'add // []' 2>/dev/null)"; then
+	triage_dedup_list_ok=false
+elif ! printf '%s' "${OPEN_TRIAGE}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+	triage_dedup_list_ok=false
+fi
+if [ "${triage_dedup_list_ok}" != "true" ]; then
+	log "error reason=dedup_list_failed fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+	exit 1
+fi
 EXISTING="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${FP}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"
 if [ -n "${EXISTING}" ]; then
 	log "skip reason=duplicate_open_issue issue=${EXISTING} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"

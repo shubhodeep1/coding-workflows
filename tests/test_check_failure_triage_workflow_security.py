@@ -1249,6 +1249,8 @@ def _run_collect_stage(
 	it. Historical mode (#7093) reads run 37 / job 113 from ``MOCK_HIST_RUN`` /
 	``MOCK_HIST_JOB`` and the job log from ``MOCK_HIST_LOG_FILE`` (404 when
 	unset); ``MOCK_TRIAGE_ISSUES`` replaces the empty triage-issue list.
+	``MOCK_TRIAGE_LIST_FAIL`` (any non-empty value) makes the triage-issue
+	listing fail with HTTP 502 (#8126).
 	``inspect(runtime_dir, env)`` runs before the temp dir is removed.
 
 	``pr_payload_overrides`` replaces top-level PR payload keys."""
@@ -1302,7 +1304,9 @@ case "$*" in
     [ -n "${MOCK_BASE_CHECK_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
   "api repos/owner/repo/issues/41") jq -n --rawfile body "${MOCK_PARENT_BODY_FILE}" '{number: 41, body: $body}' ;;
-  "api --paginate --method GET repos/owner/repo/issues "*) printf '%s\\n' "${MOCK_TRIAGE_ISSUES:-${MOCK_OPEN_TRIAGE:-[]}}" ;;
+  "api --paginate --method GET repos/owner/repo/issues "*)
+    if [ -n "${MOCK_TRIAGE_LIST_FAIL:-}" ]; then echo 'gh: Server Error (HTTP 502)' >&2; exit 1; fi
+    printf '%s\\n' "${MOCK_TRIAGE_ISSUES:-${MOCK_OPEN_TRIAGE:-[]}}" ;;
   "api --allow-escape-sequences repos/owner/repo/actions/runs/37")
     [ -n "${MOCK_HIST_RUN:-}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
     printf '%s\\n' "${MOCK_HIST_RUN}" ;;
@@ -2847,6 +2851,68 @@ class CheckFailureTriagePrBranchRoutingTests(unittest.TestCase):
 		)
 		self.assertIn('"${CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-false}" != "true"', TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8"))
 
+
+
+class CheckFailureTriageDedupFailClosedTests(unittest.TestCase):
+	"""Issue #8126 (BUG-001): when the duplicate-issue listing cannot be read,
+	triage fails with reason=dedup_list_failed instead of filing a possible
+	duplicate. A working empty listing still proceeds."""
+
+	def _assert_fail_closed(self, proc, outputs, metadata, calls: list[str]) -> None:
+		self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE error reason=dedup_list_failed fp=", proc.stdout)
+		self.assertIn("pr=17 check=CI", proc.stdout)
+		self.assertNotIn("ready", outputs)
+		self.assertEqual(metadata, {})
+		self.assertFalse(any(call.startswith("issue create") for call in calls), calls)
+
+	def test_failed_listing_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", calls_path=calls, extra_env={"MOCK_TRIAGE_LIST_FAIL": "1"},
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+		self.assertTrue(any("-f state=open" in call for call in calls if "repos/owner/repo/issues " in call), calls)
+
+	def test_failed_listing_in_historical_mode_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", pr_overrides=CLOSED_MERGED, calls_path=calls,
+			extra_env=_hist_env(MOCK_TRIAGE_LIST_FAIL="1"),
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+		self.assertTrue(any("-f state=all" in call for call in calls if "repos/owner/repo/issues " in call), calls)
+
+	def test_malformed_listing_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", calls_path=calls, extra_env={"MOCK_OPEN_TRIAGE": "not json"},
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+
+	def test_non_array_listing_fails_closed(self) -> None:
+		calls: list[str] = []
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="", calls_path=calls, extra_env={"MOCK_OPEN_TRIAGE": '{"number": 1}'},
+		)
+		self._assert_fail_closed(proc, outputs, metadata, calls)
+
+	def test_valid_empty_listing_proceeds(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(parent_body="", extra_env={"MOCK_OPEN_TRIAGE": "[]"})
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertNotIn("dedup_list_failed", proc.stdout)
+		self.assertTrue(metadata.get("fingerprint"))
+
+	def test_source_contract(self) -> None:
+		text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
+		fail_log = 'log "error reason=dedup_list_failed fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"'
+		self.assertIn(fail_log, text)
+		self.assertLess(text.index(fail_log), text.index("gh issue create"))
+		self.assertIn("jq -e 'type == \"array\"'", text)
+		block = text[text.index("# --- Duplicate-issue dedup"):text.index("EXISTING=")]
+		self.assertNotIn("|| echo '[]'", block)
+		self.assertIn("_safe_gh_jq()", text)
 
 if __name__ == "__main__":
 	unittest.main()
