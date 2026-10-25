@@ -5,10 +5,10 @@
 - How it runs: cron from default branch (orchestrate poller) + pull_request (review, check-failure triage); alerts sent by scripts/tg_helpers.sh, which skips silently when TG_BOT_SECRET or TG_ADMIN_CHAT_ID is empty
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
-- Last note: Run logs show Telegram already configured; Step 1 (operator confirms settings page) emitted.
+- Last note: Step 1 confirmed; Step 2 (tick the 7 entry checkboxes on #6211) emitted.
 
 ## Runbook
-1. [ ] Confirm in repo Settings → Secrets and variables → Actions: TG_BOT_SECRET secret present, TG_ADMIN_CHAT_ID variable present, ALERT_MSG_LEVEL absent or WARNING
+1. [x] Confirm in repo Settings → Secrets and variables → Actions: TG_BOT_SECRET secret present, TG_ADMIN_CHAT_ID variable present, ALERT_MSG_LEVEL absent or WARNING   — done 2026-10-25: operator confirmed on the settings page
 2. [ ] Tick the Telegram checkbox in each of the 7 entry comments on #6211 (pr-7176 with note: DEBUG declined)
 3. [ ] Verify LIVE (re-read #6211 entries and a fresh poller run log)
 
@@ -18,5 +18,6 @@
   - internal-check-failure-triage run 40108741912: same three values.
   - internal-review.yml calls review_autofix.yml with `secrets: inherit`, so review gets the same repo secret.
   - Direct reads of repo secrets/variables are refused by the web-session proxy (HTTP 403), so the settings page check is Step 1.
+- The co-listed credentials in the Telegram boxes of pr-6655, pr-7156, pr-7201 and pr-6980 are also in place here: poller run 40160712340 shows GH_PAT=*** and OPENROUTER_API_KEY=***; check_failure_triage.yml:54-60 declares GH_PAT, CHECK_TRIAGE_ISSUES_TOKEN and OPENROUTER_API_KEY required, and triage run 40108741912 succeeded. pr-6655's box also names consumer repos, which are out of scope (Q1: A).
 - Q2: A — ALERT_MSG_LEVEL stays WARNING (pr-7156 intent). pr-7176 asked for DEBUG to deliver gated-only Claude pool notices (scripts/claude_pool_health_alert.sh:141-145); operator declined because the variable is repo-wide and DEBUG would page on every DEBUG alert. Rejected-token / failed-probe notices still send at WARNING.
 - Only the Telegram checkbox of each entry is in scope; the entries' other steps are handled in their own sessions.
