@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.76,
+  "details": "Two merged changes to poll-test shard allocation touched the CI workflow and the sharding test together. When adjusting poll-test grouping or shard assignments, inspect and update both so the configured grouping and its test contract stay aligned.",
+  "fingerprint": "8d7736cd7c6c96413eb9096200a349a8b01572c3eef5834895483c165db2ba9f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40225810965",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40225810965",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8124",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8129",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8145",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8150",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8151",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8131",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8132",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8148",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8152",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8153"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261025193614_27ec964062",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Poll-test sharding changes involve both `.github/workflows/ci.yml` and `tests/test_ci_poll_test_sharding.py`.",
+  "timestamps": {
+    "created_at": "2026-10-25T19:36:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
