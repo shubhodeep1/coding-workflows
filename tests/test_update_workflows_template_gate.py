@@ -189,6 +189,7 @@ def test_template_header_documents_the_update_hold() -> None:
 	assert "cannot erase the hold" in paragraph
 	assert _caller_job()["if"] == "${{ vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false' }}"
 
+
 def test_template_renders_to_an_immutable_ref() -> None:
 	sys.path.insert(0, str(REPO_ROOT / "scripts"))
 	try:
