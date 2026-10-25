@@ -5,12 +5,12 @@
 - How it runs: pull_request (review_autofix.yml gate, scripts/review_single_issue_security_pass.sh:331) + cron '*/30 * * * *' from default branch (.github/workflows/review_autofix_sweep.yml:80, step gated at :601 on vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true')
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
-- Last note: Step 2 done; Step 3 (set variable to true) emitted.
+- Last note: Step 3 done; Step 4 waits for the first scheduled review_autofix_sweep run after 2026-10-25T05:40:41Z.
 
 ## Runbook
 1. [x] Prereqs: Homebrew, gh, `gh auth login` (no clone needed; every command uses `-R`)   — done 2026-10-25: operator confirmed `done`
 2. [x] Read current SINGLE_ISSUE_SECURITY_PASS_ENABLED value in shubhodeep1/coding-workflows (default `false`)   — done 2026-10-25: explicitly set to `false` (updated 2026-10-06T10:33:27Z); SECURITY_AUDIT_ENABLED unset (default true)
-3. [ ] Set repo-var SINGLE_ISSUE_SECURITY_PASS_ENABLED=true in shubhodeep1/coding-workflows
+3. [x] Set repo-var SINGLE_ISSUE_SECURITY_PASS_ENABLED=true in shubhodeep1/coding-workflows   — done 2026-10-25: `gh variable list` shows `true` (updated 2026-10-25T05:40:41Z)
 4. [ ] Verify LIVE: variable reads `true` and a scheduled review_autofix_sweep run executes "Re-dispatch stale security holds" (not skipped)
 
 ## Notes
