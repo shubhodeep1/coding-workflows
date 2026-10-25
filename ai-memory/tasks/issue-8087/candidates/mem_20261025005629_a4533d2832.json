@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan: smoke-canary-b fixture edit (issue for tracking #8085)\n\nPlanning ref: `orchestrator/project-8085` at `d899b6c2852b9a1b3b5bfc21ed6183eb9ef10cbe` (integration branch matches; mismatch `false`).\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for a fixed two-line edit to one smoke-test fixture, and says plainly that no other file may change. Reduction is not needed and Expansion has nothing to add, so the plan keeps exactly the requested scope. No code, workflow, changelog or documentation changes.\n\n## Files likely to change\n- `tests/e2e_smoke_canary_b.txt` (create if missing)\n\n## Functions or modules to implement\nNone. This is a plain-text edit. Write the file so its whole content is exactly:\n```\nstatus: ok\ndecompose-run: 40147488993\n```\nThat is two lines, each ending in `\\n`, with nothing before, between or after them. Any existing content is replaced. An existing second line is overwritten, and any lines after it are dropped so the file has exactly two lines.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the whole file rather than editing lines in place\n- Chosen: overwrite `tests/e2e_smoke_canary_b.txt` with the exact two-line content.\n- Alternatives considered: change only line 1 and line 2 and keep any later lines.\n- Why: the acceptance criteria say the file must contain exactly these two lines in order with a trailing newline, so replacing the whole file is the only way to meet them.\n\n## Security considerations\n- No trust boundaries, endpoints, credentials or external input are involved.\n- Abuse cases: none. The file content is a fixed literal, not taken from issue text at runtime.\n\n## Risks and edge cases\n- If the file already has CRLF line endings or a missing trailing newline, the overwrite normalises it to LF with a trailing newline, which is what the issue asks for.\n- A sibling issue edits `tests/e2e_smoke_canary.txt`. Leave that file alone, so the two parallel PRs cannot conflict.\n- The file name matches no test module (`test_*.py`), so the CI test-wiring guard is not affected.\n- No changelog fragment is needed: the issue says so, and there is no behaviour change.\n\n## Testing considerations\n- `head -n1 tests/e2e_smoke_canary_b.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` prints `decompose-run: 40147488993`.\n- `wc -l tests/e2e_smoke_canary_b.txt` prints `2`, and `tail -c1` of the file is a newline.\n- `git diff --stat` lists only `tests/e2e_smoke_canary_b.txt`.\n\nPre-execution self-check: the plan covers every acceptance criterion, touches one file, adds no automation paths and needs no external inputs.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "b9a079bcd905f0f1bf958b3644f8a3eab561f0ab9853975e87e0fb5d58f0cac2",
+  "lineage": {
+    "issue_number": 8087,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40148038023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40148038023",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8087"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261025005629_a4533d2832",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8087,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40148038023"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8087",
+  "timestamps": {
+    "created_at": "2026-10-25T00:56:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
