@@ -1111,8 +1111,8 @@ class MergeTrainStepContractTest(unittest.TestCase):
 # Without its guard such a step would run in all four groups.
 GROUP_PINNED_STEPS = {
 	"Regression tests wired by the CI wiring guard (part 2)": 2,
-	# Moved from group 3 to group 1 in #8072.
-	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 1,
+	# Moved from group 3 to group 1 in #8072, and to group 0 in #8091.
+	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 0,
 	"Isolated agent container tests (codex_isolated_exec.sh)": 2,
 	"Prebuilt sandbox image tests": 2,
 	"Review sandbox image build retry tests": 2,
@@ -1158,10 +1158,12 @@ class PollGroupPinnedStepsTest(unittest.TestCase):
 
 # Steps moved out of orchestrate-poll (3), which took 15m08s of its 20 minutes
 # (run 40112590944, budget-watch issue #8072): step name -> (new matrix group,
-# module paths its body names). Group 1 carries no moved-in steps since #7766.
+# module paths its body names). The step went to group 1 in #8072; group 1
+# then took 16m09s of its 20 minutes (run 40150026157, budget-watch issue
+# #8091), so it moved on to group 0.
 MOVED_POLL_GROUP_THREE_STEPS = {
 	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": (
-		1,
+		0,
 		(
 			"tests/test_unblock_judge.py",
 			"tests/test_unblock_scan.py",
@@ -1172,7 +1174,7 @@ MOVED_POLL_GROUP_THREE_STEPS = {
 
 
 class MovedPollGroupThreeStepsContractTest(unittest.TestCase):
-	"""The steps moved out of orchestrate-poll (3) run once, in group 1 (#8072)."""
+	"""The steps moved out of orchestrate-poll (3) run once, in group 0 (#8072, #8091)."""
 
 	def test_each_step_matches_its_group_pin(self) -> None:
 		# Ownership and the `if:` guard are checked once, by
@@ -1194,6 +1196,15 @@ class MovedPollGroupThreeStepsContractTest(unittest.TestCase):
 			step.get("name")
 			for step in load_poll_job()["steps"]
 			if str(step.get("if", "")) == "strategy.job-index == 3"
+		]
+		for name in MOVED_POLL_GROUP_THREE_STEPS:
+			self.assertNotIn(name, guarded)
+
+	def test_moved_steps_left_group_one(self) -> None:
+		guarded = [
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 1"
 		]
 		for name in MOVED_POLL_GROUP_THREE_STEPS:
 			self.assertNotIn(name, guarded)
