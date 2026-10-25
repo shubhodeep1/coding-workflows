@@ -233,7 +233,7 @@ class PollStepContractTest(unittest.TestCase):
 	def test_group_index_and_count_come_from_the_matrix(self) -> None:
 		self.assertEqual(self.step["env"]["CI_POLL_TEST_GROUP_INDEX"], "${{ strategy.job-index }}")
 		self.assertEqual(self.step["env"]["CI_POLL_TEST_GROUP_COUNT"], "${{ strategy.job-total }}")
-		self.assertEqual(load_poll_job()["strategy"]["matrix"]["poll-group"], [0, 1, 2, 3])
+		self.assertEqual(load_poll_job()["strategy"]["matrix"]["poll-group"], [0, 1, 2, 3, 4])
 		self.assertIs(load_poll_job()["strategy"]["fail-fast"], False)
 
 	def test_shards_read_the_group_slice_not_the_whole_subset(self) -> None:
@@ -1108,7 +1108,7 @@ class MergeTrainStepContractTest(unittest.TestCase):
 
 # Steps moved into single orchestrate-poll groups from tests-heal-plan-and-validation
 # (#7690) and from tests-hooks-and-orchestrator (budget-watch issue #7798).
-# Without its guard such a step would run in all four groups.
+# Without its guard such a step would run in every group.
 GROUP_PINNED_STEPS = {
 	"Regression tests wired by the CI wiring guard (part 2)": 2,
 	# Moved from group 3 to group 1 in #8072, and to group 0 in #8091.
@@ -1154,6 +1154,18 @@ class PollGroupPinnedStepsTest(unittest.TestCase):
 				continue
 			with self.subTest(step=step_name):
 				self.assertRegex(str(step.get("if", "")), guard_re)
+
+	def test_last_group_runs_only_its_slice(self) -> None:
+		"""Group 4 was added for capacity only (#8113): no pinned step targets it."""
+		self.assertEqual(poll_group_count(), 5)
+		last_group = poll_group_count() - 1
+		for step in load_poll_job()["steps"]:
+			guard = str(step.get("if", ""))
+			with self.subTest(step=step.get("name")):
+				self.assertNotEqual(guard, f"strategy.job-index == {last_group}")
+				if not guard:
+					self.assertIn(step.get("name"), POLL_JOB_UNGUARDED_STEPS)
+		self.assertNotIn(last_group, GROUP_PINNED_STEPS.values())
 
 
 # Steps moved out of orchestrate-poll (3), which took 15m08s of its 20 minutes
@@ -1229,8 +1241,9 @@ MOVED_RELEASE_STEPS = {
 class MovedReleaseStepsContractTest(unittest.TestCase):
 	"""Steps moved into the idle poll groups run once per CI run (#7689).
 
-	`orchestrate-poll` is a 4-way matrix, so each moved step needs a
-	single-group guard: without it the step runs four times, and a guard
+	`orchestrate-poll` is a multi-group matrix (5 groups since #8113), so each
+	moved step needs a single-group guard: without it the step runs in every
+	group, and a guard
 	naming a group the matrix no longer has would silently never run it.
 	"""
 
