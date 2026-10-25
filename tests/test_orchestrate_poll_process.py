@@ -22241,6 +22241,8 @@ sys.exit(1)
 """
 		(bin_dir / "gh").write_text(gh_mock)
 		(bin_dir / "gh").chmod(0o755)
+		# GH_TOKEN and GITHUB_REPOSITORY are set below, so keep curl off the network.
+		_write_poller_curl_shim(bin_dir)
 
 		# Minimal codex mock (should not be reached in this test)
 		(bin_dir / "codex").write_text(
