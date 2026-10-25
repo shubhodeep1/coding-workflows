@@ -89,11 +89,34 @@ Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "close", "issue": n, "reason": "not_planned", "pr": bool}
   {"op": "dispatch_review", "pr": n}
   {"op": "telegram", "level": s, "text": s}
+  {"op": "heal_report", "issue": n, "kind": "issue", "label": s, "sendable": bool,
+   "fingerprint": s, "reason": s, "harness_paths": [s], "project_paths": [s]}
+      (the work belongs in shubhodeep1/coding-workflows: send an issue-kind
+      workflow failure heal report for item n, also for a pull request, with
+      its block label when the heal intake accepts it (HEAL_REPORT_LABELS),
+      else another accepted label on the item; an empty label, and
+      `sendable: false`, mean none could be named and no report can be sent)
+  {"op": "hold_request", "issue": n, "fingerprint": s, "body": s}
+      (a project item routed to the harness: post `body`, which ends with
+      `<!-- ai:unblock-harness-hold-request:v1 item=<n> fingerprint=<fp> -->`,
+      on tracking issue n)
   {"op": "needs_human", "issue": n, "kind": s, "stop": s, "reason": s}
       (a ledger-forced terminal verdict, every round spent: park the item in
       the needs-human digest, scripts/operator_step_issue.py needs-human park,
       instead of closing it; only when the context's `needs_human_digest` is
       true, which unblock_judge.sh sets from NEEDS_HUMAN_DIGEST_ENABLED)
+
+Harness routing (Phase 3 of docs/plans/validation-failure-harness-routing-plan.md,
+switch UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED, default on; `false` restores
+the old behaviour): a `retry_budget`, `descope`, `reissue`,
+`accept_with_followup` or `operator_step` verdict whose `target_repo` is
+`harness`, or whose instructions name only harness-owned paths (classified
+with workflow_failure_heal.classify_validation_paths against SUPPORT_DIR and
+TARGET_DIR), files no fix-up: a comment, a `heal_report`, for a project a
+`hold_request`, and a DEBUG Telegram message. A `consumer` verdict naming
+both harness and project paths keeps its fix-up and adds a `heal_report`.
+Never applied in shubhodeep1/coding-workflows itself or to `ai:security`
+issues.
 
 Resume commands are the existing ones (Q10): on a project's tracking issue
 `/re-security-pass`, `/revalidate`, `/judge_resume --reset-recovery`; on an
@@ -114,7 +137,9 @@ arguments, 2 unreadable input.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -138,6 +163,33 @@ PROTECTED_HANDOFF_VERDICTS = ("descope", "operator_step")
 PROTECTED_HANDOFF_MAX_PATHS = 100
 PROTECTED_HANDOFF_SHOWN_PATHS = 20
 PROTECTED_HANDOFF_PATH_MAX_LEN = 300
+HARNESS_REPO = SOURCE_REPO
+TARGET_REPO_GUARD_VERDICTS = ("retry_budget", "descope", "reissue", "accept_with_followup", "operator_step")
+# A candidate path in verdict instructions: no spaces, quotes or backticks.
+HARNESS_PATH_TOKEN_RE = re.compile(r"[^\s`'\"<>()\[\]{},;]+")
+HARNESS_PATH_EXT_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,7}$")
+HARNESS_BARE_FILE_RE = re.compile(r"^[A-Za-z0-9_.-]+\.(?:md|py|sh|yml|yaml|json|toml|txt|js|ts|mjs|cjs)$")
+HARNESS_PATH_PREFIXES = (".github/", ".claude/", "validation/", "workflow-templates/")
+# Well-known file names without an extension, accepted bare or as a last segment.
+HARNESS_EXTENSIONLESS_NAMES = frozenset(("Makefile", "Dockerfile", "Pipfile", "Procfile", "Gemfile", "LICENSE", "CODEOWNERS"))
+HARNESS_MAX_PATH_TOKENS = 50
+# A slash token made only of path characters (`src/config`); one that
+# _instruction_paths skips as not file-like may still name project-side work.
+HARNESS_SLASH_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+/?$")
+HARNESS_SHOWN_PATHS = 20
+HARNESS_HOLD_FP_RE = re.compile(r"^[0-9a-f]{12}$")
+HARNESS_HOLD_MARKER_PREFIX = "<!-- ai:unblock-harness-hold-request:v1"
+# The labels the heal intake accepts on an issue-kind report: a copy of
+# workflow_failure_heal.HUMAN_NEEDED_LABELS (a test keeps the two equal).
+HEAL_REPORT_LABELS = (
+	"ai:needs-human",
+	"ai:check-triage-escalated",
+	"ai:destructive-blocked",
+	"ai:scope-blocked",
+	"ai:harness-broken",
+	"ai:resolver-escalated",
+	"ai:security-pass-failed",
+)
 # CI-failure issues and the PR that owns them (#7032). check_failure_triage.sh
 # writes both the label and the marker; unblock re-issues copy the marker.
 CHECK_TRIAGE_LABELS = ("ai:check-triage", "ai:check-triage-escalated")
@@ -413,6 +465,242 @@ def _is_security_issue(ctx: dict) -> bool:
 	return ctx["kind"] == "issue" and SECURITY_LABEL in ctx["labels"]
 
 
+def _target_repo_guard_enabled(env: object = None) -> bool:
+	"""UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED: unset, empty or `true` is on, `false` off."""
+	env = os.environ if env is None else env
+	value = str(env.get("UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED", "") or "").strip()
+	if value == "" or value.lower() == "true":
+		return True
+	if value.lower() != "false":
+		print("warning: UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED is not true or false; the target_repo guard is off", file=sys.stderr)
+	return False
+
+
+_OWNERSHIP_CACHE: dict = {}
+
+
+def _load_ownership():
+	"""The path-ownership helpers from the workflow_failure_heal.py next to this script, or None.
+
+	Imported by explicit path, never through TARGET_DIR or the current
+	directory, so a consumer checkout cannot supply the module.
+	"""
+	if "module" in _OWNERSHIP_CACHE:
+		return _OWNERSHIP_CACHE["module"]
+	module = None
+	try:
+		path = Path(__file__).resolve().with_name("workflow_failure_heal.py")
+		spec = importlib.util.spec_from_file_location("_unblock_actions_path_ownership", path)
+		if spec is None or spec.loader is None:
+			raise ImportError("no loader")
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+		for name in ("classify_validation_paths", "load_validation_managed_paths"):
+			if not callable(getattr(module, name, None)):
+				raise ImportError(name)
+	except Exception:
+		module = None
+		print("warning: unblock target_repo backstop unavailable (ownership helper import failed); using the verdict field only", file=sys.stderr)
+	_OWNERSHIP_CACHE["module"] = module
+	return module
+
+
+def _instruction_paths(text: object, repo: str = "") -> list[str]:
+	"""Path-like tokens in verdict instructions, de-duplicated, order kept.
+
+	Stops one token past HARNESS_MAX_PATH_TOKENS so a caller can tell a
+	truncated list; callers slice back to the cap.
+	"""
+	if not isinstance(text, str):
+		return []
+	skip = {repo.lower(), HARNESS_REPO}
+	found: list[str] = []
+	for raw in HARNESS_PATH_TOKEN_RE.findall(text):
+		if "://" in raw:
+			continue
+		token = raw
+		while token.startswith("./"):
+			token = token[2:]
+		token = token.rstrip(".,;:!)]}")
+		token = re.sub(r":[0-9]+(?::[0-9]+)?$", "", token)
+		if not token or token.lower() in skip:
+			continue
+		last = token.rsplit("/", 1)[-1]
+		if "/" in token:
+			if not (HARNESS_PATH_EXT_RE.search(last) or last in HARNESS_EXTENSIONLESS_NAMES or token.startswith(HARNESS_PATH_PREFIXES)):
+				continue
+		elif not (HARNESS_BARE_FILE_RE.match(token) or token in HARNESS_EXTENSIONLESS_NAMES):
+			continue
+		if token not in found:
+			found.append(token)
+		# One past the cap, so a caller can tell "exactly the cap" from "more were dropped".
+		if len(found) > HARNESS_MAX_PATH_TOKENS:
+			break
+	return found
+
+
+def _has_unclassified_slash_token(text: object, repo: str = "") -> bool:
+	"""True when instructions name a slash path `_instruction_paths` skipped (an extensionless `src/config`).
+
+	Such a token never reaches the ownership classifier, so it cannot prove
+	the work harness-only. Prose such as `and/or` also counts; that only
+	keeps the consumer fix-up (a `mixed` route), the safe direction.
+	"""
+	if not isinstance(text, str):
+		return False
+	skip = {repo.lower(), HARNESS_REPO}
+	kept = set(_instruction_paths(text, repo))
+	for raw in HARNESS_PATH_TOKEN_RE.findall(text):
+		if "://" in raw:
+			continue
+		token = raw
+		while token.startswith("./"):
+			token = token[2:]
+		token = token.rstrip(".,;:!)]}")
+		token = re.sub(r":[0-9]+(?::[0-9]+)?$", "", token)
+		if "/" not in token or token.lower() in skip or token in kept:
+			continue
+		if HARNESS_SLASH_TOKEN_RE.fullmatch(token):
+			return True
+	return False
+
+
+def _harness_route(verdict: dict, ctx: dict, env: object = None) -> dict:
+	"""Whether an instruction verdict's change belongs in the harness repository."""
+	env = os.environ if env is None else env
+	route = {"mode": "off", "reason": "", "harness_paths": [], "project_paths": []}
+	if verdict.get("verdict") not in TARGET_REPO_GUARD_VERDICTS or not _target_repo_guard_enabled(env):
+		return route
+	# In the harness repository itself a fix-up is implementable: TARGET_DIR is
+	# SUPPORT_DIR, and a heal report would send the work back to the same place.
+	if ctx["repo"].lower() == SOURCE_REPO:
+		return route
+	# Security findings keep their own invariants (#6541, project #7604).
+	if _is_security_issue(ctx):
+		return route
+	field = verdict.get("target_repo")
+	if field not in ("consumer", "harness"):
+		field = "consumer"
+	harness_paths: list[str] = []
+	project_paths: list[str] = []
+	# A token the classifier drops as not repo-relative (an absolute path, a
+	# `..` segment) still names a project-side file: it blocks a harness-only route.
+	unlisted_project = False
+	support_dir = str(env.get("SUPPORT_DIR", "") or "")
+	target_dir = str(env.get("TARGET_DIR", "") or "")
+	tokens = _instruction_paths(verdict.get("instructions"), ctx["repo"])
+	truncated = len(tokens) > HARNESS_MAX_PATH_TOKENS
+	tokens = tokens[:HARNESS_MAX_PATH_TOKENS]
+	if tokens and support_dir and target_dir and os.path.isdir(support_dir) and os.path.isdir(target_dir):
+		ownership = _load_ownership()
+		if ownership is not None:
+			try:
+				managed = ownership.load_validation_managed_paths(support_dir, "HEAD")
+				harness_paths, project_paths = ownership.classify_validation_paths(
+					tokens, consumer_root=target_dir, support_root=support_dir, managed_paths=managed
+				)
+				normalize = getattr(ownership, "_normalize_validation_path", None)
+				unlisted_project = callable(normalize) and any(normalize(token) is None for token in tokens)
+			except Exception as exc:
+				# A failed managed-path read included: partial data could misroute.
+				print(f"warning: unblock target_repo backstop failed ({type(exc).__name__}); using the verdict field only", file=sys.stderr)
+				harness_paths, project_paths, unlisted_project = [], [], False
+	# A token list past the cap dropped later paths, so it never proves harness-only.
+	if truncated:
+		unlisted_project = True
+	# A skipped extensionless slash path (`src/config`) is unclassified project-side work too.
+	if _has_unclassified_slash_token(verdict.get("instructions"), ctx["repo"]):
+		unlisted_project = True
+	route.update(harness_paths=list(harness_paths), project_paths=list(project_paths))
+	if field == "harness":
+		route.update(mode="harness", reason="target_repo")
+	elif harness_paths and not project_paths and not unlisted_project:
+		route.update(mode="harness", reason="backstop")
+	elif harness_paths:
+		route.update(mode="mixed", reason="mixed_harness_part")
+	else:
+		route.update(mode="consumer", reason="target_repo")
+	return route
+
+
+def _heal_report_op(ctx: dict, verdict: dict, route: dict) -> dict:
+	# The intake rejects a label outside HEAL_REPORT_LABELS; prefer the stop's
+	# own label, then ai:harness-broken, then any accepted label on the item.
+	stop_label = _stop_label(ctx["stop"])
+	present = [name for name in HEAL_REPORT_LABELS if name in ctx["labels"]]
+	if stop_label in HEAL_REPORT_LABELS:
+		label = stop_label
+	elif "ai:harness-broken" in present:
+		label = "ai:harness-broken"
+	else:
+		label = present[0] if present else ""
+	fp = verdict.get("fingerprint")
+	return {
+		"op": "heal_report",
+		"issue": ctx["item"],
+		# Always issue-kind: unblock_judge.yml is authorized only for `issue`
+		# reports, and the issues API also reads a pull request by number.
+		"kind": "issue",
+		"label": label,
+		# False when no accepted label exists: the intake would reject the report.
+		"sendable": bool(label),
+		"fingerprint": fp if isinstance(fp, str) and HARNESS_HOLD_FP_RE.match(fp) else "",
+		"reason": route["reason"],
+		"harness_paths": route["harness_paths"][:HARNESS_SHOWN_PATHS],
+		"project_paths": route["project_paths"][:HARNESS_SHOWN_PATHS],
+	}
+
+
+def _harness_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
+	"""A harness-owned verdict: no fix-up here, a heal report instead; the item stays blocked."""
+	item = ctx["item"]
+	heal = _heal_report_op(ctx, verdict, route)
+	# The heal intake rejects a report without an accepted label (HEAL_REPORT_LABELS),
+	# so say so and page a person instead of claiming a report is on its way.
+	sendable = bool(heal["label"])
+	status = (
+		" A workflow-failure heal report is being requested (if it cannot be sent, a WARNING asks a person to file the harness change), and the item stays blocked until the harness fix ships."
+		if sendable else
+		" No workflow-failure heal report could be sent because this item has no escalation label the heal intake accepts;"
+		" a person must file the harness change. The item stays blocked until the harness fix ships."
+	)
+	lines = [
+		f"The unblock judge found this work belongs in `{HARNESS_REPO}` (the shared workflow harness), so no fix-up was filed here."
+		+ status,
+	]
+	if verdict.get("instructions"):
+		lines += ["", f"Change needed in the harness: {_one_line(verdict['instructions'])}"]
+	shown = route["harness_paths"][:HARNESS_SHOWN_PATHS]
+	if shown:
+		lines += ["", "Harness paths: " + ", ".join(f"`{path}`" for path in shown)]
+	lines += ["", f"Why: {_one_line(verdict.get('reason', ''))}"]
+	ops: list[dict] = [{"op": "comment", "issue": item, "body": "\n".join(lines)}, heal]
+	fp = verdict.get("fingerprint")
+	# No hold without a report: nothing would ship the fix the hold waits for.
+	if sendable and ctx["kind"] == "project" and isinstance(fp, str) and HARNESS_HOLD_FP_RE.match(fp):
+		ops.append({
+			"op": "hold_request",
+			"issue": ctx["tracking"],
+			"fingerprint": fp,
+			"body": f"Unblock judge: harness-owned failure on #{item}; hold requested until the harness fix ships.\n\n"
+			f"{HARNESS_HOLD_MARKER_PREFIX} item={item} fingerprint={fp} -->",
+		})
+	if sendable:
+		ops.append({"op": "telegram", "level": "DEBUG", "text": f"Unblock judge routed #{item} ({ctx['stop']}) to a harness heal report; no fix-up filed."})
+	else:
+		ops.append({"op": "telegram", "level": "WARNING", "text": f"Unblock judge found #{item} ({ctx['stop']}) harness-owned, but it has no escalation label for a heal report; a person must file the harness change."})
+	return ops
+
+
+def _mixed_heal_ops(ctx: dict, verdict: dict, route: dict) -> list[dict]:
+	"""The heal report for a mixed verdict's harness part, plus a WARNING when no report can be sent."""
+	heal = _heal_report_op(ctx, verdict, route)
+	ops: list[dict] = [heal]
+	if not heal["label"]:
+		ops.append({"op": "telegram", "level": "WARNING", "text": f"Unblock judge found a harness-owned part in #{ctx['item']} ({ctx['stop']}), but it has no escalation label for a heal report; a person must file the harness change."})
+	return ops
+
+
 def _approve(issue: int, labels: list[str], drop: str) -> list[dict]:
 	ops: list[dict] = [
 		{"op": "add_labels", "issue": issue, "labels": ["ai:awaiting-approval"]},
@@ -655,8 +943,16 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		return []
 	if ctx["kind"] == "pr" and not ctx["pr_trusted"] and name in ("reissue", "descope", "operator_step", "accept_with_followup"):
 		return _untrusted_pr_ops(ctx, name)
+	route = _harness_route(verdict, ctx)
+	# Harness-owned work goes to a heal report before the protected-path
+	# operator handoff, which would ask for the change in this repository.
+	if route["mode"] == "harness":
+		return _harness_ops(ctx, verdict, route)
 	if name in PROTECTED_HANDOFF_VERDICTS and ctx.get("protected_rejection"):
-		return _protected_handoff_ops(ctx, verdict)
+		handoff = _protected_handoff_ops(ctx, verdict)
+		if route["mode"] == "mixed":
+			handoff += _mixed_heal_ops(ctx, verdict, route)
+		return handoff
 	if name == "retry_budget":
 		ops += [{"op": "comment", "issue": item, "body": f"Next attempt, per the unblock judge: {verdict['instructions']}"}]
 		ops += reset_ops(ctx, verdict["instructions"])
@@ -682,23 +978,22 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		ops += _fixup_ops(ctx, verdict, "descope")
 	elif name == "operator_step":
 		ops += _fixup_ops(ctx, verdict, "operator step")
-		if not _placeholder_needs_person(verdict["placeholder"]):
-			return ops
-		ops.append(
-			{
-				"op": "operator_step",
-				"key": f"unblock-{item}",
-				"source": f"Unblock judge, #{item}",
-				"steps": [
-					{
-						"title": f"Clear the block on #{item}",
-						"instructions": verdict["operator_instructions"],
-						"dormant_until": verdict["placeholder"],
-					}
-				],
-			}
-		)
-		ops.append({"op": "telegram", "level": "WARNING", "text": f"Operator step needed for #{item}: {verdict['placeholder']}"})
+		if _placeholder_needs_person(verdict["placeholder"]):
+			ops.append(
+				{
+					"op": "operator_step",
+					"key": f"unblock-{item}",
+					"source": f"Unblock judge, #{item}",
+					"steps": [
+						{
+							"title": f"Clear the block on #{item}",
+							"instructions": verdict["operator_instructions"],
+							"dormant_until": verdict["placeholder"],
+						}
+					],
+				}
+			)
+			ops.append({"op": "telegram", "level": "WARNING", "text": f"Operator step needed for #{item}: {verdict['placeholder']}"})
 	elif name == "override_guard":
 		if ctx["stop"] == "scope-blocked":
 			ops.append({"op": "edit_files_touched", "issue": item, "paths": verdict["paths"]})
@@ -749,10 +1044,12 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			pr_target_branch = None
 			if ctx.get("pr_source_present"):
 				if ctx.get("pr_source_metadata_unsafe"):
-					return [
+					unsafe = [
 						{"op": "comment", "issue": item, "body": "This pull request stays open: its linked issue's security finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
 						{"op": "telegram", "level": "WARNING", "text": f"Could not safely re-issue PR #{item}; its linked issue's metadata needs correction."},
 					]
+					# The harness part of a mixed verdict is still reported.
+					return unsafe + (_mixed_heal_ops(ctx, verdict, route) if route["mode"] == "mixed" else [])
 				if ctx.get("pr_source_finding_id"):
 					body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['pr_source_finding_id']} -->\n{body}"
 					pr_labels = [SECURITY_LABEL]
@@ -834,6 +1131,9 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		ops.append({"op": "telegram", "level": "CRITICAL", "text": f"Unblock judge closed #{item} ({ctx['stop']}): {_one_line(verdict['reason'])}"})
 	else:
 		raise UsageError(f"unknown verdict {name!r}")
+	if route["mode"] == "mixed":
+		# The verdict's own fix-up stays; the harness part goes to a heal report.
+		ops += _mixed_heal_ops(ctx, verdict, route)
 	return ops
 
 
