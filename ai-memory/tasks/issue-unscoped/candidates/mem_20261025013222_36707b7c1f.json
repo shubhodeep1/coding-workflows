@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.79,
+  "details": "Recent validation-harness changes span workflow files or shell scripts alongside tests for bootstrap, ref selection, routing, or escalation. When changing this area, check the relevant invocation path and add or update tests at the behavior boundary rather than treating a script change in isolation.",
+  "fingerprint": "023eb5b34e8573019da268ccafac6bf6fda746b3ba432abb3a82a2f7cd9de571",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40150427055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40150427055",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8048",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8057",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8065",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8072",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8080",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8050",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8062",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8068",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8078",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8081"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261025013222_36707b7c1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation-harness behavior is spread across workflow entry points, scripts, and focused tests.",
+  "timestamps": {
+    "created_at": "2026-10-25T01:32:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
