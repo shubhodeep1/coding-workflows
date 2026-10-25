@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:303-430 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The label_missing hold posts the hold comment and applies ai:blocked from the resolver's earlier refusal without rechecking the issue's current labels or body, so a stale plan run can re-park an issue after a repair and /reclarify.\n  WHY: Plan runs have no per-issue concurrency group, so runs can overlap. Severity disagreement: gemini rated it BLOCKER, luna MAJOR, qwen and glm NIT, and minimax gave no severity; the highest is used (BLOCKER mapped to high). sonnet-5_5 explicitly did not carry over this finding.\n- .github/workflows/plan.yml:307-331 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The comment post and label add are not atomic and have no rollback, so a failed label add leaves the hold comment without ai:blocked.\n  WHY: A transient API error or rate limit leaves the issue inconsistent and the job exits with an error without cleaning up the comment.\n- .github/workflows/plan.yml:307-331 | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `gh api --paginate --slurp` comment fetch is unbounded.\n  WHY: A huge comment thread could hit API limits or time out and fail the plan job just to post a hold comment.\n- CHANGELOG.md:3418-3432 | severity=medium | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The new changelog entry is inserted between the previous entry's main content and its \"### For contributors\" subsection, splitting them apart.\n  WHY: Readers will see the new entry followed by an unrelated \"For contributors\" section. sonnet-5_5 and z-ai_glm-5_3-flash judged this hunk a stable release fold and not attributable to this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:307-331 | severity=BLOCKER | confidence=4\n  PROBLEM: The logic adds `ai:blocked` and writes to `$GITHUB_OUTPUT` without checking whether the issue state changed between the resolver refusal and the label/comment write.\n  WHY: A stale run can post hold comments and apply `ai:blocked` to a now-valid issue, and plan runs have no per-issue concurrency group.\n- .github/workflows/plan.yml:307-331 | severity=MAJOR | confidence=4\n  PROBLEM: The `ai:blocked` label application and the hold comment creation are not atomic and have no pre-write check that the issue has not been fixed or re-clarified.\n  WHY: Concurrent plan runs or a rapid `/reclarify` can lead to duplicate comments and inconsistent state.\n- .github/workflows/plan.yml:307-331 | severity=MAJOR | confidence=4\n  PROBLEM: The block makes `gh api` and `python3` calls without error handling to revert partial actions if one step fails.\n  WHY: If the label add fails, the issue has the hold comment but not `ai:blocked`, and the comment is not cleaned up.\n- .github/workflows/plan.yml:307-331 | severity=MAJOR | confidence=4\n  PROBLEM: The block makes `gh api --paginate --slurp` calls in an unbounded way.\n  WHY: A large comment thread might hit API limits or time out and fail the whole plan job.\n- HARDENING: .github/workflows/plan.yml:311-314 | risk_score=2\n  PROBLEM: `hold_fail` just exits 1 and does not clean up or log partial state.\n  WHY: Suggested fix: wrap it in a trap or log the attempted action before exiting.\n- HARDENING: .github/workflows/plan.yml:326-340 | risk_score=3\n  PROBLEM: `hold_present` calculation uses an inline `python3` script.\n  WHY: Suggested fix: sanitize `hold_comments_file` and check it is non-empty before running python.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:341-430 | confidence=3\n  PROBLEM: The hold executes GitHub writes based only on the resolver refusal from earlier in the same step, without re-reading the live issue state.\n  WHY: A concurrent `/reclarify` can race the `hold_present` comment-list read, so the plan hold can post its comment and reapply `ai:blocked` on a fixed issue, and the stale hold marker then blocks a later release.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/plan.yml:303-304,344-430 | severity=MAJOR | confidence=4\n  PROBLEM: The hold is applied from the resolver's earlier `label_missing` result without rechecking the issue's current labels or body.\n  WHY: A stale run can post the hold and reapply `ai:blocked` after `/reclarify` released it, and `jobs.plan` has no per-issue concurrency group.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- CHANGELOG.md:3418-3432 | severity=MAJOR | confidence=5\n  PROBLEM: The new changelog entry is inserted between a previous entry's main content and its \"### For contributors\" subsection, splitting them apart.\n  WHY: The \"### For contributors\" section belongs to the previous mongo-explorer#42 entry, which confuses readers and breaks the self-contained entry structure.\n- .github/workflows/plan.yml:373-430 | severity=NIT | confidence=4\n  PROBLEM: The hold decision uses the resolver's earlier `label_missing` result and applies `ai:blocked` without rechecking the issue's current labels or body.\n  WHY: A stale `/answer`-triggered run can park a repaired issue. Qwen rated it lower severity because the race window is narrow and recovery paths exist.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/plan.yml:344-432 | severity=NIT | confidence=3\n  PROBLEM: The step never rechecks the issue's current labels or body between the resolver's `label_missing` refusal and the `ai:blocked` write. The comment read is at 374, marker dedup at 381-403 and the `ai:blocked` POST at 420-421.\n  WHY: A stale `/answer` run can re-park a repaired issue after clarify's hold-release step (clarify.yml:1054-1096) removed the label. GLM rated it NIT because it mirrors the shipped clarify.yml hold (lines 245-326) and self-heals on a repeat `/reclarify`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8859689be5b870153e4ec55ce3f6a2d3921c901dd6f7de4cf0ecfee8dbdf4137",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8170,
+    "run_id": "40230763912",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40230763912",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025204956_3e6ebbe042",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8170,
+    "run_id": "40230763912"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T20:49:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
