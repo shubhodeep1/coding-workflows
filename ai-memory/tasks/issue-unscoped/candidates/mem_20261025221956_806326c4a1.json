@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:341-435 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The hold-comment dedup is a non-atomic check-then-post sequence, so two overlapping plan runs can both post a hold comment.\n  WHY: Both runs can read the comments before either posts the marker. The end state still converges, because the label add is idempotent. Reviewers rated it NIT, with confidence 4 from gemini and 3 from minimax. It is mapped to low severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:341-435 | severity=NIT | confidence=4\n  PROBLEM: The deduplication of hold comments is a check-then-post sequence, not atomic.\n  WHY: If parallel runs read comments before either posts a marker, both post a hold comment and both add the label. The system converges, but with duplicate comments and unnecessary API usage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:373-417 | severity=NIT | confidence=3\n  PROBLEM: The marker-based dedup is a check-then-post sequence, so two concurrent plan runs could both see hold_present=0 and both post a hold comment.\n  WHY: The end state would be two hold comments, plus double idempotent `ai:blocked` adds and an extra `SKIP_PLAN=true` write per run. The dedup is best-effort, not atomic.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c5425444f6ac35cfd216b0b8a20c0369979b96e490c39a5fc33318f85738ea32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8170,
+    "run_id": "40237719998",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40237719998",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025221956_806326c4a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8170,
+    "run_id": "40237719998"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T22:19:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
