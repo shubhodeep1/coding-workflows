@@ -627,7 +627,12 @@ def _write_exec(path: Path, body: str) -> None:
 _POLLER_CURL_SHIM = r'''#!/usr/bin/env bash
 curl_shim_args=()
 curl_shim_redact_next=false
+curl_shim_redact_user=false
 for curl_shim_arg in "$@"; do
+	if [ "${curl_shim_redact_user}" = "true" ]; then
+		curl_shim_redact_user=false
+		curl_shim_arg="[redacted]"
+	fi
 	if [ "${curl_shim_redact_next}" = "true" ]; then
 		curl_shim_redact_next=false
 		case "${curl_shim_arg}" in
@@ -638,6 +643,9 @@ for curl_shim_arg in "$@"; do
 		-H|--header) curl_shim_redact_next=true ;;
 		--header=[Aa]uthorization:*) curl_shim_arg="--header=Authorization: [redacted]" ;;
 		-H[Aa]uthorization:*) curl_shim_arg="-HAuthorization: [redacted]" ;;
+		-u|--user) curl_shim_redact_user=true ;;
+		--user=*) curl_shim_arg="--user=[redacted]" ;;
+		-u?*) curl_shim_arg="-u[redacted]" ;;
 	esac
 	curl_shim_args+=("${curl_shim_arg}")
 done
@@ -28224,7 +28232,7 @@ def test_poller_curl_shim_fails_fast_and_redacts_authorization() -> None:
 		curl_shim_env["CURL_CALL_CAPTURE"] = str(curl_shim_log)
 		curl_shim_env["PATH"] = f"{curl_shim_bin}:{curl_shim_env.get('PATH', '')}"
 		completed = subprocess.run(
-			["curl", "-s", "-H", "Authorization: token secret-value", "--header=authorization: bearer other-value", "https://api.github.com/x"],
+			["curl", "-s", "-H", "Authorization: token secret-value", "--header=authorization: bearer other-value", "-u", "user:pass-value", "--user=u2:pw2", "https://api.github.com/x"],
 			env=curl_shim_env,
 			capture_output=True,
 			text=True,
@@ -28233,8 +28241,9 @@ def test_poller_curl_shim_fails_fast_and_redacts_authorization() -> None:
 		assert completed.returncode == 7
 		assert completed.stdout == ""
 		logged = curl_shim_log.read_text(encoding="utf-8").splitlines()
-		assert logged == ["-s -H Authorization: [redacted] --header=Authorization: [redacted] https://api.github.com/x"]
+		assert logged == ["-s -H Authorization: [redacted] --header=Authorization: [redacted] -u [redacted] --user=[redacted] https://api.github.com/x"]
 		assert "secret-value" not in curl_shim_log.read_text(encoding="utf-8")
+		assert "pass-value" not in curl_shim_log.read_text(encoding="utf-8")
 		# A curl the test already supplied is kept.
 		(curl_shim_bin / "curl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 		_write_poller_curl_shim(curl_shim_bin)
