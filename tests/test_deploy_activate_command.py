@@ -183,3 +183,19 @@ def test_verified_steps_are_ticked_in_the_human_steps_issue(command: Path) -> No
 	assert flat.count("(#human-steps-issue)") >= 5
 	assert "Keep the human-steps issue in step with the log." in text.split("## Rules", 1)[1]
 	assert "`mcp__github__update_issue_comment`" in text.split("## Tool Access", 1)[1].split("## Rules", 1)[0]
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))
+def test_mac_setup_steps_are_skipped_unless_output_needs_them(command: Path) -> None:
+	text = " ".join(command.read_text(encoding="utf-8").split())
+	assert "fresh MacBook" not in text
+	assert "Prerequisite bootstrap" not in text
+	assert "Assume a clean machine" not in text
+	assert "- [ ] Prereqs:" not in text
+	procedure = text.split("## Procedure", 1)[1].split("## Interaction Protocol", 1)[0]
+	assert "**No Mac setup steps by default:**" in procedure
+	assert "only when pasted output shows it is needed" in procedure
+	assert "**Local clone only when a step needs it:**" in procedure
+	assert "Right before the first step that needs the latest repo files locally" in procedure
+	assert "`git pull --ff-only`" in procedure
+	assert "**Assume my Mac is set up.**" in text.split("## Rules", 1)[1]
