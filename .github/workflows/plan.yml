@@ -442,7 +442,12 @@ jobs:
             echo "resolver_status=failed" >> "$GITHUB_OUTPUT"
           fi
 
+      # The label_missing hold (#7516, #8151) sets SKIP_PLAN=true and exits 0.
+      # Every setup step up to "Fetch issue metadata" is skipped on that hold,
+      # as in clarify, so a transient checkout, staging or API failure cannot
+      # fail a held run and file a plan_failed heal report.
       - name: Checkout repository
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -452,6 +457,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Log checkout ref
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           PLAN_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
@@ -465,6 +471,7 @@ jobs:
           fi
 
       - name: Configure git auth for memory helper clones
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -476,6 +483,7 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Resolve workflow support ref
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
@@ -520,6 +528,7 @@ jobs:
 
       - name: Checkout workflow support source
         id: checkout_support_source
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -530,7 +539,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
+        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' && steps.refctx.outputs.label_missing_hold != 'true' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -540,6 +549,7 @@ jobs:
           fetch-depth: 1
 
       - name: Ensure workflow support source checkout
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
@@ -554,7 +564,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF == 'stable' }}
+        if: ${{ env.SCRIPT_REF == 'stable' && steps.refctx.outputs.label_missing_hold != 'true' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -565,6 +575,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -733,6 +744,7 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-plan-${GITHUB_RUN_ID}"
@@ -753,6 +765,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
