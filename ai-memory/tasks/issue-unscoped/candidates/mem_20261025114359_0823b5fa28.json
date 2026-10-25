@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:321 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The grep `outcome=refused reason=pr_not_open$` is claimed never to match because the resolver stderr line is claimed to end with `pr=<N> run=<id>`, so `not_open_pr` would always be empty.\n  WHY: An empty `PLAN_PR_NOT_OPEN_PR` would make the marker carry `pr=` instead of the real PR number. Severity is MAJOR here, and anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash refuted the claim, so the reviewers disagree on whether it is valid.\n- .github/workflows/plan.yml:985-994 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The `pr_not_open_unresolved` body uses `#${pr:-unknown}` in the prose but bare `pr=${pr}` in the marker, so an empty PR number renders differently in the two places.\n  WHY: A downstream parser keyed on `pr=<digits>` could drop the hand-off if the PR number is empty. anthropic_claude-sonnet-5_5 rated it NIT with confidence 2 and said it cannot occur in practice. minimax_minimax-m3 rated it NIT with confidence 3.\n- tests/test_plan_superseded_merged_pr_workflow.py:447-454 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: No test covers the hand-off path where the label edit succeeds and the comment POST fails (`comment_state=failed`).\n  WHY: A regression in the POST branch could leave the issue at `ai:blocked` with no `ai:plan-pr-not-open:v1` marker, and no test would catch it. anthropic_claude-sonnet-5_5 also raised this gap and judged it a test-coverage nit.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/plan.yml:(`pr_not_open_unresolved` body construction) | severity=low | confidence=2\n  PROBLEM: If both the resolver output and the classifier PR number are empty, the prose reads \"pull request #unknown\" while the marker reads `pr=`.\n  WHY: The PR number is always present on the `pr_not_open` path, so the mismatch only matters if the resolver's output format changes.\n- (Correctness) The reviewer refuted minimax's finding on plan.yml:321 and reported no correctness findings. (Also noted as a test-coverage nit: a comment POST failure after a successful label edit is untested. It reported no severity or confidence for this note.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:321 | severity=high | confidence=4\n  PROBLEM: The grep `$` anchor requires the resolver stderr line to end with `pr_not_open`, but the line is claimed to end with `pr=<N> run=<id>`, so `not_open_pr` would always be empty.\n  WHY: The marker would carry an empty `pr=`. The reviewer says the contract test `tests/test_workflow_checkout_integration_ref_audit.py:430` does not exercise the real format.\n- .github/workflows/plan.yml:321 | severity=high | confidence=4\n  PROBLEM: Suggested fix: drop the `$` anchor, or replace it with `[[:space:]]` or `\\s`, and update the contract test fixture to write a stderr line that ends with `pr=...` and `run=...`.\n  WHY: Without this, the resolver's PR number is lost whenever `pr_not_open` is the failure reason and the classifier has not pre-populated `pr_number`.\n- .github/workflows/plan.yml:985-994 | severity=low | confidence=3\n  PROBLEM: The body uses `${pr:-unknown}` in the prose but bare `${pr}` in the `ai:plan-pr-not-open:v1` marker.\n  WHY: A downstream parser keyed on `pr=<digits>` would silently drop the hand-off if the PR number is empty.\n- tests/test_plan_superseded_merged_pr_workflow.py:443-454 | severity=low | confidence=3\n  PROBLEM: There is no test for `label_state=applied` followed by a failed `gh api ... /comments` POST.\n  WHY: A regression in the POST branch would leave a half-hand-off with no marker comment, and no test would catch it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_plan_superseded_merged_pr_workflow.py:447-454 | severity=low | confidence=3\n  PROBLEM: The hand-off's `comment_state=failed` path (label edit succeeds, comment POST fails, plan.yml:994) has no test.\n  WHY: A regression that swallowed the POST failure, such as a `|| true` added to line 994, would leave the issue at `ai:blocked` with no marker, and no test would catch it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dca44968e46f84b4a5414a6cfc5c45bbc77c72aeb866d95eabaa642fce8ed099",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8123,
+    "run_id": "40189061243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40189061243",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025114359_0823b5fa28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8123,
+    "run_id": "40189061243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T11:43:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
