@@ -552,6 +552,148 @@ def test_export_filters_by_issue_pr_and_intersection() -> None:
 		assert telemetry[0]["record_count"] == 2
 
 
+def _assert_phase_timing_int(value) -> None:
+	assert isinstance(value, int) and not isinstance(value, bool), value
+	assert value >= 0, value
+
+
+@contextlib.contextmanager
+def _scripted_persist_git(*, diff_returncode: int):
+	import subprocess
+
+	calls: list[list[str]] = []
+
+	def _fake_clone(_repo_root, _memory_branch):
+		return Path(tempfile.mkdtemp(prefix="ai-memory-cli-persist-"))
+
+	def _fake_run_git(cwd, args, check=True, **_kwargs):
+		calls.append(list(args))
+		returncode = 0
+		stdout = ""
+		if args[:1] == ["diff"]:
+			returncode = diff_returncode
+		elif args[:1] == ["rev-parse"]:
+			stdout = "deadbeefcafebabe\n"
+		return subprocess.CompletedProcess(["git", *args], returncode, stdout=stdout, stderr="")
+
+	with _patched_module_attrs(
+		ai_memory_lib,
+		_clone_for_memory_branch=_fake_clone,
+		_run_git=_fake_run_git,
+	):
+		yield calls
+
+
+def test_persist_memory_operation_reports_phase_timings_on_push() -> None:
+	with _scripted_persist_git(diff_returncode=1) as calls:
+		result = ai_memory_lib.persist_memory_operation(
+			REPO_ROOT,
+			memory_branch="ai-memory",
+			memory_root_relative="ai-memory",
+			push_retries=3,
+			commit_message="ai-memory: timing test",
+			operation=lambda _clone_dir: {"value": 1},
+		)
+	assert result["did_commit"] is True
+	assert result["did_push"] is True
+	assert result["push_attempts"] == 1
+	assert result["commit_sha"] == "deadbeefcafebabe"
+	assert result["operation_result"] == {"value": 1}
+	for key in ("clone_ms", "write_ms", "push_ms"):
+		_assert_phase_timing_int(result[key])
+	assert sum(1 for call in calls if call[:1] == ["push"]) == 1
+
+
+def test_persist_memory_operation_reports_phase_timings_without_change() -> None:
+	with _scripted_persist_git(diff_returncode=0) as calls:
+		result = ai_memory_lib.persist_memory_operation(
+			REPO_ROOT,
+			memory_branch="ai-memory",
+			memory_root_relative="ai-memory",
+			push_retries=3,
+			commit_message="ai-memory: timing test",
+			operation=lambda _clone_dir: None,
+		)
+	assert result["did_commit"] is False
+	assert result["did_push"] is False
+	assert result["push_attempts"] == 0
+	_assert_phase_timing_int(result["clone_ms"])
+	_assert_phase_timing_int(result["write_ms"])
+	assert result["push_ms"] == 0
+	assert type(result["push_ms"]) is int
+	assert not any(call[:1] == ["push"] for call in calls)
+
+
+def _record_run_event_argv() -> list[str]:
+	return [
+		"record-run-event",
+		"--repo-root",
+		str(REPO_ROOT),
+		"--memory-branch",
+		"ai-memory",
+		"--memory-root",
+		"ai-memory",
+		"--run-id",
+		"1",
+		"--workflow",
+		"orchestrate-poll",
+		"--event-type",
+		"poll_started",
+		"--status",
+		"ok",
+		"--message",
+		"m",
+		"--actor",
+		"bot",
+	]
+
+
+def test_record_run_event_telemetry_includes_phase_timings() -> None:
+	with _stub_ai_memory_cli_branch() as store_root, _temporary_env(AI_MEMORY_ENABLED="true"):
+
+		def _fake_persist(_repo_root, *, memory_branch, memory_root_relative, push_retries, commit_message, operation):
+			result = operation(store_root) or {}
+			return {
+				"did_commit": True,
+				"did_push": True,
+				"commit_sha": "deadbeefcafebabe",
+				"push_attempts": 2,
+				"operation_result": result,
+				"clone_ms": 11,
+				"write_ms": 22,
+				"push_ms": 33,
+			}
+
+		with _patched_module_attrs(ai_memory, persist_memory_operation=_fake_persist):
+			exit_code, stdout, stderr = _run_ai_memory_cli(_record_run_event_argv())
+
+	assert exit_code == 0
+	payload = json.loads(stdout)
+	assert payload["clone_ms"] == 11
+	assert payload["write_ms"] == 22
+	assert payload["push_ms"] == 33
+	assert payload["push_attempts"] == 2
+	entries = [entry for entry in _extract_ai_memory_telemetry(stderr) if entry.get("op") == "record-run-event"]
+	assert len(entries) == 1
+	assert entries[0]["clone_ms"] == 11
+	assert entries[0]["write_ms"] == 22
+	assert entries[0]["push_ms"] == 33
+	assert entries[0]["push_attempts"] == 2
+
+
+def test_record_run_event_telemetry_defaults_phase_timings_to_zero() -> None:
+	with _stub_ai_memory_cli_branch(), _temporary_env(AI_MEMORY_ENABLED="true"):
+		exit_code, _stdout, stderr = _run_ai_memory_cli(_record_run_event_argv())
+
+	assert exit_code == 0
+	entries = [entry for entry in _extract_ai_memory_telemetry(stderr) if entry.get("op") == "record-run-event"]
+	assert len(entries) == 1
+	assert entries[0]["clone_ms"] == 0
+	assert entries[0]["write_ms"] == 0
+	assert entries[0]["push_ms"] == 0
+	assert entries[0]["push_attempts"] == 1
+
+
 def main() -> int:
 	for name, value in sorted(globals().items()):
 		if name.startswith("test_") and callable(value):
