@@ -4,9 +4,9 @@
   (+ secondary refs, each "Activation of PR #N" in shubhodeep1/coding-workflows: #6201, #6204, #6433, #6136, #6567, #6273, #6438, #6462, #6509, #6606, #6610, #6679, #6704, #6709, #6777, #6550, #6555, #6569, #6649, #6938, #7058, #6655, #6674, #6728, #7147, #7152, #6877, #7201, #6980, #7213, #7036, #7270, #7062, #7294)
 - Deploy target: shubhodeep1/coding-workflows and the 13 consumers in `.github/ai/consumer_repos.json`
 - How it runs: secrets are read by every AI workflow run (pull_request, schedule, workflow_dispatch, repository_dispatch); consumer copies are kept present by `.github/workflows/propagate-consumer-secrets.yml` (weekly cron `23 5 * * 1`, only-missing mode)
-- Status: IN_PROGRESS
+- Status: LIVE
 - Last updated: 2026-10-25
-- Last note: Both secrets verified present and working in the source and every consumer; the only open item is the OpenRouter credit balance (about 5–6 days of runway).
+- Last note: Both secrets verified present and working in the source and every consumer. Operator skipped the credit top-up; balance $552.94 on 2026-10-25 (about 5–6 days at current spend).
 
 ## Scope
 
@@ -36,8 +36,8 @@ workflows: a working inference key with credit.
 2. [x] Source GH_PAT has the union of permissions — done 2026-10-25: release job 120951846137 sent `repository_dispatch` to all 13 consumers with no "Failed to dispatch" warning; the propagation run listed secrets on all 13 consumers; E2E gate dispatches workflows; `ai-review/head-gate` statuses posted as shubhodeep1 on PR #8102/#8101 heads; sync-claude-live-copies run 39593441015 pushed and opened a PR.
 3. [x] Consumers: both secrets present in all 13 — done 2026-10-25: propagation run 39205226115 (2026-10-19) reported `status=skipped_present` for GH_PAT and OPENROUTER_API_KEY in every consumer, `summary targets=13 set=0 skipped=52 failed=0`.
 4. [x] Consumers: secrets working where workflows use them — done 2026-10-25: ai-update-workflows succeeded on the 2026-10-24 release dispatch and the 2026-10-25 cron in digital_pa, fun-token-multi-chain, binance-blessings, multi-user-ai-agent, bitsafe.io, hylifegroup.com, radateeree-resort.com and drhyg_ecommerce_automation; ai-review and ai-orchestrate-poll succeeded on 2026-10-25 in those 8 plus tele-funtoken-msg-scoring. Validate failures in fun-token-multi-chain (run 39631403428) and binance-blessings (run 38107224535) are harness errors with both secrets present, not credential failures.
-5. [ ] Top up OpenRouter credit (operator, in the OpenRouter dashboard) — balance $553.67 ($99,690 bought, $99,136.33 used) against about $679/week of spend.
-6. [ ] Verify LIVE — re-read `GET /api/v1/credits` and confirm several weeks of runway.
+5. [x] Top up OpenRouter credit (operator, in the OpenRouter dashboard) — skipped 2026-10-25 by operator choice; not a secret-configuration gate — balance $553.67 ($99,690 bought, $99,136.33 used) against about $679/week of spend.
+6. [x] Verify LIVE — done 2026-10-25: steps 1–4 evidence stands; `GET /api/v1/credits` re-read shows $552.94 remaining. Risk: AI workflows fail once credit runs out unless it is topped up.
 
 ## Notes
 - tele-funtoken-msg-scoring: ai-update-workflows runs are `skipped` because the repo variable `AI_WORKFLOW_AUTO_UPDATE_ENABLED` is `false` (a deliberate opt-out, not a credential gap). Its AI Review, validate and poller runs succeed.
