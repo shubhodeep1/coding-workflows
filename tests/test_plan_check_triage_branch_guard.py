@@ -235,7 +235,15 @@ def test_refctx_emits_resolver_status_on_every_exit_path() -> None:
 	# exactly the branch it printed.
 	assert 'bash "${resolver_script}" 2>"${resolver_err_file}"' in body
 	assert '"CI_TRIAGE_PR_BRANCH_ROUTING issue=${issue_number} pr="*" outcome=routed branch=${integration_branch}") triage_routed=true ;;' in body
-	assert body.count("exit 0") == body.count('echo "resolver_status=unavailable"')
+	# The label_missing hold (#7516, #8151) adds two more exit 0 paths, the
+	# untrusted-comment skip and the completed hold. Both go through
+	# hold_skip_plan, which writes resolver_status=failed in a group redirect.
+	hold_exits = body.count("hold_skip_plan\n")
+	assert hold_exits == 2
+	assert body.count("exit 0") == body.count('echo "resolver_status=unavailable"') + hold_exits
+	hold_fn = body[body.index("hold_skip_plan() {"):body.index("hold_login=")]
+	for line in ('echo "label_missing_hold=true"', 'echo "resolver_status=failed"', '} >> "$GITHUB_OUTPUT"', 'echo "SKIP_PLAN=true" >> "$GITHUB_ENV"'):
+		assert line in hold_fn, line
 	# Checkout ref selection is unchanged.
 	assert "ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in _workflow_text()
 
