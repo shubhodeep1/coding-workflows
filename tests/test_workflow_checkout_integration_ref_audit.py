@@ -427,6 +427,7 @@ def test_clarify_tolerates_pr_not_open_and_routing_fails_closed_on_rate_limit() 
 			if workflow_name == "plan.yml":
 				assert "pr_not_open=true\n" in gh_output, gh_output
 				assert "resolver_status=failed\n" in gh_output, gh_output
+				assert "pr_not_open_pr=7\n" in gh_output, gh_output
 		elif workflow_name == "implement.yml":
 			# Issue #7540: implement skips without a ref and hands the issue off.
 			assert rc == 0, f"{workflow_name} pr_not_open\n{out}"
