@@ -39,6 +39,21 @@ workflows: a working inference key with credit.
 5. [x] Top up OpenRouter credit (operator, in the OpenRouter dashboard) — skipped 2026-10-25 by operator choice; not a secret-configuration gate — balance $553.67 ($99,690 bought, $99,136.33 used) against about $679/week of spend.
 6. [x] Verify LIVE — done 2026-10-25: steps 1–4 evidence stands; `GET /api/v1/credits` re-read shows $552.94 remaining. Risk: AI workflows fail once credit runs out unless it is topped up.
 
+## Ticks in #6211 (2026-10-25)
+
+Ticked (`- [ ]` → `- [x]`) in the single owner-authored entry comment for each key, nothing else changed:
+pr-6204 "Supply runtime credentials"; pr-6433 "Ensure required Actions credentials are configured"; pr-6136 "Ensure required credentials exist"; pr-6567 "Provide required validation credentials"; pr-6273 "Required credentials must be present"; pr-6438 "Ensure required review credentials are configured"; pr-6462 "Provide review and audit credentials"; pr-6509 "Required automation credentials must be present"; pr-6606 "Confirm required automation secrets"; pr-6610 "Ensure required audit credentials are present"; pr-6679 "Verify required gate credentials"; pr-6704 "Confirm required Actions credentials"; pr-6709 "Ensure source credentials can be propagated"; pr-6550 "Ensure judge credentials are configured"; pr-6555 "Provision release and smoke-test credentials"; pr-6569 "Required credentials must be configured"; pr-6649 "Provision required credentials where unset"; pr-6938 "Provide review credentials and permit auto-merge"; pr-7058 "Confirm source release credentials" and "Confirm consumer sync credentials"; pr-6674 "Verify release and sync credentials"; pr-6728 "Ensure triage credentials are configured"; pr-7147 "Ensure release and validation credentials are configured"; pr-7152 "Confirm required workflow credentials"; pr-6877 "Ensure release-gate credentials are configured"; pr-7201 "Provision dispatch and alert credentials"; pr-7213 "Ensure release and updater credentials are configured"; pr-7036 "Ensure full-gate credentials are configured"; pr-7270 "Confirm the cross-repository PAT"; pr-7062 "Ensure required credentials are provisioned"; pr-7294 "Ensure release dispatch has cross-repository credentials".
+
+Already ticked before this session: pr-6655 "Ensure outage credentials and alert destination are configured"; pr-6980 "Confirm triage credentials and warning delivery".
+
+Extra evidence for bundled requirements: CHECK_TRIAGE_ISSUES_TOKEN and TG_BOT_SECRET present in all 13 consumers (run 39205226115); triage issues (`ai:check-triage`) created as shubhodeep1 in the source and 7 consumers; source poller run 40162977139 has TG_BOT_SECRET and TG_ADMIN_CHAT_ID set, ALERT_MSG_LEVEL=WARNING; coding-workflows has Allow auto-merge on.
+
+Left unticked:
+- pr-6201 "Ensure required credentials and audit setting are active" (issue body): SINGLE_ISSUE_SECURITY_PASS_ENABLED / SECURITY_AUDIT_ENABLED in consumers cannot be read (repo-variable API is refused by the proxy).
+- pr-6777 "Ensure consumer sync credentials and settings are present": btc_sweeper, atlas-bridge.gd, mongo-explorer and fbc_shutdown have no ai-update-workflows.yml.
+- pr-7294 "Ensure each consumer can deliver and merge its update PR": Allow auto-merge is off in those same 4 consumers.
+- pr-6438 "Enforce the head-bound review status": a branch-protection step, not a credential.
+
 ## Notes
 - tele-funtoken-msg-scoring: ai-update-workflows runs are `skipped` because the repo variable `AI_WORKFLOW_AUTO_UPDATE_ENABLED` is `false` (a deliberate opt-out, not a credential gap). Its AI Review, validate and poller runs succeed.
 - btc_sweeper, atlas-bridge.gd, mongo-explorer and fbc_shutdown have no ai-update-workflows.yml (and mostly no AI review/poller wrappers), so nothing exercises their copies of the secrets; the secrets are present per step 3. Installing the updater there is #6777's wrapper step, outside this batch.
