@@ -36,6 +36,8 @@
      `if: inputs.allow_workflow_edits != false`; run 40161515398 skipped both inner jobs, so the repo very likely has
      `ALLOW_WORKFLOW_EDITS=false`. Current stable (`8164dcf9593d`) removed that gate, but the repo cannot reach it
      because the old pin skips the run. Fix choice asked as Q4.
+   - 2026-10-25: `ALLOW_WORKFLOW_EDITS` is NOT set in tele-funtoken, so the `false` input most likely comes from the
+     wrapper's `with:` block (e.g. a hardcoded `allow_workflow_edits: false`). Reading that block next.
 7. [ ] Bootstrap `ai-update-workflows.yml` on any consumer that never had it (only if step 6 finds one)
 8. [ ] Verify LIVE
 
