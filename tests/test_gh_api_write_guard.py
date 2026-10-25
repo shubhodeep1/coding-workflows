@@ -1502,3 +1502,95 @@ def test_flag_between_gh_and_api_asks(command):
 
 def test_flag_before_other_gh_subcommand_gets_no_decision():
 	assert _decide("gh -R a/b issue comment 1 --body 'api change'") is None
+
+
+# ──────────────────────────────────────────────────────────────────
+# Auto mode: shell-shape doubts step aside, writes still ask
+# ──────────────────────────────────────────────────────────────────
+
+def _decide_in_mode(command: str, mode: str | None) -> tuple[str | None, str]:
+	payload: dict = {"tool_name": "Bash", "tool_input": {"command": command}}
+	if mode is not None:
+		payload["permission_mode"] = mode
+	return guard.evaluate(payload)
+
+
+# Each of these is a read whose shell shape the guard cannot trust. They are
+# the commands from the permission prompts that held up Auto-mode sessions.
+_SHAPE_DOUBT_READS = [
+	# unquoted expansion in a loop with a file redirect and a python3 step
+	"for i in 6031951051 6084132710; do gh api repos/o/r/issues/comments/$i > got_$i.json; done; python3 -I -c \"print(1)\"",
+	# unquoted expansion in a loop piped into grep
+	"for id in 6114886899 6193924757; do echo \"=== $id\"; gh api repos/o/r/issues/comments/$id --jq .body | grep -n '^- '; done",
+	# ANSI-C quoting in a later pipeline stage
+	"gh api 'repos/o/r/issues/4599/comments?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2",
+	# brace expansion
+	"gh api repos/o/r/pulls/{1,2}",
+	# gh api hidden inside a backtick substitution or handed to bash -c
+	"x=`gh api repos/o/r/pulls/1`; echo $x",
+	"bash -c \"gh api repos/o/r/pulls/1\"",
+	# a command the tokenizer cannot parse
+	"gh api repos/o/r/pulls/1 'unterminated",
+]
+
+
+@pytest.mark.parametrize("command", _SHAPE_DOUBT_READS)
+def test_shape_doubts_still_ask_outside_auto_mode(command):
+	for mode in (None, "default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "AUTO", ""):
+		assert _decide_in_mode(command, mode)[0] == guard.DECISION_ASK, mode
+
+
+@pytest.mark.parametrize("command", _SHAPE_DOUBT_READS)
+def test_shape_doubts_give_no_decision_in_auto_mode(command):
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
+
+
+@pytest.mark.parametrize("command", [
+	"gh api -X PATCH repos/{owner}/{repo}/issues/1 -f state=closed",
+	"gh api -X DELETE repos/o/r/git/refs/heads/x",
+	"for i in 1 2; do gh api -X DELETE repos/o/r/git/refs/heads/x$i; done",
+	"gh api repos/o/r/issues/1/comments -F body=@notes.md",
+	"gh api repos/o/r/issues/1/comments -f body=x | sort -t$'\\t' -k2",
+	"gh api --bogus-flag repos/o/r/pulls/1",
+	"gh -R evil/repo api repos/o/r/pulls/1",
+])
+def test_writes_and_flag_before_api_still_ask_in_auto_mode(command):
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	assert decision == guard.DECISION_ASK
+	assert reason
+
+
+def test_auto_mode_keeps_allows_and_the_malformed_jq_deny():
+	assert _decide_in_mode("gh api repos/o/r/pulls/1", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ALLOW
+	assert _decide_in_mode("gh api repos/o/r/pulls/1 --jq -r", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_DENY
+	assert _decide_in_mode("for i in 1 2; do gh api repos/o/r/pulls/$i; done", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ALLOW
+
+
+def test_auto_mode_hook_subprocess_emits_nothing_for_a_shape_doubt():
+	payload = {"tool_name": "Bash", "tool_input": {"command": _SHAPE_DOUBT_READS[1]}, "permission_mode": "auto"}
+	proc = _run_hook(json.dumps(payload))
+	assert proc.returncode == 0 and proc.stdout.strip() == ""
+
+
+def test_headless_pipelines_never_run_claude_in_auto_mode():
+	# The Auto-mode step-aside relies on headless pipeline runs using another
+	# mode, where a hook "ask" is a denial. A pipeline switched to Auto mode
+	# would turn those denials into classifier decisions.
+	import re
+	scripts = REPO_ROOT / "scripts"
+	literal = re.compile(r"""--permission-mode[ =]["']?auto\b""")
+	offenders = [
+		str(path.relative_to(REPO_ROOT))
+		for path in sorted(scripts.rglob("*"))
+		if path.is_file() and literal.search(path.read_text(encoding="utf-8", errors="replace"))
+	]
+	assert offenders == []
+	allowed = {"dontAsk", "bypassPermissions"}
+	engine = (scripts / "ai_engine.sh").read_text(encoding="utf-8")
+	assert '--permission-mode "${mode}"' in engine
+	engine_modes = set(re.findall(r'\bmode="([A-Za-z]+)"; isolation_mode=', engine))
+	assert engine_modes and engine_modes <= allowed, engine_modes
+	sandbox = (scripts / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert '--permission-mode "${CLAUDE_PERMISSIONS}"' in sandbox
+	sandbox_modes = set(re.findall(r"\bclaude_permissions=([A-Za-z]+)", sandbox))
+	assert sandbox_modes and sandbox_modes <= allowed, sandbox_modes

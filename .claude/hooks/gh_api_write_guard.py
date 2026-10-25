@@ -101,6 +101,16 @@ Decision for the whole Bash call (a hook decides once per tool call):
     counter `echo`, with only safe pipe filters and `2>&1`. Writes still ask;
     unvetted loops still receive no decision.
 
+Auto mode (`permission_mode` `auto` in the hook payload): a hook "ask"
+forces a human prompt even in Auto mode, so the asks above that only mean
+"the guard cannot read this command's shell shape" step aside there and give
+no decision, leaving the command to the Auto-mode classifier. They are the
+unparseable command, the hidden `gh api` call, the ANSI-C / comment / brace
+hazard, and the unquoted `gh api` argument expansion. A call the guard reads
+and classifies as a write (unreadable calls included) still asks, a flag
+between `gh` and `api` still asks, and the malformed-jq deny and every allow
+are unchanged. Any other or missing mode keeps the prompts.
+
 Unlike the other hooks in this directory this one fails CLOSED: an unreadable,
 invalid, or non-object payload, or an internal error, asks instead of allowing,
 because it is the only thing standing where the ask rules were. Empty or
@@ -134,6 +144,10 @@ SETTINGS_MATCHER = "Bash"
 DECISION_ASK = "ask"
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
+
+# Claude Code's `permission_mode` hook field for Auto mode (hooks reference,
+# "Common input fields").
+AUTO_PERMISSION_MODE = "auto"
 
 KIND_READ = "read"
 KIND_ROUTINE = "routine"
@@ -1728,6 +1742,11 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 		if not command.lstrip().startswith("for "):
 			return None, ""
 
+	# In Auto mode, doubts about the command's shell shape step aside instead of
+	# asking (see the module docstring); `shape_doubt` records that one fired.
+	auto_mode = payload.get("permission_mode") == AUTO_PERMISSION_MODE
+	shape_doubt = False
+
 	stripped_command, heredocs = strip_heredoc_bodies(command)
 	if not heredocs:
 		approved_echo = _approved_echo_read_command(command)
@@ -1746,12 +1765,16 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	try:
 		segments = shell_segments(stripped_command)
 	except ValueError:
+		if auto_mode:
+			return None, ""
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): the command could not be parsed, so its gh api call is treated as a write."
 			+ (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
 		)
 	invocations = gh_api_invocations(segments)
-	if has_hidden_gh_api(segments, heredocs, stripped_command):
+	if has_hidden_gh_api(segments, heredocs, stripped_command) and auto_mode:
+		shape_doubt = True
+	elif has_hidden_gh_api(segments, heredocs, stripped_command):
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): a gh api call could run hidden inside a $(...) or backtick word, "
 			"an executor (bash -c, sudo, xargs, python3, ...), or a heredoc fed to one, so it is treated as a "
@@ -1807,13 +1830,17 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 
 	hazard = _shell_rewrite_hazard(stripped_command)
 	# Only a fully validated literal-ID loop may bypass the shell-hazard check.
-	if hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)):
+	if hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)) and auto_mode:
+		shape_doubt = True
+	elif hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)):
 		return DECISION_ASK, (
 			f"gh api guard (CLAUDE.md §23.H): the command uses {hazard}, which Bash expands or parses differently "
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
 		)
-	if _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results):
+	if _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results) and auto_mode:
+		shape_doubt = True
+	elif _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results):
 		return DECISION_ASK, (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."
@@ -1826,6 +1853,9 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"gh api guard (CLAUDE.md §23.H): not a read or a §23.B routine write: " + "; ".join(writes) + "."
 			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
 		)
+	if shape_doubt:
+		# Never allow a command whose shape the guard could not trust.
+		return None, ""
 	if invocations and _is_approvable_command(command):
 		summary = "; ".join(f"{kind} call {description}" for kind, description in results)
 		return DECISION_ALLOW, f"gh api guard (CLAUDE.md §23.H): {summary}."

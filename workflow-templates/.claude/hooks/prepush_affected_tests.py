@@ -19,8 +19,12 @@ Subcommands
                     its merge-base with origin and write a pass/fail stamp
                     under ``${TMPDIR:-/tmp}/claude-prepush-gate/``.
 ``hook``            PreToolUse hook: ask for confirmation when a Bash command
-                    pushes and no passing stamp exists for HEAD. It never runs
-                    tests or repository code, and fails open with a warning.
+                    pushes and no passing stamp exists for HEAD. In Auto mode
+                    (``permission_mode`` ``auto``) a push whose only problem is
+                    a missing stamp is denied instead, with a reason that tells
+                    the session to run ``stamp`` and push again, so no human
+                    has to answer a prompt. It never runs tests or repository
+                    code, and fails open with a warning.
 
 Environment (each has a default here, §8): ``PREPUSH_TEST_GATE_TIMEOUT_MINUTES``
 (15), ``PREPUSH_TEST_GATE_SHARDS`` (4), ``PREPUSH_TEST_GATE_LARGE_FILE_TESTS``
@@ -83,6 +87,11 @@ AGENTS_ASSEMBLER = "scripts/assemble_agents.py"
 STAMP_DIR_NAME = "claude-prepush-gate"
 STAMP_COMMAND = "python3 .claude/hooks/prepush_affected_tests.py stamp"
 PASSING_STAMP_STATUSES = frozenset({"pass", "unverified", "skipped"})
+# Claude Code's `permission_mode` hook field for Auto mode (hooks reference,
+# "Common input fields"). Any other or missing value keeps the ask.
+AUTO_PERMISSION_MODE = "auto"
+FINDING_MISSING_STAMP = "missing_stamp"
+FINDING_NEEDS_HUMAN = "needs_human"
 GIT_SAFE = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
 
 _TEST_JS_RE = re.compile(r".+\.(?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs)$")
@@ -992,66 +1001,82 @@ def _resolve_commit(repo: Path, ref: str) -> str | None:
 	return value if _SHA_RE.match(value) else None
 
 
-def _emit(ask_reason: str = "", system_message: str = "") -> None:
+def _emit(ask_reason: str = "", system_message: str = "", decision: str = "ask") -> None:
 	response: dict = {}
 	if system_message:
 		response["systemMessage"] = system_message
 	if ask_reason:
 		response["hookSpecificOutput"] = {
 			"hookEventName": "PreToolUse",
-			"permissionDecision": "ask",
+			"permissionDecision": decision,
 			"permissionDecisionReason": ask_reason,
 		}
 	if response:
 		print(json.dumps(response))
 
 
-def evaluate_hook(payload: object) -> tuple[str, str]:
-	"""(ask reason, system message); both empty means no decision."""
+def _hook_findings(payload: object) -> tuple[list[tuple[str, str]], str]:
+	"""([(finding kind, reason)], system message); no findings means no decision.
+
+	The kind is FINDING_MISSING_STAMP when the session can clear the finding
+	itself by running the stamp, and FINDING_NEEDS_HUMAN otherwise.
+	"""
 	if not isinstance(payload, dict):
-		return "", "prepush gate: hook payload is not a JSON object; push not checked."
+		return [], "prepush gate: hook payload is not a JSON object; push not checked."
 	if payload.get("tool_name") != "Bash" or gate_disabled():
-		return "", ""
+		return [], ""
 	tool_input = payload.get("tool_input")
 	command = tool_input.get("command") if isinstance(tool_input, dict) else None
 	if not isinstance(command, str) or not command.strip():
-		return "", ""
+		return [], ""
 	cwd = payload.get("cwd")
 	if not isinstance(cwd, str) or not os.path.isdir(cwd):
 		cwd = os.getcwd()
 	pushes, warning = detect_pushes(command, cwd)
 	if not pushes:
-		return "", warning
-	reasons = []
+		return [], warning
+	reasons: list[tuple[str, str]] = []
 	for directory, ref, note in dict.fromkeys(pushes):
 		toplevel = _toplevel(Path(directory))
 		if toplevel is None:
 			continue
 		if note.startswith("bulk:"):
-			reasons.append(
-				f"This push ({_sanitize_name(note[5:])}) publishes several branch tips in {toplevel}; a pre-push test "
-				f"stamp covers one commit. Push each branch by name after running `{STAMP_COMMAND}` on it, or confirm to push anyway."
-			)
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"This push ({_sanitize_name(note[5:])}) publishes several branch tips in {toplevel}; a pre-push test "
+					f"stamp covers one commit. Push each branch by name after running `{STAMP_COMMAND}` on it, or confirm to push anyway."
+				),
+			))
 			continue
 		if note == "unresolved":
-			reasons.append(
-				f"Could not resolve which refs this push publishes in {toplevel} (unrecognised push options or "
-				f"destination), so its pre-push test stamp cannot be checked. Run `{STAMP_COMMAND}` on the pushed "
-				"commit and push with full option names, or confirm to push anyway."
-			)
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"Could not resolve which refs this push publishes in {toplevel} (unrecognised push options or "
+					f"destination), so its pre-push test stamp cannot be checked. Run `{STAMP_COMMAND}` on the pushed "
+					"commit and push with full option names, or confirm to push anyway."
+				),
+			))
 			continue
 		if note == "non_branch":
-			reasons.append(
-				f"This push publishes tags or other non-branch refs in {toplevel}, whose commits the pre-push test "
-				f"stamp check cannot map. Check out the tagged commit and run `{STAMP_COMMAND}`, or confirm to push anyway."
-			)
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"This push publishes tags or other non-branch refs in {toplevel}, whose commits the pre-push test "
+					f"stamp check cannot map. Check out the tagged commit and run `{STAMP_COMMAND}`, or confirm to push anyway."
+				),
+			))
 			continue
 		head = _resolve_commit(toplevel, ref)
 		if head is None:
-			reasons.append(
-				f"Could not resolve the pushed ref `{_sanitize_name(ref)}` in {toplevel} to a commit, so its pre-push "
-				f"test stamp cannot be checked. Check out that commit, run `{STAMP_COMMAND}`, or confirm to push anyway."
-			)
+			reasons.append((
+				FINDING_NEEDS_HUMAN,
+				(
+					f"Could not resolve the pushed ref `{_sanitize_name(ref)}` in {toplevel} to a commit, so its pre-push "
+					f"test stamp cannot be checked. Check out that commit, run `{STAMP_COMMAND}`, or confirm to push anyway."
+				),
+			))
 			continue
 		path = stamp_path(toplevel, head)
 		try:
@@ -1059,22 +1084,61 @@ def evaluate_hook(payload: object) -> tuple[str, str]:
 		except (OSError, ValueError):
 			stamp = None
 		if not isinstance(stamp, dict) or stamp.get("head") != head:
-			reasons.append(
-				f"No pre-push test stamp for {head[:12]} (pushed ref `{_sanitize_name(ref)}`) in {toplevel}. Check out that commit "
-				f"and run `{STAMP_COMMAND}` after committing, fix failures this change caused, then push. "
-				"Set CLAUDE_PREPUSH_TEST_GATE=off to disable this check."
-			)
+			reasons.append((
+				FINDING_MISSING_STAMP,
+				(
+					f"No pre-push test stamp for {head[:12]} (pushed ref `{_sanitize_name(ref)}`) in {toplevel}. Check out that commit "
+					f"and run `{STAMP_COMMAND}` after committing, fix failures this change caused, then push. "
+					"Set CLAUDE_PREPUSH_TEST_GATE=off to disable this check."
+				),
+			))
 			continue
 		status = stamp.get("status")
 		if status in PASSING_STAMP_STATUSES:
 			continue
 		failures = stamp.get("failures") if isinstance(stamp.get("failures"), list) else []
 		listed = ", ".join(_sanitize_name(str(f.get("test"))) for f in failures[:MAX_HOOK_FAILURES_LISTED] if isinstance(f, dict))
-		reasons.append(
-			f"The pre-push test stamp for {head[:12]} records {len(failures)} failure(s) this change caused"
-			+ (f": {listed}" if listed else "") + ". Fix them and re-run the stamp, or confirm to push anyway."
-		)
-	return "\n\n".join(reasons), warning
+		reasons.append((
+			FINDING_NEEDS_HUMAN,
+			(
+				f"The pre-push test stamp for {head[:12]} records {len(failures)} failure(s) this change caused"
+				+ (f": {listed}" if listed else "") + ". Fix them and re-run the stamp, or confirm to push anyway."
+			),
+		))
+	return reasons, warning
+
+
+def evaluate_hook(payload: object) -> tuple[str, str]:
+	"""(ask reason, system message); both empty means no decision."""
+	findings, warning = _hook_findings(payload)
+	return "\n\n".join(reason for _kind, reason in findings), warning
+
+
+def is_auto_permission_mode(payload: object) -> bool:
+	return isinstance(payload, dict) and payload.get("permission_mode") == AUTO_PERMISSION_MODE
+
+
+def hook_decision(payload: object) -> tuple[str, str, str]:
+	"""(decision, reason, system message); an empty reason means no decision.
+
+	Outside Auto mode every finding asks, as before. In Auto mode a push whose
+	only findings are missing stamps is denied: a hook "ask" still forces a
+	human prompt in Auto mode, while a deny runs nothing and hands the reason
+	back to the session, which can run the stamp itself and push again. A stamp
+	that records failures, or a push whose commits the hook cannot map, still
+	asks, because only a person can decide to push anyway.
+	"""
+	findings, warning = _hook_findings(payload)
+	reason = "\n\n".join(text for _kind, text in findings)
+	if not findings:
+		return "", "", warning
+	if is_auto_permission_mode(payload) and all(kind == FINDING_MISSING_STAMP for kind, _text in findings):
+		return "deny", (
+			reason + "\n\nAuto mode: nothing ran (any commit in this command did not happen either). Commit "
+			f"first in its own command, run `{STAMP_COMMAND}`, fix failures it reports that this change caused, "
+			"then run the push again as its own command. If the stamp cannot be written, stop and tell the user."
+		), warning
+	return "ask", reason, warning
 
 
 def cmd_hook(raw: str) -> int:
@@ -1084,11 +1148,11 @@ def cmd_hook(raw: str) -> int:
 		_emit(system_message="prepush gate: hook payload is not valid JSON; push not checked.")
 		return 0
 	try:
-		ask, message = evaluate_hook(payload)
+		decision, reason, message = hook_decision(payload)
 	except Exception as exc:  # noqa: BLE001 - the hook fails open
 		_emit(system_message=f"prepush gate: internal error ({type(exc).__name__}); push not checked.")
 		return 0
-	_emit(ask, message)
+	_emit(reason, message, decision or "ask")
 	return 0
 
 

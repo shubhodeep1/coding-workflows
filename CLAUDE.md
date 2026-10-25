@@ -1263,8 +1263,9 @@ your own judgement.
    `gh api repos/o/r/actions/runs/123/jobs`, not `.../runs/$RUN_ID/jobs` or
    `.../commits/$(git rev-parse HEAD)/check-runs`, and do not wrap `gh api`
    in `$(...)`. An unquoted expansion in a `gh api` argument prompts in every
-   permission mode, Auto included, and so does a `gh api` call inside a
-   `$(...)` that sits in a loop or in a larger word. Look a value up with one
+   permission mode except Auto, and so does a `gh api` call inside a
+   `$(...)` that sits in a loop or in a larger word (in Auto mode the guard
+   leaves both to the Auto-mode classifier, §23.H). Look a value up with one
    call, then issue the next call with the value typed out. Put GET
    parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
@@ -1383,7 +1384,7 @@ and classifies it:
 |---|---|---|
 | read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion; in both cases with no file-backed `-F` value and no `--input`. A complete `for VAR in TOKEN…; do BODY; done` over literal IDs is also approved when every item is a vetted `gh api` read, `gh run view/list` or `gh pr view` read, or literal/`$VAR` echo (§23.H below). A bare `gh api --help` or `gh api -h` with no other argument is a read too (it prints usage and sends no API request); `--help` / `-h` next to an endpoint, any other flag or `--` stays unreadable and prompts (#6668). | not prompted by the hook |
 | routine | a §23.B write to the local checkout's repository (or `{owner}/{repo}`): create a PR; edit a PR's or issue's `title`/`body`; add or edit an issue or PR comment; reply to a review thread; add or remove one label; request reviewers; dispatch (`ref`, `inputs` only) one of the workflows `.claude/settings.json` already allows as `gh workflow run <file> *` (§23.C command-invoked carve-out) | not prompted by the hook |
-| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input` or a file-backed `-F`/`--field` value (`@<file>`, or `@-` for stdin, which `gh` reads and sends) on any method, endpoint, or repository, GraphQL included (issue #4619; a `-f`/`--raw-field` value is sent literally and reads no file), an `-F` word the shell could rewrite into one (`$`, a backtick, `~`, or a glob character in it), a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a backtick or double-quoted `$(...)` substitution Bash would run — single-quoted text is data — handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
+| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input` or a file-backed `-F`/`--field` value (`@<file>`, or `@-` for stdin, which `gh` reads and sends) on any method, endpoint, or repository, GraphQL included (issue #4619; a `-f`/`--raw-field` value is sent literally and reads no file), an `-F` word the shell could rewrite into one (`$`, a backtick, `~`, or a glob character in it), a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a backtick or double-quoted `$(...)` substitution Bash would run — single-quoted text is data — handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode (in Auto mode a hidden call gets no decision instead; see "Auto mode" below) |
 | malformed jq | a `-q`/`--jq` value that is one of jq's own command-line options (matches `^--?[A-Za-z]`: `--arg`, `-r`, `--raw-output`, `-c`); `gh api` has no such flags, so the call could never work (#4891) | denied with a reason that says how to fix the command; nothing runs and no human is needed |
 
 The hook decides once for the whole Bash call: **deny** when any call
@@ -1417,8 +1418,22 @@ also approve code the guard has not read (an arbitrary loop, a `python3`
 heredoc, a `$VAR` redirect). `gh api` text that is only data (`git commit -m`, `grep`,
 `echo`) is ignored.
 
+**Auto mode.** A hook's ask prompts a human even in Auto mode, so when the
+hook payload's `permission_mode` is `auto` the asks that only mean "the
+guard cannot trust this command's shell shape" give **no decision** instead,
+and the Auto-mode classifier judges the command. Those are an unparseable
+command, a `gh api` call that could run hidden, ANSI-C quoting / an unquoted
+`#` comment / brace expansion, and an unquoted expansion in a `gh api`
+argument. A call the guard reads and classifies as a write (an unreadable
+call included) still asks, a flag between `gh` and `api` still asks, the
+malformed-jq deny and every allow are unchanged, and the command is never
+allowed when one of those doubts fired. Every other mode keeps the prompts.
+The headless Actions runs use `dontAsk` or `bypassPermissions`, where an ask
+is a denial; `tests/test_gh_api_write_guard.py` fails if a script under
+`scripts/` starts Claude in Auto mode.
+
 It fails **closed**, unlike the §21/§25 hooks: an unreadable, invalid,
-or non-object payload, or an internal error, asks. Empty input is allowed
+or non-object payload, or an internal error, asks, in Auto mode too. Empty input is allowed
 silently. It issues no GitHub API calls (§15), runs only
 `git config --get remote.origin.url` (and only when a call could be
 routine), and has no environment-variable escape hatch. It does not see
