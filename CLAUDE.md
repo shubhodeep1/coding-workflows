@@ -1265,8 +1265,8 @@ your own judgement.
    in `$(...)`. An unquoted expansion in a `gh api` argument prompts in every
    permission mode, and so does a `gh api` call inside a `$(...)` that sits
    in a loop or in a larger word (in Auto mode the guard leaves both to the
-   Auto-mode classifier unless the command contains `gh api repos/` or
-   `gh api user`, §23.H). Look a value up with one
+   Auto-mode classifier unless an allow rule such as `Bash(gh api repos/*)`
+   or `Bash(test *)` could match the command, §23.H). Look a value up with one
    call, then issue the next call with the value typed out. Put GET
    parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
@@ -1428,11 +1428,16 @@ command, a `gh api` call that could run hidden, ANSI-C quoting / an unquoted
 argument. A call the guard reads and classifies as a write (an unreadable
 call included) still asks, a flag between `gh` and `api` still asks, the
 malformed-jq deny and every allow are unchanged, and the command is never
-allowed when one of those doubts fired. A command containing `gh api repos/`
-or `gh api user` (quoted or not) keeps every ask in Auto mode: Auto mode
-resolves the shipped `Bash(gh api repos/*)` / `Bash(gh api user *)` allow
-rules before its classifier runs, so a no-decision there would approve the
-command unprompted. Every other mode keeps the prompts.
+allowed when one of those doubts fired. A command that an allow rule could
+match keeps every ask in Auto mode, because Auto mode resolves a matching
+allow rule before its classifier runs, so a no-decision there would approve
+the command unprompted. That covers `gh api repos/` and `gh api user`
+(including quoted spellings such as `'gh' api repos/`), and any `Bash(...)`
+allow rule in the project's `.claude/settings.json` /
+`.claude/settings.local.json` or `~/.claude/settings.json` that matches the
+command or one of its parts (for example `Bash(test *)` around a hidden
+`$(gh api -X DELETE ...)`). A settings file that exists but cannot be read
+also keeps every ask. Every other mode keeps the prompts.
 The headless Actions runs use `dontAsk` or `bypassPermissions`, where an ask
 is a denial; `tests/test_gh_api_write_guard.py` fails if a script under
 `scripts/` starts Claude in Auto mode.

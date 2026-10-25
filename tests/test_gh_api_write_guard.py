@@ -54,6 +54,7 @@ def _load_guard():
 guard = _load_guard()
 # The autouse fixture patches this; the remote-resolution unit tests call the real one.
 _REAL_PLACEHOLDER_REPO_SLUG = guard.placeholder_repo_slug
+_REAL_SETTINGS_FILES = guard._settings_files
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +65,8 @@ def _fixed_local_slug(monkeypatch):
 	monkeypatch.setattr(guard, "placeholder_repo_slug", lambda cwd: LOCAL_SLUG)
 	for name in ("GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE"):
 		monkeypatch.delenv(name, raising=False)
+	# Auto mode reads the allow rules; use the shipped ones, not the runner's.
+	monkeypatch.setattr(guard, "_settings_files", lambda: [str(TEMPLATE_SETTINGS_PATH)])
 
 
 def _decide(command: str) -> str | None:
@@ -1038,12 +1041,14 @@ def test_internal_exception_asks(monkeypatch, capsys):
 def test_hook_has_no_environment_escape_hatch():
 	# The guard reads only the variables that tell it where gh sends a call
 	# (issue #7555); each can only turn a routine write into a prompt.
+	# CLAUDE_PROJECT_DIR only adds settings files whose allow rules keep the
+	# Auto-mode asks, so it can only add prompts too.
 	import re as _re
 
 	source = GUARD_PATH.read_text(encoding="utf-8")
 	assert "getenv" not in source
 	reads = _re.findall(r"os\.environ\.get\(\"([A-Z_]+)\"", source)
-	assert set(reads) == {"GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE"}
+	assert set(reads) == {"GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE", "CLAUDE_PROJECT_DIR"}
 	assert source.count("os.environ") == len(reads)
 
 
@@ -1619,3 +1624,62 @@ def test_headless_pipelines_never_run_claude_in_auto_mode():
 	assert '--permission-mode "${CLAUDE_PERMISSIONS}"' in sandbox
 	sandbox_modes = set(re.findall(r"\bclaude_permissions=([A-Za-z]+)", sandbox))
 	assert sandbox_modes and sandbox_modes <= allowed, sandbox_modes
+
+
+
+# Hidden writes inside commands that another allow rule could match. Auto mode
+# would approve the outer command by that rule without its classifier.
+_OTHER_ALLOW_RULE_SHAPE_DOUBTS = [
+	'test "$(gh api -X DELETE orgs/o/teams/1)" = x',
+	'git commit -m "$(gh api -X DELETE orgs/o/teams/1)"',
+	'cd sub && git log "$(gh api -X DELETE orgs/o/teams/1)"',
+	"'gh' api repos/o/r/git/refs/heads/x {-X,DELETE}",
+	"g''h api repos/o/r/pulls/1 {-X,DELETE}",
+	"gh api user; x=$(gh api -X DELETE orgs/o/teams/1)",
+	"gh api user|grep $(gh api -X DELETE orgs/o/teams/1)",
+]
+
+
+@pytest.mark.parametrize("command", _OTHER_ALLOW_RULE_SHAPE_DOUBTS)
+def test_shape_doubts_under_any_allow_rule_still_ask_in_auto_mode(command):
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	assert decision == guard.DECISION_ASK
+	assert reason
+
+
+def _settings_file(tmp_path, monkeypatch, text: str) -> None:
+	path = tmp_path / "settings.json"
+	path.write_text(text, encoding="utf-8")
+	monkeypatch.setattr(guard, "_settings_files", lambda: [str(path)])
+
+
+@pytest.mark.parametrize("rule", ["Bash(echo:*)", "Bash(echo *)", "Bash", "Bash(*)"])
+def test_auto_mode_reads_user_allow_rules(tmp_path, monkeypatch, rule):
+	command = 'echo "$(gh api -X DELETE orgs/o/teams/1)"'
+	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": [rule]}}))
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ASK
+	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": ["Bash(ls *)"]}}))
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
+
+
+@pytest.mark.parametrize("text", ["{not json", json.dumps({"permissions": {"allow": "Bash(*)"}})])
+def test_auto_mode_keeps_asks_when_settings_cannot_be_checked(tmp_path, monkeypatch, text):
+	_settings_file(tmp_path, monkeypatch, text)
+	assert _decide_in_mode(_SHAPE_DOUBT_READS[0], guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ASK
+
+
+def test_settings_files_cover_project_local_and_user(tmp_path, monkeypatch):
+	monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path / "proj"))
+	monkeypatch.setenv("HOME", str(tmp_path / "home"))
+	paths = _REAL_SETTINGS_FILES()
+	for directory in (tmp_path / "proj" / ".claude", tmp_path / "home" / ".claude"):
+		for name in ("settings.json", "settings.local.json"):
+			assert os.path.realpath(directory / name) in paths
+
+
+def test_every_shipped_gh_api_allow_rule_is_recognised():
+	rules = json.loads(TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"))["permissions"]["allow"]
+	gh_api_rules = [rule for rule in rules if rule.startswith("Bash(gh api ")]
+	assert gh_api_rules
+	for rule in gh_api_rules:
+		assert guard._GH_API_ALLOW_RULE_RE.search(rule[5:-1].replace("*", "x")), rule
