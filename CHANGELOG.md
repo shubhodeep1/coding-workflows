@@ -3403,6 +3403,18 @@ What this means for consumer repos: nothing. This only changes the release gate 
 
 Only regular committed files are used, and their file mode is kept. An untracked file, a symlink, or a repository with no commit falls back to the working-tree copy and logs `outcome=skip reason=support_from_head_unavailable path=<path>`, and the trusted `scripts/validate_driver.sh` overlay still takes precedence. `VALIDATION_SANDBOX_SUPPORT_FROM_HEAD_ENABLED=false` turns the change off; it is on when unset. Refs #8064.
 
+- **Implement runs in consumer repositories no longer commit Python bytecode from the pipeline's own helper scripts.** Before this, an issue could be blocked as `ai:scope-blocked` even though every file its plan changed was allowed.
+
+The implement job copies its memory helpers (`ai_memory.py` and the modules it imports) into the consumer's `scripts/` folder, and a later step imports them from there. Python then wrote `scripts/__pycache__/*.pyc` files, the commit staged them, and the automation-path guard refused those `scripts/` paths and blocked the issue (mongo-explorer#42). `implement.yml` now sets `PYTHONDONTWRITEBYTECODE=1` for the whole workflow, and the generated `scripts/.gitignore` also lists `__pycache__/`, so both commit paths leave the folder out. The automation-path guard is unchanged.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Bytecode files that blocked mongo-explorer#42 | 3 |
+| Commit paths that now skip `scripts/__pycache__/` | 2 (preflight guard, `implement_commit_changes.sh`) |
+| Guard rules changed | 0 |
+
+What this means for operators: consumers without their own `__pycache__` ignore rule stop hitting this block once their wrappers sync to the release with this fix. mongo-explorer#42 still needs `ai:scope-blocked` removed and a new `/approved`.
+
 ### For contributors
 
 The extension logic sits between `# BEGIN/END phase4 review deadline extension (#8004)` in `scripts/stable_e2e_step_wait_review.sh`, the Phase 4 step body that `.github/workflows/test-and-mark-stable.yml` sources (#7991). Tests: new cases in `tests/test_test_and_mark_stable_review_blocked_budget.py` run that block with a fixed clock.
