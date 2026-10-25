@@ -7,7 +7,11 @@ argument expansion. A hook "ask" forces a human prompt even in Auto mode, so
 this hands those commands to the Auto-mode classifier. Calls the guard
 classifies as writes (unreadable calls included) and a flag between `gh` and
 `api` still ask; the malformed-jq deny and every allow are unchanged, and a
-command with a shape doubt is never allowed. Any other or missing mode keeps
+command with a shape doubt is never allowed. A command that matches
+`_GH_API_ALLOW_RULE_RE` (`gh api repos/` or `gh api user`, quoted or not)
+keeps every ask in Auto mode, because Auto mode resolves the shipped
+`Bash(gh api repos/*)` / `Bash(gh api user *)` allow rules before its
+classifier, so a no-decision would approve it unprompted. Any other or missing mode keeps
 the prompts, and the headless pipelines run in `dontAsk` /
 `bypassPermissions` (pinned by `tests/test_gh_api_write_guard.py`).
 

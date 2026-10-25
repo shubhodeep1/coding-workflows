@@ -109,7 +109,10 @@ unparseable command, the hidden `gh api` call, the ANSI-C / comment / brace
 hazard, and the unquoted `gh api` argument expansion. A call the guard reads
 and classifies as a write (unreadable calls included) still asks, a flag
 between `gh` and `api` still asks, and the malformed-jq deny and every allow
-are unchanged. Any other or missing mode keeps the prompts.
+are unchanged. A command that the shipped `Bash(gh api repos/*)` or
+`Bash(gh api user *)` allow rule could match keeps every ask, because Auto mode
+resolves a matching allow rule before its classifier runs. Any other or
+missing mode keeps the prompts.
 
 Unlike the other hooks in this directory this one fails CLOSED: an unreadable,
 invalid, or non-object payload, or an internal error, asks instead of allowing,
@@ -148,6 +151,12 @@ DECISION_DENY = "deny"
 # Claude Code's `permission_mode` hook field for Auto mode (hooks reference,
 # "Common input fields").
 AUTO_PERMISSION_MODE = "auto"
+# Auto mode resolves a matching allow rule before its classifier runs, so a
+# no-decision on a command that the shipped `Bash(gh api repos/*)` or
+# `Bash(gh api user *)` allow rule could match would approve it unprompted.
+# Such commands keep the ask in Auto mode. Quoted forms count too, because the
+# guard cannot tell how Claude Code normalises a command before matching.
+_GH_API_ALLOW_RULE_RE = re.compile(r"""(?<![\w./-])gh\s+api\s+["']?(?:repos/|user(?=["']?(?:\s|$)))""")
 
 KIND_READ = "read"
 KIND_ROUTINE = "routine"
@@ -1744,7 +1753,7 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 
 	# In Auto mode, doubts about the command's shell shape step aside instead of
 	# asking (see the module docstring); `shape_doubt` records that one fired.
-	auto_mode = payload.get("permission_mode") == AUTO_PERMISSION_MODE
+	auto_mode = payload.get("permission_mode") == AUTO_PERMISSION_MODE and not _GH_API_ALLOW_RULE_RE.search(command)
 	shape_doubt = False
 
 	stripped_command, heredocs = strip_heredoc_bodies(command)

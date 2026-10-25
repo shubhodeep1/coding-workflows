@@ -1263,9 +1263,10 @@ your own judgement.
    `gh api repos/o/r/actions/runs/123/jobs`, not `.../runs/$RUN_ID/jobs` or
    `.../commits/$(git rev-parse HEAD)/check-runs`, and do not wrap `gh api`
    in `$(...)`. An unquoted expansion in a `gh api` argument prompts in every
-   permission mode except Auto, and so does a `gh api` call inside a
-   `$(...)` that sits in a loop or in a larger word (in Auto mode the guard
-   leaves both to the Auto-mode classifier, §23.H). Look a value up with one
+   permission mode, and so does a `gh api` call inside a `$(...)` that sits
+   in a loop or in a larger word (in Auto mode the guard leaves both to the
+   Auto-mode classifier unless the command contains `gh api repos/` or
+   `gh api user`, §23.H). Look a value up with one
    call, then issue the next call with the value typed out. Put GET
    parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
@@ -1427,7 +1428,11 @@ command, a `gh api` call that could run hidden, ANSI-C quoting / an unquoted
 argument. A call the guard reads and classifies as a write (an unreadable
 call included) still asks, a flag between `gh` and `api` still asks, the
 malformed-jq deny and every allow are unchanged, and the command is never
-allowed when one of those doubts fired. Every other mode keeps the prompts.
+allowed when one of those doubts fired. A command containing `gh api repos/`
+or `gh api user` (quoted or not) keeps every ask in Auto mode: Auto mode
+resolves the shipped `Bash(gh api repos/*)` / `Bash(gh api user *)` allow
+rules before its classifier runs, so a no-decision there would approve the
+command unprompted. Every other mode keeps the prompts.
 The headless Actions runs use `dontAsk` or `bypassPermissions`, where an ask
 is a denial; `tests/test_gh_api_write_guard.py` fails if a script under
 `scripts/` starts Claude in Auto mode.

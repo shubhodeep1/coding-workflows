@@ -1515,23 +1515,48 @@ def _decide_in_mode(command: str, mode: str | None) -> tuple[str | None, str]:
 	return guard.evaluate(payload)
 
 
-# Each of these is a read whose shell shape the guard cannot trust. They are
-# the commands from the permission prompts that held up Auto-mode sessions.
+# Each of these is a read whose shell shape the guard cannot trust, shaped like
+# the commands from the permission prompts that held up Auto-mode sessions. They
+# use endpoints that no shipped `Bash(gh api ...)` allow rule matches, so a
+# no-decision really reaches the Auto-mode classifier.
 _SHAPE_DOUBT_READS = [
 	# unquoted expansion in a loop with a file redirect and a python3 step
-	"for i in 6031951051 6084132710; do gh api repos/o/r/issues/comments/$i > got_$i.json; done; python3 -I -c \"print(1)\"",
+	"for i in 6031951051 6084132710; do gh api orgs/o/teams/$i > got_$i.json; done; python3 -I -c \"print(1)\"",
 	# unquoted expansion in a loop piped into grep
-	"for id in 6114886899 6193924757; do echo \"=== $id\"; gh api repos/o/r/issues/comments/$id --jq .body | grep -n '^- '; done",
+	"for id in 6114886899 6193924757; do echo \"=== $id\"; gh api orgs/o/teams/$id --jq .name | grep -n '^- '; done",
 	# ANSI-C quoting in a later pipeline stage
-	"gh api 'repos/o/r/issues/4599/comments?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2",
+	"gh api 'orgs/o/teams?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2",
 	# brace expansion
-	"gh api repos/o/r/pulls/{1,2}",
+	"gh api orgs/o/teams/{1,2}",
 	# gh api hidden inside a backtick substitution or handed to bash -c
-	"x=`gh api repos/o/r/pulls/1`; echo $x",
-	"bash -c \"gh api repos/o/r/pulls/1\"",
+	"x=`gh api orgs/o`; echo $x",
+	"bash -c \"gh api orgs/o\"",
 	# a command the tokenizer cannot parse
-	"gh api repos/o/r/pulls/1 'unterminated",
+	"gh api orgs/o 'unterminated",
 ]
+
+# Shape doubts on commands that the shipped `Bash(gh api repos/*)` or
+# `Bash(gh api user *)` allow rule could match. Auto mode resolves that allow
+# rule before its classifier, so a no-decision would approve these unprompted;
+# they must keep asking in Auto mode too.
+_ALLOW_RULE_SHAPE_DOUBTS = [
+	"for i in 6031951051 6084132710; do gh api repos/o/r/issues/comments/$i > got_$i.json; done; python3 -I -c \"print(1)\"",
+	"gh api 'repos/o/r/issues/4599/comments?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2",
+	"gh api repos/o/r/pulls/{1,2}",
+	"gh api repos/o/r/git/refs/heads/x {-X,DELETE}",
+	"gh api repos/o/r/pulls/1 $(gh api -X DELETE repos/o/r/git/refs/heads/x)",
+	"x=`gh api repos/o/r/pulls/1`; echo $x",
+	"gh api repos/o/r/pulls/1 -X DELETE 'unterminated",
+	"gh api user $(gh api -X DELETE repos/o/r/git/refs/heads/x)",
+]
+
+
+@pytest.mark.parametrize("command", _ALLOW_RULE_SHAPE_DOUBTS)
+def test_allow_rule_covered_shape_doubts_still_ask_in_auto_mode(command):
+	for mode in (guard.AUTO_PERMISSION_MODE, None):
+		decision, reason = _decide_in_mode(command, mode)
+		assert decision == guard.DECISION_ASK, mode
+		assert reason
 
 
 @pytest.mark.parametrize("command", _SHAPE_DOUBT_READS)
