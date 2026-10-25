@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: This issue's heal scope marker (`<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/plan.yml,tests/**,changelog.d/*.md ... -->`) covers only `plan.yml`, tests and changelog fragments. Implement preflight enforces that marker on `ai:workflow-heal` issues, so options B and C would be held at plan approval or blocked at implement. B and C also wait on a maintainer editing the issue body, and that is the kind of circular dependency the pipeline has to avoid. Option A fixes the actual failure from the report: plan exits 1 on a `label_missing` refusal it already knows to be deterministic, and that exit files the `plan_failed` heal report. With the fix, each judge round on a held item ends quietly in the same hold clarify uses, and other exit-3 reasons still fail closed. The change to the judge's `/answer` loop in `scripts/unblock_actions.py` goes to a separate follow-up issue, as option A says.\n\nSETUP REQUIRED: none.",
+  "fingerprint": "394b91a45caa6fd488eca4dd35fb6903bca3ddc2c98841f81ab6734b6d63d6a3",
+  "lineage": {
+    "issue_number": 8151,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40203599963",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40203599963",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8151"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261025145454_7c0f109ea8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8151,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40203599963"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8151",
+  "timestamps": {
+    "created_at": "2026-10-25T14:54:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
