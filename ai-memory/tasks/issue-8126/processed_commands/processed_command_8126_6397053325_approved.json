@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8126_6397053325_approved",
   "issue_number": 8126,
   "metadata": {
+    "branch": "ai/issue-8126",
+    "changed_files": [
+      "changelog.d/8126-triage-dedup-fail-closed.md",
+      "scripts/check_failure_triage.sh",
+      "tests/test_check_failure_triage_workflow_security.py"
+    ],
+    "issue_number": 8126,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8126",
+    "pr_number": 8133,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8133",
+    "run_attempt": "1",
+    "run_id": "40188971595",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40188971595"
   },
   "run_attempt": 1,
   "run_id": "40188971595",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-25T11:30:20Z",
+  "status": "completed",
+  "timestamp": "2026-10-25T11:46:28Z",
   "workflow": "implement"
 }
