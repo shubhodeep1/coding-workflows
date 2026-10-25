@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Required: the file has exactly two lines: `status: ok` and `decompose-run: 40222261089`. Remove the old 'run_id' and 'updated-by' lines.\"\n  expected_change_site: tests/e2e_smoke_canary.txt\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The reviewer states the PR satisfies this requirement (the file changes from 3 lines to 2 lines, matching the requirement), so no hunk is missing. The reviewer labels the entry SEVERITY: NIT. It also notes that the sibling file `tests/e2e_smoke_canary_spec.txt` still has the old 3-line format, while `.github/workflows/test-and-mark-stable.yml:4386` now expects the new 2-line format. The reviewer says this is outside the scope of issue #8162 and may need a follow-up.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP:\n  Requirement: \"Required: the file has exactly two lines: `status: ok` and `decompose-run: 40222261089`. Remove the old 'run_id' and 'updated-by' lines.\"\n  Expected change site: tests/e2e_smoke_canary.txt\n  Evidence of absence: No diff hunk removes these lines \u2014 the PR correctly changes the file from 3 lines to 2 lines, matching the requirement exactly. The file now contains `status: ok` on line 1 and `decompose-run: 40222261089` on line 2.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n  Note: The PR correctly satisfies issue #8162. The sibling file `tests/e2e_smoke_canary_spec.txt` still contains the old 3-line format (`status: ok`, `run_id: __RUN_ID__`, `updated-by: ai-pipeline`). The workflow at `.github/workflows/test-and-mark-stable.yml:4386` now instructs the decomposer to create issues requiring the new 2-line format (`status: ok` + `decompose-run: ${GITHUB_RUN_ID}`). `tests/test_e2e_editor_smoke_canary.py` validates the canary byte-for-byte against the spec template, so this drift could cause Phase 4b test failures in future smoke runs. It is outside the scope of issue #8162, which names `tests/e2e_smoke_canary.txt` only. It is a latent consistency issue that may need a follow-up fix to `tests/e2e_smoke_canary_spec.txt`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0b945371884ed79ace07b88085b5bdea35185afb856b79ec4ebbc580406c0bb4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8166,
+    "run_id": "40228753900",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40228753900",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025201054_542a0c7580",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8166,
+    "run_id": "40228753900"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T20:10:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
