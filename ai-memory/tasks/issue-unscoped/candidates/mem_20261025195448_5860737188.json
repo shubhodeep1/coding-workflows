@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:429 | severity=medium | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: In `hold_delete_err=\"$(gh api -X DELETE ... 2>&1 >/dev/null)\"`, the redirect order discards stdout, so the captured value is empty and the `grep -q 'HTTP 404'` branch (`planning_label=absent`, lines 431-432) is unreachable. Every DELETE failure is logged as `planning_label=failed`.\n  WHY: The source states no severity, so medium is a placeholder. The reviewer says `gh api` writes the 404 body to stdout, so the benign \"label already absent\" case is never distinguished and the removed/absent/failed tri-state collapses to removed/failed. Other reviewers (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) said the redirect order is correct and that stderr is captured, so reviewers disagree on this finding.\n- tests/test_workflow_checkout_integration_ref_audit.py:860-869 | severity=medium | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `test_plan_label_missing_hold_fails_closed_on_write_errors` only covers the generic DELETE failure (`FAKE_GH_FAIL=label_delete`). No test drives the `planning_label=absent` 404 branch.\n  WHY: The source states no severity, so medium is a placeholder. A regression in 404 detection would not be caught by CI, and the existing test passes because the fake `gh` prints nothing.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  expected_change_site: .github/workflows/plan.yml\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The patch modifies `.github/workflows/plan.yml` but appears to only add `HOLD_EVENT_NAME`, `HOLD_COMMENT_LOGIN` and `HOLD_COMMENT_ASSOCIATION` env vars, matching `if` conditions and tests. It shows no resolution of the `plan.yml` conflicts that made the automated forward-merge fail. The reviewer marked this SEVERITY: BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  Expected change site: `.github/workflows/plan.yml`\n  Evidence of absence: The PR patch shows modifications, but does not resolve the conflicts that caused the automated forward-merge to fail. The conflicts were reported in `.github/workflows/plan.yml`. The submitted patch modifies `.github/workflows/plan.yml` in several places, but appears to only add a `HOLD_EVENT_NAME`, `HOLD_COMMENT_LOGIN`, `HOLD_COMMENT_ASSOCIATION` environment variables and corresponding `if` conditions to the jobs, and update tests. It does not contain any resolution of the conflicts in `plan.yml` that were caused by previous changes in `main` or the `stable` branch.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:429 | confidence=4\n  PROBLEM: The redirect order `2>&1 >/dev/null` discards stdout and leaves stderr on the command-substitution pipe. `gh api -X DELETE` writes HTTP error bodies to stdout, so `hold_delete_err` is always empty and the `planning_label=absent` branch (lines 431-432) is unreachable.\n  WHY: A 404 from `DELETE repos/.../labels/ai:planning` is the expected benign case but is logged as `planning_label=failed`. The removed/absent/failed tri-state collapses to removed/failed.\n- tests/test_workflow_checkout_integration_ref_audit.py:860-869 | confidence=3\n  PROBLEM: The test only exercises the generic DELETE failure (`FAKE_GH_FAIL=label_delete`) and asserts only `planning_label=failed phase=plan`. No test drives the `planning_label=absent` branch.\n  WHY: The 404 path is unreachable and untested, so a regression in 404 detection would not be caught by CI.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3c0910fc5dc85cac1d84b59e1461348ae5e9c417bf797daa38ca872da1da4ebd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8155,
+    "run_id": "40224290147",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40224290147",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025195448_5860737188",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8155,
+    "run_id": "40224290147"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T19:54:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
