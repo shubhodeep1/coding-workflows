@@ -617,6 +617,45 @@ def _write_exec(path: Path, body: str) -> None:
 	path.chmod(0o755)
 
 
+# The poller's real `tg_cleanup_msgs` runs on every clean project completion
+# and calls `curl_gh_api`, which runs `curl` with no time limit. Without this
+# shim a poller test sent a live HTTPS request to api.github.com, and a slow
+# network hung tests past the harness timeout (CI run 40182895760). The shim
+# records each call (Authorization header values redacted) to
+# ${CURL_CALL_CAPTURE}, prints nothing and exits 7 ("couldn't connect"), the
+# same fast failure a runner without network gives.
+_POLLER_CURL_SHIM = r'''#!/usr/bin/env bash
+curl_shim_args=()
+curl_shim_redact_next=false
+for curl_shim_arg in "$@"; do
+	if [ "${curl_shim_redact_next}" = "true" ]; then
+		curl_shim_redact_next=false
+		case "${curl_shim_arg}" in
+			[Aa]uthorization:*) curl_shim_arg="Authorization: [redacted]" ;;
+		esac
+	fi
+	case "${curl_shim_arg}" in
+		-H|--header) curl_shim_redact_next=true ;;
+		--header=[Aa]uthorization:*) curl_shim_arg="--header=Authorization: [redacted]" ;;
+		-H[Aa]uthorization:*) curl_shim_arg="-HAuthorization: [redacted]" ;;
+	esac
+	curl_shim_args+=("${curl_shim_arg}")
+done
+if [ -n "${CURL_CALL_CAPTURE:-}" ]; then
+	printf '%s\n' "${curl_shim_args[*]}" >> "${CURL_CALL_CAPTURE}" 2>/dev/null || true
+fi
+exit 7
+'''
+
+
+def _write_poller_curl_shim(bin_dir: Path) -> None:
+	"""Put the failing `curl` shim on the sandbox PATH unless one exists."""
+	curl_shim_path = bin_dir / "curl"
+	if curl_shim_path.exists():
+		return
+	_write_exec(curl_shim_path, _POLLER_CURL_SHIM)
+
+
 # V2 framing parsing — keep in sync with scripts/orchestrate_state_v2.py.
 # Tests cannot import the helper module directly because it lives outside
 # `tests/` and the test runner is invoked as a flat script; reimplementing
@@ -1145,6 +1184,7 @@ esac
 		}
 		security_audit_capture = runtime_dir / "security_audit_capture.json"
 		telegram_cleanup_capture = runtime_dir / "telegram_cleanup_calls.log"
+		curl_call_capture = runtime_dir / "curl_calls.log"
 		telegram_notification_capture = runtime_dir / "telegram_notifications.jsonl"
 		bin_dir.mkdir(parents=True)
 		home_dir.mkdir(parents=True)
@@ -3123,6 +3163,7 @@ print('Unsupported gh call: ' + ' '.join(args), file=sys.stderr)
 sys.exit(1)
 '''
 		_write_exec(bin_dir / "gh", gh_mock)
+		_write_poller_curl_shim(bin_dir)
 
 		real_git = shutil.which("git")
 		real_jq = shutil.which("jq")
@@ -3814,6 +3855,7 @@ sys.exit(proc.returncode)
 				"SECURITY_PASS_CONFIDENCE_GATE": "8",
 				"SECURITY_AUDIT_CAPTURE": str(security_audit_capture),
 				"TG_CLEANUP_CAPTURE": str(telegram_cleanup_capture),
+				"CURL_CALL_CAPTURE": str(curl_call_capture),
 				"TG_NOTIFICATION_CAPTURE": str(telegram_notification_capture),
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"BRANCH_REBUILD_ENABLED": branch_rebuild_enabled,
@@ -3903,6 +3945,11 @@ sys.exit(proc.returncode)
 		result["telegram_cleanup_calls"] = (
 			telegram_cleanup_capture.read_text(encoding="utf-8").splitlines()
 			if telegram_cleanup_capture.exists()
+			else []
+		)
+		result["curl_calls"] = (
+			curl_call_capture.read_text(encoding="utf-8").splitlines()
+			if curl_call_capture.exists()
 			else []
 		)
 		result["telegram_notifications"] = (
@@ -28162,6 +28209,40 @@ def test_standalone_pipeline_label_batch_unrecognised_answer_keeps_rest_path() -
 	assert result["pipeline_label_graphql_calls"] == 0, log
 	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
 	assert {501, 502, 503} <= set(result.get("candidate_details_requested", [])), log
+
+
+def test_poller_curl_shim_fails_fast_and_redacts_authorization() -> None:
+	with tempfile.TemporaryDirectory() as curl_shim_tmp:
+		curl_shim_root = Path(curl_shim_tmp)
+		curl_shim_bin = curl_shim_root / "bin"
+		curl_shim_bin.mkdir()
+		_write_poller_curl_shim(curl_shim_bin)
+		curl_shim_log = curl_shim_root / "curl_calls.log"
+		curl_shim_env = dict(os.environ)
+		curl_shim_env["CURL_CALL_CAPTURE"] = str(curl_shim_log)
+		curl_shim_env["PATH"] = f"{curl_shim_bin}:{curl_shim_env.get('PATH', '')}"
+		completed = subprocess.run(
+			["curl", "-s", "-H", "Authorization: token secret-value", "--header=authorization: bearer other-value", "https://api.github.com/x"],
+			env=curl_shim_env,
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+		assert completed.returncode == 7
+		assert completed.stdout == ""
+		logged = curl_shim_log.read_text(encoding="utf-8").splitlines()
+		assert logged == ["-s -H Authorization: [redacted] --header=Authorization: [redacted] https://api.github.com/x"]
+		assert "secret-value" not in curl_shim_log.read_text(encoding="utf-8")
+		# A curl the test already supplied is kept.
+		(curl_shim_bin / "curl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+		_write_poller_curl_shim(curl_shim_bin)
+		assert (curl_shim_bin / "curl").read_text(encoding="utf-8") == "#!/bin/sh\nexit 0\n"
+		# Without a capture path the shim still fails fast.
+		curl_shim_env.pop("CURL_CALL_CAPTURE")
+		curl_shim_bin.joinpath("curl").unlink()
+		_write_poller_curl_shim(curl_shim_bin)
+		completed = subprocess.run(["curl", "https://api.github.com/x"], env=curl_shim_env, capture_output=True, text=True, timeout=30)
+		assert completed.returncode == 7
 
 
 if __name__ == "__main__":
