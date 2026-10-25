@@ -11,7 +11,7 @@
     `UPDATER_PR_DELIVERY_ENABLED`, auto-merge settings).
 - Deploy target: shubhodeep1/coding-workflows -> 13 consumers in `.github/ai/consumer_repos.json`
 - How it runs: release via `workflow_dispatch` of `test-and-mark-stable.yml` (manual); consumers update on
-  `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:49-51`)
+  `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:48-50`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
 - Last note: tele-funtoken wrapper file built and verified locally; next: commit, push, open its PR.
