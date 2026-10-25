@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:validation_harness_hold_tick() | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If validation_harness_pin returns 1 (e.g., due to an unstable git ref resolution), the function returns 0 and the project is treated as \"still waiting\" for a harness fix.\n  WHY: A transient git failure while polling could keep a project waiting for a harness fix that is already present or not needed, causing unnecessary delays. Source severity was NIT.\n- scripts/unblock_actions.py:_instruction_paths() regex | severity=high | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The regex used to extract file paths from instructions might be bypassed by carefully crafted input.\n  WHY: Work could be misrouted between the 'consumer' and 'harness' repositories, violating the intended scope of changes. Source severity was MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Phase 3 \"Unblock judge harness routing\" adds the `target_repo` field to the verdict schema in the output contract, adds `UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED`, and updates `prompts/mode-judge-unblock.txt` and `prompts/contracts/mode-validate-diagnose.yml`.\n  expected_change_site: prompts/_templates/mode-judge-unblock.txt, prompts/mode-judge-unblock.txt, prompts/contracts/mode-validate-diagnose.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The diff includes schema updates in the prompts, but the diff for `prompts/contracts/mode-validate-diagnose.yml` does not appear to include the `files` or `harness_files` fields in the schema documentation comment section. (anthropic_claude-sonnet-5_5 reviewed the same candidate and judged it not a gap, because that contract file only documents Phase 1 diagnosis output fields.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:validation_harness_hold_tick() | severity=NIT | confidence=2\n  PROBLEM: If validation_harness_pin returns 1 (e.g., due to an unstable git ref resolution), the function returns 0 and the project is treated as \"still waiting\" for a harness fix.\n  WHY: A transient failure in git operations while polling could incorrectly keep a project waiting for a harness fix that is actually already present or for which no fix is required, leading to unnecessary delays.\n- scripts/unblock_actions.py:_instruction_paths() regex | severity=MAJOR | confidence=2\n  PROBLEM: The regex used to extract file paths from instructions might be bypassed by carefully crafted input.\n  WHY: This could lead to work being misrouted between 'consumer' and 'harness' repositories, potentially violating the intended scope of changes.\n- TASK_GAP:\n  Requirement: Phase 3 \"Unblock judge harness routing\" adds the `target_repo` field to the verdict schema in the output contract, adds `UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED`, and updates `prompts/mode-judge-unblock.txt` and `prompts/contracts/mode-validate-diagnose.yml`.\n  Expected change site: prompts/_templates/mode-judge-unblock.txt, prompts/mode-judge-unblock.txt, prompts/contracts/mode-validate-diagnose.yml\n  Evidence of absence: While the diff includes schema updates in the prompts, the plan requires explicit updates to `prompts/contracts/mode-validate-diagnose.yml` to reflect these schema changes properly. The diff for `prompts/contracts/mode-validate-diagnose.yml` does not seem to include the `files` or `harness_files` fields in the schema documentation comment section as implied by the plan instructions.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTION: scripts/unblock_actions.py `_harness_route`: `_load_ownership` returns None on failure and the code defaults mode to 'consumer' without logging why. Suggested fix: add a visible warning log when ownership loading fails (about 2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "277d9b27e24e6328e8c51c6785e28291f37d2ee780e31686fa12fe9518fb9562",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 7922,
+    "run_id": "40146684774",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40146684774",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025010906_27f5e7e1a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 7922,
+    "run_id": "40146684774"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T01:09:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
