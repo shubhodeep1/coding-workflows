@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "For issue-driven code or workflow changes, the repository commonly adds a fragment named with the issue number and a short descriptive slug, such as `changelog.d/<issue>-<slug>.md`. Check this convention when planning a change; documentation- or analysis-only updates may differ.",
+  "fingerprint": "2c080108f95e1cd0c2ddb98ea5c3040fb05da1f779f0a13a3e13d1949f2d3248",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40197619154",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40197619154",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8124",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8126",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8127",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8128",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8129",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8131",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8132",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8133",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8134",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8136"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261025134232_b40447cbff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Implementation changes commonly include a numbered `changelog.d/` fragment.",
+  "timestamps": {
+    "created_at": "2026-10-25T13:42:32Z",
+    "promoted_at": "2026-10-25T13:44:44Z",
+    "superseded_at": null
+  }
+}
