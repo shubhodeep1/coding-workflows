@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8096_6392573973_approved",
   "issue_number": 8096,
   "metadata": {
+    "branch": "ai/issue-8096",
+    "changed_files": [
+      "changelog.d/8096-merge-probe-unknown-siblings.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_merge_probe.py"
+    ],
+    "issue_number": 8096,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8096",
+    "pr_number": 8102,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8102",
+    "run_attempt": "1",
+    "run_id": "40155442811",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40155442811"
   },
   "run_attempt": 1,
   "run_id": "40155442811",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-25T02:44:16Z",
+  "status": "completed",
+  "timestamp": "2026-10-25T03:04:04Z",
   "workflow": "implement"
 }
