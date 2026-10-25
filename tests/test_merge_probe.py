@@ -346,11 +346,14 @@ def test_bump_merge_deferral_count_persists_to_state():
 		assert counters == {10: 2, 11: 1}
 
 
-def _run_probe_twice(env: dict[str, str]) -> tuple[subprocess.CompletedProcess, Path]:
-	"""Run the probe twice in one shell; return the result and call log."""
+def _run_probe_twice(env: dict[str, str]) -> tuple[subprocess.CompletedProcess, int]:
+	"""Run the probe twice in one shell; return the result and gh call count."""
 	import tempfile
-	td = tempfile.mkdtemp(prefix="merge-probe-")
-	repo_dir = Path(td)
+	with tempfile.TemporaryDirectory(prefix="merge-probe-") as td:
+		return _run_probe_twice_in(Path(td), env)
+
+
+def _run_probe_twice_in(repo_dir: Path, env: dict[str, str]) -> tuple[subprocess.CompletedProcess, int]:
 	_init_git_repo(repo_dir)
 	_extract_probe_functions(repo_dir)
 	call_log = repo_dir / "gh_calls.log"
@@ -367,7 +370,7 @@ def _run_probe_twice(env: dict[str, str]) -> tuple[subprocess.CompletedProcess, 
 	full_env = {"GH_MOCK_CALL_LOG": str(call_log)}
 	full_env.update(env)
 	r = _run_bash(script, cwd=repo_dir, env=full_env)
-	return r, call_log
+	return r, _call_count(call_log)
 
 
 def _call_count(call_log: Path) -> int:
@@ -377,7 +380,7 @@ def _call_count(call_log: Path) -> int:
 
 
 def test_probe_failed_lookup_returns_two_and_caches_unknown():
-	r, call_log = _run_probe_twice({"GH_MOCK_PR_LIST_RC": "1"})
+	r, calls = _run_probe_twice({"GH_MOCK_PR_LIST_RC": "1"})
 	assert r.returncode == 0, f"bash failed: {r.stderr}"
 	assert "PROBE_RC1=2" in r.stdout, r.stdout
 	assert "PROBE_RC2=2" in r.stdout, r.stdout
@@ -386,7 +389,7 @@ def test_probe_failed_lookup_returns_two_and_caches_unknown():
 		"  [merge-probe] Sibling PR lookup for integration unavailable; cannot probe PR #700 this tick."
 		in r.stdout
 	), r.stdout
-	assert _call_count(call_log) == 1, f"expected one gh call, got {_call_count(call_log)}"
+	assert calls == 1, f"expected one gh call, got {calls}"
 
 
 def test_probe_non_array_lookup_returns_two():
@@ -404,12 +407,12 @@ def test_probe_empty_output_lookup_returns_two():
 
 
 def test_probe_valid_empty_array_is_known_and_returns_zero():
-	r, call_log = _run_probe_twice({"GH_MOCK_PR_LIST_JSON": "[]"})
+	r, calls = _run_probe_twice({"GH_MOCK_PR_LIST_JSON": "[]"})
 	assert r.returncode == 0, f"bash failed: {r.stderr}"
 	assert "PROBE_RC1=0" in r.stdout, r.stdout
 	assert "PROBE_RC2=0" in r.stdout, r.stdout
 	assert "STATE=known" in r.stdout, r.stdout
-	assert _call_count(call_log) == 1
+	assert calls == 1
 
 
 def test_probe_switch_false_restores_fail_open():
@@ -452,7 +455,7 @@ def test_ready_to_merge_caller_skips_unknown_lookup_without_counting():
 	region = text[start:end]
 	assert "|| _rtm_probe_rc=$?" in region
 	rc2_start = region.index('if [ "${_rtm_probe_rc}" -eq 2 ]; then')
-	rc2_end = region.index("fi", rc2_start)
+	rc2_end = region.index("\n            fi\n", rc2_start)
 	rc2_block = region[rc2_start:rc2_end]
 	assert (
 		"  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} this tick: "
