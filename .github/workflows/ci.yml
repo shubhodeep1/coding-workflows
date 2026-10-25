@@ -2501,11 +2501,85 @@ jobs:
       # group 4 only, once per CI run, and
       # needs only checkout, Python 3.12 and the shared pip install, which
       # every matrix group has. Name and body unchanged.
+      # Sharded in place, not moved (#8150): orchestrate-poll (4) took 15m13s
+      # of its 20 minutes on main (run 40198222187). This step had moved four
+      # times (#8072, #8091, #8118) and each group it landed in then reached
+      # about 15 to 17 minutes, and no other CI job has the roughly 11 minutes
+      # of headroom it needs. That cost is an estimate from group totals
+      # (group 0 at 17m01s with slice, fast-fail subset and this step; group 4
+      # at 15m13s with slice and this step), not a measurement. The step keeps
+      # its name, guard and modules, and splits their test functions across 4
+      # local pytest processes on the runner's 4 cores, the way the
+      # merge-train step was split (#7579). Each test seeds its own tmp_path,
+      # and each shard is a separate pytest process.
       - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
         if: strategy.job-index == 4
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py
+          ub_shards=4
+          ub_modules=(tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py)
+          rm -f /tmp/unblock_step_collect.log /tmp/unblock_step_tests.txt \
+            /tmp/unblock_step_shard_*.txt /tmp/unblock_step_shard_*.log /tmp/unblock_step_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${ub_modules[@]}" \
+            > /tmp/unblock_step_collect.log 2>&1 \
+            || { cat /tmp/unblock_step_collect.log; echo "::error::Test collection failed for the unblock step modules."; exit 1; }
+          { grep -E '^tests/test_(unblock_judge|unblock_scan|orphan_fixup_close)\.py::' /tmp/unblock_step_collect.log || true; } \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/unblock_step_tests.txt
+          ub_test_count="$(wc -l < /tmp/unblock_step_tests.txt | tr -d '[:space:]')"
+          if ! [ "${ub_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from the unblock step modules."
+            exit 1
+          fi
+          echo "unblock step: ${ub_test_count} test functions across ${ub_shards} shards"
+          ub_pids=()
+          for ub_shard in $(seq 0 "$((ub_shards - 1))"); do
+            awk -v n="${ub_shard}" -v total="${ub_shards}" 'NR % total == n' \
+              /tmp/unblock_step_tests.txt > "/tmp/unblock_step_shard_${ub_shard}.txt"
+            [ -s "/tmp/unblock_step_shard_${ub_shard}.txt" ] || continue
+            (
+              mapfile -t ub_shard_tests < "/tmp/unblock_step_shard_${ub_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${ub_shard_tests[@]}" > "/tmp/unblock_step_shard_${ub_shard}.log" 2>&1
+              echo "$?" > "/tmp/unblock_step_shard_${ub_shard}.rc"
+            ) &
+            ub_pids+=("$!")
+          done
+          # Reap every process before judging any, so none is left orphaned.
+          for ub_pid in "${ub_pids[@]}"; do
+            wait "${ub_pid}" || true
+          done
+          ub_ids=()
+          for ub_shard in $(seq 0 "$((ub_shards - 1))"); do
+            [ -s "/tmp/unblock_step_shard_${ub_shard}.txt" ] || continue
+            ub_ids+=("${ub_shard}")
+          done
+          ub_failed=()
+          for ub_id in "${ub_ids[@]}"; do
+            ub_stem="/tmp/unblock_step_shard_${ub_id}"
+            echo "::group::unblock step shard ${ub_id}"
+            cat "${ub_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            ub_rc="$(cat "${ub_stem}.rc" 2>/dev/null || echo 1)"
+            case "${ub_rc}" in
+              ''|*[!0-9]*) ub_rc=1 ;;
+            esac
+            if [ "${ub_rc}" != "0" ]; then
+              ub_failed+=("${ub_id}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for ub_id in "${ub_failed[@]}"; do
+            echo "--- unblock step shard ${ub_id} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/unblock_step_shard_${ub_id}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#ub_failed[@]}" -gt 0 ]; then
+            echo "::error::unblock step shards failed: ${ub_failed[*]}"
+            exit 1
+          fi
 
       # Moved out of the group-0 block of "Orchestrate poll process unit tests":
       # orchestrate-poll (0) took 15m09s of its 20 minutes on main (run

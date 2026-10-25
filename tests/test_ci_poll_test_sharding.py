@@ -1248,6 +1248,147 @@ class MovedPollGroupThreeStepsContractTest(unittest.TestCase):
 			self.assertNotIn(name, guarded)
 
 
+
+UNBLOCK_STEP_NAME = "Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)"
+UNBLOCK_STEP_MODULES = MOVED_POLL_GROUP_THREE_STEPS[UNBLOCK_STEP_NAME][1]
+UNBLOCK_STEP_AWK_RE = re.compile(
+	r"""awk -v n="\$\{ub_shard\}" -v total="\$\{ub_shards\}" '(?P<expr>[^']+)'"""
+)
+
+
+def run_unblock_step_judge(step_run: str, files: dict[int, dict[str, str]]) -> subprocess.CompletedProcess:
+	"""Run the unblock step's judgment part against fake shard files.
+
+	`files` maps a shard index to the files it left (`txt`, `log`, `rc`).
+	The cut starts after the reap loop and ends at the final exit, so the
+	shipped shell is exercised, pointed at a temp dir.
+	"""
+	start = step_run.index("ub_ids=()")
+	end = step_run.index("\nfi\n", step_run.index("unblock step shards failed")) + len("\nfi\n")
+	with tempfile.TemporaryDirectory(prefix="test_ub_judge_") as tmp:
+		for shard, shard_files in files.items():
+			for suffix, content in shard_files.items():
+				Path(tmp, f"unblock_step_shard_{shard}.{suffix}").write_text(content, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/unblock_step_", f"{tmp}/unblock_step_")
+		return subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nub_shards=4\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+
+class UnblockStepShardingContractTest(unittest.TestCase):
+	"""The unblock step runs its three modules in local shards (#8150).
+
+	orchestrate-poll (4) took 15m13s of its 20 minutes (run 40198222187)
+	after four moves of this step. It now stays in group 4, by name, guard
+	and modules, and splits its test functions across 4 processes. Every
+	test must still run exactly once, and a shard that fails or records no
+	exit code must fail the step.
+	"""
+
+	def setUp(self) -> None:
+		self.step = poll_job_step(UNBLOCK_STEP_NAME)
+		self.run = self.step["run"]
+
+	def green(self) -> dict[int, dict[str, str]]:
+		return {n: {"txt": f"t{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+
+	def test_step_keeps_its_group_and_pin_tables(self) -> None:
+		self.assertEqual(self.step["if"], "strategy.job-index == 4")
+		self.assertEqual(GROUP_PINNED_STEPS[UNBLOCK_STEP_NAME], 4)
+		self.assertIn(UNBLOCK_STEP_NAME, LAST_GROUP_PINNED_STEPS)
+
+	def test_body_names_modules_and_shard_count(self) -> None:
+		for module in UNBLOCK_STEP_MODULES:
+			with self.subTest(module=module):
+				self.assertIn(module, self.run)
+		self.assertIn("ub_shards=4", self.run)
+		self.assertIn('--collect-only -q -p no:cacheprovider "${ub_modules[@]}"', self.run)
+		self.assertIn("No tests collected from the unblock step modules.", self.run)
+		self.assertIn("Test collection failed for the unblock step modules.", self.run)
+
+	def test_partition_expression_is_a_true_partition(self) -> None:
+		match = UNBLOCK_STEP_AWK_RE.search(self.run)
+		self.assertIsNotNone(match)
+		expression = match.group("expr").strip()
+		self.assertEqual(expression, "NR % total == n")
+		names = [f"tests/test_x.py::test_{i:03d}" for i in range(97)]
+		for total in range(1, 7):
+			with self.subTest(shards=total):
+				collected: list[str] = []
+				for n in range(total):
+					collected.extend(ShardPartitionTest.shard(self, names, total, n, expression))
+				self.assertCountEqual(collected, names)
+
+	def test_partition_covers_the_real_test_functions(self) -> None:
+		import ast
+
+		names: list[str] = []
+		for module in UNBLOCK_STEP_MODULES:
+			tree = ast.parse((REPO_ROOT / module).read_text(encoding="utf-8"))
+			names.extend(
+				f"{module}::{node.name}"
+				for node in ast.walk(tree)
+				if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")
+			)
+		self.assertGreater(len(names), 0)
+		expression = UNBLOCK_STEP_AWK_RE.search(self.run).group("expr").strip()
+		collected: list[str] = []
+		for n in range(4):
+			collected.extend(ShardPartitionTest.shard(self, names, 4, n, expression))
+		self.assertCountEqual(collected, names)
+
+	def test_collect_filter_matches_each_module_prefix(self) -> None:
+		match = re.search(r"grep -E '(?P<pattern>[^']+)' /tmp/unblock_step_collect\.log", self.run)
+		self.assertIsNotNone(match)
+		pattern = re.compile(match.group("pattern"))
+		for module in UNBLOCK_STEP_MODULES:
+			with self.subTest(module=module):
+				self.assertTrue(pattern.search(f"{module}::test_a"))
+		self.assertFalse(pattern.search("3 tests collected in 0.1s"))
+
+	def test_every_process_is_reaped_before_any_is_judged(self) -> None:
+		self.assertLess(self.run.index('wait "${ub_pid}"'), self.run.index("ub_ids=()"))
+		self.assertLess(self.run.index('wait "${ub_pid}"'), self.run.index('.rc" 2>/dev/null'))
+
+	def test_all_green_passes(self) -> None:
+		result = run_unblock_step_judge(self.run, self.green())
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("failed", result.stdout)
+
+	def test_failing_shard_fails_the_step_with_prefixed_tail(self) -> None:
+		files = self.green()
+		files[1] = {"txt": "t1\n", "log": "::error::forged\nFAILED x\n", "rc": "1\n"}
+		result = run_unblock_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::unblock step shards failed: 1\n", result.stdout)
+		tail = result.stdout[result.stdout.index("shard 1 failed; last 40 log lines"):]
+		self.assertIn("| ::error::forged", tail)
+		self.assertNotIn("\n::error::forged", tail)
+
+	def test_missing_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[2] = {"txt": "t2\n", "log": "partial\n"}
+		result = run_unblock_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::unblock step shards failed: 2\n", result.stdout)
+
+	def test_non_numeric_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[0] = {"txt": "t0\n", "log": "ok\n", "rc": "zero\n"}
+		result = run_unblock_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::unblock step shards failed: 0\n", result.stdout)
+
+	def test_empty_shard_is_skipped(self) -> None:
+		files = self.green()
+		del files[3]
+		result = run_unblock_step_judge(self.run, files)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("shard 3", result.stdout)
+
 # Steps moved from tests-release-and-log-analysis (budget-watch issue #7689):
 # step name -> (matrix group that runs it, module paths its body names).
 # The two group-2 steps moved out of the matrix again in #7697; see
