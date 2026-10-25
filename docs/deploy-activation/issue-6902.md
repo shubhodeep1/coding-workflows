@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:49-51`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
-- Last note: Q2: A, Q3: A, Q4: A answered. Next: step 7, tele-funtoken wrapper PR.
+- Last note: tele-funtoken wrapper file built and verified locally; next: commit, push, open its PR.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -43,6 +43,7 @@
      17 templates used `secrets: inherit`; at current stable `8164dcf9593d` none do, so that condition is now met.
      Q4 re-asked: replace the wrapper with the current template (lifting the hold) or keep it.
 7. [ ] tele-funtoken-msg-scoring: PR replacing `ai-update-workflows.yml` with the v1.40.0 template rendered at `8164dcf9593d` (lifts the hardcoded `allow_workflow_edits: false` hold; Q4: A). Expected file sha256 `02b8fd3779a12157dc366b4a46b5ac2ba64d93674edb94b6fce65a5a1c835000`
+   - 2026-10-25: file built on operator's Mac on branch `chore/updater-v1.40.0`; sha256 matched; diff is only the pin (`2820e97` -> `8164dcf`) and `allow_workflow_edits`. PR not opened yet.
 8. [ ] Set `WORKFLOW_PROFILE`: `core` on btc_sweeper and atlas-bridge.gd (Q2: A), `standard` on mongo-explorer and fbc_shutdown (Q3: A)
 9. [ ] PRs adding the same rendered `ai-update-workflows.yml` to btc_sweeper, atlas-bridge.gd, mongo-explorer, fbc_shutdown
 10. [ ] Merge the 5 PRs and run each repo's `ai-update-workflows.yml` once
