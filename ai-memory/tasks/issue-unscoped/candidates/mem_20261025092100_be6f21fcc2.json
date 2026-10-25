@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_update_workflows_template_gate.py:190-192 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: Only one blank line separates `test_template_header_documents_the_update_hold` from `def test_template_renders_to_an_immutable_ref()` (line 191), while the rest of the file uses two (ruff E302).\n  WHY: Nothing fails at runtime, and the CI ruff step covers only `scripts/*.py`. The pre-push affected-test gate runs `ruff check --select E,F` on changed Python files and would flag it. Every reviewer rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_update_workflows_template_gate.py:191 | severity=NIT | confidence=4\n  PROBLEM: Only one blank line separates `test_template_header_documents_the_update_hold` from `def test_template_renders_to_an_immutable_ref()`. Every other top-level def in the file has two, so ruff E302 flags it.\n  WHY: Nothing fails at runtime, and the repo's CI ruff step covers only `scripts/*.py`. Only the pre-push affected-test gate's ruff pass on changed Python files would flag it.\n- Hardening suggestion: add one more blank line at line 191 (risk score 1).\n- All other checklist sections: NONE. The task completeness section reports no gaps.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_update_workflows_template_gate.py:191 | severity=NIT | confidence=4\n  PROBLEM: Only one blank line separates top-level test functions, violating PEP 8 (E302) conventions established elsewhere in this file.\n  WHY: This is a static linting issue, not a runtime failure, but it violates repository coding standards.\n- All other checklist sections: NONE. The task completeness section reports no gaps.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_update_workflows_template_gate.py:191-192 | severity=NIT | confidence=5\n  PROBLEM: Missing blank line between top-level function definitions (PEP 8 E302 violation).\n  WHY: The prepush test gate runs ruff with `--select E,F` on changed Python files. Line 191 has only one blank line before `def test_template_renders_to_an_immutable_ref()`, and the file's own convention (lines 171-173) uses two. The gate's ruff check would fail.\n- All other checklist sections: NONE. The task completeness section reports no gaps.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_update_workflows_template_gate.py:190-192 | severity=NIT | confidence=5\n  PROBLEM: Only one blank line separates the new top-level test from the next top-level `def`, while every other top-level definition in the file uses two. The pre-push affected-test gate runs `ruff check --select E,F --ignore E501` on every changed `.py` file (workflow-templates/.claude/hooks/prepush_affected_tests.py:405-408), so ruff E302 fails this file in that gate.\n  WHY: Running the repo's pre-push gate selects this changed test file, and its ruff static check reports E302 at line 192, so the gate returns `fail` for an otherwise clean change. CI's ruff step covers only `scripts/*.py` (ci.yml:360), so CI does not catch it.\n- Hardening risk score: 0.\n- All other checklist sections: NONE. The task completeness section reports no gaps.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8fca4209d164250e5d6e8de00dee8c155af66100859866f35734ca94debc79f1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8119,
+    "run_id": "40179139797",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40179139797",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025092100_be6f21fcc2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8119,
+    "run_id": "40179139797"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T09:21:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
