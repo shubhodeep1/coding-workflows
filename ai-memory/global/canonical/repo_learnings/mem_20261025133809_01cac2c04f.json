@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "When changing scripts under `scripts/`, add or update targeted tests that exercise the relevant behavior rather than relying only on broad integration coverage. This is especially useful for failure handling, workflow security, and phase or status transitions.",
+  "fingerprint": "79e9ef1b45f146b39f91168d52fdbd02439b126644c3ef7ffcf872637056c3e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40197619154",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40197619154",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8124",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8126",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8127",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8128",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8129",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8131",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8132",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8133",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8134",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8136"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261025133809_01cac2c04f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Behavior changes to workflow scripts are typically accompanied by focused tests that lock down contracts, security properties, or state transitions.",
+  "timestamps": {
+    "created_at": "2026-10-25T13:38:09Z",
+    "promoted_at": "2026-10-25T13:40:22Z",
+    "superseded_at": null
+  }
+}
