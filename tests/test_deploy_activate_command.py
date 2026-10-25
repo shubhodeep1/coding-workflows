@@ -149,3 +149,19 @@ def test_activation_log_slug_handles_prs_in_other_repositories(command: Path) ->
 	assert "PR → `pr-<N>` ·" not in section
 	step_one = " ".join(text.split("1. **Parse `$ARGUMENTS`", 1)[1].split("\n2. ", 1)[0].split())
 	assert "including the lookup in [Activation Log](#activation-log)" in step_one
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))
+def test_mac_setup_steps_are_skipped_unless_output_needs_them(command: Path) -> None:
+	text = " ".join(command.read_text(encoding="utf-8").split())
+	assert "fresh MacBook" not in text
+	assert "Prerequisite bootstrap" not in text
+	assert "Assume a clean machine" not in text
+	assert "- [ ] Prereqs:" not in text
+	procedure = text.split("## Procedure", 1)[1].split("## Interaction Protocol", 1)[0]
+	assert "**No Mac setup steps by default:**" in procedure
+	assert "only when pasted output shows it is needed" in procedure
+	assert "**Local clone only when a step needs it:**" in procedure
+	assert "Right before the first step that needs the latest repo files locally" in procedure
+	assert "`git pull --ff-only`" in procedure
+	assert "**Assume my Mac is set up.**" in text.split("## Rules", 1)[1]
