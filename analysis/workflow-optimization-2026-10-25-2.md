@@ -247,3 +247,307 @@ No 429s or secondary rate limits were seen.
 3. Export `or_phases`.
 4. Compute a partial cache-hit rate when some calls lack usage.
 5. Capture plan and implement excerpts, which have no telemetry rows in this window.
+## Deep Audit — Workflows & Scripts (2026-10-25)
+
+> Scope and method: this pass reads a smaller set of files closely rather than all of them lightly. Files read: `internal-cancel-on-pr-close.yml`, `cancel_on_pr_close.yml`, `integration-pr-readiness.yml`, `lint-pr-body-auto-close.yml`, `workflow-log-analysis.yml` (the three model-pass jobs and the push steps), and selected steps of `implement.yml`, `review_autofix.yml`, `issue_pr_status.yml`, `orchestrate.yml`, `clarify.yml`, `plan.yml` and `check_failure_triage.yml`. Scripts read: `workflow_failure_heal_pr_reconcile.sh`, `gh_helpers.sh` (`gh_retry`), `review_collect_pr_metadata.sh`, `stable_e2e_step_verify_bait_removed.sh`, `ai_memory_lib.py` and `ai_memory.py`, plus `tests/test_workflow_file_size_limit.py`. Findings already in this report (ai-memory full clone, heal-pr-reconcile `fetch-depth: 0`, readiness fan-out) are cross-referenced, not repeated. Character counts were estimated from line counts and sampled line lengths, not measured, and are marked `[NEEDS VERIFICATION]`.
+
+### Section 1: Bug & Correctness Sweep
+
+**BUG-001 — The merge-train release is skipped whenever run cancellation fails**
+- **File:** `.github/workflows/cancel_on_pr_close.yml:143-190, 391-427`
+- **Severity:** Medium · **Category:** `bug`
+- **Description:**
+  - The step "Cancel queued/in-progress runs for closed PR branch" runs under `set -euo pipefail` (line 146).
+  - `_cpr_fetch_active_runs` pipes `gh_retry gh api … --paginate` into `jq` with no error guard (lines 167-188). It is called as `_cpr_fetch_active_runs … > "${active_runs_file}"` (lines 260, 325).
+  - So if the API is still failing after retries, or `jq` fails, the whole step fails.
+  - The next step, "Release merge-queued PRs (merge train)" (line 391), has no `if:`. It therefore inherits `success()` and is skipped.
+  - That step's own comment says it must run because "core-profile repos have no poll backstop" (lines 392-394). In those repos, one transient Actions API failure on PR close leaves younger merge-queued PRs blocked until some other trigger arrives.
+- **Recommended fix:** add `if: ${{ !cancelled() }}` to the "Release merge-queued PRs" step. That step is already fail-open (lines 423-427, `_mt_rc` with a `::warning::`), so running it after a failed cancel pass is safe.
+
+**BUG-002 — The no-op path can exit before applying `ai:implementation-failed`**
+- **File:** `.github/workflows/implement.yml:5427-5428, 5637-5654`
+- **Severity:** Medium · **Category:** `bug`
+- **Description:**
+  - The fall-through branch of "Handle no-op implementation" runs `gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" -f body="${noop_body}"` (5637-5638) with no `|| …` guard, under `set -euo pipefail` (5428).
+  - `gh_retry` gives commands it classifies as unsafe creates a single attempt (`gh_helpers.sh:1171-1173`, classifier at `gh_helpers.sh:804-816`). Whether this implicit-POST `gh api … -f` form is classified that way is `[NEEDS VERIFICATION]` in `_gh_api_args_unsafe_post`.
+  - If the comment POST fails, the step exits before the label edit at 5651-5654. The issue never gets `ai:implementation-failed`, so the orchestrator's re-issue path never sees it.
+  - Every other mutation in this step ends in `|| true` (for example 5464, 5471, 5475, 5518).
+- **Recommended fix:** apply the label (5643-5654) before posting the comment. Then end the comment call with `|| echo "::warning::no-op comment failed for #${ISSUE_NUMBER}"`. This matches the Guard 0 and Guard 2 branches in the same step.
+
+**BUG-003 — `GH_API_RETRY_HELPERS` is read in 13 workflows but set in only 5, so the promote-candidate read never retries in 8**
+- **Files:**
+  - `.github/workflows/cancel_on_pr_close.yml:43`
+  - `.github/workflows/orchestrate_poll.yml:135, 531`
+  - `.github/workflows/plan.yml:389, 3244`
+  - `clarify.yml`, `orchestrate.yml`, `workflow_failure_heal.yml`, `check_failure_triage.yml`, `review_autofix_sweep.yml` (grep counts only; exact lines not listed in this pass)
+- **Severity:** Medium · **Category:** `bug`
+- **Description:**
+  - `source "${GH_API_RETRY_HELPERS:-/dev/null}"` is used in 13 workflows (28 sites).
+  - `GH_API_RETRY_HELPERS=` is written only in `validate.yml`, `implement.yml` (line 198), `security-audit.yml`, `orchestrate_clarify_respond.yml` and `review_autofix.yml`.
+  - In the other 8 workflows the source resolves to `/dev/null`. The inline fallback `gh_api_retry() { …; gh api "$@"; }` then makes exactly one unretried `branches/promote-candidate` read.
+  - A transient failure is reported as `SUPPORT_REF source=promote_candidate_unprotected` (for example `cancel_on_pr_close.yml:51`), which is misleading. The run then takes support scripts from `github.sha` while the workflow YAML runs from `promote-candidate`.
+  - Result: support code and workflow YAML can silently come from different commits during the promote cycle. That the skew causes failures is an inference.
+- **Recommended fix:**
+  - Log a distinct reason when the read fails: `SUPPORT_REF source=promote_candidate_read_failed`, separate from the unprotected case.
+  - Give the inline fallback a bounded retry, for example 3 attempts with 2s/4s waits.
+  - Alternatively, add the bootstrap step that writes `GH_API_RETRY_HELPERS` (pattern at `implement.yml:153-198`) to these 8 workflows.
+
+**SEC-001 — Memory git errors can carry the token-bearing clone URL, and one handler skips redaction**
+- **Files:** `scripts/ai_memory_lib.py:3137-3141, 3202-3204, 3211, 3447-3467` and `scripts/ai_memory.py:1263-1276`
+- **Severity:** Medium · **Category:** `security`
+- **Description:**
+  - `_resolve_origin_url` puts `GH_TOKEN` into the HTTPS origin URL (`_inject_token_into_url`, 3161-3173).
+  - `_run_git` builds its `MemoryGitError` text from `' '.join(args)` (3138). For the clone at 3211, those args include the token-bearing URL, so the exception text contains the token.
+  - 23 handlers in `ai_memory.py` pass this text through `_sanitize_git_error` (line 76-79; for example 247, 499, 1129).
+  - `cmd_actions_runs_cache_get` does not: it uses `error_text = str(exc)` (1264), prints `AI_MEMORY_ERROR: {exc}` to stderr (1275), and puts the raw text into its JSON stdout (1273, 1276).
+  - That path's exception comes from `read_memory_root_from_branch`, whose message carries git's stderr (3466-3467).
+  - Whether git's stderr includes the credentialed URL depends on the git version `[NEEDS VERIFICATION]`. Actions masks registered secrets in step logs, but the JSON stdout may be persisted or forwarded unmasked (inference).
+- **Recommended fix:**
+  - Use `error_text = _sanitize_git_error(str(exc))` at `ai_memory.py:1264` and print the sanitized text at 1275.
+  - Fix the root cause too: in `_run_git` (3137-3141), redact `args` and stderr with the same userinfo regex before building the message, so no future handler can leak the URL.
+
+**BUG-004 — The `heal-pr-reconcile` job has no timeout**
+- **File:** `.github/workflows/internal-cancel-on-pr-close.yml:19-54`
+- **Severity:** Low · **Category:** `bug`
+- **Description:**
+  - The job does a full-history checkout and git merges and pushes (`workflow_failure_heal_pr_reconcile.sh:159-205`), but sets no `timeout-minutes`, so GitHub's 360-minute default applies.
+  - The sibling `cancel-active-runs` job uses 5 minutes (`cancel_on_pr_close.yml:13`).
+  - A hung `git fetch` or push holds a runner, during the same merge bursts this report already identifies as runner-saturated. The checkout cost itself is covered by Speed #2 of this report.
+- **Recommended fix:** add `timeout-minutes: 15` to the `heal-pr-reconcile` job.
+
+**Reviewed, no defect found:**
+- Event-text handling in `lint-pr-body-auto-close.yml:58-69`, `integration-pr-readiness.yml:56-65` and `internal-cancel-on-pr-close.yml:34-43`: PR title, body, labels and refs pass through `env:`, not `${{ }}` inside `run:`, so there is no shell injection.
+- Branch and ref validation in `workflow_failure_heal_pr_reconcile.sh:66-89` is strict and fails closed.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+**API-001 — Post-merge validate dispatch reads labels one issue at a time and makes a separate PR text read**
+- **File:** `.github/workflows/review_autofix.yml:855-949`
+- **Severity:** Medium · **Category:** `api-batching`
+- **Description:**
+  - When `POST_MERGE_LINKED_ISSUES_JSON` is `[]` (every sampled run, per this report's GH API audit table), the step:
+    - runs a GraphQL `closingIssuesReferences` query (856-862);
+    - then a REST `pulls/<n>` read just for title and body (874);
+    - then, for each issue found in the body fallback, one `gh_retry gh issue view … --json labels` inside the `while` loop (910-914).
+  - **Current calls:** 1 GraphQL + 1 REST + N REST.
+  - The GraphQL re-fetch may duplicate an upstream lookup that already returned `[]` `[NEEDS VERIFICATION: where POST_MERGE_LINKED_ISSUES_JSON is computed]`.
+- **Recommended fix:**
+  1. Add `title body` to the `pullRequest` selection at line 860 and drop the REST call at 874.
+  2. Replace the per-issue `gh issue view` with one aliased query, `i<N>: issue(number:N){number labels(first:100){nodes{name}}}`. The existing batch helper `_fetch_linked_issue_bodies_graphql` (`scripts/review_collect_pr_metadata.sh:87-119`) already selects `labels(first: 50)` per number; the chunked `_cpr_fetch_pr_state_batches` (`cancel_on_pr_close.yml:196-256`) is the reference for batches of 50.
+  - **Projected calls:** 1 GraphQL + 1 GraphQL, saving N calls per merge.
+  - Fail-open is kept: if the batch fails, mark the labels unknown, as the current code does at 920-923.
+  - This extends the row "post-merge-validate-dispatch" in this report's GH API audit table.
+
+**API-002 — The no-op ancestor walk makes two REST calls per hop**
+- **File:** `.github/workflows/implement.yml:5565-5583`
+- **Severity:** Low · **Category:** `api-batching`
+- **Description:** each hop runs `gh api repos/…/issues/<n>` for the body (5571), then a paginated `…/comments` scan (5575-5576). Hops depend on each other (the parent number comes from the body), so they cannot be merged across hops.
+  - **Current calls:** 2 × `IMPL_NOOP_ANCESTRY_THRESHOLD` + extra pages. That is 4+ calls at the default of 2.
+- **Recommended fix:** use one GraphQL query per hop, `repository{issue(number:$n){body comments(last:100){nodes{body}}}}`.
+  - **Projected calls:** 1 × threshold, so 2 at the default.
+  - Keep the fail-open `break` on error.
+
+**API-003 — heal-pr-reconcile makes one PR lookup per heal issue**
+- **File:** `scripts/workflow_failure_heal_pr_reconcile.sh:96-101, 239-247`
+- **Severity:** Low · **Category:** `api-batching`
+- **Description:** after the paginated heal-issue list (96-101), the loop runs one `gh api repos/…/pulls -f head=<owner>:ai/issue-<n>` per matching heal issue (243).
+  - **Current calls:** 1 + N. N is usually 0-1, and all sampled runs ended at `noop reason=no_heal_issue`.
+- **Recommended fix:** when N > 1, use one aliased GraphQL query, `h<N>: pullRequests(headRefName:"ai/issue-<N>", states:OPEN, first:10){nodes{number headRefName headRefOid baseRefName}}`.
+  - **Projected calls:** 2.
+  - If the pre-checkout gate from this report's Speed #2 is adopted, pass the heal-issue list result (`ISSUES_FILE`) through a step output or file so the list is not fetched twice. Today it would be 2 list calls per PR close; after the change, 1.
+
+**API-004 — If the GraphQL batch fails, issue_pr_status falls back to one REST call per issue with no cap**
+- **File:** `.github/workflows/issue_pr_status.yml:649-682`
+- **Severity:** Low · **Category:** `api-batching`
+- **Description:** on any GraphQL batch failure, the step makes one `gh_retry gh api repos/…/issues/<n>` per `LOOKUP_ISSUE_NUMBERS` entry (657).
+  - **Current calls:** 1 failed GraphQL + N REST.
+  - The fail-open behaviour is deliberate (#1469), but N has no cap `[NEEDS VERIFICATION: typical N]`.
+- **Recommended fix:** retry the batch once as two halves before falling back to REST, and cap the REST fallback (for example 20) by marking the rest conservatively as tracking, as line 666 already does on per-issue failure.
+  - **Projected calls:** 1 + 2 in the common transient case.
+
+**API-005 — Hand-written retry loops with a fixed 2-second sleep**
+- **Files:** `.github/workflows/orchestrate.yml:1700-1707` and `.github/workflows/clarify.yml:2223-2240`
+- **Severity:** Low · **Category:** `api-redundancy`
+- **Description:**
+  - `orchestrate.yml` wraps `gh_retry gh api …/comments` (a comment create, which `gh_retry` treats as single-attempt) in an outer `for attempt in 1 2 3` with a fixed `sleep 2`.
+  - `clarify.yml` posts a marker with raw `gh api` and no retry (2223), then hand-retries the label POST 3 times with a fixed `sleep 2` (2227-2240).
+  - Neither gets `gh_retry`'s rate-limit detection and circuit breaker (`gh_helpers.sh:1212-1218`).
+- **Recommended fix:** the code comment at `orchestrate.yml:1696` says a duplicate is harmless, so use `gh_retry --idempotent gh api …` and remove the outer loop. In `clarify.yml`, use `GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST …/labels`.
+  - **Calls:** the maximum stays about the same, but retries get exponential backoff and rate-limit awareness.
+
+**Loops reviewed and left as they are (no batch endpoint exists):**
+- `cancel_on_pr_close.yml:364-380` sends one `actions/runs/<id>/cancel` per run.
+- `plan.yml:1320-1323` sends one `DELETE issues/comments/<id>` per comment.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001 — The support-ref resolution block is copied 16 times across 9 workflows**
+- **Files:** for example `implement.yml:463-500` (4 copies), `cancel_on_pr_close.yml:30-67`, `orchestrate_poll.yml:123-…, 519-…`, `plan.yml` (2), `clarify.yml` (2), `orchestrate.yml` (2), plus `workflow_failure_heal.yml`, `orchestrate_clarify_respond.yml` and `check_failure_triage.yml`.
+- **Severity:** Medium · **Category:** `duplication`
+- **Description:**
+  - The same body, including `promote_candidate_support_ref="${{ github.sha }}"`, the branches read, the `^…\.yml@[0-9a-f]{40}$` pin regex and the `stable` fallback, is repeated. Only the workflow filename and the output variable change (`SCRIPT_REF`, `DUPLICATE_NOTICE_SCRIPT_REF`, `PR_NOT_OPEN_SCRIPT_REF`).
+  - The block runs before any support checkout, so it cannot simply source a script. That is also why BUG-003 shows up in 8 of the copies.
+  - `tests/test_workflow_support_ref_follows_pin.py` exists, but no test asserts that all copies are identical (grep for `promote_candidate_support_ref` in `tests/` finds nothing).
+- **Recommended fix:**
+  - Add a parity test in `tests/test_workflow_support_ref_follows_pin.py`. It should pull every step body that contains `promote_candidate_support_ref=`, normalise the workflow filename and output variable name, and assert they are byte-identical.
+  - Fix BUG-003 in all copies in the same PR.
+  - Optionally, replace the copies with a SHA-pinned composite action under `.github/actions/resolve-support-ref` with inputs `workflow_file` and `output_var`.
+
+**DUP-002 — The three model passes in workflow-log-analysis.yml share about 120 lines each, and the setup steps are copied four times**
+- **File:** `.github/workflows/workflow-log-analysis.yml`
+- **Severity:** Medium · **Category:** `duplication`
+- **Description:** "Run workflow log analysis" (1068-1401), "Run deep audit pass" (1873-2127) and "Run API redundancy pass" (2473-2727) repeat:
+  - `_wla_label_retry` and `_wla_label_create` (1078-1079 = 1881-1882);
+  - the `AI_PHASE_FAILURE_V1` emitter, including its 14-field `jq -cn` payload (1100-1193 against 1894-1970);
+  - the attempt and backoff validation, `wla_engine_ready` (1336-1339 = 2035-2038), and the retry ladder with the exit-80 capacity wait (1340-1398 against 2039-2092).
+  - The per-job setup is also copied 4 times:
+    - "Resolve AI engine": 257, 834, 1677, 2284;
+    - Codex CLI persist and restore: 325-348, 907-934, 1750-1777, 2357-2384;
+    - semble install and index: 365, 960, 1826, 2425 and 376, 980, 1846, 2445.
+- **Recommended fix:**
+  - Create `scripts/workflow_log_analysis_pass.sh` with:
+    - `wla_emit_phase_failure <failed_step_name> <failure_mode> <attempt_count> <summary>`
+    - `wla_run_model_pass <role> <heartbeat_phase> <prompt_file> <output_file> <codex_log>`, which runs the retry ladder and returns 0, 80 or the last exit code.
+  - Call it from all three steps.
+  - Move the Codex CLI cache persist and restore into `scripts/codex_cli_tool_cache.sh {persist|restore}`.
+  - This also clears EXPR-001 and EXPR-003.
+
+**DUP-003 — The report commit-and-push retry loop exists twice**
+- **File:** `.github/workflows/workflow-log-analysis.yml:2134-2211, 2732-2804`
+- **Severity:** Low · **Category:** `duplication`
+- **Description:** the two loops are identical except for the commit message and log label: `format-patch`, `pull --rebase`, `reset --hard FETCH_HEAD`, `am --3way`, and a 5-attempt backoff capped at 60s.
+- **Recommended fix:** move it to `scripts/workflow_log_report_push.sh <report_file> <section_label>` and have both steps call it.
+
+**DUP-004 — `gh_retry` is re-implemented inline in several places**
+- **Files:** `review_autofix.yml:816-838`, `check_failure_triage.yml:146-174`, `scripts/stable_e2e_step_verify_bait_removed.sh:65-104`
+- **Severity:** Low · **Category:** `duplication`
+- **Description:**
+  - `review_autofix.yml` defines a 4-attempt fallback `gh_retry` for when `.codex-workflow-src/scripts/gh_helpers.sh` is missing.
+  - `check_failure_triage.yml` hand-parses `HTTP [0-9]{3}` and retries 3 times.
+  - `stable_e2e_step_verify_bait_removed.sh` sources `gh_helpers.sh` (line 65) and then defines its own `gh_api_with_retry` with separate rate-limit parsing.
+- **Recommended fix:**
+  - `check_failure_triage.yml`: call `gh_retry` from `gh_helpers.sh`, whose `_is_gh_permanent_failure` gives the same retryable/permanent split, with `GH_RETRY_MAX_ATTEMPTS=3`.
+  - `stable_e2e_step_verify_bait_removed.sh`: keep the function only if the rate-limit-returns-75 behaviour is needed, and document why `gh_retry` does not fit.
+
+**DUP-005 — The same six-clause guard condition is pasted into several `if:` lines**
+- **File:** `.github/workflows/implement.yml:6609, 6705, 6835`. Lines 6758 and 6988 are also very long `if:` conditions `[NEEDS VERIFICATION: same clauses]`.
+- **Severity:** Low · **Category:** `duplication`
+- **Description:** `(failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && … staged_support_rebase_conflict == ''` is repeated word for word. Adding a new guard output means editing every copy.
+- **Recommended fix:** add one step, `id: guard_state`, that writes `blocked=true|false` from those six outputs, and change each `if:` to `(failure() || cancelled()) && steps.guard_state.outputs.blocked != 'true'`.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+- **What CI already enforces:**
+  - `tests/test_workflow_file_size_limit.py:66-98` fails CI when any `steps[].run` containing `${{` reaches 18,000 characters (`RUN_EXPRESSION_GUARD_CHARS`, line 32).
+  - If CI is green on main, no interpolated `run:` body is at or above the 18,000-character High threshold, so no High findings are raised.
+  - The test does not report the 15,000-18,000 band.
+- **Exclusions:** the largest bodies found contain no `${{ }}` and are not subject to the limit: `implement.yml` "Run Codex implementation" (2853-4126, about 1,270 lines) and `review_autofix.yml` "Mark PR review-skipped…" (1150-1461).
+
+**EXPR-001 — "Run workflow log analysis" is probably in the 15K band**
+- **File:** `.github/workflows/workflow-log-analysis.yml:1068-1401`
+- **Severity:** Medium · **Category:** `expression-limit`
+- **Description:**
+  - The body is about 333 lines, with 13 `${{ github.* }}` expressions at 1113-1115, 1128, 1134-1136 and 1173-1175.
+  - **Estimated size:** about 14,000-16,500 characters after YAML indentation is stripped `[NEEDS VERIFICATION]`. **Headroom:** about 4,500-7,000 characters to the 21,000 limit, and about 1,500-4,000 to the CI guard.
+  - The body embeds the failure-emitter heredoc, which grows with every new field.
+- **Recommended fix:** every expression used here (`github.run_id`, `run_attempt`, `workflow`, `server_url`, `repository`) is also a default runner env var: `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, `GITHUB_WORKFLOW`, `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`. Replace each `${{ github.X }}` with the env var. The body then has no expressions at all, so it is no longer subject to the limit. Then do the DUP-002 extraction.
+
+**EXPR-002 — "Handle no-op implementation" is probably in the 15K band**
+- **File:** `.github/workflows/implement.yml:5427-5655`
+- **Severity:** Medium · **Category:** `expression-limit`
+- **Description:**
+  - The body is about 228 lines of long prose comment templates (for example 5457, 5497, 5504, 5591, 5593), with `${{ }}` at 5432, 5434, 5637, 5645, 5647, 5651 and 5653.
+  - **Estimated size:** about 15,000-17,000 characters `[NEEDS VERIFICATION]`. **Headroom:** about 4,000-6,000 characters to 21,000, and about 1,000-3,000 to the CI guard.
+- **Recommended fix:** use `RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"` and `${GITHUB_REPOSITORY}` instead of the expressions. As a follow-up, move the body to `scripts/implement_handle_noop.sh`, following the existing `scripts/implement_handle_guard_block.sh` pattern, with the support-dir resolution used at 5429.
+
+**EXPR-003 — The deep-audit and API-redundancy pass bodies**
+- **File:** `.github/workflows/workflow-log-analysis.yml:1873-2127, 2473-2727`
+- **Severity:** Low · **Category:** `expression-limit`
+- **Description:** each body is about 255 lines with 13 `${{ github.* }}` expressions (for example 1905-1907, 1919, 1925-1927, 1958-1960). **Estimated size:** about 11,000-12,500 characters each `[NEEDS VERIFICATION]`. **Headroom:** about 8,500-10,000 characters.
+- **Recommended fix:** the same env-var substitution as EXPR-001.
+
+**EXPR-004 — The size guard has no warning band**
+- **File:** `tests/test_workflow_file_size_limit.py:66-98`
+- **Severity:** Low · **Category:** `expression-limit`
+- **Description:**
+  - The test fails only at 18,000 characters and gives no early signal at 15,000.
+  - It measures only `steps[].run`. The longest `if:` conditions seen are well under 2,000 characters (`implement.yml:6609`, `update_workflows.yml:1057`), and no workflow uses `actions/github-script`, so the current scope is enough for today.
+- **Recommended fix:** have `scripts/ci_budget_watch.py` (agents.md:2510-2520) also report interpolated `run:` bodies at or above 15,000 characters, as `CI_BUDGET kind=run_expression`. That opens the deduplicated `ai:ci-budget` issue before the hard guard trips, without making the test stricter.
+
+- **Whole-file size:** `tests/test_workflow_file_size_limit.py:44-59` fails CI at 480,000 bytes for every `.github/workflows/*.yml`, so no workflow is anywhere near 800 KB. The largest by line count are `implement.yml` (7,180 lines), `test-and-mark-stable.yml` (6,569) and `review_autofix.yml` (5,816). Byte sizes were not measured in this pass `[NEEDS VERIFICATION]`. The 1 MB figure in this audit's prompt is wrong; see CONSIST-004.
+
+### Section 5: Cross-Cutting Concerns
+
+**CONSIST-001 — This report's Speed #3 contradicts the readiness workflow's documented contract**
+- **File:** `.github/workflows/integration-pr-readiness.yml:20-22, 45-49`
+- **Severity:** Medium · **Category:** `consistency`
+- **Description:**
+  - The workflow says: "Run on every PR so the status context exists when branch protection marks it required. The script itself posts a no-op success on non-orchestrator branches."
+  - The required check is the commit status `orchestrator/integration-pr-not-ready`, which the script posts (lines 12-14). It is not the job's own check.
+  - Speed #3 above recommends a job-level `if: startsWith(github.head_ref, 'orchestrator/project-')`. With that gate, a skipped job never posts the status. A required status that is never posted stays pending, so every non-project PR into `main` or `stable` would be blocked from merging (inference from the documented branch-protection setup).
+- **Recommended fix:** do not apply Speed #3 as written. If the runner cost must come down, post the success status from a lightweight job and leave the full check in place, and confirm against branch protection first.
+
+**CONSIST-002 — Missing retry helpers fall back silently**
+- **Files:** for example `plan.yml:1297-1298`, `orchestrate.yml:1687-1688`, `cancel_on_pr_close.yml:147-148`, `scripts/workflow_failure_heal_pr_reconcile.sh:51-55`. A grep over 12 workflows found 65 matches of this and related inline-fallback patterns.
+- **Severity:** Low · **Category:** `consistency`
+- **Description:** `source …/gh_helpers.sh 2>/dev/null || true; type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }` drops all retry, rate-limit and circuit-breaker behaviour without any log line when staging failed.
+  - Related: `workflow-log-analysis.yml:1164` and `1952` call `gh issue comment` without `gh_retry`, while the label calls next to them use `_wla_label_retry`.
+- **Recommended fix:** in the fallback branch, emit one `echo "GH_RETRY_FALLBACK file=<workflow> reason=helpers_missing" >&2`. Register the prefix through an `agents.d/` fragment (§25) so the log collector can count degraded runs.
+
+**CONSIST-003 — review_collect_pr_metadata.sh redefines `gh_retry` with a different signature**
+- **File:** `scripts/review_collect_pr_metadata.sh:35, 69-74`
+- **Severity:** Low · **Category:** `consistency`
+- **Description:**
+  - The script sources `gh_helpers.sh` (35) and then redefines `gh_retry()` as `gh_retry <outfile> <gh-args…>` (69-74). That shadows the shared `gh_retry <command…>`.
+  - It works today because none of the `gh_helpers.sh` functions this script calls use `gh_retry` internally. If one does in future, it will pass the wrong arguments. This breaks the identifier-uniqueness rule (§10).
+- **Recommended fix:** rename the local function to `_rcpm_gh_to_file` and update its callers (138, 194, 231, 235, 240, 247, 280). Do not rename the shared helper.
+
+**CONSIST-004 — The audit prompt states the wrong workflow file size limit**
+- **File:** `prompts/mode-workflow-audit.txt:100`
+- **Severity:** Low · **Category:** `consistency`
+- **Description:** the prompt says the overall limit is "1 MB (1,048,576 characters)" and asks for workflows over 800 KB to be flagged. The verified limit is 512,000 bytes, with a 480,000-byte guard (`agents.md:2521-2538`, `tests/test_workflow_file_size_limit.py:26-27`, unattended §24). At 800 KB the audit would never flag a file before GitHub stops running it.
+- **Recommended fix:** change line 100 to the 512,000-byte limit, and flag files at or above 440,000 bytes (`CI_BUDGET_WORKFLOW_WARN_BYTES`) and at or above 480,000 bytes.
+
+**DEBT-001 — Stale comments describe a parallel push race that cannot happen**
+- **File:** `.github/workflows/workflow-log-analysis.yml:2154-2164, 2752-2757`
+- **Severity:** Low · **Category:** `tech-debt`
+- **Description:**
+  - The comments say the deep-audit and api-redundancy jobs "append a section to the same REPORT_FILE in parallel".
+  - In fact `api-redundancy` has `needs: [analyze-commit-notify, deep-audit]` (2247), so they run one after the other.
+  - The comments also claim `git am --3way` "merge[s] cleanly". Two different appends at the end of the same file normally conflict in a 3-way merge (inference), so the replay path would abort at 2196 or 2789 rather than merge.
+- **Recommended fix:** rewrite both comments to describe the actual risk, which is a concurrent run on the same branch. Note that an end-of-file conflict ends the retries; that matches today's `exit 1`.
+
+**DEAD-001 — `MAX_CODEX_ATTEMPTS` is validated twice in the same step**
+- **File:** `.github/workflows/workflow-log-analysis.yml:1091-1094, 1320-1324`
+- **Severity:** Low · **Category:** `dead-code`
+- **Description:** `MAX_CODEX_ATTEMPTS` is checked and defaulted to 3 at 1091-1094. The second check on `max_attempts` at 1320-1324 can never fire.
+- **Recommended fix:** delete 1320-1324 and use `max_attempts="${MAX_CODEX_ATTEMPTS}"`. This also trims EXPR-001.
+
+**SHELL-001 — Unquoted loop over comment IDs (SC2086)**
+- **File:** `.github/workflows/plan.yml:1320-1323`
+- **Severity:** Low · **Category:** `shellcheck`
+- **Description:** `for cid in ${CLARIFY_IDS}; do` relies on word-splitting. The values come from jq `.id`, so they are numeric in practice. Still, nothing validates them before they are interpolated into the DELETE endpoint.
+- **Recommended fix:** use `mapfile -t clarify_ids <<< "${CLARIFY_IDS}"`, then `for cid in "${clarify_ids[@]}"; do [[ "${cid}" =~ ^[0-9]+$ ]] || continue; …`.
+
+**TODO/FIXME/HACK markers:** none. Grep for `TODO|FIXME|HACK|XXX` under `scripts/` and for `# TODO|FIXME|HACK` in `.github/workflows/` returned no matches.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 10 | BUG-001, BUG-002, BUG-003, SEC-001, API-001, DUP-001, DUP-002, EXPR-001, EXPR-002, CONSIST-001 |
+| Low | 16 | BUG-004, API-002, API-003, API-004, API-005, DUP-003, DUP-004, DUP-005, EXPR-003, EXPR-004, CONSIST-002, CONSIST-003, CONSIST-004, DEBT-001, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | `cancel_on_pr_close.yml`, `implement.yml`, `scripts/ai_memory.py`, `scripts/ai_memory_lib.py`, 8 workflows that read `GH_API_RETRY_HELPERS` (BUG-001/002/003, SEC-001; all Medium, none Critical/High) | Medium |
+| API call optimization | `review_autofix.yml`, `implement.yml`, `scripts/workflow_failure_heal_pr_reconcile.sh`, `issue_pr_status.yml`, `orchestrate.yml`, `clarify.yml` | Medium |
+| Code modularization | `workflow-log-analysis.yml`, new `scripts/workflow_log_analysis_pass.sh` / `scripts/workflow_log_report_push.sh` / `scripts/codex_cli_tool_cache.sh`, `tests/test_workflow_support_ref_follows_pin.py`, `check_failure_triage.yml`, `implement.yml` | Large |
+| Expression size reduction | `workflow-log-analysis.yml`, `implement.yml`, `scripts/ci_budget_watch.py` | Small |
+| Medium/Low fixes | `internal-cancel-on-pr-close.yml`, `integration-pr-readiness.yml` (comment/plan only), `scripts/review_collect_pr_metadata.sh`, `prompts/mode-workflow-audit.txt`, `plan.yml`, `workflow-log-analysis.yml`, one `agents.d/` fragment | Small |
