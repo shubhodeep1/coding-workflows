@@ -1814,7 +1814,7 @@ _merge_probe_refresh()
 		--state open \
 		--base "${integration_branch}" \
 		--json number,headRefName,headRefOid \
-		--limit 100 2>/dev/null)" \
+		--limit 100)" \
 		&& printf '%s' "${prs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
 		lookup_state="known"
 	else

@@ -3991,9 +3991,6 @@ reviewer_attempt_result_failure_class() {
   if [ "${cmd_rc}" = "0" ] && [ "${no_text}" = false ]; then
     printf 'ok\n'; return 0
   fi
-  if [ "${no_text}" = true ]; then
-    printf 'empty_structured_output\n'; return 0
-  fi
   if [ "${wd_reason}" = "max_steps" ]; then
     printf 'max_steps\n'; return 0
   fi
@@ -4029,6 +4026,12 @@ reviewer_attempt_result_failure_class() {
     if grep -Fq 'reasoning.effort' "${stderr_file}" 2>/dev/null && grep -Fq 'max_tokens' "${stderr_file}" 2>/dev/null; then
       printf 'provider_request_invalid\n'; return 0
     fi
+  fi
+  # The no-text marker is appended for any attempt without a text event,
+  # including watchdog kills, stalls and provider errors, so it only names
+  # the class when no more specific cause matched above.
+  if [ "${no_text}" = true ]; then
+    printf 'empty_structured_output\n'; return 0
   fi
   printf 'exit_nonzero\n'
   return 0
