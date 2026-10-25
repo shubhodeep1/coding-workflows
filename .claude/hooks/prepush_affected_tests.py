@@ -92,6 +92,9 @@ PASSING_STAMP_STATUSES = frozenset({"pass", "unverified", "skipped"})
 AUTO_PERMISSION_MODE = "auto"
 FINDING_MISSING_STAMP = "missing_stamp"
 FINDING_NEEDS_HUMAN = "needs_human"
+# The off switch is read from the hook's own environment, so a session command
+# cannot use it; the Auto-mode deny reason leaves it out.
+GATE_OFF_HINT = "Set CLAUDE_PREPUSH_TEST_GATE=off to disable this check."
 GIT_SAFE = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null")
 
 _TEST_JS_RE = re.compile(r".+\.(?:test|spec)\.(?:js|jsx|ts|tsx|mjs|cjs)$")
@@ -1089,7 +1092,7 @@ def _hook_findings(payload: object) -> tuple[list[tuple[str, str]], str]:
 				(
 					f"No pre-push test stamp for {head[:12]} (pushed ref `{_sanitize_name(ref)}`) in {toplevel}. Check out that commit "
 					f"and run `{STAMP_COMMAND}` after committing, fix failures this change caused, then push. "
-					"Set CLAUDE_PREPUSH_TEST_GATE=off to disable this check."
+					+ GATE_OFF_HINT
 				),
 			))
 			continue
@@ -1134,7 +1137,7 @@ def hook_decision(payload: object) -> tuple[str, str, str]:
 		return "", "", warning
 	if is_auto_permission_mode(payload) and all(kind == FINDING_MISSING_STAMP for kind, _text in findings):
 		return "deny", (
-			reason + "\n\nAuto mode: nothing ran (any commit in this command did not happen either). Commit "
+			reason.replace(" " + GATE_OFF_HINT, "") + "\n\nAuto mode: nothing ran (any commit in this command did not happen either). Commit "
 			f"first in its own command, run `{STAMP_COMMAND}`, fix failures it reports that this change caused, "
 			"then run the push again as its own command. If the stamp cannot be written, stop and tell the user."
 		), warning

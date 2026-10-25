@@ -1048,7 +1048,7 @@ def test_hook_has_no_environment_escape_hatch():
 	source = GUARD_PATH.read_text(encoding="utf-8")
 	assert "getenv" not in source
 	reads = _re.findall(r"os\.environ\.get\(\"([A-Z_]+)\"", source)
-	assert set(reads) == {"GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE", "CLAUDE_PROJECT_DIR"}
+	assert set(reads) == {"GH_REPO", "GH_HOST", "CLAUDE_ENV_FILE", "CLAUDE_PROJECT_DIR", "CLAUDE_CONFIG_DIR"}
 	assert source.count("os.environ") == len(reads)
 
 
@@ -1641,6 +1641,12 @@ _OTHER_ALLOW_RULE_SHAPE_DOUBTS = [
 	"g''h api repos/o/r/pulls/1 {-X,DELETE}",
 	"gh api user; x=$(gh api -X DELETE orgs/o/teams/1)",
 	"gh api user|grep $(gh api -X DELETE orgs/o/teams/1)",
+	# wrappers in front of a command an allow rule matches (`Bash(git diff *)`,
+	# `Bash(git log *)`, `Bash(git status *)`, `Bash(test *)`)
+	'timeout 60 git diff "$(gh api -X DELETE orgs/o/teams/1)"',
+	'nice -n 5 git log "$(gh api -X DELETE orgs/o/teams/1)"',
+	'env A=1 git status "$(gh api -X DELETE orgs/o/teams/1)"',
+	'nohup timeout 5 test "$(gh api -X DELETE orgs/o/teams/1)" = x',
 ]
 
 
@@ -1679,6 +1685,30 @@ def test_settings_files_cover_project_local_and_user(tmp_path, monkeypatch):
 	for directory in (tmp_path / "proj" / ".claude", tmp_path / "home" / ".claude"):
 		for name in ("settings.json", "settings.local.json"):
 			assert os.path.realpath(directory / name) in paths
+
+
+def test_settings_files_cover_config_dir_and_managed_settings(tmp_path, monkeypatch):
+	monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "cfg"))
+	paths = _REAL_SETTINGS_FILES()
+	for name in ("settings.json", "settings.local.json"):
+		assert os.path.realpath(tmp_path / "cfg" / name) in paths
+	for managed in guard._MANAGED_SETTINGS_FILES:
+		assert os.path.realpath(managed) in paths
+
+
+@pytest.mark.parametrize("command", [
+	"gh api orgs/o/teams -F{'q=1','x=@/etc/passwd'}",
+	"gh api orgs/o/teams -F{'q=1','x=\\x40/etc/passwd'}",
+	"gh api orgs/o/teams $'-F\\100x=/etc/passwd'",
+	"gh api orgs/o/teams -F x=@/etc/passwd # trailing comment",
+])
+def test_auto_mode_hazard_that_could_hide_a_file_field_still_asks(command):
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ASK
+
+
+def test_auto_mode_hazard_without_a_file_field_still_steps_aside():
+	command = "gh api 'orgs/o/teams?per_page=100' --paginate --jq '.[] | .id' 2>&1 | sort -t$'\\t' -k2"
+	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
 
 
 def test_every_shipped_gh_api_allow_rule_is_recognised():

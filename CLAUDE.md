@@ -1434,10 +1434,16 @@ allow rule before its classifier runs, so a no-decision there would approve
 the command unprompted. That covers `gh api repos/` and `gh api user`
 (including quoted spellings such as `'gh' api repos/`), and any `Bash(...)`
 allow rule in the project's `.claude/settings.json` /
-`.claude/settings.local.json` or `~/.claude/settings.json` that matches the
-command or one of its parts (for example `Bash(test *)` around a hidden
-`$(gh api -X DELETE ...)`). A settings file that exists but cannot be read
-also keeps every ask. Every other mode keeps the prompts.
+`.claude/settings.local.json`, `~/.claude/settings.json`, `CLAUDE_CONFIG_DIR`
+or the managed settings files that matches the command or one of its parts
+(for example `Bash(test *)` around a hidden `$(gh api -X DELETE ...)`). A part
+that starts with a wrapper such as `timeout`, `nice`, `env`, `sudo` or `xargs`
+is also matched with its leading words dropped, so
+`timeout 60 git diff "$(...)"` counts as matching `Bash(git diff *)`. A
+settings file that exists but cannot be read also keeps every ask, and so does
+a brace / ANSI-C / comment hazard in a command that holds an `@` or an escape
+that can produce one, since it could hide a file-backed `-F key=@file` field.
+Every other mode keeps the prompts.
 The headless Actions runs use `dontAsk` or `bypassPermissions`, where an ask
 is a denial; `tests/test_gh_api_write_guard.py` fails if a script under
 `scripts/` starts Claude in Auto mode.

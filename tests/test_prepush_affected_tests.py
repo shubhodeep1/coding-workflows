@@ -803,6 +803,8 @@ def test_hook_denies_a_missing_stamp_in_auto_mode(tmp_path):
 	assert decision["permissionDecision"] == "deny"
 	reason = decision["permissionDecisionReason"]
 	assert gate.STAMP_COMMAND in reason and "nothing ran" in reason and "tell the user" in reason
+	# The session cannot set the hook's environment, so the off switch is not offered.
+	assert "CLAUDE_PREPUSH_TEST_GATE=off" not in reason
 
 
 @pytest.mark.parametrize("mode", ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "Auto", None])

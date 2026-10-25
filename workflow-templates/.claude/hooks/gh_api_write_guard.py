@@ -113,10 +113,16 @@ are unchanged. A command that an allow rule could match keeps every ask,
 because Auto mode resolves a matching allow rule before its classifier runs:
 the shipped `Bash(gh api repos/*)` / `Bash(gh api user *)` prefixes (quoted
 spellings included), and any `Bash(...)` rule in the project settings (next
-to this hook and under `CLAUDE_PROJECT_DIR`, `settings.local.json` too) or the
-user's `~/.claude/settings.json`, such as `Bash(test *)` around a hidden
-`$(gh api -X DELETE ...)`. A settings file that exists but cannot be read
-also keeps every ask. Any other or missing mode keeps the prompts.
+to this hook and under `CLAUDE_PROJECT_DIR`, `settings.local.json` too), the
+user's `~/.claude/settings.json` or `CLAUDE_CONFIG_DIR`, or the managed
+settings files, such as `Bash(test *)` around a hidden
+`$(gh api -X DELETE ...)`. A piece that starts with a wrapper (`timeout`,
+`nice`, `env`, `sudo`, `xargs`, ...) is also matched with its leading words
+dropped, so `timeout 60 git diff "$(...)"` counts as matching
+`Bash(git diff *)`. A settings file that exists but cannot be read also keeps
+every ask. A brace / ANSI-C / comment hazard keeps its ask when the command
+holds an `@` or an escape that can produce one, because it could hide a
+file-backed `-F key=@file` field. Any other or missing mode keeps the prompts.
 
 Unlike the other hooks in this directory this one fails CLOSED: an unreadable,
 invalid, or non-object payload, or an internal error, asks instead of allowing,
@@ -169,6 +175,24 @@ _ALLOW_RULE_COARSE_SPLIT_RE = re.compile(r"&&|\|\||[;&|\n]")
 _ALLOW_RULE_FINE_SPLIT_RE = re.compile(r"&&|\|\||\$\(|[;&|\n()`]")
 _ALLOW_RULE_LEADING_WORDS_RE = re.compile(r"^(?:(?:do|then|else|elif|if|while|until|time|!|\{)\s+)+")
 _ALLOW_RULE_LEADING_ASSIGNMENTS_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*\+?=\S*\s+)+")
+# Commands that run their remaining words as a command. Claude Code can match
+# an allow rule against the wrapped command (`timeout 60 git diff ...` against
+# `Bash(git diff *)`), so a piece that starts with one is also tried with up to
+# _ALLOW_RULE_WRAPPER_MAX_DROP leading words dropped.
+_ALLOW_RULE_WRAPPER_WORDS = frozenset({
+	"builtin", "command", "doas", "env", "exec", "ionice", "nice", "nohup", "noglob",
+	"setsid", "stdbuf", "sudo", "time", "timeout", "xargs",
+})
+_ALLOW_RULE_WRAPPER_MAX_DROP = 16
+# Managed (administrator) settings files, which also hold allow rules.
+_MANAGED_SETTINGS_FILES = (
+	"/etc/claude-code/managed-settings.json",
+	"/Library/Application Support/ClaudeCode/managed-settings.json",
+)
+# In Auto mode a brace / ANSI-C / comment hazard keeps its ask when the command
+# holds an `@` or an escape that can produce one (`\x40`, `\100`), because the
+# hazard could turn a word into a file-backed `-F key=@file` field (#4619).
+_AUTO_HAZARD_FILE_FIELD_RE = re.compile(r"@|\\(?:[xuU][0-9A-Fa-f]|[0-7])")
 
 KIND_READ = "read"
 KIND_ROUTINE = "routine"
@@ -994,12 +1018,19 @@ def _settings_files() -> list[str]:
 	home = os.path.expanduser("~")
 	if home and home != "~":
 		directories.append(os.path.join(home, ".claude"))
+	config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+	if config_dir:
+		directories.append(config_dir)
 	paths: list[str] = []
 	for directory in directories:
 		for name in _SETTINGS_FILE_NAMES:
 			path = os.path.realpath(os.path.join(directory, name))
 			if path not in paths:
 				paths.append(path)
+	for managed in _MANAGED_SETTINGS_FILES:
+		path = os.path.realpath(managed)
+		if path not in paths:
+			paths.append(path)
 	return paths
 
 
@@ -1062,7 +1093,12 @@ def _may_match_bash_allow_rule(command: str) -> bool:
 		for candidate in candidates:
 			piece = _ALLOW_RULE_LEADING_WORDS_RE.sub("", candidate.strip())
 			pieces.add(piece)
-			pieces.add(_ALLOW_RULE_LEADING_ASSIGNMENTS_RE.sub("", piece))
+			unassigned = _ALLOW_RULE_LEADING_ASSIGNMENTS_RE.sub("", piece)
+			pieces.add(unassigned)
+			words = unassigned.split()
+			if words and words[0] in _ALLOW_RULE_WRAPPER_WORDS:
+				for drop in range(1, min(len(words), _ALLOW_RULE_WRAPPER_MAX_DROP + 1)):
+					pieces.add(" ".join(words[drop:]))
 	return any(pattern.fullmatch(piece) for piece in pieces if piece for pattern in patterns)
 
 
@@ -1937,7 +1973,12 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 
 	hazard = _shell_rewrite_hazard(stripped_command)
 	# Only a fully validated literal-ID loop may bypass the shell-hazard check.
-	if hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)) and auto_mode:
+	if (
+		hazard
+		and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results))
+		and auto_mode
+		and not _AUTO_HAZARD_FILE_FIELD_RE.search(stripped_command)
+	):
 		shape_doubt = True
 	elif hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)):
 		return DECISION_ASK, (
