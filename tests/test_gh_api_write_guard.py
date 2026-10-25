@@ -1596,7 +1596,11 @@ def test_auto_mode_keeps_allows_and_the_malformed_jq_deny():
 	assert _decide_in_mode("for i in 1 2; do gh api repos/o/r/pulls/$i; done", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ALLOW
 
 
-def test_auto_mode_hook_subprocess_emits_nothing_for_a_shape_doubt():
+def test_auto_mode_hook_subprocess_emits_nothing_for_a_shape_doubt(tmp_path, monkeypatch):
+	# The child reads real settings files; keep the operator's own allow rules out.
+	monkeypatch.setenv("HOME", str(tmp_path))
+	monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+	monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 	payload = {"tool_name": "Bash", "tool_input": {"command": _SHAPE_DOUBT_READS[1]}, "permission_mode": "auto"}
 	proc = _run_hook(json.dumps(payload))
 	assert proc.returncode == 0 and proc.stdout.strip() == ""

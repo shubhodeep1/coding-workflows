@@ -1571,8 +1571,8 @@ by a flag and later an `api` token (`_gh_flag_before_api`, for example
 a backslash-newline instead of turning it into a space, so `gh a\<newline>pi`
 parses as `gh api`. `gh $'api'`, an expanding word before `api` and
 `env -S '...'` count as hidden calls and prompt. The guard reads only
-`GH_REPO`, `GH_HOST` and `CLAUDE_ENV_FILE` from the environment, and each can
-only turn an allow into a prompt. CLAUDE.md §23.H's routine row still says
+`GH_REPO`, `GH_HOST`, `CLAUDE_ENV_FILE` and `CLAUDE_PROJECT_DIR` (plus the home
+directory's settings) from the environment, and each can only add prompts. CLAUDE.md §23.H's routine row still says
 "(or `{owner}/{repo}`)" without these conditions; an interactive session
 updates both CLAUDE.md copies, which pipeline editors cannot write.
 
