@@ -1282,7 +1282,7 @@ class UnblockStepShardingContractTest(unittest.TestCase):
 	"""The unblock step runs its three modules in local shards (#8150).
 
 	orchestrate-poll (4) took 15m13s of its 20 minutes (run 40198222187)
-	after four moves of this step. It now stays in group 4, by name, guard
+	after three moves of this step. It now stays in group 4, by name, guard
 	and modules, and splits its test functions across 4 processes. Every
 	test must still run exactly once, and a shard that fails or records no
 	exit code must fail the step.
