@@ -551,3 +551,122 @@ No 429s or secondary rate limits were seen.
 | Code modularization | `workflow-log-analysis.yml`, new `scripts/workflow_log_analysis_pass.sh` / `scripts/workflow_log_report_push.sh` / `scripts/codex_cli_tool_cache.sh`, `tests/test_workflow_support_ref_follows_pin.py`, `check_failure_triage.yml`, `implement.yml` | Large |
 | Expression size reduction | `workflow-log-analysis.yml`, `implement.yml`, `scripts/ci_budget_watch.py` | Small |
 | Medium/Low fixes | `internal-cancel-on-pr-close.yml`, `integration-pr-readiness.yml` (comment/plan only), `scripts/review_collect_pr_metadata.sh`, `prompts/mode-workflow-audit.txt`, `plan.yml`, `workflow-log-analysis.yml`, one `agents.d/` fragment | Small |
+## API Call Consolidation & Dead-Call Analysis (2026-10-25)
+
+### Safety Tag Legend
+- **`SAFE_TO_MERGE`:** the change is fully proven from static reading. The calls hit the same endpoint or a strict subset of fields, with identical pagination, filters and auth. They sit in the same function or step with nothing in between that changes the data. Error handling and retries stay the same, no concurrency boundary is crossed, and any documented cache contract holds. The implement stage may act on these directly.
+- **`NEEDS_VERIFICATION`:** the saving looks real, but at least one of those conditions can't be proven from source alone. Do the listed checks first.
+- **`RISKY_SKIP`:** the call matches a hard exclusion: pagination, a retry or backoff loop, a rate-limit-sensitive path, a race guard, or a fail-open fallback that defends a known incident. It is listed for visibility only. Do not auto-implement it.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: two paginated `actions/runs` reads in `_cpr_fetch_active_runs` (queued + in_progress)**
+- **Safety tag:** `RISKY_SKIP`
+- **Files:**
+  - `.github/workflows/cancel_on_pr_close.yml:167-176` (queued)
+  - `.github/workflows/cancel_on_pr_close.yml:177-186` (in_progress)
+  - Callers: `:260` (schedule) and `:325` (PR close, with a branch filter)
+- **Current call count:** 2 paginated sequences per invocation, so at least 2 calls.
+- **Proposed call count:** 1 sequence, if the `status` filter were dropped. **Not recommended.**
+- **Endpoint:** `GET /repos/{owner}/{repo}/actions/runs?status=…&event=pull_request[&branch=…]&per_page=100`
+- **Evidence:** both calls are in the same function and differ only in `-f status=`. The code already rejects merging them:
+  ```bash
+  # Keep the two status-filtered calls: dropping the filters can
+  # paginate through an unbounded completed-run history.
+  ```
+  The REST endpoint takes one `status` value per request, so one call can't cover both states without dropping the filter.
+- **Proposed fix:** none. Keep both calls. This entry exists so that later passes don't raise the merge again.
+- **Safety rationale:** both calls use `--paginate`, and merging them would remove the status filter. That changes page boundaries and makes the result set unbounded (pagination trigger).
+- **Downstream signal:** do not auto-implement. Merging would be a semantic change to cancellation scope. It would need a maintainer to accept unbounded pagination over completed runs, which the code comment explicitly forbids.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: post-merge dispatch re-runs the gate's `closingIssuesReferences` GraphQL query even after the gate got an authoritative empty result**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:**
+  - `scripts/review_autofix_step_evaluate_gate.sh:187-207` (gate query at 190-196; cache flag at 188/198)
+  - `scripts/review_autofix_step_evaluate_gate.sh:1361-1363` (gate outputs)
+  - `.github/workflows/review_autofix.yml:317-318` (job outputs), `:762-763` (dispatch env), `:855-869` (live re-query)
+- **Current call count:** 2 GraphQL calls per merged PR whose closing references are empty. The report's GH API table shows `POST_MERGE_LINKED_ISSUES_JSON: []` in every sampled run.
+- **Proposed call count:** 1 when the gate query succeeded; 2 only when it failed.
+- **Endpoint:** GraphQL `repository.pullRequest(number).closingIssuesReferences(first:50){nodes{number labels(first:100){nodes{name}}}}`. The query text is byte-identical at gate.sh:194 and review_autofix.yml:860.
+- **Evidence:**
+  - The gate records whether its query succeeded, but never exports that flag:
+    ```bash
+    post_merge_linked_issues_cache_known="false"
+    ...
+    POST_MERGE_LINKED_ISSUES_JSON="$(printf '%s' "${_post_merge_linked}" | jq -c '.' 2>/dev/null || echo '[]')"
+    post_merge_linked_issues_cache_known="true"
+    ```
+  - The dispatch job gets only the array, and treats a successful `[]` the same as a failed lookup:
+    ```bash
+    if [ "${issue_nodes_json}" = "[]" ]; then
+      if issue_nodes_json_live="$(gh_retry gh api graphql \
+    ```
+  - The job's `if:` (review_autofix.yml:756) skips the dispatch only when both the closing references are empty **and** the title and body are empty (gate.sh:202-206). PR titles are never empty, so the job still runs and re-queries on every merge into a non-default branch.
+- **Proposed fix:**
+  1. In gate.sh, near 1362, add `echo "post_merge_linked_issues_cache_known=${post_merge_linked_issues_cache_known:-false}" >> "${GITHUB_OUTPUT}"`. Initialise the variable near line 30 so it is set when `POST_MERGE_DISPATCH` is not true.
+  2. Expose it as a gate job output next to review_autofix.yml:318.
+  3. Pass it into the dispatch env as `POST_MERGE_LINKED_ISSUES_CACHE_KNOWN: ${{ needs.gate.outputs.post_merge_linked_issues_cache_known || 'false' }}`. The default keeps today's behaviour, per §8.
+  4. Change line 855 to `if [ "${issue_nodes_json}" = "[]" ] && [ "${POST_MERGE_LINKED_ISSUES_CACHE_KNOWN:-false}" != "true" ]; then`.
+  5. Keep the live block and its warning string. `tests/test_review_autofix_review_pipeline_contract.py:7156` pins `"Unable to refresh closingIssuesReferences for merged PR"`.
+- **Safety rationale:**
+  - The two calls are in different jobs (`gate` → `post-merge-validate-dispatch`), so the "same function, no intervening change" condition fails.
+  - The gate call is a bare `gh api graphql` without `gh_retry`, while the dispatch call has retries. Only a *successful* gate result would be reused, so failures still get the retried live path.
+- **Downstream signal:** before implementing, check three things:
+  1. Confirm with a maintainer that the live re-query at 856 is a fallback and not a deliberate freshness re-read. The warning says "refresh"; the gate comment at gate.sh:183-186 says "reuse … before any live fallback". A closing reference could only change in the seconds between the two jobs if someone edits the merged PR body.
+  2. Grep `tests/` for assertions that the dispatch step always calls `closingIssuesReferences`. Only the warning-string assertion was found at :7156.
+  3. Confirm the new gate output won't push `review_autofix.yml` toward the 480,000-byte guard (§24). Run `wc -c`.
+
+**REUSE-002: the no-op ancestry walk re-fetches the current issue's body, which the job already cached in `ISSUE_META_FILE`**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files:**
+  - `.github/workflows/implement.yml:5569-5571` (hop 1 read)
+  - Cache writers in the same `implement` job (line 98): `:221-224` (first payload), `:1019-1020`, `:2072-2073` / `:2101` ("Fetch issue metadata")
+  - `:314` (`ISSUE_META_FILE` exported to `GITHUB_ENV`)
+  - `:2061-2070` (`issue_meta_matches_issue` validator)
+- **Current call count:** for the body, 1 call per hop, so `IMPL_NOOP_ANCESTRY_THRESHOLD` calls (default 2), plus the paginated comment scans (unchanged).
+- **Proposed call count:** threshold − 1 body calls. Hop 1 reads the cache, saving 1 REST call per no-op run.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{ISSUE_NUMBER}` (`--jq '.body // ""'`)
+- **Evidence:**
+  ```bash
+  current="${ISSUE_NUMBER}"
+  for hop in $(seq 1 "${threshold}"); do
+    parent_body="$(gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""' 2>/dev/null || echo "")"
+  ```
+  - On hop 1, `current == ISSUE_NUMBER`. The same job has already stored the full issue payload in `${ISSUE_META_FILE}` (line 222). It re-validates that payload with `issue_meta_matches_issue` (checks number and string body) at 2072-2079.
+  - This is not the same as Deep Audit API-002, which proposes a GraphQL merge across body and comments.
+- **Proposed fix:** before the loop, when `current = ISSUE_NUMBER` and the cached file passes the `issue_meta_matches_issue` check, take hop 1's body from `jq -r '.body // ""' "${ISSUE_META_FILE}"`. Otherwise keep the live `gh_retry` call. Also update the cost comment at 5561 ("up to 2 * threshold calls").
+- **Safety rationale:** the cache-miss path stays on the existing call, so error handling is unchanged. But the cached snapshot is taken 20+ minutes before this step, and the file can be truncated on purpose (`: > "${ISSUE_META_FILE}"` at 991 and 1010). So freshness and presence can't be proven statically.
+- **Downstream signal:** verify three things before implementing:
+  1. Nothing adds or edits the `Re-issued from #N` line in an issue body after the issue is created. Grep the re-issue writer in `scripts/` for edits to an existing body.
+  2. `issue_meta_matches_issue` is defined in, or callable from, the "Handle no-op implementation" step. It is defined inline at 2061 in another step, so it may need copying or sourcing.
+  3. `RUNTIME_DIR` / `ISSUE_META_FILE` are not swapped for staged-support paths between line 2101 and line 5419.
+
+### Dead Calls (DEAD-API-###)
+No findings. The calls I reviewed all feed downstream logic. The nearest case, the REST `pulls/{n}` read at `review_autofix.yml:874`, is close to unreachable rather than dead (see API-001 below).
+
+### Cross-References to Deep Audit Section
+- API-001: NEEDS_VERIFICATION — the REST read at 874 only runs if the gate's PR title/body output is lost, so step 1 saves almost no calls; REUSE-001 is the bigger win. Details:
+  - The dispatch job only runs when `POST_MERGE_DISPATCH=true`. That needs a successful gate PR read (gate.sh:87-121, 154-158), which fills `pr_title_cached`, and PR titles are never empty.
+  - Batching the per-issue `gh issue view` (874/910-914) changes failure granularity: one failed batch would mark every issue's labels unknown, where today each issue fails separately (920-923).
+  - The batch must keep the test-pinned string `"Unable to read labels for issue #${issue_number} after retries"` (test file :7168).
+- API-002: RISKY_SKIP — the comments read at `implement.yml:5575-5576` uses `--paginate`. Replacing it with `comments(last:100)` would miss no-op markers on older comment pages (pagination trigger). The non-paginated part of the saving is in REUSE-002.
+- API-003: NEEDS_VERIFICATION — today N is 0 in every sampled run (`noop reason=no_heal_issue` at `workflow_failure_heal_pr_reconcile.sh:104`). Two cautions:
+  - The paginated heal-issue list (96-101) must not be merged or restructured.
+  - Reusing `ISSUES_FILE` from a pre-checkout gate depends on Speed #2 adding that step first. The script header (29-32) documents the API budget and must be updated with it.
+- API-004: RISKY_SKIP — the per-issue REST loop at `issue_pr_status.yml:649-682` is the deliberate fail-open fallback that defends incident #1469 (comments at 650-652 and 659-663). Capping or re-batching it changes when a tracking issue could be misclassified.
+- API-005: RISKY_SKIP — both sites are retry loops. `clarify.yml:2225-2226` deliberately retries "with the independent job token" as a fallback for when the PAT budget runs out (label description at 2236), which is a rate-limit-sensitive path. The `orchestrate.yml:1700-1707` loop wraps a comment create, and adding `--idempotent` changes duplicate-post behaviour.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 2 | REUSE-001, REUSE-002 |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+The counts cover only this pass's findings. Of the Deep Audit IDs, API-001 and API-003 are `NEEDS_VERIFICATION`, and API-002, API-004 and API-005 are `RISKY_SKIP`.
+
+### Implement-Stage Handoff
+No `SAFE_TO_MERGE` findings in this pass. The highest-value candidate once verified is REUSE-001: it saves 1 GraphQL call on every merge into a non-default branch. It needs the maintainer check on whether the line-856 re-query is a fallback or a deliberate freshness re-read.

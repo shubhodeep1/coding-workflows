@@ -83,6 +83,13 @@ def _stub_dispatcher(tmp: Path, *, outcome: str = "dispatched") -> tuple[Path, P
 	return script, env_out
 
 
+def _assert_completion_cleanup_hit_curl_shim(result: dict) -> None:
+	"""The completion path's tg_cleanup_msgs request went to the curl shim, never the network."""
+	cleanup_calls = [line for line in result["curl_calls"] if "api.github.com/repos/owner/repo/issues/192/comments" in line]
+	assert cleanup_calls, result["curl_calls"]
+	assert not any("test-token" in line for line in result["curl_calls"])
+
+
 def _project_state() -> dict:
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -119,6 +126,7 @@ def test_proving_run_completion_dispatches_verifying_run() -> None:
 		exclude = [line for line in env_lines if line.startswith("APPLY_ANALYSIS_IN_FLIGHT_EXCLUDE_ISSUE=")]
 		assert len(exclude) == 1 and exclude[0].split("=", 1)[1].isdigit()
 		assert "COMPREHENSIVE_VERIFICATION_DISPATCHED" in result["stdout"]
+		_assert_completion_cleanup_hit_curl_shim(result)
 
 
 def test_proving_run_completion_reports_when_verifying_run_cannot_be_dispatched() -> None:
@@ -140,6 +148,7 @@ def test_proving_run_completion_reports_when_verifying_run_cannot_be_dispatched(
 		assert result["latest_state"]["comprehensive_release_callback"]["verification"] == "SKIPPED reason=no_docs"
 		assert result["release_dispatches"] == []
 		assert "COMPREHENSIVE_VERIFICATION_NOT_DISPATCHED" in result["stdout"]
+		_assert_completion_cleanup_hit_curl_shim(result)
 
 
 def test_proving_run_retries_when_default_branch_ref_is_unavailable() -> None:
