@@ -908,6 +908,7 @@ def test_plan_label_missing_fixture_holds() -> None:
 def test_plan_steps_after_refctx_skip_on_skip_plan() -> None:
 	wf = _workflow_text("plan.yml")
 	for name in (
+		"Fetch issue comments",
 		"Validate planning phase label",
 		"Check and claim /answer command",
 		"Run Codex planning",

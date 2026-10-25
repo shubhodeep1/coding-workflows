@@ -838,6 +838,10 @@ jobs:
           fi
 
       - name: Fetch issue comments
+        # The label_missing hold (#8151) sets SKIP_PLAN=true and has read the
+        # comments itself; every reader of ISSUE_COMMENTS_FILE is gated on
+        # SKIP_PLAN, so a failed read here must not fail a held run.
+        if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
