@@ -14,10 +14,10 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:49-51`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
-- Last note: Source-side release + dispatch already done (v1.40.0). Waiting on operator to verify each consumer's updater ran.
+- Last note: Step 1 (Mac prereqs) done. Next: operator verifies each consumer's ai-update-workflows.yml ran after 2026-10-24T18:29Z.
 
 ## Runbook
-1. [ ] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers
+1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
 2. [x] `STABLE_RELEASE_ENABLED=true` on the source repo — done 2026-10-25 (already satisfied): release job env of run 40113559006 shows `STABLE_RELEASE_ENABLED: true`
 3. [x] Publish attested stable release — done 2026-10-25 (already satisfied): `v1.40.0` released 2026-10-24T18:29Z by `test-and-mark-stable.yml` run 40113559006; steps "Attest sync manifest", "Attest release manifest", "Upload release manifest asset" all succeeded; release assets `release-manifest.v1.json`, `sync-manifest.json`; `stable` -> `8164dcf9593d`
 4. [x] Dispatch to consumers — done 2026-10-25 (already satisfied): same run, step "Notify consumer repos via repository_dispatch" succeeded and logged a dispatch to all 13 registered consumers with no warnings
