@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\n\nNone. This change only edits a data file.\n\nRewrite `tests/e2e_smoke_canary.txt` so that it contains exactly these two lines:\n\n```\nstatus: ok\ndecompose-run: 40222261089\n```\n\n- Remove the `run_id: 26151428977` line.\n- Remove the `updated-by: ai-pipeline` line.\n- End the file with one trailing newline after line 2, which is the usual POSIX text-file convention. Add no other blank lines.\n\n## Data structures affected\n\nOnly the content of the canary file changes.\n\n## API or interface changes\n\nNone.\n\n## Decisions\n\n### D1 \u2014 Rewrite the whole canary file instead of patching individual lines\n- Chosen: overwrite the file with the exact two required lines.\n- Alternatives considered: delete the two old lines and insert the new line separately.\n- Why: the result is fixed and short, so a full rewrite guarantees the exact content and the exact line order.\n\n## Security considerations\n\n- No trust boundaries, endpoints or external input are involved.\n- The file is a static test fixture with no secrets in it.\n\n## Risks and edge cases\n\n- An e2e smoke check may compare the file byte for byte. A missing trailing newline or an extra blank line could fail that comparison, so the file should end with exactly one newline.\n- The issue says the earlier issue #8160 was closed without a merged PR. The integration branch still has the old content, which this plan does not treat as a conflict.\n- Scope stays within `files_touched`. No changelog or agents fragment is needed, because this is a test fixture change with no behaviour change.\n\n## Testing considerations\n\n- Run `cat -A tests/e2e_smoke_canary.txt` and confirm the output is exactly:\n  - `status: ok$`\n  - `decompose-run: 40222261089$`\n- Run `git diff --stat` and confirm that this is the only changed file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for one exact two-line change to one file and forbids touching any other file. Holding scope matches that request completely, so there is nothing to expand or reduce.\n\nPre-execution self-check: the content, the single file and the branch ref (`orchestrator/project-8159`, mismatch false) were all checked against the issue.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "94ad81361ded90621071c1422c0a882dea088cbe2e7278d5d14a8ba2260cbd14",
+  "lineage": {
+    "issue_number": 8162,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40223723046",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40223723046",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8162"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261025190650_6cf756c703",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8162,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40223723046"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8162",
+  "timestamps": {
+    "created_at": "2026-10-25T19:06:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
