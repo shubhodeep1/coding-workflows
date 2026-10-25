@@ -594,3 +594,141 @@ Scope: this run did not cover every file. It read in depth: `review_autofix.yml`
 | Code modularization | 10 workflows carrying the support-ref and bootstrap copies; new `scripts/resolve_support_ref.sh`; `scripts/tg_helpers.sh`; `scripts/label_helpers.sh` callers in `implement.yml` and the two implement scripts; one copy-parity test | Large |
 | Expression size reduction | `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, `.github/workflows/review_autofix.yml`, `tests/test_workflow_file_size_limit.py` | Small |
 | Medium/Low fixes | 7 workflows for BUG-001; `.github/workflows/implement.yml`; `scripts/review_autofix_step_evaluate_gate.sh`; `scripts/orchestrate_force_tick.sh`; `scripts/check_external_branch_advance.sh`; `scripts/retarget_merged_base.sh`; `.github/workflows/review_autofix_sweep.yml`; `.github/workflows/orchestrate_poll.yml`; `scripts/gh_helpers.sh` | Medium |
+## API Call Consolidation & Dead-Call Analysis (2026-10-25)
+
+### Safety Tag Legend
+- `SAFE_TO_MERGE`: the change removes or merges a call that reads the same data, under the same auth, in the same scope, with no mutation in between. Error handling, retry behavior, log keys and cache contracts stay the same. The implement stage may apply it without further review.
+- `NEEDS_VERIFICATION`: the change is probably correct, but at least one `SAFE_TO_MERGE` precondition can't be proven from reading the code. Run the listed checks before changing anything.
+- `RISKY_SKIP`: the call hits a hard-stop trigger. That means it is in `orchestrate_poll_process.sh`, a retry, pagination or rate-limit path, an auth/identity probe, or race-defence code, or the change would alter log keys. It is reported for visibility only and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+**MERGE-001: Two back-to-back `rate_limit` probes on the reclarify sweep-only tick**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:** `scripts/orchestrate_poll_process.sh:44` (`replay_failed_reclarify_commands`) and `scripts/orchestrate_poll_process.sh:157` (`detect_unrouted_blocked_comments`). They run one after the other at `:209-212`:
+  ```bash
+  if [ "${RECLARIFY_REQUEUE_SWEEP_ONLY:-false}" = "true" ]; then
+    replay_failed_reclarify_commands
+    detect_unrouted_blocked_comments || true
+  ```
+- **Current call count:** 2 per sweep-only tick. **Proposed:** 1.
+- **Endpoint:** `GET /rate_limit`, both projected with `--jq '.resources.core.remaining'`.
+- **Evidence:** both functions read the same field and compare it to the same threshold of 500 (`:45`, `:158`). Neither probe uses `gh_retry`.
+- **Proposed fix:** none to implement. If it is ever done, read the budget once in the `:209` block, pass it to both functions as an argument, and keep each function's own threshold check and `RECLARIFY_UNROUTED outcome=skip reason=budget_low` log line.
+- **Safety rationale:** RISKY_SKIP triggers apply three times over:
+  - The call feeds a rate-limit gate.
+  - The call lives in `orchestrate_poll_process.sh`.
+  - Between the two probes, the replay loop spends up to 2N+2 core calls (`:46`, `:51`, `:55`, `:58`, plus POST/DELETE). A shared reading would therefore be staler for the second gate.
+  - Also, GitHub does not count `/rate_limit` against the core quota, so the saving is one round-trip and no quota.
+- **Downstream signal:** do not auto-implement. The saving is about one HTTP request per sweep-only tick and no quota. Changing which budget reading gates `detect_unrouted_blocked_comments` needs a maintainer's decision. The two issue listings next to these probes (`:46-47` with `--label ai:reclarify-requeue`, `:162-163` with `--label ai:blocked`) cannot be merged either: `gh issue list` ANDs labels, so merging would need an unlabeled `--limit 1000` listing and would change the page-boundary semantics.
+
+### Redundant Re-Fetch (REUSE-###)
+
+**REUSE-001: The poller reads `repos/{repo}.default_branch` at about 19 sites, while a per-run file-backed memo already exists**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:**
+  - **Existing memo:** `scripts/orchestrate_poll_process.sh:23072-23129` (`_review_run_default_branch`). It is file-backed through `${RUNTIME_DIR}/review_run_default_branch.${GITHUB_RUN_ID}.$$`, so it survives `$(...)` subshells.
+  - **Uncached readers:** `:3864` (`refresh_validation_dispatch_wave_gate`), `:5149` (`close_merged_issues_sweep`), `:5613` (`compute_cycle_integration_ahead_by`), `:6364` (`external_finalize_delivery_check`), `:15326` (`mark_validation_complete`). In the per-project main loop: `:23910`, `:24082`, `:24373`, `:24524`, `:24569`, `:24975`, `:25045`, `:25122` and `:29230`. At top level: `:30337`. `:19815` is memoized per tick through `_STALL_STANDALONE_DEFAULT_BRANCH_TRIED`.
+- **Current call count:** at least P+1 per poll tick, where P is the number of tracking projects that reach `:24523`. `DEFAULT_BRANCH_TRACKING` is reset to `""` per project at `:23873` and re-read at `:24524`. Add one call per `mark_validation_complete`, `compute_cycle_integration_ahead_by` or `external_finalize_delivery_check` invocation, plus `:29230` per judged project and `:30337` once. **Proposed:** 1 per run, through `_review_run_default_branch`.
+- **Endpoint:** `GET /repos/{owner}/{repo}` (`.default_branch`).
+- **Evidence:**
+  - The value does not change within a run.
+  - Every site uses the same call shape: `gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch'`.
+  - The memo already exists and fails closed, with the log line `REVIEW_RUN_DEFAULT_BRANCH outcome=unavailable` (`:23114`).
+  - Most callers fall back differently, with `|| echo "main"` (e.g. `:24524`, `:29230`, `:30337`); others use `|| echo ""` (`:5613`, `:6364`).
+- **Proposed fix:** none to implement. A future change could add a fail-soft wrapper, for example `_poll_default_branch_or <fallback>`, that calls `_review_run_default_branch` and prints the caller's existing fallback when it returns 1. Each site would then keep its own `main` or empty fallback.
+- **Safety rationale:** RISKY_SKIP. The call sites are in `orchestrate_poll_process.sh`. Merging also changes error semantics: today a transient failure at one site is retried by `gh_retry` at the next site, but a memoized `failed` state would apply `main` or `""` to every later site in the tick. It would also emit a new warning key (`REVIEW_RUN_DEFAULT_BRANCH outcome=unavailable`) on paths that never emitted it.
+- **Downstream signal:** needs manual review. A maintainer must decide whether one memoized failure may set the fallback for the whole tick. That covers sync, validation-complete and security-pass routing, and a repo whose default branch is not `main` would make that choice visible. Only then should the per-site fallbacks be routed through the memo.
+
+**REUSE-002: `FINAL_DEFAULT_BRANCH` re-reads the default branch right after `DEFAULT_BRANCH_TRACKING` was set in the same project iteration**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:** `scripts/orchestrate_poll_process.sh:24523-24525` (sets `DEFAULT_BRANCH_TRACKING` if empty) and `:24569` (unconditional re-read in the `merge_conflict` arm). The same file already uses the reuse pattern at `:29575`:
+  ```bash
+  FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
+  ```
+- **Current call count:** 2 per `merge_conflict` project per tick. **Proposed:** 1.
+- **Endpoint:** `GET /repos/{owner}/{repo}`.
+- **Evidence:**
+  - `:24523-24525` guarantees `DEFAULT_BRANCH_TRACKING` is non-empty before `:24567`.
+  - The only code between the two reads is `sync_default_into_integration_branch` (`:24549-24565`), which skips `merge_conflict` projects (`:24552`) and does not change repository settings.
+- **Proposed fix:** none to implement. A future change would replace `:24569` with the `:29575` form.
+- **Safety rationale:** RISKY_SKIP because the code is in `orchestrate_poll_process.sh`. In addition, when `:24524` falls back to `"main"` after a failed read, the second read at `:24569` currently works as a free retry for the final-merge path. Reuse would remove that retry.
+- **Downstream signal:** manual review must confirm that a `"main"` fallback from `:24524` is acceptable for the merge-conflict final-PR path before `:24569` reuses it.
+
+**REUSE-003: The no-op ancestor walk's first hop re-fetches the issue body already cached in `ISSUE_META_FILE` (extends BATCH-004)**
+- **Safety tag:** `NEEDS_VERIFICATION`
+- **Files / lines:**
+  - `.github/workflows/implement.yml:5563-5565`: hop 1 runs with `current="${ISSUE_NUMBER}"` and calls `gh_retry gh api "repos/${REPO}/issues/${current}" --jq '.body // ""'`.
+  - Cache written at `:215-216` (`ISSUE_PAYLOAD="$(gh_api_retry "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"` then `printf … > "${ISSUE_META_FILE}"`) and exported to the job env at `:308`.
+  - Cache revalidated and rewritten at `:982-1014` (number match at `:998-1000`).
+- **Current call count:** 2T in the worst case (default T=2, so 4). **Proposed:** 2T−1, because hop 1 reads `.body` from `${ISSUE_META_FILE}` and makes a live GET only when the file is missing or invalid.
+- **Endpoint:** `GET /repos/{owner}/{repo}/issues/{n}`.
+- **Evidence:** the hop-1 read targets the same endpoint and issue number, with the same `GH_PAT` scope, as the job's first-step snapshot. Only `.body` is consumed, and only to match `Re-issued from #N` (`:5566`). Re-issue code writes that marker when it creates the issue (`:1080`).
+- **Proposed fix:**
+  - In `Handle no-op implementation`, read hop 1's body when the cache is valid: `jq -er --arg n "${ISSUE_NUMBER}" 'select((.number|tostring)==$n) | .body // ""' "${ISSUE_META_FILE}"`.
+  - Otherwise fall back to the existing `gh_retry` GET.
+  - Hops 2 and later are unchanged.
+- **Safety rationale:** NEEDS_VERIFICATION. The snapshot is taken minutes before the no-op step, so a body edited mid-run is not seen. `ISSUE_META_FILE` is also truncated on some paths (`:985`, `:1004`), so the fallback must stay. Neither point can be proven harmless from reading alone.
+- **Downstream signal:** before implementing:
+  1. Grep `implement.yml` between `:1014` and `:5413` for any other write to `${ISSUE_META_FILE}`, and confirm it still holds a raw `issues/{n}` object.
+  2. Confirm that no workflow adds or edits a `Re-issued from #N` line after the issue is created.
+  3. Keep BATCH-004's GraphQL rewrite out of scope: the parent comments read at `:5569` uses `--paginate`, and `comments(last:100)` would drop older no-op markers.
+
+**REUSE-004: `orchestrate_force_tick.sh` re-fetches through `issues/N` the same body already in its `pulls/N` response (extends API-002)**
+- **Safety tag:** `SAFE_TO_MERGE`
+- **Files / lines:** `scripts/orchestrate_force_tick.sh:274-284` (`pulls/N` through `_force_tick_fetch_pull_request_json`, `:57-67`) and `:286-296` (`issues/N` `.body` through `_force_tick_fetch_issue_body`, `:103-115`).
+- **Current call count:** 2 when N is a PR without a tracking reference. **Proposed:** 1. Plain issues still make 2 calls, because `pulls/N` fails and `pr_lookup_failed=true`.
+- **Endpoints:** `GET /repos/{o}/{r}/pulls/{n}` and `GET /repos/{o}/{r}/issues/{n}`.
+- **Evidence:**
+  - Both calls use the same token expression, `GH_TOKEN="${GH_PAT:-${GH_TOKEN:-}}"` (`:66`, `:114`), the same number, and no pagination or retry. For a PR number, `issues/{n}.body` is the same field as `pulls/{n}.body`.
+  - The PR extractor already scans that body (`:96-99`) with a regex identical to the issue extractor's (`:51` vs `:85`). The pattern has no anchors, so the `re.MULTILINE` difference has no effect.
+  - The second call therefore always finds the same result: nothing.
+  - Its only side effect, `issue_lookup_failed`, is read only at `:299`, and only together with `pr_lookup_failed = true`. That combination can't occur when `pulls/N` succeeded.
+  - The test fixtures (`tests/test_orchestrate_force_tick.py:279-287`) use identical PR and issue bodies, as on GitHub.
+- **Proposed fix:** in `scripts/orchestrate_force_tick.sh:286`, run the issue-body fallback only when the PR read did not produce a payload:
+  - `if [ -z "${TRACKING_ISSUE}" ] && [ -n "${ISSUE_NUMBER}" ] && { [ "${pr_lookup_failed}" = "true" ] || [[ "${pr_json}" != "{"* ]]; }; then`
+- **Safety rationale:**
+  - **Same data and auth scope:** the eliminated call reads data the earlier `pulls/N` call already returned, in the same top-level scope, with the same auth.
+  - **No mutation in between:** nothing changes between the two calls.
+  - **Same error and log behavior:** the `:299-303` messages and the `:304` skip exit are unchanged.
+  - **Scope:** the script is outside `orchestrate_poll_process.sh` and is not a retry, pagination or rate-limit path.
+- **Downstream signal:** in `scripts/orchestrate_force_tick.sh:286`, add `&& { [ "${pr_lookup_failed}" = "true" ] || [[ "${pr_json}" != "{"* ]]; }` to the issue-body fallback guard. Make no other change, then run `tests/test_orchestrate_force_tick.py`.
+
+**REUSE-005: The reclarify replay's per-issue GET re-checks state and labels that its own listing already filtered (alternative to BATCH-001)**
+- **Safety tag:** `RISKY_SKIP`
+- **Files / lines:** `scripts/orchestrate_poll_process.sh:46-47` (`gh issue list --state open --label ai:reclarify-requeue --json number`) and `:55-57` (per-issue `issues/N` GET checked for `.state == "open"`, `.pull_request? == null` and the label).
+- **Current call count:** N GETs plus N paginated comment reads. **Proposed:** 0 GETs plus N comment reads, by requesting `--json number,state,labels` on the existing listing. That beats BATCH-001's ceil(N/25) GraphQL calls.
+- **Endpoints:** `gh issue list` (GraphQL `repository.issues`) and `GET /repos/{o}/{r}/issues/{n}`.
+- **Evidence:** the listing's filters already guarantee open state, the label and issue-only results. The per-issue read repeats those checks a few seconds later.
+- **Proposed fix:** none to implement. See the downstream signal.
+- **Safety rationale:** RISKY_SKIP. The code is in `orchestrate_poll_process.sh`, and it is an authorization-gated replay path. The header at `:37-41` names "live issue read per queued issue" as part of the contract ("The marker is data, not authorization"), so the re-read is deliberate defence against label removal between listing and POST.
+- **Downstream signal:** do not auto-implement. A maintainer must decide whether the live re-read is a required TOCTOU guard before the non-idempotent `/reclarify` POST at `:94-96`. If it is not, prefer this listing-field reuse over BATCH-001. Either way, keep the paginated comments read at `:58-60`.
+
+### Dead Calls (DEAD-API-###)
+No findings. I checked these candidates, and each result is consumed:
+- `sweep_default_branch` (`review_autofix_sweep.yml:285`) is used by the provenance filter at `:350`/`:379`.
+- `_post_merge_linked` (`scripts/review_autofix_step_evaluate_gate.sh:190-198`) is handed to the post-merge job through `POST_MERGE_LINKED_ISSUES_JSON`.
+- `trusted_login` (`orchestrate_poll_process.sh:51`) is used at `:76-80`.
+- The live head re-reads at `review_autofix_step_evaluate_gate.sh:1327` and `review_autofix.yml:1249` and `:1651` are documented race guards (`:1323-1326`, `:1661-1665`).
+- The `pulls/N` fallbacks in `review_autofix_step_mark_ready_to_merge.sh:62` and `review_autofix_step_mark_review_blocked_workflow_failure.sh:43` fire only when `PR_META_FILE` gives an empty title and body, so they are not redundant.
+
+### Cross-References to Deep Audit Section
+- BATCH-001: RISKY_SKIP — in `orchestrate_poll_process.sh` on the authorization-gated replay path. REUSE-005 is a cheaper alternative that needs no new call shape, if maintainers drop the live re-read.
+- BATCH-002: RISKY_SKIP — in `orchestrate_poll_process.sh` (`:7948`). The paginated comments read at `:7961` and the single-attempt POST at `:7978` must stay unchanged.
+- BATCH-003: RISKY_SKIP — this is spoof and race-defence code (`check_external_branch_advance.sh:163-166`). The compare endpoint lists at most 250 commits, so a rewrite must check `total_commits` against `advance_count` (`:144`) and fall back to `ADVANCE=unknown` on mismatch. It should land together with SEC-001.
+- BATCH-004: RISKY_SKIP — the parent comments read is `--paginate` (`implement.yml:5569`), and the proposed `comments(last:100)` would change page-boundary semantics. REUSE-003 covers the safe part.
+- BATCH-005: RISKY_SKIP — `--paginate` listings in race-defence code for the PR #3895 pending-duplicate incident (`review_autofix_sweep.yml:322-330`), with per-status fail-closed handling (`:344-347`).
+- API-001: NEEDS_VERIFICATION — confirm that `.base.repo.default_branch` is present in `GET /pulls` items. The listing at `:228` is raw `gh api` with no retry, while `:285`'s failure path emits `AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable`. Merging the two changes which failure produces which outcome.
+- API-002: NEEDS_VERIFICATION — the `issueOrPullRequest` GraphQL rewrite changes the error path (one call failing instead of two independent ones) and the `:299` warning semantics. REUSE-004 is the safe subset to land first.
+
+### Summary Counts
+The table counts findings raised in this pass only. The tags for the cross-referenced Deep Audit IDs are listed in the section above.
+
+| Tag | Count | IDs |
+|---|---|---|
+| SAFE_TO_MERGE | 1 | REUSE-004 |
+| NEEDS_VERIFICATION | 1 | REUSE-003 |
+| RISKY_SKIP | 4 | MERGE-001, REUSE-001, REUSE-002, REUSE-005 |
+
+### Implement-Stage Handoff
+- REUSE-004: in `scripts/orchestrate_force_tick.sh:286`, run the `issues/N` body fallback only when `pr_lookup_failed=true` or `pr_json` is not an object. This saves 1 API call per force-tick on a PR with no tracking reference.
