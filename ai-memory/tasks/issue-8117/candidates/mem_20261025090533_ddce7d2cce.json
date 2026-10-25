@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8117,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8117\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8119\",\"pr_number\":8119,\"branch\":\"ai/issue-8117\",\"run_id\":\"40178010936\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40178010936\",\"changed_files\":[\"changelog.d/8117-updater-hold-false-positive.md\",\"tests/test_update_workflows_template_gate.py\",\"workflow-templates/ai-update-workflows.yml\"]}",
+  "fingerprint": "9d800906fa2196b5147ca5b866044065af685a5041430189981805707ba99e5c",
+  "lineage": {
+    "issue_number": 8117,
+    "parent_ids": [],
+    "pr_number": 8119,
+    "run_id": "40178010936",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40178010936",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8119"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261025090533_ddce7d2cce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8117,
+    "level": "run",
+    "pr_number": 8119,
+    "run_id": "40178010936"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8117: https://github.com/shubhodeep1/coding-workflows/pull/8119",
+  "timestamps": {
+    "created_at": "2026-10-25T09:05:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
