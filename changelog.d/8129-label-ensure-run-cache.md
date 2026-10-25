@@ -8,3 +8,5 @@ Steps that label many issues with one label now make one label-create call inste
 | Label-create calls for one label across N issues | N+1 before, 1 now |
 | Outcomes cached | 2 (created, already exists) |
 | Failures cached | 0 |
+
+What this means for operators: nothing to set or change. Runs that label many issues spend less GitHub API quota on label creation, and a label that fails to create is still retried and still logs its `::warning::` on every call.
