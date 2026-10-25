@@ -318,10 +318,12 @@ jobs:
               echo "resolver_status=none" >> "$GITHUB_OUTPUT"
             fi
           elif [ "${resolver_pr_not_open}" = "true" ]; then
+            not_open_pr="$(grep -E 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" | sed -n 's/.* pr=\([0-9][0-9]*\) .*/\1/p' | head -n1)"
             echo "::notice::CI-triage PR for issue #${issue_number} is no longer open; planning continues only if the superseded-PR check resolves it."
             echo "ref=" >> "$GITHUB_OUTPUT"
             echo "resolver_status=failed" >> "$GITHUB_OUTPUT"
             echo "pr_not_open=true" >> "$GITHUB_OUTPUT"
+            echo "pr_not_open_pr=${not_open_pr}" >> "$GITHUB_OUTPUT"
           elif [ "${resolver_rc}" -eq 3 ]; then
             echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
             exit 1
@@ -946,6 +948,7 @@ jobs:
           PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED: ${{ vars.PLAN_SUPERSEDED_MERGED_PR_CHECK_ENABLED || 'true' }}
           PLAN_SUPERSEDE_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
           PLAN_PR_NOT_OPEN: ${{ steps.refctx.outputs.pr_not_open }}
+          PLAN_PR_NOT_OPEN_PR: ${{ steps.refctx.outputs.pr_not_open_pr }}
           PLAN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -967,14 +970,39 @@ jobs:
           if [ "${PLAN_PR_NOT_OPEN:-}" = "true" ]; then
             pr_not_open=true
           fi
+          # Issue #7995: skipping alone left the issue at ai:planning, so
+          # stall recovery re-posted /answer every hour and each run skipped
+          # again. Hand the issue to the unblock judge as implement does
+          # (#7540): ai:planning -> ai:blocked plus one marker comment.
           pr_not_open_unresolved() {
-            local detail="${1:-unknown}"
+            local detail pr label_state=applied comment_state=posted body
+            detail="$(printf '%s' "${1:-unknown}" | tr -cd 'a-z_')"
+            pr="$(printf '%s' "${PLAN_PR_NOT_OPEN_PR:-${pr_number:-}}" | tr -cd '0-9')"
             echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
-            log "outcome=skip reason=pr_not_open_unresolved detail=${detail}"
-            echo "::warning::Planning skipped for #${ISSUE_NUMBER}: CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail})."
+            source scripts/gh_helpers.sh 2>/dev/null || true
+            type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+            source scripts/label_helpers.sh 2>/dev/null || true
             source scripts/tg_helpers.sh 2>/dev/null || true
+            if type ensure_label_exists >/dev/null 2>&1; then
+              ensure_label_exists "ai:blocked" "${REPO_SLUG}" || true
+            fi
+            gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPO_SLUG}" --add-label 'ai:blocked' \
+              --remove-label 'ai:planning' >/dev/null 2>&1 || label_state=failed
+            body="CI-triage pull request #${pr:-unknown} is no longer open, so planning was not started (outcome: \`${detail}\`). The unblock judge decides whether to close or re-issue this issue."$'\n\n'"<!-- ai:plan-pr-not-open:v1 pr=${pr} run=${GITHUB_RUN_ID:-} -->"
+            # Comment only after the label landed, so a retry does not post it twice.
+            if [ "${label_state}" = "applied" ]; then
+              gh_retry gh api "repos/${REPO_SLUG}/issues/${ISSUE_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 || comment_state=failed
+            else
+              comment_state=skipped
+            fi
+            log "outcome=skip reason=pr_not_open_unresolved detail=${detail} pr=${pr:-none} label=${label_state} comment=${comment_state}"
+            echo "::warning::Planning skipped for #${ISSUE_NUMBER}: CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail})."
             if type tg_send_tracked >/dev/null 2>&1; then
-              tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: its CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail})."$'\n'"Issue: ${ISSUE_URL:-}" "WARNING" || true
+              if [ "${label_state}" = "failed" ]; then
+                tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: its CI-triage PR is no longer open and the superseded check could not resolve the issue (${detail}). The ai:blocked hand-off failed; the issue is still ai:planning."$'\n'"Issue: ${ISSUE_URL:-}" "WARNING" || true
+              else
+                tg_send_tracked "${ISSUE_NUMBER}" "Planning skipped for #${ISSUE_NUMBER}: its CI-triage PR is no longer open (${detail}); handed to the unblock judge."$'\n'"Issue: ${ISSUE_URL:-}" "DEBUG" || true
+              fi
             fi
             exit 0
           }
