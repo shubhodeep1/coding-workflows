@@ -565,3 +565,10 @@ def test_summary_never_logs_dash_prefixed_flag_values(tmp_path: Path) -> None:
 def test_summary_finds_number_after_flags(tmp_path: Path) -> None:
 	assert _summary(tmp_path, "gh", "issue", "view", "--repo", "o/r", "42") == "gh issue view 42 (flags: --repo)"
 	assert _summary(tmp_path, "gh", "pr", "view", "--repo", "o/r", "br", "7") == "gh pr view (flags: --repo)"
+
+
+def test_summary_unknown_flag_never_logs_dash_prefixed_value(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "issue", "create", "--project", "--PRIVATE_SENTINEL", "--title", "t")
+	assert out == "gh issue create (flags: --project --title)"
+	assert "PRIVATE_SENTINEL" not in out
+	assert _summary(tmp_path, "gh", "api", "--paginate", "--slurp", "repos/o/r/x") == "gh api repos/o/r/x (flags: --paginate --slurp)"

@@ -861,12 +861,11 @@ _gh_cmd_log_summary()
 		_ghsum_ep="${_ghsum_ep//${_ghsum_bad}/_}"
 		_ghsum_target="${_ghsum_ep:0:120}"
 	fi
-	# Flag names only. A flag without an attached value treats the next
-	# non-dash token as its value and skips it; over-skipping only drops
-	# information from the log line.
-	# A flag known to take a value (the api flag list plus the common
-	# body/title/repo flags) always skips its next token, even one that
-	# starts with "-", so a value such as `--body --x` is never logged.
+	# Flag names only. A flag without an attached value always treats the
+	# next token as its value and skips it, even one that starts with "-",
+	# so a value such as `--project --x` is never logged as a flag name.
+	# Only the known boolean flags listed below leave the next token alone.
+	# Over-skipping only drops information from the log line.
 	local _ghsum_j="${_ghsum_rest_start}" _ghsum_skip=0 _ghsum_force=0 _ghsum_a _ghsum_name _ghsum_attached
 	local _ghsum_pos_seen=0
 	while [ "${_ghsum_j}" -lt "${_ghsum_n}" ]; do
@@ -899,10 +898,9 @@ _gh_cmd_log_summary()
 				;;
 		esac
 		if [ "${_ghsum_attached}" != "1" ]; then
-			_ghsum_skip=1
-			if _gh_api_flag_takes_value "${_ghsum_name}"; then _ghsum_force=1; fi
 			case "${_ghsum_name}" in
-				-b|--body|--body-file|--title|-c|-R|--repo|-m|--message|--notes|--notes-file|-l|--label|--add-label|--remove-label|--json|-S|--search|-B|--base|--head|-a|--assignee|-r|--reviewer|--milestone|-L|--limit|-s|--state) _ghsum_force=1 ;;
+				--paginate|--slurp|-i|--include|--silent|--verbose|--web|--draft|--fill|--squash|--merge|--rebase|--auto|--admin|--delete-branch|--yes|--disable-auto|--comments) ;;
+				*) _ghsum_skip=1; _ghsum_force=1 ;;
 			esac
 		fi
 		[[ "${_ghsum_name}" =~ ${_ghsum_flag_re} ]] || continue
