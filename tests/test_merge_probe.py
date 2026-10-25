@@ -135,6 +135,10 @@ echo '' >> extracted/probe.sh
 # Declare globals the extracted functions rely on.
 echo 'declare -gA _MERGE_PROBE_CACHE_JSON=()' >> extracted/probe.sh
 echo 'declare -gA _MERGE_PROBE_CACHE_FETCHED=()' >> extracted/probe.sh
+echo 'declare -gA _MERGE_PROBE_CACHE_STATE=()' >> extracted/probe.sh
+echo '_MERGE_PROBE_FAIL_CLOSED_SWITCH_WARNED=""' >> extracted/probe.sh
+extract_fn '_merge_probe_sibling_lookup_fail_closed_enabled' >> extracted/probe.sh
+echo '' >> extracted/probe.sh
 extract_fn '_merge_probe_refresh' >> extracted/probe.sh
 echo '' >> extracted/probe.sh
 extract_fn 'probe_sibling_merge_conflicts' >> extracted/probe.sh
@@ -156,11 +160,20 @@ def _extract_probe_functions(repo_dir: Path) -> None:
 
 def _mock_gh_script() -> str:
 	"""Return a bash stub that shadows `gh` so `gh pr list` returns a
-	caller-controlled JSON array (from $GH_MOCK_PR_LIST_JSON)."""
+	caller-controlled JSON array (from $GH_MOCK_PR_LIST_JSON).
+
+	GH_MOCK_PR_LIST_RC (non-zero) makes `gh pr list` print nothing and
+	fail; GH_MOCK_CALL_LOG names a file that gets one line per call."""
 	return textwrap.dedent(r"""
 	gh() {
 		if [ "${1:-}" = "pr" ] && [ "${2:-}" = "list" ]; then
-			printf '%s' "${GH_MOCK_PR_LIST_JSON:-[]}"
+			if [ -n "${GH_MOCK_CALL_LOG:-}" ]; then
+				echo "pr list" >> "${GH_MOCK_CALL_LOG}"
+			fi
+			if [ "${GH_MOCK_PR_LIST_RC:-0}" != "0" ]; then
+				return "${GH_MOCK_PR_LIST_RC}"
+			fi
+			printf '%s' "${GH_MOCK_PR_LIST_JSON-[]}"
 			return 0
 		fi
 		return 0
@@ -331,6 +344,134 @@ def test_bump_merge_deferral_count_persists_to_state():
 		final_state = json.loads(state_file.read_text(encoding="utf-8"))
 		counters = {i["github_issue"]: i.get("merge_deferral_count") for i in final_state["waves"][0]["issues"]}
 		assert counters == {10: 2, 11: 1}
+
+
+def _run_probe_twice(env: dict[str, str]) -> tuple[subprocess.CompletedProcess, int]:
+	"""Run the probe twice in one shell; return the result and gh call count."""
+	import tempfile
+	with tempfile.TemporaryDirectory(prefix="merge-probe-") as td:
+		return _run_probe_twice_in(Path(td), env)
+
+
+def _run_probe_twice_in(repo_dir: Path, env: dict[str, str]) -> tuple[subprocess.CompletedProcess, int]:
+	_init_git_repo(repo_dir)
+	_extract_probe_functions(repo_dir)
+	call_log = repo_dir / "gh_calls.log"
+	script = _mock_gh_script() + textwrap.dedent(r"""
+	source extracted/probe.sh
+	rc=0
+	probe_sibling_merge_conflicts "700" "candidate" "integration" || rc=$?
+	echo "PROBE_RC1=${rc}"
+	rc=0
+	probe_sibling_merge_conflicts "700" "candidate" "integration" || rc=$?
+	echo "PROBE_RC2=${rc}"
+	echo "STATE=${_MERGE_PROBE_CACHE_STATE[integration]:-none}"
+	""")
+	full_env = {"GH_MOCK_CALL_LOG": str(call_log)}
+	full_env.update(env)
+	r = _run_bash(script, cwd=repo_dir, env=full_env)
+	return r, _call_count(call_log)
+
+
+def _call_count(call_log: Path) -> int:
+	if not call_log.exists():
+		return 0
+	return len([ln for ln in call_log.read_text(encoding="utf-8").splitlines() if ln.strip()])
+
+
+def test_probe_failed_lookup_returns_two_and_caches_unknown():
+	r, calls = _run_probe_twice({"GH_MOCK_PR_LIST_RC": "1"})
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert "PROBE_RC1=2" in r.stdout, r.stdout
+	assert "PROBE_RC2=2" in r.stdout, r.stdout
+	assert "STATE=unknown" in r.stdout, r.stdout
+	assert (
+		"  [merge-probe] Sibling PR lookup for integration unavailable; cannot probe PR #700 this tick."
+		in r.stdout
+	), r.stdout
+	assert calls == 1, f"expected one gh call, got {calls}"
+
+
+def test_probe_non_array_lookup_returns_two():
+	r, _ = _run_probe_twice({"GH_MOCK_PR_LIST_JSON": '{"message":"x"}'})
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert "PROBE_RC1=2" in r.stdout, r.stdout
+	assert "STATE=unknown" in r.stdout, r.stdout
+
+
+def test_probe_empty_output_lookup_returns_two():
+	r, _ = _run_probe_twice({"GH_MOCK_PR_LIST_JSON": ""})
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert "PROBE_RC1=2" in r.stdout, r.stdout
+	assert "STATE=unknown" in r.stdout, r.stdout
+
+
+def test_probe_valid_empty_array_is_known_and_returns_zero():
+	r, calls = _run_probe_twice({"GH_MOCK_PR_LIST_JSON": "[]"})
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert "PROBE_RC1=0" in r.stdout, r.stdout
+	assert "PROBE_RC2=0" in r.stdout, r.stdout
+	assert "STATE=known" in r.stdout, r.stdout
+	assert calls == 1
+
+
+def test_probe_switch_false_restores_fail_open():
+	for value in ("false", "FALSE", "False"):
+		r, _ = _run_probe_twice({
+			"GH_MOCK_PR_LIST_RC": "1",
+			"MERGE_PROBE_SIBLING_LOOKUP_FAIL_CLOSED_ENABLED": value,
+		})
+		assert r.returncode == 0, f"bash failed: {r.stderr}"
+		assert "PROBE_RC1=0" in r.stdout, (value, r.stdout)
+		assert "::warning::" not in r.stderr, (value, r.stderr)
+
+
+def test_probe_switch_invalid_value_warns_once_without_value():
+	r, _ = _run_probe_twice({
+		"GH_MOCK_PR_LIST_RC": "1",
+		"MERGE_PROBE_SIBLING_LOOKUP_FAIL_CLOSED_ENABLED": "garbage",
+	})
+	assert r.returncode == 0, f"bash failed: {r.stderr}"
+	assert "PROBE_RC1=0" in r.stdout, r.stdout
+	assert r.stderr.count("::warning::MERGE_PROBE_SIBLING_LOOKUP_FAIL_CLOSED_ENABLED") == 1, r.stderr
+	assert "garbage" not in r.stdout + r.stderr
+
+
+def test_probe_switch_true_or_empty_stays_fail_closed():
+	for value in ("TRUE", "true", ""):
+		r, _ = _run_probe_twice({
+			"GH_MOCK_PR_LIST_RC": "1",
+			"MERGE_PROBE_SIBLING_LOOKUP_FAIL_CLOSED_ENABLED": value,
+		})
+		assert r.returncode == 0, f"bash failed: {r.stderr}"
+		assert "PROBE_RC1=2" in r.stdout, (value, r.stdout)
+
+
+def test_ready_to_merge_caller_skips_unknown_lookup_without_counting():
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert "if ! probe_sibling_merge_conflicts" not in text
+	start = text.index('probe_sibling_merge_conflicts "${RTM_PR}"')
+	end = text.index("_bump_merge_deferral_count", start)
+	region = text[start:end]
+	assert "|| _rtm_probe_rc=$?" in region
+	rc2_start = region.index('if [ "${_rtm_probe_rc}" -eq 2 ]; then')
+	rc2_end = region.index("\n            fi\n", rc2_start)
+	rc2_block = region[rc2_start:rc2_end]
+	assert (
+		"  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} this tick: "
+		"sibling lookup unavailable (not counted toward MAX_MERGE_DEFERRALS)."
+	) in rc2_block
+	assert "continue" in rc2_block
+	for forbidden in (
+		"_bump_merge_deferral_count",
+		"_merge_deferral_cap_alert",
+		"unblock_handover_merge_deferral",
+		"gh pr merge",
+		"STATE_FILE",
+		"post_state_comment",
+	):
+		assert forbidden not in rc2_block, forbidden
+	assert 'if [ "${_rtm_probe_rc}" -ne 0 ]; then' in region[rc2_end:]
 
 
 # ---------------------------------------------------------------------------

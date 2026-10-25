@@ -829,10 +829,11 @@ jobs:
       # Before that it moved here from tests-release-and-log-analysis (20m16s,
       # run 39030079651, #7560), and earlier out of this job when it measured
       # 19.6 of its 20 minutes (2026-10-09). In orchestrate-poll it ran in
-      # group 1 only, because group 0 carries the fast-fail subset and the
-      # single-file modules. Budget-watch issue #7579: group 1 then took
-      # 15m13s of its 20 minutes (run 39047759102), and the step was split in
-      # place there, the way the workflow failure heal step was (#7387):
+      # group 1 only, because group 0 carried the fast-fail subset and (until
+      # #8080 moved them to group 1) the single-file modules. Budget-watch
+      # issue #7579: group 1 then took 15m13s of its 20 minutes (run
+      # 39047759102), and the step was split in place there, the way the
+      # workflow failure heal step was (#7387):
       # tests/test_review_merge_train.py runs in 3 local shards (split by test
       # function, parametrized cases together) and the five small modules run
       # in one more process beside them, on the runner's 4 cores. Every test
@@ -1110,6 +1111,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_owner_routing.py
 
       # Moved from tests-hooks-and-orchestrator, which took 15m09s of its 20
       # minutes on main (run 38508333607, budget-watch issue #7366). Step
@@ -2077,15 +2079,18 @@ jobs:
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
     # (about 20 minutes on 4 local shards). Each matrix group runs one
-    # quarter of it on CI_POLL_TEST_SHARDS local shards, about 5 minutes
-    # measured (#4707); 20 leaves room for a cold runner, whose shards can
-    # be slower than a warm one's.
+    # fifth of it on CI_POLL_TEST_SHARDS local shards; 20 minutes leaves
+    # room for a cold runner, whose shards can be slower than a warm one's.
+    # The matrix grew from 4 to 5 groups after group 0 took 16m45s of its
+    # 20 minutes (run 40165437476, budget-watch issue #8113). Group 4 runs
+    # its slice and, since #8118, the unblock judge step; every other
+    # group-pinned step keeps its group.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
       fail-fast: false
       matrix:
-        poll-group: [0, 1, 2, 3]
+        poll-group: [0, 1, 2, 3, 4]
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -2348,13 +2353,6 @@ jobs:
             exit 1
           fi
 
-          # The single-file modules are not split; group 0 runs them once.
-          if [ "${poll_group}" -eq 0 ]; then
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
-          fi
-
       # Moved from tests-heal-plan-and-validation, which took 15m26s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7690). That run's
       # step timings were not readable, so the steps were chosen by timing each
@@ -2366,7 +2364,8 @@ jobs:
       # every other step 3s or less. Each test job has recorded about 15
       # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
       # #7677), while poll groups record about 5 minutes (#4707). Group 0
-      # carries the fast-fail subset and the single-file modules and group 1
+      # carries the fast-fail subset (the single-file modules ran there until
+      # #8080 moved them to group 1) and group 1
       # then carried the merge-train step (moved out in #7766), so this step
       # runs in group 2 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
@@ -2465,15 +2464,138 @@ jobs:
       # every other step 3s or less. Each test job has recorded about 15
       # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
       # #7677), while poll groups record about 5 minutes (#4707). Group 0
-      # carries the fast-fail subset and the single-file modules and group 1
+      # carries the fast-fail subset (the single-file modules ran there until
+      # #8080 moved them to group 1) and group 1
       # then carried the merge-train step (moved out in #7766), so this step
-      # runs in group 3 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
-      # which this job already has. Name and body unchanged.
+      # ran in group 3 only, once per CI run, until #8072 moved it to group 1
+      # (#8091 later moved it on to group 0). It needs only checkout, Python 3.12 and the shared pip install,
+      # which this job already has. Name and body unchanged by that move.
+      # Moved from group 3, which took 15m08s of its 20 minutes on main (run
+      # 40112590944, budget-watch issue #8072); group 1 then carried no moved-in
+      # steps since #7766, so it had the most headroom. Step timings were not
+      # readable from CI and not measurable in the implement sandbox (PyYAML
+      # was missing, so this step and the Claude engine judges step failed at
+      # collection), so the plan's default applied: only this step moved, and
+      # the two #7689 steps below stay in group 3.
+      # Moved from group 1 to group 0: group 1 took 16m09s of its 20 minutes
+      # on main (run 40150026157, budget-watch issue #8091). Step timings were
+      # not readable, so the choice is an estimate from recorded group totals,
+      # not a measurement: group 1 took 16m09s with this step and the
+      # single-file modules, group 0 took 15m09s with the fast-fail subset and
+      # the single-file modules (#8080), so if the two slices cost about the
+      # same, this step costs about one minute more than the fast-fail subset.
+      # The single-file modules cost more (test_run_substate_ledger.py alone
+      # took 139s locally), but group 0 ran 15m09s with them, so they stay in
+      # group 1; group 1 may still finish near the 15-minute budget-watch
+      # threshold. Group 0 keeps the fast-fail subset. This step then ran in
+      # group 0 only, once per CI run, until #8118 moved it on to group 4.
+      # Name and body unchanged by that move.
+      # Moved from group 0 to group 4: orchestrate-poll (0) took 17m01s of its
+      # 20 minutes on main (run 40175309052, budget-watch issue #8118). Group 0
+      # carried its slice, the fast-fail subset (11 test_implementation_failed_*
+      # tests) and this step (#8091); group 4 runs only its slice (#8113), so
+      # it has the most headroom. Step timings were not readable, so the move
+      # is an estimate from group totals, not a measurement; the
+      # analysis/workflow-optimization-2026-10-24-2.md table recorded this
+      # step at 860s in a failing run (40065164413). This step now runs in
+      # group 4 only, once per CI run, and
+      # needs only checkout, Python 3.12 and the shared pip install, which
+      # every matrix group has. Name and body unchanged by that move.
+      # Sharded in place, not moved (#8150): orchestrate-poll (4) took 15m13s
+      # of its 20 minutes on main (run 40198222187). This step had moved three
+      # times (#8072, #8091, #8118) and each group it landed in then reached
+      # about 15 to 17 minutes. Its cost is not measured: those two group
+      # totals (group 0 at 17m01s with slice, fast-fail subset and this step;
+      # group 4 at 15m13s with slice and this step) differ only by the
+      # fast-fail subset, and the one recorded figure is 860s in a failing run
+      # (40065164413), more headroom than any other CI job has. The step keeps
+      # its name, guard and modules, and splits their test functions across 4
+      # local pytest processes on the runner's 4 cores, the way the
+      # merge-train step was split (#7579). Each test seeds its own tmp_path,
+      # and each shard is a separate pytest process.
       - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
-        if: strategy.job-index == 3
+        if: strategy.job-index == 4
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py
+          ub_shards=4
+          ub_modules=(tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py)
+          rm -f /tmp/unblock_step_collect.log /tmp/unblock_step_tests.txt \
+            /tmp/unblock_step_shard_*.txt /tmp/unblock_step_shard_*.log /tmp/unblock_step_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${ub_modules[@]}" \
+            > /tmp/unblock_step_collect.log 2>&1 \
+            || { cat /tmp/unblock_step_collect.log; echo "::error::Test collection failed for the unblock step modules."; exit 1; }
+          { grep -E '^tests/test_(unblock_judge|unblock_scan|orphan_fixup_close)\.py::' /tmp/unblock_step_collect.log || true; } \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/unblock_step_tests.txt
+          ub_test_count="$(wc -l < /tmp/unblock_step_tests.txt | tr -d '[:space:]')"
+          if ! [ "${ub_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from the unblock step modules."
+            exit 1
+          fi
+          echo "unblock step: ${ub_test_count} test functions across ${ub_shards} shards"
+          ub_pids=()
+          for ub_shard in $(seq 0 "$((ub_shards - 1))"); do
+            awk -v n="${ub_shard}" -v total="${ub_shards}" 'NR % total == n' \
+              /tmp/unblock_step_tests.txt > "/tmp/unblock_step_shard_${ub_shard}.txt"
+            [ -s "/tmp/unblock_step_shard_${ub_shard}.txt" ] || continue
+            (
+              mapfile -t ub_shard_tests < "/tmp/unblock_step_shard_${ub_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${ub_shard_tests[@]}" > "/tmp/unblock_step_shard_${ub_shard}.log" 2>&1
+              echo "$?" > "/tmp/unblock_step_shard_${ub_shard}.rc"
+            ) &
+            ub_pids+=("$!")
+          done
+          # Reap every process before judging any, so none is left orphaned.
+          for ub_pid in "${ub_pids[@]}"; do
+            wait "${ub_pid}" || true
+          done
+          ub_ids=()
+          for ub_shard in $(seq 0 "$((ub_shards - 1))"); do
+            [ -s "/tmp/unblock_step_shard_${ub_shard}.txt" ] || continue
+            ub_ids+=("${ub_shard}")
+          done
+          ub_failed=()
+          for ub_id in "${ub_ids[@]}"; do
+            ub_stem="/tmp/unblock_step_shard_${ub_id}"
+            echo "::group::unblock step shard ${ub_id}"
+            cat "${ub_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            ub_rc="$(cat "${ub_stem}.rc" 2>/dev/null || echo 1)"
+            case "${ub_rc}" in
+              ''|*[!0-9]*) ub_rc=1 ;;
+            esac
+            if [ "${ub_rc}" != "0" ]; then
+              ub_failed+=("${ub_id}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for ub_id in "${ub_failed[@]}"; do
+            echo "--- unblock step shard ${ub_id} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/unblock_step_shard_${ub_id}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#ub_failed[@]}" -gt 0 ]; then
+            echo "::error::unblock step shards failed: ${ub_failed[*]}"
+            exit 1
+          fi
+
+      # Moved out of the group-0 block of "Orchestrate poll process unit tests":
+      # orchestrate-poll (0) took 15m09s of its 20 minutes on main (run
+      # 40122910216, budget-watch issue #8080). Group 0 keeps the fast-fail
+      # subset by design; group 1 had carried only its slice and the unblock
+      # step (#8072), so it had the most headroom. Commands and order
+      # unchanged; they run once per CI run. The unblock step left group 1
+      # for group 0 in #8091.
+      - name: Orchestrate poll single-file module tests
+        if: strategy.job-index == 1
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
 
       # Moved from tests-release-and-log-analysis, which took 17m51s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7689). Earlier

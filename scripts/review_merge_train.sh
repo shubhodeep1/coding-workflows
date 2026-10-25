@@ -868,8 +868,11 @@ _mt_replace_comment()
 # Upsert one marker comment per PR so repeated gate runs never spam.
 # $1 = pr, $2 = marker, $3 = body, $4 = optional already-looked-up comment id.
 # Skips the write when an identical body already carries the marker.
+# Returns the status of the write it made: 0 when no write was needed or the
+# PATCH/POST succeeded, the failed gh status otherwise, and 1 when the marker
+# lookup failed. Callers handle a non-zero status (warn and continue).
 _mt_upsert_comment() {
-	local pr="$1" marker="$2" body="$3" existing_id="" existing_body
+	local pr="$1" marker="$2" body="$3" existing_id="" existing_body write_rc=0
 	if [ "$#" -ge 4 ]; then
 		existing_id="$4"
 	elif ! existing_id="$(_mt_find_marker_comment_id "${pr}" "${marker}")"; then
@@ -880,10 +883,11 @@ _mt_upsert_comment() {
 		if [ "${existing_body}" = "${body}" ]; then
 			return 0
 		fi
-		gh_retry gh api -X PATCH "repos/${MT_REPO}/issues/comments/${existing_id}" -f body="${body}" >/dev/null 2>&1 || true
-		return 0
+		gh_retry gh api -X PATCH "repos/${MT_REPO}/issues/comments/${existing_id}" -f body="${body}" >/dev/null 2>&1 || write_rc=$?
+		return "${write_rc}"
 	fi
-	gh_retry gh api -X POST "repos/${MT_REPO}/issues/${pr}/comments" -f body="${body}" >/dev/null 2>&1 || true
+	gh_retry gh api -X POST "repos/${MT_REPO}/issues/${pr}/comments" -f body="${body}" >/dev/null 2>&1 || write_rc=$?
+	return "${write_rc}"
 }
 
 _mt_has_label() {
@@ -996,7 +1000,8 @@ _mt_gate() {
 Blocked by:
 ${blocker_lines}
 
-Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, or remove the \`${MT_LABEL}\` label and re-run the review to bypass it once." "${queued_comment_id}"
+Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, or remove the \`${MT_LABEL}\` label and re-run the review to bypass it once." "${queued_comment_id}" \
+			|| _mt_warn "merge-train gate: could not upsert the queued comment for PR #${pr}; continuing."
 	fi
 	if [ -n "${GITHUB_ENV:-}" ]; then
 		{

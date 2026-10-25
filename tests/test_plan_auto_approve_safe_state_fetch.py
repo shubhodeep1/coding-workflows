@@ -512,6 +512,23 @@ def test_heal_issue_out_of_scope_plan_holds_without_a_body_write() -> None:
 	assert "auto_approve_hold_reason=heal_scope_plan_out_of_scope" in output
 	assert "outcome=defer issue=123 paths=scripts/other.sh" in stdout
 	assert len(posts) == 1 and "verified workflow-heal scope" in posts[0]
+	# Implement enforces the frozen marker whatever the approval, so the hold
+	# must not offer `/approved` as the way forward (#8064).
+	assert "`/approved` alone does not help" in posts[0]
+	assert "`/reclarify`" in posts[0]
+	assert "To proceed, a maintainer reviews the plan and replies `/approved`" not in posts[0]
+
+
+def test_heal_issue_plan_with_its_own_agents_fragment_is_approved() -> None:
+	# CLAUDE.md §30 fragments are always in the heal scope for the issue's own number (#8064).
+	plan = HEAL_PLAN + "- `agents.d/123-fix.md`\n"
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=plan, gate_flag="true", graphql=_heal_graphql())
+	assert posted, stdout
+	plan = HEAL_PLAN + "- `agents.d/124-fix.md`\n"
+	posts: list[str] = []
+	posted, stdout, output = _run_auto_approve(_HEAL_ISSUE, plan_text=plan, gate_flag="true", graphql=_heal_graphql(), posts_out=posts)
+	assert not posted
+	assert "auto_approve_hold_reason=heal_scope_plan_out_of_scope" in output
 
 
 def test_edited_heal_issue_holds_as_unverified() -> None:

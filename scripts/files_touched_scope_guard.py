@@ -997,6 +997,22 @@ def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file
 # when every path the plan lists is inside them. The matcher is the one the heal
 # route's commit check uses (strict: no lockfile allowance). No body is written.
 HEAL_PLAN_APPROVE_REASON = "heal_scope_verified"
+
+
+# A heal issue's own agents.md fragment (#8064). CLAUDE.md §30 requires an
+# `agents.d/<N>-<slug>.md` fragment for any agents.md addition, and the intake
+# scope marker only carries `tests/**` and `changelog.d/*.md`, so every heal
+# that documented its change was held and then refused at implement. The heal
+# plan gate and implement_heal_preflight.sh (which writes HEAL_SCOPE_FILE for
+# the isolated transfer and the commit guard) add this one entry for the
+# issue's own number; review_untrusted_workspace.py accepts exactly this shape.
+# The marker format is unchanged, so issues filed before this fix benefit too.
+def heal_own_agents_fragment_entry(issue_number: object) -> str:
+	"""``agents.d/<N>-*.md`` for a positive decimal issue number, else ``""``."""
+	number = str(issue_number or "").strip()
+	if not re.fullmatch(r"[1-9][0-9]{0,9}", number):
+		return ""
+	return f"agents.d/{number}-*.md"
 _HEAL_BARE_GLOB_RE = re.compile(r"[A-Za-z0-9_.*?/\[\]-]+")
 
 
@@ -1012,6 +1028,9 @@ def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: s
 			raise ValueError("empty plan")
 		protected = extract_plan_automation_paths(plan_text)
 		scope = normalize_allowlist(_read_allowlist(heal_scope_file)) if heal_scope_file else []
+		own_agents_fragment = heal_own_agents_fragment_entry(issue_number)
+		if scope and own_agents_fragment and own_agents_fragment not in scope:
+			scope.append(own_agents_fragment)
 		files = extract_plan_file_paths(plan_text)
 		if not scope:
 			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_check_unavailable", protected

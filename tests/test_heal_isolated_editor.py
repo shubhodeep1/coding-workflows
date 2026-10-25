@@ -400,7 +400,7 @@ def test_preflight_scope_ignores_files_touched_in_issue_and_evidence(tmp_path: P
 		assert "HEAL_SCOPE_REFUSED" not in result.stdout
 		assert "HEAL_ROUTE=true" in env_file.read_text()
 		scope = (tmp_path / "heal-scope-77.txt").read_text().split()
-		assert scope == ["scripts/fix.py", "tests/**", "changelog.d/*.md"]
+		assert scope == ["scripts/fix.py", "tests/**", "changelog.d/*.md", "agents.d/42-*.md"]
 		# The evidence carries the injected files_touched text; the scope does not.
 		assert "files_touched:" in (tmp_path / "heal_evidence.md").read_text()
 	finally:
@@ -500,6 +500,47 @@ def test_heal_transfer_rejects_editor_controlled_helpers_and_git_hooks(tmp_path:
 	if changed_path.startswith("scripts/"):
 		# An out-of-scope helper rejects the whole transfer before any write;
 		# hook and attribute files are dropped as non-transferable paths.
+		assert (host / "scripts/fix.py").read_text() == "old\n"
+
+
+def test_heal_transfer_admits_only_the_issues_own_agents_fragment(tmp_path: Path) -> None:
+	# implement_heal_preflight.sh adds agents.d/<N>-*.md to the scope (#8064).
+	scope = ["scripts/fix.py", "tests/**", "changelog.d/*.md", "agents.d/42-*.md"]
+	host, copy, manifest = _scoped_snapshot(tmp_path)
+	(copy / "agents.d").mkdir()
+	(copy / "agents.d/42-fix.md").write_text("note\n")
+	workspace.transfer(host, copy, manifest, scope)
+	assert (host / "agents.d/42-fix.md").read_text() == "note\n"
+	other = tmp_path / "other"
+	other.mkdir()
+	host, copy, manifest = _scoped_snapshot(other)
+	(copy / "agents.d").mkdir()
+	(copy / "agents.d/43-fix.md").write_text("note\n")
+	with pytest.raises(ValueError, match="out of heal scope"):
+		workspace.transfer(host, copy, manifest, scope)
+	assert not (host / "agents.d").exists()
+
+
+@pytest.mark.parametrize("entry,accepted", [
+	("agents.d/42-*.md", True),
+	("agents.d/*.md", False),
+	("agents.d/042-*.md", False),
+	("agents.d/42-*", False),
+	("scripts/*.py", False),
+])
+def test_heal_transfer_cli_scope_entry_shapes(tmp_path: Path, entry: str, accepted: bool) -> None:
+	host, copy, manifest = _scoped_snapshot(tmp_path)
+	scope = tmp_path / "scope.txt"
+	scope.write_text(f"scripts/fix.py\ntests/**\nchangelog.d/*.md\n{entry}\n")
+	(copy / "scripts/fix.py").write_text("new\n")
+	result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/review_untrusted_workspace.py"), "transfer", str(host), str(copy), str(manifest), "--scope-file", str(scope)],
+		capture_output=True, text=True, check=False, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+	if accepted:
+		assert result.returncode == 0, result.stderr
+		assert (host / "scripts/fix.py").read_text() == "new\n"
+	else:
+		assert result.returncode != 0
+		assert "reason=out_of_heal_scope" in result.stderr
 		assert (host / "scripts/fix.py").read_text() == "old\n"
 
 
