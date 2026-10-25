@@ -553,3 +553,15 @@ def test_summary_of_other_commands_and_positionals(tmp_path: Path) -> None:
 	assert _summary(tmp_path, "gh", "issue", "edit", "42", "--add-label", "bug") == "gh issue edit 42 (flags: --add-label)"
 	assert _summary(tmp_path) == ""
 	assert _summary(tmp_path, "gh") == "gh"
+
+
+def test_summary_never_logs_dash_prefixed_flag_values(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "issue", "comment", "5", "--body", "--secret123", "--repo", "o/r")
+	assert out == "gh issue comment 5 (flags: --body --repo)"
+	assert "secret123" not in out
+	assert _summary(tmp_path, "gh", "api", "repos/o/r/x", "-f", "-secretfield") == "gh api repos/o/r/x (flags: -f)"
+
+
+def test_summary_finds_number_after_flags(tmp_path: Path) -> None:
+	assert _summary(tmp_path, "gh", "issue", "view", "--repo", "o/r", "42") == "gh issue view 42 (flags: --repo)"
+	assert _summary(tmp_path, "gh", "pr", "view", "--repo", "o/r", "br", "7") == "gh pr view (flags: --repo)"

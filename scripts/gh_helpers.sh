@@ -864,18 +864,31 @@ _gh_cmd_log_summary()
 	# Flag names only. A flag without an attached value treats the next
 	# non-dash token as its value and skips it; over-skipping only drops
 	# information from the log line.
-	local _ghsum_j="${_ghsum_rest_start}" _ghsum_skip=0 _ghsum_a _ghsum_name _ghsum_attached
+	# A flag known to take a value (the api flag list plus the common
+	# body/title/repo flags) always skips its next token, even one that
+	# starts with "-", so a value such as `--body --x` is never logged.
+	local _ghsum_j="${_ghsum_rest_start}" _ghsum_skip=0 _ghsum_force=0 _ghsum_a _ghsum_name _ghsum_attached
+	local _ghsum_pos_seen=0
 	while [ "${_ghsum_j}" -lt "${_ghsum_n}" ]; do
 		_ghsum_a="${_ghsum_args[${_ghsum_j}]}"
 		_ghsum_j=$(( _ghsum_j + 1 ))
 		if [ "${_ghsum_skip}" = "1" ]; then
 			_ghsum_skip=0
+			if [ "${_ghsum_force}" = "1" ]; then _ghsum_force=0; continue; fi
 			case "${_ghsum_a}" in -*) ;; *) continue ;; esac
 		fi
 		[ "${_ghsum_a}" = "--" ] && break
 		case "${_ghsum_a}" in
 			-*) ;;
-			*) continue ;;
+			*)
+				# Non-api gh: the first positional counts only as a plain number.
+				if [ "${_ghsum_api}" = "0" ] && [ "${_ghsum_words%% *}" = "gh" ] && [ "${_ghsum_pos_seen}" = "0" ] \
+					&& [ -z "${_ghsum_target}" ] && [[ "${_ghsum_a}" =~ ${_ghsum_num_re} ]]; then
+					_ghsum_target="${_ghsum_a}"
+				fi
+				_ghsum_pos_seen=1
+				continue
+				;;
 		esac
 		_ghsum_name="${_ghsum_a}"; _ghsum_attached=0
 		case "${_ghsum_a}" in
@@ -885,7 +898,13 @@ _gh_cmd_log_summary()
 				if [ "${#_ghsum_a}" -gt 2 ]; then _ghsum_name="${_ghsum_a:0:2}"; _ghsum_attached=1; fi
 				;;
 		esac
-		[ "${_ghsum_attached}" = "1" ] || _ghsum_skip=1
+		if [ "${_ghsum_attached}" != "1" ]; then
+			_ghsum_skip=1
+			if _gh_api_flag_takes_value "${_ghsum_name}"; then _ghsum_force=1; fi
+			case "${_ghsum_name}" in
+				-b|--body|--body-file|--title|-c|-R|--repo|-m|--message|--notes|--notes-file|-l|--label|--add-label|--remove-label|--json|-S|--search|-B|--base|--head|-a|--assignee|-r|--reviewer|--milestone|-L|--limit|-s|--state) _ghsum_force=1 ;;
+			esac
+		fi
 		[[ "${_ghsum_name}" =~ ${_ghsum_flag_re} ]] || continue
 		case " ${_ghsum_flags} " in
 			*" ${_ghsum_name} "*) ;;
