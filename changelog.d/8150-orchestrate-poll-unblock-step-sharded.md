@@ -5,7 +5,7 @@
 
 | The numbers that matter | Value |
 | --- | --- |
-| Estimated cost of the step before (from group totals, not measured) | about 11 minutes |
+| Recorded cost of the step before (one failing run, 40065164413) | 860s |
 | Local shards | 4 |
 | `timeout-minutes`, job names, step names, `CI / lint` | unchanged |
 
@@ -13,4 +13,4 @@ What this means for operators: nothing to do. If `orchestrate-poll (4)` still ru
 
 ### For contributors
 
-The step had already moved three times (#8072, #8091, #8118), and every group it landed in then neared the timeout, because no CI job has the roughly 11 minutes of room it needs. It is split the way the merge-train step was split (#7579). A failing shard's last 40 log lines are printed with a `| ` prefix outside the collapsed log groups.
+The step had already moved three times (#8072, #8091, #8118), and every group it landed in then neared the timeout, because no CI job has room for a step recorded at 860s in a failing run (40065164413). Group totals cannot isolate its cost, so it is not measured. It is split the way the merge-train step was split (#7579). A failing shard's last 40 log lines are printed with a `| ` prefix outside the collapsed log groups.
