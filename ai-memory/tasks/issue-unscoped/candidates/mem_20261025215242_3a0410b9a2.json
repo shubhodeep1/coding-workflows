@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:371-375 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The python script uses `sys.argv[1:4]` to get `path`, `login`, `marker` without validating that the arguments were provided.\n  WHY: If called without enough arguments it raises IndexError, so `hold_present` is unparseable, which triggers `hold_fail` and crashes the job instead of handling the hold.\n- .github/workflows/plan.yml:300-305 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `grep -Eq` for `CI_TRIAGE_PR_BRANCH_ROUTING ... reason=label_missing` may fail to match if the log line in `resolver_err_file` has slight spacing or character variations.\n  WHY: If the grep misses, `resolver_label_missing` stays false and the script falls through to the default `cat \"${resolver_err_file}\"` error output instead of the warning conversion or hold logic.\n- .github/workflows/plan.yml:387 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The python `count` logic assumes `json.load(fh)` returns a list of pages.\n  WHY: If `gh api` returns a single object instead of a list, the `isinstance(pages, list)` check or the iteration may fail or skip comments.\n- .github/workflows/plan.yml:~445-780 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: On a label_missing hold, the early steps (checkout, support staging, issue metadata fetch, support-source clones) still run before the gated \"Fetch issue comments\" step.\n  WHY: This wastes runner minutes and a few API calls with no GitHub writes. The reviewer rated it a NIT and noted a prior editor pass declined it to keep stable and main aligned.\n- agents.md:3984 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The new plan hold has no `agents.d/<n>-<slug>.md` fragment. The log shape `INTEGRATION_REF_RESOLVE outcome=held reason=label_missing ... phase=plan`, the `label_missing_hold`/`ref=`/`resolver_status=failed` refctx outputs and the `SKIP_PLAN=true` gating are undocumented. Rated NIT.\n  WHY: This is documentation-contract drift only, so log-analysis tooling and operators grepping agents.md will not find the held outcome. There is no runtime effect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: CLAUDE.md \u00a730 requires PRs that introduce new behavior to document it in `agents.d/<issue-or-pr>-<slug>.md` instead of editing `agents.md` directly.\n  expected_change_site: new `agents.d/<issue-or-pr>-plan-label-missing-hold.md` fragment\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR diff modifies `.github/workflows/plan.yml`, `CHANGELOG.md` and two test files but adds no `agents.d/` fragment covering the marker `ai:integration-ref-label-missing:v1 issue=N`, the `label_missing_hold=true` refctx output, the `INTEGRATION_REF_RESOLVE outcome=held reason=label_missing ... phase=plan` log line, or the `SKIP_PLAN=true` behavior.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:300-305 | severity=MAJOR | confidence=3\n  PROBLEM: The `grep -Eq` for `CI_TRIAGE_PR_BRANCH_ROUTING ... reason=label_missing` might fail to match if the log line in `resolver_err_file` has slight spacing or character variations.\n  WHY: If the grep misses, `resolver_label_missing` stays false and the script falls through to the default `cat \"${resolver_err_file}\"` error output instead of the warning conversion or hold logic.\n- .github/workflows/plan.yml:371-375 | severity=MAJOR | confidence=4\n  PROBLEM: The python script uses `sys.argv[1:4]` to get `path`, `login`, `marker` without validating that the arguments were provided.\n  WHY: If called without enough arguments it raises IndexError, so `hold_present` is unparseable, which triggers `hold_fail` and crashes the job instead of handling the hold.\n- .github/workflows/plan.yml:387 | severity=MAJOR | confidence=3\n  PROBLEM: The python `count` logic assumes `json.load(fh)` returns a list of pages.\n  WHY: If `gh api` returns a single object instead of a list, the `isinstance(pages, list)` check or the iteration may fail or skip comments.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/plan.yml:~445-780 | severity=NIT | confidence=3\n  PROBLEM: On a label_missing hold, the early steps (checkout, support staging, issue metadata fetch, support-source clones) still run before the gated \"Fetch issue comments\" step.\n  WHY: This wastes runner minutes and a few API calls with no GitHub writes. A prior editor pass declined this finding to keep stable and main aligned in this forward-merge.\n- TASK_GAP:\n  Requirement: CLAUDE.md \u00a730 requires PRs that introduce new behavior to document it in `agents.d/<issue-or-pr>-<slug>.md` instead of editing `agents.md` directly.\n  Expected change site: a new `agents.d/<issue-or-pr>-plan-label-missing-hold.md` fragment covering the new plan-side hold (the marker `ai:integration-ref-label-missing:v1 issue=N`, the `label_missing_hold=true` refctx output, the `INTEGRATION_REF_RESOLVE outcome=held reason=label_missing ... phase=plan` log line, and the SKIP_PLAN=true behavior).\n  Evidence of absence: The PR diff modifies `.github/workflows/plan.yml`, `CHANGELOG.md` and two test files but adds no `agents.d/` fragment. The glm reviewer flagged the same gap at NIT confidence 3.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:3984 | severity=NIT | confidence=4\n  PROBLEM: The new plan hold has no `agents.d/<n>-<slug>.md` fragment (expected change site: new file agents.d/8150-plan-label-missing-hold.md). The log shape `INTEGRATION_REF_RESOLVE outcome=held reason=label_missing ... phase=plan`, the `label_missing_hold`/`ref=`/`resolver_status=failed` refctx outputs and the `SKIP_PLAN=true` gating are undocumented.\n  WHY: This is documentation-contract drift only, with no runtime effect. The reviewer noted the shipped clarify hold #7516 has the same gap.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "453f9556224e814cf61f98fed9f398d90fdddcd573185772e3e62e635d148360",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8170,
+    "run_id": "40235222159",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40235222159",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025215242_3a0410b9a2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8170,
+    "run_id": "40235222159"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T21:52:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
