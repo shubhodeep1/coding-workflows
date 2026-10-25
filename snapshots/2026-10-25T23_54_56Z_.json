@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-25T01:02:09Z",
+  "tick_at": "2026-10-25T23:54:56Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 17
+    "tracking_issues": 18
   },
   "tracking_issues": [
     {
@@ -335,10 +335,9 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
-      "integration_ahead_by": "1",
+      "current_wave": 0,
       "issue_counts": {
-        "closed": 2,
+        "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
@@ -348,12 +347,32 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 8085,
+      "number": 8094,
       "project_complete": false,
-      "status": "failed",
-      "title": "[Orchestrator] [E2E Orchestrate Smoke 40147488993] Update two smoke canary files in parallel",
-      "total_waves": 1,
-      "wave_complete": true
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply verified recommendations from analysis/workflow-optimization-2026-09-25.md",
+      "total_waves": 0,
+      "wave_complete": false
+    },
+    {
+      "current_wave": 0,
+      "issue_counts": {
+        "closed": 0,
+        "done": 0,
+        "implementation_failed": 0,
+        "in_progress": 0,
+        "merged": 0,
+        "not_created": 0,
+        "ready_to_merge": 0,
+        "review_blocked": 0,
+        "skipped": 0
+      },
+      "number": 8125,
+      "project_complete": false,
+      "status": "in-progress",
+      "title": "[Orchestrator] Apply workflow-optimization-2026-09-26 recommendations (verified subset)",
+      "total_waves": 0,
+      "wave_complete": false
     }
   ]
 }
