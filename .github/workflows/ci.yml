@@ -2489,7 +2489,7 @@ jobs:
       # group 1; group 1 may still finish near the 15-minute budget-watch
       # threshold. Group 0 keeps the fast-fail subset. This step then ran in
       # group 0 only, once per CI run, until #8118 moved it on to group 4.
-      # Name and body unchanged.
+      # Name and body unchanged by that move.
       # Moved from group 0 to group 4: orchestrate-poll (0) took 17m01s of its
       # 20 minutes on main (run 40175309052, budget-watch issue #8118). Group 0
       # carried its slice, the fast-fail subset (11 test_implementation_failed_*
@@ -2500,7 +2500,7 @@ jobs:
       # step at 860s in a failing run (40065164413). This step now runs in
       # group 4 only, once per CI run, and
       # needs only checkout, Python 3.12 and the shared pip install, which
-      # every matrix group has. Name and body unchanged.
+      # every matrix group has. Name and body unchanged by that move.
       # Sharded in place, not moved (#8150): orchestrate-poll (4) took 15m13s
       # of its 20 minutes on main (run 40198222187). This step had moved three
       # times (#8072, #8091, #8118) and each group it landed in then reached
