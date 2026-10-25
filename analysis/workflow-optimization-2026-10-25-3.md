@@ -358,3 +358,341 @@ Other MCP servers observed: none.
 - The judge-to-#8154 link and the CI runner-contention cause are inferences.
 
 **Missing context:** the full run logs. The `log_summary` fields and the repository code were used instead.
+## Deep Audit — Workflows & Scripts (2026-10-25)
+
+Scope: this pass goes deep rather than wide. Files read in full or at length: `scripts/gh_helpers.sh`, `scripts/label_helpers.sh`, `scripts/tg_helpers.sh`, `scripts/workflow_failure_heal_pr_reconcile.sh`, `scripts/implement_handle_guard_block.sh`, the error handling in `scripts/ai_memory.py` and `scripts/ai_memory_lib.py`, the poll loops in `scripts/orchestrate_poll_process.sh`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/internal-cancel-on-pr-close.yml`, `.github/workflows/sync_ai_labels.yml`, `.github/workflows/pr6576-shard-followup.yml`, and parts of `.github/workflows/implement.yml` and `.github/workflows/test-and-mark-stable.yml`.
+
+Three items are already covered earlier in this report and are not raised again here:
+- the full-history checkout in `heal-pr-reconcile` (Executive Summary and Speed item 3);
+- the full clone in `_clone_for_memory_branch` (Speed item 2);
+- the "Clarify loop guard unit tests" step that cannot be diagnosed (Reliability item 1).
+
+Several findings below were already raised in earlier reports under `analysis/` and are still in the code. Each one is marked "recurring".
+
+### Section 1: Bug & Correctness Sweep
+
+**BUG-001**: `scripts/label_helpers.sh:172-214`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:**
+  - `ensure_label_exists` sends `gh label create` through `gh_retry` (lines 192-196).
+  - `_is_gh_permanent_failure` (`scripts/gh_helpers.sh:192-195`) has no pattern for gh's "already exists" error, so `gh_retry` treats it as transient. It makes 5 attempts with 1+2+4+8 = 15s of backoff (`gh_helpers.sh:1220-1227`) and logs `::error::gh command failed after 5 attempts` (line 1236) before the helper's own grep at line 206 accepts the result.
+  - The repo already documents this: `scripts/implement_handle_guard_block.sh:30-33` says "gh_retry does not treat it as permanent" and works around it with a raw first attempt.
+  - The process-local cache (`label_helpers.sh:155-162`, `183-187`) only covers repeat calls in the same shell. Every new process pays again. There are 168 `ensure_label_exists` call sites across 27 files.
+  - Recurring: raised in `analysis/workflow-optimization-2026-10-17-3.md`.
+- **Recommended fix:** use the `guard_block_ensure_label` shape (`implement_handle_guard_block.sh:35-66`):
+  1. One raw `gh label create ... 2>"${err}"`.
+  2. On a match for `already[ _-]*exists`, cache and return 0.
+  3. Use `gh_retry` only for other failures.
+
+  Do not add "already exists" to `_is_gh_permanent_failure`, because that would change behaviour for every caller.
+
+**BUG-002**: `scripts/tg_helpers.sh:380-441` (`tg_cleanup_phase_msgs`) and `scripts/tg_helpers.sh:449-510` (`tg_cleanup_msgs`)
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:**
+  - Both loops read `comments?per_page=100&page=${page}`, DELETE the matching comments (lines 430-434 and 501-505), then move on to `page+1` using the count from before the deletes (lines 438-439).
+  - Each delete moves later comments one page earlier, so up to *k* tracking comments from the old page 2 are never visited. Those comments and their Telegram messages are left behind.
+  - It matters on busy issues. The header at lines 194-197 cites 447 `tg_cleanup` comments on one issue.
+  - Recurring: BUG-003 in `analysis/workflow-optimization-2026-10-21.md`.
+- **Recommended fix:** collect every matching `(id, body)` first using `gh_retry gh api --paginate --slurp ".../comments?per_page=100"` (the pattern at `orchestrate_poll_process.sh:58`), then delete. Alternatively, re-read the same `page` after any page that had deletions.
+
+**BUG-003**: `scripts/tg_helpers.sh:227-276` and `scripts/tg_helpers.sh:296-344`
+- **Severity:** Medium
+- **Category:** `bug`
+- **Description:**
+  - `tg_store_msg_id` and `tg_store_phase_msg_id` read the newest tracking comment, append `,${msg_id}` with `sed` (lines 261-262 and 330-331), and PATCH the whole body (lines 263-267 and 332-336). This is a read-modify-write with no compare-and-swap.
+  - Two jobs on the same issue (for example clarify and the poller) can each PATCH, and the second discards the first job's message ID, so that Telegram message is never cleaned up.
+  - A failed read always creates a new tracking comment (lines 241-250 and 310-318).
+  - Recurring: BUG-004 in `analysis/workflow-optimization-2026-10-21.md`.
+- **Recommended fix:** post one comment per message (marker `<!-- tg_cleanup:<id> -->`). Comment creates do not conflict, and cleanup already deletes every matching comment. If one comment per issue must stay, re-read after the PATCH and re-apply any IDs that were lost.
+
+**BUG-004**: `.github/workflows/cancel_on_pr_close.yml:155-189` and `.github/workflows/cancel_on_pr_close.yml:391-427`
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:**
+  - `_cpr_fetch_active_runs` pipes `gh_retry gh api --paginate ...` into `jq -s` under `set -euo pipefail` (line 146). If the runs list fails for good, the "Cancel queued/in-progress runs" step fails.
+  - The next step, "Release merge-queued PRs (merge train)" (line 391), has no `if:`, so it is skipped. That step is documented as fail-open (lines 423-427).
+  - The PR-state GraphQL batch, by contrast, fails open on purpose (lines 228-237).
+  - The 5-minute schedule (`internal-cancel-on-pr-close.yml:6-7`) acts as a backstop, so the impact is a delay (inference).
+- **Recommended fix:** add `if: ${{ !cancelled() }}` to the merge-train release step so it runs even when the cancel step fails. Optionally, wrap the two runs-list calls so that a failure logs `::warning::` and exits 0, matching the GraphQL batch's fail-open contract.
+
+**BUG-005**: `.github/workflows/cancel_on_pr_close.yml:14-16` and `.github/workflows/internal-cancel-on-pr-close.yml:6-7`
+- **Severity:** Low
+- **Category:** `bug`
+- **Description:**
+  - The job's concurrency group is `cancel-on-pr-close-${{ github.repository }}` with `cancel-in-progress: false`, and the caller also runs every 5 minutes.
+  - GitHub keeps at most one *pending* run per concurrency group. A newer pending run (a schedule tick or another PR close) cancels an older pending PR-close run. That drops the PR-specific branch cleanup and the immediate merge-train release.
+  - The scheduled sweep recovers both later. The Metrics Appendix shows 1 of 35 `cancel_on_pr_close` runs cancelled, which fits this pattern (inference). [NEEDS VERIFICATION]
+- **Recommended fix:** use separate groups for each trigger: `cancel-on-pr-close-${{ github.repository }}-${{ github.event_name == 'schedule' && 'sweep' || github.event.pull_request.number }}`. Cancel API calls are idempotent, so running in parallel is safe.
+
+**SEC-001**: `scripts/ai_memory.py:1269-1283` (`cmd_actions_runs_cache_get`)
+- **Severity:** Medium
+- **Category:** `security`
+- **Description:**
+  - This is the only one of 16 `except MemoryGitError as exc` handlers in `ai_memory.py` that does not pass the text through `_sanitize_git_error` (lines 76-79). It prints `AI_MEMORY_ERROR: {exc}` to stderr (line 1281) and puts the raw text in stdout JSON (lines 1279 and 1282).
+  - The exception comes from `read_memory_root_from_branch` (`scripts/ai_memory_lib.py:3484-3488`). That function embeds git's stderr after `_resolve_origin_url` has put `GH_TOKEN` into the clone URL (`ai_memory_lib.py:3202-3204`, `3161-3173`).
+  - Whether git repeats the credential in its error text depends on the git version (inference). Actions masks registered secrets in logs, but the stdout JSON may be saved by callers. [NEEDS VERIFICATION]
+- **Recommended fix:** use `error_text = _sanitize_git_error(str(exc))` at line 1270 and print `error_text` instead of `exc` at line 1281. Also consider a regression test that greps every `except MemoryGitError` handler for `_sanitize_git_error`.
+
+**SEC-002**: `.github/workflows/implement.yml:1978-1991`
+- **Severity:** Low
+- **Category:** `security`
+- **Description:**
+  - The "Log checkout ref" step writes `${{ steps.baseline_refctx.outputs.branch }}` and `.status` directly into the shell body.
+  - The branch value comes from the issue body. Today it is validated against `ai/reissue-baseline/pr-(\d+)-([0-9a-f]{12})-\d+-\d+` (line 1187) and checked against GitHub (lines 1205-1306) before the step emits it, so it cannot be exploited now.
+  - The safety depends on a regex in another step. The same step already uses `env:` for other values (lines 1972-1974).
+- **Recommended fix:** add `BASELINE_REFCTX_BRANCH: ${{ steps.baseline_refctx.outputs.branch }}`, `BASELINE_REFCTX_STATUS` and `CHECKOUT_BASELINE_OUTCOME` to the step's `env:` and refer to them as `"${BASELINE_REFCTX_BRANCH}"`. This is the "promoted to env" pattern at `test-and-mark-stable.yml:1995`.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+**API-001**: `scripts/gh_helpers.sh:1464-1517` (`curl_gh_api`)
+- **Severity:** Medium
+- **Category:** `api-redundancy`
+- **Description:**
+  - Any status outside 2xx, other than a rate limit, is retried with exponential backoff (lines 1503-1509). That includes permanent 401, 404 and 422 responses. `gh_retry` stops early on these through `_is_gh_permanent_failure` (line 1203).
+  - The header comment (lines 1454-1455) still says the helper "sleeps 30 s", but the code uses `_parse_reset_header` (line 1498).
+  - Callers are in `scripts/tg_helpers.sh` (lines 207, 214, 398 and 467). A deleted issue costs 5 calls and about 15s per lookup.
+  - Recurring: API-002 in `analysis/workflow-optimization-2026-10-07-4.md`.
+- **Calls:** 5 → 1 on a permanent 4xx.
+- **Recommended fix:** in the non-rate-limit branch, return 1 at once for `http_code` in `400|401|404|422`. Keep 403 retryable, as `_is_gh_permanent_failure` (lines 184-186) already does deliberately. Correct the header comment.
+
+**API-002**: `.github/workflows/cancel_on_pr_close.yml:364-380`
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:**
+  - `gh_retry gh api -X POST .../actions/runs/<id>/cancel` is treated as a non-idempotent create. `_gh_api_args_unsafe_post` returns true for any POST that is not GraphQL (`gh_helpers.sh:721-741`), so `gh_retry` makes only one attempt (lines 1171-1173).
+  - Cancel is idempotent. A transient 5xx leaves the run going, and the log calls it "likely already completed" (lines 376-378).
+  - The per-run loop cannot be batched: the API has no bulk cancel.
+- **Calls:** 1 → up to 5 on transient errors only. On success, 1 → 1.
+- **Recommended fix:** use `gh_retry --idempotent gh api -X POST "${cancel_url}"`. The flag is supported at `gh_helpers.sh:1169`.
+
+**API-003**: `scripts/orchestrate_poll_process.sh:46-58` (`replay_failed_reclarify_commands`)
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:**
+  - For each queued issue the function makes one `issues/<n>` read (line 55) and one paginated comments read (line 58).
+  - The issue read only checks `state == open`, that it is not a PR, and that it has the `ai:reclarify-requeue` label (lines 56-57). The `gh issue list` at lines 46-47 seconds earlier already filters on the open state and that label.
+  - Only N > 0 ticks are affected, but they cost 1 + 1 + pages calls per issue. [NEEDS VERIFICATION: whether the "live issue read" in the comment at lines 39-41 is meant as a TOCTOU guard.]
+- **Calls:** 2N + pages → N + pages.
+- **Recommended fix:** if a separate live read is not needed, extend the listing to `--json number,state,labels` and drop line 55. The paginated comments read must stay, because "incomplete comment history never authorizes replay" (line 59). For that reason `_fetch_blocked_issue_routing_graphql` (`comments(last: 20)`, line 128) cannot be reused.
+
+**API-004**: `scripts/tg_helpers.sh:204-218` (`_tg_newest_comments_json`)
+- **Severity:** Low
+- **Category:** `api-redundancy`
+- **Description:**
+  - Each tracked Telegram message costs 2 reads (issue for its comment count, then the last comments page) plus one write (lines 263-274).
+  - The two reads also race: a comment posted between them can leave the "last page" holding only new comments, so the marker is missed and a duplicate tracking comment is created (inference).
+- **Calls:** 2 → 1 read per tracked message.
+- **Recommended fix:** use one GraphQL query `repository{issue(number:$n){comments(last:100){nodes{databaseId body}}}}`, the same `comments(last: N)` shape as `_fetch_blocked_issue_routing_graphql` (`orchestrate_poll_process.sh:128`). It returns the newest page atomically.
+
+**BATCH-001**: `scripts/orchestrate_poll_process.sh:29283-29297`
+- **Severity:** Medium
+- **Category:** `api-batching`
+- **Description:**
+  - After review-blocked handling, the poller re-reads labels for every wave issue with one REST call each, `gh_retry _safe_gh_jq "repos/.../issues/${inum}/labels"` (line 29290), and builds `LABELS_JSON` by string concatenation (lines 29294-29296).
+  - The same cycle already batches this exact set through `_fetch_issue_labels_batch_graphql` (defined at line 4460, used at line 26994, 25 issues per call, misses fall back to REST at lines 27003-27010).
+  - A transient failure turns into `[]` (no labels) for that issue rather than a cache miss, which hides label-based status for the cycle.
+- **Calls:** N → ceil(N/25), plus REST only for misses.
+- **Recommended fix:** replace the loop with `LABELS_JSON="$(_fetch_issue_labels_batch_graphql "${_wave_issue_nums_json}")"`, followed by the existing REST backfill for missing keys. That backfill is the same loop as lines 27003-27010 (see DUP-002).
+
+**BATCH-002**: `scripts/orchestrate_poll_process.sh:7095-7111` and `scripts/orchestrate_poll_process.sh:29425-29441`
+- **Severity:** Low
+- **Category:** `api-batching`
+- **Description:** both paths make one `issues/<n> --jq .state` REST call per blocker fix-up issue inside a `while read` loop.
+- **Calls:** B → ceil(B/25).
+- **Recommended fix:** batch with aliased `issue(number:){state}` GraphQL. Extend `_fetch_candidate_issue_details_graphql` (line 19677), which already returns the state field used for `ISSUE_STATES_JSON` (comment at lines 26985-26988), or add a small helper modelled on `_fetch_blocked_issue_routing_graphql` (lines 115-131). Missing keys stay "unknown", which keeps today's fail-safe defer (lines 7106-7109 and 29436-29439).
+
+**BATCH-003**: `scripts/orchestrate_poll_process.sh:2262-2266` (`_fetch_pr_json`), called in loops at `5008-5013`, `5319-5321`, `9390-9391`, `20398-20399` and `27042-27044`
+- **Severity:** Low
+- **Category:** `api-batching`
+- **Description:**
+  - Each candidate PR costs one `pulls/<n>` REST call.
+  - The comment at lines 5010-5012 shows the §14 audit was done for one site, but five loops share the pattern.
+  - The callers read REST fields (`.merged_at`, `.state`, `.body`, head and base refs), so a GraphQL replacement needs a REST-shaped adapter. [NEEDS VERIFICATION per call site]
+- **Calls:** P → ceil(P/25) per loop.
+- **Recommended fix:** add `_fetch_pr_json_batch_graphql <numbers_json>`. It should alias `pullRequest(number:){number state mergedAt body headRefName baseRefName headRefOid}`, map the results to `{state, merged_at, body, head:{ref,sha}, base:{ref}}`, and fall back to `_fetch_pr_json` for missing keys. Document the batching contract as at lines 102-110.
+
+**BATCH-004**: `scripts/workflow_failure_heal_pr_reconcile.sh:239-247`
+- **Severity:** Low
+- **Category:** `api-batching`
+- **Description:**
+  - Each matching heal issue costs one `pulls?head=<owner>:ai/issue-<n>` call. This is documented in the budget comment at lines 29-32.
+  - It is usually N = 1, so the saving is small.
+- **Calls:** N → 1.
+- **Recommended fix:** one aliased GraphQL `repository{h<n>:pullRequests(headRefName:"ai/issue-<n>",states:OPEN,first:10){nodes{number headRefName headRefOid baseRefName}}}` across all heal issues. Act only when N ≥ 2, to keep the simple path.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+**DUP-001**: `scripts/orchestrate_poll_process.sh:7094-7117` and `scripts/orchestrate_poll_process.sh:29420-29449`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** the blocker-state tally is the same in both places: an open/closed/unknown `case`, counters, a `#N=state` summary, and a defer reason of "blocker status lookup incomplete" or "blocker fix-up issue(s) still open". Only the variable prefixes differ.
+- **Recommended fix:** add `_tally_blocker_issue_states <blockers_json>` in `orchestrate_poll_process.sh`. It sets `BLOCKER_TALLY_OPEN`, `BLOCKER_TALLY_UNKNOWN`, `BLOCKER_TALLY_SUMMARY` and `BLOCKER_TALLY_DEFER_REASON` (new, non-clashing names), and both call sites map them to their existing variables. Combine this with BATCH-002.
+
+**DUP-002**: `scripts/orchestrate_poll_process.sh:27003-27010`, `29300-29310` and `29698-29706`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** three copies of "for each number missing from `LABELS_JSON`, run a REST labels read, then merge it in with `jq '. + {($key): $labels}'`".
+- **Recommended fix:** add `_labels_json_backfill_missing <numbers…>`, which reads and updates the global `LABELS_JSON`. Use it at all three sites and in BATCH-001.
+
+**DUP-003**: the "Resolve workflow support ref", checkout, fallback and ensure block, repeated across 14 workflows. Examples: `.github/workflows/cancel_on_pr_close.yml:25-104` and `.github/workflows/sync_ai_labels.yml:37-92`.
+- **Severity:** Medium
+- **Category:** `duplication`
+- **Description:**
+  - There are 29 `SUPPORT_REF_WORKFLOW_JOB_JSON:` blocks across 14 workflow files and 12 "Checkout workflow support source fallback" steps across 10 files.
+  - The copies have already drifted:
+    - `cancel_on_pr_close.yml:36-53` resolves a protected `promote-candidate` tip; `sync_ai_labels.yml:43-44` always uses `github.sha`.
+    - The fallback checkout has `continue-on-error: true` at `cancel_on_pr_close.yml:82` but not at `sync_ai_labels.yml:70-78`, so the clearer `::error::` in "Ensure workflow support source checkout" (`sync_ai_labels.yml:80-86`) cannot be reached there.
+  - The body cannot move into `scripts/`, because it runs before the support source is checked out.
+- **Recommended fix:** extend `tests/test_workflow_support_ref_follows_pin.py` (not reviewed in this pass) so it requires every copy to be identical after normalising the workflow filename, with an explicit allowlist for the promote-candidate variant. Bring the fallback `continue-on-error` into line. A remote composite action is not an option, because its `uses:` ref cannot be dynamic. [NEEDS VERIFICATION]
+
+**DUP-004**: the shim `type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }`, which appears 83 times in 44 files (for example `scripts/workflow_failure_heal_pr_reconcile.sh:55`, `.github/workflows/cancel_on_pr_close.yml:148`, `.github/workflows/plan.yml` with 14 copies)
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** when `gh_helpers.sh` fails to source, each copy silently drops to no retry and no rate-limit handling. Nothing in the log shows the fallback happened.
+- **Recommended fix:** add a single `scripts/gh_helpers_shim.sh` with `_gh_retry_shim_install()`, which defines the passthrough and prints one `::warning::gh_retry unavailable; running without retry` line. Script callers that already source from `${script_dir}` can use it. Inline workflow copies stay where the shim cannot be staged.
+
+**DUP-005**: `.github/workflows/implement.yml:6609`, `6705` and `6835` (plus the inverse at `5379`)
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** the same six-term guard predicate (`steps.preflight_destructive_guard.outputs.*` and `steps.commit_changes.outputs.*` for `destructive_commit_blocked`, `scope_violation_blocked` and `staged_support_rebase_conflict`) is copied into at least three `if:` conditions. Adding a seventh guard output means editing every copy.
+- **Recommended fix:** add one `if: always()` step after `commit_changes` that emits `guard_blocked=true|false`. Replace the copies with `steps.<id>.outputs.guard_blocked == 'false'` (or `== 'true'`).
+
+**DUP-006**: `.github/workflows/test-and-mark-stable.yml:881-1020`, `1035-1312` and `1342-1695`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:**
+  - The Phase 1, 2 and 3b wait loops each re-implement inactivity timeouts, `RATE_LIMIT_BACKOFF`, page-aware run lookups (`fetch_plan_runs_page_json` at lines 1072-1074, `scoped_implement_runs_complete` at line 1396) and status output.
+  - All of them wrap `find_latest_scoped_run_field` from `scripts/comprehensive_test_and_release_gh_api.sh`.
+- **Recommended fix:** move them into `scripts/stable_e2e_step_wait_phase.sh <phase> <created_after>`, following the existing `scripts/stable_e2e_step_wait_review.sh` pattern. This also clears EXPR-001 and EXPR-002.
+
+**DUP-007**: `scripts/tg_helpers.sh:227-276` vs `296-344`, and `380-441` vs `449-510`
+- **Severity:** Low
+- **Category:** `duplication`
+- **Description:** the store pair and the cleanup pair are near-identical, differing only in the marker prefix and the jq selector. BUG-002 and BUG-003 therefore have to be fixed twice.
+- **Recommended fix:** add `_tg_store_marker_id <issue> <marker_prefix> <msg_id>` and `_tg_cleanup_by_marker <issue> <jq_select_expr> <sed_extract_expr>`. The four public functions become thin wrappers and keep their current names and signatures (§10).
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Context:
+- The in-repo guard `tests/test_workflow_file_size_limit.py` (lines 26-32 and 66-98, run at `ci.yml:1375`) fails CI for any `run:` body that contains `${{` and reaches 18,000 characters. It also fails any workflow file at or above 480,000 bytes.
+- The repo's real file-size limit is GitHub's 512,000 bytes (§24), not the 1 MB in the audit template. No workflow can exceed 800 KB while the guard holds.
+- Byte counts could not be measured in this sandbox (no shell). The estimates below are inferences from line counts. The YAML block-scalar indentation (10 spaces per line) is stripped before GitHub measures the body.
+
+**EXPR-001**: `.github/workflows/test-and-mark-stable.yml:1350-1695` ("Phase 3b: Wait for PR creation")
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:**
+  - The body is about 345 lines. One inline interpolation, `IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"` at line 1388, makes the whole body count as one expression.
+  - Estimated at 15,000-19,000 characters, from about 345 lines at roughly 45-55 characters after indentation stripping. CI passing implies it is below 18,000, so the likely headroom is 3,000-6,000 characters before the 21,000 limit. [NEEDS VERIFICATION: run `python3 tests/test_workflow_file_size_limit.py` with a lowered threshold.]
+- **Recommended fix:** move the expression into the step's `env:` (`IMPL_CREATED_AFTER_INPUT: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}`) and set `IMPL_CREATED_AFTER="${IMPL_CREATED_AFTER_INPUT}"`. The body then contains no `${{` and is outside the limit, as already done at lines 1995 and 2094. Longer term, extract it under DUP-006.
+
+**EXPR-002**: `.github/workflows/test-and-mark-stable.yml:1043-1312` ("Phase 2: Wait for plan to complete")
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:**
+  - The body is about 268 lines, with `${{ steps.create-issue.outputs.created_after }}` inlined three times (lines 1061, 1073 and 1091).
+  - Estimated at 12,000-15,000 characters, leaving about 6,000-9,000 of headroom. [NEEDS VERIFICATION]
+  - The same pattern appears in Phase 1 (line 929, about 140 lines) and in "Verify all phases passed" (lines 3380-3506, many `${{ steps.*.outputs.status }}` reads). Both are estimated below 10,000 characters.
+- **Recommended fix:** add `CREATED_AFTER: ${{ steps.create-issue.outputs.created_after }}` to each step's `env:` and use `"${CREATED_AFTER}"`. For the verify step, move each `steps.*.outputs.status` into `env:`.
+
+**EXPR-003**: `tests/test_workflow_file_size_limit.py:66-98`
+- **Severity:** Low
+- **Category:** `expression-limit`
+- **Description:**
+  - The guard fails only at 18,000 characters. There is no early warning at 15,000.
+  - It only scans `run:`. `if:` and `with:` values are not measured. The longest `if:` conditions sampled are about 500-600 characters (`review_autofix.yml:4191`, `implement.yml:5379`), so there is no current risk.
+- **Recommended fix:** in `main()`, print a non-failing `WARN: <file> job=<id> step=<name> length=<n>` for interpolated `run:` bodies of 15,000 characters or more. Also measure `if:` strings, flagging those of 2,000 characters or more.
+
+**EXPR-004**: `.github/workflows/implement.yml` (7,180 lines, the largest workflow), and `.github/workflows/implement.yml:1037-1310`
+- **Severity:** Medium
+- **Category:** `expression-limit`
+- **Description:**
+  - The 480,000-byte guard implies `implement.yml` averages under about 66.8 bytes per line. `review_autofix.yml` was about 87 bytes per line when it hit 505,283 bytes (#4327, cited in the test docstring). So `implement.yml` is plausibly within 10% of the guard (inference). [NEEDS VERIFICATION: `wc -c .github/workflows/implement.yml`]
+  - The `baseline_refctx` step holds about 275 lines of inline Python (`python3 - <<'PY'`, lines 1039-1310). It has no `${{` in the body because all inputs come through `env:`, which makes it a clean candidate to extract.
+- **Recommended fix:** move the Python verbatim into `scripts/implement_baseline_refctx.py`. Keep the step's `name:`, `id:`, `env:` and outputs, per §24. This frees an estimated 12-15 KB.
+
+### Section 5: Cross-Cutting Concerns
+
+TODO, FIXME and HACK markers: none in `scripts/*.sh`, `scripts/*.py` or `.github/workflows/*.yml` (searched for `TODO|FIXME|HACK|XXX:`).
+
+**DEAD-001**: `.github/workflows/pr6576-shard-followup.yml:14-23`, `40-105`, and `docs/scripts-pending-removal.md:331-340`
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:**
+  - This single-use workflow runs on every push to `main`. Each run starts a `self-test` job (pip install plus pytest, lines 40-64) and a `locate` job that only checks the marker (lines 92-97), even after the follow-up is done.
+  - The registry entry still says "PR number assigned when the implementation PR opens" (line 333).
+  - Whether the marker has been posted on #7072 cannot be checked offline. [NEEDS VERIFICATION]
+- **Recommended fix:** run the registry preflight checks (lines 337-339). If they pass, remove the workflow, `scripts/pr6576_shard_followup.py`, `tests/test_pr6576_shard_followup.py` and the registry entry in one PR (§20.F). If not, add `paths:` to the `push` trigger, or move `self-test` to `pull_request` only, and fill in the PR number.
+
+**DEAD-002**: `scripts/gh_helpers.sh:336-341` (`gh_rate_limit_breaker_tripped`)
+- **Severity:** Low
+- **Category:** `dead-code`
+- **Description:**
+  - No caller in `scripts/` or `.github/workflows/`. The comment at lines 315-318 notes that its only consumer was removed.
+  - `README.md:3744` documents it as a public helper for consumers, so deleting it would be a breaking change (§10).
+  - Recurring: DEAD-001 in `analysis/workflow-optimization-2026-10-25.md`.
+- **Recommended fix:** keep it. State in the README that it is a consumer-facing API with no in-repo callers, so future audits stop re-raising it.
+
+**CONSIST-001**: `scripts/tg_helpers.sh:244-248`, `263-267`, `270-274`, `312-316`, `332-336`, `338-342`, `430-434` and `501-505`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:**
+  - Reads go through `curl_gh_api`. Every write (POST, PATCH, DELETE) is raw `curl -s ... || true`, with no `-f`, no HTTP status check, no retry and no breaker accounting. A 403 or 5xx is indistinguishable from success.
+  - The fallback at lines 26-29 turns `curl_gh_api` into plain `curl` when `gh_helpers.sh` is absent.
+- **Recommended fix:**
+  - Route PATCH and DELETE (both idempotent) through `curl_gh_api`.
+  - Keep POST to a single attempt (`curl_gh_api` has no unsafe-POST guard, unlike `gh_retry` at `gh_helpers.sh:1171-1173`), but capture `-w '%{http_code}'` and log `::warning::` when the status is outside 2xx.
+
+**CONSIST-002**: `.github/workflows/implement.yml:1205-1229` and `.github/workflows/implement.yml:1256-1275`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:** `baseline_refctx` calls `gh pr view` and `gh api .../git/matching-refs/...` as raw subprocesses with no retry. A transient 5xx drops the baseline override (`lookup-failed` or `ref-lookup-failed`) for the whole implement run. This fails closed and is safe, but it differs from the rest of the pipeline.
+- **Recommended fix:** when moving this code under EXPR-004, wrap both calls in a bounded retry (3 attempts, exponential backoff) that retries only on non-4xx failures, matching `gh_retry`. Alternatively, reuse `scripts/gh_api_retry.py`, referenced at `gh_helpers.sh:751-752`. [NEEDS VERIFICATION: interface not reviewed]
+
+**CONSIST-003**: `.github/workflows/sync_ai_labels.yml:70-78`
+- **Severity:** Low
+- **Category:** `consistency`
+- **Description:** the fallback checkout has no `continue-on-error: true`, unlike `cancel_on_pr_close.yml:80-89`. A fallback failure fails the job at the checkout step, and the "Ensure workflow support source checkout" diagnostic (lines 80-86) never runs.
+- **Recommended fix:** add `continue-on-error: true` to the fallback step, as covered under DUP-003.
+
+**SHELL-001**: `scripts/tg_helpers.sh:331` and `scripts/tg_helpers.sh:420`
+- **Severity:** Low
+- **Category:** `shellcheck`
+- **Description:**
+  - `${phase}` goes into `sed` regexes unescaped (`s/<!-- tg_phase:${phase}:\(...\)/.../`), and `tg_cleanup_msgs` only matches phases of the form `phase:[a-z_]*` (line 490).
+  - All current callers pass the literals `clarify` or `plan` (`clarify.yml:2117`, `plan.yml:1289`, `plan.yml:2558`, `plan.yml:2990`, `implement.yml:2553`, `orchestrate_clarify_respond.yml:1296`), so nothing is broken today.
+  - A future phase containing `/`, `.`, a digit or `-` would break the store, or never be cleaned by `tg_cleanup_msgs`.
+- **Recommended fix:** at the top of `tg_store_phase_msg_id` and `tg_cleanup_phase_msgs`, add the guard below, which matches the line 490 contract.
+
+  ```bash
+  [[ "${phase}" =~ ^[a-z_]+$ ]] || { echo "::warning::invalid tg phase '${phase}'" >&2; return 0; }
+  ```
+
+**DEBT-001**: recurring findings that remain unfixed in `scripts/tg_helpers.sh`, `scripts/gh_helpers.sh` and `scripts/label_helpers.sh`
+- **Severity:** Low
+- **Category:** `tech-debt`
+- **Description:** BUG-001, BUG-002, BUG-003 and API-001 were each raised in earlier reports (`analysis/workflow-optimization-2026-10-17-3.md`, `-10-21.md` and `-10-07-4.md`), and the cited code is unchanged. Re-auditing them each day costs reviewer time without moving them forward.
+- **Recommended fix:** have the API-redundancy and log-analysis pipeline open one follow-up issue per recurring finding ID, with the file and line range and this report's fix. Downstream audits can then cite the issue number instead of re-describing the finding.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---|---|
+| Critical | 0 | — |
+| High | 0 | — |
+| Medium | 9 | BUG-001, BUG-002, BUG-003, SEC-001, API-001, BATCH-001, DUP-003, EXPR-001, EXPR-004 |
+| Low | 24 | BUG-004, BUG-005, SEC-002, API-002, API-003, API-004, BATCH-002, BATCH-003, BATCH-004, DUP-001, DUP-002, DUP-004, DUP-005, DUP-006, DUP-007, EXPR-002, EXPR-003, DEAD-001, DEAD-002, CONSIST-001, CONSIST-002, CONSIST-003, SHELL-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 0 (no Critical or High findings) | Small |
+| API call optimization | 5 (`scripts/gh_helpers.sh`, `scripts/orchestrate_poll_process.sh`, `scripts/tg_helpers.sh`, `scripts/workflow_failure_heal_pr_reconcile.sh`, `.github/workflows/cancel_on_pr_close.yml`) | Medium |
+| Code modularization | About 18 (the 14 workflows with support-ref blocks, `scripts/orchestrate_poll_process.sh`, `scripts/tg_helpers.sh`, the new `scripts/stable_e2e_step_wait_phase.sh`, `tests/test_workflow_support_ref_follows_pin.py`) | Large |
+| Expression size reduction | 4 (`.github/workflows/test-and-mark-stable.yml`, `.github/workflows/implement.yml`, the new `scripts/implement_baseline_refctx.py`, `tests/test_workflow_file_size_limit.py`) | Small |
+| Medium/Low fixes | About 11 (`scripts/label_helpers.sh`, `scripts/tg_helpers.sh`, `scripts/ai_memory.py`, `scripts/gh_helpers.sh`, `.github/workflows/cancel_on_pr_close.yml`, `.github/workflows/implement.yml`, `.github/workflows/sync_ai_labels.yml`, the `pr6576-shard-followup` workflow, script and test, `docs/scripts-pending-removal.md`, `README.md`) | Medium |
