@@ -1241,8 +1241,9 @@ MOVED_RELEASE_STEPS = {
 class MovedReleaseStepsContractTest(unittest.TestCase):
 	"""Steps moved into the idle poll groups run once per CI run (#7689).
 
-	`orchestrate-poll` is a 4-way matrix, so each moved step needs a
-	single-group guard: without it the step runs four times, and a guard
+	`orchestrate-poll` is a multi-group matrix (5 groups since #8113), so each
+	moved step needs a single-group guard: without it the step runs in every
+	group, and a guard
 	naming a group the matrix no longer has would silently never run it.
 	"""
 
