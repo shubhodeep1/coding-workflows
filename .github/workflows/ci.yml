@@ -2465,11 +2465,11 @@ jobs:
       # #8080 moved them to group 1) and group 1
       # then carried the merge-train step (moved out in #7766), so this step
       # ran in group 3 only, once per CI run, until #8072 moved it to group 1
-      # (below; moved to group 0 in #8091). It needs only checkout, Python 3.12 and the shared pip install,
+      # (#8091 later moved it on to group 0). It needs only checkout, Python 3.12 and the shared pip install,
       # which this job already has. Name and body unchanged.
       # Moved from group 3, which took 15m08s of its 20 minutes on main (run
-      # 40112590944, budget-watch issue #8072); group 1 carries no moved-in
-      # steps since #7766, so it has the most headroom. Step timings were not
+      # 40112590944, budget-watch issue #8072); group 1 then carried no moved-in
+      # steps since #7766, so it had the most headroom. Step timings were not
       # readable from CI and not measurable in the implement sandbox (PyYAML
       # was missing, so this step and the Claude engine judges step failed at
       # collection), so the plan's default applied: only this step moved, and
@@ -2477,11 +2477,14 @@ jobs:
       # Moved from group 1 to group 0: group 1 took 16m09s of its 20 minutes
       # on main (run 40150026157, budget-watch issue #8091). Step timings were
       # not readable, so the choice is an estimate from recorded group totals,
-      # not a measurement: group 0 took 15m09s with the single-file modules
-      # (#8080), group 3 took 15m08s with this step (#8072), so this step costs
-      # about one minute more than the fast-fail subset, and the single-file
-      # modules cost more (test_run_substate_ledger.py alone took 139s
-      # locally). Group 0 keeps the fast-fail subset. This step runs in group
+      # not a measurement: group 1 took 16m09s with this step and the
+      # single-file modules, group 0 took 15m09s with the fast-fail subset and
+      # the single-file modules (#8080), so if the two slices cost about the
+      # same, this step costs about one minute more than the fast-fail subset.
+      # The single-file modules cost more (test_run_substate_ledger.py alone
+      # took 139s locally), but group 0 ran 15m09s with them, so they stay in
+      # group 1; group 1 may still finish near the 15-minute budget-watch
+      # threshold. Group 0 keeps the fast-fail subset. This step runs in group
       # 0 only, once per CI run, and needs only checkout, Python 3.12 and the
       # shared pip install, which every matrix group has. Name and body unchanged.
       - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)

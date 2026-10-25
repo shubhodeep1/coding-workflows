@@ -5,4 +5,4 @@
   |---|---|---|
   | `Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)` | 1 | 0 |
 
-  The run's step timings were not readable, so the step and the group were chosen from earlier recorded group totals (group 0 at 15m09s in #8080, group 3 at 15m08s in #8072). That is an estimate, not a measurement. The step's name and body are unchanged, and it still runs once per CI run. No job was added or renamed, no `timeout-minutes` changed, and `CI / lint` is unchanged. A failure in these tests now shows under `orchestrate-poll (0)`. Operators have nothing to do.
+  The run's step timings were not readable, so the step and the group were chosen from recorded group totals (group 1 at 16m09s with this step and the single-file modules, group 0 at 15m09s with the fast-fail subset and the single-file modules in #8080). That is an estimate, not a measurement. The step's name and body are unchanged, and it still runs once per CI run. No job was added or renamed, no `timeout-minutes` changed, and `CI / lint` is unchanged. A failure in these tests now shows under `orchestrate-poll (0)`. Operators have nothing to do.
