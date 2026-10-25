@@ -453,6 +453,17 @@ def test_pr_not_open_handoff_label_failure_posts_no_comment(tmp_path):
 	assert not [call for call in calls if call[0] == "api" and call[1].endswith("/comments") and "-f" in call]
 
 
+def test_pr_not_open_handoff_comment_failure_is_logged(tmp_path):
+	# The label landed but the marker comment failed: the log must say so.
+	proc, calls, github_env = _run_step(tmp_path, merged=False,
+		env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main", "FAKE_COMMENT_FAIL": "1"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "SKIP_PLAN=true" in github_env
+	assert "label=applied comment=failed" in proc.stdout
+	edit = next(call for call in calls if call[:2] == ["issue", "edit"])
+	assert edit[edit.index("--add-label") + 1] == "ai:blocked"
+
+
 def test_pr_not_open_handoff_uses_the_resolver_pr_before_the_classifier(tmp_path):
 	# "disabled" exits before the classifier runs, so only the ref step's PR is known.
 	proc, calls, _ = _run_step(tmp_path, env_extra={**PR_NOT_OPEN_ENV, "PLAN_DEFAULT_BRANCH": "main",
