@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:1244-1246 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The `MovedReleaseStepsContractTest` docstring still describes `orchestrate-poll` as a 4-way matrix, but `.github/workflows/ci.yml` line 2092 now has `poll-group: [0, 1, 2, 3, 4]`.\n  WHY: The text is stale and could lead a maintainer to count four runs instead of five (reported as NIT by both reviewers; no runtime failure).\n- tests/test_ci_poll_test_sharding.py:1158-1168 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: `test_last_group_runs_only_its_slice` forbids pinning any step to the last group and repeats assertions that `PollGroupPinnedStepsTest` already makes.\n  WHY: The documented follow-up of moving the unblock step into the new group would fail this test, and the duplicated assertions can drift (reported as NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ci_poll_test_sharding.py:1244-1246 | severity=NIT | confidence=5\n  PROBLEM: The docstring of `MovedReleaseStepsContractTest` still says the matrix has 4 groups. `.github/workflows/ci.yml` line 2092 now has `poll-group: [0, 1, 2, 3, 4]`.\n  WHY: It does not fail at runtime, because the assertions use `poll_group_count()`. The stale text misleads anyone sizing a new pinned step.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ci_poll_test_sharding.py:1244-1246 | severity=NIT | confidence=5\n  PROBLEM: The `MovedReleaseStepsContractTest` docstring still says \"4-way matrix ... runs four times\", but the matrix is now `poll-group: [0, 1, 2, 3, 4]` (.github/workflows/ci.yml:2092) and the new test pins `poll_group_count() == 5`. The PR updated the analogous comment at lines 1109-1111 but left this docstring stale.\n  WHY: There is no CI failure, but the stale text could lead a maintainer to count four runs instead of five.\n- tests/test_ci_poll_test_sharding.py:1158-1168 | severity=NIT | confidence=3\n  PROBLEM: `test_last_group_runs_only_its_slice` forbids any step pinned to the last group (line 1165, line 1168) and repeats the group-count pin (line 1160) and the unguarded-step allowlist check (lines 1166-1167) that `PollGroupPinnedStepsTest` already makes (lines 1149-1156).\n  WHY: The documented follow-up of moving the unblock step into the new group would fail this test, and the duplicated assertions can drift.\n- TASK_GAP (reviewer concluded not a gap): Requirement: \"Move its slowest steps ... into the CI job with the most headroom ... Do not raise `timeout-minutes` and do not split tests into new required job names\" (AD-1 option B: grow the matrix from 4 to 5 groups) | Expected change site: .github/workflows/ci.yml orchestrate-poll matrix | Evidence of absence: Delivered by the diff (matrix `poll-group: [0, 1, 2, 3, 4]` at ci.yml:2092, `timeout-minutes: 20` unchanged, names unchanged), so no TASK_GAP to report. | severity=NIT | confidence=5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "69e1a3ac41071aa83e8cfa16979c4a56137b0f38c95b5c2dca79c9e5eab76db8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8115,
+    "run_id": "40171748994",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40171748994",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025074104_a6af7e713c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8115,
+    "run_id": "40171748994"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T07:41:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
