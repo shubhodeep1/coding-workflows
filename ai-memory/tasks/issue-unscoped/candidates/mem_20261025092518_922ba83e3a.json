@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:2490-2508 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The comment block above the step is self-contradictory. Lines 2490-2492 still say the step runs in group 0 only, lines 2500-2503 say group 4, and \"Group 0 keeps the fast-fail subset.\" is duplicated.\n  WHY: The guard at line 2505 is correctly `strategy.job-index == 4`, so nothing fails at runtime. The stale group-0 text could mislead future editors. All reviewers rated it NIT, which is mapped to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:2490-2508 | severity=NIT | confidence=5\n  PROBLEM: The comment block explaining the change is self-contradictory.\n  WHY: It keeps the old text mentioning Group 0 next to the new text mentioning group 4, which gives future maintainers conflicting guidance. The sentence about group 0 keeping the fast-fail subset is also duplicated.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:2490-2505 | severity=NIT | confidence=5\n  PROBLEM: The comment says the step runs in group 0 only at lines 2490-2492. The added comment says group 4, and the actual guard at line 2505 selects group 4.\n  WHY: The workflow guard is correct, so the current run does not break. The contradictory notes misstate which group runs the step and can mislead future CI edits.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/ci.yml:2490-2503 | severity=NIT | confidence=5\n  PROBLEM: The comment block above the step \"Unblock judge, scan and orphan fix-up close tests\" contradicts itself. Lines 2490-2492 say \"This step runs in group 0 only, once per CI run\", which is stale text from before this PR. Lines 2500-2503 say \"This step runs in group 4 only, once per CI run\". \"Group 0 keeps the fast-fail subset.\" is duplicated at both locations.\n  WHY: There is no runtime failure, because the step guard at line 2505 is correctly `strategy.job-index == 4`. The stale text at lines 2490-2492 would mislead future editors, and the old text should have been removed when the new comment was added.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:2490-2503 (comment block above the step named at 2504; guard `strategy.job-index == 4` at 2505) | severity=NIT | confidence=5\n  PROBLEM: The comment block contradicts itself. The pre-existing text at ci.yml:2490-2492 still says the step runs in group 0 only. The text added for #8118 at ci.yml:2500-2503 says group 4. The \"Group 0 keeps the fast-fail subset.\" sentence is duplicated. The group-0 claim is now false, because the diff changed the guard at ci.yml:2505 from `strategy.job-index == 0` to `strategy.job-index == 4`.\n  WHY: This is documentation only and causes no execution failure. A future editor reading lines 2490-2492 could conclude the step is pinned to group 0 and revert or re-pin it against the guard at line 2505. Suggested fix: delete the stale group-0 sentences at lines 2490-2492 so only the #8118 group-4 text remains.\n- .github/workflows/ci.yml:2490-2503 | severity=NIT | confidence=5\n  PROBLEM: The edit left stale and duplicated comment lines. Lines 2490-2492 claim the step runs in group 0 only, lines 2500-2503 claim group 4, and \"Group 0 keeps the fast-fail subset.\" appears twice.\n  WHY: There is no runtime failure. The executable change (guard at 2505) is correct and consistent with the matrix at 2093 (`[0, 1, 2, 3, 4]`), so this is only a comment-contract defect.\n- TASK COMPLETENESS / INTENT GAPS: none reported. The reviewer's requirement check found all deliverables delivered, with the step name (ci.yml:2504), body (2506-2508), matrix and `timeout-minutes: 20` (ci.yml:2093-2094) unchanged and no new jobs.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a3ef7a0fa262a7a1ce831954d4b0c1eb72362fb7acb36583266bdf5de322af2e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8120,
+    "run_id": "40179344864",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40179344864",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025092518_922ba83e3a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8120,
+    "run_id": "40179344864"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-25T09:25:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
