@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:49-51`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
-- Last note: Step 6 partial (8/13). tele-funtoken stuck on v1.38.3 pin + ALLOW_WORKFLOW_EDITS=false gate; Q2/Q3/Q4 open.
+- Last note: Step 6 partial (8/13). tele-funtoken held by a deliberate hardcoded allow_workflow_edits: false whose lift condition is now met; Q2/Q3/Q4 open.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -38,6 +38,10 @@
      because the old pin skips the run. Fix choice asked as Q4.
    - 2026-10-25: `ALLOW_WORKFLOW_EDITS` is NOT set in tele-funtoken, so the `false` input most likely comes from the
      wrapper's `with:` block (e.g. a hardcoded `allow_workflow_edits: false`). Reading that block next.
+   - 2026-10-25 confirmed: tele-funtoken's wrapper hardcodes `allow_workflow_edits: false` with the comment "keep overwrites
+     disabled until a least-privilege release is pinned" (tele-funtoken commit e591b7b, PR #4824, 2026-10-24). At v1.38.3
+     17 templates used `secrets: inherit`; at current stable `8164dcf9593d` none do, so that condition is now met.
+     Q4 re-asked: replace the wrapper with the current template (lifting the hold) or keep it.
 7. [ ] Bootstrap `ai-update-workflows.yml` on any consumer that never had it (only if step 6 finds one)
 8. [ ] Verify LIVE
 
