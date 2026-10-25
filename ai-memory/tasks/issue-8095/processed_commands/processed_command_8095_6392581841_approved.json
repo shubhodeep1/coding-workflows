@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8095_6392581841_approved",
   "issue_number": 8095,
   "metadata": {
+    "branch": "ai/issue-8095",
+    "changed_files": [
+      "changelog.d/8095-gh-helpers-log-redaction.md",
+      "scripts/gh_helpers.sh",
+      "tests/test_gh_retry_stdout_isolation.py"
+    ],
+    "issue_number": 8095,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8095",
+    "pr_number": 8103,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8103",
+    "run_attempt": "1",
+    "run_id": "40155503361",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40155503361"
   },
   "run_attempt": 1,
   "run_id": "40155503361",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-25T02:45:21Z",
+  "status": "completed",
+  "timestamp": "2026-10-25T03:05:46Z",
   "workflow": "implement"
 }
