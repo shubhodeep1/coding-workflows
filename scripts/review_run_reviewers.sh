@@ -3981,7 +3981,9 @@ reviewer_attempt_result_failure_class() {
   esac
   if [ -n "${stderr_file}" ] && [ -s "${stderr_file}" ]; then
     has_stderr=true
-    if grep -Fqx 'OpenCode structured reviewer output contained no text events.' "${stderr_file}" 2>/dev/null; then
+    # The marker is appended with a trailing newline but may be glued onto an
+    # unterminated last stderr line, so anchor it to line end, not the whole line.
+    if grep -Eq 'OpenCode structured reviewer output contained no text events\.$' "${stderr_file}" 2>/dev/null; then
       no_text=true
     fi
   fi

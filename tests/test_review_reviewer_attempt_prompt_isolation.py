@@ -178,6 +178,8 @@ def _run_line(*args: str) -> str:
 		("0", "", "", "", "ok"),
 		("0", "", NO_TEXT_LINE + "\n", "", "empty_structured_output"),
 		("1", "", "noise\n" + NO_TEXT_LINE + "\n", "", "empty_structured_output"),
+		("0", "", "unterminated stderr" + NO_TEXT_LINE + "\n", "", "empty_structured_output"),
+		("0", "", NO_TEXT_LINE + " quoted later\n", "", "ok"),
 		("143", "max_steps", "", "", "max_steps"),
 		("1", "", "", "killed", "stall_guard"),
 		("1", "idle_timeout", "", "", "timeout"),
