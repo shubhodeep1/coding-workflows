@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/deploy-activate.md:7,27,55 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The command requires reading the activation log before emitting any step, but the new clone guidance delays cloning until a step needs local files, so a first-time Mac run with no local clone cannot do the required local log lookup before it emits the clone step.\n  WHY: With no local repository there is no `docs/deploy-activation/` to read or list, so the command cannot tell whether a log exists. The reviewer rated this MAJOR; I mapped it to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/deploy-activate.md:7,27,55 | severity=MAJOR | confidence=4\n  PROBLEM: The command requires reading the activation log before emitting any step, but the new clone guidance delays cloning until a step needs local files. On a Mac with no local clone, the command cannot perform its required local log lookup before it can emit the corrective step to create that clone.\n  WHY: A first-time run has no local repository from which to read or list `docs/deploy-activation/`. It therefore cannot establish whether a log exists, even though it must do so before emitting the clone step.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "0613c490731601fc53e1557f54217f13b8217dd89dbb223a08271697f92c09e7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8109,
+    "run_id": "40164755158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40164755158",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261025062518_42c958250b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8109,
+    "run_id": "40164755158"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-25T06:25:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
