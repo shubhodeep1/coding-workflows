@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8091,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8091\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8093\",\"pr_number\":8093,\"branch\":\"ai/issue-8091\",\"run_id\":\"40152615479\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40152615479\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/8091-orchestrate-poll-unblock-step-to-group-0.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "b3cfa0bfe00a94cdf9616fafc7e816c2f094fa8acae1b81e47109a49858737c2",
+  "lineage": {
+    "issue_number": 8091,
+    "parent_ids": [],
+    "pr_number": 8093,
+    "run_id": "40152615479",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40152615479",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8093"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261025020943_b631d45572",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8091,
+    "level": "run",
+    "pr_number": 8093,
+    "run_id": "40152615479"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8091: https://github.com/shubhodeep1/coding-workflows/pull/8093",
+  "timestamps": {
+    "created_at": "2026-10-25T02:09:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
