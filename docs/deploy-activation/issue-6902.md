@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:49-51`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-25
-- Last note: Step 6 partial (8/13). tele-funtoken held by a deliberate hardcoded allow_workflow_edits: false whose lift condition is now met; Q2/Q3/Q4 open.
+- Last note: Q2: A, Q3: A, Q4: A answered. Next: step 7, tele-funtoken wrapper PR.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -42,8 +42,11 @@
      disabled until a least-privilege release is pinned" (tele-funtoken commit e591b7b, PR #4824, 2026-10-24). At v1.38.3
      17 templates used `secrets: inherit`; at current stable `8164dcf9593d` none do, so that condition is now met.
      Q4 re-asked: replace the wrapper with the current template (lifting the hold) or keep it.
-7. [ ] Bootstrap `ai-update-workflows.yml` on any consumer that never had it (only if step 6 finds one)
-8. [ ] Verify LIVE
+7. [ ] tele-funtoken-msg-scoring: PR replacing `ai-update-workflows.yml` with the v1.40.0 template rendered at `8164dcf9593d` (lifts the hardcoded `allow_workflow_edits: false` hold; Q4: A). Expected file sha256 `02b8fd3779a12157dc366b4a46b5ac2ba64d93674edb94b6fce65a5a1c835000`
+8. [ ] Set `WORKFLOW_PROFILE`: `core` on btc_sweeper and atlas-bridge.gd (Q2: A), `standard` on mongo-explorer and fbc_shutdown (Q3: A)
+9. [ ] PRs adding the same rendered `ai-update-workflows.yml` to btc_sweeper, atlas-bridge.gd, mongo-explorer, fbc_shutdown
+10. [ ] Merge the 5 PRs and run each repo's `ai-update-workflows.yml` once
+11. [ ] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A)
 
 ## Notes
 - The local clone is shallow, so `git merge-base --is-ancestor` reported false negatives; containment was checked with the GitHub compare API instead.
@@ -51,3 +54,6 @@
 - Consumer repos are not attached to this cloud session (HTTP 403), so step 6 runs on the operator's machine.
 - 2026-10-25: operator answered Q1: A. Once verified, tick the release/sync line in the latest #6211 `project-6902` comment and the
   release/sync line of the 50 `pr-*` entries (no other lines). No ticks made yet: step 6 is not verified.
+- 2026-10-25: operator answered Q2: A (btc_sweeper, atlas-bridge.gd -> `WORKFLOW_PROFILE=core` + updater), Q3: A
+  (mongo-explorer, fbc_shutdown -> `WORKFLOW_PROFILE=standard` + updater), Q4: A (lift tele-funtoken hold). The rendered
+  wrapper was produced with `sed` and checked byte-identical to `scripts/workflow_wrapper_refs.py` output at `8164dcf9593d`.
