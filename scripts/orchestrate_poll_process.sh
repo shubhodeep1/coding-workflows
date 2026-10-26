@@ -13839,11 +13839,38 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     return 1
   fi
 
-  jq --arg err "Final PR #${final_pr} could not be merged automatically (state=${pr_state:-unknown}, mergeable=${pr_mergeable:-unknown})." '.final_merge_error = $err' \
+  # Keep GitHub's refusal reason. mergeable=true with mergeable_state=blocked
+  # is a ruleset or required-status block (for example a failing required
+  # commit status, which the check-runs gate above never reads), and only the
+  # merge error names it. gh_retry ends a failed call with its
+  # "::error::gh command failed after" line followed by gh's raw stderr, so
+  # only that raw text is kept when present. Flattened to one line,
+  # workflow-command prefixes and backticks dropped, capped so it fits the
+  # tracking comment.
+  local final_pr_mergeable_state=""
+  local merge_refusal_detail=""
+  final_pr_mergeable_state="$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')"
+  if [ -n "${merge_err}" ]; then
+    merge_refusal_detail="$(printf '%s\n' "${merge_err}" \
+      | awk '/^::error::gh command failed after / { buf = ""; next } { buf = buf $0 "\n" } END { printf "%s", buf }')"
+    [ -n "${merge_refusal_detail//[[:space:]]/}" ] || merge_refusal_detail="${merge_err}"
+    merge_refusal_detail="$(printf '%s\n' "${merge_refusal_detail}" \
+      | sed -E 's/^::(warning|error|notice)::[[:space:]]*//' \
+      | tr -d '`' | tr -d '\000-\010\013-\037\177' | tr '\n' ' ' \
+      | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | head -c 600)"
+  fi
+  local final_merge_refusal_msg="Final PR #${final_pr} could not be merged automatically (state=${pr_state:-unknown}, mergeable=${pr_mergeable:-unknown}, mergeable_state=${final_pr_mergeable_state:-unknown})."
+  if [ -n "${merge_refusal_detail}" ]; then
+    final_merge_refusal_msg+=" GitHub: ${merge_refusal_detail}"
+  fi
+  echo "  [final-merge] ${final_merge_refusal_msg}"
+  jq --arg err "${final_merge_refusal_msg}" '.final_merge_error = $err' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_tracking_comment "## ⚠️ Final merge blocked
 
-Final PR #${final_pr} could not be merged automatically. Review branch protections/checks and merge manually if needed."
+Final PR #${final_pr} could not be merged automatically (mergeable_state=\`${final_pr_mergeable_state:-unknown}\`). Review branch protections/checks and merge manually if needed.
+
+GitHub's response: \`${merge_refusal_detail:-none recorded}\`"
   return 1
 }
 

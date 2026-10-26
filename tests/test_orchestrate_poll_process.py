@@ -1977,6 +1977,9 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 			if pr.get('mergeable') is False:
 				print('conflict', file=sys.stderr)
 				sys.exit(1)
+			if pr.get('merge_error'):
+				print(pr['merge_error'], file=sys.stderr)
+				sys.exit(1)
 			pr['state'] = 'closed'
 			pr['merged'] = True
 			store.setdefault('merged_prs', []).append(pr_num)
@@ -11974,6 +11977,56 @@ def test_final_merge_waits_for_required_checks_before_merging():
 	assert result["latest_state"]["final_merge_status"] == "pending"
 	assert result["latest_state"]["final_merge_pr"] == 352
 	assert result.get("merged_prs", []) == []
+
+
+def test_final_merge_refusal_keeps_github_error_and_mergeable_state():
+	# fun-token-multi-chain#579: the final PR was mergeable=true but
+	# mergeable_state=blocked by a failing required commit status
+	# (coding-workflows/workflow-integrity). The check-runs gate never reads
+	# commit statuses, so the merge was tried and refused, and the recorded
+	# error said only "state=open, mergeable=true". GitHub's refusal text and
+	# mergeable_state must reach final_merge_error, which the exhausted-budget
+	# comment prints as "Last recorded error".
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"merge_error": (
+				"X Pull request owner/repo#353 is not mergeable: the base branch policy prohibits the merge.\n"
+				"Required status check `coding-workflows/workflow-integrity` is failing."
+			),
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result.get("merged_prs", []) == []
+	err = result["state_on_disk"]["final_merge_error"]
+	assert err == (
+		"Final PR #353 could not be merged automatically (state=open, mergeable=true, mergeable_state=blocked). "
+		"GitHub: X Pull request owner/repo#353 is not mergeable: the base branch policy prohibits the merge. "
+		"Required status check coding-workflows/workflow-integrity is failing."
+	)
+	assert "[final-merge] " + err in result["stdout"]
+	comments = [
+		c.get("body", "") if isinstance(c, dict) else str(c)
+		for c in result["issues"]["192"]["comments"]
+	]
+	blocked = [c for c in comments if c.startswith("## ⚠️ Final merge blocked")]
+	assert blocked, comments
+	assert "mergeable_state=`blocked`" in blocked[-1]
+	assert "Required status check coding-workflows/workflow-integrity is failing." in blocked[-1]
 
 
 def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge():
