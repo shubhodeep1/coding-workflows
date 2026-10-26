@@ -1767,7 +1767,12 @@ jobs:
             fi
           done
 
-          if [ -f .codex-workflow-src/agents.md ]; then
+          # Consumers get coding-workflows' agents.md as agents_canonical.md,
+          # ahead of their own. In coding-workflows itself the checkout's
+          # agents.md (with agents.d/ fragments) is that same file, and
+          # build_static_context.sh emits both, so staging it here inlined
+          # ~620 KB twice and pushed the prompt past codex's 1 MiB stdin cap.
+          if [ "${is_self_repo}" = "false" ] && [ -f .codex-workflow-src/agents.md ]; then
             install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
           fi
 

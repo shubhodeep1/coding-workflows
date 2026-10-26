@@ -825,11 +825,36 @@ def test_hook_auto_mode_keeps_passing_stamps_silent_and_failures_asking(tmp_path
 	assert "tests/test_broken.py" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-@pytest.mark.parametrize("command", ["git push --tags origin", "git push --all origin", "git push origin no-such-branch:main"])
+@pytest.mark.parametrize("command", ["git push --tags origin", "git push --all origin"])
 def test_hook_auto_mode_still_asks_when_a_person_must_decide(tmp_path, command):
 	root = _repo(tmp_path, {"a.txt": ""})
 	out = _hook(_auto(_push(root, command)), {"TMPDIR": str(tmp_path)})
 	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git push origin no-such-branch:main",
+		# The branch only exists once the command has run, so the hook cannot see it yet.
+		"git checkout -q -b claude/new-log && git commit -qam log && git push -u origin claude/new-log 2>&1 | tail -1",
+	],
+)
+def test_hook_auto_mode_denies_a_pushed_branch_that_does_not_exist_yet(tmp_path, command):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root, command)), {"TMPDIR": str(tmp_path)})
+	decision = out["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "deny"
+	reason = decision["permissionDecisionReason"]
+	assert "Could not resolve the pushed ref" in reason and "nothing ran" in reason
+	assert "own plain command" in reason and gate.STAMP_COMMAND in reason
+
+
+def test_hook_still_asks_for_a_pushed_branch_that_does_not_exist_yet_outside_auto_mode(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_push(root, "git checkout -b claude/new-log && git push -u origin claude/new-log"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "Could not resolve the pushed ref" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_hook_auto_mode_asks_when_a_missing_stamp_comes_with_a_human_finding(tmp_path):

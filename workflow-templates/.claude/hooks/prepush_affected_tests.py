@@ -20,10 +20,12 @@ Subcommands
                     under ``${TMPDIR:-/tmp}/claude-prepush-gate/``.
 ``hook``            PreToolUse hook: ask for confirmation when a Bash command
                     pushes and no passing stamp exists for HEAD. In Auto mode
-                    (``permission_mode`` ``auto``) a push whose only problem is
-                    a missing stamp is denied instead, with a reason that tells
-                    the session to run ``stamp`` and push again, so no human
-                    has to answer a prompt. It never runs tests or repository
+                    (``permission_mode`` ``auto``) a push whose only problems are
+                    a missing stamp or a pushed branch that does not exist yet
+                    (made earlier in the same command) is denied instead, with a
+                    reason that tells the session to commit, run ``stamp`` and
+                    push again as its own command, so no human has to answer a
+                    prompt. It never runs tests or repository
                     code, and fails open with a warning.
 
 Environment (each has a default here, §8): ``PREPUSH_TEST_GATE_TIMEOUT_MINUTES``
@@ -92,6 +94,12 @@ PASSING_STAMP_STATUSES = frozenset({"pass", "unverified", "skipped"})
 AUTO_PERMISSION_MODE = "auto"
 FINDING_MISSING_STAMP = "missing_stamp"
 FINDING_NEEDS_HUMAN = "needs_human"
+# The pushed branch does not resolve yet, usually because the same command
+# creates it (`git checkout -b X && ... && git push -u origin X`). Splitting
+# the command clears it, so Auto mode denies it like a missing stamp.
+FINDING_UNRESOLVED_REF = "unresolved_ref"
+# Findings the session can clear itself, so Auto mode denies rather than asks.
+SESSION_FIXABLE_FINDINGS = frozenset({FINDING_MISSING_STAMP, FINDING_UNRESOLVED_REF})
 # The off switch is read from the hook's own environment, so a session command
 # cannot use it; the Auto-mode deny reason leaves it out.
 GATE_OFF_HINT = "Set CLAUDE_PREPUSH_TEST_GATE=off to disable this check."
@@ -1022,7 +1030,9 @@ def _hook_findings(payload: object) -> tuple[list[tuple[str, str]], str]:
 	"""([(finding kind, reason)], system message); no findings means no decision.
 
 	The kind is FINDING_MISSING_STAMP when the session can clear the finding
-	itself by running the stamp, and FINDING_NEEDS_HUMAN otherwise.
+	itself by running the stamp, FINDING_UNRESOLVED_REF when the pushed branch
+	does not resolve yet (the session clears it by splitting the command), and
+	FINDING_NEEDS_HUMAN otherwise.
 	"""
 	if not isinstance(payload, dict):
 		return [], "prepush gate: hook payload is not a JSON object; push not checked."
@@ -1074,7 +1084,7 @@ def _hook_findings(payload: object) -> tuple[list[tuple[str, str]], str]:
 		head = _resolve_commit(toplevel, ref)
 		if head is None:
 			reasons.append((
-				FINDING_NEEDS_HUMAN,
+				FINDING_UNRESOLVED_REF,
 				(
 					f"Could not resolve the pushed ref `{_sanitize_name(ref)}` in {toplevel} to a commit, so its pre-push "
 					f"test stamp cannot be checked. Check out that commit, run `{STAMP_COMMAND}`, or confirm to push anyway."
@@ -1125,7 +1135,8 @@ def hook_decision(payload: object) -> tuple[str, str, str]:
 	"""(decision, reason, system message); an empty reason means no decision.
 
 	Outside Auto mode every finding asks, as before. In Auto mode a push whose
-	only findings are missing stamps is denied: a hook "ask" still forces a
+	only findings are missing stamps or not-yet-created pushed branches is
+	denied: a hook "ask" still forces a
 	human prompt in Auto mode, while a deny runs nothing and hands the reason
 	back to the session, which can run the stamp itself and push again. A stamp
 	that records failures, or a push whose commits the hook cannot map, still
@@ -1135,11 +1146,12 @@ def hook_decision(payload: object) -> tuple[str, str, str]:
 	reason = "\n\n".join(text for _kind, text in findings)
 	if not findings:
 		return "", "", warning
-	if is_auto_permission_mode(payload) and all(kind == FINDING_MISSING_STAMP for kind, _text in findings):
+	if is_auto_permission_mode(payload) and all(kind in SESSION_FIXABLE_FINDINGS for kind, _text in findings):
 		return "deny", (
-			reason.replace(" " + GATE_OFF_HINT, "") + "\n\nAuto mode: nothing ran (any commit in this command did not happen either). Commit "
-			f"first in its own command, run `{STAMP_COMMAND}`, fix failures it reports that this change caused, "
-			"then run the push again as its own command. If the stamp cannot be written, stop and tell the user."
+			reason.replace(" " + GATE_OFF_HINT, "") + "\n\nAuto mode: nothing ran (any branch or commit in this command was not "
+			"created either). Create the branch and commit first in their own command, run "
+			f"`{STAMP_COMMAND}`, fix failures it reports that this change caused, then run the push again as its "
+			"own plain command (`git push -u origin <branch>`). If the stamp cannot be written, stop and tell the user."
 		), warning
 	return "ask", reason, warning
 
