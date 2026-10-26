@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/8195-review-consolidator-restore.md:1-4 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The new `CACHE_LAYOUT_PROBE` log prefix is documented under the \"Review pipeline consolidator + ledger contract\" section. It has no registry bullet and no `LOG_PREFIX.name=CACHE_LAYOUT_PROBE` line under \"Stable log prefixes (contractual)\".\n  WHY: Log-analysis tooling selects on the registered prefix list, so the probe output is not picked up. Severity disagreement: two reviewers said NIT and one said MAJOR (mapped to high, the highest).\n- changelog.d/8195-review-consolidator-restore.md:4 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog says \"The four scripts are now staged\", but six scripts are staged, because `ledger_emit_substate.sh` and `codex_thread_reuse.sh` were added to `REQUIRED_BOOTSTRAP_SCRIPTS`.\n  WHY: This is documentation drift only, and the code is correct. Confidence ranged from 3 to 5 across reviewers; the highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A new log prefix goes under <!-- agents: section=\"Stable log prefixes (contractual)\" --> as the - `PREFIX` registry bullet plus the LOG_PREFIX.name=PREFIX line.\n  expected_change_site: agents.d/8195-review-consolidator-restore.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The CACHE_LAYOUT_PROBE prefix is placed under the \"Review pipeline consolidator + ledger contract\" section, and the required LOG_PREFIX.name=CACHE_LAYOUT_PROBE line is missing.\n- requirement: The changelog entry says \"The four scripts are now staged...\", but six scripts are staged.\n  expected_change_site: changelog.d/8195-review-consolidator-restore.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The changelog states four scripts are staged, but ledger_emit_substate.sh and codex_thread_reuse.sh were also added to REQUIRED_BOOTSTRAP_SCRIPTS in scripts/stage_workflow_support.sh.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/8195-review-consolidator-restore.md:4 | severity=low (NIT) | confidence=4\n  PROBLEM: The new `CACHE_LAYOUT_PROBE` log prefix, emitted from .github/workflows/claude-engine-smoke.yml, has no registry bullet and no `LOG_PREFIX.name=CACHE_LAYOUT_PROBE` line under \"Stable log prefixes (contractual)\".\n  WHY: Log-analysis tooling selects on the registered prefix list, so the probe lines are never picked up, and \u00a725 says a new prefix belongs under that section.\n- changelog.d/8195-review-consolidator-restore.md:4 | severity=low (NIT) | confidence=3\n  PROBLEM: The text says \"The four scripts are now staged\", but `ledger_emit_substate.sh` and `codex_thread_reuse.sh` were also staged.\n  WHY: This is documentation drift only, and the code is correct.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"The four scripts are now staged...\" in the changelog fragment.\n  Expected change site: changelog.d/8195-review-consolidator-restore.md\n  Evidence of absence: The changelog says \"The four scripts are now staged\", but the PR added ledger_emit_substate.sh and codex_thread_reuse.sh to REQUIRED_BOOTSTRAP_SCRIPTS in scripts/stage_workflow_support.sh, so six scripts are staged.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: A new log prefix goes under <!-- agents: section=\"Stable log prefixes (contractual)\" --> as the - `PREFIX` registry bullet plus the LOG_PREFIX.name=PREFIX line.\n  Expected change site: agents.d/8195-review-consolidator-restore.md\n  Evidence of absence: The CACHE_LAYOUT_PROBE prefix registration is under the Review pipeline consolidator + ledger contract section instead of the Stable log prefixes (contractual) section, and it lacks the required LOG_PREFIX.name=CACHE_LAYOUT_PROBE registry line.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/8195-review-consolidator-restore.md:1-4 | severity=low (NIT) | confidence=5\n  PROBLEM: The `CACHE_LAYOUT_PROBE` prefix is documented in the \"Review pipeline consolidator + ledger contract\" section and has no `LOG_PREFIX.name=CACHE_LAYOUT_PROBE` line. It lacks the registry bullet under \"Stable log prefixes (contractual)\".\n  WHY: This is a contract gap and not a runtime failure. The analysis pipeline reads the registered prefix list, so the probe output is invisible to it until the prefix is registered.\n- changelog.d/8195-review-consolidator-restore.md:4 | severity=low (NIT) | confidence=4\n  PROBLEM: The sentence \"The four scripts are now staged with the rest of the support bundle, and staging fails if one is missing.\" is stale. Six scripts are staged, including `ledger_emit_substate.sh` and `codex_thread_reuse.sh` in `REQUIRED_BOOTSTRAP_SCRIPTS` at `scripts/stage_workflow_support.sh:57`.\n  WHY: This is documentation drift only, and the code is correct.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a7c143669f9354c340f507bc4a89398311364cb046e1a4a33c1a774f20b760cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8195,
+    "run_id": "40294993386",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40294993386",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026092600_8d15f63033",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8195,
+    "run_id": "40294993386"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T09:26:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
