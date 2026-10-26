@@ -86,7 +86,9 @@ def test_raw_stderr_dumps_drop_the_replayed_usage_line(tmp_path: Path) -> None:
 	text = APPLY_FIXES.read_text(encoding="utf-8")
 	dump = "sed -e '/^{.*\"type\": \"result\"/d' \"${tmp_err}\""
 	assert 'cat "${tmp_err}"' not in text
+	assert 'cat "${final_editor_err}"' not in text
 	assert text.count(dump) == 3
+	assert text.count("sed -e '/^{.*\"type\": \"result\"/d' \"${final_editor_err}\"") == 1
 	tmp_err = tmp_path / "err"
 	tmp_err.write_text('CLAUDE_POOL x\n{"num_turns": 1, "type": "result"}\nboom\n', encoding="utf-8")
 	result = subprocess.run(["bash", "-c", dump], env={"tmp_err": str(tmp_err), "PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=True)

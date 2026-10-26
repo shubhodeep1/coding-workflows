@@ -3004,5 +3004,7 @@ fi
 final_editor_err="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
 if [ -n "${final_editor_err}" ] && [ -s "${final_editor_err}" ]; then
   echo "Editor stderr from final attempt:"
-  cat "${final_editor_err}"
+  # Same filter as the per-attempt dumps: the usage JSON line was already
+  # replayed as stage=editor, so cost_audit.py must not see it twice.
+  sed -e '/^{.*"type": "result"/d' "${final_editor_err}"
 fi
