@@ -270,8 +270,17 @@ run_editor_codex_attempt() {
       if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
       return 80
     fi
-    [ "${editor_claude_rc}" -eq 75 ] || return "${editor_claude_rc}"
+    if [ "${editor_claude_rc}" -ne 75 ]; then
+      # Clear an earlier attempt's OpenCode latch only when this Claude
+      # attempt succeeded: a failed Claude attempt wrote nothing, so edits an
+      # earlier OpenCode fallback left behind must keep the codex-bot identity.
+      if [ "${editor_claude_rc}" -eq 0 ] && [ -n "${GITHUB_ENV:-}" ]; then echo "REVIEW_EDITOR_ENGINE_FELL_BACK=false" >> "${GITHUB_ENV}" || true; fi
+      return "${editor_claude_rc}"
+    fi
     echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=claude_unavailable action=opencode" >&2
+    # The commit step (review_commit_changes.sh) reads this to keep the
+    # codex-bot identity on a commit OpenCode wrote.
+    if [ -n "${GITHUB_ENV:-}" ]; then echo "REVIEW_EDITOR_ENGINE_FELL_BACK=true" >> "${GITHUB_ENV}" || true; fi
   fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then

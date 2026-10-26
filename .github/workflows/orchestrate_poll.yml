@@ -1917,7 +1917,7 @@ jobs:
 
           git init --quiet "${PUBLISH_DIR}"
           git -C "${PUBLISH_DIR}" config user.name "codex-bot"
-          git -C "${PUBLISH_DIR}" config user.email "codex@users.noreply.github.com"
+          git -C "${PUBLISH_DIR}" config user.email "codex-bot@users.noreply.invalid"
           git -C "${PUBLISH_DIR}" remote add origin "$(git remote get-url origin)"
 
           if git -C "${PUBLISH_DIR}" fetch --quiet --depth=1 origin "${BRANCH_NAME}"; then

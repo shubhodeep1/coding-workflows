@@ -720,7 +720,7 @@ def open_or_update_discovery_pr(
 			check=True,
 		)
 		executor.run(
-			["git", "config", "user.email", "codex@users.noreply.github.com"],
+			["git", "config", "user.email", "codex-bot@users.noreply.invalid"],
 			cwd=consumer_clone_dir,
 			check=True,
 		)
