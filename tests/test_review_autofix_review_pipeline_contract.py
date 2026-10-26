@@ -10761,9 +10761,16 @@ def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in line, line
 	# Plus the two merge-authorizing steps: a repair-only run reviewed nothing,
 	# so it must neither enable auto-merge nor apply ai:ready-to-merge.
-	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
+	# The security-pass gate and the review-blocked judge skip too: neither may
+	# dispatch an audit, use up a cycle, or fix/merge on a repair-only run.
+	for name in (
+		"Enable auto-merge on PR",
+		"Mark linked issues ready to merge",
+		"Single-issue security pass",
+		"Review-blocked judge decision",
+	):
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
-	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 19
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 21
 
 
 def test_post_sync_test_repair_commit_is_pushed() -> None:

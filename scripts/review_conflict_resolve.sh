@@ -1310,7 +1310,8 @@ _resolver_test_repair_context()
   if ! [[ "${login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
     return 1
   fi
-  comments_raw="$(mktemp "${RUNTIME_DIR}/test_repair_comments.XXXXXX")" || return 1
+  # rc 2 (state_unavailable): a temp-file failure is not an identity failure.
+  comments_raw="$(mktemp "${RUNTIME_DIR}/test_repair_comments.XXXXXX")" || return 2
   if _resolver_test_repair_gh gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${tracking}/comments?per_page=100" > "${comments_raw}" 2>/dev/null; then
     # V2 first: the poller writes chunked V2 state; V1 is legacy.
