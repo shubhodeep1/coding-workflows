@@ -1379,7 +1379,7 @@ _resolver_test_repair_main()
   local result="${RESOLVER_TEST_REPAIR_RESULT_FILE}" branch="${TARGET_BRANCH:-${HEAD_REF:-}}" tracking
   local gate_support="${SUPPORT_SCRIPTS_DIR:-}" gate_step prompts_dir="${SUPPORT_PROMPTS_DIR:-}" tpl="" cand
   local base_branch="${BASE_BRANCH:-}" base="" dir rendered changed allow prompt touched pre_untracked empty_set
-  local index_tree="" rc=0 outcome="" path engine="codex" budget remaining fp_rc=0
+  local index_tree="" rc=0 outcome="" path engine="codex" budget remaining fp_rc=0 fp_baseline="" fp_args=()
   local check_args=() _effective_prompt_file tmp_output resolver_sandbox_sh
   # Read by _resolver_sandbox_attempt (dynamic scope).
   local resolver_gate_prepare_bounded=true
@@ -1493,6 +1493,16 @@ _resolver_test_repair_main()
     return 0
   fi
   git ls-files --others --exclude-standard 2>/dev/null | sort -u > "${pre_untracked}"
+  # Baseline before the model runs, as _capture_fingerprints_baseline does:
+  # drift already on the head (a sync can cause it) must not reject a repair.
+  fp_baseline="${dir}/fp_baseline.json"
+  rm -f -- "${fp_baseline}"
+  if [ -s "${INTEGRATION_FINGERPRINTS_FILE}" ] && [ "$(wc -c < "${INTEGRATION_FINGERPRINTS_FILE}")" -gt 2 ] \
+    && [ -f "${gate_support}/verify_integration_fingerprints.py" ]; then
+    INTEGRATION_BRANCH_NAME="${branch}" python3 "${gate_support}/verify_integration_fingerprints.py" \
+      --baseline-fingerprints-state "${fp_baseline}" "${INTEGRATION_FINGERPRINTS_FILE}" \
+      > "${dir}/fingerprints-baseline.txt" 2>&1 || rm -f -- "${fp_baseline}"
+  fi
   _effective_prompt_file="${prompt}"
   tmp_output="$(mktemp "${RUNTIME_DIR}/integration_test_repair_output.XXXXXX")" || tmp_output=""
   rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
@@ -1532,8 +1542,10 @@ _resolver_test_repair_main()
       fp_rc=0
       if [ -s "${INTEGRATION_FINGERPRINTS_FILE}" ] && [ "$(wc -c < "${INTEGRATION_FINGERPRINTS_FILE}")" -gt 2 ] \
         && [ -f "${gate_support}/verify_integration_fingerprints.py" ]; then
+        fp_args=()
+        [ ! -s "${fp_baseline}" ] || fp_args=(--compare-against-baseline "${fp_baseline}")
         INTEGRATION_BRANCH_NAME="${branch}" python3 "${gate_support}/verify_integration_fingerprints.py" \
-          "${INTEGRATION_FINGERPRINTS_FILE}" > "${dir}/fingerprints.txt" 2>&1 || fp_rc=$?
+          "${fp_args[@]}" "${INTEGRATION_FINGERPRINTS_FILE}" > "${dir}/fingerprints.txt" 2>&1 || fp_rc=$?
       fi
       if [ "${fp_rc}" -eq 1 ]; then
         outcome="fingerprints"

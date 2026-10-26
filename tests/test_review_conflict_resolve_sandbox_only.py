@@ -1363,6 +1363,26 @@ def test_test_repair_prompt_carries_the_intent_fingerprints(tmp_path):
 	assert "keep_me_marker" in rendered and "{{INTENT_FINGERPRINTS_JSON}}" not in rendered
 
 
+def test_test_repair_commits_despite_fingerprint_drift_already_on_the_head(tmp_path):
+	# The pattern is missing before the model runs (a sync can do this): the
+	# baseline compare lets the repair through.
+	fp = '{"11":{"issue":11,"pr":12,"must_contain":[{"file":"lib.py","regex":"keep_me_marker"}]}}'
+	proc, repo, github_env = _run_test_repair(tmp_path, "fix", fp_json=fp)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=committed" in proc.stderr, proc.stderr
+	assert "INTEGRATION_TEST_REPAIRED=true" in github_env.read_text(encoding="utf-8")
+
+
+def test_test_repair_reverts_a_repair_that_adds_fingerprint_drift(tmp_path):
+	# "return 2" is present before the repair and removed by it.
+	fp = '{"11":{"issue":11,"pr":12,"must_contain":[{"file":"lib.py","regex":"return 2"}]}}'
+	proc, repo, github_env = _run_test_repair(tmp_path, "fix", fp_json=fp)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=repair_reverted reason=fingerprints" in proc.stderr, proc.stderr
+	assert _tr_git(repo, "log", "--format=%s", "-1").strip() == "sync broke the test"
+	assert "INTEGRATION_TEST_REPAIRED" not in github_env.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("mode,reason", [("stray", "check_resolver_diff"), ("fail", "editor_exit_1")])
 def test_test_repair_reverts_rejected_repairs_without_committing(tmp_path, mode, reason):
 	proc, repo, github_env = _run_test_repair(tmp_path, mode)
