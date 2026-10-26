@@ -107,8 +107,11 @@ def settings_match_template(template_text: str, live_text: str) -> bool:
 	appended, in order, at the end of `permissions.allow`; any other
 	difference, a missing rule or an extra one, is a mismatch.
 	"""
-	template = json.loads(template_text)
-	live = json.loads(live_text)
+	try:
+		template = json.loads(template_text)
+		live = json.loads(live_text)
+	except ValueError:  # malformed settings JSON is a mismatch, not a traceback
+		return False
 	live_allow = live.get("permissions", {}).get("allow", [])
 	extras = tuple(live_allow[len(live_allow) - len(LIVE_ONLY_ALLOW_RULES):])
 	if extras != LIVE_ONLY_ALLOW_RULES:

@@ -4483,7 +4483,7 @@ through without a prompt. A missing stamp, one that records failures the
 change caused, or a push whose options or destination the hook cannot
 resolve (for example an abbreviated option such as `--follow-tag`), asks for
 confirmation. In Auto mode a push whose only problems are a missing stamp or
-a pushed branch that does not exist yet (one the same command creates) is
+a pushed branch that does not exist yet (usually one the same command creates) is
 denied instead of asking: nothing runs, and the reason tells the session to
 commit, run the stamp itself and push again as its own command, so no one has
 to answer a prompt. A stamp that records failures, a bulk or tag push, and
