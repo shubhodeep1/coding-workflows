@@ -1445,6 +1445,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_folded_fragment_keep.py
 
+      - name: Review criss-cross clean merge and forward-merge dedupe tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_merge_criss_cross.py tests/test_forward_merge_fallback_dedupe.py
+
       - name: Review judge-interim round-trip contract test
         run: |
           set -euo pipefail
