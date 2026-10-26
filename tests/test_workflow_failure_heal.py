@@ -2865,7 +2865,8 @@ def test_intake_report_without_runs_skips_quietly_instead_of_paging(tmp_path: Pa
 		assert "skip reason=scope_marker_unresolved" not in result.stdout
 	# A report that named a run still pages: there the unresolved scope is a fault.
 	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
-	assert intake.count("_heal_report_claimed_no_runs; then") == 2
+	# Three call sites: the engine_fallback pre-diagnosis skip, the marker guard and the creation gate.
+	assert intake.count("_heal_report_claimed_no_runs; then") == 3
 	# Claimed runs that validate-payload drops (here a foreign repository) still
 	# page: the raw report named runs, so the missing scope is a fault.
 	tg_log = tmp_path / "tg-dropped.log"
@@ -6751,14 +6752,40 @@ def test_intake_keeps_the_quiet_skip_when_the_reporting_run_does_not_bind(tmp_pa
 	]
 	for index, (outcome, payload, run_details) in enumerate(cases):
 		tg_log = tmp_path / f"tg-{index}.log"
-		result, state, _ = _run_intake(payload, _intake_state(run_details=run_details), diagnosis=DIAG_WORKFLOW_DEFECT,
+		result, state, prompt = _run_intake(payload, _intake_state(run_details=run_details), diagnosis=DIAG_WORKFLOW_DEFECT,
 			setup_git=_engine_intake_setup(tg_log), scope_marker_guard=True, extra_env=SCOPE_GUARD_ON)
 		assert result.returncode == 0, outcome + result.stderr + result.stdout
 		assert f"WORKFLOW_HEAL engine_reporter_run outcome={outcome} " in result.stdout, result.stdout
-		assert "WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=marker_guard " in result.stdout, result.stdout
+		# The skip happens before the diagnosis: no prompt, no model call, no classification.
+		assert "WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=pre_diagnosis " in result.stdout, result.stdout
+		assert "classification=none " in result.stdout, result.stdout
+		assert prompt == ""
+		assert "WORKFLOW_HEAL classification=" not in result.stdout
 		assert "issues_created" not in state
 		assert not [line for line in (tg_log.read_text() if tg_log.exists() else "").splitlines() if line.startswith("CRITICAL\t")]
 		assert len(_engine_run_get_calls(state)) == (0 if outcome == "absent" else 1)
+
+
+def test_intake_engine_fallback_without_run_still_diagnoses_when_the_creation_gate_is_off(tmp_path: Path) -> None:
+	# HEAL_INTAKE_SCOPE_GUARD_ENABLED off is the compose-only path: the early
+	# skip does not apply, the diagnosis runs and nothing is created.
+	result, state, prompt = _run_intake(_engine_scoped_payload(reporter_run=None), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tmp_path / "tg.log"))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL engine_reporter_run outcome=absent " in result.stdout
+	assert "stage=pre_diagnosis" not in result.stdout
+	assert prompt != ""
+	assert "WORKFLOW_HEAL classification=workflow-defect " in result.stdout, result.stdout
+	assert "issues_created" not in state
+
+
+def test_intake_skips_the_engine_fallback_diagnosis_only_for_run_less_reports() -> None:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	gate = 'if [ "${SOURCE_KIND}" = "engine_fallback" ] && _heal_intake_scope_guard_is_on && _heal_report_claimed_no_runs; then'
+	assert text.count(gate) == 1
+	# After the reporting-run binding (which sets ENGINE_REPORTER_RUN_REF) and
+	# before the diagnosis prompt is assembled.
+	assert text.index('ENGINE_REPORTER_RUN_REF="$(jq -r') < text.index(gate) < text.index('} > "${PROMPT_FILE}"')
 
 
 def test_intake_engine_fallback_duplicate_reads_no_run(tmp_path: Path) -> None:

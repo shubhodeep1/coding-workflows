@@ -2195,7 +2195,10 @@ through `clarify → plan → implement → review`.
   verdict is filed as `workflow-defect`). A duplicate is recorded as an
   occurrence without the run read. A report from an older reporter (no
   `reporter_run`), or one whose run does not match, is skipped quietly as
-  `scope_unavailable_no_runs`, as all of these reports were before.
+  `scope_unavailable_no_runs`, as all of these reports were before. While
+  the creation gate (`HEAL_INTAKE_SCOPE_GUARD_ENABLED`) is on, that skip
+  runs before the `WORKFLOW_HEAL` diagnosis (`stage=pre_diagnosis`), so no
+  model call is spent on a report that can never be filed.
 - **Report (consumer side):** the reporter reads the escalated issue / PR, its
   comments, and the repository's recent runs. It links at most 3 listed failed
   runs whose display title matches the issue title, or, for an orchestrator
