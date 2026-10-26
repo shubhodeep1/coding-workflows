@@ -276,7 +276,7 @@ heal_prepush_test_gate()
 		vrc="$(cat "${root}/results/prepush-validate.rc" 2>/dev/null || echo unavailable)"
 	fi
 	if [ "${rc}" -eq 0 ] && [ "${vrc}" = 0 ]; then
-		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail failures=${gate_pr} repair=ran" >&2
+		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repaired failures=${gate_pr} repair=ran" >&2
 		rm -rf -- "${root}/source.pre-gate"
 		return 0
 	fi

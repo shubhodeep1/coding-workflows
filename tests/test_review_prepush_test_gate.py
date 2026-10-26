@@ -468,6 +468,9 @@ def test_review_apply_fixes_repair_turn_hook():
 	body = text[text.index("review_apply_fixes_repair_turn()"):dispatch]
 	assert body.count("run_editor_codex_attempt ") == 1
 	assert ':?' not in body
+	# A capacity wait in the repair turn must not mark the review run as paused.
+	assert 'GITHUB_ENV="${RUNTIME_DIR}/prepush_gate_repair_github_env"' in body
+	assert body.index("GITHUB_ENV=") < body.index("run_editor_codex_attempt ")
 
 
 def test_step_script_never_reads_relative_support_paths():

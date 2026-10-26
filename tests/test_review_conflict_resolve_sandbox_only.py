@@ -1153,14 +1153,7 @@ def _gate_result(status: str, failures: list) -> str:
 		"inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1})
 
 
-@pytest.mark.parametrize("repair_edit, expect_kept", [
-	("printf 'fixed\\n' > tests/test_a.py", True),
-	("printf 'fixed\\n' > tests/test_a.py; printf 'bad\\n' > outside.py", False),
-	# A non-conflicted file the merge brought in stays outside the extra
-	# allowed paths, even though it differs from the pre-merge head.
-	("printf 'fixed\\n' > tests/test_a.py; printf 'rewritten\\n' > base_side.py", False),
-])
-def test_resolver_gate_fixture_runs_one_repair_and_keeps_or_reverts_it(tmp_path: Path, repair_edit: str, expect_kept: bool) -> None:
+def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: int = 0) -> tuple:
 	root = SCRIPT.parent.parent
 	work = tmp_path / "work"
 	work.mkdir()
@@ -1208,6 +1201,7 @@ def test_resolver_gate_fixture_runs_one_repair_and_keeps_or_reverts_it(tmp_path:
 _resolver_sandbox_attempt() {{ echo "attempt $1" >> "{work}/attempts"; cp "${{_effective_prompt_file}}" "{work}/prompt"; {repair_edit}; return 0; }}
 _verify_fingerprints_soft() {{ RESOLVER_FP_EXIT=0; }}
 {function}
+SECONDS={start_seconds}
 _resolver_prepush_test_gate
 git commit -q -m "[ai-merge-resolve] resolve merge conflicts"
 echo COMMITTED
@@ -1217,6 +1211,18 @@ echo COMMITTED
 		GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
 	proc = subprocess.run(["bash", "-c", harness], cwd=repo, env=env, capture_output=True, text=True, timeout=180)
 	assert "COMMITTED" in proc.stdout, proc.stderr
+	return proc, work, repo, env
+
+
+@pytest.mark.parametrize("repair_edit, expect_kept", [
+	("printf 'fixed\\n' > tests/test_a.py", True),
+	("printf 'fixed\\n' > tests/test_a.py; printf 'bad\\n' > outside.py", False),
+	# A non-conflicted file the merge brought in stays outside the extra
+	# allowed paths, even though it differs from the pre-merge head.
+	("printf 'fixed\\n' > tests/test_a.py; printf 'rewritten\\n' > base_side.py", False),
+])
+def test_resolver_gate_fixture_runs_one_repair_and_keeps_or_reverts_it(tmp_path: Path, repair_edit: str, expect_kept: bool) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, repair_edit)
 	assert (work / "attempts").read_text(encoding="utf-8") == "attempt codex\n"
 	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in (work / "prompt").read_text(encoding="utf-8")
 	committed = subprocess.run(["git", "show", "HEAD:tests/test_a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout
@@ -1230,3 +1236,20 @@ echo COMMITTED
 	else:
 		assert committed == "# covers a.py\nimport a\n"
 		assert "outcome=repair_reverted reason=check_resolver_diff" in proc.stderr
+
+
+def test_resolver_gate_skips_the_repair_when_the_step_budget_is_short(tmp_path: Path) -> None:
+	# 5000s into the step: run1 still fits, a 3000s repair attempt plus a gate
+	# run does not. The commit still lands.
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, "printf 'fixed\\n' > tests/test_a.py", start_seconds=5000)
+	assert not (work / "attempts").exists()
+	assert (work / "count").read_text(encoding="utf-8").strip() == "1"
+	assert "phase=resolver outcome=fail" in proc.stderr and "repair=skipped_step_time_budget" in proc.stderr
+	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"
+
+
+def test_resolver_gate_is_skipped_when_no_gate_run_fits_the_step_budget(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, "printf 'fixed\\n' > tests/test_a.py", start_seconds=8500)
+	assert not (work / "count").exists() and not (work / "attempts").exists()
+	assert "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=step_budget" in proc.stderr
+	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"

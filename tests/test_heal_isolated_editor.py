@@ -871,7 +871,7 @@ def test_heal_gate_failure_runs_one_repair_turn_then_validates_and_transfers(tmp
 	assert "scripts/fix.py" in allow.split()
 	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
 	assert (run["host"] / "tests/test_fix.py").read_text() == "repaired\n"
-	assert "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail failures=1 repair=ran" in run["stderr"]
+	assert "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repaired failures=1 repair=ran" in run["stderr"]
 	# The gate worktree is removed again.
 	assert run["worktrees"].count("worktree ") == 1
 

@@ -12,7 +12,7 @@ Each path handles failures the change caused, as opposed to ones that also fail 
 | The numbers that matter | Value |
 | --- | --- |
 | Repair turns per run | at most 1 |
-| Growth of `review_autofix.yml` | 1,522 bytes |
+| Growth of `review_autofix.yml` | 1,603 bytes |
 | New GitHub API calls | 0 |
 
 What this means for operators: nothing to set up. The `PREPUSH_TEST_GATE_MODE` variable controls implement, the review step and the conflict resolver: `off` turns the gate off, and `report` keeps the result without the repair turn. The workflow-heal editor does not receive it yet, because `implement.yml`'s "Run Codex implementation" step does not pass it on, so heal always runs in `repair` mode until that step forwards it. The review sandbox image now carries `shellcheck` and `ruff`.

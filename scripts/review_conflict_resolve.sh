@@ -954,6 +954,20 @@ _resolver_prepush_test_gate()
     echo "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=mode_off" >&2
     return 0
   fi
+  # Step budget: the resolver step has `timeout-minutes: 170` and SECONDS
+  # counts from this script's start. Keep 20 minutes for the commit and the
+  # EXIT-trap dispatch, and skip any gate stage that would not finish before
+  # then, so the [ai-merge-resolve] commit below always runs (Q3).
+  local gate_budget_end=9000 gate_tm="${PREPUSH_TEST_GATE_TIMEOUT_MINUTES:-15}" gate_wall gate_attempt_secs
+  [[ "${gate_tm}" =~ ^[0-9]+$ ]] && [ "$((10#${gate_tm}))" -ge 1 ] && [ "$((10#${gate_tm}))" -le 360 ] || gate_tm=15
+  gate_tm=$((10#${gate_tm})); [ "${gate_tm}" -le 53 ] || gate_tm=53
+  gate_wall=$(( gate_tm * 60 + 120 ))
+  gate_attempt_secs="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}"
+  [[ "${gate_attempt_secs}" =~ ^[1-9][0-9]*$ ]] || gate_attempt_secs=3000
+  if [ $(( gate_budget_end - SECONDS )) -lt "${gate_wall}" ]; then
+    echo "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=step_budget" >&2
+    return 0
+  fi
   mkdir -p "${gate_dir}" 2>/dev/null || return 0
   gate_base="$(git rev-parse HEAD 2>/dev/null || true)"
   if [ -f "${gate_sandbox_sh}" ] && gate_root="$(bash "${gate_sandbox_sh}" prepare-ephemeral codex 2>/dev/null)" && [ -n "${gate_root}" ]; then
@@ -967,7 +981,10 @@ _resolver_prepush_test_gate()
   bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
     --image-reason resolver_image_unavailable --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true
   read -r gate_status gate_pr gate_inh < "${gate_dir}/run1.status" || true
-  if [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ]; then
+  if [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ] \
+    && [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall )) ]; then
+    gate_repair="skipped (step time budget)"
+  elif [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ]; then
     gate_allow="${gate_dir}/allow.txt"
     gate_prompt="${gate_dir}/repair-prompt.txt"
     gate_touched="${gate_dir}/repair-touched.txt"
@@ -988,7 +1005,7 @@ _resolver_prepush_test_gate()
         gate_rc=77
       elif [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
         _resolver_sandbox_attempt claude || gate_rc=$?
-        if [ "${gate_rc}" -eq 75 ]; then
+        if [ "${gate_rc}" -eq 75 ] && [ $(( gate_budget_end - SECONDS )) -ge $(( gate_attempt_secs + gate_wall )) ]; then
           gate_rc=0
           rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
           _resolver_sandbox_attempt codex || gate_rc=$?
@@ -1044,6 +1061,9 @@ _resolver_prepush_test_gate()
         done < "${gate_touched}"
         gate_path="${gate_repair#*(}"
         echo "PREPUSH_TEST_GATE phase=resolver outcome=repair_reverted reason=$(printf '%s' "${gate_path%)}" | tr -dc 'a-z_0-9')" >&2
+      fi
+      if [ "${gate_repair}" = ran ] && [ $(( gate_budget_end - SECONDS )) -lt "${gate_wall}" ]; then
+        gate_repair="ran (re-run skipped: step time budget)"
       fi
       if [ "${gate_repair}" = ran ]; then
         bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \

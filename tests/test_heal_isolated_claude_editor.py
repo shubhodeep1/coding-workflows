@@ -226,4 +226,4 @@ def test_claude_heal_gate_failure_runs_one_more_claude_turn(tmp_path: Path) -> N
 	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in result["repair_prompt"]
 	assert result["host_file"] == "claude\n"
 	assert result["host_test"] == "repaired\n"
-	assert "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail failures=1 repair=ran" in result["stderr"]
+	assert "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repaired failures=1 repair=ran" in result["stderr"]

@@ -309,6 +309,13 @@ review_apply_fixes_repair_turn()
 	rm -f "${RUNTIME_DIR}/review_sandbox_transfer_reason_${repair_out##*/}"
 	(
 		trap '' PIPE
+		# A Claude capacity wait (exit 80) in this extra turn writes
+		# AUTOFIX_FAILURE_REASON=claude_capacity to GITHUB_ENV. The gate step
+		# reports it and the main fix is still committed, so it must not mark
+		# the whole review run as paused: give the turn a throwaway file.
+		GITHUB_ENV="${RUNTIME_DIR}/prepush_gate_repair_github_env"
+		: > "${GITHUB_ENV}" || exit 2
+		export GITHUB_ENV
 		PATH="${EDITOR_CODEX_PATH:-${PATH}}" run_editor_codex_attempt "${repair_prompt}" "${repair_out}" \
 			"${RUNTIME_DIR}/prepush_gate_repair_stderr.txt" "${RUNTIME_DIR}/prepush_gate_repair_activity" \
 			"${RUNTIME_DIR}/prepush_gate_repair_status"
