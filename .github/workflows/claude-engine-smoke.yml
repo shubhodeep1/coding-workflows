@@ -226,12 +226,18 @@ jobs:
           if usage is None:
               print(f"CACHE_LAYOUT_PROBE layout={layout} call={call} outcome=no_usage exit_code={rc}")
               sys.exit(0)
-          u = usage.get("usage") or {}
+          u = usage.get("usage")
+          if not isinstance(u, dict):
+              u = {}
+          try:
+              cost = float(usage.get("total_cost_usd") or 0)
+          except (TypeError, ValueError):
+              cost = 0.0
           print(
               f"CACHE_LAYOUT_PROBE layout={layout} call={call} outcome=ok account={account} "
               f"num_turns={usage.get('num_turns')} cache_read={u.get('cache_read_input_tokens', 0)} "
               f"cache_write={u.get('cache_creation_input_tokens', 0)} input={u.get('input_tokens', 0)} "
-              f"cost_usd={float(usage.get('total_cost_usd') or 0):.4f}"
+              f"cost_usd={cost:.4f}"
           )
           PY
             done
