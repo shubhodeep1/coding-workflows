@@ -6,6 +6,7 @@
     "commands/implement-issue-claude.md": "live copy describes this repo's cut-over engine; the template describes consumers before their stable sync",
     "commands/investigate-issue.md": "live copy carries coding-workflows-specific steps; both copies are edited together",
     "commands/validate-consumer-issue.md": "live copy carries coding-workflows-specific steps; both copies are edited together",
-    "commands/verify-activation.md": "live copy carries coding-workflows-specific steps; both copies are edited together"
+    "commands/verify-activation.md": "live copy carries coding-workflows-specific steps; both copies are edited together",
+    "settings.json": "live copy also allows the claude-code-remote session-opening tool without the Auto-mode check, for the daily activation routine that runs in a coding-workflows session (operator decision 2026-10-26); consumers do not get it. Every other change must be made in both copies by hand, because the live-copy sync and parity test skip this file now"
   }
 }
