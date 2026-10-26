@@ -4319,19 +4319,16 @@ def augment_files_touched(
 		for key, value in recorded_raw.items():
 			if isinstance(key, str) and isinstance(value, list):
 				recorded[key] = [v for v in value if isinstance(v, str)]
-	timed_out = False
 	for issue in data.get("issues", []):
 		totals["issues"] += 1
 		issue_id = str(issue.get("id", ""))
 		log_id = _prepush_augment_log_id(issue_id)
 		existing = list(issue.get("files_touched", []) or [])
 		if not existing:
+			# Nothing was planned, so nothing could have been added: drop any
+			# model-supplied marker entry instead of writing it back.
+			recorded.pop(issue_id, None)
 			_prepush_augment_log(f"issue={log_id} added=0 truncated=0")
-			continue
-		if timed_out:
-			# One hung module would otherwise cost the timeout once per issue.
-			totals["skipped"] += 1
-			_prepush_augment_log(f"issue={log_id} outcome=skipped reason=timeout_previous")
 			continue
 		previously_added = set(recorded.get(issue_id, [])) & set(existing)
 		planned = [p for p in existing if p not in previously_added]
@@ -4349,11 +4346,12 @@ def augment_files_touched(
 		if marker_ignored:
 			_prepush_augment_log(f"issue={log_id} outcome=marker_ignored")
 			previously_added = set()
+			recorded.pop(issue_id, None)
 			planned = list(existing)
 			candidates, reason = _prepush_select_planned_paths(module, repo_root, planned, timeout_secs)
 		if candidates is None:
+			# A timeout is a no-op for this issue only; later issues still run.
 			totals["skipped"] += 1
-			timed_out = reason == "timeout"
 			_prepush_augment_log(f"issue={log_id} outcome=skipped reason={reason}")
 			continue
 		present = set(existing)
@@ -4422,8 +4420,8 @@ def cmd_augment_files_touched(args: argparse.Namespace) -> int:
 				summary["written"] = True
 			except OSError:
 				_prepush_augment_log("outcome=skipped reason=write_failed")
-	except Exception:  # noqa: BLE001 - the augmentation must never fail the step
-		_prepush_augment_log("outcome=skipped reason=internal_error")
+	except Exception as exc:  # noqa: BLE001 - the augmentation must never fail the step
+		_prepush_augment_log(f"outcome=skipped reason=internal_error error={type(exc).__name__}")
 	_print_json(summary)
 	return 0
 

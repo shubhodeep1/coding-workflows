@@ -3521,7 +3521,7 @@ def test_augment_files_touched_ignores_forged_marker():
 		assert "issue=b outcome=marker_ignored" in proc.stderr
 
 
-def test_augment_files_touched_skips_remaining_issues_after_timeout():
+def test_augment_files_touched_timeout_is_per_issue():
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		stub = _write_prepush_stub(tmp_path, mode="sleep")
@@ -3533,7 +3533,8 @@ def test_augment_files_touched_skips_remaining_issues_after_timeout():
 		proc = _run_augment_cli(decomposition, stub, "--timeout-secs", "5")
 		assert proc.returncode == 0, proc.stderr
 		assert "issue=a outcome=skipped reason=timeout" in proc.stderr
-		assert "issue=b outcome=skipped reason=timeout_previous" in proc.stderr
+		assert "issue=b outcome=skipped reason=timeout" in proc.stderr
+		assert "timeout_previous" not in proc.stderr
 		assert decomposition.read_bytes() == original
 
 
