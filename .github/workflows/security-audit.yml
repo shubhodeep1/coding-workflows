@@ -213,6 +213,7 @@ jobs:
         env:
           AUDIT_TARGET_REF_INPUT: ${{ inputs.ref || '' }}
           AUDIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          AUDIT_EVENT_REPO_PRIVATE: ${{ github.event.repository.private }}
           PROTECTED_MAIN_SHA: ${{ steps.resolve_support.outputs.protected_main_sha }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
@@ -249,10 +250,23 @@ jobs:
               exit 1
             fi
           fi
+          # Repository visibility gates the rejected-reply upload (Refs #8204).
+          # Schedule payloads carry no repository object, so only then read it
+          # once; no earlier call in this job returns it. Anything but a
+          # confirmed true counts as public, so the upload fails closed.
+          repo_private="${AUDIT_EVENT_REPO_PRIVATE:-}"
+          if [ "${repo_private}" != "true" ] && [ "${repo_private}" != "false" ]; then
+            repo_private=""
+            if repo_json="$(gh_api_retry "repos/${GITHUB_REPOSITORY}" 2>/dev/null)"; then
+              repo_private="$(jq -r 'if .private == true then "true" else "false" end' <<< "${repo_json}" 2>/dev/null || true)"
+            fi
+          fi
+          [ "${repo_private}" = "true" ] || repo_private=false
           {
             echo "AUDIT_DATA_SHA=${audit_sha}"
             echo "AUDIT_DEFAULT_BRANCH=${AUDIT_DEFAULT_BRANCH}"
             echo "AUDIT_BRANCH=${audit_branch}"
+            echo "SECURITY_AUDIT_REPO_PRIVATE=${repo_private}"
           } >> "$GITHUB_ENV"
 
       - name: Checkout audit data
@@ -426,10 +440,10 @@ jobs:
         # Diagnostics for a refused malformed_output / schema_mismatch reply
         # (Refs #8204). The kept reply is raw model text about this repository's
         # code, so it is uploaded only for private repositories, only when the
-        # job failed, and kept for at most 3 days. A payload without
-        # repository.private (some schedule events) uploads nothing; dispatch
-        # the workflow manually to capture the reply.
-        if: failure() && github.event.repository.private == true
+        # job failed, and kept for at most 3 days. SECURITY_AUDIT_REPO_PRIVATE is
+        # set by "Resolve audit target" from the event payload or, on schedule
+        # runs whose payload has no repository object, from one repository read.
+        if: failure() && env.SECURITY_AUDIT_REPO_PRIVATE == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: security-audit-claude-rejected-${{ github.run_id }}-${{ github.run_attempt }}

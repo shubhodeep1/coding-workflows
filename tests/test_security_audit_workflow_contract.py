@@ -4456,7 +4456,8 @@ def test_security_audit_uploads_rejected_reply_only_for_private_repos_on_failure
 	upload = steps[upload_index]
 	condition = upload["if"]
 	assert "failure()" in condition
-	assert "github.event.repository.private == true" in condition
+	assert "env.SECURITY_AUDIT_REPO_PRIVATE == 'true'" in condition
+	assert "github.event.repository.private" not in condition
 	assert "always()" not in condition
 	assert upload["uses"].startswith("actions/upload-artifact@")
 	with_block = upload["with"]
@@ -4472,6 +4473,33 @@ def test_security_audit_uploads_rejected_reply_only_for_private_repos_on_failure
 		if i != upload_index and SECURITY_AUDIT_REJECTED_REPLY_PATH in str(step.get("with", {}))
 	]
 	assert others == []
+
+
+def test_security_audit_resolves_repo_visibility_for_schedule_runs() -> None:
+	step = _audit_workflow_step("Resolve audit target")
+	assert step["env"]["AUDIT_EVENT_REPO_PRIVATE"] == "${{ github.event.repository.private }}"
+	sha = "c" * 40
+	branch_api = "repos/owner/consumer/git/ref/heads/main"
+	branch = {branch_api: {"ref": "refs/heads/main", "object": {"type": "commit", "sha": sha}}}
+	repo_api = "repos/owner/consumer"
+	cases = (
+		# (event payload value, repository read response or None, expected)
+		("true", None, "true"),
+		("false", {"private": True}, "false"),
+		("", {"private": True}, "true"),
+		("", {"private": False}, "false"),
+		("", {"visibility": "private"}, "false"),
+		("", None, "false"),
+	)
+	for event_value, repo_response, expected in cases:
+		responses = dict(branch)
+		if repo_response is not None:
+			responses[repo_api] = repo_response
+		proc, _, variables = _run_audit_workflow_resolution(
+			"Resolve audit target", responses, env_overrides={"AUDIT_EVENT_REPO_PRIVATE": event_value}
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert f"SECURITY_AUDIT_REPO_PRIVATE={expected}\n" in variables, (event_value, repo_response)
 
 
 def test_security_audit_prompts_require_final_array_only() -> None:
