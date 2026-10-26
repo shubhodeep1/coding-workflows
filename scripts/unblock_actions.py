@@ -53,7 +53,7 @@ the network; the shell only executes.
   hold-followup --context-file PATH --kind KIND --ref REF
       The same reset, once the condition of a `wait` hold (or an operator-step
       hold) is met: KIND and REF are the hold marker's `hold=` and `ref=`.
-  followup-handoff --context-file PATH --fixup N --verdict descope|operator_step
+  followup-handoff --context-file PATH --fixup N --verdict descope|operator_step [--done-text TEXT]
       Instead of that reset, when the context carries a `protected_rejection`
       (the item is still held by an automation-path rejection that the
       verdict followed, #7287): the operator handoff ops with

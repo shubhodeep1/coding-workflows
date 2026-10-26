@@ -78,7 +78,9 @@
 # API budget (CLAUDE.md §15), per run: one `user` read, the item, its
 # comments (paginated; fresh reads before recording a `project-failed`
 # verdict and before its terminal label), the tracking issue's comments for a project's item,
-# at most one linked-issue read, one fix-up read while waiting, the PR diff,
+# at most one linked-issue read, one fix-up read while waiting (plus one
+# paginated fix-up comments read when the fix-up closed `completed` with
+# `ai:closed` and without `ai:merged`, #8191), the PR diff,
 # at most three run-metadata reads to bind a run cited in a pipeline-authored
 # comment to this item, then that run's log, one verdict comment (two for a
 # project's item) and
