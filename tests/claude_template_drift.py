@@ -126,5 +126,5 @@ def settings_match_template(template_text: str, live_text: str) -> bool:
 	# Formatting stays the template's: only the appended lines may differ.
 	stripped = live_text
 	for rule in LIVE_ONLY_ALLOW_RULES:
-		stripped = stripped.replace(f',\n      "{rule}"', "", 1)
+		stripped = re.sub(r",\s*\"" + re.escape(rule) + r"\"", "", stripped, count=1)
 	return stripped == template_text

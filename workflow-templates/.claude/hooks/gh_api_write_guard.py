@@ -2005,7 +2005,7 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			f"gh api guard (CLAUDE.md §23.H): the command uses {hazard}, which Bash expands or parses differently "
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
-			+ (_AUTO_SHAPE_DENY_SUFFIX if hazard_auto_deny else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if hazard_auto_deny and _may_invoke_gh_api(command) else "")
 		)
 	if _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results) and auto_mode:
 		shape_doubt = True
