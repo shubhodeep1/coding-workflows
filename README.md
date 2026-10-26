@@ -2688,7 +2688,7 @@ through `clarify → plan → implement → review`.
 | `CLAUDE_POOL_HEALTH_ALERT_ENABLED` | `true` | Hourly Telegram `DEBUG` from `orchestrate_poll.yml` when accounts are only at or above `gate_utilization`; rejected tokens or failed probes make the notice `WARNING`. `false` turns it off. See "Near-cap alert" under the Claude engine. |
 | `CLAUDE_POOL_HEALTH_WINDOW_MINUTES` | `5` | The near-cap alert is sent only by the poll cycle whose UTC minute is below this value, so it goes out at most once an hour. |
 | `CLAUDE_POOL_DAILY_USAGE_ENABLED` | `true` | Daily Telegram report from `orchestrate_poll.yml` (coding-workflows only) listing every Claude pool account's 5-hour and 7-day usage in one message. `false` turns it off. See "Daily usage report" under the Claude engine. |
-| `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` | `4` | First UTC hour (0-23) at which the daily usage report may be sent; `4` is 12:00 Singapore time. The first poll tick at or after this hour sends it, once per UTC day. Invalid values fall back to `4`. |
+| `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` | `0` | First UTC hour (0-23) at which the daily usage report may be sent; `0` is 08:00 Singapore time. The first poll tick at or after this hour sends it, once per UTC day. Invalid values fall back to `0`. |
 | `UNATTENDED_NAG_REMINDER_ENABLED` | `false` | Opt-in wrapper-level `<reminder>` injection after repeated silent reviewer/editor/judge turns. When `false`, the wrappers keep the existing retry behavior unchanged. |
 | `UNATTENDED_NAG_SILENT_ROUNDS` | `3` | Consecutive silent-turn threshold before nag-reminder injection in the review editor, review reviewers, and orchestrate-poll judge paths. Invalid or out-of-range values clamp conservatively to `3`. |
 | `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` | `false` | Enables the additive local-only `.ai/workflow_traces/<run_id>.scenario.json` renderer in `workflow-log-analysis.yml`; parseable runs emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`, per-run parser drift fail-opens with `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`. |
@@ -3175,8 +3175,8 @@ utilization, the reset time of any window at or above `gate_utilization`,
 rejected tokens and failed probes. It runs in `shubhodeep1/coding-workflows`
 only, because the pool is shared by every consumer repo. In the poll job,
 "Check Claude pool daily usage slot" (`scripts/claude_pool_daily_usage.sh
-slot`) opens the slot from `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` (default `4`,
-12:00 SGT) to the end of the UTC day, and "Look up today's Claude pool daily
+slot`) opens the slot from `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` (default `0`,
+08:00 SGT) to the end of the UTC day, and "Look up today's Claude pool daily
 usage marker" checks the `actions/cache` key
 `claude-pool-daily-usage-v1-<YYYY-MM-DD>`. When the key is missing, the
 separate `claude_pool_daily_usage` job probes the pool with
