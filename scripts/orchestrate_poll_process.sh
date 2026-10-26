@@ -18801,7 +18801,7 @@ REISSUE_EOF
         _reissue_lineage_label_args+=(--label "ai:orchestrator-managed")
       fi
       if [ "${orig_issue_is_triage}" = true ]; then
-        ensure_label_exists "ai:check-triage"
+        # No ensure_label_exists: the source issue carries the label, so it exists.
         _reissue_lineage_label_args+=(--label "ai:check-triage")
       fi
       local -a _heal_reissue_label_args=()
@@ -23256,7 +23256,7 @@ REISSUE_EOF
         # integration-ref resolver refuses it with label_missing.
         local -a _std_reissue_lineage_label_args=()
         if [ "${orig_issue_is_triage}" = true ] || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:check-triage") != null' >/dev/null 2>&1; then
-          ensure_label_exists "ai:check-triage"
+          # No ensure_label_exists: the source issue carries the label, so it exists.
           _std_reissue_lineage_label_args=(--label "ai:check-triage")
         fi
         local -a _heal_reissue_label_args=()
