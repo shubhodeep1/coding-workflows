@@ -15,11 +15,16 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
 import yaml
+
+# The gh stub evaluates the step's --jq filter with system jq.
+pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="jq required")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "forward-merge-stable-to-main.yml"
