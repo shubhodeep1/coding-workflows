@@ -47,7 +47,7 @@ the network; the shell only executes.
       the verified PR head ref), `verified` (the marker only) or `unverified`.
       A missing or malformed object keeps today's re-issue unchanged. Only
       standalone, non-security issues use it.
-  followup --context-file PATH --fixup N
+  followup --context-file PATH --fixup N [--done-text TEXT]
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
   hold-followup --context-file PATH --kind KIND --ref REF
@@ -1211,6 +1211,8 @@ def build_parser() -> argparse.ArgumentParser:
 	followup_cmd = sub.add_parser("followup")
 	followup_cmd.add_argument("--context-file", required=True)
 	followup_cmd.add_argument("--fixup", required=True, type=int)
+	# How the fix-up wait ended (#8191), used in the resume note.
+	followup_cmd.add_argument("--done-text", default="merged")
 	hold_followup_cmd = sub.add_parser("hold-followup")
 	hold_followup_cmd.add_argument("--context-file", required=True)
 	hold_followup_cmd.add_argument("--kind", required=True)
@@ -1249,7 +1251,9 @@ def run(argv: list[str] | None = None) -> dict:
 	if args.command == "followup":
 		if args.fixup < 1:
 			raise UsageError("--fixup must be an issue number")
-		return {"ops": reset_ops(ctx, f"fix-up #{args.fixup} merged")}
+		if args.done_text not in FIXUP_DONE_TEXTS:
+			raise UsageError(f"--done-text must be one of {list(FIXUP_DONE_TEXTS)}")
+		return {"ops": reset_ops(ctx, f"fix-up #{args.fixup} {args.done_text}")}
 	if args.command == "hold-followup":
 		return {"ops": reset_ops(ctx, f"waited for {hold_description(args.kind, args.ref)}")}
 	if args.command == "followup-handoff":

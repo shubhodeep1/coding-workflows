@@ -1617,7 +1617,12 @@ unblock_main()
 					return 0
 				fi
 				ops_file="${RUNTIME_DIR}/followup_ops.json"
-				if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup --context-file "${RUNTIME_DIR}/context.json" --fixup "${wait_fixup}" > "${ops_file}" \
+				# The resume note names how the wait ended; a merged fix-up keeps the old call.
+				local -a followup_done_args=()
+				if [ "${fixup_done_text}" != "merged" ]; then
+					followup_done_args=(--done-text "${fixup_done_text}")
+				fi
+				if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup --context-file "${RUNTIME_DIR}/context.json" --fixup "${wait_fixup}" ${followup_done_args[@]+"${followup_done_args[@]}"} > "${ops_file}" \
 					|| ! unblock_run_ops "${ops_file}"; then
 					unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_failed"
 					return 0

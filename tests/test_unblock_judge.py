@@ -2697,6 +2697,8 @@ def test_fixup_closed_as_already_implemented_ends_the_wait(tmp_path: Path, fixup
 		assert "fixup=50 op=fixup_done via=success_noop" in result.stdout, result.stdout + result.stderr
 		assert "fixup=50 outcome=followup" in result.stdout
 		assert state["comments"][-1]["body"].startswith("/answer")
+		assert "fix-up #50 closed as already implemented" in state["comments"][-1]["body"]
+		assert "merged" not in state["comments"][-1]["body"]
 		assert patched[-1].startswith("Fix-up #50 closed as already implemented; the unblock judge posted")
 		assert patched[-1].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
 	elif outcome == "skip":
@@ -3433,6 +3435,16 @@ def test_followup_handoff_text_says_closed_as_already_implemented(tmp_path: Path
 	result = subprocess.run([sys.executable, str(ACTIONS), "followup-handoff", "--context-file", str(context), "--fixup", "50",
 		"--verdict", "operator_step", "--done-text", "closed as already implemented"], capture_output=True, text=True, check=False)
 	assert result.returncode == 0 and "closed as already implemented" in json.loads(result.stdout)["ops"][2]["text"]
+	for done_args, note in (([], "fix-up #50 merged"), (["--done-text", "closed as already implemented"], "fix-up #50 closed as already implemented")):
+		blocked = tmp_path / "blocked.json"
+		blocked.write_text(json.dumps({"repo": "o/r", "kind": "issue", "item": 7, "stop": "blocked", "labels": ["ai:blocked"],
+			"tracking": None, "title": "T"}), encoding="utf-8")
+		result = subprocess.run([sys.executable, str(ACTIONS), "followup", "--context-file", str(blocked), "--fixup", "50", *done_args],
+			capture_output=True, text=True, check=False)
+		assert result.returncode == 0 and json.loads(result.stdout)["ops"][0]["body"] == f"/answer {note}"
+	result = subprocess.run([sys.executable, str(ACTIONS), "followup", "--context-file", str(blocked), "--fixup", "50", "--done-text", "other"],
+		capture_output=True, text=True, check=False)
+	assert result.returncode == 1
 
 
 def test_judge_merged_fixup_hands_off_instead_of_resuming(tmp_path: Path) -> None:
