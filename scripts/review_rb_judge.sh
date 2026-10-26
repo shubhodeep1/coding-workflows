@@ -1354,6 +1354,17 @@ fi
 if [ -z "${POST_REVIEW_HEAD_REF}" ]; then
   POST_REVIEW_HEAD_REF="${TARGET_BRANCH:-}"
 fi
+# Forward-merge fallback PRs (head `auto/forward-merge-stable-*`, opened by
+# forward-merge-stable-to-main.yml) must land as a real merge commit so
+# stable's commits stay in main's ancestry. A squash strips that ancestry and
+# promote-main-to-stable.yml's pre-flight ancestry check then refuses the next
+# promote. review_enable_auto_merge.sh routes these PRs to `--merge` for the
+# same reason; every other PR keeps `--squash`.
+RB_MERGE_METHOD_FLAG="--squash"
+if [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/forward-merge-stable- ]]; then
+  RB_MERGE_METHOD_FLAG="--merge"
+  echo "RB_JUDGE_MERGE_METHOD pr=${PR_NUMBER:-unknown} method=merge reason=forward_merge_fallback head_ref=${POST_REVIEW_HEAD_REF}"
+fi
 # The checked-out commit is the code snapshot the judge can inspect. Live PR
 # metadata may advance after checkout, so it is not merge authorization.
 RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
@@ -2281,8 +2292,8 @@ case "${RB_ACTION}" in
         else
           rb_judge_merge_err_open
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
-            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
@@ -2373,8 +2384,8 @@ case "${RB_ACTION}" in
         else
           rb_judge_merge_err_open
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
-            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
@@ -2800,7 +2811,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       #     operator merged the PR and reran the judge to create the
       #     follow-up; or a concurrent workflow merged it).
       #   - PR_STATE="open" + PR_MERGEABLE="true" + ENABLE_AUTO_MERGE=
-      #     "true" + `gh pr merge --squash` (sync, NO --auto) returned
+      #     "true" + `gh pr merge` with RB_MERGE_METHOD_FLAG (sync, NO
+      #     --auto; `--squash`, or `--merge` for forward-merge PRs) returned
       #     0: required checks were all green and the PR is now
       #     atomically merged.
       # Set to "false" otherwise — including the protected-branch case
@@ -2888,7 +2900,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation
             # happens only against a definitively-merged base. With the
-            # check-runs gate above, `gh pr merge --squash` is now only
+            # check-runs gate above, `gh pr merge` (RB_MERGE_METHOD_FLAG:
+            # `--squash`, or `--merge` for forward-merge PRs) is now only
             # attempted when ALL check-runs have settled, so the merge
             # success (return 0) reliably implies the PR landed against
             # validated code.
@@ -2908,7 +2921,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             rb_judge_merge_err_open
             _match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")
             review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" "${_match_head_arg[@]}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
               rb_judge_merge_err_close
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"
