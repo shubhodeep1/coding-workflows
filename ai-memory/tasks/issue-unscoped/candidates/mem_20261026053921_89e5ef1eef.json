@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/scripts-pending-removal.md:337-338 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The documented jq preflight (`startswith(\"<!-- ai:pr6576-shard-followup:v1 -->\\n## PR #6576 \")`) is stricter than the runtime matcher `_is_result_comment` at scripts/pr6576_shard_followup.py:185-186, which tolerates leading whitespace and CRLF, yet the docs and changelog say it \"uses the same rule\".\n  WHY: A body the runtime guard accepts could produce no output from the preflight, so an operator could wrongly conclude the result was never posted. Today `build_report` emits exact LF bytes, so this is a documentation-accuracy nit. Reviewers rated it NIT or hardening, and the highest mapped severity is low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/scripts-pending-removal.md:338 | hardening suggestion (HARDENING_RISK_SCORE: 1)\n  PROBLEM: The registry entry says the `gh api ... startswith(...)` preflight \"uses the same rule\" as the runtime guard. The runtime check at scripts/pr6576_shard_followup.py:180-186 (`_is_result_comment`) tolerates leading whitespace, trailing whitespace on the first two lines, and CRLF. The jq requires the exact bytes `MARKER + \"\\n## PR #6576 \"`. The changelog fragment changelog.d/7072-pr6576-followup-guard-result-only.md inherits the same wording.\n  WHY: `build_report` (scripts/pr6576_shard_followup.py:632-638) always emits the exact format, so this is a documentation-accuracy nit rather than a runtime defect. Suggested fix: (a) reword to \"matches the runtime guard for the bodies `build_report` emits\", or (b) loosen the jq with a `test(...)` regex.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/scripts-pending-removal.md:337; scripts/pr6576_shard_followup.py:185-186 | severity=NIT | confidence=4\n  PROBLEM: The documented jq preflight is stricter than the runtime matcher. It requires the exact LF-separated marker and header, while `_is_result_comment` accepts leading whitespace and CRLF.\n  WHY: For a result comment with leading whitespace or CRLF, `cmd_guard` considers the result present, but the documented preflight prints no login. An operator following the removal checklist could wrongly conclude the result was never posted.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- docs/scripts-pending-removal.md:338 (vs scripts/pr6576_shard_followup.py:185-186) | severity=NIT | confidence=3\n  PROBLEM: The changelog fragment (changelog.d/7072-pr6576-followup-guard-result-only.md:5) and the registry entry say the preflight \"uses the same rule\" as the runtime guard. `_is_result_comment` tolerates leading whitespace and CRLF, while the jq `startswith(...)` requires exact byte equality.\n  WHY: Live `build_report` output (scripts/pr6576_shard_followup.py:633-635) satisfies both rules, so there is no current failure. If a future writer adds indentation or CRLF, the preflight would print no login while the guard reports done=true, which would delay registry removal.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d09c65722b43270fd14fe4a919c85f0c8ad72861a427e8b220fec78b0e140547",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8187,
+    "run_id": "40272945987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40272945987",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026053921_89e5ef1eef",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8187,
+    "run_id": "40272945987"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T05:39:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
