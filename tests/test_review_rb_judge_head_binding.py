@@ -622,6 +622,7 @@ def test_merge_method_follows_head_ref(head_ref: str, expected: str) -> None:
 	)
 	proc = subprocess.run(
 		["bash", "-c", script],
+		check=False,
 		env={"PATH": os.environ.get("PATH", ""), "POST_REVIEW_HEAD_REF": head_ref, "PR_NUMBER": "42"},
 		text=True,
 		capture_output=True,

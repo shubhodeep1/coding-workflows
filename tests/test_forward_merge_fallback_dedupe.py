@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import tempfile
+from pathlib import Path
 
 import yaml
 
@@ -123,7 +123,7 @@ def _run(checkout: Path, tmp: Path, *, pulls: list[dict], api_fail: bool = False
 			"CONFLICT_FILES": "f",
 		}
 	)
-	proc = subprocess.run(["bash", "-e", "-c", _step_body()], cwd=checkout, env=env, text=True, capture_output=True, timeout=120)
+	proc = subprocess.run(["bash", "-e", "-c", _step_body()], cwd=checkout, env=env, text=True, capture_output=True, timeout=120, check=False)
 	calls = [json.loads(line) for line in call_log.read_text(encoding="utf-8").splitlines() if line.strip()]
 	outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines() if "=" in line)
 	return proc, calls, outputs
@@ -182,7 +182,7 @@ def test_no_open_fallback_pr_opens_a_new_one() -> None:
 	with tempfile.TemporaryDirectory(prefix="fwd_merge_dedupe_") as td:
 		tmp = Path(td)
 		checkout = _setup(tmp, existing_has_tip=True)
-		proc, calls, outputs = _run(checkout, tmp, pulls=[_open_pr(7, "claude/unrelated")])
+		proc, _calls, outputs = _run(checkout, tmp, pulls=[_open_pr(7, "claude/unrelated")])
 		assert proc.returncode == 0, proc.stdout + proc.stderr
 		assert "FORWARD_MERGE_FALLBACK outcome=open_new" in proc.stdout
 		assert outputs.get("pr_number") == "9001"

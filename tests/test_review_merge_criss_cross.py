@@ -15,9 +15,9 @@ detect step and conflict-prepare scripts against it.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import tempfile
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DETECT = REPO_ROOT / "scripts" / "review_autofix_step_detect_merge_conflicts.sh"
@@ -126,7 +126,7 @@ def _run_detect(checkout: Path, tmp: Path, *, head_ref: str = "pr") -> tuple[sub
 			"GITHUB_WORKSPACE": str(checkout),
 		}
 	)
-	proc = subprocess.run(["bash", "-c", f'source "{DETECT}"'], cwd=checkout, env=env, text=True, capture_output=True, timeout=120)
+	proc = subprocess.run(["bash", "-c", f'source "{DETECT}"'], cwd=checkout, env=env, text=True, capture_output=True, timeout=120, check=False)
 	return proc, _github_env(github_env)
 
 
@@ -154,7 +154,7 @@ def _run_prepare(checkout: Path, tmp: Path, *, head_ref: str = "pr") -> tuple[su
 			"CONFLICT_RESOLVED": "false",
 		}
 	)
-	proc = subprocess.run(["bash", str(PREPARE)], cwd=checkout, env=env, text=True, capture_output=True, timeout=120)
+	proc = subprocess.run(["bash", str(PREPARE)], cwd=checkout, env=env, text=True, capture_output=True, timeout=120, check=False)
 	return proc, _github_env(github_env)
 
 
@@ -224,7 +224,7 @@ def test_prepare_without_the_criss_cross_flag_keeps_nothing_to_resolve() -> None
 				"CONFLICT_RESOLVER_PROMPT_FILE": str(runtime / "prompt.txt"),
 			}
 		)
-		proc = subprocess.run(["bash", str(PREPARE)], cwd=checkout, env=env, text=True, capture_output=True, timeout=120)
+		proc = subprocess.run(["bash", str(PREPARE)], cwd=checkout, env=env, text=True, capture_output=True, timeout=120, check=False)
 		assert proc.returncode == 0, proc.stdout + proc.stderr
 		assert "nothing to resolve" in proc.stdout
 		assert _github_env(github_env).get("MERGE_CONFLICT") == "false"
