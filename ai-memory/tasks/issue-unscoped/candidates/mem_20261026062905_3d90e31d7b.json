@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR DESCRIPTION, \"Changes\" section \u2014 \"adds `ai:orchestrator-managed` only for a wave item (`local_id` set) or a source issue that already had the label. Security-pass fix issues and unblock fix-ups have the label, so they keep it\"\n  expected_change_site: scripts/unblock_actions.py:817 (PR description text; alternate site scripts/orchestrate_poll_process.sh managed arm at line 18799)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: scripts/unblock_actions.py:817 creates standalone unblock fix-ups with `\"labels\": []`, so they never carry `ai:orchestrator-managed`, and re-issue through the managed arm with empty `local_id` drops the label under the new condition. This is a NIT: the code behaviour is intended and correct, and the inaccuracy is only in the PR description wording. Sonnet-5_5 notes no test depends on it, and minimax notes no test exercises the standalone unblock fix-up path.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: The PR description says the managed arm \"adds `ai:orchestrator-managed` only for a wave item (`local_id` set) or a source issue that already had the label. Security-pass fix issues and unblock fix-ups have the label, so they keep it.\"\n  Expected change site: PR description text only. No code change is needed.\n  Evidence of absence: `scripts/unblock_actions.py:817` creates the standalone unblock fix-up with `\"labels\": []`, so a standalone fix-up never carries `ai:orchestrator-managed`. Only the \"unblock fix-ups have the label\" wording is inaccurate.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: PR DESCRIPTION, \"Changes\" section \u2014 \"adds `ai:orchestrator-managed` only for a wave item (`local_id` set) or a source issue that already had the label. Security-pass fix issues and unblock fix-ups have the label, so they keep it\"\n  Expected change site: scripts/unblock_actions.py:817\n  Evidence of absence: The PR does not modify scripts/unblock_actions.py. Standalone unblock fix-ups are created at line 817 with `labels: []`, contradicting the stated intent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: PR DESCRIPTION, \"Changes\" section, \"adds `ai:orchestrator-managed` only for a wave item (`local_id` set) or a source issue that already had the label. Security-pass fix issues and unblock fix-ups have the label, so they keep it\".\n  Expected change site: PR DESCRIPTION prose vs. `scripts/unblock_actions.py:817` (or `scripts/orchestrate_poll_process.sh` managed arm at line 18799).\n  Evidence of absence: The standalone unblock fix-up creation passes `labels: []`; re-issue via the managed arm with empty `local_id` drops the managed label, contradicting the description. No test exercises the standalone unblock fix-up path; the agents and changelog fragments do not mention unblock fix-ups. Code behaviour is intentional; the defect is the description claim.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nTASK_GAP:\n- Requirement: PR DESCRIPTION, \"Changes\" section \u2014 \"Security-pass fix issues and unblock fix-ups have the label, so they keep it\"\n  Expected change site: scripts/unblock_actions.py:817\n  Evidence of absence: The standalone unblock judge creates fix-ups with `\"labels\": []` at scripts/unblock_actions.py:817. Re-issue via the managed arm with empty `local_id` (scripts/orchestrate_poll_process.sh:18799) correctly drops the label. Code is correct; the PR description is misleading.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b054187a5add60c5d10287f44fe671732f9929209d14c552d7b0f3e9f7446a9d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8178,
+    "run_id": "40276058955",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40276058955",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026062905_3d90e31d7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8178,
+    "run_id": "40276058955"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T06:29:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
