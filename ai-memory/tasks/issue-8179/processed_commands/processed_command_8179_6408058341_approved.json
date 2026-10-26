@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8179_6408058341_approved",
   "issue_number": 8179,
   "metadata": {
+    "branch": "ai/issue-8179",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/8179-hooks-job-steps-to-promote-stall.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 8179,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8179",
+    "pr_number": 8184,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8184",
+    "run_attempt": "1",
+    "run_id": "40267922236",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40267922236"
   },
   "run_attempt": 1,
   "run_id": "40267922236",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-26T04:15:51Z",
+  "status": "completed",
+  "timestamp": "2026-10-26T04:34:16Z",
   "workflow": "implement"
 }
