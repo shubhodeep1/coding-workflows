@@ -15,13 +15,14 @@ support="${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE:-.}/.codex-workflow-src/
 # write container on this script's snapshot (never on the host). The snapshot
 # then goes through the same syntax validation and scoped transfer as a codex
 # edit. Claude unavailable (exit 75) runs the isolated codex editor below.
-# A Codex hand-off leaves the codex_thread_reuse.sh fallback marker, so
-# implement_commit_changes.sh commits the edits as codex-bot, not claude-bot.
+# A Codex-written snapshot that reaches the host leaves the codex_thread_reuse.sh
+# fallback marker, so implement_commit_changes.sh commits the edits as
+# codex-bot, not claude-bot. Returns non-zero when the marker cannot be written.
 heal_mark_claude_unavailable()
 {
 	local runtime="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR:-}}"
 	[ -n "${runtime}" ] || return 0
-	{ mkdir -p "${runtime}/codex-thread-reuse/states" && : > "${runtime}/codex-thread-reuse/states/claude-implement.unavailable"; } 2>/dev/null || true
+	{ mkdir -p "${runtime}/codex-thread-reuse/states" && : > "${runtime}/codex-thread-reuse/states/claude-implement.unavailable"; } 2>/dev/null
 }
 heal_engine=codex
 if [ "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" = claude ]; then
@@ -29,7 +30,6 @@ if [ "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" = claude ]; then
 		heal_engine=claude
 	else
 		echo 'AI_ENGINE_FALLBACK role=IMPLEMENT reason=support_missing' >&2
-		heal_mark_claude_unavailable
 	fi
 fi
 root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/heal-isolated.XXXXXXXX")"
@@ -88,7 +88,6 @@ run_editor_claude()
 			# claude_run logged AI_ENGINE_FALLBACK role=IMPLEMENT reason=...
 			echo 'HEAL_ISOLATED_EDITOR phase=run engine=claude outcome=unavailable action=codex' >&2
 			heal_engine=codex
-			heal_mark_claude_unavailable
 			return 75
 			;;
 		80)
@@ -207,6 +206,12 @@ done
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" --scope-file "${scope}"; then
 	echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope" >&2
 	exit 42
+fi
+# Mark only once Codex edits reached the host: a Codex attempt that never
+# transferred must not relabel a later Claude-written heal commit, and a
+# later Claude success never clears edits Codex already transferred.
+if [ "${heal_engine}" = codex ] && ! heal_mark_claude_unavailable; then
+	echo '::warning::HEAL_ISOLATED_EDITOR phase=transfer engine=codex outcome=marker_write_failed (commit identity may read claude-bot)' >&2
 fi
 install -m 0600 "${root}/results/output" "${output}"
 echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=success reason=validated"

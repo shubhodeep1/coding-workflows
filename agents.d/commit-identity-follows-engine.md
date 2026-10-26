@@ -8,8 +8,8 @@
 
   | Writer | Role | Claude identity when |
   |---|---|---|
-  | `scripts/review_commit_changes.sh` (`[ai-autofix]`) | `REVIEW_EDITOR` | `AI_ENGINE_RESOLVED_REVIEW_EDITOR=claude` and `REVIEW_EDITOR_ENGINE_FELL_BACK` is not `true` (`scripts/review_apply_fixes.sh` writes `false` to `GITHUB_ENV` before each Claude attempt and `true` when that attempt hands off to OpenCode) |
-  | `scripts/implement_commit_changes.sh` | `IMPLEMENT`, `IMPLEMENT_REPAIR` | both resolved to `claude` and neither `claude-implement.unavailable` nor `claude-implement-repair.unavailable` exists under `${CODEX_THREAD_REUSE_RUNTIME_DIR:-$RUNTIME_DIR}/codex-thread-reuse/states` (`codex_thread_reuse.sh` writes them, and on the heal route `scripts/heal_isolated_implement.sh` writes `claude-implement.unavailable` when it hands off to Codex) |
+  | `scripts/review_commit_changes.sh` (`[ai-autofix]`) | `REVIEW_EDITOR` | `AI_ENGINE_RESOLVED_REVIEW_EDITOR=claude` and `REVIEW_EDITOR_ENGINE_FELL_BACK` is not `true` (`scripts/review_apply_fixes.sh` writes `true` to `GITHUB_ENV` when a Claude attempt hands off to OpenCode and `false` when a later Claude attempt succeeds) |
+  | `scripts/implement_commit_changes.sh` | `IMPLEMENT`, `IMPLEMENT_REPAIR` | both resolved to `claude` and neither `claude-implement.unavailable` nor `claude-implement-repair.unavailable` exists under `${CODEX_THREAD_REUSE_RUNTIME_DIR:-$RUNTIME_DIR}/codex-thread-reuse/states` (`codex_thread_reuse.sh` writes them, and on the heal route `scripts/heal_isolated_implement.sh` writes `claude-implement.unavailable` when a Codex-written snapshot is transferred to the host, and warns `outcome=marker_write_failed` when it cannot) |
   | `scripts/review_conflict_resolve.sh` (`[ai-merge-resolve]`) | `CONFLICT_RESOLVER` | the last model attempt ran on Claude (`resolver_commit_engine`) |
   | `scripts/review_rb_judge.sh` (`[judge-fix]`) and the poller's combined review-blocked judge (`scripts/orchestrate_poll_process.sh`) | `RB_JUDGE` | the fix pass did not return 75; the poller reads `${RUNTIME_DIR}/rb_judge_last_engine`, which `poller_judge_isolated` writes |
 

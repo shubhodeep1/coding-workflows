@@ -1113,26 +1113,33 @@ def test_no_writer_commits_as_the_github_linked_codex_email():
 	assert not offenders, offenders
 
 
-def test_review_editor_fallback_flag_resets_before_each_claude_attempt():
+def test_review_editor_fallback_flag_resets_only_after_a_claude_success():
 	"""An earlier attempt's OpenCode hand-off must not mark a later
-	Claude-written commit codex-bot: each Claude attempt resets the flag."""
+	Claude-written commit codex-bot, and a failed Claude attempt (which wrote
+	nothing) must not clear the latch left by OpenCode edits."""
 	text = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
 	branch = text.index('if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then\n    local editor_claude_rc=0')
-	reset = text.index('echo "REVIEW_EDITOR_ENGINE_FELL_BACK=false" >> "${GITHUB_ENV}"', branch)
 	claude_call = text.index('"${editor_opencode_cmd[@]}" claude < "${prompt_file}"', branch)
+	reset_line = 'if [ "${editor_claude_rc}" -eq 0 ] && [ -n "${GITHUB_ENV:-}" ]; then echo "REVIEW_EDITOR_ENGINE_FELL_BACK=false" >> "${GITHUB_ENV}"'
+	reset = text.index(reset_line, branch)
 	latch = text.index('echo "REVIEW_EDITOR_ENGINE_FELL_BACK=true" >> "${GITHUB_ENV}"', branch)
-	assert reset < claude_call < latch
+	assert claude_call < reset < latch
+	assert text.count('REVIEW_EDITOR_ENGINE_FELL_BACK=false') == 1
 
 
-def test_heal_editor_codex_handoff_leaves_the_fallback_marker(tmp_path):
-	"""The heal route never runs codex_thread_reuse.sh, so its Codex hand-off
-	writes the marker implement_commit_changes.sh reads."""
+def test_heal_editor_codex_transfer_leaves_the_fallback_marker(tmp_path):
+	"""The heal route never runs codex_thread_reuse.sh, so a Codex-written
+	snapshot that reaches the host writes the marker implement_commit_changes.sh
+	reads. A Codex attempt that never transferred leaves no marker."""
 	text = (REPO_ROOT / "scripts" / "heal_isolated_implement.sh").read_text(encoding="utf-8")
 	func = text[text.index("heal_mark_claude_unavailable()\n{"):text.index("heal_engine=codex\n")]
-	support_missing = text.index("echo 'AI_ENGINE_FALLBACK role=IMPLEMENT reason=support_missing' >&2")
-	assert text[support_missing:].split("\n", 2)[1].strip() == "heal_mark_claude_unavailable"
-	handoff = text.index("outcome=unavailable action=codex")
-	assert "heal_mark_claude_unavailable" in text[handoff:text.index("return 75", handoff)]
+	head = text[:text.index("transfer \"${WORKSPACE_PATH:-${PWD}}\"")]
+	assert head.count("heal_mark_claude_unavailable") == 1, "marker must not be written before the transfer"
+	transfer = text.index("phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope")
+	tail = text[transfer:]
+	assert 'if [ "${heal_engine}" = codex ] && ! heal_mark_claude_unavailable; then' in tail
+	assert "outcome=marker_write_failed" in tail
+	assert tail.index("heal_mark_claude_unavailable") < tail.index('install -m 0600 "${root}/results/output"')
 	for env, root in (({"RUNTIME_DIR": str(tmp_path / "rt")}, tmp_path / "rt"),
 			({"RUNTIME_DIR": str(tmp_path / "rt2"), "CODEX_THREAD_REUSE_RUNTIME_DIR": str(tmp_path / "reuse")}, tmp_path / "reuse")):
 		run_env = {k: v for k, v in os.environ.items() if k not in ("RUNTIME_DIR", "CODEX_THREAD_REUSE_RUNTIME_DIR")}
@@ -1146,3 +1153,10 @@ def test_heal_editor_codex_handoff_leaves_the_fallback_marker(tmp_path):
 	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + func + "\nheal_mark_claude_unavailable\n"],
 		env=run_env, capture_output=True, text=True)
 	assert result.returncode == 0, result.stderr
+	# A failed write is reported, so the caller can warn.
+	blocker = tmp_path / "blocked"
+	blocker.write_text("")
+	run_env["RUNTIME_DIR"] = str(blocker)
+	result = subprocess.run(["bash", "-c", func + "\nheal_mark_claude_unavailable\n"],
+		env=run_env, capture_output=True, text=True)
+	assert result.returncode != 0
