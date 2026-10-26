@@ -3,7 +3,8 @@
 The editor's stderr reaches tmp_err through the heartbeat FIFO and is printed
 only on failure, so a successful Claude editor run left no CLAUDE_POOL line in
 the job log. scripts/review_apply_fixes.sh now replays those lines after every
-attempt with a stage=editor prefix.
+attempt with a stage=editor prefix, together with the usage JSON line
+that claude_engine.py extract prints on success.
 """
 
 import subprocess
@@ -11,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 APPLY_FIXES = ROOT / "scripts" / "review_apply_fixes.sh"
-REPLAY_HEAD = "{ grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' \"${tmp_err}\" 2>/dev/null || true; } | sed "
+REPLAY_HEAD = "{ grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) |^\\{.*\"type\": \"result\"' \"${tmp_err}\" 2>/dev/null || true; } | sed "
 REPLAY = next(
 	line.strip()
 	for line in APPLY_FIXES.read_text(encoding="utf-8").splitlines()
@@ -60,3 +61,35 @@ def test_replay_neutralises_workflow_commands(tmp_path: Path) -> None:
 		"stage=editor CLAUDE_POOL run role=REVIEW_EDITOR ::error::forged",
 		"stage=editor AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=##\\[error]x 50%25",
 	]
+
+
+def test_replay_keeps_the_usage_line(tmp_path: Path) -> None:
+	usage = '{"duration_ms": 30000, "modelUsage": {"claude-opus-5-5": {"costUSD": 2.5}}, "num_turns": 5, "type": "result"}'
+	tmp_err = tmp_path / "err"
+	tmp_err.write_text(
+		"CLAUDE_POOL run role=REVIEW_EDITOR account=A outcome=success reason=result_success exit_code=0\n"
+		+ usage + "\n"
+		+ '{"type": "assistant", "note": "not a result"}\n'
+		+ 'model says {"type": "result"} mid-line\n',
+		encoding="utf-8",
+	)
+	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + REPLAY], env={"tmp_err": str(tmp_err), "PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=True)
+	assert result.stderr.splitlines() == [
+		"stage=editor CLAUDE_POOL run role=REVIEW_EDITOR account=A outcome=success reason=result_success exit_code=0",
+		"stage=editor " + usage,
+	]
+
+
+def test_raw_stderr_dumps_drop_the_replayed_usage_line(tmp_path: Path) -> None:
+	# The failure-path stderr dumps must not repeat the usage line the replay
+	# already logged, or cost_audit.py counts the editor's Claude call twice.
+	text = APPLY_FIXES.read_text(encoding="utf-8")
+	dump = "sed -e '/^{.*\"type\": \"result\"/d' \"${tmp_err}\""
+	assert 'cat "${tmp_err}"' not in text
+	assert 'cat "${final_editor_err}"' not in text
+	assert text.count(dump) == 3
+	assert text.count("sed -e '/^{.*\"type\": \"result\"/d' \"${final_editor_err}\"") == 1
+	tmp_err = tmp_path / "err"
+	tmp_err.write_text('CLAUDE_POOL x\n{"num_turns": 1, "type": "result"}\nboom\n', encoding="utf-8")
+	result = subprocess.run(["bash", "-c", dump], env={"tmp_err": str(tmp_err), "PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=True)
+	assert result.stdout.splitlines() == ["CLAUDE_POOL x", "boom"]
