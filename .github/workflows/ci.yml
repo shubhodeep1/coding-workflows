@@ -1273,6 +1273,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stall_retired_conflict_reissue.py
 
+      - name: Stall re-issue keeps ai:check-triage tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stall_reissue_check_triage_label.py
+
       - name: Stall reissue lineage label tests
         run: |
           set -euo pipefail
