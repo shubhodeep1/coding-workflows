@@ -127,6 +127,7 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 
 		expected_files = [
 			"Dockerfile.app",
+			"Dockerfile.app.dockerignore",
 			"_lib/tap_helpers.sh",
 			"docker-compose.test.yml",
 			"tests/00_canary.sh",
@@ -512,6 +513,39 @@ def test_renderer_deterministic_output_for_same_manifest() -> None:
 		files_b, hash_b = _snapshot_directory(out_b)
 		assert files_a == files_b
 		assert hash_a == hash_b
+
+
+def test_every_family_renders_empty_dockerfile_specific_ignore() -> None:
+	# Each family builds Dockerfile.app from the repo root with `COPY . /workspace`.
+	# The rendered Dockerfile.app.dockerignore makes BuildKit skip the consumer's
+	# root .dockerignore (fun-token-multi-chain#579), and must exclude nothing.
+	families = sorted(
+		path.name for path in TEMPLATES_ROOT.iterdir()
+		if path.is_dir() and path.name != "_shared" and (path / "Dockerfile.app.j2").is_file()
+	)
+	assert families, "no harness families with Dockerfile.app.j2 found"
+	for family in families:
+		with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+			temp_root = Path(td)
+			manifest_path = temp_root / "validate.yml"
+			output_root = temp_root / "out"
+			payload = _manifest_payload(family)
+			if family == "node-hardhat-solidity":
+				payload["entry"] = "hardhat.config.ts"
+				payload["slots"]["canary_tools"] = ["node", "npm", "npx", "forge"]
+			_write_yaml(manifest_path, payload)
+
+			result = _run_renderer(manifest_path, output_root)
+			assert result.returncode == 0, f"{family}: renderer failed: {result.stderr}"
+			assert (output_root / "Dockerfile.app").is_file(), family
+			ignore_path = output_root / "Dockerfile.app.dockerignore"
+			assert ignore_path.is_file(), f"{family}: Dockerfile.app.dockerignore missing"
+			patterns = [
+				line.strip()
+				for line in ignore_path.read_text(encoding="utf-8").splitlines()
+				if line.strip() and not line.strip().startswith("#")
+			]
+			assert patterns == [], f"{family}: harness dockerignore must exclude nothing: {patterns}"
 
 
 def test_renderer_output_root_basename_only_affects_expected_files() -> None:
