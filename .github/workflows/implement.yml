@@ -1767,7 +1767,12 @@ jobs:
             fi
           done
 
-          if [ -f .codex-workflow-src/agents.md ]; then
+          # Consumers get coding-workflows' agents.md as agents_canonical.md,
+          # ahead of their own. In coding-workflows itself the checkout's
+          # agents.md (with agents.d/ fragments) is that same file, and
+          # build_static_context.sh emits both, so staging it here inlined
+          # ~620 KB twice and pushed the prompt past codex's 1 MiB stdin cap.
+          if [ "${is_self_repo}" = "false" ] && [ -f .codex-workflow-src/agents.md ]; then
             install -m 0644 .codex-workflow-src/agents.md "${RUNTIME_DIR}/agents_canonical.md"
           fi
 
@@ -5458,7 +5463,9 @@ jobs:
               '' \
               "Closing with \`ai:closed\` instead of re-issuing. The wave-completion judge will verify and re-open this issue if the requested functionality is genuinely missing from the integration branch." \
               '' \
-              "Run: ${RUN_URL}")"
+              "Run: ${RUN_URL}" \
+              '' \
+              "<!-- ai:implement-success-noop:v1 issue=${ISSUE_NUMBER} -->")"
             gh_retry gh label create 'ai:closed' --repo "${REPO}" \
               --color '6b7280' --description 'Issue closed by automation (superseded, duplicated, or already complete)' \
               2>/dev/null || true
@@ -5472,7 +5479,8 @@ jobs:
             gh_retry gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" \
               --comment "${success_noop_body}" 2>/dev/null || \
             gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
-              -f body="${success_noop_body}" >/dev/null 2>&1 || true
+              -f body="${success_noop_body}" >/dev/null 2>&1 || \
+            echo "::warning::Could not post the success-no-op close comment on #${ISSUE_NUMBER}; without its marker the unblock judge reads a fix-up wait on this issue as not done."
             exit 0
           fi
 

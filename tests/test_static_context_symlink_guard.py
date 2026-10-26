@@ -444,6 +444,53 @@ def test_all_static_readme_assemblers_use_the_shared_reader() -> None:
 		assert "cat README.md" not in script_text
 
 
+def _implement_stage_support_run() -> str:
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8"))
+	for job in workflow["jobs"].values():
+		for step in job.get("steps", []):
+			if step.get("name") == "Stage workflow support files":
+				return step["run"]
+	raise AssertionError("implement support staging step not found")
+
+
+def test_implement_stages_canonical_agents_only_in_consumer_repos() -> None:
+	# In coding-workflows the checkout's agents.md is the canonical file;
+	# staging it as agents_canonical.md made build_static_context.sh inline it
+	# twice (1.19-1.34 MB implement prompts, 2026-10-19..26).
+	run = _implement_stage_support_run()
+	lines = run.splitlines()
+	start = next(i for i, line in enumerate(lines) if 'agents_canonical.md"' in line and "install -m 0644" in line)
+	block = "\n".join(lines[start - 1:start + 2])
+	assert block.strip().startswith('if [ "${is_self_repo}" = "false" ] && [ -f .codex-workflow-src/agents.md ]; then'), block
+	assert sum(1 for line in lines if "install" in line and "agents_canonical.md" in line) == 1
+	with tempfile.TemporaryDirectory(prefix="implement-agents-") as tmp_name:
+		tmp = Path(tmp_name)
+		(tmp / ".codex-workflow-src").mkdir()
+		(tmp / ".codex-workflow-src" / "agents.md").write_text("CANONICAL\n", encoding="utf-8")
+		for is_self_repo, staged in (("true", False), ("false", True)):
+			runtime = tmp / f"rt-{is_self_repo}"
+			runtime.mkdir()
+			subprocess.run(
+				["bash", "-c", f'set -euo pipefail\nis_self_repo="{is_self_repo}"\n{block}\n'],
+				cwd=tmp, env={**_safe_env(), "RUNTIME_DIR": str(runtime)}, check=True,
+			)
+			assert (runtime / "agents_canonical.md").exists() is staged, is_self_repo
+
+
+def test_implement_static_context_emits_agents_once_without_canonical_copy() -> None:
+	with tempfile.TemporaryDirectory(prefix="implement-static-") as tmp_name:
+		tmp = Path(tmp_name)
+		for name in ("unattended_system_instructions.md", "ai_pipeline.md"):
+			shutil.copy(REPO_ROOT / name, tmp / name)
+		(tmp / "agents.md").write_text("# Agents\nSELF_REPO_AGENTS_SENTINEL\n", encoding="utf-8")
+		out = tmp / "static.txt"
+		env = {**_safe_env(), "RUNTIME_DIR": str(tmp / "runtime")}
+		(tmp / "runtime").mkdir()
+		subprocess.run(["bash", str(REPO_ROOT / "scripts" / "build_static_context.sh"), "implement", str(out)], cwd=tmp, env=env, check=True)
+		text = out.read_text(encoding="utf-8")
+		assert text.count("SELF_REPO_AGENTS_SENTINEL") == 1
+
+
 def main() -> int:
 	for test in (
 		test_review_static_context_skips_symlink_and_preserves_regular_readme,
@@ -454,6 +501,8 @@ def main() -> int:
 		test_shared_readme_context_rejects_non_regular_inputs_and_output,
 		test_shared_readme_only_requires_readme_and_bounds_prompt_size,
 		test_all_static_readme_assemblers_use_the_shared_reader,
+		test_implement_stages_canonical_agents_only_in_consumer_repos,
+		test_implement_static_context_emits_agents_once_without_canonical_copy,
 	):
 		test()
 	readme_suite = subprocess.run(
