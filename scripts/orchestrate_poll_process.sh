@@ -31747,11 +31747,12 @@ _noop_cap_review_support_sha() {
 	return 0
 }
 NOOP_MAX_RETRIES=3
-# Git identity of the pipeline's productive commits (issue #7126). Every
-# [ai-autofix] / [judge-fix] writer commits as this identity
-# (scripts/review_commit_changes.sh, scripts/review_rb_judge.sh, and the
-# poller's own judge-fix commits), not as the GH_PAT login, so a commit
-# message alone never counts as productive work. Constants, not env vars.
+# Legacy git identity of the pipeline's productive commits (issue #7126):
+# the pair [ai-autofix] / [judge-fix] writers (scripts/review_commit_changes.sh,
+# scripts/review_rb_judge.sh, and the poller's own judge-fix commits) used
+# before the per-engine .invalid identities. The gate matches the full set in
+# NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON below, never the GH_PAT login, so a
+# commit message alone never counts as productive work. Constants, not env vars.
 NOOP_PRODUCTIVE_COMMIT_NAME="codex-bot"
 NOOP_PRODUCTIVE_COMMIT_EMAIL="codex@users.noreply.github.com"
 # Every identity a pipeline writer has committed as: the legacy pair above
