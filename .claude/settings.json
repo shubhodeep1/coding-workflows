@@ -68,7 +68,8 @@
       "CronCreate",
       "CronDelete",
       "CronList",
-      "PushNotification"
+      "PushNotification",
+      "mcp__claude-code-remote__create_session"
     ],
     "ask": [
       "Bash(git push * --delete*)",
