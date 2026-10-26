@@ -5474,7 +5474,8 @@ jobs:
             gh_retry gh issue close "${ISSUE_NUMBER}" --repo "${REPO}" \
               --comment "${success_noop_body}" 2>/dev/null || \
             gh_retry gh api "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" \
-              -f body="${success_noop_body}" >/dev/null 2>&1 || true
+              -f body="${success_noop_body}" >/dev/null 2>&1 || \
+            echo "::warning::Could not post the success-no-op close comment on #${ISSUE_NUMBER}; without its marker the unblock judge reads a fix-up wait on this issue as not done."
             exit 0
           fi
 

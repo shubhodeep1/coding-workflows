@@ -1563,8 +1563,14 @@ unblock_main()
 							return 0
 						fi
 						ops_file="${RUNTIME_DIR}/followup_handoff_ops.json"
+						# Pass --done-text only for the success-no-op case, so a merged
+						# fix-up keeps the call (and its text) unchanged.
+						local -a handoff_done_args=()
+						if [ "${fixup_done_text}" != "merged" ]; then
+							handoff_done_args=(--done-text "${fixup_done_text}")
+						fi
 						if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup-handoff --context-file "${RUNTIME_DIR}/context.json" \
-							--fixup "${wait_fixup}" --verdict "${followup_verdict}" > "${ops_file}" \
+							--fixup "${wait_fixup}" --verdict "${followup_verdict}" ${handoff_done_args[@]+"${handoff_done_args[@]}"} > "${ops_file}" \
 							|| ! unblock_run_ops "${ops_file}"; then
 							# The wait stays open, so the next run retries; the keyed
 							# operator step and the hold marker make that idempotent.

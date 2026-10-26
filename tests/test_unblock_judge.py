@@ -3415,6 +3415,26 @@ def test_followup_handoff_ops_are_retryable_and_validated(tmp_path: Path) -> Non
 	assert result.returncode == 0 and json.loads(result.stdout)["ops"][2]["handoff_retry"] is True
 
 
+def test_followup_handoff_text_says_closed_as_already_implemented(tmp_path: Path) -> None:
+	# #8191: a fix-up closed by implement's success-no-op guard did not merge.
+	ctx = _ctx(stop="scope-blocked", protected_rejection=PROTECTED)
+	ops = actions.followup_handoff_ops(ctx, 50, "descope", "closed as already implemented")
+	assert "Fix-up #50 closed as already implemented, but" in ops[1]["body"]
+	assert "fix-up closed as already implemented, but implementation run 555" in ops[1]["body"]
+	assert " merged" not in ops[1]["body"] and "merged" not in ops[2]["text"]
+	assert ops[2]["text"].endswith("fix-up closed as already implemented, not resumed, the item stays blocked")
+	# The default keeps the merged wording byte-identical.
+	assert actions.followup_handoff_ops(ctx, 50, "descope") == actions.followup_handoff_ops(ctx, 50, "descope", "merged")
+	with pytest.raises(actions.UsageError):
+		actions.followup_handoff_ops(ctx, 50, "descope", "anything else")
+	context = tmp_path / "context.json"
+	context.write_text(json.dumps({"repo": "o/r", "kind": "issue", "item": 7, "stop": "scope-blocked", "labels": ["ai:scope-blocked"],
+		"tracking": None, "title": "T", "protected_rejection": PROTECTED}), encoding="utf-8")
+	result = subprocess.run([sys.executable, str(ACTIONS), "followup-handoff", "--context-file", str(context), "--fixup", "50",
+		"--verdict", "operator_step", "--done-text", "closed as already implemented"], capture_output=True, text=True, check=False)
+	assert result.returncode == 0 and "closed as already implemented" in json.loads(result.stdout)["ops"][2]["text"]
+
+
 def test_judge_merged_fixup_hands_off_instead_of_resuming(tmp_path: Path) -> None:
 	# Regression for #6887: the fix-up of an operator_step verdict merged while
 	# the automation-path rejection was still the newest guard result.
