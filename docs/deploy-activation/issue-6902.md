@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:48-50`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-26
-- Last note: tele-funtoken syncing (9/13). All 4 remaining repos already run the full wrapper set; profile choice re-asked for all 4 (Q5). Install PRs on hold.
+- Last note: WORKFLOW_PROFILE=full on the 4 repos (Q5: A). Next: merge the 4 install PRs and run each updater once.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -64,6 +64,8 @@
      listing was truncated by `head -8`). `core` would freeze 10 existing wrappers, so Q2 is re-asked together with Q5.
    - 2026-10-26: tele-funtoken-msg-scoring is syncing again: `repository_dispatch` updater runs succeeded at
      2026-10-25T14:46:48Z (v1.40.1) and 2026-10-25T20:09:49Z (v1.40.2).
+   - 2026-10-26: operator answered Q5: A (replaces Q2/Q3). `WORKFLOW_PROFILE=full` set on all 4 repos ("Updated" x4);
+     read back `full` for btc_sweeper, atlas-bridge.gd, mongo-explorer; fbc_shutdown read-back missing from paste, re-check next.
 10. [ ] Merge the 5 PRs and run each repo's `ai-update-workflows.yml` once
 11. [ ] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A)
 
