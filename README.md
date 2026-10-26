@@ -3038,7 +3038,7 @@ engine label before reporting that PR; a label-write failure stops the run.
 **Model and effort.** A role keeps its existing model variable when the value
 starts with `claude-`; otherwise it uses Opus 5.5 (`claude-opus-5-5`), or
 Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`, `RETRO`, `MATERIALITY`,
-`SUMMARISER` and `BEHAVIOURAL_SMOKE`. The role's existing reasoning value is
+`SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER` and `REVIEW_CONSOLIDATOR`. The role's existing reasoning value is
 the effort, with `none` / `minimal` mapped to `low`. Codex model variables are
 never rewritten.
 
