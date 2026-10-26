@@ -4261,6 +4261,9 @@ def _prepush_select_planned_paths(
 			return None, "malformed_json"
 	if not isinstance(payload, dict):
 		return None, "malformed_json"
+	# The module always emits both keys; a response missing one is incomplete.
+	if "companion_files" not in payload or "affected_tests" not in payload:
+		return None, "malformed_json"
 	companions = payload.get("companion_files", [])
 	affected = payload.get("affected_tests", [])
 	if not isinstance(companions, list) or not isinstance(affected, list):
@@ -4370,8 +4373,16 @@ def augment_files_touched(
 		totals["added"] += len(added)
 		totals["truncated"] += truncated
 		_prepush_augment_log(f"issue={log_id} added={len(added)} truncated={truncated}")
-	if totals["added"] > 0:
-		data[PREPUSH_AUGMENTED_PATHS_KEY] = recorded
+	# Write the marker back when paths were added, or when dropping ignored or
+	# empty-issue entries changed it, so model-supplied junk is not kept.
+	original_marker = recorded_raw if PREPUSH_AUGMENTED_PATHS_KEY in data else {}
+	totals["marker_changed"] = 0
+	if totals["added"] > 0 or recorded != original_marker:
+		totals["marker_changed"] = 1
+		if recorded:
+			data[PREPUSH_AUGMENTED_PATHS_KEY] = recorded
+		else:
+			data.pop(PREPUSH_AUGMENTED_PATHS_KEY, None)
 	return totals
 
 
@@ -4411,10 +4422,10 @@ def cmd_augment_files_touched(args: argparse.Namespace) -> int:
 			validate_decomposition(copy.deepcopy(data))
 		except OrchestrateError:
 			_prepush_augment_log("outcome=skipped reason=post_validate_failed")
-			summary["added"] = 0
+			summary.update({"issues": 0, "added": 0, "truncated": 0, "skipped": 0, "marker_changed": 0})
 			_print_json(summary)
 			return 0
-		if totals["added"] > 0 and getattr(args, "write_back", False):
+		if (totals["added"] > 0 or totals.get("marker_changed")) and getattr(args, "write_back", False):
 			try:
 				_prepush_write_json_atomic(path, data)
 				summary["written"] = True
