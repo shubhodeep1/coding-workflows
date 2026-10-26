@@ -12855,6 +12855,7 @@ heal_integration_branch_conflict() {
             "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
       echo "  [integration-heal] Pre-flight merge probe: ${integration_branch} merges cleanly into ${default_branch}; clearing conflict state without dispatching for PR #${final_pr}."
       mark_integration_sync_clean "${default_branch}"
+      _dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "${final_pr}" "${default_branch}" || true
       return 0
     fi
   fi
@@ -12990,6 +12991,7 @@ heal_integration_branch_conflict() {
     if [ "${_ihbc_pr_mergeable}" = "true" ]; then
       echo "  [integration-heal] Lifetime cap reached but PR #${final_pr} is now mergeable (late-finishing resolver dispatch landed); clearing conflict state instead of terminalizing."
       mark_integration_sync_clean "${default_branch}"
+      _dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "${final_pr}" "${default_branch}" || true
       return 0
     fi
     if _has_active_autofix_run "${final_pr}" "${integration_branch}"; then
@@ -13353,6 +13355,7 @@ Runbook (if you need to rebuild the integration branch): [Rebuild integration br
       post_state_comment || true
     fi
     mark_integration_sync_clean "${default_branch}"
+    _dispatch_integration_test_repair "${TRACKING_NUM:-}" "${integration_branch}" "" "${default_branch}" || true
     return 0
   fi
 
@@ -24487,6 +24490,120 @@ _dispatch_review_for_conflicts()
 	return 1
 }
 
+# _dispatch_integration_test_repair <tracking_issue> <integration_branch> <final_pr> [default_branch]
+#
+# Pre-push test gate, plan phase P5 (#8210): after a clean default-branch
+# sync or a sibling squash-merge into orchestrator/project-*, dispatch the
+# final PR's review workflow with post_sync_test_repair=true so the review
+# run gates the new integration head and repairs failures it caused.
+#
+# API budget (unattended section 14): at most one `gh workflow run` per new
+# integration head SHA and no REST/GraphQL read. The head comes from a local
+# `git fetch`; the wrapper choice reads the default branch's workflow files
+# with `git show`. The candidate order matches _dispatch_review_for_conflicts,
+# but only a wrapper whose default-branch copy declares the input
+# (`post_sync_test_repair:` alone on its line, so a `with:` pass-through does
+# not count) is used: in this repo that is review_autofix.yml, because
+# internal-review.yml cannot forward the input before it is on main
+# (PR #4438 startup_failure). _has_active_autofix_run is deliberately not
+# used (it reads the runs API); the SHA dedupe plus the review concurrency
+# group bound duplicates. A dispatch counts toward
+# INTEGRATION_CONFLICT_LIFETIME_MAX and records integration_test_repair_sha
+# only on success. Always returns 0. Log prefix: PREPUSH_TEST_GATE
+# phase=integration. Kill switch: PREPUSH_TEST_GATE_MODE=off.
+_dispatch_integration_test_repair()
+{
+	local tracking_issue="${1:-}" integration_branch="${2:-}" final_pr="${3:-}" default_branch="${4:-${CWS_DEFAULT_BRANCH:-}}"
+	local log="PREPUSH_TEST_GATE phase=integration tracking_issue=${tracking_issue:-none}"
+	local mode head prev total cap wf wf_found=""
+	mode="$(printf '%s' "${PREPUSH_TEST_GATE_MODE:-repair}" | tr '[:upper:]' '[:lower:]')"
+	if [ "${mode}" = "off" ]; then
+		echo "${log} outcome=skipped reason=mode_off"
+		return 0
+	fi
+	if [ -z "${STATE_FILE:-}" ] || [ ! -f "${STATE_FILE}" ]; then
+		echo "${log} outcome=skipped reason=state_unavailable"
+		return 0
+	fi
+	if [ -z "${final_pr}" ]; then
+		final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
+	fi
+	if ! [[ "${final_pr}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "${log} outcome=skipped reason=no_final_pr"
+		return 0
+	fi
+	if ! [[ "${integration_branch}" =~ ^orchestrator/project-[1-9][0-9]*$ ]]; then
+		echo "${log} outcome=skipped reason=no_integration_branch"
+		return 0
+	fi
+	if ! [[ "${default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+		echo "${log} outcome=skipped reason=default_branch_unknown"
+		return 0
+	fi
+	git fetch --no-tags --quiet origin \
+		"+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
+		"+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" 2>/dev/null || true
+	head="$(git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch}^{commit}" 2>/dev/null || true)"
+	if ! [[ "${head}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "${log} outcome=skipped reason=head_unavailable"
+		return 0
+	fi
+	# Fail closed: an unreadable state would defeat both the SHA dedupe and
+	# the lifetime cap.
+	if ! prev="$(jq -r '.integration_test_repair_sha // ""' "${STATE_FILE}" 2>/dev/null)" \
+		|| ! total="$(jq -r '.integration_conflict_total_dispatches // 0' "${STATE_FILE}" 2>/dev/null)" \
+		|| ! [[ "${total}" =~ ^[0-9]+$ ]]; then
+		echo "${log} outcome=skipped reason=state_unavailable"
+		return 0
+	fi
+	if [ "${prev}" = "${head}" ]; then
+		echo "${log} outcome=skipped reason=already_dispatched sha=${head}"
+		return 0
+	fi
+	cap="${INTEGRATION_CONFLICT_LIFETIME_MAX:-10}"
+	[[ "${cap}" =~ ^[0-9]+$ ]] || cap=10
+	if [ "${total}" -ge "${cap}" ]; then
+		echo "${log} outcome=skipped reason=lifetime_cap sha=${head} total=${total} cap=${cap}"
+		return 0
+	fi
+	for wf in ai-review.yml internal-review.yml review_autofix.yml; do
+		if git show "refs/remotes/origin/${default_branch}:.github/workflows/${wf}" 2>/dev/null \
+			| grep -Eq '^[[:space:]]+post_sync_test_repair:[[:space:]]*$'; then
+			wf_found="${wf}"
+			break
+		fi
+	done
+	if [ -z "${wf_found}" ]; then
+		echo "${log} outcome=skipped reason=wrapper_input_absent sha=${head}"
+		return 0
+	fi
+	if grep -qx "${final_pr}" "${_CONFLICT_DISPATCH_TRACKER:-/dev/null}" 2>/dev/null; then
+		echo "${log} outcome=skipped reason=already_dispatched_this_tick pr=${final_pr}"
+		return 0
+	fi
+	# No --ref: the run executes the default branch's workflow file (#4701).
+	if gh_retry gh workflow run "${wf_found}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		-f pr_number="${final_pr}" \
+		-f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS:-true}" \
+		-f post_sync_test_repair=true 2>/dev/null; then
+		jq --arg sha "${head}" \
+			'.integration_test_repair_sha = $sha
+			 | .integration_conflict_total_dispatches = ((.integration_conflict_total_dispatches // 0) + 1)' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+		[ -z "${_CONFLICT_DISPATCH_TRACKER:-}" ] || echo "${final_pr}" >> "${_CONFLICT_DISPATCH_TRACKER}"
+		echo "${log} outcome=dispatched pr=${final_pr} sha=${head} workflow=${wf_found}"
+		# Persist the dedupe SHA now so a later failure in this tick cannot
+		# cause a second dispatch for the same head.
+		if declare -F post_state_comment >/dev/null 2>&1; then
+			post_state_comment >/dev/null 2>&1 || echo "::warning::${log} state write after dispatch failed; dedupe relies on the next state write."
+		fi
+	else
+		echo "::warning::${log} outcome=dispatch_failed pr=${final_pr} sha=${head} workflow=${wf_found}"
+	fi
+	return 0
+}
+
 # _dispatch_rb_judge_for_pr <pr_number> [issue_number]
 #
 # Trigger review_rb_judge_dispatch.yml via workflow_dispatch for the
@@ -27439,6 +27556,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		      echo "  PR #${RTM_PR} merge initiated."
 		    fi
 		    refresh_integration_backpressure_gate_after_merge || true
+		    if [ "${ORCH_MERGE_BOUND_OUTCOME}" = "merged" ]; then
+		      _dispatch_integration_test_repair "${TRACKING_NUM:-}" "${RTM_INTEGRATION_BRANCH:-}" "" "${CWS_DEFAULT_BRANCH:-}" || true
+		    fi
 		  else
 		    echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
 		  fi
