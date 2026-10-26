@@ -2672,7 +2672,7 @@ to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, 
 / `ai:codex` labels select it per run. On Claude a role uses its existing
 model variable only when that value starts with `claude-`, else Opus 5.5
 (`claude-opus-5-5`), or Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`,
-`RETRO`, `MATERIALITY`, `SUMMARISER` and `BEHAVIOURAL_SMOKE`; the reasoning
+`RETRO`, `MATERIALITY`, `SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER` and `REVIEW_CONSOLIDATOR`; the reasoning
 column is the effort (`none` / `minimal` → `low`). Apart from the
 `anthropic/claude-sonnet-5.5` slot (`PANEL_REVIEWER`), the reviewer rows have no
 engine switch. When Claude is unavailable (exit 75, `AI_ENGINE_FALLBACK`),

@@ -217,16 +217,21 @@ jobs:
           usage = None
           for line in text.splitlines():
               if line.startswith("{") and '"type": "result"' in line:
-                  usage = json.loads(line)
+                  try:
+                      parsed = json.loads(line)
+                  except ValueError:
+                      continue
+                  if isinstance(parsed, dict):
+                      usage = parsed
           if usage is None:
               print(f"CACHE_LAYOUT_PROBE layout={layout} call={call} outcome=no_usage exit_code={rc}")
               sys.exit(0)
-          u = usage.get("usage", {})
+          u = usage.get("usage") or {}
           print(
               f"CACHE_LAYOUT_PROBE layout={layout} call={call} outcome=ok account={account} "
               f"num_turns={usage.get('num_turns')} cache_read={u.get('cache_read_input_tokens', 0)} "
               f"cache_write={u.get('cache_creation_input_tokens', 0)} input={u.get('input_tokens', 0)} "
-              f"cost_usd={usage.get('total_cost_usd', 0):.4f}"
+              f"cost_usd={float(usage.get('total_cost_usd') or 0):.4f}"
           )
           PY
             done
