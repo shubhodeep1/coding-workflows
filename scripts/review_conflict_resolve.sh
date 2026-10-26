@@ -1454,6 +1454,7 @@ _resolver_test_repair_main()
     TRACKING_ISSUE_TITLE="$(_resolver_test_repair_untrusted "TRACKING ISSUE TITLE" "${_test_repair_title}")" \
     TRACKING_ISSUE_BODY="$(_resolver_test_repair_untrusted "TRACKING ISSUE BODY" "${_test_repair_body}")" \
     MERGED_SUB_ISSUES_LIST="${_test_repair_merged_list}" MERGED_SUB_ISSUE_COUNT="${_test_repair_merged_count}" \
+    INTEGRATION_FINGERPRINTS_FILE="${INTEGRATION_FINGERPRINTS_FILE:-}" \
     PROMPT_TPL="${tpl}" PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; p=os.environ.get('INTEGRATION_FINGERPRINTS_FILE',''); fp=(open(p,encoding='utf-8',errors='replace').read() if (p and os.path.isfile(p) and os.access(p, os.R_OK)) else '{}'); tpl=tpl.replace('{{INTENT_FINGERPRINTS_JSON}}', fp); sys.stdout.write(tpl)" \
     > "${rendered}"; then
     _resolver_test_repair_log "outcome=skipped reason=render_failed"

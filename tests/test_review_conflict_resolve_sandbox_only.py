@@ -1302,7 +1302,7 @@ def _test_repair_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
 	return repo, runtime, result
 
 
-def _run_test_repair(tmp_path: Path, mode: str, result_override: str | None = None) -> tuple[subprocess.CompletedProcess, Path, Path]:
+def _run_test_repair(tmp_path: Path, mode: str, result_override: str | None = None, fp_json: str = "") -> tuple[subprocess.CompletedProcess, Path, Path]:
 	repo, runtime, result = _test_repair_fixture(tmp_path)
 	github_env = tmp_path / "github_env"
 	github_env.touch()
@@ -1311,7 +1311,7 @@ def _run_test_repair(tmp_path: Path, mode: str, result_override: str | None = No
 _resolver_test_repair_context() {
   _test_repair_title="t" _test_repair_body="b" _test_repair_merged_list="none" _test_repair_merged_count=0
   INTEGRATION_FINGERPRINTS_FILE="${RUNTIME_DIR}/fp.json"
-  printf '{}' > "${INTEGRATION_FINGERPRINTS_FILE}"
+  if [ -n "${FP_JSON:-}" ]; then printf '%s' "${FP_JSON}"; else printf '{}'; fi > "${INTEGRATION_FINGERPRINTS_FILE}"
 }
 _resolver_sandbox_attempt() {
   printf 'sandbox-attempt %s prompt=%s\\n' "$1" "${_effective_prompt_file}" >> "$CALLS"
@@ -1331,6 +1331,7 @@ _resolver_test_repair_main
 		"BASE_BRANCH": "main", "MODE": mode, "CALLS": str(calls), "GITHUB_WORKSPACE": str(tmp_path / "none"),
 		"RESOLVER_TEST_REPAIR_RESULT_FILE": result_override if result_override is not None else str(result),
 		"RESOLVER_TEST_REPAIR_BUDGET_SECS": "7000", "PREPUSH_TEST_GATE_MODE": "repair",
+		"FP_JSON": fp_json,
 	})
 	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program], cwd=repo, env=env, capture_output=True, text=True)
 	return proc, repo, github_env
@@ -1349,6 +1350,17 @@ def test_test_repair_commits_one_repair_on_the_integration_head(tmp_path):
 	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in prompt
 	assert "orchestrator/project-1" in prompt and "{{" not in prompt.split("=== CAPTURED")[0]
 	assert "lib.py" in (tmp_path / "runtime" / "integration_test_repair" / "allow.txt").read_text(encoding="utf-8")
+
+
+def test_test_repair_prompt_carries_the_intent_fingerprints(tmp_path):
+	# The context helper sets INTEGRATION_FINGERPRINTS_FILE as a plain shell
+	# variable; the renderer must still receive it, or the model gets "{}".
+	fp = '{"11":{"must_contain":[{"file":"lib.py","pattern":"keep_me_marker"}]}}'
+	proc, _repo, _env = _run_test_repair(tmp_path, "none", fp_json=fp)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=no_edits" in proc.stderr, proc.stderr
+	rendered = (tmp_path / "runtime" / "integration_test_repair" / "rendered-template.txt").read_text(encoding="utf-8")
+	assert "keep_me_marker" in rendered and "{{INTENT_FINGERPRINTS_JSON}}" not in rendered
 
 
 @pytest.mark.parametrize("mode,reason", [("stray", "check_resolver_diff"), ("fail", "editor_exit_1")])

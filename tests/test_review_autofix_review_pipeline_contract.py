@@ -10768,9 +10768,16 @@ def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 		"Mark linked issues ready to merge",
 		"Single-issue security pass",
 		"Review-blocked judge decision",
+		# With the judge skipped its outputs are empty, so the exhaustion
+		# fallbacks would label, comment, poll and page without a verdict.
+		"Mark linked issues review-blocked (autofix exhaustion)",
+		"Force orchestrate poll after review-blocked exhaustion",
+		"Post review-blocked comment on PR (autofix exhaustion)",
+		"Telegram review-blocked judge decision",
+		"Telegram success",
 	):
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
-	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 21
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 26
 
 
 def test_post_sync_test_repair_commit_is_pushed() -> None:
