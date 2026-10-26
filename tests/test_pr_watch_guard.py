@@ -263,6 +263,15 @@ def test_template_parity():
 		)
 
 
+def test_settings_match_template_rejects_any_other_difference():
+	template = '{\n  "permissions": {\n    "allow": [\n      "Read"\n    ]\n  }\n}\n'
+	live = template.replace('"Read"', '"Read",\n      "mcp__claude-code-remote__create_session"')
+	assert claude_template_drift.settings_match_template(template, live)
+	assert not claude_template_drift.settings_match_template(template, template)
+	assert not claude_template_drift.settings_match_template(template, live.replace('session"', 'session",\n      "Bash(*)"'))
+	assert not claude_template_drift.settings_match_template(template, live.replace('"Read"', '"Write"'))
+
+
 def test_claude_md_documents_the_rule():
 	text = CLAUDE_MD.read_text(encoding="utf-8")
 	assert "## §25. PR Watching Is Disabled (MANDATORY)" in text
