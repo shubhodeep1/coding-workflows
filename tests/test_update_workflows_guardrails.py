@@ -302,7 +302,14 @@ def test_wrapper_template_third_party_actions_are_sha_pinned() -> None:
 				continue
 			if not _TEMPLATE_PINNED_ACTION_RE.fullmatch(value):
 				unpinned.append(f"{template_path.name}: {value}")
-	assert not unpinned, f"third-party actions must be pinned to a 40-hex SHA: {unpinned}"
+	assert not unpinned, (
+		"third-party actions must be pinned to <owner>/<repo>@<40-hex SHA> "
+		f"or docker://<image>@sha256:<64-hex>: {unpinned}"
+	)
+	# The docker:// branch has no template user yet; pin both sides of it.
+	assert _TEMPLATE_PINNED_ACTION_RE.fullmatch("docker://ubuntu@sha256:" + "a" * 64)
+	assert not _TEMPLATE_PINNED_ACTION_RE.fullmatch("docker://ubuntu@sha256:" + "a" * 63)
+	assert not _TEMPLATE_PINNED_ACTION_RE.fullmatch("docker://ubuntu:latest")
 
 
 _SUPPORT_TEMPLATE = """jobs:
