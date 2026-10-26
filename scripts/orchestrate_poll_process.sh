@@ -31655,8 +31655,8 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 #     by the pipeline's own login (`unblock_trusted_login`, the filter
 #     `_noop_gate_failure_alert` uses). An unresolved login skips the PR.
 #   - A productive commit needs the `[ai-autofix]` / `[judge-fix]` prefix
-#     AND the pipeline git identity (NOOP_PRODUCTIVE_COMMIT_NAME /
-#     _EMAIL) as author or committer.
+#     AND one pipeline git identity (a name/email pair from
+#     NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON) as author or committer.
 #     Before a force-merge it must also have been pushed by the pipeline
 #     login (repository activity API push actor, Gate C binding).
 #   - The snapshot head must equal the Gate A head, and the merge is bound
