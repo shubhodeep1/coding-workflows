@@ -112,6 +112,8 @@ def settings_match_template(template_text: str, live_text: str) -> bool:
 		live = json.loads(live_text)
 	except ValueError:  # malformed settings JSON is a mismatch, not a traceback
 		return False
+	if not isinstance(template, dict) or not isinstance(live, dict) or not isinstance(live.get("permissions"), dict):
+		return False  # valid JSON of the wrong shape is a mismatch too
 	live_allow = live.get("permissions", {}).get("allow", [])
 	extras = tuple(live_allow[len(live_allow) - len(LIVE_ONLY_ALLOW_RULES):])
 	if extras != LIVE_ONLY_ALLOW_RULES:

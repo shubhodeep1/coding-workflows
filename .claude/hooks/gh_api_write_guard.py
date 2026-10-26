@@ -196,7 +196,7 @@ _MANAGED_SETTINGS_FILES = (
 	"/etc/claude-code/managed-settings.json",
 	"/Library/Application Support/ClaudeCode/managed-settings.json",
 )
-# In Auto mode a brace / ANSI-C / comment hazard keeps its ask when the command
+# In Auto mode a brace / ANSI-C / comment hazard is denied (never steps aside) when the command
 # holds an `@` or an escape that can produce one (`\x40`, `\100`), because the
 # hazard could turn a word into a file-backed `-F key=@file` field (#4619).
 _AUTO_HAZARD_FILE_FIELD_RE = re.compile(r"@|\\(?:[xuU][0-9A-Fa-f]|[0-7])")
