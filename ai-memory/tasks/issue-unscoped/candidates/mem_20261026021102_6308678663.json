@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/deploy-activation/issue-6902.md:48 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The checked-off step 8 heading still states the superseded profile choice (core on btc_sweeper and atlas-bridge.gd, standard on mongo-explorer and fbc_shutdown), while the sub-bullets at lines 57-68 record Q5: A setting `WORKFLOW_PROFILE=full` on all 4 repos.\n  WHY: A reader who relies on the headings gets the wrong profile state; reviewers rated it NIT, mapped here to low.\n- docs/deploy-activation/issue-6902.md:75 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The checked-off step 11 heading names v1.40.0, while the sub-bullets at lines 76-80 record verification on v1.40.2 (`5596e7520ef4`).\n  WHY: An auditor of the verified release is misled by the heading; reviewers rated it NIT, mapped here to low.\n- docs/deploy-activation/issue-6902.md:71 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The stale \"Next: one manual updater run in the 4 newly installed repos\" bullet remains in the checked-off step 10, although lines 72-74 record that the run was done.\n  WHY: A reader scanning for outstanding work sees a false pending action item; rated NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- docs/deploy-activation/issue-6902.md:48 | severity=NIT | confidence=4\n  PROBLEM: The heading lists outdated profile settings (core on btc_sweeper and atlas-bridge.gd, standard on mongo-explorer and fbc_shutdown) while the sub-bullets at lines 57-68 note that Q5: A set 'full' on all 4 repos.\n  WHY: Documentation is misleading for future operators, though no code logic fails.\n- docs/deploy-activation/issue-6902.md:75 | severity=NIT | confidence=4\n  PROBLEM: The heading lists the outdated release version v1.40.0 while the sub-bullets note a successful v1.40.2 sync.\n  WHY: Documentation is misleading for future operators, though no code logic fails.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/deploy-activation/issue-6902.md:48 (step 8 heading) versus lines 57-69 | severity=NIT | confidence=4\n  PROBLEM: The checked-off step 8 heading asserts the superseded profile decision (Q2: A / Q3: A) while the sub-bullets record CORRECTION entries superseding it with Q5: A and `WORKFLOW_PROFILE=full` on all four repos.\n  WHY: An operator reading only the headings would conclude the wrong profiles are in use, because the real state appears only in the sub-bullets.\n- docs/deploy-activation/issue-6902.md:75 (step 11 heading) versus lines 76-80 | severity=NIT | confidence=4\n  PROBLEM: The step 11 heading says the 13 consumers were verified on v1.40.0, but the body and the \"Last note\" record verification on v1.40.2 (`5596e7520ef4`).\n  WHY: An auditor reading the headings looks for v1.40.0 evidence and finds none, and misses the holding reasons that depend on the v1.40.2 verification.\n- TASK_GAP checks (6 items, all reported as requirement met, no gap): all 13 consumers synced to v1.40.2; tele-funtoken-msg-scoring#4885 hold removal; the four updater-install PRs with `WORKFLOW_PROFILE=full`; 37 ticked lines; 14 held entries with reasons; no changelog or agents.d fragment needed. confidence=5\n- HARDENING_SUGGESTIONS: (1) append \" \u2014 superseded by Q5: A (final: full on all 4)\" to the step 8 heading at line 48 (HARDENING_RISK_SCORE: 1); (2) append \" \u2014 verified on v1.40.2 (5596e7520ef4)\" to the step 11 heading at line 75 (HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/deploy-activation/issue-6902.md:48 (compare with lines 63-68) | severity=NIT | confidence=5\n  PROBLEM: The checked-off heading says the four repositories use `core` and `standard` profiles, but the later correction records that Q5 replaced those choices and `WORKFLOW_PROFILE=full` was set on all four.\n  WHY: An operator relying on the heading gets information that contradicts the recorded final configuration.\n- docs/deploy-activation/issue-6902.md:75 (compare with lines 76-80) | severity=NIT | confidence=5\n  PROBLEM: The heading says the 13 consumers were verified on v1.40.0, while the verification records that all 13 are synced to v1.40.2.\n  WHY: An operator auditing which release was verified cannot rely on the heading, which names a different release.\n- HARDENING_SUGGESTIONS: NONE (HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- docs/deploy-activation/issue-6902.md:48 (vs lines 57-68) | severity=NIT | confidence=4\n  PROBLEM: The step 8 heading still states the superseded decision (Q2: A / Q3: A), while the body records that Q2/Q3 were re-asked as Q5 and `WORKFLOW_PROFILE=full` was set on all 4 repos.\n  WHY: A future operator reading the [x] headings would conclude the four repos run core/standard profiles and could decide against the wrong profile, since `full` appears only in the sub-bullets.\n- docs/deploy-activation/issue-6902.md:75 (vs lines 76 and 80) | severity=NIT | confidence=4\n  PROBLEM: The step 11 heading says \"all 13 consumers show a successful updater run on v1.40.0\", but the verification bullets at lines 76 and 80 ran against v1.40.2 (`5596e7520ef4`).\n  WHY: The line 17 status (\"All 13 consumers synced to v1.40.2\") and the heading (v1.40.0) disagree, so an auditor must read the sub-bullets to learn the verified pin.\n- docs/deploy-activation/issue-6902.md:71 (within step 10, lines 69-74) | severity=NIT | confidence=4\n  PROBLEM: The \"Next: one manual updater run in the 4 newly installed repos\" bullet remains, but the next bullet records that the dispatch was done on 2026-10-26 (btc_sweeper run 40254082471, and others).\n  WHY: A reader parsing the runbook for outstanding work takes the \"Next:\" line as an open action item, producing a false pending task.\n- Note: the tick and held arithmetic in the Notes section checks out (37 ticked, 14 held, 12 synced plus pending atlas-bridge.gd at line 79 gives 13 at line 80), and no deliverable is missing from the PR description.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3797195ada508054245e27d91882167e1ba9704b0e8a17b55a8decf399f4c586",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8172,
+    "run_id": "40255817339",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40255817339",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026021102_6308678663",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8172,
+    "run_id": "40255817339"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T02:11:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
