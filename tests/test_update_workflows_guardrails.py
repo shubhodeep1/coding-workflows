@@ -285,6 +285,23 @@ def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
 		assert f"@{VALID_RELEASE_SHA} # stable" in rendered_text
 
 
+_TEMPLATE_USES_LINE_RE = re.compile(r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*['\"]?(?P<value>[^'\"\s#]+)", re.MULTILINE)
+_TEMPLATE_PINNED_ACTION_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[^@\s]+)?@[0-9a-f]{40}\Z")
+
+
+def test_wrapper_template_third_party_actions_are_sha_pinned() -> None:
+	"""Consumers gate on full-SHA action refs (fun-token-multi-chain#640); the renderer keeps them as written."""
+	unpinned = []
+	for template_path in sorted(WORKFLOW_TEMPLATES_DIR.glob("*.yml")):
+		for match in _TEMPLATE_USES_LINE_RE.finditer(template_path.read_text(encoding="utf-8")):
+			value = match.group("value")
+			if value.startswith(("./", "shubhodeep1/coding-workflows/.github/workflows/")):
+				continue
+			if not _TEMPLATE_PINNED_ACTION_RE.fullmatch(value):
+				unpinned.append(f"{template_path.name}: {value}")
+	assert not unpinned, f"third-party actions must be pinned to a 40-hex SHA: {unpinned}"
+
+
 _SUPPORT_TEMPLATE = """jobs:
   review:
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
