@@ -273,16 +273,19 @@ jobs:
           # from its own run-id branch. Both PRs resolved the same conflict
           # separately, so once the first merged, the second had two merge
           # bases with main, conflicted on GitHub and never merged.
-          # API budget (CLAUDE.md §15): one REST list of open PRs into main,
-          # issued only on this fallback path. The calls below cannot answer
+          # API budget (CLAUDE.md §15): one paginated REST list of open PRs
+          # into main (one call per 100 PRs), issued only on this fallback
+          # path. Only same-repository heads count, so a fork PR whose ref
+          # name matches a leftover origin branch cannot suppress the new
+          # PR. The calls below cannot answer
           # it: `gh pr create` runs after the branch push, and
           # resolve_existing_pr_number only looks up this run's own branch.
           # Fail open: if the list or a branch fetch fails, open a new PR as
           # before, because a missing PR would strand the stable fix.
           STABLE_TIP="$(git rev-parse origin/stable)"
           EXISTING_FALLBACK_PRS=""
-          if ! EXISTING_FALLBACK_PRS="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" \
-            --jq '.[] | select(.head.ref | startswith("auto/forward-merge-stable-")) | "\(.number) \(.head.ref)"' 2>/dev/null)"; then
+          if ! EXISTING_FALLBACK_PRS="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" --paginate \
+            --jq '.[] | select((.head.repo.full_name // "") == env.GITHUB_REPOSITORY and (.head.ref | startswith("auto/forward-merge-stable-"))) | "\(.number) \(.head.ref)"' 2>/dev/null)"; then
             EXISTING_FALLBACK_PRS=""
             echo "::warning::Could not list open forward-merge PRs; opening a new fallback PR without the duplicate check."
           fi

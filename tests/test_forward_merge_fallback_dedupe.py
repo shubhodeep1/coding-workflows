@@ -129,8 +129,8 @@ def _run(checkout: Path, tmp: Path, *, pulls: list[dict], api_fail: bool = False
 	return proc, calls, outputs
 
 
-def _open_pr(number: int, ref: str) -> dict:
-	return {"number": number, "head": {"ref": ref}}
+def _open_pr(number: int, ref: str, repo: str = "o/r") -> dict:
+	return {"number": number, "head": {"ref": ref, "repo": {"full_name": repo}}}
 
 
 def _remote_branches(checkout: Path) -> list[str]:
@@ -152,6 +152,20 @@ def test_open_pr_carrying_the_stable_tip_is_reused() -> None:
 		api_calls = [call for call in calls if call[:1] == ["api"]]
 		assert len(api_calls) == 1
 		assert api_calls[0][1] == "repos/o/r/pulls?state=open&base=main&per_page=100"
+		assert "--paginate" in api_calls[0]
+
+
+def test_fork_pr_with_a_matching_ref_name_is_not_reused() -> None:
+	with tempfile.TemporaryDirectory(prefix="fwd_merge_dedupe_") as td:
+		tmp = Path(td)
+		checkout = _setup(tmp, existing_has_tip=True)
+		pulls = [_open_pr(8169, "auto/forward-merge-stable-100-1", repo="fork/r")]
+		proc, calls, outputs = _run(checkout, tmp, pulls=pulls)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		assert "FORWARD_MERGE_FALLBACK outcome=open_new" in proc.stdout
+		assert "reused_pr_number" not in outputs
+		assert any(call[:2] == ["pr", "create"] for call in calls), calls
+		assert outputs.get("pr_number") == "9001"
 
 
 def test_open_pr_for_an_older_stable_tip_does_not_block_a_new_pr() -> None:

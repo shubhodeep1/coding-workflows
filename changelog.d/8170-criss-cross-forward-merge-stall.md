@@ -7,7 +7,7 @@ Forward-merge PR #8170 sat open with "merge" judge decisions it could never carr
 | --- | --- |
 | Forward-merge runs per release for one `stable` commit | 2 (push + `sync-to-main` dispatch) |
 | Fallback PRs opened for one `stable` commit, before / after | up to 2 / 1 |
-| Extra GitHub API calls | 1 REST list, only on the forward-merge fallback path |
+| Extra GitHub API calls | 1 paginated REST list (one call per 100 open PRs), only on the forward-merge fallback path |
 | New env var | `MERGE_CRISS_CROSS_CLEAN` (step-to-step, defaults `false`) |
 
 What this means for operators: a PR that GitHub marks conflicting while the pipeline's own merge is clean now gets an `[ai-merge-resolve]` merge commit on its next review run instead of looping until the conflict-attempt cap. Forward-merge PRs that the judge merges land as merge commits, so `promote-main-to-stable.yml`'s ancestry pre-flight keeps passing.
