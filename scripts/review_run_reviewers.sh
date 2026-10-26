@@ -719,7 +719,7 @@ run_cache_probe() {
 Return exactly the word CACHE_PROBE_OK.
 EOF
   {
-    cat ./pre_assembled_static.txt
+    cat "${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}"
     echo
     cat "${probe_prompt_file}"
   } > "${probe_out}"
@@ -1133,6 +1133,28 @@ prepare_reviewer_filtered_artifacts() {
 # ── End reviewer uninteresting-file filter helpers ──────────────────
 
 prepare_reviewer_filtered_artifacts
+
+# ── Reviewer static prefix ───────────────────────────────────────────
+# review_autofix.yml writes ${RUNTIME_DIR}/reviewer_static_context.txt: the
+# shared ./pre_assembled_static.txt without the inlined workflow-source
+# agents.md (reviewers read the checkout's agents.md / AGENTS.md with their
+# file tools when a diff needs it). Every reviewer-prompt reader below uses
+# REVIEWER_STATIC_CONTEXT_PATH. Fall back to the shared file when the
+# reviewer copy is missing, empty or not a regular file.
+REVIEWER_STATIC_CONTEXT_PATH="${PWD}/pre_assembled_static.txt"
+REVIEWER_STATIC_CONTEXT_SOURCE="shared"
+if [ -n "${RUNTIME_DIR:-}" ] \
+   && [ -f "${RUNTIME_DIR}/reviewer_static_context.txt" ] \
+   && [ ! -L "${RUNTIME_DIR}/reviewer_static_context.txt" ] \
+   && [ -s "${RUNTIME_DIR}/reviewer_static_context.txt" ]; then
+  REVIEWER_STATIC_CONTEXT_PATH="${RUNTIME_DIR}/reviewer_static_context.txt"
+  case "${REVIEWER_STATIC_CONTEXT_PATH}" in
+    /*) ;;
+    *) REVIEWER_STATIC_CONTEXT_PATH="${PWD}/${REVIEWER_STATIC_CONTEXT_PATH}" ;;
+  esac
+  REVIEWER_STATIC_CONTEXT_SOURCE="reviewer"
+fi
+echo "REVIEWER_STATIC_CONTEXT source=${REVIEWER_STATIC_CONTEXT_SOURCE} bytes=$(wc -c < "${REVIEWER_STATIC_CONTEXT_PATH}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
 
 # ── Reviewer risk-tier helpers ───────────────────────────────────────
 REVIEWER_RISK_TIER_FILE="${RUNTIME_DIR}/reviewer_risk_tier.txt"
@@ -2127,10 +2149,11 @@ prepare_reviewer_scoped_context() {
       --semble-fallback marker
     )
   fi
-  # Reviewer prompts are prefixed with pre_assembled_static.txt; overflow
+  # Reviewer prompts are prefixed with REVIEWER_STATIC_CONTEXT_PATH; overflow
   # Semble telemetry counts static_dup_bytes against it.
   local targeted_static_file=""
-  [ ! -s ./pre_assembled_static.txt ] || targeted_static_file="${PWD}/pre_assembled_static.txt"
+  local reviewer_targeted_static_path="${REVIEWER_STATIC_CONTEXT_PATH:-${PWD}/pre_assembled_static.txt}"
+  [ ! -s "${reviewer_targeted_static_path}" ] || targeted_static_file="${reviewer_targeted_static_path}"
   if ! SEMBLE_STATIC_CONTEXT_FILE="${targeted_static_file}" "${targeted_file_context_args[@]}" || [ ! -s "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}" ]; then
     write_reviewer_scope_summary "full-diff" "failed to render scoped reviewer file context"
     return 1
@@ -2592,8 +2615,8 @@ fi
 #
 # codex-cli's `turn/start` imposes a hard 1,048,576-character stdin cap on
 # the WHOLE prompt.  The assembled reviewer prompt (see
-# assemble_reviewer_prompt) is `pre_assembled_static.txt` (unattended
-# system instructions + agents.md) plus a separately framed README,
+# assemble_reviewer_prompt) is REVIEWER_STATIC_CONTEXT_PATH (unattended
+# system instructions, without agents.md) plus a separately framed README,
 # this reviewer template, the checklist, and memory/semble
 # context, all wrapped OUTSIDE the _embed_input_file budget, PLUS the
 # budgeted body.  The historical flat 800KB embed budget was sized against
@@ -2612,8 +2635,8 @@ REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES="$(reviewer_parse_positive_int_env REVIEW
 REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES="$(reviewer_parse_positive_int_env REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES 200000)"
 _PROMPT_BUDGET_TOTAL_BYTES="$(reviewer_parse_positive_int_env _PROMPT_BUDGET_TOTAL_BYTES 800000)"
 reviewer_static_prefix_bytes=0
-if [ -f ./pre_assembled_static.txt ]; then
-  reviewer_static_prefix_bytes="$(wc -c < ./pre_assembled_static.txt 2>/dev/null | tr -d '[:space:]' || printf '0')"
+if [ -f "${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}" ]; then
+  reviewer_static_prefix_bytes="$(wc -c < "${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
 fi
 if ! [[ "${reviewer_static_prefix_bytes}" =~ ^[0-9]+$ ]]; then
   reviewer_static_prefix_bytes=0
@@ -3039,7 +3062,7 @@ if [ "${reviewer_semble_should_query}" = "true" ] \
    && [ -s "${REVIEWER_SEMBLE_QUERY_FILE}" ] \
    && declare -F semble_query_block >/dev/null 2>&1; then
   REVIEWER_SEMBLE_STATIC_FILE=""
-  [ ! -s ./pre_assembled_static.txt ] || REVIEWER_SEMBLE_STATIC_FILE=./pre_assembled_static.txt
+  [ ! -s "${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}" ] || REVIEWER_SEMBLE_STATIC_FILE="${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}"
   SEMBLE_STATIC_CONTEXT_FILE="${REVIEWER_SEMBLE_STATIC_FILE}" semble_query_block \
     "$(cat "${REVIEWER_SEMBLE_QUERY_FILE}")" \
     "${SEMBLE_REVIEWER_PROMPT_CHUNKS:-12}" \
@@ -3201,7 +3224,7 @@ assemble_reviewer_prompt() {
   local prompt_body_file="$2"
   local extra_context_file="${3:-}"
   {
-    cat ./pre_assembled_static.txt
+    cat "${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}"
     echo
     if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
       echo "=== BEGIN UNTRUSTED PR README.MD (trimmed) ==="
