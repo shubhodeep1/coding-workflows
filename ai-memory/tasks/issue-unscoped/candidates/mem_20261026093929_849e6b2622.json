@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stable_e2e_step_verify_bait_removed.sh:413 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus, minimax_minimax-m3]\n  PROBLEM: The comment still says the panel is \"6 reviewers\", but this PR removed qwen/qwen3.7-plus, leaving five. The comment is the stated reason for the EDITOR_RETRY_BUDGET_MINUTES default.\n  WHY: It is a stale comment with no runtime impact, and the file is outside the PR's changed files. All three reviewers rated it NIT.\n- scripts/review_run_reviewers.sh:1161-1164 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `source=shared` fallback silently restores the full ~658 KB agents.md prefix, and only a `::warning::` marks it. This is a hardening suggestion with HARDENING_RISK_SCORE 1, not a defect.\n  WHY: In the review job, `source=shared` means the reviewer copy was never written, was emptied, or was replaced by a symlink. The warning is easy to miss, and the cost regression is silent.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"the panel drops from six models to five ... Updated the roster-based tier/failback tests, plus the `agents.md` / README roster text (corrections in place).\"\n  expected_change_site: the reviewer-panel roster comment in scripts/stable_e2e_step_verify_bait_removed.sh (EDITOR_RETRY_BUDGET_MINUTES justification block, lines 410-416)\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: scripts/stable_e2e_step_verify_bait_removed.sh:410-416 still says \"6 reviewers + consolidator + editor + conflict resolver\". No hunk touches this file, although README.md (lines 2865, 3005) and agents.md (line 2652) were updated to five.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stable_e2e_step_verify_bait_removed.sh:413 | severity=NIT | confidence=4\n  PROBLEM: The comment \"is 6 reviewers + consolidator + editor + conflict resolver and\" is stale, because the panel now has five reviewers. The file is not part of this PR. The reviewer found the \"6 reviewers\" text at `review_run_reviewers.sh:2634` correct as written, because it records a past incident.\n  WHY: It does not fail at runtime. It is a stale comment only, and the budget value is unchanged.\n- TASK_GAP (dropped as invalid, severity=NIT, confidence=1):\n  Requirement: \"Reviewer prompts no longer inline `agents.md`... replaced by one line telling reviewers to read the checkout's `agents.md` / `AGENTS.md`.\"\n  Expected change site: `.github/workflows/review_autofix.yml`, step \"Pre-assemble static context\", and `scripts/review_run_reviewers.sh`.\n  Evidence of absence: not a gap. The replacement text is the `=== REPOSITORY NOTES ===` block in `review_autofix.yml`, and a test asserts it is present.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP | severity=NIT | confidence=4\n  Requirement: \"the panel drops from six models to five (...)\" and \"Updated the roster-based tier/failback tests, plus the `agents.md` / README roster text (corrections in place).\"\n  Expected change site: the reviewer-panel roster comment in `scripts/stable_e2e_step_verify_bait_removed.sh` (the `EDITOR_RETRY_BUDGET_MINUTES` justification block).\n  Evidence of absence: `scripts/stable_e2e_step_verify_bait_removed.sh:410-416` still reads \"is 6 reviewers + consolidator + editor + conflict resolver and\". No hunk touches that file, while README.md (lines 2865, 3005) and agents.md (line 2652) were updated to five.\n- HARDENING scripts/review_run_reviewers.sh:1161-1164 | HARDENING_RISK_SCORE=1\n  PROBLEM: The `shared` fallback silently restores the full `./pre_assembled_static.txt` prefix (~658 KB of agents.md), and only a `::warning::` marks it.\n  WHY: In the review job `source=shared` indicates a wiring regression, and the warning is easy to miss.\n  SUGGESTED FIX: Add a `::error::` line next to the existing `::warning::` and keep the fail-open fallback (about 1 line changed).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/stable_e2e_step_verify_bait_removed.sh:413 | severity=NIT | confidence=4\n  PROBLEM: The comment still says \"6 reviewers\", but this PR removed qwen/qwen3.7-plus, leaving five. The comment justifies the EDITOR_RETRY_BUDGET_MINUTES default of 25 minutes.\n  WHY: The comment is stale documentation. The reviewer says the timeout may be unnecessarily long or the reviewer count overestimated. The file is outside the PR's changed files.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "aac812d4f646809cd04870ecea62d4eb8608c9599f7931bae082598b7276a6cc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8194,
+    "run_id": "40296227693",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40296227693",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026093929_849e6b2622",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8194,
+    "run_id": "40296227693"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T09:39:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
