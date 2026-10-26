@@ -80,7 +80,7 @@ jobs:
       contents: read
     steps:
       - name: Check out trusted non-retryable backfill support
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           repository: shubhodeep1/coding-workflows
           ref: stable
@@ -118,7 +118,7 @@ jobs:
       # `ref: stable` is a render token: installed wrappers pin it to the same
       # release SHA as the reusable-workflow refs (scripts/workflow_wrapper_refs.py).
       - name: Check out trusted security-hold sweep support
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           repository: shubhodeep1/coding-workflows
           ref: stable
@@ -158,7 +158,7 @@ jobs:
     steps:
       # `ref: stable` is a render token here too (tele-funtoken-msg-scoring#4566).
       - name: Check out trusted provider-outage support
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           repository: shubhodeep1/coding-workflows
           ref: stable
