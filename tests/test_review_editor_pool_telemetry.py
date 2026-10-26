@@ -78,3 +78,16 @@ def test_replay_keeps_the_usage_line(tmp_path: Path) -> None:
 		"stage=editor CLAUDE_POOL run role=REVIEW_EDITOR account=A outcome=success reason=result_success exit_code=0",
 		"stage=editor " + usage,
 	]
+
+
+def test_raw_stderr_dumps_drop_the_replayed_usage_line(tmp_path: Path) -> None:
+	# The failure-path stderr dumps must not repeat the usage line the replay
+	# already logged, or cost_audit.py counts the editor's Claude call twice.
+	text = APPLY_FIXES.read_text(encoding="utf-8")
+	dump = "sed -e '/^{.*\"type\": \"result\"/d' \"${tmp_err}\""
+	assert 'cat "${tmp_err}"' not in text
+	assert text.count(dump) == 3
+	tmp_err = tmp_path / "err"
+	tmp_err.write_text('CLAUDE_POOL x\n{"num_turns": 1, "type": "result"}\nboom\n', encoding="utf-8")
+	result = subprocess.run(["bash", "-c", dump], env={"tmp_err": str(tmp_err), "PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=True)
+	assert result.stdout.splitlines() == ["CLAUDE_POOL x", "boom"]

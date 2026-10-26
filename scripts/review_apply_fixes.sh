@@ -2533,7 +2533,9 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
     if [ -s "${tmp_err}" ]; then
       echo "Editor stderr on attempt ${attempt}:"
-      cat "${tmp_err}"
+      # The usage JSON line was already replayed above as stage=editor; drop it
+      # here so cost_audit.py does not count the same Claude call twice.
+      sed -e '/^{.*"type": "result"/d' "${tmp_err}"
     fi
     rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
     exit 78
@@ -2839,13 +2841,17 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     fi
     if [ -s "${tmp_err}" ]; then
       echo "Editor stderr on attempt ${attempt}:"
-      cat "${tmp_err}"
+      # The usage JSON line was already replayed above as stage=editor; drop it
+      # here so cost_audit.py does not count the same Claude call twice.
+      sed -e '/^{.*"type": "result"/d' "${tmp_err}"
     fi
   else
     echo "Editor execution failed on attempt ${attempt}."
     if [ -s "${tmp_err}" ]; then
       echo "Editor stderr on attempt ${attempt}:"
-      cat "${tmp_err}"
+      # The usage JSON line was already replayed above as stage=editor; drop it
+      # here so cost_audit.py does not count the same Claude call twice.
+      sed -e '/^{.*"type": "result"/d' "${tmp_err}"
     fi
   fi
   if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
