@@ -18746,11 +18746,13 @@ STALL_EOF
       STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
       [ -n "${_stall_reissue_close_msg}" ] || _stall_reissue_close_msg="Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
 
-      local orig_title orig_body orig_issue_json orig_issue_is_heal
-      orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null)}' || echo "")"
+      local orig_title orig_body orig_issue_json orig_issue_is_heal orig_issue_is_managed orig_issue_is_triage
+      orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null), managed: ([.labels[]?.name] | index("ai:orchestrator-managed") != null), triage: ([.labels[]?.name] | index("ai:check-triage") != null)}' || echo "")"
       orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
       orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
       orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
+      orig_issue_is_managed="$(printf '%s' "${orig_issue_json}" | jq -r '.managed // false' 2>/dev/null || echo false)"
+      orig_issue_is_triage="$(printf '%s' "${orig_issue_json}" | jq -r '.triage // false' 2>/dev/null || echo false)"
       if [ -z "${orig_title}" ]; then
         echo "::warning::Could not read source issue #${issue_num} for re-issue; keeping it and its PR open."
         # Spend a recovery attempt so a persistent failure reaches skip/escalate.
@@ -18782,7 +18784,26 @@ REISSUE_EOF
 
       local new_url new_url_clean new_num
       ensure_label_exists "ai:clarification"
-      ensure_label_exists "ai:orchestrator-managed"
+      # Standalone stall recovery reaches this arm too: its run_stall_judge
+      # step calls invoke_stall_judge with an empty local_id, and a
+      # close_and_reissue verdict lands here. Mark the replacement
+      # ai:orchestrator-managed only when it really is managed: a wave item
+      # (local_id set) or a source issue that already carried the label (for
+      # example a security-pass fix issue). A standalone source that gained the
+      # label had no project and no tracking line, so the integration-ref
+      # resolver refused it (btc_sweeper#209 -> #223, coding-workflows#7511,
+      # #7515). ai:check-triage is carried for the same reason: the body keeps
+      # the check-failure-triage header, and without the label the resolver
+      # refuses it with label_missing and triage dedup stops seeing it.
+      local -a _reissue_lineage_label_args=()
+      if [ "${orig_issue_is_managed}" = true ] || { [ -n "${local_id}" ] && [ "${local_id}" != "null" ]; }; then
+        ensure_label_exists "ai:orchestrator-managed"
+        _reissue_lineage_label_args+=(--label "ai:orchestrator-managed")
+      fi
+      if [ "${orig_issue_is_triage}" = true ]; then
+        ensure_label_exists "ai:check-triage"
+        _reissue_lineage_label_args+=(--label "ai:check-triage")
+      fi
       local -a _heal_reissue_label_args=()
       if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp='; then
         new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_num}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
@@ -18790,11 +18811,10 @@ REISSUE_EOF
         _heal_reissue_label_args=(--label 'ai:workflow-heal')
       fi
       mapfile -t _engine_label_args < <(engine_label_create_args)
-      new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" \
+      new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} ${_reissue_lineage_label_args[@]+"${_reissue_lineage_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
-        --label "ai:clarification" \
-        --label "ai:orchestrator-managed" 2>/dev/null || echo "")"
+        --label "ai:clarification" 2>/dev/null || echo "")"
       new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
       new_num="$(basename "${new_url_clean%%[?#]*}")"
       if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
@@ -23192,15 +23212,17 @@ STALL_EOF
         local orig_body
         local orig_issue_json
         local orig_issue_is_heal
+        local orig_issue_is_triage
         local new_body
         local new_url
         local new_url_clean
         local bt='`'
         local new_num
-        orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null)}' || echo "")"
+        orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null), triage: ([.labels[]?.name] | index("ai:check-triage") != null)}' || echo "")"
         orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
         orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
         orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
+        orig_issue_is_triage="$(printf '%s' "${orig_issue_json}" | jq -r '.triage // false' 2>/dev/null || echo false)"
 
         local _std_reissue_extra="" _std_reissue_close_msg=""
         if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
@@ -23229,6 +23251,14 @@ REISSUE_EOF
         fi
         [ -n "${_std_reissue_close_msg}" ] || _std_reissue_close_msg="Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
         ensure_label_exists "ai:clarification"
+        # Keep ai:check-triage on a triage issue's replacement: the copied body
+        # keeps the check-failure-triage header, and without the label the
+        # integration-ref resolver refuses it with label_missing.
+        local -a _std_reissue_lineage_label_args=()
+        if [ "${orig_issue_is_triage}" = true ] || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:check-triage") != null' >/dev/null 2>&1; then
+          ensure_label_exists "ai:check-triage"
+          _std_reissue_lineage_label_args=(--label "ai:check-triage")
+        fi
         local -a _heal_reissue_label_args=()
         if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
           new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_num}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
@@ -23238,7 +23268,7 @@ REISSUE_EOF
         new_url=""
         if [ -n "${orig_title}" ]; then
           mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
-          new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+          new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} ${_std_reissue_lineage_label_args[@]+"${_std_reissue_lineage_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         else
           # Source read failed: skip the create; the failure branch keeps both open.
           echo "::warning::Could not read source issue #${issue_num} for re-issue; keeping it and its PR open."
