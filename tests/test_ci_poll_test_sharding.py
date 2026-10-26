@@ -1645,6 +1645,80 @@ class MovedHooksJobStepsContractTest(unittest.TestCase):
 				self.assertEqual(GROUP_PINNED_STEPS.get(name), 2)
 
 
+# Steps moved out of tests-release-and-log-analysis, which took 15m01s of its
+# 20 minutes (run 40368173231, budget-watch issue #8208): step name -> module
+# paths its body names.
+RELEASE_TO_HEAL_SOURCE_JOB_ID = "tests-release-and-log-analysis"
+RELEASE_TO_HEAL_TARGET_JOB_ID = "tests-heal-plan-and-validation"
+RELEASE_TO_HEAL_SETUP_STEP = "Install Python CI dependencies"
+MOVED_RELEASE_TO_HEAL_STEPS = {
+	"Mark-stable release-tag refspec contract test": (
+		"tests/test_mark_stable_release_tag_refspec_contract.py",
+	),
+	"Release CI gate tests (stubbed gh; both release workflows)": (
+		"tests/test_release_ci_gate.py",
+	),
+	"Cancelled CI sweep recovery tests": (
+		"tests/test_ci_cancelled_rerun.py",
+	),
+	"Conflict-dispatch active-run visibility contract tests": (
+		"tests/test_conflict_dispatch_active_run_visibility.py",
+		"tests/test_review_dispatch_default_branch.py",
+	),
+}
+
+
+class MovedReleaseToHealStepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-release-and-log-analysis run once, in one job (#8208)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_heal_job(self) -> None:
+		for name in MOVED_RELEASE_TO_HEAL_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[RELEASE_TO_HEAL_TARGET_JOB_ID],
+				)
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_RELEASE_TO_HEAL_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_RELEASE_TO_HEAL_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[RELEASE_TO_HEAL_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_RELEASE_TO_HEAL_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_heal_job_setup(self) -> None:
+		names = [step.get("name") for step in self.jobs()[RELEASE_TO_HEAL_TARGET_JOB_ID]["steps"]]
+		setup_index = names.index(RELEASE_TO_HEAL_SETUP_STEP)
+		for name in MOVED_RELEASE_TO_HEAL_STEPS:
+			with self.subTest(step=name):
+				self.assertLess(setup_index, names.index(name))
+
+
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
 PROMOTE_CYCLE_JOB_ID = "tests-release-and-log-analysis"
 PROMOTE_CYCLE_AWK_RE = re.compile(
