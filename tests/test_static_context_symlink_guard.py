@@ -357,30 +357,6 @@ def test_all_static_readme_assemblers_use_the_shared_reader() -> None:
 		assert "cat README.md" not in script_text
 
 
-def main() -> int:
-	for test in (
-		test_review_static_context_skips_symlink_and_preserves_regular_readme,
-		test_phase_static_context_skips_symlinks_but_keeps_canonical_agents,
-		test_orchestrator_static_context_guards_symlinks,
-		test_shared_readme_context_rejects_non_regular_inputs_and_output,
-		test_shared_readme_only_requires_readme_and_bounds_prompt_size,
-		test_all_static_readme_assemblers_use_the_shared_reader,
-	):
-		test()
-	readme_suite = subprocess.run(
-		[sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_review_static_context_readme.py"],
-		cwd=REPO_ROOT, env=_safe_env(), check=False,
-	)
-	if readme_suite.returncode != 0:
-		return readme_suite.returncode
-	print("OK: static-context symlink guard and review README checks passed")
-	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 def _implement_stage_support_run() -> str:
 	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8"))
 	for job in workflow["jobs"].values():
@@ -426,3 +402,29 @@ def test_implement_static_context_emits_agents_once_without_canonical_copy() -> 
 		subprocess.run(["bash", str(REPO_ROOT / "scripts" / "build_static_context.sh"), "implement", str(out)], cwd=tmp, env=env, check=True)
 		text = out.read_text(encoding="utf-8")
 		assert text.count("SELF_REPO_AGENTS_SENTINEL") == 1
+
+
+def main() -> int:
+	for test in (
+		test_review_static_context_skips_symlink_and_preserves_regular_readme,
+		test_phase_static_context_skips_symlinks_but_keeps_canonical_agents,
+		test_orchestrator_static_context_guards_symlinks,
+		test_shared_readme_context_rejects_non_regular_inputs_and_output,
+		test_shared_readme_only_requires_readme_and_bounds_prompt_size,
+		test_all_static_readme_assemblers_use_the_shared_reader,
+		test_implement_stages_canonical_agents_only_in_consumer_repos,
+		test_implement_static_context_emits_agents_once_without_canonical_copy,
+	):
+		test()
+	readme_suite = subprocess.run(
+		[sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_review_static_context_readme.py"],
+		cwd=REPO_ROOT, env=_safe_env(), check=False,
+	)
+	if readme_suite.returncode != 0:
+		return readme_suite.returncode
+	print("OK: static-context symlink guard and review README checks passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
