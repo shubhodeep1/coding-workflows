@@ -286,7 +286,10 @@ def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
 
 
 _TEMPLATE_USES_LINE_RE = re.compile(r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*['\"]?(?P<value>[^'\"\s#]+)", re.MULTILINE)
-_TEMPLATE_PINNED_ACTION_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[^@\s]+)?@[0-9a-f]{40}\Z")
+_TEMPLATE_PINNED_ACTION_RE = re.compile(
+	r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[^@\s]+)?@[0-9a-f]{40}"
+	r"|docker://[A-Za-z0-9._/:-]+@sha256:[0-9a-f]{64})\Z"
+)
 
 
 def test_wrapper_template_third_party_actions_are_sha_pinned() -> None:
