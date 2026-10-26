@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should this fix land, given that the files it needs are outside this heal issue's frozen scope?\nChoices:\nA) Stay inside the frozen scope: only `tests/**` and a changelog fragment, plus engine-harness files such as `scripts/claude_engine.py` if any change there helps. No change to `security-audit.yml` or `security_audit.sh`.\nB) Close this heal issue and re-issue it as an ordinary issue with no heal scope marker. Its `files_touched` would list `.github/workflows/security-audit.yml`, `scripts/security_audit.sh`, `prompts/mode-security-audit.txt` and its `prompts/_templates/` copy, `tests/test_security_audit_workflow_contract.py`, and the issue's own `changelog.d/` / `agents.d/` fragments. (RECOMMENDED)\nC) Change the shared final-message extraction in `scripts/claude_engine.py` (`extract_result`) for all roles, so earlier assistant turns are considered too.\n**Note:** A is incompatible with Q2:A, Q2:C and Q3:A/B/C, because all of those edit files outside the frozen scope.\nQ2: The real rejected reply was not captured. What should this change ship?\nChoices:\nA) Diagnostics only. Set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT` in the `Run security audit` step and add the failure-time handling chosen in Q3, plus a contract test. Fix the root cause in a follow-up once a reply is captured.\nB) Diagnostics, plus a speculative extractor change in `security_audit.sh`: accept `[]` or a findings array followed by trailing prose in the final message, with regression tests built from synthetic replies. This relaxes the fail-closed rule that an empty array must have nothing but a closing fence after it.\nC) Diagnostics, plus a stricter prompt contract in `prompts/mode-security-audit.txt` and its template: the final message must be exactly the JSON array, `[]` when there are no findings. A contract test pins the wording, and the parser stays as it is. (RECOMMENDED)\nD) A person pastes the `SECURITY_AUDIT_CLAUDE_REJECTED` line and the `rejected Claude reply starts:` / `ends:` lines from run 40333816067's `Run security audit` step into this issue, and the fix targets that real reply shape with a regression test built from it.\nQ3: How should the captured raw reply be kept? It can contain unfixed vulnerability details, and artifacts and logs of this public repository are readable by any signed-in GitHub user.\nChoices:\nA) Upload it as a failure-only artifact (`if: failure()`, short retention such as 3 days) only when `github.event.repository.private` is true. In public repositories keep it on the runner and rely on the existing redacted 300-character log excerpts. (RECOMMENDED)\nB) Always upload it as a failure-only artifact with short retention, in public and private repositories alike.\nC) Never upload it. Only set `SECURITY_AUDIT_CLAUDE_REJECTED_OUT`, so the run log reports `kept=<path>` and the size/shape fields, and add no artifact step.",
+  "fingerprint": "0fff40fd018e42bbe86c9f8d83b5b92472680d8a9a1de29eb1708586f9b6004f",
+  "lineage": {
+    "issue_number": 8204,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40334938170",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40334938170",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261026140308_23cf563280",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8204,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40334938170"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #8204 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-26T14:03:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
