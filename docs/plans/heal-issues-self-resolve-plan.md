@@ -22,7 +22,7 @@ The work ships as four independent phases, each behind a default-on switch.
 
 ## Context
 
-- **The heal pipeline.** Heal intake files `ai:workflow-heal` issues here when a consumer pipeline fails. Before the model diagnosis runs, it freezes an edit scope from authenticated run metadata (`<!-- ai:workflow-heal-scope:v1 paths=… runs=… -->`, #6463). It builds that marker with `render_heal_scope_marker` (`scripts/workflow_failure_heal.py:3301`) from the frozen inputs (`scripts/workflow_failure_heal_intake.sh:2278-2306`). The diagnosis can never add a path. Failing-test subjects (Q37: A, 2026-10-09) and `HEAL_SCOPE_GUARD_TEST_SUBJECTS` (`workflow_failure_heal.py:3218-3236`) are the existing ways to widen the scope from run metadata.
+- **The heal pipeline.** Heal intake files `ai:workflow-heal` issues here when a consumer pipeline fails. Before the model diagnosis runs, it freezes an edit scope from authenticated run metadata (`<!-- ai:workflow-heal-scope:v1 paths=… runs=… -->`, #6463). It builds that marker with `render_heal_scope_marker` (`scripts/workflow_failure_heal.py:3301`) from the frozen inputs (`SCOPE_INPUTS_FROZEN`, `scripts/workflow_failure_heal_intake.sh:2291` and the jq that follows it), re-projected for `heal-scope render` by a fixed jq at line 2753. The diagnosis can never add a path. Failing-test subjects (Q37: A, 2026-10-09) and `HEAL_SCOPE_GUARD_TEST_SUBJECTS` (`workflow_failure_heal.py:3218-3236`) are the existing ways to widen the scope from run metadata.
 - **What went wrong on #8182.** A consumer validation run failed with `raw_status=harness_error`: the consumer's root `.dockerignore` stripped `package.json` from the harness image.
   - **Scope.** The scope came out as `.github/workflows/validate.yml,tests/**,changelog.d/*.md`, because `verify_run` derives workflow paths only from `referenced_workflows` (`workflow_failure_heal.py:6432-6438`). A `validation_failure` report has no crash file and no changed files.
   - **Plan hold.** The plan named the harness templates, so `plan.yml` "Auto-approve clear plan" held it with `heal_scope_plan_out_of_scope`.
@@ -34,9 +34,9 @@ The work ships as four independent phases, each behind a default-on switch.
 - **Consumer fixed it itself.** The consumer fixed the cause in fun-token-multi-chain#687. A human posted `/revalidate` at 04:20, and validation passed at 05:54. The heal issue stayed open until closed by hand (PR #8197 shipped the residual hardening).
   - No code closes a heal issue when its source resolves. The only closer, `scripts/workflow_failure_heal_pr_reconcile.sh`, reacts to PRs closing in this repo.
   - No code re-validates after a merge into the consumer's integration branch.
-- **Consumer harness hold.** The consumer poller already parks a `harness_error` project in a harness hold (`scripts/orchestrate_poll_process.sh:15336-15910`) and resumes it from the intake's routing marker `<!-- workflow-failure-heal:validation-route:v1 fp= outcome= issue= classification= run= -->`.
-  - **`already-fixed`:** the hold resumes once the consumer's `validate.yml` pin is ahead of the hold's `support` commit (Q5, line 15855).
-  - **Heal closed `not_planned`:** for an `opened`/`duplicate` route, a heal closed `not_planned` ends the hold with a CRITICAL park (line 15838).
+- **Consumer harness hold.** The consumer poller already parks a `harness_error` project in a harness hold (`scripts/orchestrate_poll_process.sh`, from `validation_harness_local_fp` at line 15333 through `validation_harness_hold_tick` at line 15730) and resumes it from the intake's routing marker `<!-- workflow-failure-heal:validation-route:v1 fp= outcome= issue= classification= run= -->`.
+  - **`already-fixed`:** the hold resumes once the consumer's `validate.yml` pin is ahead of the hold's `support` commit (Q5, step 3/4 comment at line 15855).
+  - **Heal closed `not_planned`:** for an `opened`/`duplicate` route, a heal closed `not_planned` ends the hold with a CRITICAL park (`not_planned)` arm, lines 15866-15872). That arm runs whenever the pin has moved ahead of `support`, whatever resolved the source, so Phase 3 must not reach it (see Phase 3).
 
 ## Goals
 
@@ -46,9 +46,9 @@ The work ships as four independent phases, each behind a default-on switch.
 - **G2:** the heal implementer can read, edit and create `.j2` files under `workflow-templates/validation-harness/`, and only there.
 - **G3:** the intake files no heal issue when `main` already has a commit after the consumer's pin that cites the exact source (`owner/repo#N`). It posts the `already-fixed` routing outcome naming that commit instead.
 - **G4:** a consumer harness hold that has a fix commit recorded resumes only once the consumer's pin contains that commit.
-- **G5:** an open heal issue with no open heal PR closes itself, as `not_planned` with a comment, once every source it records is resolved. A source is resolved when its issue is closed, or when a validation run for that tracking issue succeeded after the heal was filed.
-- **G6:** during a harness hold, a consumer poller re-validates once per new integration-branch head that is past the failed run's head, within the existing resume caps.
-- **G7:** each behaviour has its own default-on switch. Switching it off restores today's behaviour exactly.
+- **G5:** an open heal issue with no open heal PR closes itself, as `not_planned` with a comment, once every source it records is resolved. A source is resolved when its issue or pull request is closed, or (for `validation_failure` heals) when its tracking issue carries `ai:validated` and a validation run for it succeeded after the heal was filed. A run that only concluded `success` is not enough: a Claude capacity-wait run exits 0 with no verdict (`.github/workflows/validate.yml:1390-1396`).
+- **G6:** during a harness hold, a consumer poller re-validates once per new integration-branch head that is ahead of the head the failed validation run was dispatched against, within its own resume cap (separate from the harness-fix resume counters).
+- **G7:** each behaviour has its own default-on switch. Switching it off restores today's behaviour exactly. Two Phase 2 edits to `scripts/review_untrusted_workspace.py` are deliberately not switched, and roll back only by revert: the `.j2` admission (one directory, no credentials) and the step-script glob transfer fix (a latent bug, Q14).
 
 ## Non-goals
 
@@ -74,9 +74,10 @@ The work ships as four independent phases, each behind a default-on switch.
   - Phase 1 adds at most one `compare` call per consumer report. It cannot reuse the existing `<pin>...stable` compare, which has a different head.
   - Phase 3 adds per scan:
     - one open-PR list;
-    - one aliased GraphQL read per consumer repo with candidates;
-    - one `actions/runs` list per consumer repo with a `validation_failure` candidate.
-  - Phase 4 adds no API call: it uses the `_branch_head_sha` value the tick already resolves.
+    - one aliased GraphQL read per 25 candidate sources per repository (consumer repos and this repo);
+    - one `actions/runs` list per consumer repo with a `validation_failure` candidate;
+    - per closed issue: one comment re-read before the close, one comment POST, one label POST, one PATCH.
+  - Phase 4 adds, per held project per poller tick with the switch on, one `GET git/ref/heads/<integration branch>` (`_branch_head_sha`, `scripts/orchestrate_poll_process.sh:5570`, uncached; the hold tick resolves no head today), plus one `compare` only when that head differs from the last head checked, plus one `_branch_head_sha` call per validation dispatch to record the dispatch head. No batched read covers it.
   - Every lookup fails open (Q13: A).
 - **§19 auto-close keywords.** Close comments and PR bodies use `Refs`, never closing keywords.
 - **§20 / §30.** One `changelog.d/` fragment per phase. `agents.d/` fragments for every agents.md addition. README rows for new switches.
@@ -91,34 +92,39 @@ The work ships as four independent phases, each behind a default-on switch.
 ## Approach
 
 **Phase 1: catch fixes already on `main` at intake (Q4: A, Q5: A, Q6: A).**
-- **Check.** For a consumer report (not this repo's own runs) whose target is `stable`, the intake reads `compare/<WRAPPER_SHA>...<default branch>` once, after the existing branch-progress compare. It scans every returned commit's full message for the exact source reference `<SOURCE_REPO>#<n>` as a whole token, with no other digit after it.
-- **On a match.** The newest matching commit becomes `MAIN_FIX_SHA`. The intake sets `CLASSIFICATION=already-fixed`, skips the diagnosis, files nothing, posts the existing `already-fixed` outcome comment (naming the commit and that it reaches consumers on the next `stable` promotion), and logs `WORKFLOW_HEAL main_fix outcome=suppressed …`.
-- **Validation reports.** The route comment carries an extra line `<!-- workflow-failure-heal:validation-route-fix:v1 fp=<fp> fix=<sha> -->` before the unchanged last-line route marker.
+- **Check.** For a consumer report (not this repo's own runs) whose target is `stable`, the intake reads `compare/<WRAPPER_SHA>...<PROVENANCE_DEFAULT_BRANCH>` once, after the existing branch-progress compare (the script has no `DEFAULT_BRANCH`; an empty `PROVENANCE_DEFAULT_BRANCH` skips the check). It scans every returned commit's full message for the exact source reference `<SOURCE_REPO>#<n>` as a whole token: not preceded by `[A-Za-z0-9_./-]` and not followed by `[A-Za-z0-9_]`.
+- **On a match.** The newest matching commit becomes `MAIN_FIX_SHA`. The intake skips the scope freeze and the diagnosis model call, writes a deterministic `DIAG_FILE` naming the commit, bypasses the `parse-classification` recompute and the `check-already-fixed` gate (lines 2520-2543) so `CLASSIFICATION=already-fixed` stands, files nothing, posts the existing `already-fixed` outcome comment (naming the commit and that it reaches consumers on the next `stable` promotion), and logs `WORKFLOW_HEAL main_fix outcome=suppressed …`.
+- **Validation reports.** The route comment carries an extra line `<!-- workflow-failure-heal:validation-route-fix:v1 fp=<fp> fix=<sha> -->` before the unchanged last-line route marker. It is appended after the `grep -v 'workflow-failure-heal:validation-route'` filter (line 1122), which would otherwise strip it.
+- **One suppression per fix.** The outcome comment carries `<!-- workflow-failure-heal:main-fix:v1 fp=<fp> fix=<sha> -->`. When the source already has a pipeline-authored main-fix marker for the same `fp` whose `fix` is no longer among the compare's commits (it reached the pin and did not hold), the intake files normally (`reason=prior_fix_did_not_hold`). Later commits that merely cite the source therefore cannot suppress the heal again.
 - **Poller side.** The hold stores `fix` and, in step 3, also requires `compare/<fix>...<pin>` to be `ahead` or `identical`. Without the line, the hold behaves exactly as today.
 
 **Phase 2: deterministic harness scope (Q1: A, Q2: A, Q3: A).**
-- **Log field.** `validate_process.sh` adds `family=<name>` (one of the five `FAMILY_REGISTRY` names in `scripts/render_validation_templates.py:104-113`, else `none`) right after `raw_status=` in all three `VALIDATION_FAILURE_SUMMARY` lines (lines 58, 1366, 2176).
+- **Log field.** `validate_process.sh` adds `family=<name>` (one of the five `FAMILY_REGISTRY` names in `scripts/render_validation_templates.py:101-107`, else `none`) right after `raw_status=` in all three `VALIDATION_FAILURE_SUMMARY` lines (lines 58, 1366, 2176).
 - **Extraction.** A new `heal-scope harness-family` subcommand reads it from the verified run's filtered job logs. It returns a family only if every `VALIDATION_FAILURE_SUMMARY … raw_status=harness_error family=<f>` line in the logs agrees on one known family.
 - **Freezing.** The intake freezes it as `harness_family` in `scope_inputs_frozen.json`.
 - **Rendering.** `render_heal_scope_marker` adds `HEAL_SCOPE_HARNESS_SUBJECTS` (the four scripts, existence-checked) and two directory entries, `workflow-templates/validation-harness/<family>` and `workflow-templates/validation-harness/_shared`. These are allowed only in that exact shape, and only when they came from `harness_family`, the same way the step-script glob is allowed only as a guard subject. They take 6 of the 20 explicit slots, placed right after the workflow paths.
+- **Forwarding.** The fixed `_open_issue` jq projection that builds `scope_inputs.json` for `heal-scope render` (`workflow_failure_heal_intake.sh:2753`) gains `harness_family: (.harness_family // "")`; without it render never sees the family.
+- **Where the restriction lives.** The verify side (`_heal_scope_marker_shape_ok`, `_safe_heal_path`) is a string check and cannot tell a directory from an extensionless file such as `Makefile`, so it is not changed. Only `render_heal_scope_marker` may emit a directory entry, and only from `harness_subjects`; the scope marker is trusted only from an unedited, pipeline-authored body, so render is the gate.
 - **Downstream checks:**
   - `review_untrusted_workspace.py` admits `.j2` only under `workflow-templates/validation-harness/`.
-  - Its transfer scope check accepts the two directory shapes. It also accepts `scripts/<stem>_step_*.sh`, the latent bug Q14: A fixes.
+  - Its transfer scope check (lines 944-948) already accepts the two directory shapes (`[A-Za-z0-9_./-]+`). It newly accepts `scripts/<stem>_step_*.sh`, the latent bug Q14: A fixes.
   - The plan gate and the commit guard already match directory entries (`entry_matches`, `files_touched_scope_guard.py:478-535`).
 
 **Phase 3: auto-close heal issues when the source resolves (Q7: A, Q8: A, Q9: A).**
-- **Job.** A new `source-resolved-scan` job runs hourly, using a new `--source-resolved` mode of `workflow_failure_heal_recovery_scan.sh`, with decisions in a pure `heal-source-resolved` subcommand of `workflow_failure_heal.py`.
+- **Job.** A new `source-resolved-scan` job runs hourly and on dispatch, using a new `--source-resolved` mode of `workflow_failure_heal_recovery_scan.sh`, with decisions in a pure `heal-source-resolved` subcommand of `workflow_failure_heal.py`. The mode is dispatched before the script's recovery gates (`HEAL_SCOPE_RECOVERY_ENABLED`, schedule-only, lines 117-135) and uses its own listing: every open pipeline-authored heal issue, without the existing `contains("ai:workflow-heal-scope") | not` filter (line 187).
 - **Recorded sources.** For each open `ai:workflow-heal` issue authored by the pipeline login, the recorded sources are the `source=` marker plus every occurrence comment's source. Phase 3 also makes `compose_occurrence_comment` write an additive `<!-- workflow-failure-heal:occurrence-source=<repo>#<n> -->` marker. An occurrence comment without that marker makes the issue "unknown" (never closed), so old issues stay manual.
 - **Resolved.** A source counts as resolved when:
-  - its issue is `CLOSED` (one aliased GraphQL read per consumer repo); or
-  - for `validation_failure` heals, an `AI Validate [tracking:<n>]` run of the consumer validate wrapper concluded `success` after the heal issue's `created_at` (one `actions/runs` list per repo, with the same path and event checks as `_verify_validation_report_provenance`).
-- **Closing.** When every source is resolved and no open PR has head `ai/issue-<N>` (one open-PR list), the issue gets a comment and is closed `not_planned`.
-  - `not_planned` cannot park a hold: a resolved source means its tracking issue is closed or passed validation, both of which clear the hold.
+  - its issue or pull request is closed (`issueOrPullRequest` aliases, one GraphQL read per 25 sources per repository, this repo included; a pull request counts when `CLOSED` or `MERGED`); or
+  - for `validation_failure` heals, the tracking issue currently carries `ai:validated` (read in the same aliased query) and an `AI Validate [tracking:<n>]` run of the consumer validate wrapper concluded `success` after the heal issue's `created_at` (one `actions/runs` list per repo, with the same path and event checks as `_verify_validation_report_provenance`). The label is the positive evidence: a capacity-wait run concludes `success` without setting it.
+- **Closing.** When every source is resolved and no open PR has head `ai/issue-<N>` (one open-PR list), the scan takes the heal-intake queue ticket (`workflow_failure_heal_queue.sh acquire`/`release`, as `recovery-scan` does), re-reads the issue's comments and recomputes the decision, then comments (marker `<!-- ai:heal-source-resolved:v1 issue=<N> -->`), adds the new label `ai:heal-source-resolved` and closes it `not_planned`.
+  - **Hold safety.** The poller's `not_planned)` arm parks a hold whenever the pin has moved ahead of `support`, whatever resolved the source. Phase 3 therefore also changes the poller: `_validation_harness_hold_issue_state` reads the issue's labels from the GET it already makes (no new call), and a heal closed `not_planned` with `ai:heal-source-resolved` resumes through `_validation_harness_hold_resume` (reason `heal_source_resolved`) instead of parking. Old pollers still park until they sync `@stable`; the risk is listed below.
   - A duplicate source that is still unresolved blocks the close.
+  - A pipeline-authored close marker that is already present means a previous PATCH failed: the scan retries only the label and PATCH and does not post the comment again.
 
 **Phase 4: consumer re-validates after a merge during a harness hold (Q10: A).**
-- **Recording.** `mark_validation_failed` records the integration branch head at failure time as `validation_harness_hold.integration_head`.
-- **Trigger.** On each `validation_harness_hold_tick`, before the pin checks, if the head now resolved for `orchestrator/project-<N>` differs from `integration_head`, the tick resumes once through the existing `_validation_harness_hold_resume` path. The same counters and caps apply (`VALIDATION_HARNESS_MAX_RESUMES_PER_FP=2`, `VALIDATION_HARNESS_MAX_RESUMES=4`).
+- **Recording.** `dispatch_validation_if_needed` records the integration branch head it dispatched against as `validation_dispatch_integration_head`. `mark_validation_failed` copies it into `validation_harness_hold.integration_head` (falling back to the head at failure time, logged `baseline=failure_time`).
+- **Trigger.** On each `validation_harness_hold_tick`, after the pin is resolved (step 2, `vht_pin`) and before the support checks, if the head now resolved for `orchestrator/project-<N>` differs from `integration_head` and from the last head checked, the tick compares them once (`compare/<integration_head>...<head>` in the consumer repo). Only `ahead` resumes, through `_validation_harness_hold_resume` with the resolved pin. A reset or rebuild to a non-descendant head is recorded as checked and does not resume.
+- **Own budget.** Integration resumes are charged to a separate counter (`validation_harness_integration_resumes`, cap `VALIDATION_HARNESS_INTEGRATION_MAX_RESUMES`, default 2 per hold) and never to `validation_harness_resumes.by_fp`/`.total`, which gate hold entry. Unrelated merges therefore cannot exhaust the harness-fix budget and turn a later `harness_error` into a `capped` CRITICAL park.
 - **Once per head.** It records the new head as `integration_head`. A hold with no `integration_head` (entered before Phase 4) never takes this path.
 
 **Alternatives rejected:**
@@ -155,7 +161,7 @@ Operator answers from the planning session, 2026-10-26 (Q1-Q11 all **A**). Q12-Q
 ### D5 — What counts as already fixed (Q5)
 - **Chosen:** a commit on `main` after the consumer's pin whose full message cites the exact source `owner/repo#N`.
 - **Alternatives considered:** additionally require that the commit touches a harness or workflow path.
-- **Why:** repo commit messages already carry `Refs <source>` (e.g. #8181). A wrong match only delays a heal by one promotion.
+- **Why:** repo commit messages already carry `Refs <source>` (e.g. #8181). A wrong match only delays a heal by one promotion: the `main-fix:v1` marker allows one suppression per fingerprint and fix, so later commits that merely cite the source cannot suppress it again.
 
 ### D6 — Hold waits for the fix commit (Q6)
 - **Chosen:** a separate `validation-route-fix:v1` marker line. The hold resumes only once the pin contains the fix.
@@ -163,7 +169,7 @@ Operator answers from the planning session, 2026-10-26 (Q1-Q11 all **A**). Q12-Q
 - **Why:** a `stable` hotfix can move the pin without the fix, which wastes a resume. A separate line keeps old pollers' anchored regex working.
 
 ### D7 — Auto-close trigger (Q7)
-- **Chosen:** close when every recorded source (marker plus occurrence comments) is resolved: its issue is closed, or a validation run for that tracking issue passed after the heal was filed.
+- **Chosen:** close when every recorded source (marker plus occurrence comments) is resolved: its issue or pull request is closed, or its tracking issue carries `ai:validated` and a validation run for it succeeded after the heal was filed.
 - **Alternatives considered:** only on source issue close; only on validation pass.
 - **Why:** #579 passed validation long before closing. Requiring every source protects other projects routed onto the same heal.
 
@@ -175,12 +181,12 @@ Operator answers from the planning session, 2026-10-26 (Q1-Q11 all **A**). Q12-Q
 ### D9 — Close reason (Q9)
 - **Chosen:** `not_planned`, with a comment naming the resolution.
 - **Alternatives considered:** `completed`.
-- **Why:** nothing was fixed by the heal. `completed` would make the closed issue count as a fix in `heal_already_fixed_candidates`, and D7's rule means no hold is still waiting.
+- **Why:** nothing was fixed by the heal. `completed` would make the closed issue count as a fix in `heal_already_fixed_candidates`. Because the poller parks a hold on any `not_planned` close, the close also adds `ai:heal-source-resolved`, and Phase 3's poller change resumes instead of parking when it sees that label.
 
 ### D10 — Consumer re-validate after a merge (Q10)
-- **Chosen:** during a harness hold, resume once per new integration-branch head, within the existing resume caps.
+- **Chosen:** during a harness hold, resume once per new integration-branch head that is ahead of the dispatch head, within a separate integration-resume cap.
 - **Alternatives considered:** only for merges touching Docker or build files; leave it out.
-- **Why:** this automates the manual `/revalidate` on #579. The caps bound the cost of unrelated merges.
+- **Why:** this automates the manual `/revalidate` on #579. The separate cap bounds the cost of unrelated merges without spending the harness-fix resume budget.
 
 ### D11 — Phase split (Q11)
 - **Chosen:** four independent phases.
@@ -205,7 +211,7 @@ The AI orchestrator ships each phase as its own PR straight to production. All f
   - all existing intake and poller tests pass.
 - **Independence:**
   - The poller change is a no-op without the new line.
-  - The intake change works with old pollers: they ignore the line and resume on pin ancestry (today's `already-fixed` rule).
+  - The intake change works with old pollers: their anchored route regex ignores the extra line, and they resume on pin ancestry (today's `already-fixed` rule).
 - **Rollback:** set `HEAL_MAIN_FIX_DEDUPE_ENABLED=false` (intake) or `VALIDATION_HARNESS_FIX_SHA_WAIT_ENABLED=false` (poller), or revert the PR.
 
 **Phase 2: deterministic harness scope.**
@@ -218,16 +224,17 @@ The AI orchestrator ships each phase as its own PR straight to production. All f
 - **Independence:**
   - Until consumers run a `validate_process.sh` carrying `family=` (next `@stable` sync), no family is found and scopes are unchanged.
   - `.j2` admission is harmless on its own.
-- **Rollback:** set `HEAL_HARNESS_SCOPE_ENABLED=false`, which stops new scopes from getting harness entries. Issues already filed keep their frozen marker (by design). Or revert the PR.
+- **Rollback:** set `HEAL_HARNESS_SCOPE_ENABLED=false`, which stops new scopes from getting harness entries. Issues already filed keep their frozen marker (by design). The `.j2` admission and the step-glob transfer fix have no switch and roll back only by reverting the PR (see G7).
 
 **Phase 3: auto-close heal issues when the source resolves.**
-- **Scope:** occurrence source marker, the source-resolved decision logic, the scan mode and its job.
-- **Files:** `scripts/workflow_failure_heal.py`, `scripts/workflow_failure_heal_recovery_scan.sh`, `.github/workflows/workflow-failure-heal-intake.yml`, tests, README, fragments.
+- **Scope:** occurrence source marker, the source-resolved decision logic, the scan mode and its job, the `ai:heal-source-resolved` label, and the poller's resume-instead-of-park on that label.
+- **Files:** `scripts/workflow_failure_heal.py`, `scripts/workflow_failure_heal_recovery_scan.sh`, `scripts/orchestrate_poll_process.sh`, `.github/workflows/workflow-failure-heal-intake.yml`, `.github/ai/label_contract.v1.json`, `scripts/label_helpers.sh`, tests, README, fragments.
 - **Done when:**
   - a fixture heal issue whose single source issue is closed is closed `not_planned` with the comment;
   - one with an open `ai/issue-<N>` PR, an unresolved duplicate source, or an occurrence comment without the new marker stays open;
-  - a scan with lookup failures closes nothing.
-- **Independence:** reads only existing markers plus its own additive one.
+  - a scan with lookup failures closes nothing;
+  - a held fixture project whose heal issue is closed `not_planned` with `ai:heal-source-resolved` resumes instead of parking.
+- **Independence:** reads only existing markers plus its own additive ones. Consumer pollers older than this phase still park on the close (see Risks).
 - **Rollback:** set `HEAL_SOURCE_RESOLVED_CLOSE_ENABLED=false` (the job exits after logging `outcome=skip reason=disabled`), or revert the PR.
 
 **Phase 4: consumer re-validate after a merge during a harness hold.**
@@ -235,7 +242,7 @@ The AI orchestrator ships each phase as its own PR straight to production. All f
 - **Files:** `scripts/orchestrate_poll_process.sh`, tests, README, fragments.
 - **Done when:**
   - a held project whose integration head moved resumes once and records the head;
-  - an unchanged head, a missing `integration_head` or exhausted caps do not resume;
+  - an unchanged head, a non-descendant head, a missing `integration_head` or an exhausted integration cap do not resume, and the harness-fix counters are unchanged;
   - existing hold tests pass.
 - **Independence:** additive state field; old holds are unaffected.
 - **Rollback:** set `VALIDATION_HARNESS_INTEGRATION_RESUME_ENABLED=false`, or revert the PR.
@@ -248,22 +255,25 @@ New identifiers below were chosen to be unique. Each step re-checks them with `g
 
 1. **`scripts/workflow_failure_heal.py`: add `main_fix_commit(compare_json, source_ref)`.** It returns `{"sha": <40-hex>, "subject": <≤160 chars>}` or `None`.
    - Input checks: `source_ref` must match `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]{0,9}$` and its repo must be in the consumer registry.
-   - Matching: scans `commits[].commit.message` (full text) for the reference bounded by `(?<![A-Za-z0-9_./-])` and `(?![0-9])`. The newest match wins.
+   - Matching: scans `commits[].commit.message` (full text) for the reference bounded by `(?<![A-Za-z0-9_./-])` and `(?![A-Za-z0-9_])`, so `owner/repo#579abc` and `owner/repo#5790` do not match `owner/repo#579`. The newest match wins.
    - Truncated results: when `total_commits` exceeds the commits returned, it scans what was returned and adds `"truncated": true`.
    - Expose it as the `main-fix` CLI subcommand (`--compare-json`, `--source-ref`, JSON to stdout, exit 0).
 2. **`scripts/workflow_failure_heal_intake.sh`: switch.** Add the switch `HEAL_MAIN_FIX_DEDUPE_ENABLED`, read with the existing switch helper pattern (lines 213-243: unset, empty or `true` is on; `false` is off; anything else is off with `::warning::WORKFLOW_HEAL main_fix outcome=skip reason=invalid_switch`).
 3. **Same file: the check itself.**
    - Placement: right after the branch-progress block (after line 2112) and before the scope freeze (line ~2290).
    - Conditions: switch on, source is a consumer repo (`SOURCE_REPO != SELF_REPO`), `WRAPPER_SHA` is 40-hex, `TARGET_BRANCH_DEFAULT` is the stable target, and the report carries a source issue (`validation_failure`, consumer issue phase failures).
-   - Action: issue one call, `gh api --method GET "repos/${SELF_REPO}/compare/${WRAPPER_SHA}...${DEFAULT_BRANCH}"`, then run `main-fix`.
+   - Action: issue one call, `gh api --method GET "repos/${SELF_REPO}/compare/${WRAPPER_SHA}...${PROVENANCE_DEFAULT_BRANCH}"`, then run `main-fix`. `PROVENANCE_DEFAULT_BRANCH` is the sanitized value set at lines 984-988 (`WORKFLOW_HEAL_DEFAULT_BRANCH`, else the event's `repository.default_branch`). There is no `DEFAULT_BRANCH` in the script, and `set -u` would abort on it. When `PROVENANCE_DEFAULT_BRANCH` is empty, log `outcome=skip reason=default_branch_unavailable` and continue unchanged.
    - §15 comment: put an audit comment above the call, explaining that the existing compare's head is `stable`, so it cannot answer for `main`.
    - Fail open: when the call or the parse fails, log `WORKFLOW_HEAL main_fix outcome=skip reason=compare_failed|parse_failed` and continue unchanged.
 4. **Same file: the match path.**
-   - Set `CLASSIFICATION="already-fixed"`, `MAIN_FIX_SHA`, `MAIN_FIX_SUBJECT`.
-   - Skip the diagnosis and route through the existing already-fixed outcome (lines 2993-3000). The comment names the commit (`shubhodeep1/coding-workflows@<sha>`) and says the fix reaches the consumer on the next `stable` promotion and wrapper sync.
+   - Prior-suppression check first: read the source's comments (reuse the provenance comment snapshot when the report kind has one, else one paginated comments read, only on a match). If a pipeline-authored `<!-- workflow-failure-heal:main-fix:v1 fp=<fp> fix=<sha> -->` exists for this `fp` and its `fix` is not among the compare's commits, log `main_fix outcome=skip reason=prior_fix_did_not_hold` and continue unchanged.
+   - Set `MAIN_FIX_SHA`, `MAIN_FIX_SUBJECT`, `ALREADY_FIXED_COMMITS=${MAIN_FIX_SHA:0:12}`, `CLASSIFICATION="already-fixed"`.
+   - Skip the scope freeze and the diagnosis model call, and write a deterministic `DIAG_FILE` (`## Summary` naming the source and the commit, `## Fixed by` citing it). The `already-fixed)` arm (lines 3006-3027) runs `cat`/`sed` on `DIAG_FILE`, which would abort under `set -e` if it were missing.
+   - Guard the `parse-classification` recompute (line 2520) and the `check-already-fixed` gate (lines 2526-2543) with `[ -z "${MAIN_FIX_SHA}" ]`. Without the guard the recompute overwrites the classification, and `check-already-fixed` demotes it, because the commit is on `main`, not on `PROGRESS_BRANCH`.
+   - In the `already-fixed)` arm, when `MAIN_FIX_SHA` is set, use a main-fix wording instead of the `${PROGRESS_BRANCH} gained commit(s)` sentence. The comment names the commit (`shubhodeep1/coding-workflows@<sha>`), says the fix reaches the consumer on the next `stable` promotion and wrapper sync, and ends with the `main-fix:v1` marker.
    - Log `WORKFLOW_HEAL main_fix outcome=suppressed source=<ref> fix=<sha> truncated=<bool>`.
-   - Make sure the already-fixed path does not require a model `## Fixed by` section when `MAIN_FIX_SHA` is set: the deterministic match is the evidence. `check_heal_already_fixed_claim` stays in force for model verdicts.
-5. **Same file, `_validation_route_post` (line 1092): the fix line.** When `VALIDATION_ROUTE_OUTCOME=already-fixed` and `MAIN_FIX_SHA` is 40-hex, insert `<!-- workflow-failure-heal:validation-route-fix:v1 fp=<fp> fix=<sha> -->` as the second-to-last line. The route marker stays the last line, unchanged.
+   - `check_heal_already_fixed_claim` and the `check-already-fixed` gate stay in force for model verdicts; only the deterministic main-fix match bypasses them.
+5. **Same file, `_validation_route_post` (line 1092): the fix line.** When `VALIDATION_ROUTE_OUTCOME=already-fixed` and `MAIN_FIX_SHA` is 40-hex, append `<!-- workflow-failure-heal:validation-route-fix:v1 fp=<fp> fix=<sha> -->` after the `grep -v 'workflow-failure-heal:validation-route'` filter (line 1122) and before the route marker (line 1125). That filter matches the fix line's substring, so the line must not be in the body when it runs. The route marker stays the last line, unchanged.
 6. **`scripts/orchestrate_poll_process.sh`: poller switch.** Add the switch `VALIDATION_HARNESS_FIX_SHA_WAIT_ENABLED` beside the other harness switches (lines 2497-2536), same semantics.
 7. **Same file, the routing-marker reader (~line 15320).**
    - Also capture an optional `validation-route-fix:v1` line from the same comment whose `fp` equals the route `fp`.
@@ -293,7 +303,8 @@ New identifiers below were chosen to be unique. Each step re-checks them with `g
    - Add `VALIDATION_FAILURE_SUMMARY` to `_SOFT_LOG_PATTERNS` (line 569) if it is not already covered, so `filter_log` keeps the line.
 4. **`scripts/workflow_failure_heal_intake.sh` (line ~2296): freeze the family.**
    - Next to `FAILING_TESTS_JSON`, compute `HARNESS_FAMILY_NAME` only when the switch `HEAL_HARNESS_SCOPE_ENABLED` is on and `SOURCE_KIND=validation_failure`.
-   - Freeze it as `harness_family` in the `scope_inputs_frozen.json` jq (lines 2278-2306).
+   - Freeze it as `harness_family` in the `scope_inputs_frozen.json` jq (`SCOPE_INPUTS_FROZEN`, line 2291, and the jq after it).
+   - Forward it: add `harness_family: (.harness_family // "")` to the fixed `_open_issue` projection that writes `scope_inputs.json` for `heal-scope render` (line 2753). That projection lists its fields explicitly, so without this edit render never receives the family and G1/G2 have no effect. The intake wiring test (step 9) must assert the field reaches `scope_inputs.json`, not only the frozen file.
    - Log `WORKFLOW_HEAL harness_scope outcome=family family=<f>|none`.
 5. **`scripts/workflow_failure_heal.py`: subjects and directory entries.**
    - Add `HEAL_SCOPE_HARNESS_SUBJECTS = ("scripts/validation_harness_sandbox.sh", "scripts/validate_driver.sh", "scripts/validate_process.sh", "scripts/render_validation_templates.py")`.
@@ -302,21 +313,21 @@ New identifiers below were chosen to be unique. Each step re-checks them with `g
 6. **Same file, `render_heal_scope_marker` (3301-3333).**
    - Add a keyword `harness_subjects: Iterable[str] = ()`.
    - Order: crash file, workflow paths, harness subjects, the first 8 test subjects, changed files, remaining subjects.
-   - A directory entry passes only if it `fullmatch`es `_HEAL_SCOPE_HARNESS_DIR_RE` and came from `harness_subjects`, mirroring the `step_glob` special case at line 3316. It skips the regular-file `exists` check (it was tree-checked in step 5).
+   - A directory entry passes only if it `fullmatch`es `_HEAL_SCOPE_HARNESS_DIR_RE` and came from `harness_subjects`, mirroring the `step_glob` special case at line 3316 (`path in subjects`). It skips the regular-file `exists` check (it was tree-checked in step 5). Any other entry from `harness_subjects` is dropped. This is the only place the directory restriction is enforced.
    - In `_cmd_heal_scope` (6497-6530), read `harness_family` from the frozen JSON and pass the subjects. `is_dir` uses `git ls-tree` at `--ref`, alongside `_heal_regular_file_at_ref` (6451).
-7. **Same file, `_heal_scope_marker_shape_ok` (3340) and `verify_heal_scope` (3395).**
-   - Accept the directory shape only when it `fullmatch`es `_HEAL_SCOPE_HARNESS_DIR_RE`. Every other entry keeps today's rules.
-   - `_safe_heal_path` is unchanged; these paths already pass it.
+7. **Same file, `_heal_scope_marker_shape_ok` (3340) and `verify_heal_scope` (3395): no change.**
+   - Both are string checks and cannot tell a directory from an extensionless file (`Makefile`, `Dockerfile`, `Pipfile` pass today and must keep passing). The two directory entries already pass them as strings, as does `_safe_heal_path` (3112).
+   - A directory entry can only appear in a trusted marker if render emitted it (step 6), because the marker is trusted only from an unedited, pipeline-authored body.
 8. **`scripts/review_untrusted_workspace.py`.**
    - In `allowed()` (128-146), additionally allow a `.j2` suffix when the path starts with `workflow-templates/validation-harness/`. `SUFFIXES` itself is unchanged.
-   - In the transfer scope entry check (lines 944-948), additionally accept entries matching `_HEAL_SCOPE_HARNESS_DIR_RE`'s pattern and `scripts/[a-z0-9][a-z0-9_]{0,79}_step_\*\.sh` (Q14: A, the latent rejection of the existing step-script glob).
+   - In the transfer scope entry check (lines 944-948), additionally accept `scripts/[a-z0-9][a-z0-9_]{0,79}_step_\*\.sh` (Q14: A, the latent rejection of the existing step-script glob). The two directory entries already pass its `[A-Za-z0-9_./-]+` rule.
    - Check that `entry_matches` in the transfer (lines 463-469) matches files under a directory entry and new files under it. Add the handling if it does not.
 9. **Tests**, extending existing files:
    - `tests/test_workflow_failure_heal_scope_tests.py`:
      - extraction: agreeing lines, disagreeing lines, a forged unknown family, no line, timestamped lines;
      - render with harness subjects at a scope commit: dir entries present, ordering, and the 20-slot budget with a large `changed_files`;
-     - shape/verify accept the two dir shapes and reject `workflow-templates/validation-harness/foo` and `workflow-templates/x`;
-     - intake wiring: the family is frozen, and the switch off leaves the marker unchanged.
+     - render drops a harness subject outside the two allowed directories (`workflow-templates/validation-harness/foo`, `workflow-templates/x`), and shape/verify keep accepting the two dir shapes and existing extensionless entries such as `Makefile`;
+     - intake wiring: the family is frozen and reaches `scope_inputs.json` through the line 2753 projection, and the switch off leaves the marker unchanged.
    - A parity test: the family enum equals `FAMILY_REGISTRY` names.
    - `tests/test_files_touched_scope_guard*.py` (whichever covers `run_heal_plan_scope_gate`): a plan listing an existing and a new `.j2` under the family dir approves; one outside holds.
    - The `review_untrusted_workspace.py` transfer tests:
@@ -334,55 +345,69 @@ New identifiers below were chosen to be unique. Each step re-checks them with `g
 
 1. **`scripts/workflow_failure_heal.py`, `compose_occurrence_comment` (5308): the occurrence marker.**
    - Append `<!-- workflow-failure-heal:occurrence-source=<repo>#<n> -->` when the payload has a source issue.
-   - For run-only sources, write `<repo>#run` as `compose_issue_body` does (5538).
+   - For run-only sources, write `<repo>#run`, the shape the existing composers use for the `source=` marker (`compose_issue_body` at 5156; e.g. line 5538 in `compose_synced_security_issue`).
 2. **Same file: `heal_source_resolved_decision(issue, comments, source_states, validation_passes, open_heal_branches, pipeline_login)`.** It is pure and returns `{"decision": "close"|"keep"|"unknown", "reason": <token>, "sources": [...]}`.
    - Rules:
      - The issue must be authored by `pipeline_login`.
-     - Sources are the `source=` marker plus every pipeline-authored occurrence comment's `occurrence-source=` marker. An occurrence comment without the marker gives `unknown`/`occurrence_unmarked`.
+     - Sources are the `source=` marker plus every pipeline-authored occurrence comment's `occurrence-source=` marker. An occurrence comment (first line is the occurrence marker) without the source marker gives `unknown`/`occurrence_unmarked`. No source is inferred retroactively: issues with such comments stay manual by design.
      - Any `#run` source gives `keep`/`run_source`, because it has no issue to resolve.
-     - A source is resolved if its state is `CLOSED`, or (for `validation_failure` heals, `classification` marker) a validation pass for that tracking issue is newer than the heal's `created_at`.
+     - A source is resolved if its issue state is `CLOSED` or its pull request state is `CLOSED`/`MERGED`, or (for `validation_failure` heals, `classification` marker) the tracking issue carries `ai:validated` and a successful validation run for it is newer than the heal's `created_at`. A successful run without the label (a capacity-wait run) is not a pass.
+     - A source whose alias came back null or with an error gives `unknown`/`lookup_failed` for the whole issue.
      - An open `ai/issue-<N>` PR gives `keep`/`heal_pr_open` (Q8: A).
      - A missing lookup result gives `unknown`/`lookup_failed` (fail open = keep).
    - Expose it as the `heal-source-resolved` CLI subcommand over JSON files.
-3. **`scripts/workflow_failure_heal_recovery_scan.sh`: add a `--source-resolved` mode.** It reuses the script's existing open-heal-issue listing and logging. API usage, per scan:
+3. **`scripts/workflow_failure_heal_recovery_scan.sh`: add a `--source-resolved` mode.**
+   - Gates: parse the flag first and branch before the existing recovery gates (lines 117-135). The mode reads its own switch `HEAL_SOURCE_RESOLVED_CLOSE_ENABLED` (unset, empty or `true` on; `false` off; any other value off with a warning), accepts `schedule` and `workflow_dispatch`, and ignores `HEAL_SCOPE_RECOVERY_ENABLED`.
+   - Listing: reuse the paginated GraphQL listing, but with its own jq filter: every open, pipeline-authored `ai:workflow-heal` issue, without the `contains("ai:workflow-heal-scope") | not` filter (line 187), which would drop every scoped heal issue. Logging reuses the script's helpers.
+   API usage, per scan:
    - **(a)** One `GET repos/<self>/pulls?state=open&per_page=100` (paginated). Keep heads `ai/issue-<N>`.
-   - **(b)** Per consumer repo with candidate sources: one aliased GraphQL query, `repository(owner,name){ s<N>: issue(number:N){ state closedAt } … }`, in batches of 25 issues per call. Document the batching contract per §15: input shape, output shape, call count, fail-open.
+   - **(b)** Per repository with candidate sources (consumer repos and this repo): one aliased GraphQL query per 25 sources, `repository(owner,name){ s<N>: issueOrPullRequest(number:N){ __typename ... on Issue { state closedAt labels(first:50){ nodes { name } } } ... on PullRequest { state closedAt } } … }`. Partial data is accepted per alias: an alias that is null or named in `errors` (`NOT_FOUND`) marks only that source `lookup_failed`; a whole-call failure marks every source of that batch `lookup_failed`. Document the batching contract per §15: input shape, output shape, call count, fail-open.
    - **(c)** Per consumer repo with a `validation_failure` candidate: one `GET repos/<repo>/actions/runs?event=workflow_dispatch&status=success&created=>=<oldest heal created_at>&per_page=100`. Keep runs whose `path` is the consumer validate wrapper (`ai-validate.yml`/`internal-validate.yml`, per `workflow_failure_heal.py:184`) and whose `display_title` contains `[tracking:<n>]`.
    - Issue comments come from one `issues/<N>/comments` read per candidate.
-   - On `close`, post the comment, then `PATCH issues/<N> state=closed state_reason=not_planned`. The comment says which sources resolved and how (closed, or validation run `<url>` passed). It ends with `Refs <source>` lines and the "the next occurrence files a new heal" note.
+   - Before any write, take the heal-intake queue ticket (`scripts/workflow_failure_heal_queue.sh acquire`, `release` in an `if: always()` step), then re-read the candidate's comments and re-run the decision. A new occurrence that landed meanwhile changes the decision, and the issue is kept.
+   - On `close`: post the comment (one attempt, `GH_RETRY_MAX_ATTEMPTS=1`) ending in `<!-- ai:heal-source-resolved:v1 issue=<N> -->`, add the label `ai:heal-source-resolved`, then `PATCH issues/<N> state=closed state_reason=not_planned`. When a pipeline-authored close marker is already present (an earlier PATCH failed), skip the comment and retry only the label and the PATCH. The comment says which sources resolved and how (closed, or validation run `<url>` passed with `ai:validated`). It ends with `Refs <source>` lines and the "the next occurrence files a new heal" note.
    - Log `WORKFLOW_HEAL source_resolved outcome=closed|keep|unknown|skip issue=<N> reason=<token>`.
    - Cap closes per scan with `HEAL_SOURCE_RESOLVED_CLOSE_MAX_PER_SCAN` (default 10).
 4. **`.github/workflows/workflow-failure-heal-intake.yml`: new job `source-resolved-scan`.**
    - On the existing `schedule` (and `workflow_dispatch`).
    - Mirror `recovery-scan`'s checkout, token (`secrets.GH_PAT`) and env pattern (lines 338-400).
    - Gate it on `vars.HEAL_SOURCE_RESOLVED_CLOSE_ENABLED != 'false'`, and pass the switch to the script for the invalid-value warning.
-   - Use a concurrency group distinct from intake's.
-5. **Tests**, in `tests/test_workflow_failure_heal.py` (decision unit cases for every rule above) and a scan-mode test with a stub `gh` covering:
-   - close;
-   - keep for an open PR, an unresolved duplicate, an unmarked occurrence and a run-only source;
-   - lookup failure closes nothing;
+   - Use its own job-level concurrency group; serialization with intake and `recovery-scan` comes from the queue ticket (step 3), as for those jobs. Grant `issues: write`.
+5. **Poller: resume instead of parking on a source-resolved close (`scripts/orchestrate_poll_process.sh`).**
+   - `_validation_harness_hold_issue_state` (line 15487): extend the `--jq` of the GET it already makes to add a fourth field, whether `labels[].name` contains `ai:heal-source-resolved`, and expose it as a new `VHH_ISSUE_SOURCE_RESOLVED` (collision-check first). No new API call.
+   - `validation_harness_hold_tick` `not_planned)` arm (lines 15866-15872): when that flag is set and the switch `VALIDATION_HARNESS_SOURCE_RESOLVED_RESUME_ENABLED` is on (same semantics as the other harness switches), call `_validation_harness_hold_resume` with the resolved pin (log reason `heal_source_resolved`) instead of `_validation_harness_hold_end_park`. Forward the switch in `.github/workflows/orchestrate_poll.yml`.
+   - Register the label in `.github/ai/label_contract.v1.json` and `scripts/label_helpers.sh`.
+6. **Tests**, in `tests/test_workflow_failure_heal.py` (decision unit cases for every rule above) and a scan-mode test with a stub `gh` covering:
+   - close, including a pull-request source and a self-repo source;
+   - keep for an open PR, an unresolved duplicate, an unmarked occurrence, a run-only source, and a successful run without `ai:validated`;
+   - lookup failure closes nothing, and one `NOT_FOUND` alias keeps only its issue;
+   - an occurrence posted between the listing and the close keeps the issue;
+   - an existing close marker skips the comment and retries only the PATCH;
+   - the mode runs on `workflow_dispatch` and with `HEAL_SCOPE_RECOVERY_ENABLED=false`;
    - the per-scan cap;
    - call count per scan.
-   - Also extend the workflow wiring test, and the occurrence marker case.
-6. **Docs.** README rows for `HEAL_SOURCE_RESOLVED_CLOSE_ENABLED` and `HEAL_SOURCE_RESOLVED_CLOSE_MAX_PER_SCAN`, `changelog.d/<issue>-heal-source-resolved-close.md`, and `agents.d/<issue>-heal-source-resolved-close.md`.
+   - Also extend the workflow wiring test, the occurrence marker case, and the harness-hold tests (a `not_planned` close with the label resumes; without it, or with the switch off, it still parks).
+7. **Docs.** README rows for `HEAL_SOURCE_RESOLVED_CLOSE_ENABLED`, `HEAL_SOURCE_RESOLVED_CLOSE_MAX_PER_SCAN` and `VALIDATION_HARNESS_SOURCE_RESOLVED_RESUME_ENABLED`, `changelog.d/<issue>-heal-source-resolved-close.md`, and `agents.d/<issue>-heal-source-resolved-close.md`.
 
 ### Phase 4: consumer re-validate after a merge during a harness hold
 
-1. **`scripts/orchestrate_poll_process.sh`: switch.** Add the switch `VALIDATION_HARNESS_INTEGRATION_RESUME_ENABLED` beside the harness switches (lines 2497-2536).
-2. **Same file, hold entry in `mark_validation_failed` (lines 16085-16125).**
-   - When the hold is entered, resolve the integration branch head the same way the `/revalidate` block does (`_branch_head_sha`, ~line 26112). Store it as `validation_harness_hold.integration_head` (40-hex, else omitted).
-   - Use no new API call when the tick already has the value. Otherwise use the same single helper call the `/revalidate` block uses.
+1. **`scripts/orchestrate_poll_process.sh`: switches.** Add the switch `VALIDATION_HARNESS_INTEGRATION_RESUME_ENABLED` and the cap `VALIDATION_HARNESS_INTEGRATION_MAX_RESUMES` (default 2, digits only, else 2) beside the harness switches (lines 2497-2536).
+2. **Same file: record the baseline.**
+   - In `dispatch_validation_if_needed`, after a successful dispatch, resolve the integration branch head with `_branch_head_sha` (defined at line 5570; the `/revalidate` block calls it at line 26150) and store it as `validation_dispatch_integration_head` (40-hex, else omitted). One GET per dispatch.
+   - At hold entry in `mark_validation_failed` (lines 16085-16125), copy that value into `validation_harness_hold.integration_head`. When it is missing, resolve the head once and log `baseline=failure_time`; a merge that landed between dispatch and failure is then part of the baseline, which is accepted for holds without a recorded dispatch head.
 3. **Same file, `validation_harness_hold_tick` (line 15730).**
-   - Placement: after the route-marker step and before the pin checks.
-   - Conditions: the switch is on, `integration_head` is set, and the current head is 40-hex and differs from it.
-   - Action: record the new head in `integration_head`, then call `_validation_harness_hold_resume` with reason `integration_advanced`. Charge the existing per-fingerprint and total resume counters. If the caps are spent, log `outcome=waiting reason=integration_resume_capped` and continue with the normal steps.
+   - Placement: after step 2 sets `vht_pin` from `_VALIDATION_HARNESS_PIN_VALUE` (line ~15825), and before the `support` checks. `_validation_harness_hold_resume` posts the pin in its resume comment, and before that point the pin is still `unknown`.
+   - Conditions: the switch is on, `integration_head` is set, the current head (`_branch_head_sha`, one GET) is 40-hex, and it differs from both `integration_head` and the hold's `integration_checked_head`.
+   - Ancestry: one `compare/<integration_head>...<head>` read in the consumer repo. Record the head as `integration_checked_head` first, so each head is compared once. Only `ahead` continues; `behind`/`diverged` (a reset or rebuild) logs `outcome=waiting reason=integration_not_ahead`, and a compare failure logs `outcome=unknown reason=integration_compare_failed`.
+   - Budget: if `validation_harness_integration_resumes` has reached `VALIDATION_HARNESS_INTEGRATION_MAX_RESUMES`, log `outcome=waiting reason=integration_resume_capped` and continue with the normal steps.
+   - Action: record the new head in `integration_head`, increment `validation_harness_integration_resumes`, then call `_validation_harness_hold_resume` with the resolved pin and reason `integration_advanced`. Give the helper an optional fourth argument selecting the counter, so this path does not charge `validation_harness_resumes.by_fp`/`.total` (which gate hold entry at lines 16106-16111). Existing callers keep the default.
    - Log `VALIDATION_HARNESS_HOLD … outcome=resumed reason=integration_advanced`.
-   - Persist the head before dispatch, so a failed dispatch cannot loop.
-4. **Wiring.** Forward the switch in `.github/workflows/orchestrate_poll.yml` like its siblings.
-5. **Tests**, extending the existing harness-hold tests: resume on a head change, no resume on an unchanged head or a missing field, the cap respected, the head persisted once, and the switch off.
+   - Persist the head and the counter before dispatch, so a failed dispatch cannot loop.
+4. **Wiring.** Forward the switch and `VALIDATION_HARNESS_INTEGRATION_MAX_RESUMES` in `.github/workflows/orchestrate_poll.yml` like their siblings.
+5. **Tests**, extending the existing harness-hold tests: resume on an `ahead` head change with the resolved pin in the comment; no resume on an unchanged head, a missing field or a `behind`/`diverged` head (compared once); the integration cap respected and `validation_harness_resumes` unchanged; the head persisted once; the switch off.
 6. **Docs.**
-   - README row for the switch.
-   - README `VALIDATION_HARNESS_HOLD` reason list (README.md ~3904): add `integration_advanced` and `integration_resume_capped`.
+   - README rows for the switch and the cap.
+   - README `VALIDATION_HARNESS_HOLD` reason list (README.md ~3904): add `integration_advanced`, `integration_resume_capped`, `integration_not_ahead`, `integration_compare_failed` and (Phase 3) `heal_source_resolved`.
    - `changelog.d/<issue>-harness-hold-integration-resume.md`.
    - `agents.d/<issue>-harness-hold-integration-resume.md`.
 
@@ -393,9 +418,10 @@ New identifiers below were chosen to be unique. Each step re-checks them with `g
 - `scripts/workflow_failure_heal_recovery_scan.sh`: phase 3.
 - `scripts/validate_process.sh`: phase 2.
 - `scripts/review_untrusted_workspace.py`: phase 2.
-- `scripts/orchestrate_poll_process.sh`: phases 1, 4.
+- `scripts/orchestrate_poll_process.sh`: phases 1, 3 (resume on a source-resolved close), 4.
 - `.github/workflows/workflow-failure-heal-intake.yml`: phases 1, 2 (env), 3 (new job).
-- `.github/workflows/orchestrate_poll.yml`: phases 1, 4 (env forwarding).
+- `.github/workflows/orchestrate_poll.yml`: phases 1, 3, 4 (env forwarding).
+- `.github/ai/label_contract.v1.json`, `scripts/label_helpers.sh`: phase 3 (`ai:heal-source-resolved`).
 - `tests/test_workflow_failure_heal.py`, `tests/test_workflow_failure_heal_scope_tests.py`, the `run_heal_plan_scope_gate` and `review_untrusted_workspace.py` test files, the harness-hold poller tests, and `validate_process.sh` summary-line tests: extended.
 - `README.md`: switch rows and hold reasons.
 - `changelog.d/<issue>-*.md` [new]: one per phase.
@@ -404,8 +430,8 @@ New identifiers below were chosen to be unique. Each step re-checks them with `g
 ## Data Model / Index Changes
 
 None (no MongoDB). Additive non-DB state:
-- the `validation_harness_hold.fix` and `.integration_head` fields in the orchestrator state;
-- the `validation-route-fix:v1` and `occurrence-source=` comment markers;
+- the `validation_harness_hold.fix`, `.integration_head` and `.integration_checked_head` fields, and the `validation_dispatch_integration_head` and `validation_harness_integration_resumes` fields, in the orchestrator state;
+- the `validation-route-fix:v1`, `main-fix:v1`, `occurrence-source=` and `ai:heal-source-resolved:v1` comment markers, and the `ai:heal-source-resolved` label;
 - the `family=` log field.
 
 ## Tests
@@ -428,14 +454,16 @@ None (no MongoDB). Additive non-DB state:
 
 ## Risks & Mitigations
 
-- **A commit cites the source but does not fix it.** The heal is suppressed, and the consumer waits for that commit to reach its pin, then re-validates and fails again. The next report no longer sees the commit after the pin, so a heal is filed. ACCEPTED: costs at most one promotion cycle (≤1 day), with no human needed.
+- **A commit cites the source but does not fix it.** The heal is suppressed, and the consumer waits for that commit to reach its pin, then re-validates and fails again. The next report finds the `main-fix:v1` marker whose fix is no longer after the pin and files a heal (`reason=prior_fix_did_not_hold`), even if later commits also cite the source. ACCEPTED: costs at most one promotion cycle (≤1 day) per fingerprint, with no human needed.
 - **The compare is truncated** (`main` more than 250 commits ahead of the pin). Mitigation: scan the returned commits and log `truncated=true`. With no match, file normally (fail open).
 - **A forged `VALIDATION_FAILURE_SUMMARY` line in consumer test output picks the wrong family.** Mitigations: the enum check, the all-lines-must-agree rule, and the fact that the worst case is another harness family's directory (still harness code that goes through review).
 - **Directory scope entries let the implementer create arbitrary files under a family directory.** Mitigations: the entries are limited to those six exact directories, the plan gate still requires exact file names in the plan, and review and CI still gate the PR. ACCEPTED: the same trade the step-script glob already makes.
 - **Admitting `.j2` exposes template text to the isolated editor.** Templates hold no credentials; admission is limited to one directory. ACCEPTED.
 - **Auto-close removes a heal that tracked a defect worth fixing here** (as #8197 was, after #8182). The close comment names the source resolution, and the next occurrence files a new heal. ACCEPTED: the consumer no longer needs it, and hardening remains possible as ordinary work.
-- **Closing `not_planned` parks another project's hold.** Mitigations: every recorded source must be resolved; unmarked occurrences make the decision `unknown`; and a resolved source means that hold has cleared.
-- **Integration resume wastes validation runs on unrelated merges.** Bounded by the existing caps (2 per fingerprint, 4 total), with one resume per new head. ACCEPTED.
+- **Closing `not_planned` parks a hold.** The poller's `not_planned)` arm parks whenever the pin has moved ahead of `support`, whatever resolved the source. Mitigations: every recorded source must be resolved (with positive pass evidence); unmarked occurrences make the decision `unknown`; the close adds `ai:heal-source-resolved`, and a poller with Phase 3 resumes instead of parking. ACCEPTED: a consumer poller older than Phase 3 can still park once (CRITICAL) on such a close until it syncs `@stable`.
+- **A close races a new occurrence.** The scan holds the heal-intake queue ticket and re-reads comments before writing, so an intake run cannot add an occurrence between the decision and the close.
+- **Integration resume wastes validation runs on unrelated merges.** Bounded by its own cap (`VALIDATION_HARNESS_INTEGRATION_MAX_RESUMES`, default 2 per hold), one resume per new `ahead` head, and it never spends the harness-fix counters. ACCEPTED.
+- **Phase 4 API cost.** One uncached ref GET per held project per tick, plus a compare per new head. Bounded by the number of held projects (usually zero or one per consumer). ACCEPTED.
 - **Old consumer pollers see the `fix` line.** They ignore it and resume on pin ancestry alone (today's behaviour). ACCEPTED until they sync `@stable`.
 
 ## Rollout
@@ -443,11 +471,12 @@ None (no MongoDB). Additive non-DB state:
 - Each phase is default-on behind its switch:
   - `HEAL_MAIN_FIX_DEDUPE_ENABLED`, `VALIDATION_HARNESS_FIX_SHA_WAIT_ENABLED` (Phase 1);
   - `HEAL_HARNESS_SCOPE_ENABLED` (Phase 2);
-  - `HEAL_SOURCE_RESOLVED_CLOSE_ENABLED` (Phase 3);
+  - `HEAL_SOURCE_RESOLVED_CLOSE_ENABLED`, `VALIDATION_HARNESS_SOURCE_RESOLVED_RESUME_ENABLED` (Phase 3);
   - `VALIDATION_HARNESS_INTEGRATION_RESUME_ENABLED` (Phase 4).
+  - Not switched (revert-only, see G7): the `.j2` admission and the step-glob transfer fix in `scripts/review_untrusted_workspace.py` (Phase 2).
 - Set the repo variable to `false` to roll back without a revert.
 - **Coding-workflows-side changes** (intake, scope, editor, scan) take effect on merge to `main`, because the intake and scan jobs run from the default branch.
-- **Consumer-side changes** (`validate_process.sh` `family=`, the poller) reach every repo in `.github/ai/consumer_repos.json` on the next `stable` promotion and the `coding-workflows-stable-released` dispatch. Until then they are inert.
+- **Consumer-side changes** (`validate_process.sh` `family=`, the poller, including Phase 3's resume on `ai:heal-source-resolved`) reach every repo in `.github/ai/consumer_repos.json` on the next `stable` promotion and the `coding-workflows-stable-released` dispatch. Until then they are inert.
 - No migration and no backfill. Heal issues filed before Phase 3 have occurrence comments without the new marker, so they stay manual (decision `unknown`).
 
 ## References
