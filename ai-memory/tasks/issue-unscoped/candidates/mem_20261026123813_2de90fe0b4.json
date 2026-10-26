@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/mode-judge-review-blocked.txt:121 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The judge prompt says option D (merge_with_followup) runs a \"SYNCHRONOUS squash merge (no auto-merge enrollment)\", but scripts/review_rb_judge.sh:1363-1367 now sets RB_MERGE_METHOD_FLAG to --merge for auto/forward-merge-stable-* heads.\n  WHY: This is documentation drift. The merge_with_followup vs close_and_reissue decision is unaffected. All reviewers rated it NIT.\n- prompts/_templates/mode-judge-review-blocked.txt:114 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash, anthropic_claude-sonnet-5_5]\n  PROBLEM: The include-source twin template carries the same stale \"SYNCHRONOUS squash merge\" wording.\n  WHY: This is the same documentation drift as the prompt file, and it contradicts the RB_MERGE_METHOD_FLAG-dependent merge behavior for forward-merge PRs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- prompts/mode-judge-review-blocked.txt:121 (the twin prompts/_templates/mode-judge-review-blocked.txt has the same text) | severity=NIT | confidence=4\n  PROBLEM: The judge prompt still says option D (merge_with_followup) is a synchronous squash merge. scripts/review_rb_judge.sh now sets RB_MERGE_METHOD_FLAG to --merge for heads that start with auto/forward-merge-stable-.\n  WHY: Nothing breaks. The text is wrong for forward-merge PRs, but the model's choice does not depend on the merge method, so this is documentation drift only.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- prompts/mode-judge-review-blocked.txt:121 | severity=NIT | confidence=4\n  PROBLEM: The judge prompt describes option D (merge_with_followup) as a \"SYNCHRONOUS squash merge\", failing to account for the new conditional use of `--merge` for forward-merge PRs.\n  WHY: This is documentation drift. scripts/review_rb_judge.sh:1363-1367 correctly sets RB_MERGE_METHOD_FLAG, but the prompt text is stale.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- prompts/mode-judge-review-blocked.txt:121; prompts/_templates/mode-judge-review-blocked.txt:114 | severity=NIT | confidence=4\n  PROBLEM: The option D instructions say the workflow attempts a synchronous squash merge, but scripts/review_rb_judge.sh selects `--merge` for `auto/forward-merge-stable-*` PRs and uses that method at the synchronous merge site.\n  WHY: The judge receives inaccurate instructions about the merge behavior. The selected action is unchanged.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- prompts/mode-judge-review-blocked.txt:121 | severity=NIT | confidence=4\n  PROBLEM: The judge prompt says option D runs \"a SYNCHRONOUS squash merge (no auto-merge enrollment)\", but scripts/review_rb_judge.sh:1363-1367 now selects RB_MERGE_METHOD_FLAG=\"--merge\" for auto/forward-merge-stable-* heads, and the sync merge at scripts/review_rb_judge.sh:2924 uses that flag.\n  WHY: The rendered prompt contradicts the code path. The last run fixed the same staleness in the shell comments at scripts/review_rb_judge.sh:2813-2817 and :2900-2907 but not in the prompt. This is documentation drift.\n- prompts/_templates/mode-judge-review-blocked.txt:114 | severity=NIT | confidence=4\n  PROBLEM: Same documentation drift as prompts/mode-judge-review-blocked.txt:121. The include-source twin also says \"SYNCHRONOUS squash merge\" but the code now uses RB_MERGE_METHOD_FLAG.\n  WHY: Same as above: it contradicts the actual merge behavior for forward-merge PRs.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- prompts/mode-judge-review-blocked.txt:121 and prompts/_templates/mode-judge-review-blocked.txt:114 | severity=NIT | confidence=4\n  PROBLEM: This PR added RB_MERGE_METHOD_FLAG (scripts/review_rb_judge.sh:1363-1367), which switches the merge method to `--merge` for `auto/forward-merge-stable-*` heads, and the sync merge at scripts/review_rb_judge.sh:2924 uses it. The last run updated the shell comments at review_rb_judge.sh:2814 and :2903 but left the model-facing prompt text saying the sync merge is always a squash.\n  WHY: For a forward-merge fallback PR the judge reads prompt text that contradicts the code path. The merge_with_followup vs close_and_reissue decision is unaffected, so this is documentation drift.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "63baa9232f6a5e337ff54722ff9f3b78ecd189d2a0c791790ba122408d7a6ca5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8183,
+    "run_id": "40317730206",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40317730206",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026123813_2de90fe0b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8183,
+    "run_id": "40317730206"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T12:38:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
