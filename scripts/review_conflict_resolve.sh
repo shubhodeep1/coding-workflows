@@ -2815,10 +2815,10 @@ _resolver_sandbox_opencode_attempt()
   fi
 }
 
-attempt=1
 # Engine of the last model attempt; picks the commit identity below. Retries
 # restore the tree, so only the last attempt's edits are committed.
 resolver_commit_engine="codex"
+attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
   # On retries: restore the working tree to its post-merge-replay

@@ -1060,7 +1060,7 @@ def test_implement_commit_identity_needs_both_roles_on_claude_without_fallback(t
 def test_conflict_resolver_commit_identity_follows_the_last_attempt():
 	text = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
 	loop = text.index('while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do')
-	assert text.rindex('resolver_commit_engine="codex"', 0, loop) > text.rindex("attempt=1", 0, loop)
+	assert text[:loop].endswith('resolver_commit_engine="codex"\nattempt=1\n'), "the engine must reset right before the attempt loop"
 	attempt_start = text.index("    resolver_claude_rc=75\n", loop)
 	assert text[attempt_start:].startswith('    resolver_claude_rc=75\n    resolver_commit_engine="codex"\n')
 	claude_call = text.index("_resolver_sandbox_attempt claude || resolver_claude_rc=$?", attempt_start)
