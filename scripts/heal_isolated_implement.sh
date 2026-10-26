@@ -15,12 +15,21 @@ support="${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE:-.}/.codex-workflow-src/
 # write container on this script's snapshot (never on the host). The snapshot
 # then goes through the same syntax validation and scoped transfer as a codex
 # edit. Claude unavailable (exit 75) runs the isolated codex editor below.
+# A Codex hand-off leaves the codex_thread_reuse.sh fallback marker, so
+# implement_commit_changes.sh commits the edits as codex-bot, not claude-bot.
+heal_mark_claude_unavailable()
+{
+	local runtime="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR:-}}"
+	[ -n "${runtime}" ] || return 0
+	{ mkdir -p "${runtime}/codex-thread-reuse/states" && : > "${runtime}/codex-thread-reuse/states/claude-implement.unavailable"; } 2>/dev/null || true
+}
 heal_engine=codex
 if [ "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" = claude ]; then
 	if [ -f "${support}/ai_engine.sh" ] && [ ! -L "${support}/ai_engine.sh" ]; then
 		heal_engine=claude
 	else
 		echo 'AI_ENGINE_FALLBACK role=IMPLEMENT reason=support_missing' >&2
+		heal_mark_claude_unavailable
 	fi
 fi
 root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/heal-isolated.XXXXXXXX")"
@@ -79,6 +88,7 @@ run_editor_claude()
 			# claude_run logged AI_ENGINE_FALLBACK role=IMPLEMENT reason=...
 			echo 'HEAL_ISOLATED_EDITOR phase=run engine=claude outcome=unavailable action=codex' >&2
 			heal_engine=codex
+			heal_mark_claude_unavailable
 			return 75
 			;;
 		80)

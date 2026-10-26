@@ -1111,3 +1111,38 @@ def test_no_writer_commits_as_the_github_linked_codex_email():
 				if "codex@users.noreply.github.com" in line and re.search(r"user\.email|GIT_(AUTHOR|COMMITTER)_EMAIL", line):
 					offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}")
 	assert not offenders, offenders
+
+
+def test_review_editor_fallback_flag_resets_before_each_claude_attempt():
+	"""An earlier attempt's OpenCode hand-off must not mark a later
+	Claude-written commit codex-bot: each Claude attempt resets the flag."""
+	text = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	branch = text.index('if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then\n    local editor_claude_rc=0')
+	reset = text.index('echo "REVIEW_EDITOR_ENGINE_FELL_BACK=false" >> "${GITHUB_ENV}"', branch)
+	claude_call = text.index('"${editor_opencode_cmd[@]}" claude < "${prompt_file}"', branch)
+	latch = text.index('echo "REVIEW_EDITOR_ENGINE_FELL_BACK=true" >> "${GITHUB_ENV}"', branch)
+	assert reset < claude_call < latch
+
+
+def test_heal_editor_codex_handoff_leaves_the_fallback_marker(tmp_path):
+	"""The heal route never runs codex_thread_reuse.sh, so its Codex hand-off
+	writes the marker implement_commit_changes.sh reads."""
+	text = (REPO_ROOT / "scripts" / "heal_isolated_implement.sh").read_text(encoding="utf-8")
+	func = text[text.index("heal_mark_claude_unavailable()\n{"):text.index("heal_engine=codex\n")]
+	support_missing = text.index("echo 'AI_ENGINE_FALLBACK role=IMPLEMENT reason=support_missing' >&2")
+	assert text[support_missing:].split("\n", 2)[1].strip() == "heal_mark_claude_unavailable"
+	handoff = text.index("outcome=unavailable action=codex")
+	assert "heal_mark_claude_unavailable" in text[handoff:text.index("return 75", handoff)]
+	for env, root in (({"RUNTIME_DIR": str(tmp_path / "rt")}, tmp_path / "rt"),
+			({"RUNTIME_DIR": str(tmp_path / "rt2"), "CODEX_THREAD_REUSE_RUNTIME_DIR": str(tmp_path / "reuse")}, tmp_path / "reuse")):
+		run_env = {k: v for k, v in os.environ.items() if k not in ("RUNTIME_DIR", "CODEX_THREAD_REUSE_RUNTIME_DIR")}
+		run_env.update(env)
+		result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + func + "\nheal_mark_claude_unavailable\n"],
+			env=run_env, capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		assert (root / "codex-thread-reuse" / "states" / "claude-implement.unavailable").is_file()
+	# Without a runtime dir it is a no-op, never a failure.
+	run_env = {k: v for k, v in os.environ.items() if k not in ("RUNTIME_DIR", "CODEX_THREAD_REUSE_RUNTIME_DIR")}
+	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + func + "\nheal_mark_claude_unavailable\n"],
+		env=run_env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr

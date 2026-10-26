@@ -3,13 +3,13 @@
   wrote names the engine that wrote it: `claude-bot
   <claude-bot@users.noreply.invalid>` when the editing role ran on Claude and
   did not fall back, `codex-bot <codex-bot@users.noreply.invalid>` otherwise.
-  The four AI writers decide this from what actually ran, not from the label
+  The five AI writers decide this from what actually ran, not from the label
   alone:
 
   | Writer | Role | Claude identity when |
   |---|---|---|
-  | `scripts/review_commit_changes.sh` (`[ai-autofix]`) | `REVIEW_EDITOR` | `AI_ENGINE_RESOLVED_REVIEW_EDITOR=claude` and `REVIEW_EDITOR_ENGINE_FELL_BACK` is not `true` (`scripts/review_apply_fixes.sh` writes it to `GITHUB_ENV` when the editor hands off to OpenCode) |
-  | `scripts/implement_commit_changes.sh` | `IMPLEMENT`, `IMPLEMENT_REPAIR` | both resolved to `claude` and neither `claude-implement.unavailable` nor `claude-implement-repair.unavailable` exists under `${CODEX_THREAD_REUSE_RUNTIME_DIR:-$RUNTIME_DIR}/codex-thread-reuse/states` |
+  | `scripts/review_commit_changes.sh` (`[ai-autofix]`) | `REVIEW_EDITOR` | `AI_ENGINE_RESOLVED_REVIEW_EDITOR=claude` and `REVIEW_EDITOR_ENGINE_FELL_BACK` is not `true` (`scripts/review_apply_fixes.sh` writes `false` to `GITHUB_ENV` before each Claude attempt and `true` when that attempt hands off to OpenCode) |
+  | `scripts/implement_commit_changes.sh` | `IMPLEMENT`, `IMPLEMENT_REPAIR` | both resolved to `claude` and neither `claude-implement.unavailable` nor `claude-implement-repair.unavailable` exists under `${CODEX_THREAD_REUSE_RUNTIME_DIR:-$RUNTIME_DIR}/codex-thread-reuse/states` (`codex_thread_reuse.sh` writes them, and on the heal route `scripts/heal_isolated_implement.sh` writes `claude-implement.unavailable` when it hands off to Codex) |
   | `scripts/review_conflict_resolve.sh` (`[ai-merge-resolve]`) | `CONFLICT_RESOLVER` | the last model attempt ran on Claude (`resolver_commit_engine`) |
   | `scripts/review_rb_judge.sh` (`[judge-fix]`) and the poller's combined review-blocked judge (`scripts/orchestrate_poll_process.sh`) | `RB_JUDGE` | the fix pass did not return 75; the poller reads `${RUNTIME_DIR}/rb_judge_last_engine`, which `poller_judge_isolated` writes |
 
@@ -29,5 +29,5 @@
   `ADVANCE=unknown`.
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
-- `AI_COMMIT_IDENTITY` (`scripts/review_commit_changes.sh`: `role=REVIEW_EDITOR engine= fell_back= name=`; `scripts/implement_commit_changes.sh`: `role=IMPLEMENT engine= repair_engine= name=`; `scripts/review_conflict_resolve.sh`: `role=CONFLICT_RESOLVER engine= name=`; `scripts/review_rb_judge.sh`: `role=RB_JUDGE engine= name=`; `scripts/orchestrate_poll_process.sh`: `role=RB_JUDGE scope=poller name=`. `name=` is `claude-bot` or `codex-bot`, the git author of the commit that follows)
+- `AI_COMMIT_IDENTITY` (`scripts/review_commit_changes.sh`: `role=REVIEW_EDITOR engine= fell_back= name=`; `scripts/implement_commit_changes.sh`: `role=IMPLEMENT engine= repair_engine= commit_engine= name=`; `scripts/review_conflict_resolve.sh`: `role=CONFLICT_RESOLVER engine= name=`; `scripts/review_rb_judge.sh`: `role=RB_JUDGE engine= name=`; `scripts/orchestrate_poll_process.sh`: `role=RB_JUDGE scope=poller name=`. `name=` is `claude-bot` or `codex-bot`, the git author of the commit that follows)
 LOG_PREFIX.name=AI_COMMIT_IDENTITY

@@ -251,6 +251,9 @@ run_editor_codex_attempt() {
   # hold it open across both runs so its reader does not see EOF in between.
   if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then
     local editor_claude_rc=0
+    # Reset the fallback flag for this attempt, so an earlier attempt's
+    # OpenCode hand-off cannot mark a later Claude-written commit codex-bot.
+    if [ -n "${GITHUB_ENV:-}" ]; then echo "REVIEW_EDITOR_ENGINE_FELL_BACK=false" >> "${GITHUB_ENV}" || true; fi
     exec 2>"${stderr_target}"
     if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
       "${CODEX_STALL_GUARD_HELPER}" \

@@ -319,13 +319,15 @@ if [ "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" = "claude" ] \
   && [ "${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" = "claude" ] \
   && [ ! -e "${implement_commit_identity_states}/claude-implement.unavailable" ] \
   && [ ! -e "${implement_commit_identity_states}/claude-implement-repair.unavailable" ]; then
+  implement_commit_engine=claude
   git config user.name "claude-bot"
   git config user.email "claude-bot@users.noreply.invalid"
 else
+  implement_commit_engine=codex
   git config user.name "codex-bot"
   git config user.email "codex-bot@users.noreply.invalid"
 fi
-echo "AI_COMMIT_IDENTITY role=IMPLEMENT engine=${AI_ENGINE_RESOLVED_IMPLEMENT:-codex} repair_engine=${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex} name=$(git config user.name)"
+echo "AI_COMMIT_IDENTITY role=IMPLEMENT engine=${AI_ENGINE_RESOLVED_IMPLEMENT:-codex} repair_engine=${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex} commit_engine=${implement_commit_engine} name=$(git config user.name)"
 git rm -r --cached node_modules 2>/dev/null || true
 # Template-owned paths (prompts/, .github/prompts/,
 # .github/scripts/) are fetched from coding-workflows at runtime in
