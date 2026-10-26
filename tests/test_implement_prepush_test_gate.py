@@ -350,6 +350,17 @@ def test_timeout_above_the_step_budget_is_clamped(tmp_path):
 	assert "--timeout-minutes 53" in log
 
 
+def test_zero_padded_timeout_is_read_as_decimal(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	env["PREPUSH_TEST_GATE_TIMEOUT_MINUTES"] = "08"
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	log = (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert "--timeout-minutes 8 " in log
+	assert "value too great for base" not in proc.stderr
+	assert _editor_calls(tmp_path) == 1
+
+
 def test_node_prep_root_is_mounted_into_the_gate_container(tmp_path):
 	repo, env = _setup(tmp_path, [PASS])
 	(_work(tmp_path) / "sandbox" / "work" / "node_modules").mkdir(parents=True)

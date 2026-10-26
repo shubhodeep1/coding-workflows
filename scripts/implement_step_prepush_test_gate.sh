@@ -199,6 +199,8 @@ implement_prepush_test_gate_mode()
 	esac
 	gate_timeout="${PREPUSH_TEST_GATE_TIMEOUT_MINUTES:-15}"
 	[[ "${gate_timeout}" =~ ^[0-9]+$ ]] && [ "${gate_timeout}" -ge 1 ] && [ "${gate_timeout}" -le 360 ] || gate_timeout=15
+	# Force base 10: bash arithmetic reads a leading zero (08, 030) as octal.
+	gate_timeout=$((10#${gate_timeout}))
 	# One run (timeout + 120 s) must fit the step's 55-minute budget, or the
 	# 60-minute step kill lands before result.json and the summary exist.
 	if [ "${gate_timeout}" -gt 53 ]; then
@@ -209,6 +211,7 @@ implement_prepush_test_gate_mode()
 	[[ "${gate_large}" =~ ^[0-9]+$ ]] && [ "${gate_large}" -ge 1 ] || gate_large=50
 	gate_shards="${PREPUSH_TEST_GATE_SHARDS:-4}"
 	[[ "${gate_shards}" =~ ^[0-9]+$ ]] && [ "${gate_shards}" -ge 1 ] && [ "${gate_shards}" -le 64 ] || gate_shards=4
+	gate_large=$((10#${gate_large})) gate_shards=$((10#${gate_shards}))
 }
 
 # First regular, non-symlink file among the arguments.
@@ -661,6 +664,14 @@ implement_prepush_test_gate_main()
 			# The staged support copy predates the image action.
 			gate_image_reason="support_image_action_missing"
 		fi
+	fi
+	# Image build and setup already used part of the step budget: one run
+	# (timeout + 120 s) must still fit what is left of it.
+	local fit_minutes=$(( (step_budget - (SECONDS - gate_started) - 120) / 60 ))
+	[ "${fit_minutes}" -ge 1 ] || fit_minutes=1
+	if [ "${gate_timeout}" -gt "${fit_minutes}" ]; then
+		implement_prepush_test_gate_log "outcome=warning reason=step_budget timeout_clamped=${fit_minutes}"
+		gate_timeout="${fit_minutes}"
 	fi
 	run1="${RUNTIME_DIR}/prepush_gate/run1"
 	implement_prepush_test_gate_run_once "${run1}"

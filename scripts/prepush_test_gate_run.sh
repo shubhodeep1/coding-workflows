@@ -104,6 +104,8 @@ if ! [[ "${timeout_minutes}" =~ ^[0-9]+$ ]] || [ "${timeout_minutes}" -lt 1 ] ||
 	gate_log "outcome=config_invalid name=PREPUSH_TEST_GATE_TIMEOUT_MINUTES fallback=15"
 	timeout_minutes=15
 fi
+# Force base 10: bash arithmetic reads a leading zero (08, 030) as octal.
+timeout_minutes=$((10#${timeout_minutes}))
 if [ -n "${shards}" ] && { ! [[ "${shards}" =~ ^[0-9]+$ ]] || [ "${shards}" -lt 1 ] || [ "${shards}" -gt 64 ]; }; then
 	gate_log "outcome=config_invalid name=PREPUSH_TEST_GATE_SHARDS fallback=module_default"
 	shards=""
@@ -229,9 +231,15 @@ if [ -n "${nested_nm_root}" ] && nested_real="$(realpath -e "${nested_nm_root}" 
 			break
 		fi
 		# Never create mount points through a symlink in the copied trees.
-		[ "$(realpath -m "${root_real}/source/${rel}")" = "${root_real}/source/${rel}" ] || continue
-		[ "$(realpath -m "${root_real}/baseline/${rel}")" = "${root_real}/baseline/${rel}" ] || continue
-		mkdir -p "${root_real}/source/${rel}/node_modules" "${root_real}/baseline/${rel}/node_modules" 2>/dev/null || continue
+		if [ "$(realpath -m "${root_real}/source/${rel}")" != "${root_real}/source/${rel}" ] \
+			|| [ "$(realpath -m "${root_real}/baseline/${rel}")" != "${root_real}/baseline/${rel}" ]; then
+			gate_log "outcome=warning reason=nested_node_modules_mount_skipped detail=symlink_in_path"
+			continue
+		fi
+		if ! mkdir -p "${root_real}/source/${rel}/node_modules" "${root_real}/baseline/${rel}/node_modules" 2>/dev/null; then
+			gate_log "outcome=warning reason=nested_node_modules_mount_skipped detail=mkdir_failed"
+			continue
+		fi
 		mounts+=(--mount "type=bind,src=${nm},dst=/source/${rel}/node_modules,readonly")
 		mounts+=(--mount "type=bind,src=${nm},dst=/baseline/${rel}/node_modules,readonly")
 		nested_count=$((nested_count + 1))
