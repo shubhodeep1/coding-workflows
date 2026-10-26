@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-10-26T16:11:02Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/orchestrate_poll_process.sh:2184-2185, 2231-2232; cited_path=scripts/orchestrate_poll_process.sh (lines 2184-2185, 2231-2232); files_touched=scripts/orchestrate_poll_process.sh, scripts/review_apply_fixes.sh, scripts/heal_isolated_implement.sh, tests/test_review_autofix_claude_fixer_mode.py.",
+  "phase": "review_autofix",
+  "pr_number": 8203,
+  "record_id": "lesson_20261026161102_82aaa16882",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/orchestrate_poll_process.sh (lines 2184-2185, 2231-2232)",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/review_apply_fixes.sh",
+    "scripts/heal_isolated_implement.sh",
+    "tests/test_review_autofix_claude_fixer_mode.py"
+  ]
+}
