@@ -668,8 +668,12 @@ implement_prepush_test_gate_main()
 	# Image build and setup already used part of the step budget: one run
 	# (timeout + 120 s) must still fit what is left of it.
 	local fit_minutes=$(( (step_budget - (SECONDS - gate_started) - 120) / 60 ))
-	[ "${fit_minutes}" -ge 1 ] || fit_minutes=1
-	if [ "${gate_timeout}" -gt "${fit_minutes}" ]; then
+	if [ "${fit_minutes}" -lt 1 ]; then
+		# Not even a 1-minute run fits: record UNVERIFIED instead of starting
+		# a container the 60-minute step kill would cut off before the summary.
+		implement_prepush_test_gate_log "outcome=skipped reason=step_budget"
+		gate_image="" gate_image_reason="step_budget" fit_minutes=1
+	elif [ "${gate_timeout}" -gt "${fit_minutes}" ]; then
 		implement_prepush_test_gate_log "outcome=warning reason=step_budget timeout_clamped=${fit_minutes}"
 		gate_timeout="${fit_minutes}"
 	fi
