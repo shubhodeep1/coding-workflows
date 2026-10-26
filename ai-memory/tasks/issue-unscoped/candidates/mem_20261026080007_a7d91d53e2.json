@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:2735 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The closing sentence \"Duplicates, escalations, PR comments and no-issue classifications are unaffected.\" is inaccurate for run-less `engine_fallback` reports, which now exit at `stage=pre_diagnosis` (scripts/workflow_failure_heal_intake.sh:2282-2285) before the no-issue classification paths (`already-fixed`, `consumer-config|transient`) and their Telegram notes.\n  WHY: Operators using the row will expect notifications that are no longer sent; the changelog fragment discloses this but the env-var row does not. Severity disagreement: sonnet-5_5 rated NIT with confidence 2, minimax and luna rated NIT with confidence 4 and 5. The highest confidence is used.\n- README.md:2735 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The phrase \"the earlier scope-marker guard (`WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED`) skips the other such reports the same way\" is wrong, because that guard sits inside `_open_issue` at scripts/workflow_failure_heal_intake.sh:2764-2775, after diagnosis and classification.\n  WHY: Label-only run-less reports with `consumer-config`, `transient` or `already-fixed` verdicts never reach that guard (they leave via scripts/workflow_failure_heal_intake.sh:2984-3027), so operators would wrongly believe the model call is skipped for them.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md: `HEAL_INTAKE_SCOPE_GUARD_ENABLED` row, closing sentence | severity=NIT | confidence=2\n  PROBLEM: The sentence \"Duplicates, escalations, PR comments and no-issue classifications are unaffected.\" describes the gate's own behavior correctly, but could mislead because run-less `engine_fallback` reports no longer produce the `already-fixed`, `transient` or `consumer-config` verdict or its Telegram note.\n  WHY: Documentation precision only; it does not fail at runtime. The changelog fragment and the PR description already state the change.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:2735 | severity=NIT | confidence=4\n  PROBLEM: The phrase \"the earlier scope-marker guard (`WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED`) skips the other such reports the same way\" is wrong, because the guard lives inside `_open_issue` at scripts/workflow_failure_heal_intake.sh:2764-2775, after diagnosis and classification, and fires only for issue-opening classifications.\n  WHY: Label-only reports with `consumer-config`, `transient` or `already-fixed` verdicts leave through scripts/workflow_failure_heal_intake.sh:2984-3027 and never reach the guard, so operators would wrongly think the diagnosis cost is avoided for them.\n- README.md:2735 | severity=NIT | confidence=4\n  PROBLEM: The clause \"Duplicates, escalations, PR comments and no-issue classifications are unaffected.\" is false with the creation gate on. A run-less `engine_fallback` report exits at scripts/workflow_failure_heal_intake.sh:2282-2285 with `CLASSIFICATION=\"none\"`, making the `already-fixed` (scripts/workflow_failure_heal_intake.sh:3006-3026) and `consumer-config|transient` (scripts/workflow_failure_heal_intake.sh:2984-3004) branches unreachable.\n  WHY: Operators expect the `consumer-config` ERROR page or the `already-fixed` DEBUG note for an unbound engine_fallback report, and neither is sent now. Only the \"no-issue classifications\" half of the clause is stale.\n- HARDENING: scripts/workflow_failure_heal_intake.sh:2282-2285\n  PROBLEM: The skip exits 0 with only a `WORKFLOW_HEAL skip ...` log line and a step-summary line, so a reader cannot tell that no model call was made.\n  WHY: Suggested fix: emit one `::notice::WORKFLOW_HEAL engine_fallback skipped before diagnosis (no bound run; the creation gate is on)` next to the skip (1 line).\n- HARDENING: scripts/workflow_failure_heal_intake.sh:2282\n  PROBLEM: The guard is a bare string comparison on `SOURCE_KIND`, so a new kind that names no run would fall through to a full diagnosis.\n  WHY: No fix needed: the kind set is closed and validated by `validate-payload`, and a generic predicate would widen scope. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:2735; scripts/workflow_failure_heal_intake.sh:2282-2284 (`_heal_skip_scope_unavailable` exits at line 664) | severity=NIT | confidence=5\n  PROBLEM: The statement \"Duplicates, escalations, PR comments and no-issue classifications are unaffected\" is inaccurate for run-less `engine_fallback` reports when the creation gate is on.\n  WHY: The intake sets `CLASSIFICATION=\"none\"` and exits before diagnosis, bypassing the no-issue classification paths that this change deliberately suppresses.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "3dee0ab293f984b868aaf3dda0a1eee0a29a99ea0deb5603dbf5e070c5a8f874",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8185,
+    "run_id": "40284439649",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40284439649",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026080007_a7d91d53e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8185,
+    "run_id": "40284439649"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T08:00:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
