@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:48-50`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-26
-- Last note: All 5 consumer PRs merged; WORKFLOW_PROFILE=full confirmed on all 4. Next: run the updater once in the 4 newly installed repos.
+- Last note: First updater runs dispatched in the 4 new repos. Next: step 11, verify all 13 consumers synced to current stable.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -66,9 +66,12 @@
      2026-10-25T14:46:48Z (v1.40.1) and 2026-10-25T20:09:49Z (v1.40.2).
    - 2026-10-26: operator answered Q5: A (replaces Q2/Q3). `WORKFLOW_PROFILE=full` set on all 4 repos ("Updated" x4);
      read back `full` for btc_sweeper, atlas-bridge.gd, mongo-explorer; fbc_shutdown re-checked 2026-10-26: `full`.
-10. [ ] Merge the 5 PRs and run each repo's `ai-update-workflows.yml` once
+10. [x] Merge the 5 PRs and run each repo's `ai-update-workflows.yml` once
    - 2026-10-26: all 5 PRs MERGED (tele-funtoken#4885 on 2026-10-25; btc_sweeper#231, atlas-bridge.gd#120, mongo-explorer#46,
      fbc_shutdown#14 merged by the consumers' AI review pipeline). Next: one manual updater run in the 4 newly installed repos.
+   - done 2026-10-26: no earlier updater runs in the 4 repos (none ran under core/standard); operator dispatched
+     `ai-update-workflows.yml`: btc_sweeper run 40254082471, atlas-bridge.gd 40254086692, mongo-explorer 40254090855,
+     fbc_shutdown 40254095533.
 11. [ ] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A)
 
 ## Notes
