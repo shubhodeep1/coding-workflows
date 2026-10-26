@@ -46,7 +46,7 @@ echo "Running Codex resolver"
 
 # Ensure committer identity is set (see "Detect merge conflicts" step).
 git config user.name  "codex-bot"        2>/dev/null || true
-git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
+git config user.email "codex-bot@users.noreply.invalid" 2>/dev/null || true
 
 # Start this step from a clean tracked-file state.  The "Detect
 # merge conflicts" step's conflict branch only runs `git merge

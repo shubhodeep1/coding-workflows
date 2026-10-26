@@ -22914,7 +22914,7 @@ def test_integration_conflict_branch_rebuild_fetch_retry_stays_escalated_and_ign
 def test_branch_rebuild_replay_configures_git_identity():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert re.search(
-		r'cd "\$\{worktree_dir\}" \|\| exit 20\s+git config user.name "codex-bot" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+git config user.email "codex@users\.noreply\.github\.com" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+while IFS= read -r replay_item; do',
+		r'cd "\$\{worktree_dir\}" \|\| exit 20\s+git config user.name "codex-bot" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+git config user.email "codex-bot@users\.noreply\.invalid" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+while IFS= read -r replay_item; do',
 		script,
 	), "expected branch rebuild replay subshell to configure git identity before cherry-pick"
 

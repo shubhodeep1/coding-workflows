@@ -331,8 +331,19 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   unset _artifact
 fi
 
-git config user.name "codex-bot"
-git config user.email "codex@users.noreply.github.com"
+# The commit author names the engine that wrote the edits: claude-bot when
+# the editor ran on Claude (and did not fall back to OpenCode), codex-bot
+# otherwise. Both emails are on the reserved .invalid domain so GitHub links
+# the commit to no account.
+if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ] \
+  && [ "${REVIEW_EDITOR_ENGINE_FELL_BACK:-false}" != "true" ]; then
+  git config user.name "claude-bot"
+  git config user.email "claude-bot@users.noreply.invalid"
+else
+  git config user.name "codex-bot"
+  git config user.email "codex-bot@users.noreply.invalid"
+fi
+echo "AI_COMMIT_IDENTITY role=REVIEW_EDITOR engine=${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex} fell_back=${REVIEW_EDITOR_ENGINE_FELL_BACK:-false} name=$(git config user.name)"
 git rm -r --cached node_modules 2>/dev/null || true
 
 # Diagnostic: working tree state immediately before the

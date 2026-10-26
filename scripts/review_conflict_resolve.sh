@@ -2984,6 +2984,9 @@ _resolver_sandbox_opencode_attempt()
   fi
 }
 
+# Engine of the last model attempt; picks the commit identity below. Retries
+# restore the tree, so only the last attempt's edits are committed.
+resolver_commit_engine="codex"
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
@@ -3140,6 +3143,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     # exports AI_ENGINE_RESOLVED_CONFLICT_RESOLVER (CLAUDE_FIXER_ENABLED=false
     # keeps it on codex). Both engines use fresh isolated snapshots.
     resolver_claude_rc=75
+    resolver_commit_engine="codex"
     resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
     resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
     if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
@@ -3153,6 +3157,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
       resolver_claude_rc=0
       _resolver_sandbox_attempt claude || resolver_claude_rc=$?
+      # 75 hands the attempt to OpenCode below; anything else ran on Claude.
+      [ "${resolver_claude_rc}" -eq 75 ] || resolver_commit_engine="claude"
       if [ "${resolver_claude_rc}" -eq 80 ]; then
         # Claude capacity wait (issue #7370): no OpenCode fallback.
         echo 'AI_ENGINE_CAPACITY_WAIT role=CONFLICT_RESOLVER outcome=deferred' >&2
@@ -3592,8 +3598,18 @@ fi
 # clean; it still needs the two-parent commit below, so MERGE_HEAD opens
 # the gate too (shubhodeep1/tele-funtoken-msg-scoring#4752).
 if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-  git config user.name "codex-bot"
-  git config user.email "codex@users.noreply.github.com"
+  # The commit author names the engine of the last resolver attempt:
+  # claude-bot when it ran on Claude, codex-bot otherwise. Both emails are
+  # on the reserved .invalid domain so GitHub links the commit to no
+  # account.
+  if [ "${resolver_commit_engine}" = "claude" ]; then
+    git config user.name "claude-bot"
+    git config user.email "claude-bot@users.noreply.invalid"
+  else
+    git config user.name "codex-bot"
+    git config user.email "codex-bot@users.noreply.invalid"
+  fi
+  echo "AI_COMMIT_IDENTITY role=CONFLICT_RESOLVER engine=${resolver_commit_engine} name=$(git config user.name)"
   git rm -r --cached node_modules 2>/dev/null || true
   if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
     # On the workflow source repo, identify the files Codex actually
