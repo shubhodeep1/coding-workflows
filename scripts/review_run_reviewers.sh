@@ -1158,7 +1158,7 @@ reviewer_static_context_log_bytes=0
 if [ -f "${REVIEWER_STATIC_CONTEXT_PATH}" ]; then
   reviewer_static_context_log_bytes="$(wc -c < "${REVIEWER_STATIC_CONTEXT_PATH}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
 fi
-echo "REVIEWER_STATIC_CONTEXT source=${REVIEWER_STATIC_CONTEXT_SOURCE} bytes=${reviewer_static_context_log_bytes:-0}"
+echo "REVIEWER_STATIC_CONTEXT source=${REVIEWER_STATIC_CONTEXT_SOURCE} bytes=${reviewer_static_context_log_bytes:-0} path=${REVIEWER_STATIC_CONTEXT_PATH}"
 if [ "${REVIEWER_STATIC_CONTEXT_SOURCE}" = "shared" ]; then
   echo "::warning::Reviewer static context copy is missing, empty or not a regular file; reviewers use the full ./pre_assembled_static.txt prefix." >&2
 fi

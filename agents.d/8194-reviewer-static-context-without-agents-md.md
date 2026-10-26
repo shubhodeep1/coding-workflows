@@ -3,6 +3,6 @@
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `REVIEW_STATIC_CONTEXT_SPLIT` (`review_autofix.yml` "Pre-assemble static context": `shared_bytes=<n> reviewer_bytes=<n>`, the sizes of `./pre_assembled_static.txt` and `${RUNTIME_DIR}/reviewer_static_context.txt`)
-- `REVIEWER_STATIC_CONTEXT` (`scripts/review_run_reviewers.sh`: `source=reviewer|shared bytes=<n>`; `shared` means the reviewer copy was missing, empty or not a regular file and reviewers fell back to `./pre_assembled_static.txt`)
+- `REVIEWER_STATIC_CONTEXT` (`scripts/review_run_reviewers.sh`: `source=reviewer|shared bytes=<n> path=<resolved file>`; `shared` means the reviewer copy was missing, empty or not a regular file and reviewers fell back to `./pre_assembled_static.txt`)
 LOG_PREFIX.name=REVIEW_STATIC_CONTEXT_SPLIT
 LOG_PREFIX.name=REVIEWER_STATIC_CONTEXT
