@@ -3575,6 +3575,28 @@ def test_augment_files_touched_drops_stale_marker_without_additions():
 		assert json.loads(second.stdout)["written"] is False
 
 
+def test_augment_files_touched_ignored_marker_with_failed_module_is_noop():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		raw = _make_decomposition(issues=[
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+		])
+		# A marker that claims every planned path was added is ignored; the
+		# retry selection then fails, so the file must stay unchanged.
+		raw["prepush_augmented_paths"] = {"a": ["src/one.py"]}
+		decomposition = tmp_path / "decomposition.json"
+		decomposition.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+		original = decomposition.read_bytes()
+		for mode in ("fail", "malformed", "no_output"):
+			stub = _write_prepush_stub(tmp_path, mode=mode)
+			proc = _run_augment_cli(decomposition, stub)
+			assert proc.returncode == 0, (mode, proc.stderr)
+			assert "issue=a outcome=marker_ignored" in proc.stderr, (mode, proc.stderr)
+			assert "issue=a outcome=skipped" in proc.stderr, (mode, proc.stderr)
+			assert json.loads(proc.stdout)["written"] is False, mode
+			assert decomposition.read_bytes() == original, mode
+
+
 def test_render_expected_files_section_has_no_allowlist():
 	import files_touched_scope_guard
 

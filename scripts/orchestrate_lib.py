@@ -4322,6 +4322,7 @@ def augment_files_touched(
 		for key, value in recorded_raw.items():
 			if isinstance(key, str) and isinstance(value, list):
 				recorded[key] = [v for v in value if isinstance(v, str)]
+	recorded_initial = {key: list(value) for key, value in recorded.items()}
 	for issue in data.get("issues", []):
 		totals["issues"] += 1
 		issue_id = str(issue.get("id", ""))
@@ -4354,6 +4355,10 @@ def augment_files_touched(
 			candidates, reason = _prepush_select_planned_paths(module, repo_root, planned, timeout_secs)
 		if candidates is None:
 			# A timeout is a no-op for this issue only; later issues still run.
+			# Restore a marker entry the ignored-marker branch dropped, so a
+			# failed selection leaves this issue's marker unchanged.
+			if issue_id in recorded_initial:
+				recorded[issue_id] = recorded_initial[issue_id]
 			totals["skipped"] += 1
 			_prepush_augment_log(f"issue={log_id} outcome=skipped reason={reason}")
 			continue
