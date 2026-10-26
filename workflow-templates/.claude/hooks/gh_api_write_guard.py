@@ -105,8 +105,12 @@ Auto mode (`permission_mode` `auto` in the hook payload): a hook "ask"
 forces a human prompt even in Auto mode, so the asks above that only mean
 "the guard cannot read this command's shell shape" step aside there and give
 no decision, leaving the command to the Auto-mode classifier. They are the
-unparseable command, the hidden `gh api` call, the ANSI-C / comment / brace
-hazard, and the unquoted `gh api` argument expansion. A call the guard reads
+unparseable command, the hidden `gh api` call, and the ANSI-C / comment /
+brace hazard. An unquoted `$` or backtick in a direct `gh api` argument is
+denied in Auto mode instead, with the rewrite steps: Bash can split the word
+into a method flag (such as `-XDELETE`) that the guard read as part of a GET
+endpoint (issue #8198). Only the fully validated literal-ID read loop is
+exempt, and it is allowed. A call the guard reads
 and classifies as a write (unreadable calls included) still asks, a flag
 between `gh` and `api` still asks, and the malformed-jq deny and every allow
 are unchanged. A command that an allow rule could match does not step aside
@@ -125,8 +129,8 @@ a match. A brace / ANSI-C / comment hazard never steps aside when the command
 holds an `@` or an escape that can produce one, because it could hide a
 file-backed `-F key=@file` field. Any other or missing mode keeps the prompts.
 
-Where Auto mode cannot step aside (an allow rule could match, or the `@`
-hazard case), the hook denies instead of asking, with a reason that says how to
+Where Auto mode cannot step aside (an allow rule could match, the `@`
+hazard case, or an unquoted `gh api` argument expansion), the hook denies instead of asking, with a reason that says how to
 rewrite the command: a hook ask prompts a human even in Auto mode, while a
 deny runs nothing and the session can retry with plain `gh api` calls. Write
 classifications and the flag-between-`gh`-and-`api` check still ask.
@@ -1897,6 +1901,7 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 
 	# In Auto mode, doubts about the command's shell shape step aside instead of
 	# asking (see the module docstring); `shape_doubt` records that one fired.
+	# An unquoted `gh api` argument expansion never steps aside: it is denied.
 	auto_mode = (
 		payload.get("permission_mode") == AUTO_PERMISSION_MODE
 		and not _GH_API_ALLOW_RULE_RE.search(command)
@@ -2007,14 +2012,16 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
 			+ (_AUTO_SHAPE_DENY_SUFFIX if hazard_auto_deny and _may_invoke_gh_api(command) else "")
 		)
-	if _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results) and auto_mode:
-		shape_doubt = True
-	elif _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results):
-		return (DECISION_DENY if auto_shape_deny else DECISION_ASK), (
+	if _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results):
+		# Bash can split the word into a method flag (`EP="-XDELETE repos/..."; gh api $EP`)
+		# that the guard read as a GET endpoint, so Auto mode denies instead of
+		# leaving the call to its classifier (issue #8198).
+		unquoted_auto_deny = payload.get("permission_mode") == AUTO_PERMISSION_MODE
+		return (DECISION_DENY if unquoted_auto_deny else DECISION_ASK), (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."
 			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
-			+ (_AUTO_SHAPE_DENY_SUFFIX if auto_shape_deny else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if unquoted_auto_deny else "")
 		)
 
 	writes = [description for kind, description in results if kind == KIND_WRITE]
