@@ -1114,7 +1114,9 @@ def test_template_parity():
 	if "hooks/gh_api_write_guard.py" not in pending:
 		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	if "settings.json" not in pending:
-		assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(encoding="utf-8")
+		assert claude_template_drift.settings_match_template(
+			TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"), SETTINGS_PATH.read_text(encoding="utf-8")
+		)
 
 
 def test_claude_md_documents_the_guard():
