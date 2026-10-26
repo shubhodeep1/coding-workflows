@@ -285,6 +285,33 @@ def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
 		assert f"@{VALID_RELEASE_SHA} # stable" in rendered_text
 
 
+_TEMPLATE_USES_LINE_RE = re.compile(r"^[ \t]*(?:-[ \t]+)?uses:[ \t]*['\"]?(?P<value>[^'\"\s#]+)", re.MULTILINE)
+_TEMPLATE_PINNED_ACTION_RE = re.compile(
+	r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[^@\s]+)?@[0-9a-f]{40}"
+	r"|docker://[A-Za-z0-9._/:-]+@sha256:[0-9a-f]{64})\Z"
+)
+
+
+def test_wrapper_template_third_party_actions_are_sha_pinned() -> None:
+	"""Consumers gate on full-SHA action refs (fun-token-multi-chain#640); the renderer keeps them as written."""
+	unpinned = []
+	for template_path in sorted(WORKFLOW_TEMPLATES_DIR.glob("*.yml")):
+		for match in _TEMPLATE_USES_LINE_RE.finditer(template_path.read_text(encoding="utf-8")):
+			value = match.group("value")
+			if value.startswith(("./", "shubhodeep1/coding-workflows/.github/workflows/")):
+				continue
+			if not _TEMPLATE_PINNED_ACTION_RE.fullmatch(value):
+				unpinned.append(f"{template_path.name}: {value}")
+	assert not unpinned, (
+		"third-party actions must be pinned to <owner>/<repo>@<40-hex SHA> "
+		f"or docker://<image>@sha256:<64-hex>: {unpinned}"
+	)
+	# The docker:// branch has no template user yet; pin both sides of it.
+	assert _TEMPLATE_PINNED_ACTION_RE.fullmatch("docker://ubuntu@sha256:" + "a" * 64)
+	assert not _TEMPLATE_PINNED_ACTION_RE.fullmatch("docker://ubuntu@sha256:" + "a" * 63)
+	assert not _TEMPLATE_PINNED_ACTION_RE.fullmatch("docker://ubuntu:latest")
+
+
 _SUPPORT_TEMPLATE = """jobs:
   review:
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable
@@ -411,6 +438,7 @@ def main() -> int:
 	test_success_path_contracts_are_preserved()
 	test_wrapper_ref_renderer_contract()
 	test_every_wrapper_template_renders_to_an_immutable_ref()
+	test_wrapper_template_third_party_actions_are_sha_pinned()
 	test_renderer_pins_security_hold_support_checkout_to_release_sha()
 	test_renderer_fails_closed_on_unpinnable_support_checkout()
 	test_ai_review_template_pins_only_the_sweep_support_checkout()

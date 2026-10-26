@@ -7,7 +7,9 @@ name: PR 6576 orchestrate-poll shard follow-up
 # workflow fetches that log (or reruns the CI partition at #6576's recorded
 # head), reruns the failing tests on current main, posts one marker comment on
 # #7072 and files an issue only for a failure that reproduces on main.
-# The marker comment by the GH_PAT account makes every later run a no-op.
+# The result comment by the GH_PAT account (marker on line 1, result header
+# on line 2) makes every later run a no-op; comments that only quote the
+# marker do not count.
 # Single-use: see docs/scripts-pending-removal.md. ci.yml and its aggregate
 # `lint` gate are deliberately untouched.
 
