@@ -1389,3 +1389,57 @@ def test_test_repair_rejects_unknown_arguments_and_skips_the_conflict_path():
 	assert "trap - EXIT" in branch and "_resolver_test_repair_main" in branch and "exit 0" in branch
 	assert src.index("_resolver_sandbox_attempt()") < src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then')
 	assert src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then') < src.index(': > "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"')
+
+
+def _run_test_repair_context(tmp_path: Path, comments: list) -> tuple[subprocess.CompletedProcess, Path]:
+	if shutil.which("jq") is None:
+		pytest.skip("jq binary not available in test environment")
+	runtime = tmp_path / "runtime"
+	runtime.mkdir(exist_ok=True)
+	comments_file = tmp_path / "comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	program = _test_repair_functions() + """
+gh() {
+  case "$*" in
+    "api user"*) echo bot ;;
+    *"--paginate"*) cat "$COMMENTS_FILE" ;;
+    *) echo '{"title":"t","body":"b"}' ;;
+  esac
+}
+rc=0
+_resolver_test_repair_context 7 || rc=$?
+echo "RC=${rc}"
+echo "MERGED=${_test_repair_merged_count}"
+[ -z "${INTEGRATION_FINGERPRINTS_FILE:-}" ] || echo "FP=$(cat "${INTEGRATION_FINGERPRINTS_FILE}")"
+"""
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+	env.update({"SUPPORT_SCRIPTS_DIR": str(_REPO_ROOT / "scripts"), "RUNTIME_DIR": str(runtime),
+		"GITHUB_REPOSITORY": "o/r", "COMMENTS_FILE": str(comments_file), "GITHUB_WORKSPACE": str(tmp_path / "none")})
+	proc = subprocess.run(["bash", "-c", program], cwd=tmp_path, env=env, capture_output=True, text=True)
+	return proc, runtime
+
+
+def test_test_repair_context_reads_v2_state_before_legacy_v1(tmp_path):
+	v2_state = {"waves": [{"issues": [{"id": "a", "github_issue": 11, "status": "merged"}]}],
+		"merged_issue_fingerprints": {"11": {"must_contain": [{"file": "lib.py", "pattern": "v2"}]}}}
+	v1_state = {"waves": [], "merged_issue_fingerprints": {"9": {"stale": True}}}
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps(v2_state), encoding="utf-8")
+	chunks = tmp_path / "chunks"
+	subprocess.run(["python3", "-I", "-B", str(_REPO_ROOT / "scripts" / "orchestrate_state_v2.py"), "pack",
+		"--state-file", str(state_file), "--out-dir", str(chunks)], check=True)
+	comments = [{"user": {"login": "bot"}, "body": "ORCHESTRATOR_STATE_V1\n" + json.dumps(v1_state) + "\nORCHESTRATOR_STATE_V1"}]
+	comments += [{"user": {"login": "bot"}, "body": p.read_text(encoding="utf-8")} for p in sorted(chunks.iterdir())]
+	proc, _runtime = _run_test_repair_context(tmp_path, comments)
+	assert "RC=0" in proc.stdout, proc.stdout + proc.stderr
+	assert "MERGED=1" in proc.stdout
+	assert '"pattern":"v2"' in proc.stdout and "stale" not in proc.stdout
+
+
+def test_test_repair_context_fails_closed_without_trusted_state(tmp_path):
+	# Only another author's state: no trusted state, so no repair (rc 2).
+	comments = [{"user": {"login": "someone"}, "body": "ORCHESTRATOR_STATE_V1\n{\"waves\": []}\nORCHESTRATOR_STATE_V1"}]
+	proc, _runtime = _run_test_repair_context(tmp_path, comments)
+	assert "RC=2" in proc.stdout, proc.stdout + proc.stderr
+	src = _source()
+	assert 'reason=state_unavailable' in src[src.index("_resolver_test_repair_main()"):]

@@ -393,7 +393,11 @@ _resolver_exit_trap() {
   fi
   return "${_rc}"
 }
-trap _resolver_exit_trap EXIT
+# --test-repair runs no conflict resolution, so a setup failure before its
+# branch below must not dispatch the integration judge (#8210).
+if [ -z "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then
+  trap _resolver_exit_trap EXIT
+fi
 
 # ----------------------------------------------------------------------
 # Retry-loop hardening (fix for the recurring integration-sync
@@ -1281,20 +1285,27 @@ _resolver_test_repair_gh()
   fi
 }
 
-# Mirrors the integration-context block of review_conflict_prepare.sh
-# (tracking issue read, pipeline login, paginated tracking comments, the
-# same ORCHESTRATOR_STATE_V1 jq); keep the two in step. Sets the
-# _test_repair_* globals and writes INTEGRATION_FINGERPRINTS_FILE. Returns 1
-# when the pipeline identity cannot be verified: no repair without trusted
-# state.
+# Reads the integration context like review_conflict_prepare.sh (tracking
+# issue read, pipeline login, paginated tracking comments), but takes the
+# state from the pipeline login's newest complete ORCHESTRATOR_STATE_V2 chain
+# (scripts/orchestrate_state_v2.py from the trusted support copy) and falls
+# back to the ORCHESTRATOR_STATE_V1 jq only when there is no V2 state. Sets
+# the _test_repair_* globals and writes INTEGRATION_FINGERPRINTS_FILE.
+# Returns 1 when the pipeline identity cannot be verified and 2 when no
+# trusted state could be read: no repair without trusted state, because the
+# fingerprint hard gate would otherwise be skipped.
 _resolver_test_repair_context()
 {
-  local tracking="$1" ti_json login comments_raw state_payload state_json fingerprints="{}"
+  local tracking="$1" ti_json login comments_raw state_payload state_json="" fingerprints="{}" v2_helper="" cand
   _test_repair_title="" _test_repair_body="" _test_repair_merged_list="" _test_repair_merged_count="0"
   ti_json="$(_resolver_test_repair_gh gh api -H 'Accept: application/vnd.github+json' \
     "repos/${GITHUB_REPOSITORY}/issues/${tracking}" 2>/dev/null || echo '{}')"
   _test_repair_title="$(printf '%s' "${ti_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
   _test_repair_body="$(printf '%s' "${ti_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+  if [ "${#_test_repair_body}" -gt 20000 ]; then
+    _test_repair_body="${_test_repair_body:0:20000}
+(tracking issue body truncated at 20000 characters)"
+  fi
   login="$(_resolver_test_repair_gh gh api user --jq '.login // ""' 2>/dev/null || true)"
   if ! [[ "${login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
     return 1
@@ -1302,14 +1313,31 @@ _resolver_test_repair_context()
   comments_raw="$(mktemp "${RUNTIME_DIR}/test_repair_comments.XXXXXX")" || return 1
   if _resolver_test_repair_gh gh api --paginate \
     "repos/${GITHUB_REPOSITORY}/issues/${tracking}/comments?per_page=100" > "${comments_raw}" 2>/dev/null; then
-    state_payload="$(jq -s --arg login "${login}" '
-      ([.[][] | select((.user.login // "") == $login) | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] // [])
-      | last // {}
-      | .body // ""
-      | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
-      | .json // ""
-    ' "${comments_raw}" 2>/dev/null || echo '""')"
-    state_json="$(printf '%s' "${state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+    # V2 first: the poller writes chunked V2 state; V1 is legacy.
+    for cand in "${SUPPORT_SCRIPTS_DIR:-}/orchestrate_state_v2.py" \
+      "${GITHUB_WORKSPACE:-/nonexistent}/.codex-workflow-src/scripts/orchestrate_state_v2.py"; do
+      case "${cand}" in /*) ;; *) continue ;; esac
+      if [ -f "${cand}" ] && [ ! -L "${cand}" ]; then
+        v2_helper="${cand}"
+        break
+      fi
+    done
+    if [ -n "${v2_helper}" ] && jq -s --arg login "${login}" \
+      '[.[][] | select((.user.login // "") == $login)]' "${comments_raw}" > "${comments_raw}.login" 2>/dev/null; then
+      state_json="$(python3 -I -B "${v2_helper}" extract --comments-json "${comments_raw}.login" 2>/dev/null \
+        | jq -c 'select(type == "object")' 2>/dev/null || true)"
+    fi
+    rm -f -- "${comments_raw}.login"
+    if [ -z "${state_json}" ]; then
+      state_payload="$(jq -s --arg login "${login}" '
+        ([.[][] | select((.user.login // "") == $login) | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] // [])
+        | last // {}
+        | .body // ""
+        | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
+        | .json // ""
+      ' "${comments_raw}" 2>/dev/null || echo '""')"
+      state_json="$(printf '%s' "${state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+    fi
     if [ -n "${state_json}" ]; then
       _test_repair_merged_list="$(printf '%s' "${state_json}" | jq -r '
         [ .waves[]?.issues[]? | select(.status == "merged")
@@ -1320,6 +1348,9 @@ _resolver_test_repair_context()
     fi
   fi
   rm -f -- "${comments_raw}"
+  if [ -z "${state_json}" ]; then
+    return 2
+  fi
   if [ -z "${_test_repair_merged_list}" ]; then
     _test_repair_merged_list="          (no merged sub-issues recorded in tracking-issue state)"
   fi
@@ -1399,8 +1430,13 @@ _resolver_test_repair_main()
     _resolver_test_repair_log "outcome=skipped reason=conflict_path"
     return 0
   fi
-  if ! _resolver_test_repair_context "${tracking}"; then
+  rc=0
+  _resolver_test_repair_context "${tracking}" || rc=$?
+  if [ "${rc}" -eq 1 ]; then
     _resolver_test_repair_log "outcome=skipped reason=identity_unavailable"
+    return 0
+  elif [ "${rc}" -ne 0 ]; then
+    _resolver_test_repair_log "outcome=skipped reason=state_unavailable"
     return 0
   fi
   dir="${RUNTIME_DIR}/integration_test_repair"

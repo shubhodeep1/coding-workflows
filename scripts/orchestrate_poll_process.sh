@@ -24507,9 +24507,13 @@ _dispatch_review_for_conflicts()
 # internal-review.yml cannot forward the input before it is on main
 # (PR #4438 startup_failure). _has_active_autofix_run is deliberately not
 # used (it reads the runs API); the SHA dedupe plus the review concurrency
-# group bound duplicates. A dispatch counts toward
-# INTEGRATION_CONFLICT_LIFETIME_MAX and records integration_test_repair_sha
-# only on success. Always returns 0. Log prefix: PREPUSH_TEST_GATE
+# group bound duplicates. Only a successful dispatch records
+# integration_test_repair_sha and adds 1 to integration_test_repair_dispatches,
+# which is checked against INTEGRATION_CONFLICT_LIFETIME_MAX. It is kept apart
+# from integration_conflict_total_dispatches: repair dispatches run on every
+# new head and no conflict episode ever releases them, so sharing that counter
+# would let routine syncs park the next real conflict at the lifetime cap
+# without a resolver attempt. Always returns 0. Log prefix: PREPUSH_TEST_GATE
 # phase=integration. Kill switch: PREPUSH_TEST_GATE_MODE=off.
 _dispatch_integration_test_repair()
 {
@@ -24540,9 +24544,14 @@ _dispatch_integration_test_repair()
 		echo "${log} outcome=skipped reason=default_branch_unknown"
 		return 0
 	fi
-	git fetch --no-tags --quiet origin \
+	# A stale remote-tracking ref could match the recorded SHA and hide the
+	# new head; skip this tick instead.
+	if ! git fetch --no-tags --quiet origin \
 		"+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" \
-		"+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" 2>/dev/null || true
+		"+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" 2>/dev/null; then
+		echo "${log} outcome=skipped reason=fetch_failed"
+		return 0
+	fi
 	head="$(git rev-parse --verify --quiet "refs/remotes/origin/${integration_branch}^{commit}" 2>/dev/null || true)"
 	if ! [[ "${head}" =~ ^[0-9a-f]{40}$ ]]; then
 		echo "${log} outcome=skipped reason=head_unavailable"
@@ -24551,7 +24560,7 @@ _dispatch_integration_test_repair()
 	# Fail closed: an unreadable state would defeat both the SHA dedupe and
 	# the lifetime cap.
 	if ! prev="$(jq -r '.integration_test_repair_sha // ""' "${STATE_FILE}" 2>/dev/null)" \
-		|| ! total="$(jq -r '.integration_conflict_total_dispatches // 0' "${STATE_FILE}" 2>/dev/null)" \
+		|| ! total="$(jq -r '.integration_test_repair_dispatches // 0' "${STATE_FILE}" 2>/dev/null)" \
 		|| ! [[ "${total}" =~ ^[0-9]+$ ]]; then
 		echo "${log} outcome=skipped reason=state_unavailable"
 		return 0
@@ -24587,10 +24596,12 @@ _dispatch_integration_test_repair()
 		-f pr_number="${final_pr}" \
 		-f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS:-true}" \
 		-f post_sync_test_repair=true 2>/dev/null; then
-		jq --arg sha "${head}" \
+		if ! { jq --arg sha "${head}" \
 			'.integration_test_repair_sha = $sha
-			 | .integration_conflict_total_dispatches = ((.integration_conflict_total_dispatches // 0) + 1)' \
-			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+			 | .integration_test_repair_dispatches = ((.integration_test_repair_dispatches // 0) + 1)' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+			echo "::warning::${log} state update after dispatch failed sha=${head}; the next tick may dispatch this head again."
+		fi
 		[ -z "${_CONFLICT_DISPATCH_TRACKER:-}" ] || echo "${final_pr}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 		echo "${log} outcome=dispatched pr=${final_pr} sha=${head} workflow=${wf_found}"
 		# Persist the dedupe SHA now so a later failure in this tick cannot

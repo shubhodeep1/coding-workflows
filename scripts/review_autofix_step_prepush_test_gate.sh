@@ -363,7 +363,10 @@ review_prepush_test_gate_build_prompt()
 		cat "${rpg_template}"
 		echo
 		echo "=== CAPTURED TEST FAILURES (UNTRUSTED) ==="
-		review_prepush_test_gate_py failures "${result}"
+		# Every line is prefixed so test output cannot imitate the trusted
+		# section headers below; the END marker closes the untrusted block.
+		review_prepush_test_gate_py failures "${result}" | sed 's/^/UNTRUSTED_DATA: /'
+		echo "=== END CAPTURED TEST FAILURES (UNTRUSTED) ==="
 		if [ -n "${changed}" ] && [ -f "${changed}" ]; then
 			echo
 			echo "=== CHANGED FILES ==="
@@ -727,7 +730,7 @@ review_prepush_test_gate_integration_main()
 		REVIEW_SANDBOX_ROOT="${root}" bash "${sd}/review_untrusted_sandbox.sh" cleanup >/dev/null 2>&1 || true
 	fi
 	status_line="$(review_prepush_test_gate_cmd_gate --phase integration --worktree "${rpg_worktree}" --base "${base}" \
-		--image "${image}" --image-reason integration_image_unavailable --out "${gate_dir}/run1" 2>/dev/null | tail -n 1)" || status_line=""
+		--image "${image}" --image-reason integration_image_unavailable --out "${gate_dir}/run1" | tail -n 1)" || status_line=""
 	rpg_phase=integration
 	read -r status pr_caused inherited <<< "${status_line:-unverified 0 0}"
 	if [ "${status}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
@@ -744,6 +747,21 @@ review_prepush_test_gate_integration_main()
 			repair="resolver exit ${rc}"
 			if [ -n "${GITHUB_ENV:-}" ] && grep -qx 'INTEGRATION_TEST_REPAIRED=true' "${GITHUB_ENV}" 2>/dev/null; then
 				repair="committed"
+				# Re-run the gate on the repaired head; a repair that leaves
+				# PR-caused failures is not pushed (the later env line wins).
+				left=$(( step_budget - (SECONDS - step_started) ))
+				if [ "${left}" -lt $(( ${rpg_timeout:-15} * 60 + 120 )) ]; then
+					repair="committed (re-run skipped: step time budget)"
+				else
+					status_line="$(review_prepush_test_gate_cmd_gate --phase integration --worktree "${rpg_worktree}" --base "${base}" \
+						--image "${image}" --image-reason integration_image_unavailable --out "${gate_dir}/run2" | tail -n 1)" || status_line=""
+					rpg_phase=integration
+					read -r status pr_caused inherited <<< "${status_line:-unverified 0 0}"
+					if [ "${status}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
+						echo "INTEGRATION_TEST_REPAIRED=false" >> "${GITHUB_ENV}"
+						repair="withheld (failures remain after repair)"
+					fi
+				fi
 			fi
 		fi
 	fi

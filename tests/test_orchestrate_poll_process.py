@@ -28468,13 +28468,16 @@ def test_integration_test_repair_dispatches_once_and_records_the_head():
 	with tempfile.TemporaryDirectory() as tmp:
 		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
 		head = subprocess.run(["git", "-C", work, "rev-parse", "origin/orchestrator/project-1"], check=True, capture_output=True, text=True, env=_itr_git_env()).stdout.strip()
-		out, state, gh = _itr_run(tmp, work, {"integration_conflict_total_dispatches": 1}, {}, calls=2)
+		out, state, gh = _itr_run(tmp, work, {"integration_conflict_total_dispatches": 1}, {"INTEGRATION_CONFLICT_LIFETIME_MAX": "1"}, calls=2)
 		lines = [ln for ln in gh.splitlines() if ln.startswith("gh workflow run")]
 		assert len(lines) == 1, gh
 		assert "review_autofix.yml" in lines[0] and "-f pr_number=42" in lines[0]
 		assert "-f post_sync_test_repair=true" in lines[0] and "--ref" not in lines[0]
 		assert state["integration_test_repair_sha"] == head
-		assert state["integration_conflict_total_dispatches"] == 2
+		# Repairs use their own counter: a full conflict budget does not stop
+		# them, and they never consume conflict-resolver slots.
+		assert state["integration_test_repair_dispatches"] == 1
+		assert state["integration_conflict_total_dispatches"] == 1
 		assert f"outcome=dispatched pr=42 sha={head} workflow=review_autofix.yml" in out
 		# The second call in the same tick sees the recorded SHA.
 		assert f"reason=already_dispatched sha={head}" in out
@@ -28487,7 +28490,7 @@ def test_integration_test_repair_dedupes_a_recorded_head_sha():
 		out, state, gh = _itr_run(tmp, work, {"integration_test_repair_sha": head}, {})
 		assert "gh workflow run" not in gh
 		assert "reason=already_dispatched" in out
-		assert "integration_conflict_total_dispatches" not in state
+		assert "integration_test_repair_dispatches" not in state
 
 
 def test_integration_test_repair_mode_off_stops_dispatch():
@@ -28512,14 +28515,23 @@ def test_integration_test_repair_skips_wrappers_without_the_input():
 def test_integration_test_repair_respects_the_lifetime_cap_and_failed_dispatch():
 	with tempfile.TemporaryDirectory() as tmp:
 		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
-		out, state, gh = _itr_run(tmp, work, {"integration_conflict_total_dispatches": 3}, {"INTEGRATION_CONFLICT_LIFETIME_MAX": "3"})
+		out, state, gh = _itr_run(tmp, work, {"integration_test_repair_dispatches": 3}, {"INTEGRATION_CONFLICT_LIFETIME_MAX": "3"})
 		assert gh == "" and "reason=lifetime_cap" in out
 	with tempfile.TemporaryDirectory() as tmp:
 		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
 		out, state, gh = _itr_run(tmp, work, {}, {"GH_RC": "1"})
 		assert "outcome=dispatch_failed" in out
 		assert "integration_test_repair_sha" not in state
-		assert "integration_conflict_total_dispatches" not in state
+		assert "integration_test_repair_dispatches" not in state
+
+
+def test_integration_test_repair_skips_when_the_fetch_fails():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		subprocess.run(["git", "-C", work, "remote", "set-url", "origin", os.path.join(tmp, "missing.git")], check=True, env=_itr_git_env())
+		out, state, gh = _itr_run(tmp, work, {}, {})
+		assert gh == "" and "outcome=skipped reason=fetch_failed" in out
+		assert "integration_test_repair_sha" not in state
 
 
 def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
@@ -28539,6 +28551,9 @@ def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
 	step = workflow[workflow.index("      - name: Process each tracking issue"):]
 	step = step[:step.index("\n      - name: ", 10)]
 	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in step
+	sweep = workflow[workflow.index("      - name: Run standalone stall recovery without active projects"):]
+	sweep = sweep[:sweep.index("\n      - name: ", 10)]
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in sweep
 
 
 if __name__ == "__main__":

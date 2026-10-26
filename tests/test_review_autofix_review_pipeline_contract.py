@@ -10759,7 +10759,11 @@ def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
 	for line in pre_review:
 		assert line.lstrip().startswith("if: "), line
 		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in line, line
-	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 17
+	# Plus the two merge-authorizing steps: a repair-only run reviewed nothing,
+	# so it must neither enable auto-merge nor apply ai:ready-to-merge.
+	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
+		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 19
 
 
 def test_post_sync_test_repair_commit_is_pushed() -> None:
