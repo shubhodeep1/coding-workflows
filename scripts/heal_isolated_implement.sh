@@ -26,9 +26,14 @@ fi
 root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/heal-isolated.XXXXXXXX")"
 container="heal-editor-${GITHUB_RUN_ID:-local}-$$"
 broker_pid=""
+gate_tree_added=false
 cleanup()
 {
 	[ -z "${broker_pid}" ] || { kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; }
+	if [ "${gate_tree_added}" = true ]; then
+		git -C "${WORKSPACE_PATH:-${PWD}}" worktree remove --force "${root}/gate-tree" >/dev/null 2>&1 || true
+		git -C "${WORKSPACE_PATH:-${PWD}}" worktree prune >/dev/null 2>&1 || true
+	fi
 	env -i PATH="${PATH}" docker rm -f "${container}" >/dev/null 2>&1 || true
 	rm -rf -- "${root}"
 }
@@ -194,6 +199,82 @@ while ! validate_snapshot; do
 	} > "${root}/repair-prompt"
 	run_editor "${root}/repair-prompt"
 done
+# Pre-push affected-test gate (plan P4). Tests run only in the gate's
+# credential-free container. The editor can rewrite the snapshot's synthetic
+# .git, so the gate never runs host git on ${root}/source: it runs on a
+# detached worktree of the heal checkout (whose .git the editor never saw) that
+# receives the snapshot's content through the same scoped transfer. On
+# failures the change caused, one more editor turn runs with the test-repair
+# prompt and validate_snapshot runs once more; a syntax failure restores the
+# pre-repair snapshot. Fail-open: the transfer below always follows.
+heal_prepush_test_gate()
+{
+	local gate_step="" gate_mode gate_ws="${WORKSPACE_PATH:-${PWD}}" gate_base gate_status="" gate_pr=0 gate_inh=0 rc
+	local candidate
+	for candidate in "${support}/review_autofix_step_prepush_test_gate.sh" "${GITHUB_WORKSPACE:-.}/.codex-workflow-src/scripts/review_autofix_step_prepush_test_gate.sh"; do
+		if [ -f "${candidate}" ] && [ ! -L "${candidate}" ]; then
+			gate_step="${candidate}"
+			break
+		fi
+	done
+	if [ -z "${gate_step}" ]; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=skipped reason=module_absent' >&2
+		return 0
+	fi
+	gate_mode="$(bash "${gate_step}" mode 2>/dev/null || echo repair)"
+	if [ "${gate_mode}" = off ]; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=skipped reason=mode_off' >&2
+		return 0
+	fi
+	if git -C "${gate_ws}" -c core.hooksPath=/dev/null worktree add --detach "${root}/gate-tree" HEAD >/dev/null 2>&1; then
+		gate_tree_added=true
+	fi
+	# A private manifest copy (with its sidecars, such as the admitted-command
+	# inventory) keeps the real transfer's baseline untouched.
+	local manifest_part
+	for manifest_part in "${root}"/manifest.json*; do
+		[ -f "${manifest_part}" ] || continue
+		cp -f "${manifest_part}" "${root}/manifest.gate.json${manifest_part#"${root}/manifest.json"}" 2>/dev/null || true
+	done
+	if [ "${gate_tree_added}" != true ] || ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer \
+		"${root}/gate-tree" "${root}/source" "${root}/manifest.gate.json" --scope-file "${scope}" >/dev/null 2>&1; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=unverified reason=gate_tree_unavailable' >&2
+		return 0
+	fi
+	# An exported GIT_DIR / GIT_WORK_TREE would point the gate's git at the heal
+	# checkout instead of the gate tree.
+	gate_base="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${root}/gate-tree" rev-parse HEAD 2>/dev/null || true)"
+	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE bash "${gate_step}" gate --phase heal --worktree "${root}/gate-tree" --base "${gate_base}" --image "${image}" \
+		--out "${root}/results/prepush" > "${root}/results/prepush.status" || true
+	read -r gate_status gate_pr gate_inh < "${root}/results/prepush.status" || true
+	if [ "${gate_status}" != fail ] || ! [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null || [ "${gate_mode}" != repair ]; then
+		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=${gate_status:-unverified} failures=${gate_pr:-0} inherited=${gate_inh:-0} repair=none" >&2
+		return 0
+	fi
+	if ! bash "${gate_step}" repair-prompt "${root}/results/prepush/result.json" "${root}/repair-prompt-tests" 2>/dev/null; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=repair_template_absent' >&2
+		return 0
+	fi
+	rm -rf -- "${root}/source.pre-gate"
+	cp -a "${root}/source" "${root}/source.pre-gate" || { echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=backup_failed' >&2; return 0; }
+	rc=0
+	run_editor "${root}/repair-prompt-tests" || rc=$?
+	if [ "${rc}" -eq 0 ] && validate_snapshot; then
+		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail failures=${gate_pr} repair=ran" >&2
+		rm -rf -- "${root}/source.pre-gate"
+		return 0
+	fi
+	# Editor failure or broken syntax: the transfer gets the pre-repair snapshot.
+	rm -rf -- "${root}/source"
+	mv -- "${root}/source.pre-gate" "${root}/source"
+	if [ "${rc}" -ne 0 ]; then
+		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repair_reverted reason=editor_exit_${rc}" >&2
+	else
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repair_reverted reason=syntax' >&2
+	fi
+	return 0
+}
+heal_prepush_test_gate || true
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" --scope-file "${scope}"; then
 	echo "HEAL_ISOLATED_EDITOR phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope" >&2
 	exit 42

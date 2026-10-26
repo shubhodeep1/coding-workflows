@@ -3648,6 +3648,25 @@ jobs:
           fi
           source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
+      # Pre-push affected-test gate (plan P4): never blocks the commit or push.
+      - name: Pre-push affected-test gate
+        if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && vars.PREPUSH_TEST_GATE_MODE != 'off'
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
+          PREPUSH_TEST_GATE_TIMEOUT_MINUTES: ${{ vars.PREPUSH_TEST_GATE_TIMEOUT_MINUTES || '15' }}
+          PREPUSH_TEST_GATE_LARGE_FILE_TESTS: ${{ vars.PREPUSH_TEST_GATE_LARGE_FILE_TESTS || '50' }}
+          PREPUSH_TEST_GATE_SHARDS: ${{ vars.PREPUSH_TEST_GATE_SHARDS || '4' }}
+        run: |
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_prepush_test_gate.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_prepush_test_gate.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_prepush_test_gate.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Pre-push affected-test gate'."
+            exit 1
+          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
       - name: Commit changes
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
         id: commit_changes

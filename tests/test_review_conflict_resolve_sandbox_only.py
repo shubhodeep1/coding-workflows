@@ -1037,3 +1037,180 @@ def test_source_repo_without_its_conflict_set_still_fails_closed(tmp_path):
 	assert result.returncode == 1 and "guard-passed" not in result.stdout
 	assert "Conflict resolver paired live copy check failed" in result.stderr
 	assert "reason=sandbox_path_unsupported" in result.stderr
+
+
+# --- pre-push affected-test gate (issue #8201, plan P4) --------------------------------
+
+CHECK_RESOLVER_DIFF = SCRIPT.parent / "check_resolver_diff.sh"
+
+
+def _gate_function_body() -> str:
+	text = SCRIPT.read_text(encoding="utf-8")
+	start = text.index("_resolver_prepush_test_gate()\n{")
+	return text[start:text.index("\n}\n", start)]
+
+
+def test_resolver_gate_runs_after_every_guard_and_before_the_commit() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	commit = text.index('git commit -m "[ai-merge-resolve] resolve merge conflicts"')
+	call = text.index("_resolver_prepush_test_gate || true")
+	assert call < commit
+	# Every existing guard runs first; the commit follows whatever the gate says.
+	assert text.rindex('"${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \\', 0, call) < call
+	assert text.rindex("verify_resolver_index_complete_or_fail", 0, call) < call
+	assert text.rindex("git diff --cached --quiet", 0, call) < call
+	assert text[call:commit].count("\n") <= 2
+
+
+def test_resolver_gate_repair_contract() -> None:
+	body = _gate_function_body()
+	assert "review_autofix_step_prepush_test_gate.sh" in body
+	assert 'gate --phase resolver --worktree "${PWD}" --base "${gate_base}"' in body
+	assert "prepare-ephemeral codex" in body and "cleanup" in body
+	# One extra sandbox attempt: Claude, then OpenCode only on exit 75.
+	assert body.count("_resolver_sandbox_attempt claude") == 1
+	assert body.count("_resolver_sandbox_attempt codex") == 2
+	assert "--extra-allowed-file" in body
+	assert '--conflicted-set "${CONFLICTED_PATHS_FILE}"' in body
+	assert "_verify_fingerprints_soft" in body and 'RESOLVER_FP_EXIT:-0}" -eq 1' in body
+	# Reverts go back to the merge index, never to HEAD.
+	assert 'gate_index_tree="$(git write-tree' in body and 'git read-tree "${gate_index_tree}"' in body
+	assert "--source=HEAD" not in body
+	# Fail-open: the gate never exits the resolver.
+	assert not re.search(r"(^|[;&|]\s*)\s*exit\b", body, re.MULTILINE)
+	assert body.rstrip().endswith("return 0")
+
+
+def _resolver_diff_repo(tmp_path: Path) -> Path:
+	repo = tmp_path / "repo"
+	(repo / "tests").mkdir(parents=True)
+	(repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+	(repo / "tests" / "test_a.py").write_text("y = 1\n", encoding="utf-8")
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
+	(tmp_path / "conflicted.txt").write_text("a.py\n", encoding="utf-8")
+	(tmp_path / "touched.txt").write_text("a.py\ntests/test_a.py\n", encoding="utf-8")
+	return repo
+
+
+def _run_check(tmp_path: Path, repo: Path, *extra: str) -> subprocess.CompletedProcess:
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	return subprocess.run(["bash", str(CHECK_RESOLVER_DIFF), "--conflicted-set", str(tmp_path / "conflicted.txt"),
+		"--touched-set", str(tmp_path / "touched.txt"), "--repo-root", str(repo), *extra],
+		capture_output=True, text=True, env=env, timeout=60)
+
+
+def test_check_resolver_diff_without_extra_paths_is_unchanged(tmp_path: Path) -> None:
+	repo = _resolver_diff_repo(tmp_path)
+	proc = _run_check(tmp_path, repo)
+	assert proc.returncode == 1
+	assert "edited files outside the conflicted set" in proc.stderr and "tests/test_a.py" in proc.stderr
+
+
+def test_check_resolver_diff_extra_allowed_file_passes_the_subset_check(tmp_path: Path) -> None:
+	repo = _resolver_diff_repo(tmp_path)
+	proc = _run_check(tmp_path, repo, "--extra-allowed-file", "tests/test_a.py")
+	assert proc.returncode == 0, proc.stderr
+	assert "check_resolver_diff: OK" in proc.stdout
+
+
+@pytest.mark.parametrize("value", ["/abs/tests/test_a.py", "../tests/test_a.py", "tests/../tests/test_a.py", "tests/test\x01a.py"])
+def test_check_resolver_diff_ignores_unsafe_extra_paths(tmp_path: Path, value: str) -> None:
+	repo = _resolver_diff_repo(tmp_path)
+	proc = _run_check(tmp_path, repo, "--extra-allowed-file", value)
+	assert proc.returncode == 1
+	assert "ignoring unsafe --extra-allowed-file value" in proc.stderr
+
+
+_GATE_DOCKER = r'''#!/usr/bin/env bash
+if [ "$1" = run ]; then
+	for arg in "$@"; do
+		case "$arg" in
+			type=bind,src=*,dst=/results) results="${arg#type=bind,src=}"; results="${results%,dst=/results}" ;;
+		esac
+	done
+	n=$(( $(cat "__WORK__/count" 2>/dev/null || echo 0) + 1 ))
+	echo "$n" > "__WORK__/count"
+	if [ "$n" = 1 ]; then cp "__WORK__/fail.json" "$results/result.json"; else cp "__WORK__/pass.json" "$results/result.json"; fi
+fi
+exit 0
+'''
+
+
+def _gate_result(status: str, failures: list) -> str:
+	return json.dumps({"schema": "prepush_test_gate.v1", "status": status, "ran": ["tests/test_a.py"], "failures": failures,
+		"inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1})
+
+
+@pytest.mark.parametrize("repair_edit, expect_kept", [
+	("printf 'fixed\\n' > tests/test_a.py", True),
+	("printf 'fixed\\n' > tests/test_a.py; printf 'bad\\n' > outside.py", False),
+])
+def test_resolver_gate_fixture_runs_one_repair_and_keeps_or_reverts_it(tmp_path: Path, repair_edit: str, expect_kept: bool) -> None:
+	root = SCRIPT.parent.parent
+	work = tmp_path / "work"
+	work.mkdir()
+	failure = [{"test": "tests/test_a.py", "file": "tests/test_a.py", "names": ["test_x"], "tail": "AssertionError"}]
+	(work / "fail.json").write_text(_gate_result("fail", failure), encoding="utf-8")
+	(work / "pass.json").write_text(_gate_result("pass", []), encoding="utf-8")
+	repo = tmp_path / "repo"
+	(repo / "tests").mkdir(parents=True)
+	(repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+	(repo / "tests" / "test_a.py").write_text("# covers a.py\nimport a\n", encoding="utf-8")
+	(repo / "outside.py").write_text("keep\n", encoding="utf-8")
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PREPUSH_", "AI_ENGINE_"))}
+	git = ["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t"]
+	subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
+	subprocess.run([*git, "add", "-A"], cwd=repo, check=True, env=env)
+	subprocess.run([*git, "commit", "-q", "-m", "base"], cwd=repo, check=True, env=env)
+	(repo / "a.py").write_text("x = 2\n", encoding="utf-8")
+	subprocess.run(["git", "add", "a.py"], cwd=repo, check=True, env=env)
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("review_autofix_step_prepush_test_gate.sh", "prepush_test_gate_run.sh", "review_untrusted_workspace.py", "check_resolver_diff.sh"):
+		shutil.copy2(root / "scripts" / name, support / name)
+	shutil.copy2(root / "workflow-templates/.claude/hooks/prepush_affected_tests.py", support / "prepush_affected_tests.py")
+	prompts = tmp_path / "prompts"
+	prompts.mkdir()
+	shutil.copy2(root / "prompts/mode-implement-repair-tests.txt", prompts / "mode-implement-repair-tests.txt")
+	sandbox_root = tmp_path / "review-isolated-gate"
+	sandbox_root.mkdir()
+	(support / "review_untrusted_sandbox.sh").write_text(
+		f'#!/usr/bin/env bash\ncase "$1" in prepare-ephemeral) printf "sha256:{"c" * 64}\\n" > "{sandbox_root}/image"; echo "{sandbox_root}" ;; esac\nexit 0\n',
+		encoding="utf-8")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "docker").write_text(_GATE_DOCKER.replace("__WORK__", str(work)), encoding="utf-8")
+	(bin_dir / "docker").chmod(0o755)
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	conflicted = runtime / "conflicted_paths.txt"
+	conflicted.write_text("a.py\n", encoding="utf-8")
+	text = SCRIPT.read_text(encoding="utf-8")
+	start = text.index("_resolver_prepush_test_gate()\n{")
+	function = text[start:text.index("\n}\n", start) + 3]
+	harness = f'''set -euo pipefail
+_resolver_sandbox_attempt() {{ echo "attempt $1" >> "{work}/attempts"; cp "${{_effective_prompt_file}}" "{work}/prompt"; {repair_edit}; return 0; }}
+_verify_fingerprints_soft() {{ RESOLVER_FP_EXIT=0; }}
+{function}
+_resolver_prepush_test_gate
+git commit -q -m "[ai-merge-resolve] resolve merge conflicts"
+echo COMMITTED
+'''
+	env.update(PATH=f"{bin_dir}{os.pathsep}{env.get('PATH', '')}", SUPPORT_SCRIPTS_DIR=str(support), SUPPORT_PROMPTS_DIR=str(prompts),
+		RUNTIME_DIR=str(runtime), RUNNER_TEMP=str(tmp_path), CONFLICTED_PATHS_FILE=str(conflicted), GITHUB_WORKSPACE=str(repo),
+		GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+	proc = subprocess.run(["bash", "-c", harness], cwd=repo, env=env, capture_output=True, text=True, timeout=180)
+	assert "COMMITTED" in proc.stdout, proc.stderr
+	assert (work / "attempts").read_text(encoding="utf-8") == "attempt codex\n"
+	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in (work / "prompt").read_text(encoding="utf-8")
+	committed = subprocess.run(["git", "show", "HEAD:tests/test_a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout
+	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"
+	assert (repo / "outside.py").read_text(encoding="utf-8") == "keep\n"
+	if expect_kept:
+		assert committed == "fixed\n"
+		assert "phase=resolver outcome=pass" in proc.stderr and "repair=ran" in proc.stderr
+		assert (work / "count").read_text(encoding="utf-8").strip() == "2"
+	else:
+		assert committed == "# covers a.py\nimport a\n"
+		assert "outcome=repair_reverted reason=check_resolver_diff" in proc.stderr

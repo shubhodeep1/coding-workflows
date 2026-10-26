@@ -922,6 +922,138 @@ _resolver_sandbox_attempt()
   return "${sandbox_attempt_rc}"
 }
 
+# Pre-push affected-test gate on the completed resolution (plan P4), called
+# once right before the [ai-merge-resolve] commit, after check_resolver_diff.sh,
+# staging and the index-completeness guard. Tests run only in the gate's
+# credential-free container; the gate module, wrapper and repair prompt come
+# from the trusted step script's support lookup. On failures the merge caused
+# (base = the pre-merge PR head, so PR-side failures count as inherited) and in
+# repair mode it runs one extra resolver sandbox attempt with the repair
+# prompt. That repair must pass check_resolver_diff.sh (the affected tests and
+# companions are extra allowed paths) and, on integration-sync heads, the
+# fingerprint verifier; otherwise it is reverted to the index. The commit
+# follows whatever the gate reports (Q3): this function always returns 0.
+# Log prefix: PREPUSH_TEST_GATE phase=resolver.
+_resolver_prepush_test_gate()
+{
+  local gate_step="${SUPPORT_SCRIPTS_DIR:-scripts}/review_autofix_step_prepush_test_gate.sh"
+  local gate_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+  local gate_dir="${RUNTIME_DIR}/prepush_gate_resolver" gate_mode gate_root="" gate_image="" gate_base
+  local gate_status="" gate_pr=0 gate_inh=0 gate_repair="not needed" gate_rc=0 gate_path
+  local gate_allow gate_prompt gate_touched gate_pre_untracked gate_check_args=() gate_index_tree=""
+  if [ ! -f "${gate_step}" ] || [ -L "${gate_step}" ]; then
+    echo "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=module_absent" >&2
+    return 0
+  fi
+  gate_mode="$(bash "${gate_step}" mode 2>/dev/null || echo repair)"
+  if [ "${gate_mode}" = off ]; then
+    echo "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=mode_off" >&2
+    return 0
+  fi
+  mkdir -p "${gate_dir}" 2>/dev/null || return 0
+  gate_base="$(git rev-parse HEAD 2>/dev/null || true)"
+  if [ -f "${gate_sandbox_sh}" ] && gate_root="$(bash "${gate_sandbox_sh}" prepare-ephemeral codex 2>/dev/null)" && [ -n "${gate_root}" ]; then
+    if [ -f "${gate_root}/image" ] && [ ! -L "${gate_root}/image" ]; then
+      gate_image="$(head -n 1 "${gate_root}/image" 2>/dev/null | tr -d '[:space:]')"
+    fi
+  fi
+  if [ -n "${gate_root}" ]; then
+    REVIEW_SANDBOX_ROOT="${gate_root}" bash "${gate_sandbox_sh}" cleanup >/dev/null 2>&1 || true
+  fi
+  bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
+    --image-reason resolver_image_unavailable --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true
+  read -r gate_status gate_pr gate_inh < "${gate_dir}/run1.status" || true
+  if [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ]; then
+    gate_allow="${gate_dir}/allow.txt"
+    gate_prompt="${gate_dir}/repair-prompt.txt"
+    gate_touched="${gate_dir}/repair-touched.txt"
+    gate_pre_untracked="${gate_dir}/pre-untracked.txt"
+    git diff --name-only HEAD -- > "${gate_dir}/changed.txt" 2>/dev/null || true
+    bash "${gate_step}" allow-list "${PWD}" "${gate_dir}/changed.txt" "${gate_dir}/run1/result.json" "${gate_allow}" 2>/dev/null || : > "${gate_allow}"
+    # The complete merge index (the resolution) is the repair's revert point.
+    gate_index_tree="$(git write-tree 2>/dev/null || true)"
+    if [ -n "${gate_index_tree}" ] && [ -s "${gate_allow}" ] && bash "${gate_step}" repair-prompt "${gate_dir}/run1/result.json" "${gate_prompt}" "${gate_allow}" 2>/dev/null; then
+      printf '\nThis tree is a completed merge resolution. Fix only the failures above, only in allow-list files; keep every conflict resolution as it is.\n' >> "${gate_prompt}"
+      git ls-files --others --exclude-standard 2>/dev/null | sort -u > "${gate_pre_untracked}"
+      local _effective_prompt_file="${gate_prompt}" tmp_output
+      tmp_output="$(mktemp "${RUNTIME_DIR}/prepush_gate_resolver_output.XXXXXX")" || tmp_output=""
+      rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+      if [ -z "${tmp_output}" ]; then
+        gate_rc=77
+      elif [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
+        _resolver_sandbox_attempt claude || gate_rc=$?
+        if [ "${gate_rc}" -eq 75 ]; then
+          gate_rc=0
+          rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+          _resolver_sandbox_attempt codex || gate_rc=$?
+        fi
+      else
+        _resolver_sandbox_attempt codex || gate_rc=$?
+      fi
+      [ -z "${tmp_output}" ] || rm -f -- "${tmp_output}"
+      { git diff --name-only -- 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null | grep -Fxv -f "${gate_pre_untracked}" || true; } | sed '/^$/d' | sort -u > "${gate_touched}"
+      if [ "${gate_rc}" -ne 0 ]; then
+        gate_repair="skipped (resolver exit ${gate_rc})"
+        [ "${gate_rc}" -ne 80 ] || gate_repair="skipped (Claude capacity wait)"
+      elif [ ! -s "${gate_touched}" ]; then
+        gate_repair="ran (no edits)"
+      else
+        while IFS= read -r gate_path; do
+          [ -n "${gate_path}" ] && gate_check_args+=(--extra-allowed-file "${gate_path}")
+        done < "${gate_allow}"
+        if ! "${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" --conflicted-set "${CONFLICTED_PATHS_FILE}" \
+          --touched-set "${gate_touched}" --repo-root "${PWD}" "${gate_check_args[@]}"; then
+          gate_repair="reverted (check_resolver_diff)"
+        else
+          _verify_fingerprints_soft || true
+          if [ "${RESOLVER_FP_EXIT:-0}" -eq 1 ]; then
+            gate_repair="reverted (fingerprints)"
+          else
+            gate_repair="ran"
+            while IFS= read -r gate_path; do
+              [ -n "${gate_path}" ] || continue
+              if [ -e "${gate_path}" ] || [ -L "${gate_path}" ]; then
+                git add -- "${gate_path}" || gate_repair="reverted (staging)"
+              else
+                git rm -q --cached --ignore-unmatch -- "${gate_path}" || gate_repair="reverted (staging)"
+              fi
+            done < "${gate_touched}"
+            if [ -n "$(git diff --name-only --diff-filter=U -- 2>/dev/null)" ]; then
+              gate_repair="reverted (staging)"
+            fi
+          fi
+        fi
+      fi
+      if [ "${gate_repair}" != ran ] && [ -s "${gate_touched}" ]; then
+        # Back to the resolution the index held before the repair; new files go.
+        git read-tree "${gate_index_tree}" 2>/dev/null || echo "::warning::PREPUSH_TEST_GATE phase=resolver could not restore the merge index" >&2
+        while IFS= read -r gate_path; do
+          [ -n "${gate_path}" ] || continue
+          case "/${gate_path}/" in */../*) continue ;; esac
+          if git cat-file -e "${gate_index_tree}:${gate_path}" 2>/dev/null; then
+            git checkout-index -f -- "${gate_path}" 2>/dev/null || true
+          else
+            rm -f -- "${gate_path}"
+          fi
+        done < "${gate_touched}"
+        gate_path="${gate_repair#*(}"
+        echo "PREPUSH_TEST_GATE phase=resolver outcome=repair_reverted reason=$(printf '%s' "${gate_path%)}" | tr -dc 'a-z_0-9')" >&2
+      fi
+      if [ "${gate_repair}" = ran ]; then
+        bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
+          --image-reason resolver_image_unavailable --out "${gate_dir}/run2" > "${gate_dir}/run2.status" || true
+        read -r gate_status gate_pr gate_inh < "${gate_dir}/run2.status" || true
+      fi
+    else
+      gate_repair="skipped (no index tree, allow-list or repair prompt)"
+    fi
+  elif [ "${gate_status}" = fail ] && [ "${gate_mode}" = report ]; then
+    gate_repair="not run (report mode)"
+  fi
+  echo "PREPUSH_TEST_GATE phase=resolver outcome=${gate_status:-unverified} failures=${gate_pr:-0} inherited=${gate_inh:-0} mode=${gate_mode} repair=$(printf '%s' "${gate_repair}" | tr ' ()' '_  ' | tr -d ' ')" >&2
+  return 0
+}
+
 # Source-repo only: the final touched-set gate compares against the prepare
 # step's pre-resolver tree. Snapshot each attempt as well, since the allowlist
 # retry base cannot undo an unauthorized edit to a different tracked path.
@@ -3714,6 +3846,10 @@ if [ -n "$(git status --porcelain)" ] || git rev-parse -q --verify MERGE_HEAD >/
   # tests/test_orchestrate_poll_process.py) continues to
   # match.
   # ============================================================
+
+  # Pre-push affected-test gate (plan P4). Fail-open: the commit below always
+  # follows, and every guard above has already passed.
+  _resolver_prepush_test_gate || true
 
   git commit -m "[ai-merge-resolve] resolve merge conflicts"
   # Host-only paths the prepare step resolved to the base version (issue
