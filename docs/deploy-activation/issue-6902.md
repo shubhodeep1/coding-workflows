@@ -12,9 +12,9 @@
 - Deploy target: shubhodeep1/coding-workflows -> 13 consumers in `.github/ai/consumer_repos.json`
 - How it runs: release via `workflow_dispatch` of `test-and-mark-stable.yml` (manual); consumers update on
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:48-50`)
-- Status: IN_PROGRESS
+- Status: LIVE
 - Last updated: 2026-10-26
-- Last note: 12/13 consumers on v1.40.2. Waiting on atlas-bridge.gd run 40254086692 (queued). #6211 not ticked yet.
+- Last note: LIVE. All 13 consumers synced to v1.40.2 (`5596e7520ef4`); #6211 release/sync lines ticked (37), 14 held with reasons in Notes.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -22,7 +22,7 @@
 3. [x] Publish attested stable release — done 2026-10-25 (already satisfied): `v1.40.0` released 2026-10-24T18:29Z by `test-and-mark-stable.yml` run 40113559006; steps "Attest sync manifest", "Attest release manifest", "Upload release manifest asset" all succeeded; release assets `release-manifest.v1.json`, `sync-manifest.json`; `stable` -> `8164dcf9593d`
 4. [x] Dispatch to consumers — done 2026-10-25 (already satisfied): same run, step "Notify consumer repos via repository_dispatch" succeeded and logged a dispatch to all 13 registered consumers with no warnings
 5. [x] Confirm the 50 PRs are in `@stable` — done 2026-10-25: all 50 merged to `main`; GitHub compare `<merge_commit>...stable` returned `ahead`, `behind_by=0` for every one
-6. [ ] Verify each consumer's updater ran on or after the v1.40.0 dispatch (operator, consumers not attached to the session)
+6. [x] Verify each consumer's updater ran on or after the v1.40.0 dispatch (operator, consumers not attached to the session)
    - 2026-10-25 operator check, `schedule` runs on 2026-10-25, success: digital_pa, fun-token-multi-chain, binance-blessings,
      multi-user-ai-agent, bitsafe.io, hylifegroup.com, radateeree-resort.com, drhyg_ecommerce_automation (8/13)
    - skipped: tele-funtoken-msg-scoring (run 40161515398; job `if: vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false'`)
@@ -72,11 +72,12 @@
    - done 2026-10-26: no earlier updater runs in the 4 repos (none ran under core/standard); operator dispatched
      `ai-update-workflows.yml`: btc_sweeper run 40254082471, atlas-bridge.gd 40254086692, mongo-explorer 40254090855,
      fbc_shutdown 40254095533.
-11. [ ] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A)
+11. [x] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A)
    - 2026-10-26 check (current stable v1.40.2 = `5596e7520ef4`): 12/13 synced, each with a `completed/success` updater run,
      `pin=5596e7520ef4` and no open `auto/update-workflows-*` PR: tele-funtoken-msg-scoring, digital_pa, fun-token-multi-chain,
      btc_sweeper, binance-blessings, mongo-explorer, multi-user-ai-agent, fbc_shutdown, bitsafe.io, hylifegroup.com,
      radateeree-resort.com, drhyg_ecommerce_automation. Pending: atlas-bridge.gd run 40254086692 still `queued`, pin `8164dcf9593d`.
+   - done 2026-10-26: atlas-bridge.gd run 40254086692 `completed/success`, pin `5596e7520ef4`. 13/13 consumers synced to v1.40.2.
 
 ## Notes
 - The local clone is shallow, so `git merge-base --is-ancestor` reported false negatives; containment was checked with the GitHub compare API instead.
@@ -87,3 +88,16 @@
 - 2026-10-25: operator answered Q2: A (btc_sweeper, atlas-bridge.gd -> `WORKFLOW_PROFILE=core` + updater), Q3: A
   (mongo-explorer, fbc_shutdown -> `WORKFLOW_PROFILE=standard` + updater), Q4: A (lift tele-funtoken hold). The rendered
   wrapper was produced with `sed` and checked byte-identical to `scripts/workflow_wrapper_refs.py` output at `8164dcf9593d`.
+- 2026-10-26 #6211 ticks (Q1: A), each checked byte-for-byte after the edit:
+  - Ticked the release/sync line in the latest `project-6902` comment ("Publish and propagate an attested stable release").
+  - Ticked the release/sync line in 35 `pr-*` comments: pr-6562, 6204, 6433, 6136, 6462, 6610, 6677, 6777, 6550, 6791,
+    6564, 6569, 6935, 6951, 6938, 6959, 7073, 6655, 7098, 6674, 7105, 6728, 7147, 7157, 7156, 7176, 6855, 7195, 7204,
+    7213, 7036, 7062, 7044, 7065, 7294.
+  - Ticked `pr-6283` ("Release and sync the consumer rollout") in the #6211 issue body; the responder wrapper is now on
+    btc_sweeper and atlas-bridge.gd, which the 2026-10-17 verification had flagged. The body edit also dropped two
+    trailing newlines at the end of the body (no visible change).
+  - Held (not ticked), because the step depends on something outside this release/sync verification:
+    pr-7050 (also sets CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED per consumer), pr-6877 (also AUTO_RELEASE_STABLE_ENABLED,
+    unreadable through the session proxy), pr-6208 / pr-6605 / pr-6709 / pr-6682 ("after the code fixes"),
+    pr-6273 ("after the corrected code"), pr-7043 / pr-7201 ("after implementation merges"), pr-6509 ("hook fix"),
+    pr-6649 ("staging fix"), pr-7134 and pr-6643 ("live-copy parity"), pr-7256 ("after the matching hook change merges").
