@@ -47,6 +47,7 @@ def _run(tmp_path: Path, mode: str, source_labels: list[str], labels_json: str =
 		"title": "CI failure: check on PR #32",
 		"body": TRIAGE_BODY,
 		"heal": "ai:workflow-heal" in source_labels,
+		"managed": "ai:orchestrator-managed" in source_labels,
 		"check_triage": "ai:check-triage" in source_labels,
 	})
 	script = """set -euo pipefail
@@ -103,7 +104,9 @@ needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required
 @needs_jq
 @pytest.mark.parametrize("mode", ["managed", "standalone"])
 def test_reissue_of_a_check_triage_issue_keeps_the_label(tmp_path: Path, mode: str) -> None:
-	args = _run(tmp_path, mode, ["ai:check-triage"])
+	# A managed source issue carries ai:orchestrator-managed; a standalone one does not.
+	source = ["ai:check-triage", "ai:orchestrator-managed"] if mode == "managed" else ["ai:check-triage"]
+	args = _run(tmp_path, mode, source)
 	labels = _labels(args)
 	assert labels.count("ai:check-triage") == 1, args
 	assert "ai:clarification" in labels
