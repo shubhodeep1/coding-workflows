@@ -115,6 +115,8 @@ def settings_match_template(template_text: str, live_text: str) -> bool:
 	if not isinstance(template, dict) or not isinstance(live, dict) or not isinstance(live.get("permissions"), dict):
 		return False  # valid JSON of the wrong shape is a mismatch too
 	live_allow = live.get("permissions", {}).get("allow", [])
+	if not isinstance(live_allow, list):
+		return False  # a non-list allow value is a mismatch, not a TypeError
 	extras = tuple(live_allow[len(live_allow) - len(LIVE_ONLY_ALLOW_RULES):])
 	if extras != LIVE_ONLY_ALLOW_RULES:
 		return False

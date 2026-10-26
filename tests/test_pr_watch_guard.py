@@ -270,7 +270,8 @@ def test_settings_match_template_rejects_any_other_difference():
 	assert not claude_template_drift.settings_match_template(template, template)
 	assert not claude_template_drift.settings_match_template(template, live.replace('session"', 'session",\n      "Bash(*)"'))
 	assert not claude_template_drift.settings_match_template(template, live.replace('"Read"', '"Write"'))
-	for malformed in ("[]", "null", '"text"', '{"permissions": []}', "{not json"):
+	for malformed in ("[]", "null", '"text"', '{"permissions": []}', "{not json",
+		'{"permissions": {"allow": 5}}', '{"permissions": {"allow": null}}', '{"permissions": {"allow": {}}}'):
 		assert not claude_template_drift.settings_match_template(template, malformed)
 
 
