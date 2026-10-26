@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:48-50`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-26
-- Last note: First updater runs dispatched in the 4 new repos. Next: step 11, verify all 13 consumers synced to current stable.
+- Last note: 12/13 consumers on v1.40.2. Waiting on atlas-bridge.gd run 40254086692 (queued). #6211 not ticked yet.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -73,6 +73,10 @@
      `ai-update-workflows.yml`: btc_sweeper run 40254082471, atlas-bridge.gd 40254086692, mongo-explorer 40254090855,
      fbc_shutdown 40254095533.
 11. [ ] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A)
+   - 2026-10-26 check (current stable v1.40.2 = `5596e7520ef4`): 12/13 synced, each with a `completed/success` updater run,
+     `pin=5596e7520ef4` and no open `auto/update-workflows-*` PR: tele-funtoken-msg-scoring, digital_pa, fun-token-multi-chain,
+     btc_sweeper, binance-blessings, mongo-explorer, multi-user-ai-agent, fbc_shutdown, bitsafe.io, hylifegroup.com,
+     radateeree-resort.com, drhyg_ecommerce_automation. Pending: atlas-bridge.gd run 40254086692 still `queued`, pin `8164dcf9593d`.
 
 ## Notes
 - The local clone is shallow, so `git merge-base --is-ancestor` reported false negatives; containment was checked with the GitHub compare API instead.
