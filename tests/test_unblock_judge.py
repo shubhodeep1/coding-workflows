@@ -1312,6 +1312,11 @@ if endpoint.endswith("/comments?per_page=100"):
 		done(json.dumps([[{"id": 1000 + i, "user": {"login": "pipeline-bot"}, "body": c["body"]} for i, c in enumerate(posted)]]))
 	if endpoint == "repos/o/r/issues/40/comments?per_page=100":
 		done(os.environ.get("FAKE_GH_PROJECT_COMMENTS", "[]"))
+	if endpoint == "repos/o/r/issues/50/comments?per_page=100" and "FAKE_GH_FIXUP_COMMENTS" in os.environ:
+		if os.environ.get("FAKE_GH_FAIL_FIXUP_COMMENTS"):
+			json.dump(state, open(state_path, "w"))
+			sys.exit(1)
+		done(os.environ["FAKE_GH_FIXUP_COMMENTS"])
 	if endpoint == "repos/o/r/issues/7/comments?per_page=100":
 		state["item_comments_reads"] = state.get("item_comments_reads", 0) + 1
 		if state["item_comments_reads"] > 2:
@@ -2661,6 +2666,62 @@ def test_judge_waits_on_an_open_fixup_and_follows_up_when_it_merged(tmp_path: Pa
 	assert not any("ai:unblock-wait:v1 item=7 fixup=50 done" in fields.get("body", "") for _, fields in state["patched"])
 	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {}}, verdict={"verdict": "retry_budget", "reason": "x", "instructions": "y"})
 	assert "reason=fixup_unavailable" in result.stdout and state["comments"] == []
+
+
+NOOP_CLOSED_FIXUP = {"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:closed"}]}}
+NOOP_MARKER = "<!-- ai:implement-success-noop:v1 issue=50 -->"
+
+
+@pytest.mark.parametrize(("fixup_comments", "fail_read", "outcome"), [
+	# btc_sweeper #229: a verification-only fix-up closed as already implemented.
+	([_comment("Already implemented.\n\nRun: x\n\n" + NOOP_MARKER, "pipeline-bot")], False, "followup"),
+	([_comment("Already implemented.\n\n" + NOOP_MARKER + "\r\n", "pipeline-bot")], False, "followup"),
+	# An untrusted author, a marker for another issue, or a marker that is not
+	# the last line does not end the wait.
+	([_comment(NOOP_MARKER, "someone-else")], False, "judge_again"),
+	([_comment("<!-- ai:implement-success-noop:v1 issue=51 -->", "pipeline-bot")], False, "judge_again"),
+	([_comment(NOOP_MARKER + "\n\nmore text", "pipeline-bot")], False, "judge_again"),
+	([], False, "judge_again"),
+	# Unreadable comments keep the wait open instead of spending a round.
+	([], True, "skip"),
+])
+def test_fixup_closed_as_already_implemented_ends_the_wait(tmp_path: Path, fixup_comments: list, fail_read: bool, outcome: str) -> None:
+	wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", "pipeline-bot", "2026-10-04T11:00:00Z")
+	wait["id"] = 123
+	env = {"FAKE_GH_FIXUP_COMMENTS": json.dumps(fixup_comments)}
+	if fail_read:
+		env["FAKE_GH_FAIL_FIXUP_COMMENTS"] = "1"
+	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues=NOOP_CLOSED_FIXUP, **env)
+	patched = [fields.get("body", "") for _, fields in state["patched"]]
+	if outcome == "followup":
+		assert "fixup=50 op=fixup_done via=success_noop" in result.stdout, result.stdout + result.stderr
+		assert "fixup=50 outcome=followup" in result.stdout
+		assert state["comments"][-1]["body"].startswith("/answer")
+		assert patched[-1].startswith("Fix-up #50 closed as already implemented; the unblock judge posted")
+		assert patched[-1].endswith("<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->")
+	elif outcome == "skip":
+		assert "fixup=50 outcome=skip reason=fixup_comments_unavailable" in result.stdout, result.stdout + result.stderr
+		assert state["comments"] == [] and patched == []
+	else:
+		assert "via=success_noop" not in result.stdout and "fixup=50 outcome=followup" not in result.stdout
+		assert any(body.startswith("Fix-up #50 did not merge in time") for body in patched)
+
+
+def test_merged_fixup_does_not_read_fixup_comments(tmp_path: Path) -> None:
+	wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", "pipeline-bot", "2026-10-04T11:00:00Z")
+	wait["id"] = 123
+	result, state = _judge(tmp_path, ISSUE, comments=[wait], issues={"50": {"state": "closed", "state_reason": "completed", "labels": [{"name": "ai:merged"}]}},
+		FAKE_GH_FIXUP_COMMENTS="[]", FAKE_GH_FAIL_FIXUP_COMMENTS="1")
+	assert "fixup=50 outcome=followup" in result.stdout, result.stdout + result.stderr
+	assert "reason=fixup_comments_unavailable" not in result.stdout
+	assert [fields.get("body", "") for _, fields in state["patched"]][-1].startswith("Fix-up #50 merged; the unblock judge posted")
+
+
+def test_implement_success_noop_close_comment_ends_with_the_marker() -> None:
+	text = (ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	start = text.index("success_noop_body=\"$(printf '%s\\n' \\")
+	block = text[start:text.index(")\"", start)]
+	assert block.rstrip().endswith("\"<!-- ai:implement-success-noop:v1 issue=${ISSUE_NUMBER} -->\"")
 
 
 def test_judge_skips_closed_and_unblocked_items_and_honours_the_switch(tmp_path: Path) -> None:
