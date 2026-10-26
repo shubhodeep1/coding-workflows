@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:31750-31754 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The comment above NOOP_PRODUCTIVE_COMMIT_NAME / NOOP_PRODUCTIVE_COMMIT_EMAIL is stale. It says every [ai-autofix] / [judge-fix] writer commits as this (legacy codex-bot) identity, but writers now commit as claude-bot or codex-bot on the .invalid domain.\n  WHY: It has no runtime effect, because the jq filters read NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON. It can mislead future maintainers. Reviewers rated it NIT. z-ai_glm-5_3-flash filed it under CORRECTNESS and the others under NAMING / BACKWARD COMPATIBILITY.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says pipeline-commit checks accept all three identities. NOOP_PRODUCTIVE_COMMIT_NAME / NOOP_PRODUCTIVE_COMMIT_EMAIL keep their legacy values, and NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON holds all three pairs. The comment drift fixed in the last run should be fixed here too.\n  expected_change_site: scripts/orchestrate_poll_process.sh lines 31750-31754 (the comment block above NOOP_PRODUCTIVE_COMMIT_NAME / NOOP_PRODUCTIVE_COMMIT_EMAIL)\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The comment still says \"Every [ai-autofix] / [judge-fix] writer commits as this identity\", naming only the legacy codex-bot pair, although the writers now pick claude-bot when the editing role ran on Claude. The comment at lines 31757-31760 was updated, but this one was not. Documentation drift only.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:31750-31754 | severity=NIT | confidence=4\n  PROBLEM: The comment above NOOP_PRODUCTIVE_COMMIT_NAME / NOOP_PRODUCTIVE_COMMIT_EMAIL says every [ai-autofix] / [judge-fix] writer \"commits as this identity\". That is stale, because writers now commit as claude-bot or codex-bot on the .invalid domain and these constants hold only the legacy pair.\n  WHY: It has no runtime effect, since the jq filters read NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON. Only the documentation is misleading.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:31752 | severity=NIT | confidence=4\n  PROBLEM: The comment above NOOP_PRODUCTIVE_COMMIT_NAME/_EMAIL is stale and misleading.\n  WHY: It implies that every [ai-autofix] / [judge-fix] writer uses the legacy identity (codex-bot / codex@users.noreply.github.com), which is incorrect after this PR. The runtime logic is correct, but the comment may mislead future maintainers.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:31750-31754 | severity=NIT | confidence=4\n  PROBLEM: The comment still says \"Every [ai-autofix] / [judge-fix] writer commits as this identity (scripts/review_commit_changes.sh, scripts/review_rb_judge.sh, and the poller's own judge-fix commits)...\".\n  WHY: This is no longer accurate. scripts/review_commit_changes.sh (lines 331-349), scripts/review_rb_judge.sh (lines 2563-2583) and the poller's combined RB_JUDGE block (lines 28867-28886) now switch between claude-bot and codex-bot. The comment at lines 31757-31760 already documents the correct list. There is no runtime bug, because the gate's jq (lines 31914-31924) uses the JSON list.\n- TASK_GAP:\n  Requirement: The PR description says checks that recognise pipeline commits accept all three identities. NOOP_PRODUCTIVE_COMMIT_NAME / NOOP_PRODUCTIVE_COMMIT_EMAIL keep their legacy values, and NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON holds all three pairs. The last run fixed the same kind of comment drift in the Gate C comment (lines 31655-31662).\n  Expected change site: scripts/orchestrate_poll_process.sh lines 31750-31754 (the comment block above NOOP_PRODUCTIVE_COMMIT_NAME / NOOP_PRODUCTIVE_COMMIT_EMAIL).\n  Evidence of absence: The comment still says \"Every [ai-autofix] / [judge-fix] writer commits as this identity\", naming only the legacy codex-bot pair, although the writers now pick claude-bot when the editing role ran on Claude. The comment at lines 31757-31760 was updated, but this one was not. Documentation drift only.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:31750-31754 | severity=NIT | confidence=4\n  PROBLEM: The comment still says \"Every [ai-autofix] / [judge-fix] writer commits as this identity...\". After this PR none of the three cited writers commits as the legacy pair defined below it. review_commit_changes.sh (scripts/review_commit_changes.sh:331-349) and review_rb_judge.sh (scripts/review_rb_judge.sh:2563-2583) commit as claude-bot or codex-bot on the .invalid domain, and the poller's judge-fix commits read ${RUNTIME_DIR}/rb_judge_last_engine (scripts/orchestrate_poll_process.sh:28867-28886).\n  WHY: It has no runtime effect, but it misleads editors into thinking the legacy constants are still the single productive-commit identity. The last run fixed the same drift in the Gate C comment at lines 31657-31661 and missed this copy.\n- TASK_GAP (reviewer concluded no remaining gap):\n  Requirement: The PR description says pipeline-commit checks accept all three identities and the noop force-merge gate uses NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON (scripts/orchestrate_poll_process.sh:31761 and the jq call sites at 31914-31924 and 32172-32185).\n  Expected change site: scripts/orchestrate_poll_process.sh\n  Evidence of absence: none. All described deliverables are present, and the only residue is the stale comment reported above.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "180433788b8f91d3f11c4e4cc89315d87a2de2ea53558978cebe1a771dc84690",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8203,
+    "run_id": "40372279130",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40372279130",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026180423_7039156cb3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8203,
+    "run_id": "40372279130"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T18:04:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
