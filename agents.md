@@ -2652,7 +2652,7 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
 | review autofix editor | `openai/gpt-6-sol` | `high` (smoke: `medium`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_EDITOR` |
 | review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `anthropic/claude-sonnet-5.5`, `z-ai/glm-5.3-flash`, `google/gemini-3.1-flash-lite`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode for four slots; the `anthropic/claude-sonnet-5.5` slot runs on the Claude account pool (Sonnet 5.5, one Haiku 5.5 retry, skipped when the pool is unavailable) · `PANEL_REVIEWER` |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | Same as pass 1 · `PANEL_REVIEWER` for the Claude slot |
-| review consolidator | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_CONSOLIDATOR` |
+| review consolidator | `openai/gpt-6-sol` | `high` | `low` | Claude (Sonnet 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_CONSOLIDATOR` |
 | conflict resolver | `openai/gpt-6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `CONFLICT_RESOLVER` |
 | security audit (weekly / dispatch, orchestrator security pass) | `openai/gpt-6-sol` on codex | `xhigh` on codex; `high` on Claude | `low` | Claude (Opus 5.5 at `high`; codex `gpt-6-sol` fallback on any Claude failure, including every account at the 95% usage gate) · `SECURITY_AUDIT` |
 | validate generate, diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `VALIDATE` |
@@ -2673,7 +2673,7 @@ to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, 
 / `ai:codex` labels select it per run. On Claude a role uses its existing
 model variable only when that value starts with `claude-`, else Opus 5.5
 (`claude-opus-5-5`), or Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`,
-`RETRO`, `MATERIALITY`, `SUMMARISER` and `BEHAVIOURAL_SMOKE`; the reasoning
+`RETRO`, `MATERIALITY`, `SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER` and `REVIEW_CONSOLIDATOR`; the reasoning
 column is the effort (`none` / `minimal` → `low`). Apart from the
 `anthropic/claude-sonnet-5.5` slot (`PANEL_REVIEWER`), the reviewer rows have no
 engine switch. When Claude is unavailable (exit 75, `AI_ENGINE_FALLBACK`),

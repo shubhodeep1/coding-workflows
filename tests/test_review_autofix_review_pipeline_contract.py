@@ -88,6 +88,9 @@ def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> Non
 	for key in ("PR_EVENT_HEAD_SHA", "GATE_HEAD_SHA", "GATE_AUTO_MERGE_ENABLED", "DETERMINISTIC_SKIP", "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED"):
 		assert f"{key}:" in workflow
 	assert 'review_head_gate.sh' in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split()
+	# #8195: the consolidator, parser, ledger and floor-rule stages are skipped when these are not staged.
+	for script in ("review_floor_rules.sh", "review_consolidate.sh", "review_parse_consolidator.sh", "review_issue_ledger.sh", "ledger_emit_substate.sh", "codex_thread_reuse.sh"):
+		assert script in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split(), script
 	assert 'REVIEW_HEAD_GATE_CONTEXT="ai-review/head-gate"' in HEAD_GATE_HELPER.read_text(encoding="utf-8")
 	assert auto_merge.index('review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"', auto_merge.index('_orch_pr_head_sha=')) < auto_merge.index('gh_retry gh pr merge')
 	judge_lines = judge.splitlines()
