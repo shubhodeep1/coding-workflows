@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:48-50`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-26
-- Last note: 5 consumer PRs open (tele-funtoken#4885 + 4 updater installs). Next: step 10, check file lists, merge, run updaters.
+- Last note: tele-funtoken#4885 merged. mongo-explorer/fbc_shutdown profile choice re-asked (Q5); reading btc_sweeper/atlas-bridge.gd full workflow lists.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -51,6 +51,15 @@
    - done 2026-10-26: checksum matched in all 4; PRs opened: shubhodeep1/btc_sweeper#231, shubhodeep1/atlas-bridge.gd#120,
      shubhodeep1/mongo-explorer#46, shubhodeep1/fbc_shutdown#14 (not merged yet). Case-collision warnings (`CLAUDE.md`/`claude.md`)
      on the macOS clones; only the new file was staged, PR file lists to be checked before merge.
+   - 2026-10-26 pre-merge check: btc_sweeper#231, atlas-bridge.gd#120, mongo-explorer#46, fbc_shutdown#14 each change only
+     `.github/workflows/ai-update-workflows.yml` and are MERGEABLE (AI review `codex-agent` still pending).
+     tele-funtoken#4885 already MERGED 2026-10-25T12:21:47Z (by shubhodeep1).
+   - CORRECTION 2026-10-26: mongo-explorer and fbc_shutdown are NOT unseeded. Each has 18 of the 19 `full` profile
+     wrappers (all but `ai-update-workflows.yml`) plus non-managed workflows (claude-auto-review, qodo-pr-review, tier1-*).
+     The earlier filtered listing returned nothing for them. With `WORKFLOW_PROFILE=standard` the updater only iterates the
+     standard manifest, so the 4 full-only wrappers already present (ai-check-failure-triage, ai-memory-maintenance,
+     ai-security-audit, ai-workflow-failure-heal) would stay at their old pin (README "Profile downgrades are
+     non-destructive"). Q3 re-asked as Q5; their PRs are on hold until answered.
 10. [ ] Merge the 5 PRs and run each repo's `ai-update-workflows.yml` once
 11. [ ] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A)
 
