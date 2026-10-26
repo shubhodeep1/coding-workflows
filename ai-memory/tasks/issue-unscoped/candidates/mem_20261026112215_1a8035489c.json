@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_apply_fixes.sh:3004-3008 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The final-attempt \"Editor stderr from final attempt:\" dump at line 3007 (`cat \"${final_editor_err}\"`) is unfiltered and still prints the usage JSON line (`\"type\": \"result\"`) already replayed as `stage=editor` at line 2357.\n  WHY: cost_audit.py counts every matching line, so a failed editor's Claude call (turns, tokens, USD) is double-counted, which the last run's three sed filters meant to prevent; severity source MAJOR (mapped to high).\n- tests/test_review_editor_pool_telemetry.py:87-89 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `test_raw_stderr_dumps_drop_the_replayed_usage_line` only asserts `'cat \"${tmp_err}\"' not in text` and `text.count(dump) == 3`, so it never observes the unfiltered `cat \"${final_editor_err}\"` at scripts/review_apply_fixes.sh:3007.\n  WHY: The suite passes while the failure-path double count persists, giving false confidence; severity source NIT (mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_apply_fixes.sh:3004-3008 | severity=MAJOR | confidence=4\n  PROBLEM: A fourth raw dump remains after the retry loop: \"Editor stderr from final attempt:\" at line 3006 prints the newest archived `editor_attempt_N.err` unfiltered, including the `{\"type\": \"result\", ...}` usage line (archives are copies of `tmp_err`, lines 2533, 2545, 2871); the `stage=editor` replay at line 2357 already logged it.\n  WHY: When the editor fails after retries, usage JSON is in the log twice, so `cost_audit.py` double-counts that call's turns, tokens and USD.\n- tests/test_review_editor_pool_telemetry.py:`test_raw_stderr_dumps_drop_the_replayed_usage_line` | severity=NIT | confidence=4\n  PROBLEM: The test only forbids the literal `cat \"${tmp_err}\"` and expects `text.count(dump) == 3`, so it passes while `cat \"${final_editor_err}\"` at scripts/review_apply_fixes.sh:3007 stays unfiltered.\n  WHY: The suite passes while the failure-path double count persists; applying the sed filter at line 3007 and raising the expected count to 4 would close both.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_apply_fixes.sh:3007 | severity=MAJOR | confidence=4\n  PROBLEM: The failure path dump uses `cat \"${final_editor_err}\"`, which includes the usage JSON line already replayed as `stage=editor` earlier in the script.\n  WHY: This double-counts the Claude call, tokens and USD in `cost_audit.py`, inflating recorded usage for failed runs; the last run's fix missed this dump.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_apply_fixes.sh:3007 | severity=MAJOR | confidence=5\n  PROBLEM: The last run filtered the three in-loop dumps (lines 2538, 2846, 2854) but the fourth, `cat \"${final_editor_err}\"` at line 3007 (newest `editor_attempt_*.err` from line 3004, a byte copy of `tmp_err`), is still printed verbatim.\n  WHY: The replay at line 2357 already prints the usage JSON (produced via ai_engine.sh:637/653 and claude_engine.py:958); on the failure path cost_audit.py:137-156 and 777-796 parse both lines, doubling claude_calls, tokens, total_cost_usd and modelUsage buckets.\n- tests/test_review_editor_pool_telemetry.py:87-89 | severity=NIT | confidence=5\n  PROBLEM: The assertions `'cat \"${tmp_err}\"' not in text` and `text.count(dump) == 3` do not observe `cat \"${final_editor_err}\"` at scripts/review_apply_fixes.sh:3007.\n  WHY: The test passes green while the double count is live, so CI cannot detect a regression of the behavior it pins.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_apply_fixes.sh:3004-3007 | severity=MAJOR | confidence=4\n  PROBLEM: The last run filtered the three inline failure dumps (lines 2538, 2846, 2854), but the terminal \"Editor stderr from final attempt:\" dump still `cat`s the archived `editor_attempt_*.err` (copy of `tmp_err`; archives at lines 2413, 2508, 2518, 2533, 2545, 2871), containing the usage JSON line already replayed at line 2357.\n  WHY: cost_audit.py (parse_claude_result_line, cost_audit.py:137-156, counted at 777-783) counts the replayed line and the raw line, double-counting tokens and `total_cost_usd` on the failure path.\n- tests/test_review_editor_pool_telemetry.py:`test_raw_stderr_dumps_drop_the_replayed_usage_line` | severity=NIT | confidence=4\n  PROBLEM: The test proves only the three inline dumps are filtered and no literal `cat \"${tmp_err}\"` remains; it does not cover `cat \"${final_editor_err}\"` at scripts/review_apply_fixes.sh:3007.\n  WHY: Coverage gap lets the double-count defect survive the test gate.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d3f80952598985d3ec0479ba5d75c1408d84df08d428f4db611652c56d09bf22",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8195,
+    "run_id": "40311033164",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40311033164",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026112215_1a8035489c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8195,
+    "run_id": "40311033164"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T11:22:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
