@@ -3597,6 +3597,31 @@ def test_augment_files_touched_ignored_marker_with_failed_module_is_noop():
 			assert decomposition.read_bytes() == original, mode
 
 
+def test_augment_files_touched_malformed_marker_with_failed_module_is_noop():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		for marker in ({"a": ["src/one.py", 5]}, {"a": "src/one.py"}, ["src/one.py"]):
+			raw = _make_decomposition(issues=[
+				{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+			])
+			raw["prepush_augmented_paths"] = marker
+			decomposition = tmp_path / "decomposition.json"
+			decomposition.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+			original = decomposition.read_bytes()
+			stub = _write_prepush_stub(tmp_path, mode="fail")
+			proc = _run_augment_cli(decomposition, stub)
+			assert proc.returncode == 0, (marker, proc.stderr)
+			assert "issue=a outcome=skipped" in proc.stderr, (marker, proc.stderr)
+			assert json.loads(proc.stdout)["written"] is False, marker
+			assert decomposition.read_bytes() == original, marker
+			# A successful run cleans the malformed marker.
+			ok_stub = _write_prepush_stub(tmp_path, payload={"affected_tests": [], "companion_files": []})
+			proc = _run_augment_cli(decomposition, ok_stub)
+			assert proc.returncode == 0, (marker, proc.stderr)
+			assert json.loads(proc.stdout)["written"] is True, marker
+			assert "prepush_augmented_paths" not in json.loads(decomposition.read_text(encoding="utf-8")), marker
+
+
 def test_render_expected_files_section_has_no_allowlist():
 	import files_touched_scope_guard
 

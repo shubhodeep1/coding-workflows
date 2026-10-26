@@ -4380,9 +4380,16 @@ def augment_files_touched(
 		_prepush_augment_log(f"issue={log_id} added={len(added)} truncated={truncated}")
 	# Write the marker back when paths were added, or when dropping ignored or
 	# empty-issue entries changed it, so model-supplied junk is not kept.
-	original_marker = recorded_raw if PREPUSH_AUGMENTED_PATHS_KEY in data else {}
+	# A raw marker the parser had to filter (non-dict, non-list values,
+	# non-string entries) is cleaned only when some issue did not fail, so a
+	# run where every selection failed leaves the file unchanged.
+	marker_malformed = recorded_raw is not None and recorded_raw != recorded_initial
 	totals["marker_changed"] = 0
-	if totals["added"] > 0 or recorded != original_marker:
+	if (
+		totals["added"] > 0
+		or recorded != recorded_initial
+		or (marker_malformed and totals["skipped"] < totals["issues"])
+	):
 		totals["marker_changed"] = 1
 		if recorded:
 			data[PREPUSH_AUGMENTED_PATHS_KEY] = recorded
