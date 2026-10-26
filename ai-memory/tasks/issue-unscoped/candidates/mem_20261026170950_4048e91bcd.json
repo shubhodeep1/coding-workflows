@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:302-430 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The forward-merge mixes the `pr_not_open` handoff (lines 337-343) with the new `label_missing` hold (lines 344-430), and the nested `SKIP_PLAN=true` logic could skip later steps unintentionally.\n  WHY: If a branch is misidentified as `pr_not_open` when it should fall through to the hold or failure handling, critical planning steps are bypassed and PR orchestration is incomplete. The reviewer labeled this MAJOR, which is mapped here to high.\n- .github/workflows/plan.yml:344-430 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The duplicate check for the hold comment (lines 373-418 in the resolved PR, as the reviewer noted) is not atomic.\n  WHY: Two plan runs started at the same moment for the same issue could both find no hold comment and both post one, causing redundant comments and possibly conflicting label or status updates. The reviewer labeled this NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  expected_change_site: .github/workflows/plan.yml\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer could not confirm that the conflict resolution in .github/workflows/plan.yml fully integrates the `stable` fixes without reverting other changes or leaving the workflow broken. The reviewer rated this BLOCKER.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:302-430 | severity=MAJOR | confidence=3\n  PROBLEM: The forward-merge mixes the `pr_not_open` handoff (lines 337-343) with the new `label_missing` hold (lines 344-430), and the nested `SKIP_PLAN=true` logic could skip later steps unintentionally.\n  WHY: If a branch is misidentified as `pr_not_open` when it should fall through to the hold or failure handling, critical planning steps are bypassed and PR orchestration is incomplete.\n- .github/workflows/plan.yml:344-430 | severity=NIT | confidence=4\n  PROBLEM: The duplicate check for the hold comment (lines 373-418 in the resolved PR, as the reviewer noted) is not atomic.\n  WHY: Two plan runs started at the same moment for the same issue could both post a hold comment, causing redundant comments and possibly conflicting label or status updates.\n- TASK_GAP | severity=BLOCKER | confidence=4\n  Requirement: \"Resolve the conflicts and merge this PR so the bug fix on `stable` is also present on `main`.\"\n  Expected change site: .github/workflows/plan.yml\n  Evidence of absence: The reviewer could not confirm that the conflict resolution in .github/workflows/plan.yml fully integrates the `stable` fixes without reverting other changes or leaving the workflow broken.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===",
+  "fingerprint": "a8c02a78ab8595f71f5c8d585d53892fc4711be0f962b474b0f9ddfbe6d4419c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8170,
+    "run_id": "40363660681",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40363660681",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026170950_4048e91bcd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8170,
+    "run_id": "40363660681"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T17:09:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
