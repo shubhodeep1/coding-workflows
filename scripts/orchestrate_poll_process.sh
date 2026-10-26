@@ -26822,6 +26822,8 @@ The poller will resume processing on the next cycle."
 
       DEF_TITLE="$(echo "${ISSUE_DEF}" | jq -r '.title')"
       DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body' | sed 's/\\n/\n/g')"
+      DEF_EXPECTED_SECTION="$(echo "${ISSUE_DEF}" | jq -c '.files_touched // []' 2>/dev/null | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)"
+      if [ -n "${DEF_EXPECTED_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_EXPECTED_SECTION}")"; fi
       DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
 
       FULL_BODY="${DEF_BODY}
@@ -31105,6 +31107,8 @@ ${_gate_violations:-(no violation lines parsed — see workflow run log for the 
 
           DEF_TITLE="$(echo "${ISSUE_DEF}" | jq -r '.title')"
           DEF_BODY="$(echo "${ISSUE_DEF}" | jq -r '.body' | sed 's/\\n/\n/g')"
+          DEF_EXPECTED_SECTION="$(echo "${ISSUE_DEF}" | jq -c '.files_touched // []' 2>/dev/null | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)"
+          if [ -n "${DEF_EXPECTED_SECTION}" ]; then DEF_BODY="$(printf '%s\n\n%s' "${DEF_BODY}" "${DEF_EXPECTED_SECTION}")"; fi
           DEF_PRIORITY="$(echo "${ISSUE_DEF}" | jq -r '.priority')"
 
           FULL_BODY="${DEF_BODY}

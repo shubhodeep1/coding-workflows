@@ -3316,6 +3316,280 @@ def test_extract_integration_branch_cli_reads_body_from_stdin() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Pre-push affected-test gate, phase P2 (issue #8189): augment-files-touched
+# and render-expected-files.
+# ---------------------------------------------------------------------------
+
+_PREPUSH_STUB_TEMPLATE = """#!/usr/bin/env python3
+import json
+import sys
+import time
+
+MODE = {mode!r}
+argv = sys.argv[1:]
+out = argv[argv.index("--out") + 1]
+paths_file = argv[argv.index("--paths-file") + 1]
+planned = [line for line in open(paths_file, encoding="utf-8").read().splitlines() if line]
+if MODE == "fail":
+	sys.exit(3)
+if MODE == "sleep":
+	time.sleep(60)
+if MODE == "no_output":
+	sys.exit(0)
+if MODE == "malformed":
+	open(out, "w", encoding="utf-8").write("{{not json")
+	sys.exit(0)
+if MODE == "wrong_shape":
+	open(out, "w", encoding="utf-8").write(json.dumps({{"affected_tests": "x", "companion_files": []}}))
+	sys.exit(0)
+payload = {payload!r}
+if MODE == "derived":
+	# One affected test per planned path, so feeding the added tests back in
+	# would derive further tests (transitive expansion).
+	payload = {{
+		"affected_tests": [{{"path": "tests/derived/test_" + p.replace("/", "_"), "reasons": ["stem_text"]}} for p in planned],
+		"companion_files": [],
+	}}
+open(out, "w", encoding="utf-8").write(json.dumps(payload))
+"""
+
+
+def _write_prepush_stub(tmp: Path, mode: str = "fixed", payload: dict | None = None) -> Path:
+	stub = tmp / "prepush_affected_tests_stub.py"
+	stub.write_text(_PREPUSH_STUB_TEMPLATE.format(mode=mode, payload=payload or {}), encoding="utf-8")
+	return stub
+
+
+def _run_augment_cli(decomposition: Path, module: Path, *extra: str) -> subprocess.CompletedProcess:
+	return subprocess.run(
+		[
+			sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "augment-files-touched",
+			"--decomposition", str(decomposition),
+			"--repo-root", str(decomposition.parent),
+			"--gate-module", str(module),
+			"--write-back",
+			*extra,
+		],
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=120,
+	)
+
+
+def _write_prepush_decomposition(tmp: Path, issues: list[dict]) -> Path:
+	path = tmp / "decomposition.json"
+	path.write_text(json.dumps(_make_decomposition(issues=issues), indent=2), encoding="utf-8")
+	return path
+
+
+def test_augment_files_touched_adds_tests_and_companions():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"changed_files": ["scripts/new_tool.py"],
+			"affected_tests": [{"path": "tests/test_new_tool.py", "reasons": ["naming"]}, {"path": "scripts/new_tool.py", "reasons": ["changed_test"]}],
+			"companion_files": ["docs/INVENTORY.md"],
+			"registry_checks": [],
+			"static_checks": [],
+		})
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["scripts/new_tool.py"]},
+			{"id": "b", "title": "B", "body": "b", "priority": 2},
+		])
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = json.loads(decomposition.read_text(encoding="utf-8"))
+		issues = {i["id"]: i for i in data["issues"]}
+		assert issues["a"]["files_touched"] == ["scripts/new_tool.py", "docs/INVENTORY.md", "tests/test_new_tool.py"]
+		assert issues["b"]["files_touched"] == []
+		assert "PREPUSH_TEST_GATE phase=augment issue=a added=2 truncated=0" in proc.stderr
+		assert "PREPUSH_TEST_GATE phase=augment issue=b added=0 truncated=0" in proc.stderr
+		assert json.loads(proc.stdout)["written"] is True
+		orchestrate_lib.validate_decomposition(data)
+
+
+def test_augment_files_touched_caps_at_fifty_with_log():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"affected_tests": [{"path": f"tests/test_extra_{n}.py"} for n in range(5)],
+			"companion_files": [],
+		})
+		planned = [f"src/file_{n}.py" for n in range(48)]
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": planned},
+		])
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = json.loads(decomposition.read_text(encoding="utf-8"))
+		files = data["issues"][0]["files_touched"]
+		assert len(files) == 50
+		assert files[-2:] == ["tests/test_extra_0.py", "tests/test_extra_1.py"]
+		assert "issue=a added=2 truncated=3" in proc.stderr
+		orchestrate_lib.validate_decomposition(data)
+
+
+def test_augment_files_touched_is_idempotent():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, mode="derived")
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py", "src/two.py"]},
+		])
+		first = _run_augment_cli(decomposition, stub)
+		assert first.returncode == 0, first.stderr
+		assert "issue=a added=2 truncated=0" in first.stderr
+		after_first = decomposition.read_bytes()
+		second = _run_augment_cli(decomposition, stub)
+		assert second.returncode == 0, second.stderr
+		assert "issue=a added=0 truncated=0" in second.stderr
+		assert json.loads(second.stdout)["written"] is False
+		assert decomposition.read_bytes() == after_first
+
+
+def test_augment_files_touched_missing_or_failing_module_is_noop():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+		])
+		original = decomposition.read_bytes()
+		proc = _run_augment_cli(decomposition, tmp_path / "absent_module.py")
+		assert proc.returncode == 0, proc.stderr
+		assert "PREPUSH_TEST_GATE phase=augment outcome=skipped reason=module_absent" in proc.stderr
+		assert decomposition.read_bytes() == original
+		cases = [
+			("fail", "module_failed", ()),
+			("no_output", "output_missing", ()),
+			("malformed", "malformed_json", ()),
+			("wrong_shape", "malformed_json", ()),
+			("sleep", "timeout", ("--timeout-secs", "5")),
+		]
+		for mode, reason, extra in cases:
+			stub = _write_prepush_stub(tmp_path, mode=mode)
+			proc = _run_augment_cli(decomposition, stub, *extra)
+			assert proc.returncode == 0, (mode, proc.stderr)
+			assert f"issue=a outcome=skipped reason={reason}" in proc.stderr, (mode, proc.stderr)
+			assert decomposition.read_bytes() == original, mode
+
+
+def test_augment_files_touched_drops_unsafe_paths():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"affected_tests": [
+				{"path": "../outside.py"},
+				{"path": "tests/test_`tick`.py"},
+				{"path": ".git/config"},
+				{"path": "tests/test with space.py"},
+				{"path": "tests/test_ok.py"},
+			],
+			"companion_files": ["/etc/passwd"],
+		})
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+		])
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = json.loads(decomposition.read_text(encoding="utf-8"))
+		assert data["issues"][0]["files_touched"] == ["src/one.py", "tests/test_ok.py"]
+
+
+def test_render_expected_files_section_has_no_allowlist():
+	import files_touched_scope_guard
+
+	assert orchestrate_lib.render_expected_files_section([]) == ""
+	assert orchestrate_lib.render_expected_files_section("nope") == ""
+	section = orchestrate_lib.render_expected_files_section(
+		["scripts/a.py", "files_touched:", "scripts/a.py", "../x", "tests/test_a.py"]
+	)
+	assert section == (
+		"**Expected files** (advisory, from the decomposition; includes the tests and\n"
+		"registries this change affects. Update them in the same change.)\n"
+		"- `scripts/a.py`\n"
+		"- `files_touched:`\n"
+		"- `tests/test_a.py`"
+	)
+	assert "files_touched" not in section.splitlines()[0]
+	body = (
+		"Do the thing.\n\n" + section + "\n\n---\n**Orchestrator metadata** (do not edit)\n"
+		"- Tracking issue: #1\n- Managed by: AI Orchestrator\n"
+	)
+	assert files_touched_scope_guard.extract_files_touched(body) is None
+	with tempfile.TemporaryDirectory() as tmp:
+		body_file = Path(tmp) / "body.md"
+		body_file.write_text(body, encoding="utf-8")
+		staged_file = Path(tmp) / "staged.txt"
+		staged_file.write_text("scripts/a.py\n", encoding="utf-8")
+		guard = subprocess.run(
+			[sys.executable, str(REPO_ROOT / "scripts" / "files_touched_scope_guard.py"),
+			 "--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
+			capture_output=True, text=True, check=False,
+		)
+		assert guard.returncode == 10, (guard.returncode, guard.stdout, guard.stderr)
+	rendered = subprocess.run(
+		[sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "render-expected-files", "--paths-json-file", "-"],
+		input=json.dumps(["scripts/a.py", "files_touched:", "tests/test_a.py"]),
+		capture_output=True, text=True, check=False,
+	)
+	assert rendered.returncode == 0, rendered.stderr
+	assert rendered.stdout == section + "\n"
+	for empty_input in ("[]", "not json", "{}"):
+		proc = subprocess.run(
+			[sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "render-expected-files", "--paths-json-file", "-"],
+			input=empty_input, capture_output=True, text=True, check=False,
+		)
+		assert proc.returncode == 0 and proc.stdout == "", (empty_input, proc.stdout)
+
+
+def test_augmented_siblings_get_partition_edge():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"affected_tests": [{"path": "tests/test_shared.py"}],
+			"companion_files": [],
+		})
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/a.py"]},
+			{"id": "b", "title": "B", "body": "b", "priority": 2, "files_touched": ["src/b.py"]},
+		])
+		before = orchestrate_lib.validate_decomposition(json.loads(decomposition.read_text(encoding="utf-8")))
+		assert orchestrate_lib.auto_serialize_file_overlaps(before, hot_files=set()) == []
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = orchestrate_lib.validate_decomposition(json.loads(decomposition.read_text(encoding="utf-8")))
+		serializations = orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+		assert len(serializations) == 1
+		assert {"from": "a", "to": "b"} in data["dependency_edges"]
+
+
+def test_prepush_gate_orchestrator_scoping_wiring_contract():
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
+	validate_idx = workflow.index('python3 scripts/orchestrate_lib.py validate --input-file "${DECOMPOSITION_FILE}"')
+	augment_idx = workflow.index("python3 scripts/orchestrate_lib.py augment-files-touched")
+	partition_idx = workflow.index("python3 scripts/orchestrate_lib.py check-partition")
+	assert validate_idx < augment_idx < partition_idx
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in workflow
+	assert '"${PREPUSH_TEST_GATE_MODE:-repair}"' in workflow
+	assert "PREPUSH_TEST_GATE outcome=mode_invalid" in workflow
+	assert "reason=mode_off" in workflow
+	assert '"${GITHUB_WORKSPACE}/.codex-workflow-src/workflow-templates/.claude/hooks/prepush_affected_tests.py"' in workflow
+	wave1_render_idx = workflow.index("render-expected-files --paths-json-file -")
+	assert wave1_render_idx < workflow.index("**Orchestrator metadata** (do not edit)")
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	render_line = (
+		"DEF_EXPECTED_SECTION=\"$(echo \"${ISSUE_DEF}\" | jq -c '.files_touched // []' 2>/dev/null"
+		" | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)\""
+	)
+	assert poller.count(render_line) == 2
+	for match in re.finditer(re.escape(render_line), poller):
+		tail = poller[match.end():]
+		assert tail.index("FULL_BODY=\"${DEF_BODY}") < tail.index("**Orchestrator metadata** (do not edit)")
+		assert tail.index("DEF_BODY=\"$(printf '%s\\n\\n%s' \"${DEF_BODY}\" \"${DEF_EXPECTED_SECTION}\")\"") < tail.index("FULL_BODY=\"${DEF_BODY}")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
