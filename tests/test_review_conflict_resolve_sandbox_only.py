@@ -1068,6 +1068,10 @@ def test_resolver_gate_repair_contract() -> None:
 	assert 'gate --phase resolver --worktree "${PWD}" --base "${gate_base}"' in body
 	assert "prepare-ephemeral codex" in body and "cleanup" in body
 	# One extra sandbox attempt: Claude, then OpenCode only on exit 75.
+	# Trusted support only, and the conflicted set (not the merge diff) seeds the allow-list.
+	assert "${SUPPORT_SCRIPTS_DIR:-scripts}" not in body
+	assert 'git diff --name-only HEAD -- > "${gate_dir}/changed.txt"' not in body
+	assert '"${CONFLICTED_PATHS_FILE:-/nonexistent}" > "${gate_dir}/changed.txt"' in body
 	assert body.count("_resolver_sandbox_attempt claude") == 1
 	assert body.count("_resolver_sandbox_attempt codex") == 2
 	assert "--extra-allowed-file" in body
@@ -1114,6 +1118,13 @@ def test_check_resolver_diff_extra_allowed_file_passes_the_subset_check(tmp_path
 	assert "check_resolver_diff: OK" in proc.stdout
 
 
+def test_check_resolver_diff_extra_allowed_file_without_value_is_a_usage_error(tmp_path: Path) -> None:
+	repo = _resolver_diff_repo(tmp_path)
+	proc = _run_check(tmp_path, repo, "--extra-allowed-file")
+	assert proc.returncode == 2
+	assert "--extra-allowed-file needs a value" in proc.stderr
+
+
 @pytest.mark.parametrize("value", ["/abs/tests/test_a.py", "../tests/test_a.py", "tests/../tests/test_a.py", "tests/test\x01a.py"])
 def test_check_resolver_diff_ignores_unsafe_extra_paths(tmp_path: Path, value: str) -> None:
 	repo = _resolver_diff_repo(tmp_path)
@@ -1145,6 +1156,9 @@ def _gate_result(status: str, failures: list) -> str:
 @pytest.mark.parametrize("repair_edit, expect_kept", [
 	("printf 'fixed\\n' > tests/test_a.py", True),
 	("printf 'fixed\\n' > tests/test_a.py; printf 'bad\\n' > outside.py", False),
+	# A non-conflicted file the merge brought in stays outside the extra
+	# allowed paths, even though it differs from the pre-merge head.
+	("printf 'fixed\\n' > tests/test_a.py; printf 'rewritten\\n' > base_side.py", False),
 ])
 def test_resolver_gate_fixture_runs_one_repair_and_keeps_or_reverts_it(tmp_path: Path, repair_edit: str, expect_kept: bool) -> None:
 	root = SCRIPT.parent.parent
@@ -1164,7 +1178,8 @@ def test_resolver_gate_fixture_runs_one_repair_and_keeps_or_reverts_it(tmp_path:
 	subprocess.run([*git, "add", "-A"], cwd=repo, check=True, env=env)
 	subprocess.run([*git, "commit", "-q", "-m", "base"], cwd=repo, check=True, env=env)
 	(repo / "a.py").write_text("x = 2\n", encoding="utf-8")
-	subprocess.run(["git", "add", "a.py"], cwd=repo, check=True, env=env)
+	(repo / "base_side.py").write_text("from base\n", encoding="utf-8")
+	subprocess.run(["git", "add", "a.py", "base_side.py"], cwd=repo, check=True, env=env)
 	support = tmp_path / "support"
 	support.mkdir()
 	for name in ("review_autofix_step_prepush_test_gate.sh", "prepush_test_gate_run.sh", "review_untrusted_workspace.py", "check_resolver_diff.sh"):
@@ -1207,6 +1222,7 @@ echo COMMITTED
 	committed = subprocess.run(["git", "show", "HEAD:tests/test_a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout
 	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"
 	assert (repo / "outside.py").read_text(encoding="utf-8") == "keep\n"
+	assert subprocess.run(["git", "show", "HEAD:base_side.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "from base\n"
 	if expect_kept:
 		assert committed == "fixed\n"
 		assert "phase=resolver outcome=pass" in proc.stderr and "repair=ran" in proc.stderr

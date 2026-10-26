@@ -61,7 +61,11 @@ while [ "$#" -gt 0 ]; do
 		--repo-root)
 			REPO_ROOT="$2"; shift 2 ;;
 		--extra-allowed-file)
-			extra_path="${2:-}"
+			if [ "$#" -lt 2 ]; then
+				echo "::error::check_resolver_diff.sh: --extra-allowed-file needs a value" >&2
+				exit 2
+			fi
+			extra_path="$2"
 			if [ -z "${extra_path}" ] || [[ "${extra_path}" == /* ]] || [[ "/${extra_path}/" == */../* ]] || \
 				[[ "${extra_path}" =~ [[:cntrl:]] ]]; then
 				echo "::warning::check_resolver_diff.sh: ignoring unsafe --extra-allowed-file value" >&2

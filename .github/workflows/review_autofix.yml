@@ -4040,6 +4040,7 @@ jobs:
           # levels (review_conflict_resolve.sh) are
           # xhigh, high, medium, none.
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
+          PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
         run: |
           set -euo pipefail
           echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"

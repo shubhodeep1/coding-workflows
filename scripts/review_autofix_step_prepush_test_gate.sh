@@ -127,7 +127,10 @@ def main(argv):
 		selection, result = load(argv[2]), load(argv[3])
 		paths = [e.get("path") for e in entries(selection, "affected_tests")]
 		paths += [p for p in (selection.get("companion_files") or []) if isinstance(p, str)]
-		paths += [e.get("file") for e in entries(result, "failures")]
+		# failures[] comes from the container (tests can rewrite result.json):
+		# a failing file counts only when the host selection already has it.
+		selected = {p for p in paths if isinstance(p, str)}
+		paths += [e.get("file") for e in entries(result, "failures") if e.get("file") in selected]
 		for path in paths:
 			if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
 				continue
@@ -331,7 +334,7 @@ review_prepush_test_gate_allow_list()
 		if review_prepush_test_gate_py_module select --repo-root "${worktree}" --paths-file "${changed}" --out "${selection}"; then
 			review_prepush_test_gate_py allow "${selection}" "${result}"
 		else
-			# No selection: failing files still count.
+			# No selection: the container's failing files are not trusted.
 			printf '{}' > "${selection}"
 			review_prepush_test_gate_py allow "${selection}" "${result}"
 		fi

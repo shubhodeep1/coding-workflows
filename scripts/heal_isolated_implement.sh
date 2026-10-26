@@ -251,15 +251,31 @@ heal_prepush_test_gate()
 		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=${gate_status:-unverified} failures=${gate_pr:-0} inherited=${gate_inh:-0} repair=none" >&2
 		return 0
 	fi
-	if ! bash "${gate_step}" repair-prompt "${root}/results/prepush/result.json" "${root}/repair-prompt-tests" 2>/dev/null; then
-		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=repair_template_absent' >&2
+	# The allow-list and the prompt's diff come from the gate tree (the
+	# snapshot's content on a checkout the editor never saw); the transfer
+	# still enforces the heal scope.
+	if ! ( cd "${root}/gate-tree" && unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE \
+		&& { git diff --name-only HEAD -- 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | sed '/^$/d' | sort -u > "${root}/results/prepush-changed.txt" \
+		&& bash "${gate_step}" allow-list "${root}/gate-tree" "${root}/results/prepush-changed.txt" "${root}/results/prepush/result.json" "${root}/results/prepush-allow.txt" \
+		&& [ -s "${root}/results/prepush-allow.txt" ] \
+		&& bash "${gate_step}" repair-prompt "${root}/results/prepush/result.json" "${root}/repair-prompt-tests" "${root}/results/prepush-allow.txt" ) 2>/dev/null; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=repair_prompt_unavailable' >&2
 		return 0
 	fi
 	rm -rf -- "${root}/source.pre-gate"
 	cp -a "${root}/source" "${root}/source.pre-gate" || { echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=backup_failed' >&2; return 0; }
 	rc=0
 	run_editor "${root}/repair-prompt-tests" || rc=$?
-	if [ "${rc}" -eq 0 ] && validate_snapshot; then
+	# validate_snapshot exits the script on validator infrastructure failures;
+	# a subshell keeps that from skipping the restore and the transfer below.
+	# The rc file is written only when validate_snapshot returns.
+	local vrc=0
+	if [ "${rc}" -eq 0 ]; then
+		rm -f -- "${root}/results/prepush-validate.rc"
+		( r=0; validate_snapshot || r=$?; echo "${r}" > "${root}/results/prepush-validate.rc" ) || true
+		vrc="$(cat "${root}/results/prepush-validate.rc" 2>/dev/null || echo unavailable)"
+	fi
+	if [ "${rc}" -eq 0 ] && [ "${vrc}" = 0 ]; then
 		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail failures=${gate_pr} repair=ran" >&2
 		rm -rf -- "${root}/source.pre-gate"
 		return 0
@@ -269,6 +285,8 @@ heal_prepush_test_gate()
 	mv -- "${root}/source.pre-gate" "${root}/source"
 	if [ "${rc}" -ne 0 ]; then
 		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repair_reverted reason=editor_exit_${rc}" >&2
+	elif [ "${vrc}" = unavailable ]; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repair_reverted reason=validator_unavailable' >&2
 	else
 		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repair_reverted reason=syntax' >&2
 	fi

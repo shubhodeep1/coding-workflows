@@ -936,8 +936,12 @@ _resolver_sandbox_attempt()
 # Log prefix: PREPUSH_TEST_GATE phase=resolver.
 _resolver_prepush_test_gate()
 {
-  local gate_step="${SUPPORT_SCRIPTS_DIR:-scripts}/review_autofix_step_prepush_test_gate.sh"
-  local gate_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+  # Absolute support directory only: a relative path would resolve inside the
+  # PR checkout this credential-bearing step is resolving.
+  local gate_support="${SUPPORT_SCRIPTS_DIR:-}"
+  case "${gate_support}" in /*) ;; *) gate_support="/nonexistent-prepush-gate-support" ;; esac
+  local gate_step="${gate_support}/review_autofix_step_prepush_test_gate.sh"
+  local gate_sandbox_sh="${gate_support}/review_untrusted_sandbox.sh"
   local gate_dir="${RUNTIME_DIR}/prepush_gate_resolver" gate_mode gate_root="" gate_image="" gate_base
   local gate_status="" gate_pr=0 gate_inh=0 gate_repair="not needed" gate_rc=0 gate_path
   local gate_allow gate_prompt gate_touched gate_pre_untracked gate_check_args=() gate_index_tree=""
@@ -968,7 +972,9 @@ _resolver_prepush_test_gate()
     gate_prompt="${gate_dir}/repair-prompt.txt"
     gate_touched="${gate_dir}/repair-touched.txt"
     gate_pre_untracked="${gate_dir}/pre-untracked.txt"
-    git diff --name-only HEAD -- > "${gate_dir}/changed.txt" 2>/dev/null || true
+    # The conflicted set, not the whole merge diff: base-side files the merge
+    # brought in must stay outside the repair's extra allowed paths.
+    sed '/^$/d' "${CONFLICTED_PATHS_FILE:-/nonexistent}" > "${gate_dir}/changed.txt" 2>/dev/null || : > "${gate_dir}/changed.txt"
     bash "${gate_step}" allow-list "${PWD}" "${gate_dir}/changed.txt" "${gate_dir}/run1/result.json" "${gate_allow}" 2>/dev/null || : > "${gate_allow}"
     # The complete merge index (the resolution) is the repair's revert point.
     gate_index_tree="$(git write-tree 2>/dev/null || true)"

@@ -476,3 +476,34 @@ def test_step_script_never_reads_relative_support_paths():
 	# The container's summary.md (tests can write it) is never read.
 	assert "/summary.md" not in text
 	subprocess.run(["bash", "-n", str(STEP_SCRIPT)], check=True)
+
+
+def test_allow_list_ignores_failing_files_outside_the_selection(tmp_path):
+	# result.json comes from the container, where tests can rewrite it: a
+	# failing file counts only when the host selection already names it.
+	repo, env = _setup(tmp_path, [PASS])
+	script = tmp_path / "support" / "scripts" / STEP_SCRIPT.name
+	changed = tmp_path / "changed.txt"
+	changed.write_text("lib/a.py\n", encoding="utf-8")
+	result = tmp_path / "result.json"
+	result.write_text(json.dumps(_result("fail", failures=[
+		{"test": "tests/test_a.py", "file": "tests/test_a.py", "names": ["test_x"], "tail": "x"},
+		{"test": "forged", "file": "other.txt", "names": ["test_y"], "tail": "y"},
+	])), encoding="utf-8")
+	out = tmp_path / "allow.txt"
+	proc = subprocess.run(["bash", str(script), "allow-list", str(repo), str(changed), str(result), str(out)],
+		cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	allowed = out.read_text(encoding="utf-8").splitlines()
+	assert "lib/a.py" in allowed and "tests/test_a.py" in allowed
+	assert "other.txt" not in allowed
+
+
+def test_resolver_step_receives_the_gate_mode():
+	yaml = pytest.importorskip("yaml")
+	workflow = yaml.safe_load(REVIEW_YML.read_text(encoding="utf-8"))
+	resolver_steps = [step for job in workflow["jobs"].values() for step in job.get("steps", [])
+		if "review_conflict_resolve.sh" in str(step.get("run", "")) and "RESOLVER_SCRIPT=" in str(step.get("run", ""))]
+	assert resolver_steps
+	for step in resolver_steps:
+		assert step["env"]["PREPUSH_TEST_GATE_MODE"] == "${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}"

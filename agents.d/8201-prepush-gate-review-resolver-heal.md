@@ -8,6 +8,8 @@
     - The repair turn is `review_apply_fixes.sh --repair-turn PROMPT OUT`: one `run_editor_codex_attempt` call in a subshell, advertised by the `# supports: --repair-turn` marker. A missing marker logs `outcome=repair_skipped reason=editor_hook_missing`. It adds no `: "${VAR:?}"` guard.
     - After the turn, stray edits and replaced symlinks are rolled back. A nonzero editor exit reverts the repair. A failure of `${SUPPORT_SCRIPTS_DIR}/validate_changed_files_syntax.sh` reverts it (`repair_reverted reason=syntax`); a missing validator only warns (`reason=syntax_validator_missing`).
     - The summary is appended to `EDITOR_SUMMARY_FILE` only when that file is non-empty. The section is `## Pre-push test gate`, then a `Pre-push test gate results:` line, which ends a preceding `PR comment audit:` section for `review_resolve_review_threads_plan.py`.
+  - **Allow-list trust.** A failing file from the container's `result.json` (which tests can rewrite) joins the repair allow-list only when the host selection (`affected_tests`, `companion_files`) already names it; with no selection, no failing file counts.
+  - **Mode reach.** The review step and the conflict-resolver step pass `PREPUSH_TEST_GATE_MODE` (`vars.PREPUSH_TEST_GATE_MODE || 'repair'`). The heal editor runs inside `implement.yml`'s "Run Codex implementation" step, which does not pass it, so heal runs in `repair` mode until that step forwards the variable.
   - **Subcommands** (exit codes other than 0 only for missing inputs):
     - `gate --worktree --base --image --out [--venv] [--phase] [--image-reason]` prints `<status> <pr_caused> <inherited>`.
     - `repair-prompt RESULT OUT [ALLOW_FILE]`
@@ -15,13 +17,14 @@
     - `summary RESULT OUT MODE REPAIR INITIAL`
     - `mode`
   - **Resolver.** `_resolver_prepush_test_gate` in `scripts/review_conflict_resolve.sh` runs right before `git commit -m "[ai-merge-resolve] resolve merge conflicts"`, after every existing guard.
+    - The gate script and sandbox helper come only from an absolute `SUPPORT_SCRIPTS_DIR`; anything else logs `reason=module_absent`. The allow-list is seeded from `CONFLICTED_PATHS_FILE`, not the merge diff, so base-side files the merge brought in stay outside the extra allowed paths.
     - The image comes from one `review_untrusted_sandbox.sh prepare-ephemeral codex` plus `cleanup`, with no venv. The base is the pre-merge PR head (`HEAD`), so PR-side failures count as inherited.
     - On PR-caused failures it records the complete merge index with `git write-tree`, then runs one `_resolver_sandbox_attempt` with the repair prompt: Claude, with OpenCode on exit 75; exit 80 skips.
     - The repair must pass `check_resolver_diff.sh`, with every allow-list path given as `--extra-allowed-file`, and, on integration-sync heads, `_verify_fingerprints_soft`. Its paths are then staged and the index re-checked for unmerged entries. Otherwise `git read-tree` plus `checkout-index` restore the resolution (`repair_reverted`).
     - The commit always follows (Q3).
-  - **`check_resolver_diff.sh --extra-allowed-file PATH`** (repeatable) widens only invariant 1. Absolute values, `..` segments and control characters are ignored with a warning. Without the flag the output is unchanged.
+  - **`check_resolver_diff.sh --extra-allowed-file PATH`** (repeatable) widens only invariant 1. Absolute values, `..` segments and control characters are ignored with a warning; a flag with no value exits 2. Without the flag the output is unchanged.
   - **Heal.** `heal_prepush_test_gate` in `scripts/heal_isolated_implement.sh` runs after the `validate_snapshot` loop and before the scoped transfer.
     - It never runs host git on the editor-writable `${root}/source`. It adds a detached worktree of the heal checkout at `HEAD` (`core.hooksPath=/dev/null`) and copies the snapshot onto it with `review_untrusted_workspace.py transfer --scope-file` and a copy of the manifest. It gates that tree with the heal image, with `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` unset. A refused copy logs `outcome=unverified reason=gate_tree_unavailable`.
-    - On PR-caused failures it saves `source.pre-gate`, runs one `run_editor` turn (either engine) with the repair prompt, then `validate_snapshot`. An editor failure or a syntax failure restores the saved snapshot (`repair_reverted`).
+    - On PR-caused failures it builds the allow-list and the repair prompt from the gate tree, saves `source.pre-gate`, runs one `run_editor` turn (either engine) with the repair prompt, then `validate_snapshot` in a subshell. An editor failure, a syntax failure or an unavailable validator restores the saved snapshot (`repair_reverted reason=editor_exit_<n>|syntax|validator_unavailable`), and the transfer still follows.
     - The `cleanup` trap removes the worktree and prunes. The transfer follows as before. Logs: `HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=...`.
   - The review sandbox image (`scripts/review_sandbox/Dockerfile`) installs `shellcheck` and, non-fatally, `ruff==0.17.2`.

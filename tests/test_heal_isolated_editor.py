@@ -777,6 +777,7 @@ case "$1" in
     if [[ "$*" == *"/validator.sh"* ]]; then
       echo validator >> "__LOG__"
       if [ -e "__LOG__.syntax_fail" ] && [ "$(grep -c '^editor' "__LOG__")" -ge 2 ]; then exit 1; fi
+      if [ -e "__LOG__.validator_down" ] && [ "$(grep -c '^editor' "__LOG__")" -ge 2 ]; then exit 3; fi
       exit 0
     fi
     echo editor >> "__LOG__"
@@ -797,7 +798,7 @@ esac
 
 
 def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_fail_after_repair: bool = False,
-		with_step: bool = True) -> dict:
+		with_step: bool = True, validator_down_after_repair: bool = False) -> dict:
 	host = tmp_path / "host"
 	(host / "scripts").mkdir(parents=True)
 	(host / "tests").mkdir()
@@ -846,6 +847,8 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 	if syntax_fail_after_repair:
 		# The heal script runs docker under env -i: signal through a file.
 		Path(str(log) + ".syntax_fail").write_text("1")
+	if validator_down_after_repair:
+		Path(str(log) + ".validator_down").write_text("1")
 	result = subprocess.run(["bash", str(ROOT / "scripts/heal_isolated_implement.sh"), str(prompt), str(output)],
 		env=env, capture_output=True, text=True, check=False, timeout=300)
 	lines = log.read_text().splitlines() if log.exists() else []
@@ -864,6 +867,8 @@ def test_heal_gate_failure_runs_one_repair_turn_then_validates_and_transfers(tmp
 	repair_prompt = Path(str(run["log"]) + ".prompt2").read_text()
 	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in repair_prompt
 	assert not any(line.startswith("::") for line in repair_prompt.splitlines())
+	allow = repair_prompt.split("=== EFFECTIVE REPAIR ALLOW-LIST ===", 1)[1].split("===", 1)[0]
+	assert "scripts/fix.py" in allow.split()
 	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
 	assert (run["host"] / "tests/test_fix.py").read_text() == "repaired\n"
 	assert "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail failures=1 repair=ran" in run["stderr"]
@@ -878,6 +883,15 @@ def test_heal_gate_repair_with_broken_syntax_restores_the_pre_repair_snapshot(tm
 	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
 	assert (run["host"] / "tests/test_fix.py").read_text() == "old test\n"
 	assert "phase=prepush_gate outcome=repair_reverted reason=syntax" in run["stderr"]
+
+
+def test_heal_gate_validator_failure_after_repair_still_transfers_the_pre_repair_snapshot(tmp_path: Path) -> None:
+	run = _gate_heal_run(tmp_path, validator_down_after_repair=True)
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"].count("editor") == 2
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+	assert (run["host"] / "tests/test_fix.py").read_text() == "old test\n"
+	assert "phase=prepush_gate outcome=repair_reverted reason=validator_unavailable" in run["stderr"]
 
 
 @pytest.mark.parametrize("status", ["pass", "unverified"])
