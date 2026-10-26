@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/gh_api_write_guard.py:1941-1942, 2033 | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: In Auto mode, a `gh api` call hidden behind an expanded command or subcommand word (`gh $S`, `$G api`, `gh${IFS}api`) still gets no decision, because `has_hidden_gh_api` sets `shape_doubt` and evaluate() returns `None, \"\"`.\n  WHY: Only the probabilistic Auto-mode classifier then stands between the session and the ref deletion. The reviewer calls this an adjacent gap, not a regression from this PR, and rates it MAJOR.\n- tests/test_gh_api_write_guard.py:test_auto_mode_hook_subprocess_emits_nothing_for_a_shape_doubt | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test feeds `_ANSI_C_SHAPE_DOUBT` and asserts empty stdout, but the reviewer says evaluate() routes the command through the hazard block and returns an ASK decision with non-empty output.\n  WHY: The assertion would fail and block CI. Note: anthropic_claude-sonnet-5_5 examined the same claim and dropped it, concluding the `$'` sits in the `sort` stage and the evaluation returns `None, \"\"`.\n- CLAUDE.md:\u00a723.H Auto mode paragraph (and agents.d/auto-mode-hook-prompts.md; workflow-templates/CLAUDE.md, around lines 1273, 1433-1435) | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, qwen_qwen3_7-plus]\n  PROBLEM: The docs still say an unquoted `gh api` argument expansion gives no decision in Auto mode, but the hook now denies it with rewrite steps.\n  WHY: Operators who follow the policy text get a different outcome than documented. The fix needs an interactive session because pipeline editors cannot write CLAUDE.md. Severity is NIT from anthropic_claude-sonnet-5_5 and a hardening suggestion with risk score 1 from qwen_qwen3_7-plus.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/hooks/gh_api_write_guard.py:evaluate(), lines 1941-1942 and 2033 | severity=MAJOR | confidence=3\n  PROBLEM: In Auto mode, a `gh api` call hidden behind an expanded command or subcommand word (`gh $S`, `$G api`, `gh${IFS}api`) still gets no decision. `_unquoted_gh_api_expansion` only inspects direct `gh api` calls, and `has_hidden_gh_api` sets `shape_doubt`, so evaluate() returns `None, \"\"`.\n  WHY: Only the Auto-mode classifier then guards against the ref deletion. This is an adjacent gap to issue #8198, not a regression. The tests cover these spellings only outside Auto mode.\n- CLAUDE.md:\u00a723.H \"Auto mode\" paragraph (and agents.d/auto-mode-hook-prompts.md) | severity=NIT | confidence=4\n  PROBLEM: The documentation still says an unquoted `gh api` argument expansion gives no decision in Auto mode, but the hook now denies it.\n  WHY: Nothing breaks at runtime, and the deny message is self-explanatory. The 8198 agents.d fragment records the refinement and notes that an interactive session must update CLAUDE.md.\n- HARDENING_SUGGESTIONS: .claude/hooks/gh_api_write_guard.py (and the workflow-templates twin), evaluate() at lines 1941-1942. In Auto mode, deny with `_AUTO_SHAPE_DENY_SUFFIX` when the hidden call comes from an unquoted expansion in the command word or the first argument after `gh`, and add Auto-mode tests (8-10 lines plus tests). HARDENING_RISK_SCORE: 3\n- Dropped by the reviewer after checking: the claim that `test_auto_mode_hook_subprocess_emits_nothing_for_a_shape_doubt` fails with `_ANSI_C_SHAPE_DOUBT`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_gh_api_write_guard.py:test_auto_mode_hook_subprocess_emits_nothing_for_a_shape_doubt | severity=MAJOR | confidence=3\n  PROBLEM: The test drives `_ANSI_C_SHAPE_DOUBT` and asserts `proc.stdout.strip() == \"\"`. The reviewer says evaluate() routes the command through the hazard block because of `$'\\t'` and returns `DECISION_ASK` with a non-empty JSON payload.\n  WHY: The empty-stdout assertion cannot hold, so the test would fail and block the PR once the `tests-hooks-and-orchestrator` CI job runs.\n- Notes: The three hunks in the last AI autofix run introduce no new runtime defect. They are the `hazard_auto_deny and _may_invoke_gh_api(command)` suffix tightening in the hook (and its twin), and the `re.sub` relaxation of the LIVE_ONLY_ALLOW_RULES stripping in tests/claude_template_drift.py.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- HARDENING_SUGGESTIONS: CLAUDE.md (and workflow-templates/CLAUDE.md), \u00a723.H Auto mode paragraph (around lines 1273, 1433-1435). The docs still say an unquoted `gh api` argument expansion gives no decision in Auto mode, but the guard now denies it. Suggested fix: update the paragraph to say these expansions are denied in Auto mode with rewrite steps, and that the validated literal-ID read loop is still allowed (3-4 lines). HARDENING_RISK_SCORE: 1. The reviewer notes the update needs an interactive session, and the agents.d fragment agents.d/8198-gh-api-guard-auto-mode-unquoted-expansion-deny.md acknowledges this.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "882cbbdb13b3f4d7c66c78cecf959cdf202d3c8a92bdb91ae7c38a198c6b167f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8199,
+    "run_id": "40299473338",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40299473338",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026094543_0630989f86",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8199,
+    "run_id": "40299473338"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T09:45:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
