@@ -523,7 +523,7 @@ def test_engine_files_ride_the_optional_bootstrap():
 REVIEW_SITES = {
 	"review_apply_fixes.sh": (
 		'if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then',
-		'[ "${editor_claude_rc}" -eq 75 ] || return "${editor_claude_rc}"',
+		'if [ "${editor_claude_rc}" -ne 75 ]; then',
 		'      -- "${editor_opencode_cmd[@]}" < "${prompt_file}" 2>"${stderr_target}"',
 	),
 	"review_consolidate.sh": (

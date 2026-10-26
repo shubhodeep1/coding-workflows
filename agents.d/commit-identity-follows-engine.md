@@ -29,5 +29,5 @@
   `ADVANCE=unknown`.
 
 <!-- agents: section="Stable log prefixes (contractual)" -->
-- `AI_COMMIT_IDENTITY` (`scripts/review_commit_changes.sh`: `role=REVIEW_EDITOR engine= fell_back= name=`; `scripts/implement_commit_changes.sh`: `role=IMPLEMENT engine= repair_engine= commit_engine= name=`; `scripts/review_conflict_resolve.sh`: `role=CONFLICT_RESOLVER engine= name=`; `scripts/review_rb_judge.sh`: `role=RB_JUDGE engine= name=`; `scripts/orchestrate_poll_process.sh`: `role=RB_JUDGE scope=poller name=`. `name=` is `claude-bot` or `codex-bot`, the git author of the commit that follows)
+- `AI_COMMIT_IDENTITY` (`scripts/review_commit_changes.sh`: `role=REVIEW_EDITOR engine= fell_back= name=`; `scripts/implement_commit_changes.sh`: `role=IMPLEMENT engine= repair_engine= commit_engine= name=`; `scripts/review_conflict_resolve.sh`: `role=CONFLICT_RESOLVER engine= name=`; `scripts/review_rb_judge.sh`: `role=RB_JUDGE engine= name=`; `scripts/orchestrate_poll_process.sh`: `role=RB_JUDGE scope=poller engine= name=`. `name=` is `claude-bot` or `codex-bot`, the git author of the commit that follows)
 LOG_PREFIX.name=AI_COMMIT_IDENTITY

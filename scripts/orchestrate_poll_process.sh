@@ -28871,14 +28871,16 @@ sys.exit(1)
                 # (poller_judge_isolated records it): claude-bot on Claude,
                 # codex-bot otherwise. Both emails are on the reserved
                 # .invalid domain so GitHub links the commit to no account.
+                rb_combined_commit_engine=codex
                 if [ "$(head -n1 "${RUNTIME_DIR}/rb_judge_last_engine" 2>/dev/null || true)" = claude ]; then
+                  rb_combined_commit_engine=claude
                   git -C "${RB_COMBINED_WORKDIR}" config user.name "claude-bot"
                   git -C "${RB_COMBINED_WORKDIR}" config user.email "claude-bot@users.noreply.invalid"
                 else
                   git -C "${RB_COMBINED_WORKDIR}" config user.name "codex-bot"
                   git -C "${RB_COMBINED_WORKDIR}" config user.email "codex-bot@users.noreply.invalid"
                 fi
-                echo "AI_COMMIT_IDENTITY role=RB_JUDGE scope=poller name=$(git -C "${RB_COMBINED_WORKDIR}" config user.name)"
+                echo "AI_COMMIT_IDENTITY role=RB_JUDGE scope=poller engine=${rb_combined_commit_engine} name=$(git -C "${RB_COMBINED_WORKDIR}" config user.name)"
                 # Stage before enforcing ALLOW_WORKFLOW_EDITS so excluded edits
                 # cannot hide behind an otherwise allowed fix. Do not list
                 # .gitignored directories (node_modules) as exclude pathspecs:
