@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/deploy-activation/pr-8066.md:17-34 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Line 17 says `AI_PIPELINE_APPROVER_LOGIN` was set on tele and read back as `shubhodeep1-pipeline-approver[bot]`; line 34 says it is unset there.\n  WHY: The activation log gives conflicting records of tele's configuration, leaving operators unable to determine which automated-comment gate behavior is active (source severity NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- docs/deploy-activation/pr-8066.md:17,34 | severity=low (source: NIT) | confidence=5\n  PROBLEM: Line 17 says `AI_PIPELINE_APPROVER_LOGIN` was set on tele and read back as `shubhodeep1-pipeline-approver[bot]`; line 34 says it is unset there.\n  WHY: The activation log gives conflicting records of tele's configuration, leaving operators unable to determine which automated-comment gate behavior is active.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "cc2b26fbf359da6d535ad89479211bb79c6355b1ee8c59d8fb8973aa4052ad94",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8173,
+    "run_id": "40257024128",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40257024128",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026022024_38a99eb577",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8173,
+    "run_id": "40257024128"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T02:20:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
