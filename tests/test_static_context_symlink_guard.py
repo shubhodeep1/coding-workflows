@@ -447,6 +447,8 @@ def test_all_static_readme_assemblers_use_the_shared_reader() -> None:
 def main() -> int:
 	for test in (
 		test_review_static_context_skips_symlink_and_preserves_regular_readme,
+		test_review_static_context_refuses_symlinked_reviewer_copy,
+		test_reviewers_prefer_reviewer_static_copy_and_fall_back_to_shared,
 		test_phase_static_context_skips_symlinks_but_keeps_canonical_agents,
 		test_orchestrator_static_context_guards_symlinks,
 		test_shared_readme_context_rejects_non_regular_inputs_and_output,

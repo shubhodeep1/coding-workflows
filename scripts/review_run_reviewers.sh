@@ -1155,6 +1155,9 @@ if [ -n "${RUNTIME_DIR:-}" ] \
   REVIEWER_STATIC_CONTEXT_SOURCE="reviewer"
 fi
 echo "REVIEWER_STATIC_CONTEXT source=${REVIEWER_STATIC_CONTEXT_SOURCE} bytes=$(wc -c < "${REVIEWER_STATIC_CONTEXT_PATH}" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+if [ "${REVIEWER_STATIC_CONTEXT_SOURCE}" = "shared" ]; then
+  echo "::warning::Reviewer static context copy is missing, empty or not a regular file; reviewers use the full ./pre_assembled_static.txt prefix." >&2
+fi
 
 # ── Reviewer risk-tier helpers ───────────────────────────────────────
 REVIEWER_RISK_TIER_FILE="${RUNTIME_DIR}/reviewer_risk_tier.txt"
@@ -3281,7 +3284,7 @@ if [ -f "${REVIEWER_PROMPT_FILE}" ]; then
   fi
   echo "Reviewer prompt assembled size: ${reviewer_prompt_assembled_bytes} bytes (codex stdin cap: ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES})."
   if [ "${reviewer_prompt_assembled_bytes}" -ge "${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}" ]; then
-    echo "::warning::Reviewer prompt is ${reviewer_prompt_assembled_bytes} bytes, at or over codex's ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Reviewers will fail with 'Input exceeds the maximum length'. Raise REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES to tighten the embed budget or shrink pre_assembled_static.txt / memory / semble context."
+    echo "::warning::Reviewer prompt is ${reviewer_prompt_assembled_bytes} bytes, at or over codex's ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}-character turn/start stdin cap. Reviewers will fail with 'Input exceeds the maximum length'. Raise REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES to tighten the embed budget or shrink the reviewer static context (${REVIEWER_STATIC_CONTEXT_PATH:-./pre_assembled_static.txt}) / memory / semble context."
   fi
 fi
 
