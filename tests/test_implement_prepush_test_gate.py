@@ -331,6 +331,25 @@ def test_nested_node_modules_are_mounted_into_the_gate_container(tmp_path):
 	assert "dst=/baseline/tools/app/node_modules,readonly" in log
 
 
+def test_nested_node_modules_with_spaces_are_mounted(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	(_work(tmp_path) / "sandbox" / "work" / "tools" / "my app" / "node_modules").mkdir(parents=True)
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	log = (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert "dst=/source/tools/my app/node_modules,readonly" in log
+
+
+def test_timeout_above_the_step_budget_is_clamped(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	env["PREPUSH_TEST_GATE_TIMEOUT_MINUTES"] = "300"
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "name=PREPUSH_TEST_GATE_TIMEOUT_MINUTES clamped=53" in proc.stderr
+	log = (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert "--timeout-minutes 53" in log
+
+
 def test_node_prep_root_is_mounted_into_the_gate_container(tmp_path):
 	repo, env = _setup(tmp_path, [PASS])
 	(_work(tmp_path) / "sandbox" / "work" / "node_modules").mkdir(parents=True)

@@ -199,6 +199,12 @@ implement_prepush_test_gate_mode()
 	esac
 	gate_timeout="${PREPUSH_TEST_GATE_TIMEOUT_MINUTES:-15}"
 	[[ "${gate_timeout}" =~ ^[0-9]+$ ]] && [ "${gate_timeout}" -ge 1 ] && [ "${gate_timeout}" -le 360 ] || gate_timeout=15
+	# One run (timeout + 120 s) must fit the step's 55-minute budget, or the
+	# 60-minute step kill lands before result.json and the summary exist.
+	if [ "${gate_timeout}" -gt 53 ]; then
+		implement_prepush_test_gate_log "outcome=config_invalid name=PREPUSH_TEST_GATE_TIMEOUT_MINUTES clamped=53"
+		gate_timeout=53
+	fi
 	gate_large="${PREPUSH_TEST_GATE_LARGE_FILE_TESTS:-50}"
 	[[ "${gate_large}" =~ ^[0-9]+$ ]] && [ "${gate_large}" -ge 1 ] || gate_large=50
 	gate_shards="${PREPUSH_TEST_GATE_SHARDS:-4}"
@@ -443,6 +449,8 @@ implement_prepush_test_gate_narrow_allow_list()
 	before="$(wc -l < "${extras}")"
 	: > "${entries}"
 	: > "${denied}"
+	: > "${auto}"
+	: > "${auto_denied}"
 	if [ ! -f "${guard}" ]; then
 		cp -f "${extras}" "${denied}"
 	elif [ "${ENFORCE_FILES_TOUCHED:-true}" = "true" ] && [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" != "true" ]; then
@@ -493,7 +501,7 @@ implement_prepush_test_gate_repair()
 			implement_prepush_test_gate_py allow "${RUNTIME_DIR}/prepush_gate_selection.json" "${result}"
 		fi
 	} | sed '/^$/d' | sort -u > "${gate_allow_file}"
-	if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ]; then
+	if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]; then
 		grep -v '^\.github/workflows/' "${gate_allow_file}" > "${gate_allow_file}.tmp" || true
 		mv -f "${gate_allow_file}.tmp" "${gate_allow_file}"
 	fi

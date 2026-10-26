@@ -217,8 +217,13 @@ if [ -n "${nested_nm_root}" ] && nested_real="$(realpath -e "${nested_nm_root}" 
 		[ "${nm}" != "${nested_real}/node_modules" ] || continue
 		rel="${nm#"${nested_real}"/}"
 		rel="${rel%/node_modules}"
-		[[ "${rel}" =~ ^[A-Za-z0-9._@+/-]+$ ]] || continue
-		case "/${rel}/" in */../*|*/./*|*//*) continue ;; esac
+		# Docker parses --mount as CSV: only a comma, a quote or a control
+		# character breaks it. Paths with spaces are mounted like any other.
+		if [[ "${rel}" == *[,\"]* || "${rel}" =~ [[:cntrl:]] ]]; then
+			gate_log "outcome=warning reason=nested_node_modules_unsafe_path"
+			continue
+		fi
+		case "/${rel}/" in */../*|*/./*|*//*) gate_log "outcome=warning reason=nested_node_modules_unsafe_path"; continue ;; esac
 		if [ "${nested_count}" -ge 6 ]; then
 			gate_log "outcome=warning reason=nested_node_modules_cap"
 			break
