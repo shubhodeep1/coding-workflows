@@ -45,7 +45,7 @@
 7. [x] tele-funtoken-msg-scoring: PR replacing `ai-update-workflows.yml` with the v1.40.0 template rendered at `8164dcf9593d` (lifts the hardcoded `allow_workflow_edits: false` hold; Q4: A). Expected file sha256 `02b8fd3779a12157dc366b4a46b5ac2ba64d93674edb94b6fce65a5a1c835000`
    - 2026-10-25: file built on operator's Mac on branch `chore/updater-v1.40.0`; sha256 matched; diff is only the pin (`2820e97` -> `8164dcf`) and `allow_workflow_edits`.
    - done 2026-10-25: commit 81168db497 pushed; PR shubhodeep1/tele-funtoken-msg-scoring#4885 opened (not merged yet; merge is step 10).
-8. [x] Set `WORKFLOW_PROFILE`: `core` on btc_sweeper and atlas-bridge.gd (Q2: A), `standard` on mongo-explorer and fbc_shutdown (Q3: A)
+8. [x] Set `WORKFLOW_PROFILE`: `core` on btc_sweeper and atlas-bridge.gd (Q2: A), `standard` on mongo-explorer and fbc_shutdown (Q3: A) — superseded by Q5: A, final `full` on all 4 (see step 9)
    - done 2026-10-26: operator created the variable in all 4 repos; `gh variable get` read back core, core, standard, standard.
 9. [x] PRs adding the same rendered `ai-update-workflows.yml` to btc_sweeper, atlas-bridge.gd, mongo-explorer, fbc_shutdown
    - done 2026-10-26: checksum matched in all 4; PRs opened: shubhodeep1/btc_sweeper#231, shubhodeep1/atlas-bridge.gd#120,
@@ -68,11 +68,11 @@
      read back `full` for btc_sweeper, atlas-bridge.gd, mongo-explorer; fbc_shutdown re-checked 2026-10-26: `full`.
 10. [x] Merge the 5 PRs and run each repo's `ai-update-workflows.yml` once
    - 2026-10-26: all 5 PRs MERGED (tele-funtoken#4885 on 2026-10-25; btc_sweeper#231, atlas-bridge.gd#120, mongo-explorer#46,
-     fbc_shutdown#14 merged by the consumers' AI review pipeline). Next: one manual updater run in the 4 newly installed repos.
+     fbc_shutdown#14 merged by the consumers' AI review pipeline). Next (done, see the next bullet): one manual updater run in the 4 newly installed repos.
    - done 2026-10-26: no earlier updater runs in the 4 repos (none ran under core/standard); operator dispatched
      `ai-update-workflows.yml`: btc_sweeper run 40254082471, atlas-bridge.gd 40254086692, mongo-explorer 40254090855,
      fbc_shutdown 40254095533.
-11. [x] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A)
+11. [x] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A) — verified on v1.40.2 (`5596e7520ef4`), the stable release current at check time
    - 2026-10-26 check (current stable v1.40.2 = `5596e7520ef4`): 12/13 synced, each with a `completed/success` updater run,
      `pin=5596e7520ef4` and no open `auto/update-workflows-*` PR: tele-funtoken-msg-scoring, digital_pa, fun-token-multi-chain,
      btc_sweeper, binance-blessings, mongo-explorer, multi-user-ai-agent, fbc_shutdown, bitsafe.io, hylifegroup.com,
