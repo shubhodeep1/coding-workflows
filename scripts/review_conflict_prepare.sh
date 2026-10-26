@@ -880,6 +880,32 @@ if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true"
   echo ".ai asset take-base: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
 fi
 
+# Criss-cross clean merge (PR #8170): the detect step set
+# MERGE_CRISS_CROSS_CLEAN=true because git merges origin/<base> cleanly
+# through a virtual merge base while a single-base merge (what GitHub
+# computes) conflicts. Aborting here as "nothing to resolve" leaves the PR
+# dirty on GitHub forever, so commit the clean merge instead; the push step
+# then makes origin/<base> an ancestor of the PR head. Integration-sync
+# branches defer the commit until the fingerprint check below, like the
+# other deterministic resolutions.
+if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
+   && [ "${_merge_exit}" -eq 0 ] && [ "${MERGE_CRISS_CROSS_CLEAN:-false}" = "true" ] \
+   && [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  echo "AUTOFIX_MERGE_CRISS_CROSS pr=${PR_NUMBER:-unknown} outcome=commit_clean_merge phase=prepare"
+  case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+    orchestrator/project-*)
+      _mu_defer_commit=true
+      _det_commit_label="Criss-cross clean merge"
+      _det_commit_scope="criss-cross-clean-merge"
+      _det_commit_path="origin/${BASE_BRANCH}"
+      echo "Criss-cross clean merge: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+      ;;
+    *)
+      _conflict_prepare_commit_deterministic_merge "Criss-cross clean merge"
+      ;;
+  esac
+fi
+
 if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ]; then
   if [ "${_merge_exit}" -eq 0 ]; then
     echo "::warning::Merge replay produced no unmerged paths (git merge exit=0) — skipping Codex resolver (nothing to resolve)."

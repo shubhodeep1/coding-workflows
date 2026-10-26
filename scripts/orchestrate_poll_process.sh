@@ -18755,13 +18755,13 @@ STALL_EOF
       STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
       [ -n "${_stall_reissue_close_msg}" ] || _stall_reissue_close_msg="Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
 
-      local orig_title orig_body orig_issue_json orig_issue_is_heal orig_issue_is_managed orig_issue_is_triage
-      orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null), managed: ([.labels[]?.name] | index("ai:orchestrator-managed") != null), triage: ([.labels[]?.name] | index("ai:check-triage") != null)}' || echo "")"
+      local orig_title orig_body orig_issue_json orig_issue_is_heal orig_issue_is_managed orig_issue_is_check_triage
+      orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null), managed: ([.labels[]?.name] | index("ai:orchestrator-managed") != null), check_triage: ([.labels[]?.name] | index("ai:check-triage") != null)}' || echo "")"
       orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
       orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
       orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
       orig_issue_is_managed="$(printf '%s' "${orig_issue_json}" | jq -r '.managed // false' 2>/dev/null || echo false)"
-      orig_issue_is_triage="$(printf '%s' "${orig_issue_json}" | jq -r '.triage // false' 2>/dev/null || echo false)"
+      orig_issue_is_check_triage="$(printf '%s' "${orig_issue_json}" | jq -r '.check_triage // false' 2>/dev/null || echo false)"
       if [ -z "${orig_title}" ]; then
         echo "::warning::Could not read source issue #${issue_num} for re-issue; keeping it and its PR open."
         # Spend a recovery attempt so a persistent failure reaches skip/escalate.
@@ -18809,18 +18809,23 @@ REISSUE_EOF
         ensure_label_exists "ai:orchestrator-managed"
         _reissue_lineage_label_args+=(--label "ai:orchestrator-managed")
       fi
-      if [ "${orig_issue_is_triage}" = true ]; then
-        # No ensure_label_exists: the source issue carries the label, so it exists.
-        _reissue_lineage_label_args+=(--label "ai:check-triage")
-      fi
       local -a _heal_reissue_label_args=()
       if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp='; then
         new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_num}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
         ensure_label_exists 'ai:workflow-heal'
         _heal_reissue_label_args=(--label 'ai:workflow-heal')
       fi
+      # Keep ai:check-triage on a triage issue's re-issue. The copied body
+      # still carries the check-failure-triage markers, and
+      # scripts/resolve_integration_ref.sh refuses such an issue as
+      # label_missing when the label is gone (btc_sweeper #209 -> #223).
+      local -a _check_triage_reissue_label_args=()
+      if [ "${orig_issue_is_check_triage}" = true ]; then
+        ensure_label_exists 'ai:check-triage'
+        _check_triage_reissue_label_args=(--label 'ai:check-triage')
+      fi
       mapfile -t _engine_label_args < <(engine_label_create_args)
-      new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} ${_reissue_lineage_label_args[@]+"${_reissue_lineage_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" \
+      new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} ${_reissue_lineage_label_args[@]+"${_reissue_lineage_label_args[@]}"} ${_check_triage_reissue_label_args[@]+"${_check_triage_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
         --label "ai:clarification" 2>/dev/null || echo "")"
@@ -23221,17 +23226,17 @@ STALL_EOF
         local orig_body
         local orig_issue_json
         local orig_issue_is_heal
-        local orig_issue_is_triage
+        local orig_issue_is_check_triage
         local new_body
         local new_url
         local new_url_clean
         local bt='`'
         local new_num
-        orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null), triage: ([.labels[]?.name] | index("ai:check-triage") != null)}' || echo "")"
+        orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null), check_triage: ([.labels[]?.name] | index("ai:check-triage") != null)}' || echo "")"
         orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
         orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
         orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
-        orig_issue_is_triage="$(printf '%s' "${orig_issue_json}" | jq -r '.triage // false' 2>/dev/null || echo false)"
+        orig_issue_is_check_triage="$(printf '%s' "${orig_issue_json}" | jq -r '.check_triage // false' 2>/dev/null || echo false)"
 
         local _std_reissue_extra="" _std_reissue_close_msg=""
         if [ -n "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE}" = "${issue_num}" ]; then
@@ -23260,24 +23265,23 @@ REISSUE_EOF
         fi
         [ -n "${_std_reissue_close_msg}" ] || _std_reissue_close_msg="Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
         ensure_label_exists "ai:clarification"
-        # Keep ai:check-triage on a triage issue's replacement: the copied body
-        # keeps the check-failure-triage header, and without the label the
-        # integration-ref resolver refuses it with label_missing.
-        local -a _std_reissue_lineage_label_args=()
-        if [ "${orig_issue_is_triage}" = true ] || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:check-triage") != null' >/dev/null 2>&1; then
-          # No ensure_label_exists: the source issue carries the label, so it exists.
-          _std_reissue_lineage_label_args=(--label "ai:check-triage")
-        fi
         local -a _heal_reissue_label_args=()
         if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
           new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_num}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
           ensure_label_exists 'ai:workflow-heal'
           _heal_reissue_label_args=(--label 'ai:workflow-heal')
         fi
+        # Keep ai:check-triage on a triage issue's re-issue (see the managed
+        # close_and_reissue in execute_stall_recovery_action).
+        local -a _check_triage_reissue_label_args=()
+        if [ "${orig_issue_is_check_triage}" = true ] || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:check-triage") != null' >/dev/null 2>&1; then
+          ensure_label_exists 'ai:check-triage'
+          _check_triage_reissue_label_args=(--label 'ai:check-triage')
+        fi
         new_url=""
         if [ -n "${orig_title}" ]; then
           mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
-          new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} ${_std_reissue_lineage_label_args[@]+"${_std_reissue_lineage_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+          new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} ${_check_triage_reissue_label_args[@]+"${_check_triage_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         else
           # Source read failed: skip the create; the failure branch keeps both open.
           echo "::warning::Could not read source issue #${issue_num} for re-issue; keeping it and its PR open."

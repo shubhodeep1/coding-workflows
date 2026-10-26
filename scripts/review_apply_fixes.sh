@@ -2356,13 +2356,14 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   _hb_fifo=""
   # The editor's stderr goes to tmp_err through the heartbeat FIFO and is
   # printed only on failure, so on a successful attempt the Claude engine's
-  # account-pool telemetry never reached the job log. Replay those lines on
+  # account-pool telemetry never reached the job log. Replay those lines,
+  # plus the usage JSON line claude_engine.py extract prints on success, on
   # every attempt (once per attempt, so a retried run replays each attempt's
   # lines) with a stage=editor prefix so they stay distinct from the raw
   # failure dump. Like the consolidator's stage=consolidator stderr= replay,
   # escape `%`, CR, `##[` and leading `::<cmd>` first so editor stderr can
   # never be parsed as a workflow command.
-  { grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${tmp_err}" 2>/dev/null || true; } | sed -e 's/%/%25/g' -e 's/\r/ /g' -e 's/##\[/##\\[/g' -e 's/^::\(error\|warning\|notice\|debug\|group\|endgroup\|add-mask\|add-matcher\|remove-matcher\|set-output\|save-state\|echo\|stop-commands\|add-path\|set-env\)\([[:space:]]\|::\)/::\\\1\2/g' -e 's/^/stage=editor /' >&2 || true
+  { grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) |^\{.*"type": "result"' "${tmp_err}" 2>/dev/null || true; } | sed -e 's/%/%25/g' -e 's/\r/ /g' -e 's/##\[/##\\[/g' -e 's/^::\(error\|warning\|notice\|debug\|group\|endgroup\|add-mask\|add-matcher\|remove-matcher\|set-output\|save-state\|echo\|stop-commands\|add-path\|set-env\)\([[:space:]]\|::\)/::\\\1\2/g' -e 's/^/stage=editor /' >&2 || true
 
   # The watchdog subshell exits on its own (143/142/144) after it kills the
   # editor, so by the time the editor process is reaped the watchdog may
@@ -2541,7 +2542,9 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
     if [ -s "${tmp_err}" ]; then
       echo "Editor stderr on attempt ${attempt}:"
-      cat "${tmp_err}"
+      # The usage JSON line was already replayed above as stage=editor; drop it
+      # here so cost_audit.py does not count the same Claude call twice.
+      sed -e '/^{.*"type": "result"/d' "${tmp_err}"
     fi
     rm -f "${tmp_output}" "${tmp_err}" "${attempt_prompt_file_cleanup_path}"
     exit 78
@@ -2847,13 +2850,17 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
     fi
     if [ -s "${tmp_err}" ]; then
       echo "Editor stderr on attempt ${attempt}:"
-      cat "${tmp_err}"
+      # The usage JSON line was already replayed above as stage=editor; drop it
+      # here so cost_audit.py does not count the same Claude call twice.
+      sed -e '/^{.*"type": "result"/d' "${tmp_err}"
     fi
   else
     echo "Editor execution failed on attempt ${attempt}."
     if [ -s "${tmp_err}" ]; then
       echo "Editor stderr on attempt ${attempt}:"
-      cat "${tmp_err}"
+      # The usage JSON line was already replayed above as stage=editor; drop it
+      # here so cost_audit.py does not count the same Claude call twice.
+      sed -e '/^{.*"type": "result"/d' "${tmp_err}"
     fi
   fi
   if [ -z "${PR_NUMBER:-}" ] || [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
@@ -3006,5 +3013,7 @@ fi
 final_editor_err="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
 if [ -n "${final_editor_err}" ] && [ -s "${final_editor_err}" ]; then
   echo "Editor stderr from final attempt:"
-  cat "${final_editor_err}"
+  # Same filter as the per-attempt dumps: the usage JSON line was already
+  # replayed as stage=editor, so cost_audit.py must not see it twice.
+  sed -e '/^{.*"type": "result"/d' "${final_editor_err}"
 fi

@@ -37,7 +37,6 @@ jobs:
         anthropic/claude-sonnet-5.5
         z-ai/glm-5.3-flash
         google/gemini-3.1-flash-lite
-        qwen/qwen3.7-plus
         openai/gpt-6-luna
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
