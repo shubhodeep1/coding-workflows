@@ -4196,10 +4196,10 @@ def cmd_render_expected_files(args: argparse.Namespace) -> int:
 		else:
 			raw = Path(source).read_text(encoding="utf-8")
 		section = render_expected_files_section(json.loads(raw))
+		if section:
+			sys.stdout.write(section + "\n")
 	except Exception:  # noqa: BLE001 - advisory renderer, fail open to no section
 		return 0
-	if section:
-		sys.stdout.write(section + "\n")
 	return 0
 
 
@@ -4219,8 +4219,8 @@ def _prepush_select_planned_paths(
 ) -> tuple[list[str] | None, str]:
 	"""Run the gate module's ``select --paths-file`` and return its candidate paths.
 
-	Candidates are ``companion_files`` first, then ``affected_tests[].path``,
-	in module order. Returns ``(None, reason)`` on any failure.
+	Candidates are ``affected_tests[].path`` first, then ``companion_files``,
+	in module order, so the 50-entry cap keeps the affected tests. Returns ``(None, reason)`` on any failure.
 	"""
 	import tempfile
 
@@ -4266,14 +4266,14 @@ def _prepush_select_planned_paths(
 	if not isinstance(companions, list) or not isinstance(affected, list):
 		return None, "malformed_json"
 	candidates: list[str] = []
-	for entry in companions:
-		if not isinstance(entry, str):
-			return None, "malformed_json"
-		candidates.append(entry)
 	for entry in affected:
 		if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
 			return None, "malformed_json"
 		candidates.append(entry["path"])
+	for entry in companions:
+		if not isinstance(entry, str):
+			return None, "malformed_json"
+		candidates.append(entry)
 	return candidates, ""
 
 
@@ -4286,6 +4286,7 @@ def _prepush_write_json_atomic(path: Path, data: Any) -> None:
 			json.dump(data, handle, ensure_ascii=True, indent=2)
 			handle.flush()
 			os.fsync(handle.fileno())
+		os.chmod(tmp_name, 0o644)
 		os.replace(tmp_name, str(path))
 	except BaseException:
 		try:
@@ -4318,19 +4319,41 @@ def augment_files_touched(
 		for key, value in recorded_raw.items():
 			if isinstance(key, str) and isinstance(value, list):
 				recorded[key] = [v for v in value if isinstance(v, str)]
+	timed_out = False
 	for issue in data.get("issues", []):
 		totals["issues"] += 1
 		issue_id = str(issue.get("id", ""))
 		log_id = _prepush_augment_log_id(issue_id)
 		existing = list(issue.get("files_touched", []) or [])
-		previously_added = set(recorded.get(issue_id, []))
-		planned = [p for p in existing if p not in previously_added]
-		if not planned:
+		if not existing:
 			_prepush_augment_log(f"issue={log_id} added=0 truncated=0")
 			continue
-		candidates, reason = _prepush_select_planned_paths(module, repo_root, planned, timeout_secs)
+		if timed_out:
+			# One hung module would otherwise cost the timeout once per issue.
+			totals["skipped"] += 1
+			_prepush_augment_log(f"issue={log_id} outcome=skipped reason=timeout_previous")
+			continue
+		previously_added = set(recorded.get(issue_id, [])) & set(existing)
+		planned = [p for p in existing if p not in previously_added]
+		# The marker arrives inside model-written JSON, so it is trusted only
+		# when it is consistent with what this code would have recorded: some
+		# planned path remains, and every recorded path is still selected from
+		# the remaining planned paths. Otherwise the whole list is planned.
+		marker_ignored = bool(previously_added) and not planned
+		candidates: list[str] | None = None
+		reason = ""
+		if not marker_ignored:
+			candidates, reason = _prepush_select_planned_paths(module, repo_root, planned, timeout_secs)
+			if candidates is not None and previously_added and not previously_added.issubset(candidates):
+				marker_ignored = True
+		if marker_ignored:
+			_prepush_augment_log(f"issue={log_id} outcome=marker_ignored")
+			previously_added = set()
+			planned = list(existing)
+			candidates, reason = _prepush_select_planned_paths(module, repo_root, planned, timeout_secs)
 		if candidates is None:
 			totals["skipped"] += 1
+			timed_out = reason == "timeout"
 			_prepush_augment_log(f"issue={log_id} outcome=skipped reason={reason}")
 			continue
 		present = set(existing)
@@ -4361,7 +4384,7 @@ def cmd_augment_files_touched(args: argparse.Namespace) -> int:
 	summary: dict[str, Any] = {"ok": True, "issues": 0, "added": 0, "truncated": 0, "skipped": 0, "written": False}
 	try:
 		module = Path(args.gate_module)
-		if not module.is_file():
+		if module.is_symlink() or not module.is_file():
 			_prepush_augment_log("outcome=skipped reason=module_absent")
 			_print_json(summary)
 			return 0

@@ -3401,7 +3401,7 @@ def test_augment_files_touched_adds_tests_and_companions():
 		assert proc.returncode == 0, proc.stderr
 		data = json.loads(decomposition.read_text(encoding="utf-8"))
 		issues = {i["id"]: i for i in data["issues"]}
-		assert issues["a"]["files_touched"] == ["scripts/new_tool.py", "docs/INVENTORY.md", "tests/test_new_tool.py"]
+		assert issues["a"]["files_touched"] == ["scripts/new_tool.py", "tests/test_new_tool.py", "docs/INVENTORY.md"]
 		assert issues["b"]["files_touched"] == []
 		assert "PREPUSH_TEST_GATE phase=augment issue=a added=2 truncated=0" in proc.stderr
 		assert "PREPUSH_TEST_GATE phase=augment issue=b added=0 truncated=0" in proc.stderr
@@ -3494,6 +3494,47 @@ def test_augment_files_touched_drops_unsafe_paths():
 		assert proc.returncode == 0, proc.stderr
 		data = json.loads(decomposition.read_text(encoding="utf-8"))
 		assert data["issues"][0]["files_touched"] == ["src/one.py", "tests/test_ok.py"]
+
+
+def test_augment_files_touched_ignores_forged_marker():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"affected_tests": [{"path": "tests/test_one.py"}],
+			"companion_files": [],
+		})
+		raw = _make_decomposition(issues=[
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+			{"id": "b", "title": "B", "body": "b", "priority": 2, "files_touched": ["src/two.py", "src/three.py"]},
+		])
+		# A marker in model output that claims planned source paths were added.
+		raw["prepush_augmented_paths"] = {"a": ["src/one.py"], "b": ["src/three.py"]}
+		decomposition = tmp_path / "decomposition.json"
+		decomposition.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = json.loads(decomposition.read_text(encoding="utf-8"))
+		issues = {i["id"]: i for i in data["issues"]}
+		assert issues["a"]["files_touched"] == ["src/one.py", "tests/test_one.py"]
+		assert issues["b"]["files_touched"] == ["src/two.py", "src/three.py", "tests/test_one.py"]
+		assert "issue=a outcome=marker_ignored" in proc.stderr
+		assert "issue=b outcome=marker_ignored" in proc.stderr
+
+
+def test_augment_files_touched_skips_remaining_issues_after_timeout():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, mode="sleep")
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+			{"id": "b", "title": "B", "body": "b", "priority": 2, "files_touched": ["src/two.py"]},
+		])
+		original = decomposition.read_bytes()
+		proc = _run_augment_cli(decomposition, stub, "--timeout-secs", "5")
+		assert proc.returncode == 0, proc.stderr
+		assert "issue=a outcome=skipped reason=timeout" in proc.stderr
+		assert "issue=b outcome=skipped reason=timeout_previous" in proc.stderr
+		assert decomposition.read_bytes() == original
 
 
 def test_render_expected_files_section_has_no_allowlist():
