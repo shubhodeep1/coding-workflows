@@ -219,7 +219,9 @@ class Wiring(unittest.TestCase):
 	def test_review_rb_judge_gates_both_merge_sites(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
 		self.assertEqual(text.count('if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
-		for site in text.split('--squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]:
+		sites = text.split('"${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]
+		self.assertEqual(len(sites), 2)
+		for site in sites:
 			self.assertIn("_pr_base_fresh_for_merge", site[-1200:])
 		# merge_with_followup's synchronous merge is gated too.
 		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then', text)

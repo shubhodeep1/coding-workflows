@@ -136,15 +136,16 @@ def test_pool_usage_cli_reads_the_gate_from_the_config(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
 	("now", "extra", "in_slot", "reason"),
 	[
-		("2026-10-17T03:59", {}, "false", "before_hour"),
-		("2026-10-17T04:00", {}, "true", "due"),
+		("2026-10-17T00:00", {}, "true", "due"),
 		("2026-10-17T23:59", {}, "true", "due"),
+		("2026-10-17T03:59", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "4"}, "false", "before_hour"),
+		("2026-10-17T04:00", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "4"}, "true", "due"),
 		("2026-10-17T04:30", {"CLAUDE_POOL_DAILY_USAGE_ENABLED": "false"}, "false", "disabled"),
 		("2026-10-17T04:30", {"ALERT_MSG_LEVEL": "silent"}, "false", "silent"),
 		("2026-10-17T04:30", {"TG_BOT_SECRET": ""}, "false", "telegram_not_configured"),
 		("2026-10-17T09:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "10"}, "false", "before_hour"),
-		("2026-10-17T04:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "nonsense"}, "true", "due"),
-		("2026-10-17T03:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "24"}, "false", "before_hour"),
+		("2026-10-17T00:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "nonsense"}, "true", "due"),
+		("2026-10-17T00:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "24"}, "true", "due"),
 	],
 )
 def test_slot(env: dict, now: str, extra: dict, in_slot: str, reason: str) -> None:
@@ -209,7 +210,7 @@ def test_orchestrate_poll_wiring() -> None:
 	slot, seen = steps["pool_daily_slot"], steps["pool_daily_seen"]
 	assert slot["if"] == "github.repository == 'shubhodeep1/coding-workflows'"
 	assert slot["run"] == "bash .codex-workflow-src/scripts/claude_pool_daily_usage.sh slot"
-	assert slot["env"]["CLAUDE_POOL_DAILY_USAGE_HOUR_UTC"] == "${{ vars.CLAUDE_POOL_DAILY_USAGE_HOUR_UTC || '4' }}"
+	assert slot["env"]["CLAUDE_POOL_DAILY_USAGE_HOUR_UTC"] == "${{ vars.CLAUDE_POOL_DAILY_USAGE_HOUR_UTC || '0' }}"
 	assert slot["env"]["CLAUDE_POOL_DAILY_USAGE_ENABLED"] == "${{ vars.CLAUDE_POOL_DAILY_USAGE_ENABLED || 'true' }}"
 	assert seen["uses"].startswith("actions/cache/restore@") and seen["with"]["lookup-only"] is True
 	order = [step.get("id") for step in poll["steps"]]

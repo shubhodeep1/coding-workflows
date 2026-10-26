@@ -8,7 +8,8 @@ here.
 
 Consumer repos define their own `agents.md` with their own architectural
 facts. The unattended pipeline loads this file as `agents_canonical.md` and
-the consumer's `agents.md` separately; both are inlined into the prompt.
+the consumer's `agents.md` separately; both are inlined into the prompt. In
+coding-workflows itself implement inlines only the checkout's copy.
 
 The interactive merged-PR hook (`.claude/hooks/pr_merge_status_guard.py` and
 its consumer template) recognizes guarded git commands after nested control
@@ -1484,7 +1485,7 @@ whose `reporter_run` is missing or did not verify) has no verified run to bound
 a heal scope with. Both the pre-compose scope-marker
 guard (`WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED`) and the creation gate
 (`HEAL_INTAKE_SCOPE_GUARD_ENABLED`) skip it with
-`WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=marker_guard|scope_guard`
+`WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=pre_diagnosis|marker_guard|scope_guard`
 and exit 0, with no CRITICAL alert (`_heal_report_claimed_no_runs` in
 `scripts/workflow_failure_heal_intake.sh`). The raw report must name no run as
 well: a report whose claimed runs `validate-payload` dropped (malformed or
@@ -2651,7 +2652,7 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
 | review autofix editor | `openai/gpt-6-sol` | `high` (smoke: `medium`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_EDITOR` |
 | review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `anthropic/claude-sonnet-5.5`, `z-ai/glm-5.3-flash`, `google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode for five slots; the `anthropic/claude-sonnet-5.5` slot runs on the Claude account pool (Sonnet 5.5, one Haiku 5.5 retry, skipped when the pool is unavailable) · `PANEL_REVIEWER` |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | Same as pass 1 · `PANEL_REVIEWER` for the Claude slot |
-| review consolidator | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_CONSOLIDATOR` |
+| review consolidator | `openai/gpt-6-sol` | `high` | `low` | Claude (Sonnet 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_CONSOLIDATOR` |
 | conflict resolver | `openai/gpt-6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `CONFLICT_RESOLVER` |
 | security audit (weekly / dispatch, orchestrator security pass) | `openai/gpt-6-sol` on codex | `xhigh` on codex; `high` on Claude | `low` | Claude (Opus 5.5 at `high`; codex `gpt-6-sol` fallback on any Claude failure, including every account at the 95% usage gate) · `SECURITY_AUDIT` |
 | validate generate, diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `VALIDATE` |
@@ -2672,7 +2673,7 @@ to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, 
 / `ai:codex` labels select it per run. On Claude a role uses its existing
 model variable only when that value starts with `claude-`, else Opus 5.5
 (`claude-opus-5-5`), or Sonnet 5.5 (`claude-sonnet-5-5`) for `LOG_SUMMARY`,
-`RETRO`, `MATERIALITY`, `SUMMARISER` and `BEHAVIOURAL_SMOKE`; the reasoning
+`RETRO`, `MATERIALITY`, `SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER` and `REVIEW_CONSOLIDATOR`; the reasoning
 column is the effort (`none` / `minimal` → `low`). Apart from the
 `anthropic/claude-sonnet-5.5` slot (`PANEL_REVIEWER`), the reviewer rows have no
 engine switch. When Claude is unavailable (exit 75, `AI_ENGINE_FALLBACK`),
@@ -2797,7 +2798,7 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
 - `tests/test_claude_template_live_parity.py` (own `ci.yml` step) fails when a
   template and its live copy differ in content or executable bits, unless the
   file is listed in `.github/ai/claude_template_divergence.json` with a reason.
-  Six command files are listed today; both copies of those are edited by hand.
+  Six command files and `settings.json` are listed; both copies are edited by hand.
 - `scripts/sync_claude_live_copies.py` runs from
   `.github/workflows/sync-claude-live-copies.yml` on every push to `main` that
   touches `workflow-templates/.claude/**`. When the push changed a template
@@ -2846,7 +2847,7 @@ using the PR base SHA and full git history. This prepares only eligible
 template-only command changes for the tests without committing or pushing live
 files. Security hooks under `.claude/hooks/**` and `.claude/settings.json` are
 never prepared: their committed live copies must match the templates for CI
-to pass, even when the editor cannot write the live file.
+to pass (settings.json apart from its one live-only allow rule), even when the editor cannot write the live file.
 Changes to both halves that still differ remain test failures. Push CI and
 PRs targeting `stable` check the committed tree without preparation, so drift
 on `main` is still reported while the post-merge sync PR is pending.

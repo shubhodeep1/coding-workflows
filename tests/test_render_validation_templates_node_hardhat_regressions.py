@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import tempfile
 from pathlib import Path
@@ -69,6 +70,33 @@ def test_log7_foundry_path_persists_in_non_login_shells() -> None:
 
         dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
         assert "ENV PATH=/root/.foundry/bin:${PATH}" in dockerfile_text
+
+
+def test_app_image_ignores_consumer_root_dockerignore() -> None:
+    # fun-token-multi-chain#579: a consumer root .dockerignore of `**` plus
+    # `!services/session-server/...` stripped package.json from /workspace.
+    # BuildKit prefers <Dockerfile>.dockerignore next to the Dockerfile, so the
+    # harness renders one beside Dockerfile.app that excludes nothing.
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "validation"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose = yaml.safe_load((output_root / "docker-compose.test.yml").read_text(encoding="utf-8"))
+        dockerfile_rel = compose["services"]["app"]["build"]["dockerfile"]
+        assert dockerfile_rel == "validation/Dockerfile.app", dockerfile_rel
+        ignore_path = output_root / "Dockerfile.app.dockerignore"
+        assert ignore_path.is_file(), "Dockerfile.app.dockerignore was not rendered"
+        patterns = [
+            line.strip()
+            for line in ignore_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        assert patterns == [], f"harness dockerignore must exclude nothing: {patterns}"
 
 
 def test_node_compose_pins_foundry_image_version() -> None:
@@ -633,6 +661,146 @@ def test_rpc_probe_skip_decision_trims_hardhat_network_whitespace() -> None:
         # normalized value so the container's hardhat config sees the canonical
         # network name.
         assert 'HARDHAT_NETWORK: "HARDHAT"' in compose_text, compose_text
+
+
+def _dockerfile_install_script(dockerfile_text: str) -> str:
+    """The shell body of the Dockerfile's npm install RUN instruction."""
+    lines = dockerfile_text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("RUN if [ -f package-lock.json ]"))
+    body: list[str] = []
+    for line in lines[start:]:
+        body.append(line[len("RUN "):] if not body else line)
+        if not line.endswith("\\"):
+            break
+    return "\n".join(part[:-1] if part.endswith("\\") else part for part in body)
+
+
+def test_dockerfile_fails_build_when_package_json_missing() -> None:
+    # fun-token-multi-chain#579: package.json never reached /workspace, the
+    # install step skipped silently, and the failure surfaced later as an npm
+    # ENOENT in the test suite. The build must fail at the install step instead.
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "out"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
+        assert "skipping npm install" not in dockerfile_text, dockerfile_text
+        script = _dockerfile_install_script(dockerfile_text)
+
+        fake_bin = temp_root / "bin"
+        fake_bin.mkdir()
+        npm_calls = temp_root / "npm_calls"
+        fake_npm = fake_bin / "npm"
+        fake_npm.write_text(f'#!/bin/sh\necho "$@" >> "{npm_calls}"\n', encoding="utf-8")
+        fake_npm.chmod(0o755)
+        env = {"PATH": f"{fake_bin}:{os.environ['PATH']}"}
+
+        empty_context = temp_root / "empty"
+        empty_context.mkdir()
+        missing = subprocess.run(["sh", "-c", script], cwd=empty_context, env=env, text=True, capture_output=True)
+        assert missing.returncode == 1, (missing.stdout, missing.stderr)
+        assert "harness_error: package.json missing from build context /workspace" in missing.stderr, missing.stderr
+        assert not npm_calls.exists(), "npm must not run without package.json"
+
+        project = temp_root / "project"
+        project.mkdir()
+        (project / "package.json").write_text("{}\n", encoding="utf-8")
+        present = subprocess.run(["sh", "-c", script], cwd=project, env=env, text=True, capture_output=True)
+        assert present.returncode == 0, (present.stdout, present.stderr)
+        assert npm_calls.read_text(encoding="utf-8").split() == ["install"]
+
+        (project / "package-lock.json").write_text("{}\n", encoding="utf-8")
+        npm_calls.unlink()
+        locked = subprocess.run(["sh", "-c", script], cwd=project, env=env, text=True, capture_output=True)
+        assert locked.returncode == 0, (locked.stdout, locked.stderr)
+        assert npm_calls.read_text(encoding="utf-8").split() == ["ci"]
+
+
+def _run_hardhat_test_with_fake_docker(temp_root: Path, precheck_exit: int) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Run the rendered 30_hardhat_test.sh with a fake docker on PATH.
+
+    The fake answers the /workspace/package.json precheck with ``precheck_exit``
+    and records every other call (the test suite run) in ``suite_calls``.
+    """
+    manifest_path = temp_root / "validate.yml"
+    output_root = temp_root / "validation"
+    _write_yaml(manifest_path, _manifest_payload())
+    result = _run_renderer(manifest_path, output_root)
+    assert result.returncode == 0, result.stderr
+
+    fake_bin = temp_root / "bin"
+    fake_bin.mkdir()
+    suite_calls = temp_root / "suite_calls"
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        f'\t*/workspace/package.json*) exit {precheck_exit} ;;\n'
+        "esac\n"
+        f'echo "$*" >> "{suite_calls}"\n'
+        "echo 'suite passed'\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    env = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "LOG_DIR": str(temp_root / "logs"),
+    }
+    # The runner's watchdog leaves a `sleep 300` behind after the suite ends,
+    # which would hold a capture pipe open; write to files and kill the
+    # process group once the script exits.
+    stdout_path = temp_root / "stdout"
+    stderr_path = temp_root / "stderr"
+    with open(stdout_path, "w", encoding="utf-8") as out, open(stderr_path, "w", encoding="utf-8") as err:
+        proc = subprocess.Popen(
+            ["bash", str(output_root / "tests" / "30_hardhat_test.sh")],
+            cwd=temp_root, env=env, stdout=out, stderr=err, start_new_session=True,
+        )
+        try:
+            returncode = proc.wait(timeout=60)
+        finally:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    run = subprocess.CompletedProcess(
+        proc.args, returncode,
+        stdout_path.read_text(encoding="utf-8"), stderr_path.read_text(encoding="utf-8"),
+    )
+    return run, suite_calls
+
+
+def test_hardhat_test_reports_missing_project_tree_as_harness_error() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        run, suite_calls = _run_hardhat_test_with_fake_docker(Path(td), 3)
+        assert run.returncode == 1, (run.stdout, run.stderr)
+        assert "not ok 1 - hardhat test suite" in run.stdout, run.stdout
+        assert "# harness_error: project tree not staged at /workspace" in run.stdout, run.stdout
+        assert not suite_calls.exists(), "the test suite must not run without the project tree"
+
+
+def test_hardhat_test_runs_suite_when_project_tree_present() -> None:
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        run, suite_calls = _run_hardhat_test_with_fake_docker(Path(td), 0)
+        assert run.returncode == 0, (run.stdout, run.stderr)
+        assert "ok 1 - hardhat test suite" in run.stdout, run.stdout
+        assert "harness_error" not in run.stdout, run.stdout
+        assert suite_calls.read_text(encoding="utf-8").count("exec -T") == 1
+
+
+def test_hardhat_test_precheck_failure_other_than_missing_file_keeps_old_path() -> None:
+    # A precheck that fails for another reason (the service is not running)
+    # must not be reported as a missing project tree; the suite run reports it.
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        run, suite_calls = _run_hardhat_test_with_fake_docker(Path(td), 1)
+        assert "harness_error" not in run.stdout, run.stdout
+        assert suite_calls.exists(), "the suite run must still be attempted"
 
 
 def main() -> int:

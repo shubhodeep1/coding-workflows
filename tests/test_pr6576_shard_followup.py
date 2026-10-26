@@ -13,7 +13,6 @@ import importlib.util
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -66,14 +65,59 @@ def _guard(monkeypatch, tmp_path, routes, capsys):
 	return rc, out.read_text() if out.exists() else ""
 
 
+# Shapes of the pipeline's own clarify answer and plan comments on #7072. Both
+# quote the marker and predate the workflow, so neither may count as the result.
+CLARIFY_QUOTE = (
+	"/answer [auto-answered-by-orchestrator]\n\nDECISIONS:\nQ1: B\n\n"
+	"- **Step 1: guard.** If a comment authored by the `GH_PAT` login contains "
+	"`<!-- ai:pr6576-shard-followup:v1 -->`, log a skip and exit 0.\n"
+)
+PLAN_QUOTE = (
+	"Implementation Plan\n\nIssue #7072 (activation fix for PR #7067): implementation plan\n\n"
+	"- Workflow-level `env` literals: `FOLLOWUP_ISSUE: \"7072\"`, "
+	"`MARKER: \"<!-- ai:pr6576-shard-followup:v1 -->\"`.\n"
+	"- Durable markers: `<!-- ai:pr6576-shard-followup:v1 -->` (comment on #7072)\n"
+)
+
+
+def _report_body():
+	return mod.build_report(_results([]), EVIDENCE)
+
+
 def test_guard_done_only_for_pipeline_login_marker(monkeypatch, tmp_path, capsys):
-	comments = [{"user": {"login": "pipeline"}, "body": "x\n" + mod.MARKER}]
+	comments = [{"user": {"login": "pipeline"}, "body": _report_body()}]
 	rc, out = _guard(monkeypatch, tmp_path, {"user": {"login": "pipeline"}, f"repos/{REPO}/issues/7072/comments": comments}, capsys)
 	assert rc == 0 and out.strip() == "done=true"
 
 
+def test_guard_ignores_quoting_clarify_and_plan_comments(monkeypatch, tmp_path, capsys):
+	assert mod.MARKER in CLARIFY_QUOTE and mod.MARKER in PLAN_QUOTE
+	comments = [{"user": {"login": "pipeline"}, "body": body} for body in (CLARIFY_QUOTE, PLAN_QUOTE)]
+	rc, out = _guard(monkeypatch, tmp_path, {"user": {"login": "pipeline"}, f"repos/{REPO}/issues/7072/comments": comments}, capsys)
+	assert rc == 0 and out.strip() == "done=false"
+	assert "marker_present" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("body", [
+	"x\n" + mod.MARKER,
+	mod.MARKER,
+	mod.MARKER + "\nnot the result header\n",
+	"`" + mod.MARKER + "`\n" + mod.RESULT_HEADER + "\n",
+	mod.RESULT_HEADER + "\n" + mod.MARKER + "\n",
+	None,
+])
+def test_is_result_comment_rejects_non_report_bodies(body):
+	assert mod._is_result_comment(body) is False
+
+
+def test_is_result_comment_accepts_report_body_and_crlf():
+	body = _report_body()
+	assert mod._is_result_comment(body)
+	assert mod._is_result_comment(body.replace("\n", "\r\n"))
+
+
 def test_guard_ignores_marker_from_other_login(monkeypatch, tmp_path, capsys):
-	comments = [{"user": {"login": "mallory"}, "body": mod.MARKER}]
+	comments = [{"user": {"login": "mallory"}, "body": _report_body()}]
 	rc, out = _guard(monkeypatch, tmp_path, {"user": {"login": "pipeline"}, f"repos/{REPO}/issues/7072/comments": comments}, capsys)
 	assert rc == 0 and out.strip() == "done=false"
 

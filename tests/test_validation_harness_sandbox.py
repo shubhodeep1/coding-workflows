@@ -1841,10 +1841,10 @@ def _write(workspace: Path, name: str, text: str) -> None:
 	path.write_text(text, encoding="utf-8")
 
 
-def _stage_with_mode_map(helper_dir: Path, workspace: Path, *extra_args: str) -> tuple[dict[str, bytes], dict[str, int], str]:
+def _stage_with_mode_map(helper_dir: Path, workspace: Path, *extra_args: str, env_extra: dict[str, str] | None = None) -> tuple[dict[str, bytes], dict[str, int], str]:
 	result = subprocess.run(
 		["python3", "-I", "-c", _stage_program(), str(helper_dir), str(workspace), *extra_args],
-		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir)},
+		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir), **(env_extra or {})},
 	)
 	assert result.returncode == 0, result.stderr
 	members: dict[str, bytes] = {}
@@ -2356,3 +2356,41 @@ def test_cmd_run_passes_head_support_paths_after_the_driver_overlay() -> None:
 	assert 'head_support_args+=("head-support:${head_support_path}")' in gated
 	assert body.count("head_support_args+=") == 1
 	assert 'python3 -I -c "${STAGE_PY}" "${SANDBOX_HELPER_DIR}" "${workspace}" "${head_support_args[@]}" "${overlays[@]}"' in body
+
+
+# fun-token-multi-chain#579: a diagnosis could not tell whether the project was
+# staged at all, because ordinary files are staged without a log line. One
+# count line per run answers that without logging any file name.
+def test_stage_copy_logs_one_member_count(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	for name in ("package.json", "hardhat.config.ts", "contracts/Token.sol", ".env.example"):
+		_write(workspace, name, "x\n")
+	_git_add(workspace, "package.json", "hardhat.config.ts", "contracts/Token.sol", ".env.example")
+	trusted = tmp_path / "trusted_driver.sh"
+	trusted.write_text("trusted driver\n", encoding="utf-8")
+	members, stderr = _stage(helper_dir, workspace, f"scripts/validate_driver.sh={trusted}")
+	lines = [line for line in stderr.splitlines() if "reason=staged_count" in line]
+	assert lines == [f"VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=staged_count staged={len(members)}"], stderr
+	assert len(members) == 5, sorted(members)
+	assert "package.json" not in lines[0], "the count line must never carry file names"
+
+
+def test_stage_copy_lists_from_split_git_dir_and_work_tree(tmp_path: Path) -> None:
+	# validate.yml exports GIT_DIR=<checkout>/.git and GIT_WORK_TREE=<workspace
+	# copy>; STAGE_PY inherits both, lists names from the checkout's index and
+	# reads the bytes from the copy. The project files must still be staged.
+	helper_dir, checkout = _stage_workspace(tmp_path)
+	for name in ("package.json", "hardhat.config.ts"):
+		_write(checkout, name, f"committed {name}\n")
+	_git_add(checkout, "package.json", "hardhat.config.ts")
+	_git_commit(checkout)
+	copy = tmp_path / "copy"
+	copy.mkdir()
+	for name in ("package.json", "hardhat.config.ts"):
+		shutil.copy2(checkout / name, copy / name)
+	members, _, stderr = _stage_with_mode_map(
+		helper_dir, copy,
+		env_extra={"GIT_DIR": str(checkout / ".git"), "GIT_WORK_TREE": str(copy)},
+	)
+	assert members.get("package.json") == b"committed package.json\n", (sorted(members), stderr)
+	assert members.get("hardhat.config.ts") == b"committed hardhat.config.ts\n", sorted(members)

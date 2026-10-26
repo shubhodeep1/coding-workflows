@@ -586,24 +586,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py
 
-      - name: Judge Semble prefetch contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_record_id_format_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_informal_detect.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_repo_root_helper.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_generate_resource_id.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_repo_tree.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_handshake_probe.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_setup_serena_toml.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
-
       - name: Telegram alert levels page only when a person must act
         run: |
           set -euo pipefail
@@ -648,15 +630,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_retarget_merged_base.py
-
-      - name: Standalone clarify auto-decide tests (port P3)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_auto_decisions.py \
-            tests/test_clarify_respond_standalone.py \
-            tests/test_clarify_github_facts.py \
-            tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: Clarify sandbox base image pre-seed tests (#6985)
         run: |
@@ -797,18 +770,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_deploy_activate_command.py
-
-      - name: Orchestrate lib unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_follow_up.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
 
       - name: Orchestrator completion lessons + lesson retrieval tests
         run: |
@@ -1311,6 +1272,16 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stall_retired_conflict_reissue.py
 
+      - name: Stall re-issue keeps ai:check-triage tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stall_reissue_check_triage_label.py
+
+      - name: Stall reissue lineage label tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stall_reissue_lineage_labels.py
+
       - name: Stall-freshness branch-fallback unit tests
         run: |
           set -euo pipefail
@@ -1473,6 +1444,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_folded_fragment_keep.py
 
+      - name: Review criss-cross clean merge and forward-merge dedupe tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_merge_criss_cross.py tests/test_forward_merge_fallback_dedupe.py
+
       - name: Review judge-interim round-trip contract test
         run: |
           set -euo pipefail
@@ -1542,6 +1518,50 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
+
+      # Moved here unchanged from tests-hooks-and-orchestrator (15m01s of its 20
+      # minutes, run 40264887710, budget-watch issue #8179). Step timings were not
+      # readable when this was planned; chosen by test and subprocess counts
+      # (estimated, not measured). None of these needs git history, Node or the
+      # prepared .claude/ live copies. Names and bodies unchanged.
+      - name: Orchestrate lib unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_follow_up.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
+
+      - name: Judge Semble prefetch contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_record_id_format_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_informal_detect.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_repo_root_helper.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_generate_resource_id.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_repo_tree.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_handshake_probe.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_setup_serena_toml.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
+
+      - name: Standalone clarify auto-decide tests (port P3)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_auto_decisions.py \
+            tests/test_clarify_respond_standalone.py \
+            tests/test_clarify_github_facts.py \
+            tests/test_clarify_sandbox_base_image_preseed.py
 
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
