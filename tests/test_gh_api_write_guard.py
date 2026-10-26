@@ -1556,12 +1556,19 @@ _ALLOW_RULE_SHAPE_DOUBTS = [
 ]
 
 
+def _assert_auto_shape_deny(decision, reason):
+	# Auto mode turns a shape ask that would reach a human into a deny with
+	# rewrite instructions: still never an allow, and nothing runs.
+	assert decision == guard.DECISION_DENY
+	assert "Auto mode: nothing ran" in reason
+
+
 @pytest.mark.parametrize("command", _ALLOW_RULE_SHAPE_DOUBTS)
 def test_allow_rule_covered_shape_doubts_still_ask_in_auto_mode(command):
-	for mode in (guard.AUTO_PERMISSION_MODE, None):
-		decision, reason = _decide_in_mode(command, mode)
-		assert decision == guard.DECISION_ASK, mode
-		assert reason
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	decision, reason = _decide_in_mode(command, None)
+	assert decision == guard.DECISION_ASK
+	assert reason and "Auto mode" not in reason
 
 
 @pytest.mark.parametrize("command", _SHAPE_DOUBT_READS)
@@ -1580,7 +1587,6 @@ def test_shape_doubts_give_no_decision_in_auto_mode(command):
 	"gh api -X DELETE repos/o/r/git/refs/heads/x",
 	"for i in 1 2; do gh api -X DELETE repos/o/r/git/refs/heads/x$i; done",
 	"gh api repos/o/r/issues/1/comments -F body=@notes.md",
-	"gh api repos/o/r/issues/1/comments -f body=x | sort -t$'\\t' -k2",
 	"gh api --bogus-flag repos/o/r/pulls/1",
 	"gh -R evil/repo api repos/o/r/pulls/1",
 ])
@@ -1639,8 +1645,6 @@ _OTHER_ALLOW_RULE_SHAPE_DOUBTS = [
 	'cd sub && git log "$(gh api -X DELETE orgs/o/teams/1)"',
 	"'gh' api repos/o/r/git/refs/heads/x {-X,DELETE}",
 	"g''h api repos/o/r/pulls/1 {-X,DELETE}",
-	"gh api user; x=$(gh api -X DELETE orgs/o/teams/1)",
-	"gh api user|grep $(gh api -X DELETE orgs/o/teams/1)",
 	# wrappers in front of a command an allow rule matches (`Bash(git diff *)`,
 	# `Bash(git log *)`, `Bash(git status *)`, `Bash(test *)`)
 	'timeout 60 git diff "$(gh api -X DELETE orgs/o/teams/1)"',
@@ -1652,9 +1656,40 @@ _OTHER_ALLOW_RULE_SHAPE_DOUBTS = [
 
 @pytest.mark.parametrize("command", _OTHER_ALLOW_RULE_SHAPE_DOUBTS)
 def test_shape_doubts_under_any_allow_rule_still_ask_in_auto_mode(command):
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+
+
+@pytest.mark.parametrize("command", [
+	"gh api user; x=$(gh api -X DELETE orgs/o/teams/1)",
+	"gh api user|grep $(gh api -X DELETE orgs/o/teams/1)",
+])
+def test_auto_mode_still_asks_for_a_readable_write_in_an_unquoted_substitution(command):
+	# The guard reads the inner call and classifies it as a write: a person decides.
 	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
 	assert decision == guard.DECISION_ASK
-	assert reason
+	assert "DELETE orgs/o/teams/1" in reason
+
+
+def test_auto_mode_denies_a_write_hidden_behind_a_shell_hazard():
+	# The hazard is checked before the write, so the session first rewrites the
+	# shape; the plain write then asks as usual.
+	command = "gh api repos/o/r/issues/1/comments -f body=x | sort -t$'\\t' -k2"
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	assert _decide_in_mode("gh api -X DELETE repos/o/r/git/refs/heads/x", guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ASK
+
+
+@pytest.mark.parametrize("command", [
+	# The prompts from the 2026-10-26 activation sessions.
+	"D=/tmp/s; for id in 6113664576 6111267295; do gh api repos/o/r/issues/comments/$id > $D/fresh_$id.json; done",
+	"cd /tmp/s && for id in 6016877098 6035928540; do gh api repos/o/r/issues/comments/$id > live_$id.json; done; "
+	"python3 -I -c \"print(1)\"",
+	"python3 - docs/log.md <<'EOF'\nimport sys\nprint('gh api repos/o/r --jq .permissions.admin')\nEOF",
+])
+def test_auto_mode_denies_the_activation_session_prompts_with_rewrite_steps(command):
+	decision, reason = _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)
+	_assert_auto_shape_deny(decision, reason)
+	assert "own plain command" in reason and "Edit or Write tool" in reason
+	assert _decide_in_mode(command, None)[0] == guard.DECISION_ASK
 
 
 def _settings_file(tmp_path, monkeypatch, text: str) -> None:
@@ -1667,7 +1702,7 @@ def _settings_file(tmp_path, monkeypatch, text: str) -> None:
 def test_auto_mode_reads_user_allow_rules(tmp_path, monkeypatch, rule):
 	command = 'echo "$(gh api -X DELETE orgs/o/teams/1)"'
 	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": [rule]}}))
-	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ASK
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
 	_settings_file(tmp_path, monkeypatch, json.dumps({"permissions": {"allow": ["Bash(ls *)"]}}))
 	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE) == (None, "")
 
@@ -1675,7 +1710,7 @@ def test_auto_mode_reads_user_allow_rules(tmp_path, monkeypatch, rule):
 @pytest.mark.parametrize("text", ["{not json", json.dumps({"permissions": {"allow": "Bash(*)"}})])
 def test_auto_mode_keeps_asks_when_settings_cannot_be_checked(tmp_path, monkeypatch, text):
 	_settings_file(tmp_path, monkeypatch, text)
-	assert _decide_in_mode(_SHAPE_DOUBT_READS[0], guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ASK
+	_assert_auto_shape_deny(*_decide_in_mode(_SHAPE_DOUBT_READS[0], guard.AUTO_PERMISSION_MODE))
 
 
 def test_settings_files_cover_project_local_and_user(tmp_path, monkeypatch):
@@ -1703,7 +1738,8 @@ def test_settings_files_cover_config_dir_and_managed_settings(tmp_path, monkeypa
 	"gh api orgs/o/teams -F x=@/etc/passwd # trailing comment",
 ])
 def test_auto_mode_hazard_that_could_hide_a_file_field_still_asks(command):
-	assert _decide_in_mode(command, guard.AUTO_PERMISSION_MODE)[0] == guard.DECISION_ASK
+	_assert_auto_shape_deny(*_decide_in_mode(command, guard.AUTO_PERMISSION_MODE))
+	assert _decide_in_mode(command, None)[0] == guard.DECISION_ASK
 
 
 def test_auto_mode_hazard_without_a_file_field_still_steps_aside():
