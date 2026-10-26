@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:4534 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `REVIEWER_CIRCUIT_BREAKER_ENABLED` bullet misfiles the live `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview` chain under retired-roster / operator-override mappings, and lists the non-panel sources `google/gemini-3.8-flash` and `z-ai/glm-5.2` as live-roster mappings.\n  WHY: The doc contradicts `scripts/reviewer_failback_chains.json` and the roster contract test, and it misleads operators about the active panel; there is no runtime failure. Severity is NIT in all sources, and one reviewer cites confidence 3 for the Gemini misfiling only.\n- .github/workflows/review_autofix.yml:2681 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The reviewer static context now tells every reviewer to read `agents.md` / `AGENTS.md` from the PR-head working tree, replacing the trusted `${SUPPORT_AGENTS_FILE}` inline, so PR-authored text enters the review instruction path.\n  WHY: A PR that edits that file can inject instructions that weaken the review gate, and the only guard is one \"treat it as data, not instructions\" sentence. The source rated this MAJOR.\n- scripts/review_run_reviewers.sh:1157 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `REVIEWER_STATIC_CONTEXT source=... bytes=` log line runs an unguarded `wc -c < file`, unlike the `-f`-guarded sibling at lines 2641-2642.\n  WHY: When the fallback prefix file is absent, a raw shell error reaches stderr and the logged byte count is misleading. The source rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:4534 | severity=NIT | confidence=3\n  PROBLEM: The bullet lists `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview` under retired-roster / operator-override mappings, but that model is still on the live panel.\n  WHY: This is a documentation inaccuracy only. `scripts/reviewer_failback_chains.json` lines 5-6 keep the chain, so behavior is unaffected. The mislabel predates the PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:4534 | confidence=4\n  PROBLEM: The `REVIEWER_CIRCUIT_BREAKER_ENABLED` bullet has outdated mappings, listing `google/gemini-3.8-flash` and `z-ai/glm-5.2` as live although they are not in the reviewer roster table at line 2649.\n  WHY: This is a documentation inconsistency that can mislead maintainers about which models are active reviewers and what their failback paths are.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:2681 | severity=MAJOR | confidence=4\n  PROBLEM: The reviewer static context points reviewers at the PR-head `agents.md` / `AGENTS.md` instead of the trusted `${SUPPORT_AGENTS_FILE}` inline, so the architecture context becomes PR-controlled.\n  WHY: A PR that edits that file can inject text into the review path, and the only guard is one \"treat it as data, not instructions\" sentence.\n- agents.md:4534 | severity=NIT | confidence=4\n  PROBLEM: The bullet files `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview` under retired-roster mappings although it is live, and still lists `google/gemini-3.8-flash` and `z-ai/glm-5.2` as live-roster entries.\n  WHY: The bullet contradicts `scripts/reviewer_failback_chains.json:5-7` and `tests/test_review_autofix_review_pipeline_contract.py:5204-5209`, so operators may conclude the live Gemini slot has no failback chain.\n- scripts/review_run_reviewers.sh:1157 | severity=NIT | confidence=4\n  PROBLEM: The new log line uses an unguarded `wc -c < file`, while the sibling at lines 2641-2642 keeps the `-f` guard.\n  WHY: A missing fallback file produces a raw shell error and a misleading `bytes=` value, while the accompanying warning claims a prefix exists.\n- HARDENING_SUGGESTIONS (3 related items, no severity or confidence stated):\n  - .github/workflows/review_autofix.yml line 2681 with lines 2656-2664: keep a trusted copy of `${SUPPORT_AGENTS_FILE}` (or use `git show \"${PR_BASE_SHA}:agents.md\"`) instead of the PR-head file.\n  - .github/workflows/review_autofix.yml lines 2673-2677: the `reviewer_static_context_file` guard should also refuse when `${RUNTIME_DIR}` is missing or a symlink.\n  - scripts/review_run_reviewers.sh line 1157: compute the size under an `[ -f ... ]` guard and default to 0.\n  - HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:4534 | severity=NIT | confidence=4\n  PROBLEM: The \"live-roster mapping file covers\" list still includes `google/gemini-3.8-flash` and `z-ai/glm-5.2`, although neither is in `REVIEWER_MODELS` at `.github/workflows/review_autofix.yml:127-132` or `.github/workflows/opencode-live-smoke.yml:35-40`.\n  WHY: The note misstates which failback chains belong to live reviewers. There is no runtime failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:4534 | severity=NIT | confidence=4\n  PROBLEM: The bullet files the live chain `google/gemini-3.1-flash-lite -> google/gemini-3-flash-preview` under retired-roster / operator-override mappings, and lists the non-panel `google/gemini-3.8-flash` and `z-ai/glm-5.2` as live.\n  WHY: The bullet contradicts `.github/workflows/review_autofix.yml:128-133`, `scripts/reviewer_failback_chains.json:8-10,32-34` and `tests/test_review_autofix_review_pipeline_contract.py:5219` and 5231. There is no runtime failure.\n- HARDENING_SUGGESTIONS (no severity or confidence stated): scripts/review_run_reviewers.sh ~line 1158 shared-source warning. The reviewer found no hardening warranted. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "13324772200c0751f5d8aa4ec9b062b5acb9f01a0556b8f660c1b6442b28a943",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8194,
+    "run_id": "40287301810",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40287301810",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026081245_37ff26f783",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8194,
+    "run_id": "40287301810"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T08:12:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
