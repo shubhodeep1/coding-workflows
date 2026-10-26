@@ -111,7 +111,7 @@ Rules:
   paths/lines as bare `apps/x/y.ts:NN` without that prefix.
 - For option D (merge_with_followup): the follow-up issue body must describe
   the specific gap that was deferred and provide acceptance criteria. The
-  workflow attempts a SYNCHRONOUS squash merge (no auto-merge enrollment) and
+  workflow attempts a SYNCHRONOUS merge (no auto-merge enrollment; `--squash`, or `--merge` for `auto/forward-merge-stable-*` PRs) and
   creates the follow-up issue ONLY when the PR is definitively merged — either
   because it was already merged before the judge ran, or because the
   synchronous merge just landed in this turn. Both the standalone and
