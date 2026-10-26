@@ -8,8 +8,11 @@ fetch the failed job log and most of the partition could not run in the
 implement sandbox, so the original failure was never identified. This helper:
 
 - ``guard``        prints ``done=true|false``: true once the pipeline account
-                   (the ``GH_PAT`` login) has posted the result marker on the
-                   follow-up issue. Any read failure exits non-zero (fail closed).
+                   (the ``GH_PAT`` login) has posted the result comment on the
+                   follow-up issue: a body whose first line is the marker and
+                   whose second line is ``RESULT_HEADER``. Comments that only
+                   quote the marker (clarify answers, plans) do not count.
+                   Any read failure exits non-zero (fail closed).
 - ``locate``       resolves PR #6576's recorded head, finds the failed
                    ``orchestrate-poll (<g>)`` CI jobs, downloads their logs
                    (redacted before disk) and extracts the failing test names
@@ -44,6 +47,9 @@ from typing import Any
 
 MARKER = os.environ.get("MARKER") or "<!-- ai:pr6576-shard-followup:v1 -->"
 DEFECT_MARKER = os.environ.get("DEFECT_MARKER") or "<!-- ai:pr6576-shard-followup-defect:v1 -->"
+# Second line of every report body. The guard requires it right after the marker
+# so a comment that merely quotes the marker is never taken for the result.
+RESULT_HEADER = "## PR #6576 `orchestrate-poll` follow-up result"
 DEFECT_SINCE = "2026-10-10T00:00:00Z"
 POLL_MODULE = "tests/test_orchestrate_poll_process.py"
 FAST_FAIL_PREFIX = "test_implementation_failed_"
@@ -167,6 +173,19 @@ def _safe_names(names: Any) -> list[str]:
 
 # --------------------------------------------------------------------- guard
 
+def _is_result_comment(body: Any) -> bool:
+	"""True only for a body ``build_report`` wrote: marker line, then the header.
+
+	The pipeline's own clarify answer and plan comments on #7072 quote the
+	marker mid-line, so a substring match would mark the follow-up done before
+	it ever ran.
+	"""
+	if not isinstance(body, str):
+		return False
+	lines = body.lstrip().splitlines()
+	return len(lines) >= 2 and lines[0].strip() == MARKER and lines[1].strip() == RESULT_HEADER
+
+
 def cmd_guard(args: argparse.Namespace) -> int:
 	try:
 		login = _login()
@@ -177,7 +196,7 @@ def cmd_guard(args: argparse.Namespace) -> int:
 	done = any(
 		isinstance(c, dict)
 		and (c.get("user") or {}).get("login") == login
-		and MARKER in (c.get("body") or "")
+		and _is_result_comment(c.get("body"))
 		for c in comments
 	)
 	if done:
@@ -613,7 +632,7 @@ def build_report(results: dict[str, Any], evidence: dict[str, Any], defect_issue
 	source = results.get("source") or evidence.get("source") or "unknown"
 	lines = [
 		MARKER,
-		"## PR #6576 `orchestrate-poll` follow-up result",
+		RESULT_HEADER,
 		"",
 		f"- Evidence source: **{'failed job log' if source == 'log' else 'fallback: partition rerun at the recorded head'}**",
 	]

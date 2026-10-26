@@ -2271,6 +2271,19 @@ if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 	fi
 fi
 
+# An engine_fallback report whose reporting run is absent or did not bind
+# names no run, so it can never get a heal scope. With the creation gate on,
+# every classification then ends without an issue: the scope guards skip it
+# as scope_unavailable_no_runs, and already-fixed / transient / consumer-config
+# open none. Skip it before the WORKFLOW_HEAL diagnosis instead of after it.
+# Nothing is filed, so no duplicate marker stops a repeat: on 2026-10-21/22,
+# 104 such reports each ran a full Opus diagnosis (~$3 each) for nothing.
+# With the gate off the intake keeps its compose-only path unchanged.
+if [ "${SOURCE_KIND}" = "engine_fallback" ] && _heal_intake_scope_guard_is_on && _heal_report_claimed_no_runs; then
+	CLASSIFICATION="none"
+	_heal_skip_scope_unavailable pre_diagnosis
+fi
+
 # Freeze the heal-scope inputs before the diagnosis prompt assembles any
 # untrusted evidence (#6463): only validated report fields, authenticated run metadata
 # and the ownership facts computed above. _open_issue reads this snapshot,
