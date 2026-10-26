@@ -2811,7 +2811,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       #     operator merged the PR and reran the judge to create the
       #     follow-up; or a concurrent workflow merged it).
       #   - PR_STATE="open" + PR_MERGEABLE="true" + ENABLE_AUTO_MERGE=
-      #     "true" + `gh pr merge --squash` (sync, NO --auto) returned
+      #     "true" + `gh pr merge` with RB_MERGE_METHOD_FLAG (sync, NO
+      #     --auto; `--squash`, or `--merge` for forward-merge PRs) returned
       #     0: required checks were all green and the PR is now
       #     atomically merged.
       # Set to "false" otherwise — including the protected-branch case
@@ -2899,7 +2900,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation
             # happens only against a definitively-merged base. With the
-            # check-runs gate above, `gh pr merge --squash` is now only
+            # check-runs gate above, `gh pr merge` (RB_MERGE_METHOD_FLAG:
+            # `--squash`, or `--merge` for forward-merge PRs) is now only
             # attempted when ALL check-runs have settled, so the merge
             # success (return 0) reliably implies the PR landed against
             # validated code.
