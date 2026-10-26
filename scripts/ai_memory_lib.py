@@ -3356,7 +3356,7 @@ def persist_memory_operation(
             op_result = operation(clone_dir) or {}
 
             _run_git(clone_dir, ["config", "user.name", "codex-bot"])
-            _run_git(clone_dir, ["config", "user.email", "codex@users.noreply.github.com"])
+            _run_git(clone_dir, ["config", "user.email", "codex-bot@users.noreply.invalid"])
             _run_git(clone_dir, ["add", str(memory_root.relative_to(clone_dir))])
 
             if _run_git(clone_dir, ["diff", "--cached", "--quiet"], check=False).returncode == 0:
