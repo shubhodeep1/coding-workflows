@@ -287,6 +287,50 @@ def test_allow_list_is_narrowed_to_the_issue_files_touched_scope(tmp_path):
 	assert "# edited" not in (repo / "tests" / "test_a.py").read_text(encoding="utf-8")
 
 
+def test_automation_paths_need_the_commit_time_grant(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	(repo / "scripts").mkdir()
+	(repo / "scripts" / "helper.sh").write_text("echo hi\n", encoding="utf-8")
+	_git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+	_git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "helper")
+	(repo / "lib" / "a.py").write_text("X = 3\n", encoding="utf-8")
+	failing = dict(FAIL, failures=[dict(FAIL["failures"][0], file="scripts/helper.sh")])
+	(_work(tmp_path) / "queue" / "1.json").write_text(json.dumps(failing), encoding="utf-8")
+	body = tmp_path / "issue_body.txt"
+	body.write_text("Fix.\n\nfiles_touched:\n  - lib/a.py\n  - scripts/helper.sh\n", encoding="utf-8")
+	env.update({"ISSUE_BODY_FILE": str(body), "ISSUE_NUMBER": "5", "ALLOW_WORKFLOW_EDITS": "false"})
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	prompt = (_work(tmp_path) / "editor_prompt.txt").read_text(encoding="utf-8")
+	allow = prompt.split("=== EFFECTIVE REPAIR ALLOW-LIST ===", 1)[1].split("===", 1)[0]
+	assert "lib/a.py" in allow and "scripts/helper.sh" not in allow
+
+
+def test_repair_turn_is_time_bounded(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	_run_step(repo, env)
+	editor_env = (_work(tmp_path) / "editor_env.txt").read_text(encoding="utf-8")
+	match = re.search(r"^CODEX_THREAD_REUSE_TIMEOUT_SECS=(\d+)$", editor_env, re.M)
+	assert match and 300 <= int(match.group(1)) <= 3300
+
+
+def test_summary_lists_the_tests_run(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	_run_step(repo, env)
+	text = _summary(tmp_path).read_text(encoding="utf-8")
+	assert "### Tests and checks run" in text and "- `tests/test_a.py`" in text
+
+
+def test_nested_node_modules_are_mounted_into_the_gate_container(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	(_work(tmp_path) / "sandbox" / "work" / "tools" / "app" / "node_modules").mkdir(parents=True)
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	log = (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert "dst=/source/tools/app/node_modules,readonly" in log
+	assert "dst=/baseline/tools/app/node_modules,readonly" in log
+
+
 def test_node_prep_root_is_mounted_into_the_gate_container(tmp_path):
 	repo, env = _setup(tmp_path, [PASS])
 	(_work(tmp_path) / "sandbox" / "work" / "node_modules").mkdir(parents=True)

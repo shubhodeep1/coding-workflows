@@ -156,12 +156,19 @@ def main(argv):
 		# listed by file and kind, never with the assertion source text.
 		assertions = clean.pop("changed_assertions")
 		lines = gate.write_summary(clean).splitlines()
+		if clean["ran"]:
+			lines += ["", "### Tests and checks run", ""]
+			lines += ["- `" + gate._sanitize_name(r) + "`" for r in clean["ran"][:50]]
+			if len(clean["ran"]) > 50:
+				lines.append("- (" + str(len(clean["ran"]) - 50) + " more)")
 		if assertions:
 			lines += ["", "### Changed pre-existing assertions", ""]
 			lines += ["- `" + gate._sanitize_name(a["file"]) + "` (" + a["kind"] + ")" for a in assertions]
 		extra = ["- Mode: `" + gate_mode + "`", "- Repair turn: " + repair]
 		if initial and initial != clean["status"]:
 			extra.append("- Status before the repair turn: **" + initial + "**")
+		if repair.startswith("ran (re-run skipped"):
+			extra.append("- The result above predates the repair turn: the re-run was skipped.")
 		lines = lines[:3] + extra + lines[3:]
 		text = scrub("\n".join(lines))
 		data = text.encode("utf-8")
@@ -282,6 +289,10 @@ implement_prepush_test_gate_run_once()
 	if [ -n "${CODEX_ISOLATED_IMPLEMENT_ROOT:-}" ] && [ -d "${CODEX_ISOLATED_IMPLEMENT_ROOT}/work/node_modules" ] && [ ! -L "${CODEX_ISOLATED_IMPLEMENT_ROOT}/work/node_modules" ]; then
 		args+=(--node-modules "${CODEX_ISOLATED_IMPLEMENT_ROOT}/work/node_modules")
 	fi
+	# Nested Node projects' node_modules (handoff-nested-deps puts them under work/<project>/).
+	if [ -n "${CODEX_ISOLATED_IMPLEMENT_ROOT:-}" ] && [ -d "${CODEX_ISOLATED_IMPLEMENT_ROOT}/work" ] && [ ! -L "${CODEX_ISOLATED_IMPLEMENT_ROOT}/work" ]; then
+		args+=(--nested-node-modules-root "${CODEX_ISOLATED_IMPLEMENT_ROOT}/work")
+	fi
 	implement_prepush_test_gate_staged_workspace restore
 	bash "${gate_wrapper}" "${args[@]}" || true
 	implement_prepush_test_gate_staged_workspace reinstall
@@ -328,7 +339,10 @@ implement_prepush_test_gate_revert()
 	done
 	[ "${#restore[@]}" -eq 0 ] || git restore --source="${gate_baseline}" --staged --worktree -- "${restore[@]}" || restore_failed=true
 	[ "${#remove[@]}" -eq 0 ] || git rm -r -f -q --ignore-unmatch -- "${remove[@]}" || restore_failed=true
-	[ "${restore_failed}" = false ] || implement_prepush_test_gate_log "outcome=warning reason=restore_failed mode=${which}"
+	if [ "${restore_failed}" = true ]; then
+		: > "${RUNTIME_DIR}/prepush_gate_restore_failed.flag"
+		implement_prepush_test_gate_log "outcome=warning reason=restore_failed mode=${which}"
+	fi
 	for path in "${untracked[@]}"; do
 		case "${path}" in
 			/*|../*|*/../*|*/..) implement_prepush_test_gate_log "outcome=warning reason=unsafe_untracked_path" ;;
@@ -346,7 +360,7 @@ implement_prepush_test_gate_revert()
 # (the "Restore tracked symlinks" step already ran before this step).
 implement_prepush_test_gate_restore_symlinks()
 {
-	local entry meta path expected
+	local entry meta path expected bak bak_n=0
 	while IFS= read -r -d '' entry; do
 		meta="${entry%%$'\t'*}"
 		path="${entry#*$'\t'}"
@@ -359,14 +373,19 @@ implement_prepush_test_gate_restore_symlinks()
 		if [ -n "${STAGED_SUPPORT_LEDGER:-}" ] && [ -f "${STAGED_SUPPORT_LEDGER}" ] && grep -Fqx -- "${path}" "${STAGED_SUPPORT_LEDGER}"; then
 			continue
 		fi
+		# The backup lives outside the worktree, so a kill can never leave it
+		# for "Commit changes" to stage.
+		bak_n=$((bak_n + 1))
+		bak="${RUNTIME_DIR}/prepush_gate_symlink_bak.${bak_n}"
+		rm -rf -- "${bak}"
 		if [ -e "./${path}" ] || [ -L "./${path}" ]; then
-			mv -- "./${path}" "./${path}.prepush-gate-bak" 2>/dev/null || continue
+			mv -- "./${path}" "${bak}" 2>/dev/null || continue
 		fi
 		if GIT_LITERAL_PATHSPECS=1 git checkout HEAD -- "${path}" 2>/dev/null; then
-			rm -rf -- "./${path}.prepush-gate-bak"
+			rm -rf -- "${bak}"
 			implement_prepush_test_gate_log "outcome=warning reason=symlink_restored"
 		else
-			mv -- "./${path}.prepush-gate-bak" "./${path}" 2>/dev/null || true
+			mv -- "${bak}" "./${path}" 2>/dev/null || true
 			implement_prepush_test_gate_log "outcome=warning reason=symlink_restore_failed"
 		fi
 	done < <(git ls-files -s -z 2>/dev/null)
@@ -418,6 +437,7 @@ implement_prepush_test_gate_narrow_allow_list()
 	local guard="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/files_touched_scope_guard.py"
 	local extras="${RUNTIME_DIR}/prepush_gate_allow_extras.txt" entries="${RUNTIME_DIR}/prepush_gate_allow_entries.txt"
 	local denied="${RUNTIME_DIR}/prepush_gate_allow_denied.txt" rc=0 path before after
+	local auto="${RUNTIME_DIR}/prepush_gate_allow_auto.txt" auto_denied="${RUNTIME_DIR}/prepush_gate_allow_auto_denied.txt" auto_rc=127
 	grep -Fxv -f "${gate_changed_file}" "${gate_allow_file}" > "${extras}" || true
 	[ -s "${extras}" ] || return 0
 	before="$(wc -l < "${extras}")"
@@ -434,20 +454,32 @@ implement_prepush_test_gate_narrow_allow_list()
 		[ -n "${path}" ] || continue
 		grep -Fqx -- "${path}" "${denied}" && continue
 		case "$(printf '%s' "${path}" | tr '[:upper:]' '[:lower:]')" in
-			.github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*) grep -Fqx -- "${path}" "${entries}" || continue ;;
+			.github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*) printf '%s\n' "${path}" >> "${auto}"; continue ;;
 		esac
 		printf '%s\n' "${path}"
 	done < "${extras}" > "${extras}.kept"
+	# Automation paths go through the same grant check "Commit changes" runs
+	# (ALLOW_WORKFLOW_EDITS, trusted issue-bound grant, open pipeline grant).
+	if [ -s "${auto}" ] && [ -f "${guard}" ]; then
+		auto_rc=0
+		PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${guard}" --check-automation-paths --staged-file "${auto}" \
+			--automation-grant-file "${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR}/automation_path_grant.json}" \
+			--allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" --issue-number "${ISSUE_NUMBER:-}" > "${auto_denied}" 2>/dev/null || auto_rc=$?
+	fi
+	case "${auto_rc}" in
+		0) cat "${auto}" >> "${extras}.kept" ;;
+		30) [ ! -s "${auto_denied}" ] || grep -Fxv -f "${auto_denied}" "${auto}" >> "${extras}.kept" || true ;;
+	esac
 	cat "${gate_changed_file}" "${extras}.kept" | sed '/^$/d' | sort -u > "${gate_allow_file}"
 	after="$(wc -l < "${extras}.kept")"
 	[ "${after}" -eq "${before}" ] || implement_prepush_test_gate_log "outcome=warning reason=allow_list_narrowed dropped=$(( before - after ))"
-	rm -f "${extras}" "${extras}.kept" "${entries}" "${denied}"
+	rm -f "${extras}" "${extras}.kept" "${entries}" "${denied}" "${auto}" "${auto_denied}"
 }
 
 # One isolated editor turn. Sets gate_repair to ran | skipped (...) | reverted (syntax).
 implement_prepush_test_gate_repair()
 {
-	local run_dir="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" result="$1" prompt rc reasoning
+	local run_dir="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" result="$1" prompt rc reasoning editor_timeout
 	local isolated_exec="${run_dir}/codex_isolated_exec.sh" isolated_root="${CODEX_ISOLATED_IMPLEMENT_ROOT:-}" prepared_root=""
 	if [ -z "${run_dir}" ] || [ ! -f "${isolated_exec}" ] || [ ! -f "${run_dir}/codex_thread_reuse.sh" ]; then
 		implement_prepush_test_gate_log "outcome=repair_skipped reason=isolation_unavailable"
@@ -508,12 +540,23 @@ implement_prepush_test_gate_repair()
 		fi
 		prepared_root="${isolated_root}"
 	fi
+	# Bound the turn so the step's 60-minute kill can never land before the
+	# rollback and syntax re-validation below (step_budget, gate_started and
+	# run_wall are implement_prepush_test_gate_main's locals).
+	editor_timeout=$(( ${step_budget:-3300} - (SECONDS - ${gate_started:-${SECONDS}}) - ${run_wall:-1020} ))
+	if [ "${editor_timeout}" -lt 300 ]; then
+		[ -z "${prepared_root}" ] || bash "${isolated_exec}" cleanup --root "${prepared_root}" >/dev/null 2>&1 || true
+		implement_prepush_test_gate_log "outcome=repair_skipped reason=step_budget"
+		gate_repair="skipped (step time budget)"
+		return 0
+	fi
 	reasoning="${MODEL_REPAIR_REASONING_EFFORT:-high}"
 	case "${reasoning}" in xhigh|high|medium|low|none) ;; *) reasoning="high" ;; esac
 	implement_prepush_test_gate_staged_workspace restore
 	rc=0
 	CODEX_ISOLATED_EXEC="${isolated_exec}" CODEX_ISOLATED_ROOT="${isolated_root}" CODEX_ISOLATED_MODE="workspace" \
 		CODEX_THREAD_REUSE_STATE_KEY="implement-repair-tests" \
+		CODEX_THREAD_REUSE_TIMEOUT_SECS="${editor_timeout}" \
 		CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
 		CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
 		AI_ENGINE_EFFORT_HINT="${reasoning}" \
@@ -622,6 +665,7 @@ implement_prepush_test_gate_main()
 			implement_prepush_test_gate_log "outcome=repair_skipped reason=step_budget"
 			gate_repair="skipped (step time budget)"
 		elif [ "${gate_mode}" = repair ]; then
+			rm -f "${RUNTIME_DIR}/prepush_gate_restore_failed.flag"
 			implement_prepush_test_gate_repair "${final}"
 			# A reverted repair leaves the tree run 1 already tested: no re-run.
 			if [ "${gate_repair}" = ran ] && [ $(( SECONDS - gate_started + run_wall )) -gt "${step_budget}" ]; then
@@ -635,6 +679,9 @@ implement_prepush_test_gate_main()
 		else
 			gate_repair="not run (report mode)"
 		fi
+	fi
+	if [ -f "${RUNTIME_DIR}/prepush_gate_restore_failed.flag" ]; then
+		gate_repair="${gate_repair}; rollback incomplete"
 	fi
 	summary="${RUNTIME_DIR}/prepush_test_gate_summary.md"
 	if ! implement_prepush_test_gate_py summary "${final}" "${gate_module}" "${summary}" "${gate_mode}" "${gate_repair}" "${initial}"; then

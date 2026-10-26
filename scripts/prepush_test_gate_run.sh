@@ -21,7 +21,13 @@
 # Usage:
 #   prepush_test_gate_run.sh --worktree DIR --module FILE --image IMAGE \
 #     --base SHA --out-dir DIR [--timeout-minutes N] [--deps-root DIR]... \
-#     [--venv DIR] [--shards N] [--large-file-tests N] [--node-modules DIR]
+#     [--venv DIR] [--shards N] [--large-file-tests N] [--node-modules DIR] \
+#     [--nested-node-modules-root DIR]
+#
+# --nested-node-modules-root mounts each DIR/<project>/node_modules (the
+# nested Node projects that codex_isolated_exec.sh prepare --deps installs,
+# at most 6, depth 2-6, hidden directories skipped) read-only at
+# /source/<project>/node_modules and /baseline/<project>/node_modules.
 #
 # --node-modules mounts a prepared node_modules directory (the Node prep root
 # of codex_isolated_exec.sh prepare --deps) read-only at /source/node_modules
@@ -49,6 +55,7 @@ timeout_minutes="${PREPUSH_TEST_GATE_TIMEOUT_MINUTES:-15}"
 deps_roots=()
 venv=""
 node_modules=""
+nested_nm_root=""
 shards=""
 large_file_tests=""
 
@@ -78,6 +85,7 @@ while [ "$#" -gt 0 ]; do
 		--deps-root) deps_roots+=("${2:-}"); shift 2 ;;
 		--venv) venv="${2:-}"; shift 2 ;;
 		--node-modules) node_modules="${2:-}"; shift 2 ;;
+		--nested-node-modules-root) nested_nm_root="${2:-}"; shift 2 ;;
 		--shards) shards="${2:-}"; shift 2 ;;
 		--large-file-tests) large_file_tests="${2:-}"; shift 2 ;;
 		*) gate_log "outcome=error reason=unknown_argument"; synthetic_result usage_error; exit 0 ;;
@@ -201,6 +209,28 @@ if [ -n "${node_modules}" ]; then
 	else
 		gate_log "outcome=warning reason=node_modules_missing"
 	fi
+fi
+if [ -n "${nested_nm_root}" ] && nested_real="$(realpath -e "${nested_nm_root}" 2>/dev/null)" && [ -d "${nested_real}" ]; then
+	root_real="$(realpath -e "${root}")"
+	nested_count=0
+	while IFS= read -r -d '' nm; do
+		[ "${nm}" != "${nested_real}/node_modules" ] || continue
+		rel="${nm#"${nested_real}"/}"
+		rel="${rel%/node_modules}"
+		[[ "${rel}" =~ ^[A-Za-z0-9._@+/-]+$ ]] || continue
+		case "/${rel}/" in */../*|*/./*|*//*) continue ;; esac
+		if [ "${nested_count}" -ge 6 ]; then
+			gate_log "outcome=warning reason=nested_node_modules_cap"
+			break
+		fi
+		# Never create mount points through a symlink in the copied trees.
+		[ "$(realpath -m "${root_real}/source/${rel}")" = "${root_real}/source/${rel}" ] || continue
+		[ "$(realpath -m "${root_real}/baseline/${rel}")" = "${root_real}/baseline/${rel}" ] || continue
+		mkdir -p "${root_real}/source/${rel}/node_modules" "${root_real}/baseline/${rel}/node_modules" 2>/dev/null || continue
+		mounts+=(--mount "type=bind,src=${nm},dst=/source/${rel}/node_modules,readonly")
+		mounts+=(--mount "type=bind,src=${nm},dst=/baseline/${rel}/node_modules,readonly")
+		nested_count=$((nested_count + 1))
+	done < <(find "${nested_real}" -mindepth 1 -maxdepth 6 -type d \( -name node_modules -prune -print0 -o -name '.*' -prune \) 2>/dev/null | sort -z)
 fi
 [ -z "${large_file_tests}" ] || extra_env+=(--env "PREPUSH_TEST_GATE_LARGE_FILE_TESTS=${large_file_tests}")
 [ -z "${shards}" ] || run_extra+=(--shards "${shards}")
