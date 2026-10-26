@@ -659,6 +659,7 @@ jobs:
           set -euo pipefail
           ruff check --select E,F --ignore E501 workflow-templates/.claude/hooks/prepush_affected_tests.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_prepush_affected_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_prepush_test_gate.py
 
       - name: Claude engine selection and claude_run tests
         run: |

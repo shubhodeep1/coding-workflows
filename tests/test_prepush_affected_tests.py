@@ -853,3 +853,40 @@ def test_evaluate_hook_keeps_its_two_value_contract(tmp_path, monkeypatch):
 	root = _repo(tmp_path, {"a.txt": ""})
 	ask, message = gate.evaluate_hook(_auto(_push(root)))
 	assert "No pre-push test stamp" in ask and message == ""
+
+
+# --- wrapper pass-through flags (issue #8190) ---------------------------------
+
+def test_wrapper_forwards_venv_shards_and_large_file_limit(tmp_path):
+	worktree = _worktree(tmp_path)
+	venv = tmp_path / "venv"
+	(venv / "bin").mkdir(parents=True)
+	env, log = _wrapper_env(tmp_path)
+	out = tmp_path / "out"
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(out), "--timeout-minutes", "2", "--venv", str(venv), "--shards", "3",
+		"--large-file-tests", "7"], capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert f"src={venv.resolve()},dst=/opt/codex-venv,readonly" in run_line
+	assert "--env PATH=/opt/codex-venv/bin:" in run_line
+	assert "--env PREPUSH_TEST_GATE_LARGE_FILE_TESTS=7" in run_line
+	assert "--shards 3" in run_line
+	for flag in ("--network none", "--read-only", "--cap-drop ALL"):
+		assert flag in run_line
+
+
+def test_wrapper_drops_invalid_shards_and_large_file_values(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	out = tmp_path / "out"
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(out), "--shards", "4;rm -rf /", "--large-file-tests", "0", "--venv", str(tmp_path / "missing")],
+		capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	assert "name=PREPUSH_TEST_GATE_SHARDS" in proc.stderr and "name=PREPUSH_TEST_GATE_LARGE_FILE_TESTS" in proc.stderr
+	assert "reason=venv_missing" in proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "--env" not in run_line and "--shards" not in run_line and "/opt/codex-venv" not in run_line

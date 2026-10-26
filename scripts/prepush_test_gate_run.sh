@@ -20,7 +20,15 @@
 #
 # Usage:
 #   prepush_test_gate_run.sh --worktree DIR --module FILE --image IMAGE \
-#     --base SHA --out-dir DIR [--timeout-minutes N] [--deps-root DIR]...
+#     --base SHA --out-dir DIR [--timeout-minutes N] [--deps-root DIR]... \
+#     [--venv DIR] [--shards N] [--large-file-tests N]
+#
+# --venv mounts a dependency venv read-only at /opt/codex-venv (where
+# codex_isolated_exec.sh prepare --deps builds it, so its absolute shebangs
+# work) and puts its bin first on PATH. --shards and --large-file-tests
+# forward PREPUSH_TEST_GATE_SHARDS / PREPUSH_TEST_GATE_LARGE_FILE_TESTS to the
+# module, because the container gets no environment from the runner
+# (issue #8190). Values that are not plain digits are dropped.
 #
 # Always exits 0: the outcome is in <out-dir>/result.json (schema
 # prepush_test_gate.v1). Failures of the wrapper itself produce a synthetic
@@ -34,6 +42,9 @@ base=""
 out_dir=""
 timeout_minutes="${PREPUSH_TEST_GATE_TIMEOUT_MINUTES:-15}"
 deps_roots=()
+venv=""
+shards=""
+large_file_tests=""
 
 gate_log()
 {
@@ -59,6 +70,9 @@ while [ "$#" -gt 0 ]; do
 		--out-dir) out_dir="${2:-}"; shift 2 ;;
 		--timeout-minutes) timeout_minutes="${2:-}"; shift 2 ;;
 		--deps-root) deps_roots+=("${2:-}"); shift 2 ;;
+		--venv) venv="${2:-}"; shift 2 ;;
+		--shards) shards="${2:-}"; shift 2 ;;
+		--large-file-tests) large_file_tests="${2:-}"; shift 2 ;;
 		*) gate_log "outcome=error reason=unknown_argument"; synthetic_result usage_error; exit 0 ;;
 	esac
 done
@@ -74,6 +88,14 @@ fi
 if ! [[ "${timeout_minutes}" =~ ^[0-9]+$ ]] || [ "${timeout_minutes}" -lt 1 ] || [ "${timeout_minutes}" -gt 360 ]; then
 	gate_log "outcome=config_invalid name=PREPUSH_TEST_GATE_TIMEOUT_MINUTES fallback=15"
 	timeout_minutes=15
+fi
+if [ -n "${shards}" ] && { ! [[ "${shards}" =~ ^[0-9]+$ ]] || [ "${shards}" -lt 1 ] || [ "${shards}" -gt 64 ]; }; then
+	gate_log "outcome=config_invalid name=PREPUSH_TEST_GATE_SHARDS fallback=module_default"
+	shards=""
+fi
+if [ -n "${large_file_tests}" ] && { ! [[ "${large_file_tests}" =~ ^[0-9]+$ ]] || [ "${large_file_tests}" -lt 1 ] || [ "${large_file_tests}" -gt 100000 ]; }; then
+	gate_log "outcome=config_invalid name=PREPUSH_TEST_GATE_LARGE_FILE_TESTS fallback=module_default"
+	large_file_tests=""
 fi
 mkdir -p "${out_dir}" || { gate_log "outcome=error reason=out_dir_unwritable"; exit 0; }
 
@@ -154,16 +176,29 @@ for deps_root in "${deps_roots[@]}"; do
 	mounts+=(--mount "type=bind,src=${deps_real},dst=${deps_real},readonly")
 done
 
+extra_env=()
+run_extra=()
+if [ -n "${venv}" ]; then
+	if venv_real="$(realpath -e "${venv}" 2>/dev/null)" && [ -d "${venv_real}" ]; then
+		mounts+=(--mount "type=bind,src=${venv_real},dst=/opt/codex-venv,readonly")
+		extra_env+=(--env "PATH=/opt/codex-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" --env HOME=/tmp)
+	else
+		gate_log "outcome=warning reason=venv_missing"
+	fi
+fi
+[ -z "${large_file_tests}" ] || extra_env+=(--env "PREPUSH_TEST_GATE_LARGE_FILE_TESTS=${large_file_tests}")
+[ -z "${shards}" ] || run_extra+=(--shards "${shards}")
+
 wall=$(( timeout_minutes * 60 + 120 ))
 rc=0
 env -i PATH="${PATH}" timeout --kill-after=30s "${wall}" docker run --rm --init --name "${container}" \
 	--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
 	--pids-limit 512 --memory 4g --tmpfs /tmp:rw,nosuid,nodev,size=512m \
-	"${mounts[@]}" \
+	"${mounts[@]}" ${extra_env[@]+"${extra_env[@]}"} \
 	--workdir /source "${image}" \
 	python3 /gate/prepush_affected_tests.py run --repo-root /source \
 	--changed-files-file /results/changed.txt --baseline-tree /baseline \
-	--timeout-minutes "${timeout_minutes}" --out /results/result.json --summary /results/summary.md \
+	--timeout-minutes "${timeout_minutes}" ${run_extra[@]+"${run_extra[@]}"} --out /results/result.json --summary /results/summary.md \
 	> "${root}/container.log" 2>&1 || rc=$?
 env -i PATH="${PATH}" docker rm -f "${container}" >/dev/null 2>&1 || true
 if [ -n "$(env -i PATH="${PATH}" docker ps -aq --filter "name=^/${container}$" 2>/dev/null)" ]; then
