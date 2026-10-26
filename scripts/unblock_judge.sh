@@ -78,7 +78,9 @@
 # API budget (CLAUDE.md §15), per run: one `user` read, the item, its
 # comments (paginated; fresh reads before recording a `project-failed`
 # verdict and before its terminal label), the tracking issue's comments for a project's item,
-# at most one linked-issue read, one fix-up read while waiting, the PR diff,
+# at most one linked-issue read, one fix-up read while waiting (plus one
+# paginated fix-up comments read when the fix-up closed `completed` with
+# `ai:closed` and without `ai:merged`, #8191), the PR diff,
 # at most three run-metadata reads to bind a run cited in a pipeline-authored
 # comment to this item, then that run's log, one verdict comment (two for a
 # project's item) and
@@ -196,6 +198,29 @@ unblock_latest_wait()
 		| sort_by(.at) | last // empty
 		| "\(.id) \(.fixup) \(.done) \(.at) \(.updated)"
 	' "${RUNTIME_DIR}/item_comments.json" 2>/dev/null || true
+}
+
+# unblock_fixup_success_noop <fixup> — did the implement phase close this
+# fix-up as already implemented? Looks for the success-no-op marker
+# `<!-- ai:implement-success-noop:v1 issue=<fixup> -->` (implement.yml,
+# Guard 0) as the last line of a comment by the pipeline login.
+# Returns 0 when found, 1 when not, 2 when the comments cannot be read.
+# API calls (§15): one paginated comments read, only for a fix-up that
+# closed `completed` with `ai:closed` and without `ai:merged`.
+unblock_fixup_success_noop()
+{
+	local fixup="$1" comments_file="${RUNTIME_DIR}/fixup_${1}_comments.json"
+	if ! unblock_fetch_comments "${fixup}" "${comments_file}"; then
+		return 2
+	fi
+	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg fixup "${fixup}" '
+		any(.[]; (.user.login // "") == $login
+			and (((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r"))
+				== "<!-- ai:implement-success-noop:v1 issue=\($fixup) -->"))
+	' "${comments_file}" >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
 }
 
 # Default on: unset, empty or `true`; `false` turns waits off; any other
@@ -1474,7 +1499,29 @@ unblock_main()
 				unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=fixup_unavailable"
 				return 0
 			fi
+			# A merged fix-up ends the wait. So does one the implement phase closed
+			# as already implemented (no change needed, e.g. a verification-only
+			# operator step), when its trusted success-no-op marker is present.
+			local fixup_done_text="" fixup_noop_rc
 			if jq -e '.state == "closed" and .state_reason == "completed" and (.labels | index("ai:merged") != null)' <<< "${fixup_json}" >/dev/null 2>&1; then
+				fixup_done_text="merged"
+			elif jq -e '.state == "closed" and .state_reason == "completed" and (.labels | index("ai:closed") != null)' <<< "${fixup_json}" >/dev/null 2>&1; then
+				fixup_noop_rc=0
+				unblock_fixup_success_noop "${wait_fixup}" || fixup_noop_rc=$?
+				case "${fixup_noop_rc}" in
+					0)
+						fixup_done_text="closed as already implemented"
+						unblock_log "item=${ITEM} fixup=${wait_fixup} op=fixup_done via=success_noop"
+						;;
+					2)
+						# Unreadable comments: keep the wait open and retry next run
+						# instead of spending a round on a transient read failure.
+						unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=fixup_comments_unavailable"
+						return 0
+						;;
+				esac
+			fi
+			if [ -n "${fixup_done_text}" ]; then
 				# #7287: a fix-up filed for a descope / operator_step verdict that
 				# followed an automation-path rejection must not resume the item
 				# into the same guard; hand it to an operator instead.
@@ -1493,14 +1540,14 @@ unblock_main()
 							unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_regrant_failed run=${followup_run}"
 							return 0
 						fi
-						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge re-checked the automation-path grant instead of posting a resume command.
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; the unblock judge re-checked the automation-path grant instead of posting a resume command.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=followup_regrant run=${followup_run}"
 						return 0
 					fi
 					if jq -e '.handoff_pending == true' "${RUNTIME_DIR}/protected_rejection.json" >/dev/null 2>&1; then
-						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; this item is waiting for an operator (protected-path handoff), so no resume command was posted.
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; this item is waiting for an operator (protected-path handoff), so no resume command was posted.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=skip reason=operator_handoff_pending run=${followup_run}"
@@ -1518,15 +1565,21 @@ unblock_main()
 							return 0
 						fi
 						ops_file="${RUNTIME_DIR}/followup_handoff_ops.json"
+						# Pass --done-text only for the success-no-op case, so a merged
+						# fix-up keeps the call (and its text) unchanged.
+						local -a handoff_done_args=()
+						if [ "${fixup_done_text}" != "merged" ]; then
+							handoff_done_args=(--done-text "${fixup_done_text}")
+						fi
 						if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup-handoff --context-file "${RUNTIME_DIR}/context.json" \
-							--fixup "${wait_fixup}" --verdict "${followup_verdict}" > "${ops_file}" \
+							--fixup "${wait_fixup}" --verdict "${followup_verdict}" ${handoff_done_args[@]+"${handoff_done_args[@]}"} > "${ops_file}" \
 							|| ! unblock_run_ops "${ops_file}"; then
 							# The wait stays open, so the next run retries; the keyed
 							# operator step and the hold marker make that idempotent.
 							unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_handoff_failed"
 							return 0
 						fi
-						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged, but the automation-path guard's rejection of run ${followup_run} is still the newest guard result; the unblock judge handed this item to an operator instead of posting a resume command.
+						unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}, but the automation-path guard's rejection of run ${followup_run} is still the newest guard result; the unblock judge handed this item to an operator instead of posting a resume command.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 						unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=followup_handoff fixup=${wait_fixup} run=${followup_run}"
@@ -1552,26 +1605,31 @@ unblock_main()
 					fi
 				fi
 				if [ -n "${step_placeholder}" ]; then
-					if [ -z "${prior_hold}" ] && ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} merged. Its operator step \`${step_placeholder}\` still needs a person, so the unblock judge holds this item until that step is done instead of resuming it now. This hold uses no round.
+					if [ -z "${prior_hold}" ] && ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Fix-up #${wait_fixup} ${fixup_done_text}. Its operator step \`${step_placeholder}\` still needs a person, so the unblock judge holds this item until that step is done instead of resuming it now. This hold uses no round.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} hold=placeholder_retired ref=${step_placeholder} -->" >/dev/null 2>&1; then
 						# The fix-up wait stays open, so the next run tries again.
 						unblock_log "item=${ITEM} fixup=${wait_fixup} op=hold hold=placeholder_retired ref=${step_placeholder} outcome=skip reason=hold_record_failed"
 						return 0
 					fi
-					unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge holds this item until operator step \`${step_placeholder}\` is done.
+					unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; the unblock judge holds this item until operator step \`${step_placeholder}\` is done.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} op=hold hold=placeholder_retired ref=${step_placeholder} outcome=held"
 					return 0
 				fi
 				ops_file="${RUNTIME_DIR}/followup_ops.json"
-				if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup --context-file "${RUNTIME_DIR}/context.json" --fixup "${wait_fixup}" > "${ops_file}" \
+				# The resume note names how the wait ended; a merged fix-up keeps the old call.
+				local -a followup_done_args=()
+				if [ "${fixup_done_text}" != "merged" ]; then
+					followup_done_args=(--done-text "${fixup_done_text}")
+				fi
+				if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" followup --context-file "${RUNTIME_DIR}/context.json" --fixup "${wait_fixup}" ${followup_done_args[@]+"${followup_done_args[@]}"} > "${ops_file}" \
 					|| ! unblock_run_ops "${ops_file}"; then
 					unblock_log "item=${ITEM} fixup=${wait_fixup} outcome=skip reason=followup_failed"
 					return 0
 				fi
-				unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} merged; the unblock judge posted this item's resume command.
+				unblock_patch_comment "${wait_id}" "Fix-up #${wait_fixup} ${fixup_done_text}; the unblock judge posted this item's resume command.
 
 <!-- ai:unblock-wait:v1 item=${ITEM} fixup=${wait_fixup} done -->" || true
 				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${wait_fixup} outcome=followup"
