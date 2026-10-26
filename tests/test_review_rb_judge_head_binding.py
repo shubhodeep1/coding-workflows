@@ -439,6 +439,7 @@ def _run_merge_site(
 	stderr_text: str = DRAFT_MESSAGE,
 	*,
 	tmpdir_exists: bool = True,
+	extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]], Path, str]:
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_merge_err_") as td:
 		tmp = Path(td)
@@ -490,6 +491,7 @@ def _run_merge_site(
 			"REPOSITORY": "o/r",
 			"RB_JUDGED_HEAD_SHA": JUDGED,
 		}
+		env.update(extra_env or {})
 		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
 		calls: list[list[str]] = []
 		if gh_log.exists():
@@ -499,8 +501,8 @@ def _run_merge_site(
 		return proc, github_output.read_text(encoding="utf-8"), calls, scratch, proc.stdout
 
 
-def _expected_calls(path: str) -> list[list[str]]:
-	base = ["pr", "merge", "42", "--repo", "o/r", "--squash"]
+def _expected_calls(path: str, method: str = "--squash") -> list[list[str]]:
+	base = ["pr", "merge", "42", "--repo", "o/r", method]
 	if path == "sync":
 		return [base + ["--match-head-commit", JUDGED]]
 	return [base + ["--auto", "--match-head-commit", JUDGED], base + ["--match-head-commit", JUDGED]]
@@ -590,3 +592,51 @@ def test_no_merge_command_discards_stderr() -> None:
 			assert "2>/dev/null" not in line, line
 	reports = re.findall(r"^\s+rb_judge_merge_err_report (\S+)$", text, re.MULTILINE)
 	assert reports == ["merge", "terminal", "sync"]
+
+
+# --- forward-merge fallback PRs merge with a merge commit ------------------
+
+
+def _merge_method_selection_snippet() -> str:
+	text = _script_text()
+	start = text.index('RB_MERGE_METHOD_FLAG="--squash"\n')
+	end = text.index("\nfi\n", start) + len("\nfi\n")
+	return text[start:end]
+
+
+@pytest.mark.parametrize(
+	("head_ref", "expected"),
+	[
+		("auto/forward-merge-stable-40229490655-1", "--merge"),
+		("claude/some-feature", "--squash"),
+		("orchestrator/project-42", "--squash"),
+		("x-auto/forward-merge-stable-1-1", "--squash"),
+		("", "--squash"),
+	],
+)
+def test_merge_method_follows_head_ref(head_ref: str, expected: str) -> None:
+	script = (
+		"set -euo pipefail\n"
+		+ _merge_method_selection_snippet()
+		+ 'printf "METHOD=%s\\n" "${RB_MERGE_METHOD_FLAG}"\n'
+	)
+	proc = subprocess.run(
+		["bash", "-c", script],
+		env={"PATH": os.environ.get("PATH", ""), "POST_REVIEW_HEAD_REF": head_ref, "PR_NUMBER": "42"},
+		text=True,
+		capture_output=True,
+		timeout=30,
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert f"METHOD={expected}" in proc.stdout.splitlines(), proc.stdout
+	assert ("RB_JUDGE_MERGE_METHOD pr=42 method=merge" in proc.stdout) == (expected == "--merge")
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_forward_merge_pr_merges_with_merge_commit(path: str) -> None:
+	proc, _output, calls, _scratch, _stdout = _run_merge_site(
+		path, [0], extra_env={"RB_MERGE_METHOD_FLAG": "--merge"}
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == _expected_calls(path, "--merge")[:1]
+	assert all("--squash" not in call for call in calls)

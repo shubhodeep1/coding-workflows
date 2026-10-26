@@ -7819,7 +7819,7 @@ def test_review_blocked_judge_merges_are_bound_to_judged_head_sha() -> None:
 	assert '[[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in judge_text, (
 		"review-blocked judge must refuse merge actions without a full evaluated head SHA"
 	)
-	for merge_mode in ("--squash --auto", "--squash"):
+	for merge_mode in ('"${RB_MERGE_METHOD_FLAG:---squash}" --auto', '"${RB_MERGE_METHOD_FLAG:---squash}"'):
 		expected_call = (
 			'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" '
 			f'{merge_mode} --match-head-commit "${{RB_JUDGED_HEAD_SHA}}"'
