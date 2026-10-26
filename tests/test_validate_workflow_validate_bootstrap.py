@@ -49,6 +49,7 @@ def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_asset
 		"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
 		"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
 		"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",
+		"workflow-templates/validation-harness/_shared/Dockerfile.app.dockerignore.j2",
 		"workflow-templates/validation-harness/node-hardhat-solidity/Dockerfile.app.j2",
 		"workflow-templates/validation-harness/node-hardhat-solidity/_lib/graceful_shutdown.sh.j2",
 		"workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2",
