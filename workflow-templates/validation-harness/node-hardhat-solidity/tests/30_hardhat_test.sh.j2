@@ -26,6 +26,22 @@ echo "1..1"
 
 REPORTED_HARDHAT_TEST_CMD="${HARDHAT_TEST_CMD:-npx hardhat test --network localhost}"
 
+# Check that the project tree reached the image before running the suite, so a
+# missing /workspace/package.json is reported as a harness problem rather than
+# as an npm ENOENT (fun-token-multi-chain#579). Exit 3 means "file missing";
+# any other failure (for example the service is not running) falls through to
+# the test run below, which reports it as before.
+set +e
+docker compose -f "${COMPOSE_FILE}" exec -T \
+	"${APP_SERVICE}" /bin/sh -c 'if [ -f /workspace/package.json ]; then exit 0; fi; exit 3' >/dev/null 2>&1
+PROJECT_TREE_STATUS=$?
+set -e
+if [ "${PROJECT_TREE_STATUS}" -eq 3 ]; then
+	echo "not ok 1 - hardhat test suite"
+	echo "# harness_error: project tree not staged at /workspace (package.json missing; check the repository .dockerignore)"
+	exit 1
+fi
+
 set +e
 # The container env (set via compose env_file + environment) already carries
 # the manifest-provided HARDHAT_TEST_CMD; do not re-export it from the harness

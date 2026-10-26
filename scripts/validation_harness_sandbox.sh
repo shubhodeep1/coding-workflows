@@ -25,6 +25,7 @@
 # Log prefix (stable): VALIDATION_HARNESS_SANDBOX phase=<p> outcome=ok|retry|fail reason=<token>
 # (`phase=stage outcome=ok|skip reason=<token> path=<name>` names each file the
 # screened copy admits or drops beyond readonly_allowed: env templates and .npmrc.)
+# (`phase=stage outcome=ok reason=staged_count staged=<n>` is the member count of the screened copy, once per run.)
 # (`retry` only from provision, when a test container would not start under the
 # systemd cgroup driver, or under a daemon reused from an earlier provision in
 # the job, and the daemon is restarted with cgroupfs: reasons
@@ -929,6 +930,14 @@ for item in overlay_args:
 	overlays[dest] = src
 
 out = tarfile.open(fileobj=sys.stdout.buffer, mode="w|", format=tarfile.PAX_FORMAT)
+# Count every member written, whatever path added it (plain files, admissions,
+# HEAD blobs, overlays), for the one staged_count line after close.
+stage_addfile_raw = out.addfile
+stage_member_total = [0]
+def stage_addfile(member, fileobj=None):
+	stage_addfile_raw(member, fileobj)
+	stage_member_total[0] += 1
+out.addfile = stage_addfile
 
 def add(path, arcname):
 	info = os.lstat(path)
@@ -1169,6 +1178,9 @@ for name in sorted(names):
 for dest, src in sorted(overlays.items()):
 	add(src, dest)
 out.close()
+# A count only, never names: lets a diagnosis tell "nothing was staged" from
+# "the project was staged but the image lost it" (fun-token-multi-chain#579).
+print(f"VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=staged_count staged={stage_member_total[0]}", file=sys.stderr)
 PY
 
 # Validates a tar stream produced by the sandbox user and replays regular
