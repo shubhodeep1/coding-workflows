@@ -8,7 +8,8 @@ here.
 
 Consumer repos define their own `agents.md` with their own architectural
 facts. The unattended pipeline loads this file as `agents_canonical.md` and
-the consumer's `agents.md` separately; both are inlined into the prompt.
+the consumer's `agents.md` separately; both are inlined into the prompt. In
+coding-workflows itself implement inlines only the checkout's copy.
 
 The interactive merged-PR hook (`.claude/hooks/pr_merge_status_guard.py` and
 its consumer template) recognizes guarded git commands after nested control
@@ -1484,7 +1485,7 @@ whose `reporter_run` is missing or did not verify) has no verified run to bound
 a heal scope with. Both the pre-compose scope-marker
 guard (`WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED`) and the creation gate
 (`HEAL_INTAKE_SCOPE_GUARD_ENABLED`) skip it with
-`WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=marker_guard|scope_guard`
+`WORKFLOW_HEAL skip reason=scope_unavailable_no_runs stage=pre_diagnosis|marker_guard|scope_guard`
 and exit 0, with no CRITICAL alert (`_heal_report_claimed_no_runs` in
 `scripts/workflow_failure_heal_intake.sh`). The raw report must name no run as
 well: a report whose claimed runs `validate-payload` dropped (malformed or
@@ -2797,7 +2798,7 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
 - `tests/test_claude_template_live_parity.py` (own `ci.yml` step) fails when a
   template and its live copy differ in content or executable bits, unless the
   file is listed in `.github/ai/claude_template_divergence.json` with a reason.
-  Six command files are listed today; both copies of those are edited by hand.
+  Six command files and `settings.json` are listed; both copies are edited by hand.
 - `scripts/sync_claude_live_copies.py` runs from
   `.github/workflows/sync-claude-live-copies.yml` on every push to `main` that
   touches `workflow-templates/.claude/**`. When the push changed a template
@@ -2846,7 +2847,7 @@ using the PR base SHA and full git history. This prepares only eligible
 template-only command changes for the tests without committing or pushing live
 files. Security hooks under `.claude/hooks/**` and `.claude/settings.json` are
 never prepared: their committed live copies must match the templates for CI
-to pass, even when the editor cannot write the live file.
+to pass (settings.json apart from its one live-only allow rule), even when the editor cannot write the live file.
 Changes to both halves that still differ remain test failures. Push CI and
 PRs targeting `stable` check the committed tree without preparation, so drift
 on `main` is still reported while the post-merge sync PR is pending.

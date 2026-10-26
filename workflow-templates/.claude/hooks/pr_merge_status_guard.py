@@ -80,6 +80,12 @@ Exit codes (Claude Code hook protocol):
   0 — allow the command. A warning may be emitted via `systemMessage`, or a
       `permissionDecision: ask` may route the call through the harness prompt.
   2 — block the command; stderr is fed back to Claude as the reason.
+In Auto mode (`permission_mode` `auto`), a push whose only doubt is its shell
+shape (a branch created earlier in the same command, a push inside control
+flow, an expansion in a refspec) exits 2 with instructions to split the
+command, instead of asking: an ask prompts a human even in Auto mode, while a
+block runs nothing and the session can push again as one plain command.
+Deletions, default-branch, bulk and other-repository pushes still ask.
 The hook prints at most one JSON object on stdout per call, merging warnings
 and confirmation reasons into that object.
 
@@ -111,6 +117,9 @@ GUARDED_SUBCOMMANDS = frozenset({"commit", "push"})
 # GitHub MCP tools that push commits to a remote branch without a local
 # `git push`. Their `tool_input` carries `owner`, `repo` and `branch`.
 MCP_PUSH_TOOLS = frozenset({"mcp__github__push_files", "mcp__github__create_or_update_file"})
+# Claude Code's `permission_mode` hook field for Auto mode; any other or
+# missing value keeps the asks.
+AUTO_PERMISSION_MODE = "auto"
 
 # Verdicts of the API-free git-history fallback (see git_history_verdict).
 VERDICT_STRANDED = "stranded"
@@ -2509,6 +2518,23 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		)
 	confirmation_reasons.extend(unresolved_push_sources)
 	confirmation_reasons.extend(unresolved_push_destinations)
+	# Auto mode: when the only doubt is the command's shell shape (a branch
+	# made earlier in the same command, a push inside control flow, an
+	# expansion in a refspec), deny instead of asking. A hook "ask" prompts a
+	# human even in Auto mode; a deny runs nothing and the session can split
+	# the command and push again, which this guard then checks in full.
+	push_shape_only = bool(confirmation_reasons) and not (
+		unknown_destination_reasons or deletion_reasons or default_branch_reasons
+		or bulk_reasons or unverified_destinations
+	)
+	if push_shape_only and payload.get("permission_mode") == AUTO_PERMISSION_MODE:
+		return 2, (
+			"merged-PR guard (CLAUDE.md §21.E): " + "; ".join(confirmation_reasons)
+			+ "\n\nAuto mode: nothing ran (any branch or commit in this command was not created either). "
+			"Create the branch and commit in their own command first, then push as one plain command with "
+			"literal arguments: `git push -u origin <branch>` (no loop, `$VAR` or `$(...)`). The guard checks "
+			"that push normally."
+		)
 	confirmation_reasons.extend(unknown_destination_reasons)
 	if deletion_reasons:
 		confirmation_reasons.append(

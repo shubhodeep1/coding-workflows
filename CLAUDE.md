@@ -979,9 +979,15 @@ Write every `git push` as one plain command with literal arguments:
 `git push --force-with-lease origin <branch>` (or
 `--force-with-lease=<branch>:<sha>` with the SHA typed out). Never put a push
 inside a `for`/`while` retry loop: the guard cannot tell which directory the
-push runs in, so it asks for confirmation in every permission mode. Keep
+push runs in, so it asks for confirmation. Keep
 `$VAR` and `$(...)` out of the push arguments too, so the allow rules below
-can match. When a push fails on a network error, retry it as a new call with
+can match. Create the branch and commit in their own command before the push:
+the guards cannot resolve a branch that the same command creates
+(`git checkout -b X && ... && git push -u origin X`). In Auto mode, a push
+whose only problem is one of these shapes is refused with instructions
+instead of prompting (the merged-PR guard exits 2, the pre-push test gate
+denies), so nothing runs and the session pushes again as a plain command.
+When a push fails on a network error, retry it as a new call with
 the same plain command.
 
 `.claude/settings.json` allows the plain `git push` and
@@ -1265,8 +1271,9 @@ your own judgement.
    in `$(...)`. An unquoted expansion in a `gh api` argument prompts in every
    permission mode, and so does a `gh api` call inside a `$(...)` that sits
    in a loop or in a larger word (in Auto mode the guard leaves both to the
-   Auto-mode classifier unless an allow rule such as `Bash(gh api repos/*)`
-   or `Bash(test *)` could match the command, §23.H). Look a value up with one
+   Auto-mode classifier, or denies them with rewrite steps when an allow rule
+   such as `Bash(gh api repos/*)` or `Bash(test *)` could match the command,
+   §23.H). Look a value up with one
    call, then issue the next call with the value typed out. Put GET
    parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
@@ -1385,7 +1392,7 @@ and classifies it:
 |---|---|---|
 | read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion; in both cases with no file-backed `-F` value and no `--input`. A complete `for VAR in TOKEN…; do BODY; done` over literal IDs is also approved when every item is a vetted `gh api` read, `gh run view/list` or `gh pr view` read, or literal/`$VAR` echo (§23.H below). A bare `gh api --help` or `gh api -h` with no other argument is a read too (it prints usage and sends no API request); `--help` / `-h` next to an endpoint, any other flag or `--` stays unreadable and prompts (#6668). | not prompted by the hook |
 | routine | a §23.B write to the local checkout's repository (or `{owner}/{repo}`): create a PR; edit a PR's or issue's `title`/`body`; add or edit an issue or PR comment; reply to a review thread; add or remove one label; request reviewers; dispatch (`ref`, `inputs` only) one of the workflows `.claude/settings.json` already allows as `gh workflow run <file> *` (§23.C command-invoked carve-out) | not prompted by the hook |
-| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input` or a file-backed `-F`/`--field` value (`@<file>`, or `@-` for stdin, which `gh` reads and sends) on any method, endpoint, or repository, GraphQL included (issue #4619; a `-f`/`--raw-field` value is sent literally and reads no file), an `-F` word the shell could rewrite into one (`$`, a backtick, `~`, or a glob character in it), a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a backtick or double-quoted `$(...)` substitution Bash would run — single-quoted text is data — handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode (in Auto mode a hidden call gets no decision instead; see "Auto mode" below) |
+| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input` or a file-backed `-F`/`--field` value (`@<file>`, or `@-` for stdin, which `gh` reads and sends) on any method, endpoint, or repository, GraphQL included (issue #4619; a `-f`/`--raw-field` value is sent literally and reads no file), an `-F` word the shell could rewrite into one (`$`, a backtick, `~`, or a glob character in it), a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a backtick or double-quoted `$(...)` substitution Bash would run — single-quoted text is data — handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode (in Auto mode a hidden call gets no decision instead, or a deny with rewrite steps where an allow rule could match; see "Auto mode" below) |
 | malformed jq | a `-q`/`--jq` value that is one of jq's own command-line options (matches `^--?[A-Za-z]`: `--arg`, `-r`, `--raw-output`, `-c`); `gh api` has no such flags, so the call could never work (#4891) | denied with a reason that says how to fix the command; nothing runs and no human is needed |
 
 The hook decides once for the whole Bash call: **deny** when any call
@@ -1429,9 +1436,12 @@ argument. A call the guard reads and classifies as a write (an unreadable
 call included) still asks, a flag between `gh` and `api` still asks, the
 malformed-jq deny and every allow are unchanged, and the command is never
 allowed when one of those doubts fired. A command that an allow rule could
-match keeps every ask in Auto mode, because Auto mode resolves a matching
-allow rule before its classifier runs, so a no-decision there would approve
-the command unprompted. That covers `gh api repos/` and `gh api user`
+match is **denied** in Auto mode instead, with a reason that says how to
+rewrite it (one plain `gh api` call per ID with the ID typed out, no `$VAR`
+file redirects, the Edit or Write tool for text that only mentions `gh api`),
+because Auto mode resolves a matching allow rule before its classifier runs,
+so a no-decision there would approve the command unprompted, and an ask would
+stop on a prompt. A deny runs nothing. That covers `gh api repos/` and `gh api user`
 (including quoted spellings such as `'gh' api repos/`), and any `Bash(...)`
 allow rule in the project's `.claude/settings.json` /
 `.claude/settings.local.json`, `~/.claude/settings.json`, `CLAUDE_CONFIG_DIR`
@@ -1440,10 +1450,10 @@ or the managed settings files that matches the command or one of its parts
 that starts with a wrapper such as `timeout`, `nice`, `env`, `sudo` or `xargs`
 is also matched with its leading words dropped, so
 `timeout 60 git diff "$(...)"` counts as matching `Bash(git diff *)`. A
-settings file that exists but cannot be read also keeps every ask, and so does
-a brace / ANSI-C / comment hazard in a command that holds an `@` or an escape
-that can produce one, since it could hide a file-backed `-F key=@file` field.
-Every other mode keeps the prompts.
+settings file that exists but cannot be read is treated the same way (deny),
+and so is a brace / ANSI-C / comment hazard in a command that holds an `@` or
+an escape that can produce one, since it could hide a file-backed
+`-F key=@file` field. Every other mode keeps the prompts.
 The headless Actions runs use `dontAsk` or `bypassPermissions`, where an ask
 is a denial; `tests/test_gh_api_write_guard.py` fails if a script under
 `scripts/` starts Claude in Auto mode.
