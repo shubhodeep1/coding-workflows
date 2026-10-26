@@ -244,7 +244,8 @@ heal_prepush_test_gate()
 	# An exported GIT_DIR / GIT_WORK_TREE would point the gate's git at the heal
 	# checkout instead of the gate tree.
 	gate_base="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${root}/gate-tree" rev-parse HEAD 2>/dev/null || true)"
-	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE bash "${gate_step}" gate --phase heal --worktree "${root}/gate-tree" --base "${gate_base}" --image "${image}" \
+	# PREPUSH_TEST_GATE_TIMEOUT_MINUTES=10 matches validate_snapshot's 600 s bound.
+	env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE PREPUSH_TEST_GATE_TIMEOUT_MINUTES=10 bash "${gate_step}" gate --phase heal --worktree "${root}/gate-tree" --base "${gate_base}" --image "${image}" \
 		--out "${root}/results/prepush" > "${root}/results/prepush.status" || true
 	read -r gate_status gate_pr gate_inh < "${root}/results/prepush.status" || true
 	if [ "${gate_status}" != fail ] || ! [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null || [ "${gate_mode}" != repair ]; then

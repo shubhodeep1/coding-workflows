@@ -964,13 +964,15 @@ _resolver_prepush_test_gate()
   gate_wall=$(( gate_tm * 60 + 120 ))
   gate_attempt_secs="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}"
   [[ "${gate_attempt_secs}" =~ ^[1-9][0-9]*$ ]] || gate_attempt_secs=3000
-  if [ $(( gate_budget_end - SECONDS )) -lt "${gate_wall}" ]; then
+  # The image prepare below is bounded to 600 s and counted here, so a slow or
+  # retrying sandbox build cannot use up the commit reserve.
+  if [ $(( gate_budget_end - SECONDS )) -lt $(( gate_wall + 600 )) ]; then
     echo "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=step_budget" >&2
     return 0
   fi
   mkdir -p "${gate_dir}" 2>/dev/null || return 0
   gate_base="$(git rev-parse HEAD 2>/dev/null || true)"
-  if [ -f "${gate_sandbox_sh}" ] && gate_root="$(bash "${gate_sandbox_sh}" prepare-ephemeral codex 2>/dev/null)" && [ -n "${gate_root}" ]; then
+  if [ -f "${gate_sandbox_sh}" ] && gate_root="$(timeout --kill-after=30s 600 bash "${gate_sandbox_sh}" prepare-ephemeral codex 2>/dev/null)" && [ -n "${gate_root}" ]; then
     if [ -f "${gate_root}/image" ] && [ ! -L "${gate_root}/image" ]; then
       gate_image="$(head -n 1 "${gate_root}/image" 2>/dev/null | tr -d '[:space:]')"
     fi
