@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_lib.py:4322-4356 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The last run removed the `timed_out` latch, so each issue now pays the gate-module timeout separately. With each `select` run rescanning the repository, the step costs N issues \u00d7 (scan + up to 60 s).\n  WHY: If the module is slower than the timeout, every issue times out and nothing is augmented, yet the step spends 60 s per issue (about 10 minutes for 10 issues) against the 240-minute job budget (`orchestrate.yml:85`). The reviewer calls this \"a budget observation, not a failure\" and gave no severity; low is inferred from that wording.\n- scripts/orchestrate_lib.py:4264-4267 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: When the module response lacks `affected_tests` or `companion_files`, the missing key defaults to an empty list, so an incomplete response is accepted instead of being reported as malformed.\n  WHY: A `{}` response logs `added=0` instead of `outcome=skipped reason=malformed_json`. A response with only one key gets partly applied, so missing tests or companions never reach `files_touched` and overlapping child issues can escape partition serialization. The reviewer rated it SEVERITY: NIT, mapped here to low.\n- scripts/orchestrate_lib.py:4330-4373 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Marker entries popped from the local `recorded` dict (empty `files_touched` at 4330, `marker_ignored` at 4349) are written back only when `totals[\"added\"] > 0` (line 4373). In a run where nothing is added, the pops are discarded and the original `prepush_augmented_paths` key survives on disk.\n  WHY: This contradicts the agents.d fragment's statement that ignored or empty-`files_touched` marker entries are \"dropped rather than written back\", and leaves model-supplied junk in the state file indefinitely. It is functionally harmless because the trust check ignores the marker again. The reviewer rated it SEVERITY: NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_lib.py:`augment_files_touched`, lines 4322-4356 (per-issue `_prepush_select_planned_paths(..., timeout_secs)` at 4343 and 4351); `PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS = 60` at line 4147 | confidence=3\n  PROBLEM: The last run removed the `timed_out` latch, so the gate-module timeout is now paid once per issue instead of once per augmentation. Each `select` run also rescans the repository, so the step costs N issues \u00d7 (scan + up to 60 s).\n  WHY: If the module is slower than the timeout, every issue times out and the step spends 60 s per issue (about 10 minutes for 10 issues of the 240-minute budget, `orchestrate.yml:85`) for no result. Before, the first timeout short-circuited the rest. The reviewer calls this a budget observation, not a failure. Suggested fix: a shared wall-clock budget with `reason=budget_exhausted`.\n- HARDENING: scripts/orchestrate_lib.py:augment_files_touched, lines 4322-4356 | HARDENING_RISK_SCORE: 2\n  PROBLEM: Without the `timed_out` latch, the total timeout across issues is unbounded, so a slow gate module costs up to 60 s per issue and none of them get augmented.\n  WHY: Suggested fix: track a monotonic deadline for the whole augmentation and skip the remaining issues with `reason=budget_exhausted` (about 8 lines).\n- HARDENING: scripts/orchestrate_lib.py:cmd_augment_files_touched, lines 4409-4422 | HARDENING_RISK_SCORE: 1\n  PROBLEM: On `post_validate_failed`, the summary zeroes only `summary[\"added\"]` and keeps `summary[\"issues\"]`, `summary[\"skipped\"]` and `summary[\"truncated\"]` from the failed attempt.\n  WHY: The JSON printed to stdout mixes counters from an augmentation that was not applied. Suggested fix: `summary.update({\"issues\": 0, \"added\": 0, \"truncated\": 0, \"skipped\": 0})` (about 3 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_lib.py:4264-4267 | severity=NIT | confidence=4\n  PROBLEM: When `affected_tests` or `companion_files` is missing, it defaults to an empty list, so an incomplete module response is accepted instead of reported as malformed.\n  WHY: `{}` logs `added=0` instead of `outcome=skipped reason=malformed_json`. A response with one key missing is partly applied, so missing tests or companions never reach `files_touched` and overlapping child issues can escape partition serialization.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_lib.py:`augment_files_touched`, lines 4330/4349 (`recorded.pop`) vs line 4373 (`if totals[\"added\"] > 0: data[PREPUSH_AUGMENTED_PATHS_KEY] = recorded`) | severity=NIT | confidence=4\n  PROBLEM: Popped marker entries are written back only when `totals[\"added\"] > 0`. Otherwise the `recorded` dict is discarded and the original `prepush_augmented_paths` key is written back unchanged by `_prepush_write_json_atomic`.\n  WHY: This contradicts the documented agents.d contract that such entries are \"dropped rather than written back\". The stale, untrusted marker persists across runs. It is functionally harmless because the trust check ignores it again.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3c45215948fda2031572ed62b9604aa6f963be44ad54cbe55d1d82a55532e071",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8193,
+    "run_id": "40292536793",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40292536793",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026092013_cb86d69d1d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8193,
+    "run_id": "40292536793"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-26T09:20:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
