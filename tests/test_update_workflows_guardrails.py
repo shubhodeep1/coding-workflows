@@ -428,6 +428,7 @@ def main() -> int:
 	test_success_path_contracts_are_preserved()
 	test_wrapper_ref_renderer_contract()
 	test_every_wrapper_template_renders_to_an_immutable_ref()
+	test_wrapper_template_third_party_actions_are_sha_pinned()
 	test_renderer_pins_security_hold_support_checkout_to_release_sha()
 	test_renderer_fails_closed_on_unpinnable_support_checkout()
 	test_ai_review_template_pins_only_the_sweep_support_checkout()
