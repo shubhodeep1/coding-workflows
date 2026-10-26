@@ -1522,13 +1522,57 @@ class MovedPollGroupTwoStepsContractTest(unittest.TestCase):
 # Steps moved out of tests-hooks-and-orchestrator, which took 15m06s of its 20
 # minutes (run 39575950300, budget-watch issue #7798): step name -> (owning job
 # id, module paths or tool directory its body names). The group-2 steps of the
-# same move are in GROUP_PINNED_STEPS.
+# same move are in GROUP_PINNED_STEPS. Issue #8179 added three more steps.
 HOOKS_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
 HOOKS_NODE_SETUP_STEP = "Set up Node 22 for the claude-pool-broker Worker tests"
 HOOKS_VITEST_STEP = "claude-pool-broker Worker tests (vitest)"
 MOVED_HOOKS_JOB_STEPS = {
 	HOOKS_NODE_SETUP_STEP: ("tests-release-and-log-analysis", ()),
 	HOOKS_VITEST_STEP: ("tests-release-and-log-analysis", ("tools/claude-pool-broker",)),
+	# tests-hooks-and-orchestrator took 15m01s of its 20 minutes again (run
+	# 40264887710, budget-watch issue #8179); these three steps moved,
+	# unchanged, to tests-promote-stall-and-review.
+	"Orchestrate lib unit tests": (
+		"tests-promote-stall-and-review",
+		(
+			"tests/test_orchestrate_lib.py",
+			"tests/test_task_state.py",
+			"tests/test_task_state_unblock.py",
+			"tests/test_blocker_check.py",
+			"tests/test_codex_stall_guard_poller.py",
+			"tests/test_orchestrate_force_tick.py",
+			"tests/test_orchestrate_poll_follow_up.py",
+			"tests/test_orchestrator_concurrency_caps.py",
+		),
+	),
+	"Judge Semble prefetch contract test": (
+		"tests-promote-stall-and-review",
+		(
+			"tests/test_judge_semble_prefetch_contract.py",
+			"tests/test_implement_semble_contract.py",
+			"tests/test_record_id_format_contract.py",
+			"tests/test_clarify_informal_detect.py",
+			"tests/test_repo_root_helper.py",
+			"tests/test_generate_resource_id.py",
+			"tests/test_update_repo_tree.py",
+			"tests/test_validate_semble_contract.py",
+			"tests/test_mcp_handshake_probe.py",
+			"tests/test_setup_serena_toml.py",
+			"tests/test_serena_stats_emit.py",
+			"tests/test_validate_process_template_mode.py",
+			"tests/test_semble_workflow_parity_contract.py",
+			"tests/test_smoke_alert_silencing_contract.py",
+		),
+	),
+	"Standalone clarify auto-decide tests (port P3)": (
+		"tests-promote-stall-and-review",
+		(
+			"tests/test_auto_decisions.py",
+			"tests/test_clarify_respond_standalone.py",
+			"tests/test_clarify_github_facts.py",
+			"tests/test_clarify_sandbox_base_image_preseed.py",
+		),
+	),
 }
 MOVED_HOOKS_GROUP_TWO_STEPS = (
 	"Isolated agent container tests (codex_isolated_exec.sh)",
@@ -1538,7 +1582,7 @@ MOVED_HOOKS_GROUP_TWO_STEPS = (
 
 
 class MovedHooksJobStepsContractTest(unittest.TestCase):
-	"""The steps moved out of tests-hooks-and-orchestrator run once, in one job (#7798)."""
+	"""The steps moved out of tests-hooks-and-orchestrator run once, in one job (#7798, #8179)."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -1561,6 +1605,17 @@ class MovedHooksJobStepsContractTest(unittest.TestCase):
 			with self.subTest(step=name):
 				for _owner, step in self.owning_steps(name):
 					self.assertNotIn("if", step)
+
+	def test_moved_step_modules_exist_and_are_named(self) -> None:
+		for name, (_job_id, paths) in MOVED_HOOKS_JOB_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for path in paths:
+				if (REPO_ROOT / path).is_dir():
+					continue
+				with self.subTest(step=name, module=path):
+					self.assertTrue((REPO_ROOT / path).is_file(), path)
+					self.assertIn(path, steps[0][1]["run"])
 
 	def test_vitest_step_keeps_its_working_directory(self) -> None:
 		steps = self.owning_steps(HOOKS_VITEST_STEP)

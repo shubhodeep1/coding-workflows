@@ -71,6 +71,33 @@ def test_log7_foundry_path_persists_in_non_login_shells() -> None:
         assert "ENV PATH=/root/.foundry/bin:${PATH}" in dockerfile_text
 
 
+def test_app_image_ignores_consumer_root_dockerignore() -> None:
+    # fun-token-multi-chain#579: a consumer root .dockerignore of `**` plus
+    # `!services/session-server/...` stripped package.json from /workspace.
+    # BuildKit prefers <Dockerfile>.dockerignore next to the Dockerfile, so the
+    # harness renders one beside Dockerfile.app that excludes nothing.
+    with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
+        temp_root = Path(td)
+        manifest_path = temp_root / "validate.yml"
+        output_root = temp_root / "validation"
+        _write_yaml(manifest_path, _manifest_payload())
+
+        result = _run_renderer(manifest_path, output_root)
+        assert result.returncode == 0, result.stderr
+
+        compose = yaml.safe_load((output_root / "docker-compose.test.yml").read_text(encoding="utf-8"))
+        dockerfile_rel = compose["services"]["app"]["build"]["dockerfile"]
+        assert dockerfile_rel == "validation/Dockerfile.app", dockerfile_rel
+        ignore_path = output_root / "Dockerfile.app.dockerignore"
+        assert ignore_path.is_file(), "Dockerfile.app.dockerignore was not rendered"
+        patterns = [
+            line.strip()
+            for line in ignore_path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        assert patterns == [], f"harness dockerignore must exclude nothing: {patterns}"
+
+
 def test_node_compose_pins_foundry_image_version() -> None:
     with tempfile.TemporaryDirectory(prefix="render-validation-node-hardhat-") as td:
         temp_root = Path(td)
