@@ -447,6 +447,12 @@ jobs:
           fi
 
       - name: Checkout repository
+        # The label_missing hold (#7516, #8151) sets SKIP_PLAN=true and exits 0.
+        # Every setup step up to "Fetch issue metadata" is skipped on that hold,
+        # as in clarify, so a transient checkout, staging or API failure cannot
+        # fail a held run and file a plan_failed heal report. This comment sits
+        # inside the step: a less-indented line before it would end up in the
+        # refctx body that the tests extract and dedent.
         if: steps.refctx.outputs.label_missing_hold != 'true'
         uses: actions/checkout@v5
         with:

@@ -926,6 +926,24 @@ def test_plan_steps_after_refctx_skip_on_skip_plan() -> None:
 		step = _step_text(wf, name)
 		cond = next((l for l in step.splitlines() if l.startswith("        if: ")), "")
 		assert "env.SKIP_PLAN != 'true'" in cond, f"{name}: {cond!r}"
+	# Setup steps between the hold and the planning steps (#8151 review):
+	# a failure there would still fail a held run and file plan_failed.
+	for name in (
+		"Checkout repository",
+		"Log checkout ref",
+		"Configure git auth for memory helper clones",
+		"Resolve workflow support ref",
+		"Checkout workflow support source",
+		"Checkout workflow support source fallback",
+		"Ensure workflow support source checkout",
+		"Checkout workflow support source main snapshot",
+		"Stage workflow support files",
+		"Create runtime workspace",
+		"Fetch issue metadata",
+	):
+		step = _step_text(wf, name)
+		cond = next((l for l in step.splitlines() if l.startswith("        if: ")), "")
+		assert "steps.refctx.outputs.label_missing_hold != 'true'" in cond, f"{name}: {cond!r}"
 
 
 def test_plan_setup_steps_skip_on_label_missing_hold() -> None:
