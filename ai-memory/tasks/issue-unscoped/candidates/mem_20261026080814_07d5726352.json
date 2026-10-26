@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:56 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The module docstring usage line for `followup-handoff --context-file PATH --fixup N --verdict descope|operator_step` does not list the new optional `--done-text` argument, although the `followup` line was updated and the parser accepts it.\n  WHY: Nothing breaks at runtime (default `merged` keeps old callers unchanged), but the documented usage contract drifts from the parser. Reviewers rated this NIT.\n- scripts/unblock_judge.sh:78-96 (call at 211) | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_3-flash]\n  PROBLEM: The header \"API budget (CLAUDE.md \u00a715), per run\" list (line 81, \"one fix-up read while waiting\") omits the new paginated fix-up comments read in `unblock_fixup_success_noop` (`unblock_fetch_comments` at line 211).\n  WHY: The read happens when a fix-up is closed `completed` with `ai:closed` and without `ai:merged`, so the declared per-run API budget understates real usage. No runtime failure; reviewers rated this NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/unblock_actions.py:56 | severity=NIT | confidence=4\n  PROBLEM: The `followup` usage line was updated to `[--done-text TEXT]`, but the `followup-handoff` usage line was not, although `build_parser` gives `followup-handoff` the same `--done-text` argument.\n  WHY: Nothing breaks (default `merged`), but the usage summary no longer matches the parser.\n- scripts/unblock_judge.sh:78 | severity=NIT | confidence=4\n  PROBLEM: The API budget header omits the new paginated fix-up comments read in `unblock_fixup_success_noop`, which reaches `unblock_fetch_comments`.\n  WHY: The header is the documented per-run API contract and now understates the call set.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:81 | severity=NIT | confidence=4\n  PROBLEM: The API budget documentation in the script header is stale and does not include the new paginated fix-up comments read added at line 211.\n  WHY: This is documentation/contract drift with no runtime failure, but the API budget documentation must reflect actual usage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_actions.py:56 | severity=NIT | confidence=4\n  PROBLEM: The module docstring usage for `followup-handoff` does not list the new optional `--done-text` argument, while the sibling `followup` usage line at line 50 does.\n  WHY: Nothing breaks at runtime. The two subcommands' documented usage no longer matches the parser built at scripts/unblock_actions.py:1221-1229.\n- scripts/unblock_judge.sh:78-81 (new call at line 211, reached from line 1508) | severity=NIT | confidence=4\n  PROBLEM: The header's per-run API read list omits the new paginated comments read at line 211, `unblock_fetch_comments \"${fixup}\" \"${comments_file}\"`. \"One fix-up read while waiting\" covers only the metadata read at line 1495.\n  WHY: No runtime failure, but the declared per-run budget contract no longer reflects the effective API-call surface.\n- HARDENING (not a finding): scripts/unblock_judge.sh line 210 has no shape check on the fix-up id before it is interpolated into a path. Suggested fix: `[ \"${fixup}\" =~ ^[1-9][0-9]*$ ] || return 2`.\n- HARDENING (not a finding): scripts/unblock_actions.py:1251 \u2014 the `--done-text` gate is the existing `FIXUP_DONE_TEXTS` check. No change needed.\n- HARDENING (not a finding): scripts/unblock_judge.sh:1503 \u2014 declare `fixup_noop_rc=0` so a future reordering cannot trip `set -u`.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_judge.sh:78-85, 206-211 | severity=NIT | confidence=4\n  PROBLEM: The per-run API budget comment omits the paginated comments read added by `unblock_fixup_success_noop`.\n  WHY: When a fix-up is closed as completed with `ai:closed` and without `ai:merged`, the helper makes one additional paginated API read that the documented budget does not count.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_actions.py:56 | severity=NIT | confidence=5\n  PROBLEM: The `followup-handoff` usage line does not list the new optional `--done-text` argument, while the `followup` line at line 50 shows `[--done-text TEXT]`.\n  WHY: Nothing breaks at runtime, but the usage summary is stale and inconsistent with the CLI, which accepts `--done-text` at line 1224.\n- scripts/unblock_judge.sh:81 | severity=NIT | confidence=5\n  PROBLEM: The header's `API budget (CLAUDE.md \u00a715)` list (\"one fix-up read while waiting\") omits the new paginated fix-up comments read in `unblock_fixup_success_noop` at line 211, called from line 1508.\n  WHY: There is no runtime failure, but the omission lets the documented budget drift from the actual call set.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_actions.py:56 | severity=NIT | confidence=4\n  PROBLEM: The `followup-handoff` usage line does not list the new optional `--done-text TEXT` argument (argparse at lines ~1224-1227, `run()` at line ~1263).\n  WHY: Nothing breaks, but the usage summary misdocuments the accepted arguments and is inconsistent with the sibling `followup` line.\n- scripts/unblock_judge.sh:78-96 (read at line 211) | severity=NIT | confidence=4\n  PROBLEM: The PR description and agents.d fragment declare one paginated comments read in the `ai:closed` case, but the header's per-run API-budget list was not extended to name it. Line 81 documents only \"one fix-up read while waiting\".\n  WHY: No runtime failure, but the declared per-run budget contract drifts from the actual call set.\n- HARDENING: scripts/unblock_judge.sh lines 78-96 \u2014 append one clause to the budget sentence naming the fix-up comments read.\n- HARDENING: scripts/unblock_actions.py line 56 \u2014 add `[--done-text TEXT]` to the `followup-handoff` usage line.\n- HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fbcfc5f19d18260f935277ad2ed34a18535a762056aa8e6abb1d1476e964a358",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8191,
+    "run_id": "40284794366",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40284794366",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026080814_07d5726352",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8191,
+    "run_id": "40284794366"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T08:08:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
