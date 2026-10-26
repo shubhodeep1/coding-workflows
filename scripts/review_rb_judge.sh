@@ -2563,8 +2563,21 @@ __EDIT_DISCIPLINE__
       elif codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
         echo "::warning::Review-blocked fix OpenCode was killed by codex stall guard; skipping commit/merge and falling back to manual intervention."
       elif [ -n "$(git status --porcelain)" ]; then
-        git config user.name "codex-bot"
-        git config user.email "codex@users.noreply.github.com"
+        # The commit author names the engine of the fix pass: claude-bot
+        # when it ran on Claude (review_rb_claude_run returns 75 when the
+        # role is not on Claude or Claude handed off to OpenCode), codex-bot
+        # otherwise. Both emails are on the reserved .invalid domain so
+        # GitHub links the commit to no account.
+        if [ "${rb_fix_claude_rc}" -ne 75 ]; then
+          rb_fix_commit_engine=claude
+          git config user.name "claude-bot"
+          git config user.email "claude-bot@users.noreply.invalid"
+        else
+          rb_fix_commit_engine=codex
+          git config user.name "codex-bot"
+          git config user.email "codex-bot@users.noreply.invalid"
+        fi
+        echo "AI_COMMIT_IDENTITY role=RB_JUDGE engine=${rb_fix_commit_engine} name=$(git config user.name)"
 
         # Clean up workflow-fetched artifacts before committing.
         #

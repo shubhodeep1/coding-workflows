@@ -120,7 +120,7 @@ fi
 # steps may set this, but after git clean / reset it can be lost if
 # the runner has no global git config.
 git config user.name  "codex-bot"        2>/dev/null || true
-git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
+git config user.email "codex-bot@users.noreply.invalid" 2>/dev/null || true
 
 # Move untracked content out of the working tree so it doesn't
 # collide with files coming from origin/BASE_BRANCH during the

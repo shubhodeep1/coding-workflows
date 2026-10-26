@@ -272,6 +272,9 @@ run_editor_codex_attempt() {
     fi
     [ "${editor_claude_rc}" -eq 75 ] || return "${editor_claude_rc}"
     echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=claude_unavailable action=opencode" >&2
+    # The commit step (review_commit_changes.sh) reads this to keep the
+    # codex-bot identity on a commit OpenCode wrote.
+    if [ -n "${GITHUB_ENV:-}" ]; then echo "REVIEW_EDITOR_ENGINE_FELL_BACK=true" >> "${GITHUB_ENV}" || true; fi
   fi
 
   if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then

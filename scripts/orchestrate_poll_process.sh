@@ -460,6 +460,10 @@ poller_judge_isolated()
   [ "${judge_role}" != RB_JUDGE ] || judge_reason_file="${RUNTIME_DIR}/rb_judge_isolation_reason"
   : > "${judge_reason_file}"
   : > "${output_file}"
+  # Engine that produced the last RB_JUDGE answer, for the combined-mode fix
+  # commit's author (claude-bot vs codex-bot). A file, because callers may
+  # run this function in a subshell.
+  [ "${judge_role}" != RB_JUDGE ] || printf '%s\n' codex > "${RUNTIME_DIR}/rb_judge_last_engine"
   if [ "${POLLER_JUDGE_ENGINE_LABELS+set}" = set ]; then
     judge_engine_labels="${POLLER_JUDGE_ENGINE_LABELS}"
     if ! printf '%s' "${judge_engine_labels}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
@@ -507,9 +511,11 @@ poller_judge_isolated()
     : > "${output_file}"
     return 77
   fi
+  local rb_used_engine="${rb_engine}"
   if [ "${rb_rc}" -eq 75 ] && [ "${rb_engine}" = claude ]; then
     # Claude unavailable inside isolation: retry OpenCode in a NEW root.
     rb_rc=0
+    rb_used_engine=codex
     POLLER_JUDGE_MODEL_HINT="${model_hint}" _poller_rb_judge_sandbox_attempt codex "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" "${judge_role}" || rb_rc=$?
   fi
   if [ "${rb_rc}" -eq 75 ]; then
@@ -517,6 +523,9 @@ poller_judge_isolated()
     rb_rc=77
   fi
   [ "${rb_rc}" -eq 0 ] || : > "${output_file}"
+  if [ "${judge_role}" = RB_JUDGE ] && [ "${rb_rc}" -eq 0 ]; then
+    printf '%s\n' "${rb_used_engine}" > "${RUNTIME_DIR}/rb_judge_last_engine"
+  fi
   return "${rb_rc}"
 }
 poller_rb_judge_isolated()
@@ -2039,7 +2048,7 @@ _record_merge_conflict_telemetry()
 		(
 			cd "${wt}"
 			git config user.name "codex-bot"
-			git config user.email "codex@users.noreply.github.com"
+			git config user.email "codex-bot@users.noreply.invalid"
 			git add "${mem_root}/orchestrator/merge_conflicts.jsonl" || exit 1
 			if git diff --cached --quiet; then
 				exit 0
@@ -10609,7 +10618,7 @@ invoke_judge_for_integration_conflict() {
     return 1
   fi
   local merge_rc=0
-  git -C "${judge_wt}" -c user.name="codex-bot" -c user.email="codex@users.noreply.github.com" \
+  git -C "${judge_wt}" -c user.name="codex-bot" -c user.email="codex-bot@users.noreply.invalid" \
     merge --no-ff --no-commit "refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || merge_rc=$?
   judge_conflicts="$(git -C "${judge_wt}" diff --name-only --diff-filter=U 2>/dev/null || true)"
   if [ "${merge_rc}" -ne 0 ] && [ -z "${judge_conflicts}" ]; then
@@ -11179,7 +11188,7 @@ _integration_judge_commit_and_push() {
     echo "  [integration-heal] No merge or judge changes to commit for PR #${final_pr}; mergeability will be rechecked on the next tick."
     return 1
   fi
-  if ! git -C "${wt}" -c user.name="codex-bot" -c user.email="codex@users.noreply.github.com" -c commit.gpgsign=false \
+  if ! git -C "${wt}" -c user.name="codex-bot" -c user.email="codex-bot@users.noreply.invalid" -c commit.gpgsign=false \
       commit --no-verify -q -m "Merge ${default_branch} into ${integration_branch} (integration judge, PR #${final_pr})" >/dev/null 2>&1; then
     echo "::warning::[integration-heal] Could not commit the judge resolution for PR #${final_pr}; nothing pushed."
     return 1
@@ -11297,7 +11306,7 @@ _refresh_integration_resolver_tooling() {
     (
       cd "${wt}" || exit 9
       git config user.name "codex-bot"
-      git config user.email "codex@users.noreply.github.com"
+      git config user.email "codex-bot@users.noreply.invalid"
 
       # Resolve the merge-base ONCE before the per-file loop so we can
       # compare each file's integration-branch hash against the hash it
@@ -12408,7 +12417,7 @@ _attempt_branch_rebuild_after_escalation() {
     set +e
     cd "${worktree_dir}" || exit 20
     git config user.name "codex-bot" >>"${replay_log}" 2>&1 || exit 26
-    git config user.email "codex@users.noreply.github.com" >>"${replay_log}" 2>&1 || exit 26
+    git config user.email "codex-bot@users.noreply.invalid" >>"${replay_log}" 2>&1 || exit 26
     while IFS= read -r replay_item; do
       [ -n "${replay_item}" ] || continue
       merge_commit_sha="$(printf '%s' "${replay_item}" | jq -r '.merge_commit_sha // ""' 2>/dev/null || echo "")"
@@ -18670,7 +18679,7 @@ STALL_EOF
             fi
             if git checkout "origin/${head_ref}" 2>/dev/null; then
               git config user.name "codex-bot"
-              git config user.email "codex@users.noreply.github.com"
+              git config user.email "codex-bot@users.noreply.invalid"
               git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
               if git push origin "HEAD:${head_ref}" 2>/dev/null; then
                 tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
@@ -23076,7 +23085,7 @@ STALL_EOF
                 echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} head advanced from ${head_sha} to ${_std_rtr_origin_head_sha} after the PR-state snapshot; skipping empty-commit push to avoid racing newer review work."
               elif git checkout "origin/${head_ref}" 2>/dev/null; then
                 git config user.name "codex-bot"
-                git config user.email "codex@users.noreply.github.com"
+                git config user.email "codex-bot@users.noreply.invalid"
                 git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
                 if git push origin "HEAD:${head_ref}" 2>/dev/null; then
                   _std_rtr_push_succeeded="true"
@@ -27698,7 +27707,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       #      skip the judge for this tick — the next tick will re-enter
       #      this loop against (hopefully) a resolved PR.
       #
-      #   2. The PR head commit is external (not codex-bot / not a
+      #   2. The PR head commit is external (not codex-bot / claude-bot / not a
       #      GitHub Actions bot): an external actor has pushed a fix
       #      since the ai:review-blocked label was applied.  This is
       #      exactly the "push a new commit to re-trigger" contract the
@@ -27746,11 +27755,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
               "")
                 # Keep authenticated GitHub login authoritative. Only
                 # when login is missing do we use name/email bot hints.
+                # Pipeline writers commit as codex-bot or claude-bot on
+                # the reserved .invalid domain, which links to no GitHub
+                # account, so their commits always land here.
                 case "${_rb_head_author_name}" in
-                  codex|codex-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
+                  codex|codex-bot|claude-bot|"GitHub Actions") RB_HEAD_IS_EXTERNAL="false" ;;
                 esac
                 case "${_rb_head_author_email}" in
-                  codex@users.noreply.github.com|github-actions\[bot\]@users.noreply.github.com|*+github-actions\[bot\]@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
+                  codex@users.noreply.github.com|codex-bot@users.noreply.invalid|claude-bot@users.noreply.invalid|github-actions\[bot\]@users.noreply.github.com|*+github-actions\[bot\]@users.noreply.github.com) RB_HEAD_IS_EXTERNAL="false" ;;
                 esac
                 ;;
             esac
@@ -28855,8 +28867,18 @@ sys.exit(1)
 
               # Check if there are changes to commit
               if [ -n "$(git -C "${RB_COMBINED_WORKDIR}" status --porcelain)" ]; then
-                git -C "${RB_COMBINED_WORKDIR}" config user.name "codex-bot"
-                git -C "${RB_COMBINED_WORKDIR}" config user.email "codex@users.noreply.github.com"
+                # The commit author names the engine of the judge's fix pass
+                # (poller_judge_isolated records it): claude-bot on Claude,
+                # codex-bot otherwise. Both emails are on the reserved
+                # .invalid domain so GitHub links the commit to no account.
+                if [ "$(head -n1 "${RUNTIME_DIR}/rb_judge_last_engine" 2>/dev/null || true)" = claude ]; then
+                  git -C "${RB_COMBINED_WORKDIR}" config user.name "claude-bot"
+                  git -C "${RB_COMBINED_WORKDIR}" config user.email "claude-bot@users.noreply.invalid"
+                else
+                  git -C "${RB_COMBINED_WORKDIR}" config user.name "codex-bot"
+                  git -C "${RB_COMBINED_WORKDIR}" config user.email "codex-bot@users.noreply.invalid"
+                fi
+                echo "AI_COMMIT_IDENTITY role=RB_JUDGE scope=poller name=$(git -C "${RB_COMBINED_WORKDIR}" config user.name)"
                 # Stage before enforcing ALLOW_WORKFLOW_EDITS so excluded edits
                 # cannot hide behind an otherwise allowed fix. Do not list
                 # .gitignored directories (node_modules) as exclude pathspecs:
@@ -31730,6 +31752,11 @@ NOOP_MAX_RETRIES=3
 # message alone never counts as productive work. Constants, not env vars.
 NOOP_PRODUCTIVE_COMMIT_NAME="codex-bot"
 NOOP_PRODUCTIVE_COMMIT_EMAIL="codex@users.noreply.github.com"
+# Every identity a pipeline writer has committed as: the legacy pair above
+# (commits made before the .invalid emails), codex-bot and claude-bot. The
+# writers pick claude-bot when the editing role ran on Claude. A commit
+# counts when author or committer equals one name/email pair exactly.
+NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON='[{"name":"codex-bot","email":"codex@users.noreply.github.com"},{"name":"codex-bot","email":"codex-bot@users.noreply.invalid"},{"name":"claude-bot","email":"claude-bot@users.noreply.invalid"}]'
 # Operator-facing opt-outs. `e2e-smoke-test` mirrors the workflow's
 # own auto-merge suppression so the smoke-test bait-removal race
 # stays sealed; `force-review` lets a human pin a stuck PR for manual
@@ -31885,11 +31912,11 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	# A productive commit also needs the pipeline's git identity as author
 	# or committer (issue #7126); a message prefix alone is forgeable.
 	N_LATEST_PROD_TS="$(echo "${N_COMMITS_JSON}" | jq -r \
-		--arg name "${NOOP_PRODUCTIVE_COMMIT_NAME}" \
-		--arg email "${NOOP_PRODUCTIVE_COMMIT_EMAIL}" \
+		--argjson ids "${NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON}" \
 		'[.[] | select((.commit.message // "") | test("\\[ai-autofix\\]|\\[judge-fix\\]"))
-			| select(((.commit.committer.name // "") == $name and (.commit.committer.email // "") == $email)
-				or ((.commit.author.name // "") == $name and (.commit.author.email // "") == $email))]
+			| (.commit.committer // {}) as $cm | (.commit.author // {}) as $au
+			| select(any($ids[]; (($cm.name // "") == .name and ($cm.email // "") == .email)
+				or (($au.name // "") == .name and ($au.email // "") == .email)))]
 			| max_by(.commit.committer.date // "") | .commit.committer.date // empty' \
 		2>/dev/null || echo "")"
 
@@ -32143,14 +32170,14 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	N_PROD_PUSHED="$(printf '%s\n%s\n' "${N_COMMITS_JSON}" "${N_ACTIVITY_JSON}" | jq -rs \
 		--arg login "${N_TRUSTED_LOGIN}" \
 		--arg ref "refs/heads/${N_HEAD}" \
-		--arg name "${NOOP_PRODUCTIVE_COMMIT_NAME}" \
-		--arg email "${NOOP_PRODUCTIVE_COMMIT_EMAIL}" '
+		--argjson ids "${NOOP_PRODUCTIVE_COMMIT_IDENTITIES_JSON}" '
 		.[0] as $commits | .[1] as $acts
 		| ([$commits | to_entries[] | {key: (.value.sha // ""), value: .key}] | from_entries) as $idx
 		| [$commits | to_entries[]
 			| select((.value.commit.message // "") | test("\\[ai-autofix\\]|\\[judge-fix\\]"))
-			| select(((.value.commit.committer.name // "") == $name and (.value.commit.committer.email // "") == $email)
-				or ((.value.commit.author.name // "") == $name and (.value.commit.author.email // "") == $email))
+			| (.value.commit.committer // {}) as $cm | (.value.commit.author // {}) as $au
+			| select(any($ids[]; (($cm.name // "") == .name and ($cm.email // "") == .email)
+				or (($au.name // "") == .name and ($au.email // "") == .email)))
 			| .key] as $prod
 		| [$acts[] | select((.actor.login // "") == $login and (.ref // "") == $ref)
 			| select(($idx[(.after // "")] // null) != null)
