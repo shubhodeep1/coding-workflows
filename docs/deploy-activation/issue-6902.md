@@ -14,7 +14,7 @@
   `repository_dispatch` `coding-workflows-stable-released` plus daily cron 04:00 UTC (`workflow-templates/ai-update-workflows.yml:48-50`)
 - Status: IN_PROGRESS
 - Last updated: 2026-10-26
-- Last note: WORKFLOW_PROFILE set on the 4 repos. Next: step 9, updater PRs in those repos.
+- Last note: 5 consumer PRs open (tele-funtoken#4885 + 4 updater installs). Next: step 10, check file lists, merge, run updaters.
 
 ## Runbook
 1. [x] Prereqs on the Mac: Homebrew, gh, `gh auth login` with read access to all 13 consumers — done 2026-10-25: operator confirmed `done`
@@ -47,7 +47,10 @@
    - done 2026-10-25: commit 81168db497 pushed; PR shubhodeep1/tele-funtoken-msg-scoring#4885 opened (not merged yet; merge is step 10).
 8. [x] Set `WORKFLOW_PROFILE`: `core` on btc_sweeper and atlas-bridge.gd (Q2: A), `standard` on mongo-explorer and fbc_shutdown (Q3: A)
    - done 2026-10-26: operator created the variable in all 4 repos; `gh variable get` read back core, core, standard, standard.
-9. [ ] PRs adding the same rendered `ai-update-workflows.yml` to btc_sweeper, atlas-bridge.gd, mongo-explorer, fbc_shutdown
+9. [x] PRs adding the same rendered `ai-update-workflows.yml` to btc_sweeper, atlas-bridge.gd, mongo-explorer, fbc_shutdown
+   - done 2026-10-26: checksum matched in all 4; PRs opened: shubhodeep1/btc_sweeper#231, shubhodeep1/atlas-bridge.gd#120,
+     shubhodeep1/mongo-explorer#46, shubhodeep1/fbc_shutdown#14 (not merged yet). Case-collision warnings (`CLAUDE.md`/`claude.md`)
+     on the macOS clones; only the new file was staged, PR file lists to be checked before merge.
 10. [ ] Merge the 5 PRs and run each repo's `ai-update-workflows.yml` once
 11. [ ] Verify LIVE: all 13 consumers show a successful updater run on v1.40.0; then tick #6211 (Q1: A)
 
