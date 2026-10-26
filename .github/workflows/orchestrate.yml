@@ -1071,6 +1071,8 @@ jobs:
 
       - name: Validate decomposition JSON
         if: env.CLAUDE_CAPACITY_WAIT != 'true'
+        env:
+          PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
         run: |
           set -euo pipefail
 
@@ -1082,6 +1084,32 @@ jobs:
           # cycle detection, files_touched normalization).
           python3 scripts/orchestrate_lib.py validate --input-file "${DECOMPOSITION_FILE}"
           echo "Decomposition validated successfully."
+
+          # Pre-push affected-test gate, phase P2 (issue #8189): append the
+          # tests and companion registries each issue's planned files affect,
+          # before the partition guard, compute-waves, the tracking body and
+          # pending_issue_defs read files_touched. The gate module comes only
+          # from the trusted support checkout; the repository checkout is
+          # read as data. A missing module or any failure is a no-op.
+          _prepush_gate_mode="$(printf '%s' "${PREPUSH_TEST_GATE_MODE:-repair}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          case "${_prepush_gate_mode}" in
+            off|report|repair) ;;
+            *)
+              echo "PREPUSH_TEST_GATE outcome=mode_invalid"
+              _prepush_gate_mode="repair"
+              ;;
+          esac
+          if [ "${_prepush_gate_mode}" = "off" ]; then
+            echo "PREPUSH_TEST_GATE phase=augment outcome=skipped reason=mode_off"
+          else
+            _prepush_gate_module="${GITHUB_WORKSPACE}/.codex-workflow-src/workflow-templates/.claude/hooks/prepush_affected_tests.py"
+            python3 scripts/orchestrate_lib.py augment-files-touched \
+              --decomposition "${DECOMPOSITION_FILE}" \
+              --repo-root "${GITHUB_WORKSPACE}" \
+              --gate-module "${_prepush_gate_module}" \
+              --write-back \
+              || echo "::warning::PREPUSH_TEST_GATE phase=augment outcome=skipped reason=command_failed"
+          fi
 
           # Fetch the conflict-telemetry JSONL from the ai-memory branch
           # so the partition guard can compute the EFFECTIVE hot-file
@@ -1385,6 +1413,14 @@ jobs:
             TITLE="$(jq -r ".issues[${idx}].title" "${DECOMPOSITION_FILE}")"
             BODY="$(jq -r ".issues[${idx}].body" "${DECOMPOSITION_FILE}" | sed 's/\\n/\n/g')"
             PRIORITY="$(jq -r ".issues[${idx}].priority" "${DECOMPOSITION_FILE}")"
+
+            # Advisory "Expected files" section (issue #8189), rendered by the
+            # same helper as the poller's later-wave issues. Not an allowlist.
+            WAVE1_EXPECTED_SECTION="$(jq -c ".issues[${idx}].files_touched // []" "${DECOMPOSITION_FILE}" 2>/dev/null \
+              | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)"
+            if [ -n "${WAVE1_EXPECTED_SECTION}" ]; then
+              BODY="$(printf '%s\n\n%s' "${BODY}" "${WAVE1_EXPECTED_SECTION}")"
+            fi
 
             # Append orchestrator metadata to body
             FULL_BODY="$(cat <<EOF
