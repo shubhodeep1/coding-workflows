@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.8,
+  "details": "{\"project_title\":\"Pre-push affected-test gate: orchestrator scoping, implement / review / resolver / heal gates, integration post-sync test repair (plan P2-P5)\",\"issues\":[{\"id\":\"p2-orchestrator-scoping\",\"title\":\"Pre-push test gate P2: augment decomposition files_touched with affected tests and render an advisory 'Expected files' section on orchestrator child issues\",\"priority\":2},{\"id\":\"p3-implement-gate\",\"title\":\"Pre-push test gate P3: run the affected-test gate in implement before commit, with one test-repair turn and a PR-body section\",\"priority\":1},{\"id\":\"p4-review-resolver-heal-gates\",\"title\":\"Pre-push test gate P4: gate the review autofix editor path, the conflict resolver and the heal route\",\"priority\":2},{\"id\":\"p5-integration-post-sync-test-repair\",\"title\":\"Pre-push test gate P5: integration-branch post-sync test repair (poller dispatch, review_autofix input, resolver test-repair mode)\",\"priority\":3}],\"dependency_edges\":[{\"from\":\"p3-implement-gate\",\"to\":\"p4-review-resolver-heal-gates\"},{\"from\":\"p4-review-resolver-heal-gates\",\"to\":\"p5-integration-post-sync-test-repair\"},{\"from\":\"p2-orchestrator-scoping\",\"to\":\"p5-integration-post-sync-test-repair\"}]}",
+  "fingerprint": "fa4eaa25346974f6743d968dd940f3efdd421395e93d1517a86ad910e687c888",
+  "lineage": {
+    "issue_number": 8188,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40272732508",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40272732508",
+    "source_refs": [],
+    "workflow": "orchestrate"
+  },
+  "record_id": "mem_20261026052057_85337c239b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8188,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40272732508"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Decomposed project 'Pre-push affected-test gate: orchestrator scoping, implement / review / resolver / heal gates, integration post-sync test repair (plan P2-P5)' into 4 issues (tracking #8188)",
+  "timestamps": {
+    "created_at": "2026-10-26T05:20:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
