@@ -1073,6 +1073,10 @@ def test_resolver_gate_repair_contract() -> None:
 	assert 'git diff --name-only HEAD -- > "${gate_dir}/changed.txt"' not in body
 	assert '"${CONFLICTED_PATHS_FILE:-/nonexistent}" > "${gate_dir}/changed.txt"' in body
 	assert body.count("_resolver_sandbox_attempt claude") == 1
+	# The repair attempt's prepare-ephemeral is bounded to the 630 s reserved.
+	assert "local resolver_gate_prepare_bounded=true" in body
+	attempt = SCRIPT.read_text(encoding="utf-8").split("_resolver_sandbox_attempt()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert '[ "${resolver_gate_prepare_bounded:-}" != true ] || sandbox_attempt_prepare=(timeout --kill-after=30s 600' in attempt
 	assert body.count("_resolver_sandbox_attempt codex") == 2
 	assert "--extra-allowed-file" in body
 	assert '--conflicted-set "${CONFLICTED_PATHS_FILE}"' in body

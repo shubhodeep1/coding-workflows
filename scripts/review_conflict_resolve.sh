@@ -880,7 +880,11 @@ _resolver_sandbox_attempt()
   local sandbox_attempt_engine="$1" sandbox_attempt_root="" sandbox_attempt_config=/dev/null
   local sandbox_attempt_rc=0
   resolver_sandbox_failure_reason=""
-  if ! sandbox_attempt_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral "${sandbox_attempt_engine}")" || [ -z "${sandbox_attempt_root}" ]; then
+  local sandbox_attempt_prepare=(bash "${resolver_sandbox_sh}" prepare-ephemeral "${sandbox_attempt_engine}")
+  # The pre-push gate's repair attempt reserves 630 s for this prepare
+  # (_resolver_prepush_test_gate sets the flag); ordinary attempts are unbounded.
+  [ "${resolver_gate_prepare_bounded:-}" != true ] || sandbox_attempt_prepare=(timeout --kill-after=30s 600 "${sandbox_attempt_prepare[@]}")
+  if ! sandbox_attempt_root="$("${sandbox_attempt_prepare[@]}")" || [ -z "${sandbox_attempt_root}" ]; then
     resolver_sandbox_failure_reason=sandbox_prepare_failed
     if [ -n "${sandbox_attempt_root}" ]; then
       REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
@@ -945,6 +949,9 @@ _resolver_prepush_test_gate()
   local gate_dir="${RUNTIME_DIR}/prepush_gate_resolver" gate_mode gate_root="" gate_image="" gate_base
   local gate_status="" gate_pr=0 gate_inh=0 gate_repair="not needed" gate_rc=0 gate_path
   local gate_allow gate_prompt gate_touched gate_pre_untracked gate_check_args=() gate_index_tree=""
+  # Read by _resolver_sandbox_attempt (dynamic scope): bound the repair
+  # attempt's prepare-ephemeral to the 630 s its budget checks reserve.
+  local resolver_gate_prepare_bounded=true
   if [ ! -f "${gate_step}" ] || [ -L "${gate_step}" ]; then
     echo "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=module_absent" >&2
     return 0

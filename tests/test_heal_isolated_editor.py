@@ -798,7 +798,7 @@ esac
 
 
 def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_fail_after_repair: bool = False,
-		with_step: bool = True, validator_down_after_repair: bool = False, gate_budget: str = "") -> dict:
+		with_step: bool = True, validator_down_after_repair: bool = False, gate_budget: str = "", job_start_age: int = 0) -> dict:
 	host = tmp_path / "host"
 	(host / "scripts").mkdir(parents=True)
 	(host / "tests").mkdir()
@@ -846,6 +846,9 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 		env["PREPUSH_TEST_GATE_MODE"] = mode
 	if gate_budget:
 		env["HEAL_PREPUSH_GATE_BUDGET_SECS"] = gate_budget
+	env.pop("JOB_START_EPOCH", None)
+	if job_start_age:
+		env["JOB_START_EPOCH"] = str(int(time.time()) - job_start_age)
 	if syntax_fail_after_repair:
 		# The heal script runs docker under env -i: signal through a file.
 		Path(str(log) + ".syntax_fail").write_text("1")
@@ -934,5 +937,18 @@ def test_heal_gate_repair_is_bounded_by_the_step_budget() -> None:
 	runner = (ROOT / "scripts/heal_isolated_implement.sh").read_text()
 	body = runner[runner.index("heal_prepush_test_gate()"):runner.index("heal_prepush_test_gate || true")]
 	assert 'HEAL_PREPUSH_GATE_BUDGET_SECS:-9000' in body
-	assert 'local wall="${wall}" repair_wall=$(( gate_budget - SECONDS - 630 ))' in body
+	assert 'local wall="${wall}" repair_wall=$(( gate_budget - $(heal_gate_elapsed) - 630 ))' in body
 	assert body.index("repair_wall") < body.index('run_editor "${root}/repair-prompt-tests"')
+	# The codex fallback after a Claude exit 75 gets only what is left of the turn.
+	assert body.index('heal_repair_deadline=$(( SECONDS + wall ))') < body.index('run_editor "${root}/repair-prompt-tests"')
+	run_editor = runner[runner.index("run_editor()\n{"):runner.index('run_editor "${prompt}"')]
+	assert run_editor.index("repair_left=$(( heal_repair_deadline - SECONDS ))") < run_editor.index("docker run")
+
+
+def test_heal_gate_budget_counts_from_the_job_start(tmp_path: Path) -> None:
+	# JOB_START_EPOCH (exported by implement.yml) anchors the budget, so a
+	# heal retry late in the job does not get a fresh 9000 s.
+	run = _gate_heal_run(tmp_path, job_start_age=8500)
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"] == ["editor", "validator"]
+	assert "phase=prepush_gate outcome=skipped reason=step_budget" in run["stderr"]

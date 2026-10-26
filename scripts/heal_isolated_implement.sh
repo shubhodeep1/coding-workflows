@@ -27,6 +27,9 @@ root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/heal-isolated.XXXXXXXX")"
 container="heal-editor-${GITHUB_RUN_ID:-local}-$$"
 broker_pid=""
 gate_tree_added=false
+# Set only for the pre-push gate's repair turn: run_editor's codex fallback
+# after a Claude exit 75 gets what is left of it, not a second full wall.
+heal_repair_deadline=""
 cleanup()
 {
 	[ -z "${broker_pid}" ] || { kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; }
@@ -111,6 +114,14 @@ run_editor()
 		[ "${rc}" -eq 80 ] && return 80
 		[ "${rc}" -eq 75 ] || return 1
 		rc=0
+		if [ -n "${heal_repair_deadline}" ]; then
+			local wall="${wall}" repair_left=$(( heal_repair_deadline - SECONDS ))
+			if [ "${repair_left}" -lt 60 ]; then
+				echo 'HEAL_ISOLATED_EDITOR phase=run engine=codex outcome=skipped reason=step_budget' >&2
+				return 1
+			fi
+			[ "${repair_left}" -ge "${wall}" ] || wall="${repair_left}"
+		fi
 	fi
 	env -i PATH="${PATH}" timeout --kill-after=30s "${wall}" docker run --rm --init --name "${container}" \
 	--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
@@ -207,6 +218,19 @@ done
 # failures the change caused, one more editor turn runs with the test-repair
 # prompt and validate_snapshot runs once more; a syntax failure restores the
 # pre-repair snapshot. Fail-open: the transfer below always follows.
+# Seconds the gate budget has used: from the job's start (JOB_START_EPOCH,
+# which implement.yml exports) when it is set, so a heal retry later in the
+# job does not start a fresh budget; else from this script's start.
+heal_gate_elapsed()
+{
+	local now job_elapsed
+	now="$(date +%s)"
+	if [[ "${JOB_START_EPOCH:-}" =~ ^[1-9][0-9]{8,10}$ ]] && [ "${JOB_START_EPOCH}" -le "${now}" ]; then
+		job_elapsed=$(( now - JOB_START_EPOCH ))
+		[ "${job_elapsed}" -ge "${SECONDS}" ] && { echo "${job_elapsed}"; return 0; }
+	fi
+	echo "${SECONDS}"
+}
 heal_prepush_test_gate()
 {
 	local gate_step="" gate_mode gate_ws="${WORKSPACE_PATH:-${PWD}}" gate_base gate_status="" gate_pr=0 gate_inh=0 rc
@@ -226,14 +250,14 @@ heal_prepush_test_gate()
 		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=skipped reason=mode_off' >&2
 		return 0
 	fi
-	# Step budget: SECONDS counts from this script's start. The heal step runs
+	# Step budget: heal_gate_elapsed counts from the job's start. The heal step runs
 	# under implement.yml's 180-minute job cap, after earlier steps and before
 	# the commit and push, so the gate and its repair turn must leave room for
 	# the scoped transfer below. One gate run is at most 10 minutes plus the
 	# wrapper's 120 s overhead and 30 s kill grace.
 	local gate_budget="${HEAL_PREPUSH_GATE_BUDGET_SECS:-9000}"
 	[[ "${gate_budget}" =~ ^[1-9][0-9]{0,5}$ ]] || gate_budget=9000
-	if [ $(( gate_budget - SECONDS )) -lt 750 ]; then
+	if [ $(( gate_budget - $(heal_gate_elapsed) )) -lt 750 ]; then
 		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=skipped reason=step_budget' >&2
 		return 0
 	fi
@@ -276,7 +300,7 @@ heal_prepush_test_gate()
 	fi
 	# The repair turn gets what is left of the budget after validate_snapshot
 	# (600 s plus 30 s kill grace); run_editor reads this local wall.
-	local wall="${wall}" repair_wall=$(( gate_budget - SECONDS - 630 ))
+	local wall="${wall}" repair_wall=$(( gate_budget - $(heal_gate_elapsed) - 630 ))
 	if [ "${repair_wall}" -lt 300 ]; then
 		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail failures=${gate_pr} repair=skipped reason=step_budget" >&2
 		return 0
@@ -285,7 +309,9 @@ heal_prepush_test_gate()
 	rm -rf -- "${root}/source.pre-gate"
 	cp -a "${root}/source" "${root}/source.pre-gate" || { echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=backup_failed' >&2; return 0; }
 	rc=0
+	heal_repair_deadline=$(( SECONDS + wall ))
 	run_editor "${root}/repair-prompt-tests" || rc=$?
+	heal_repair_deadline=""
 	# validate_snapshot exits the script on validator infrastructure failures;
 	# a subshell keeps that from skipping the restore and the transfer below.
 	# The rc file is written only when validate_snapshot returns.
