@@ -101,6 +101,7 @@ def _setup(tmp_path: Path, queue: list[dict], with_module: bool = True) -> tuple
 	shutil.copy2(WRAPPER, run_dir / "prepush_test_gate_run.sh")
 	shutil.copy2(REPO_ROOT / "scripts" / "review_untrusted_workspace.py", run_dir / "review_untrusted_workspace.py")
 	shutil.copy2(REPO_ROOT / "scripts" / "targeted_file_context.py", run_dir / "targeted_file_context.py")
+	shutil.copy2(REPO_ROOT / "scripts" / "files_touched_scope_guard.py", run_dir / "files_touched_scope_guard.py")
 	shutil.copy2(TEMPLATE, run_dir.parent / "prompts" / "mode-implement-repair-tests.txt")
 	if with_module:
 		shutil.copy2(MODULE, run_dir / "prepush_affected_tests.py")
@@ -255,6 +256,53 @@ def test_repair_that_breaks_syntax_is_reverted(tmp_path):
 	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
 	assert "outcome=repair_reverted reason=syntax" in proc.stderr
 	assert _editor_calls(tmp_path) == 1
+	# The reverted tree is the one run 1 already tested: no second gate run.
+	assert _docker_runs(tmp_path) == 1
+
+
+def test_failed_editor_turn_reverts_its_in_allow_list_edits(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	(_work(tmp_path) / "edit.sh").write_text("echo 'X = (' > lib/a.py\necho new > tests/test_new.py\n", encoding="utf-8")
+	env["FAKE_EDITOR_RC"] = "1"
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
+	assert not (repo / "tests" / "test_new.py").exists()
+	assert "outcome=repair_skipped reason=editor_rc_1" in proc.stderr
+	assert _docker_runs(tmp_path) == 1
+
+
+def test_allow_list_is_narrowed_to_the_issue_files_touched_scope(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	body = tmp_path / "issue_body.txt"
+	body.write_text("Fix.\n\nfiles_touched:\n  - lib/a.py\n", encoding="utf-8")
+	env["ISSUE_BODY_FILE"] = str(body)
+	(_work(tmp_path) / "edit.sh").write_text("echo '# edited' >> tests/test_a.py\n", encoding="utf-8")
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	prompt = (_work(tmp_path) / "editor_prompt.txt").read_text(encoding="utf-8")
+	allow = prompt.split("=== EFFECTIVE REPAIR ALLOW-LIST ===", 1)[1].split("===", 1)[0]
+	assert "lib/a.py" in allow and "tests/test_a.py" not in allow
+	assert "reason=allow_list_narrowed" in proc.stderr
+	assert "# edited" not in (repo / "tests" / "test_a.py").read_text(encoding="utf-8")
+
+
+def test_node_prep_root_is_mounted_into_the_gate_container(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	(_work(tmp_path) / "sandbox" / "work" / "node_modules").mkdir(parents=True)
+	proc = _run_step(repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	log = (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert "dst=/source/node_modules,readonly" in log and "dst=/baseline/node_modules,readonly" in log
+
+
+def test_summary_lists_changed_assertions_without_their_source_text(tmp_path):
+	result = dict(PASS, changed_assertions=[{"file": "tests/test_a.py", "kind": "removed_or_modified", "line": "assert SECRET_TEXT == 1"}])
+	repo, env = _setup(tmp_path, [result])
+	_run_step(repo, env)
+	text = _summary(tmp_path).read_text(encoding="utf-8")
+	assert "### Changed pre-existing assertions" in text and "tests/test_a.py" in text
+	assert "SECRET_TEXT" not in text
 
 
 def test_forged_container_summary_never_reaches_the_pr_body_summary(tmp_path):

@@ -21,7 +21,12 @@
 # Usage:
 #   prepush_test_gate_run.sh --worktree DIR --module FILE --image IMAGE \
 #     --base SHA --out-dir DIR [--timeout-minutes N] [--deps-root DIR]... \
-#     [--venv DIR] [--shards N] [--large-file-tests N]
+#     [--venv DIR] [--shards N] [--large-file-tests N] [--node-modules DIR]
+#
+# --node-modules mounts a prepared node_modules directory (the Node prep root
+# of codex_isolated_exec.sh prepare --deps) read-only at /source/node_modules
+# and /baseline/node_modules, because the snapshot leaves node_modules out and
+# Node resolves packages from the project directory upward (issue #8190).
 #
 # --venv mounts a dependency venv read-only at /opt/codex-venv (where
 # codex_isolated_exec.sh prepare --deps builds it, so its absolute shebangs
@@ -43,6 +48,7 @@ out_dir=""
 timeout_minutes="${PREPUSH_TEST_GATE_TIMEOUT_MINUTES:-15}"
 deps_roots=()
 venv=""
+node_modules=""
 shards=""
 large_file_tests=""
 
@@ -71,6 +77,7 @@ while [ "$#" -gt 0 ]; do
 		--timeout-minutes) timeout_minutes="${2:-}"; shift 2 ;;
 		--deps-root) deps_roots+=("${2:-}"); shift 2 ;;
 		--venv) venv="${2:-}"; shift 2 ;;
+		--node-modules) node_modules="${2:-}"; shift 2 ;;
 		--shards) shards="${2:-}"; shift 2 ;;
 		--large-file-tests) large_file_tests="${2:-}"; shift 2 ;;
 		*) gate_log "outcome=error reason=unknown_argument"; synthetic_result usage_error; exit 0 ;;
@@ -184,6 +191,15 @@ if [ -n "${venv}" ]; then
 		extra_env+=(--env "PATH=/opt/codex-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" --env HOME=/tmp)
 	else
 		gate_log "outcome=warning reason=venv_missing"
+	fi
+fi
+if [ -n "${node_modules}" ]; then
+	if nm_real="$(realpath -e "${node_modules}" 2>/dev/null)" && [ -d "${nm_real}" ] && [ ! -L "${node_modules}" ] \
+		&& mkdir -p "${root}/source/node_modules" "${root}/baseline/node_modules"; then
+		mounts+=(--mount "type=bind,src=${nm_real},dst=/source/node_modules,readonly")
+		mounts+=(--mount "type=bind,src=${nm_real},dst=/baseline/node_modules,readonly")
+	else
+		gate_log "outcome=warning reason=node_modules_missing"
 	fi
 fi
 [ -z "${large_file_tests}" ] || extra_env+=(--env "PREPUSH_TEST_GATE_LARGE_FILE_TESTS=${large_file_tests}")

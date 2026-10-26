@@ -890,3 +890,17 @@ def test_wrapper_drops_invalid_shards_and_large_file_values(tmp_path):
 	assert "reason=venv_missing" in proc.stderr
 	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
 	assert "--env" not in run_line and "--shards" not in run_line and "/opt/codex-venv" not in run_line
+
+
+def test_wrapper_mounts_node_modules_read_only_on_both_trees(tmp_path):
+	worktree = _worktree(tmp_path)
+	node_modules = tmp_path / "prep" / "node_modules"
+	node_modules.mkdir(parents=True)
+	env, log = _wrapper_env(tmp_path)
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(tmp_path / "out"), "--node-modules", str(node_modules)], capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert f"src={node_modules.resolve()},dst=/source/node_modules,readonly" in run_line
+	assert f"src={node_modules.resolve()},dst=/baseline/node_modules,readonly" in run_line
