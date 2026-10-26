@@ -226,6 +226,17 @@ heal_prepush_test_gate()
 		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=skipped reason=mode_off' >&2
 		return 0
 	fi
+	# Step budget: SECONDS counts from this script's start. The heal step runs
+	# under implement.yml's 180-minute job cap, after earlier steps and before
+	# the commit and push, so the gate and its repair turn must leave room for
+	# the scoped transfer below. One gate run is at most 10 minutes plus the
+	# wrapper's 120 s overhead and 30 s kill grace.
+	local gate_budget="${HEAL_PREPUSH_GATE_BUDGET_SECS:-9000}"
+	[[ "${gate_budget}" =~ ^[1-9][0-9]{0,5}$ ]] || gate_budget=9000
+	if [ $(( gate_budget - SECONDS )) -lt 750 ]; then
+		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=skipped reason=step_budget' >&2
+		return 0
+	fi
 	if git -C "${gate_ws}" -c core.hooksPath=/dev/null worktree add --detach "${root}/gate-tree" HEAD >/dev/null 2>&1; then
 		gate_tree_added=true
 	fi
@@ -263,6 +274,14 @@ heal_prepush_test_gate()
 		echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=repair_prompt_unavailable' >&2
 		return 0
 	fi
+	# The repair turn gets what is left of the budget after validate_snapshot
+	# (600 s plus 30 s kill grace); run_editor reads this local wall.
+	local wall="${wall}" repair_wall=$(( gate_budget - SECONDS - 630 ))
+	if [ "${repair_wall}" -lt 300 ]; then
+		echo "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail failures=${gate_pr} repair=skipped reason=step_budget" >&2
+		return 0
+	fi
+	[ "${repair_wall}" -ge "${wall}" ] || wall="${repair_wall}"
 	rm -rf -- "${root}/source.pre-gate"
 	cp -a "${root}/source" "${root}/source.pre-gate" || { echo 'HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=fail repair=skipped reason=backup_failed' >&2; return 0; }
 	rc=0

@@ -964,9 +964,11 @@ _resolver_prepush_test_gate()
   gate_wall=$(( gate_tm * 60 + 120 ))
   gate_attempt_secs="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}"
   [[ "${gate_attempt_secs}" =~ ^[1-9][0-9]*$ ]] || gate_attempt_secs=3000
-  # The image prepare below is bounded to 600 s and counted here, so a slow or
-  # retrying sandbox build cannot use up the commit reserve.
-  if [ $(( gate_budget_end - SECONDS )) -lt $(( gate_wall + 600 )) ]; then
+  # The image prepare below is bounded to 600 s (630 s with its kill grace)
+  # and counted here, so a slow or retrying sandbox build cannot use up the
+  # commit reserve. A repair attempt also runs prepare-ephemeral before its
+  # own per-attempt timeout starts, so its checks reserve the same 630 s.
+  if [ $(( gate_budget_end - SECONDS )) -lt $(( gate_wall + 630 )) ]; then
     echo "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=step_budget" >&2
     return 0
   fi
@@ -984,7 +986,7 @@ _resolver_prepush_test_gate()
     --image-reason resolver_image_unavailable --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true
   read -r gate_status gate_pr gate_inh < "${gate_dir}/run1.status" || true
   if [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ] \
-    && [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall )) ]; then
+    && [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall + 630 )) ]; then
     gate_repair="skipped (step time budget)"
   elif [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ]; then
     gate_allow="${gate_dir}/allow.txt"
@@ -1007,7 +1009,7 @@ _resolver_prepush_test_gate()
         gate_rc=77
       elif [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
         _resolver_sandbox_attempt claude || gate_rc=$?
-        if [ "${gate_rc}" -eq 75 ] && [ $(( gate_budget_end - SECONDS )) -ge $(( gate_attempt_secs + gate_wall )) ]; then
+        if [ "${gate_rc}" -eq 75 ] && [ $(( gate_budget_end - SECONDS )) -ge $(( gate_attempt_secs + gate_wall + 630 )) ]; then
           gate_rc=0
           rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
           _resolver_sandbox_attempt codex || gate_rc=$?

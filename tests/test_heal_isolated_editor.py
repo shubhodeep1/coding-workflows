@@ -798,7 +798,7 @@ esac
 
 
 def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_fail_after_repair: bool = False,
-		with_step: bool = True, validator_down_after_repair: bool = False) -> dict:
+		with_step: bool = True, validator_down_after_repair: bool = False, gate_budget: str = "") -> dict:
 	host = tmp_path / "host"
 	(host / "scripts").mkdir(parents=True)
 	(host / "tests").mkdir()
@@ -844,6 +844,8 @@ def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_
 		RUNNER_TEMP=str(tmp_path), GITHUB_WORKSPACE=str(tmp_path), WORKSPACE_PATH=str(host), PYTHONDONTWRITEBYTECODE="1")
 	if mode:
 		env["PREPUSH_TEST_GATE_MODE"] = mode
+	if gate_budget:
+		env["HEAL_PREPUSH_GATE_BUDGET_SECS"] = gate_budget
 	if syntax_fail_after_repair:
 		# The heal script runs docker under env -i: signal through a file.
 		Path(str(log) + ".syntax_fail").write_text("1")
@@ -918,3 +920,19 @@ def test_heal_gate_never_hands_the_editor_snapshot_to_the_wrapper() -> None:
 	assert "worktree add --detach" in body and "core.hooksPath=/dev/null" in body
 	assert "worktree remove --force" in runner and "worktree prune" in runner
 	assert runner.index("heal_prepush_test_gate || true") < runner.index('transfer "${WORKSPACE_PATH:-${PWD}}" "${root}/source"')
+
+
+def test_heal_gate_is_skipped_when_the_step_budget_is_spent(tmp_path: Path) -> None:
+	run = _gate_heal_run(tmp_path, gate_budget="700")
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"] == ["editor", "validator"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+	assert "phase=prepush_gate outcome=skipped reason=step_budget" in run["stderr"]
+
+
+def test_heal_gate_repair_is_bounded_by_the_step_budget() -> None:
+	runner = (ROOT / "scripts/heal_isolated_implement.sh").read_text()
+	body = runner[runner.index("heal_prepush_test_gate()"):runner.index("heal_prepush_test_gate || true")]
+	assert 'HEAL_PREPUSH_GATE_BUDGET_SECS:-9000' in body
+	assert 'local wall="${wall}" repair_wall=$(( gate_budget - SECONDS - 630 ))' in body
+	assert body.index("repair_wall") < body.index('run_editor "${root}/repair-prompt-tests"')
