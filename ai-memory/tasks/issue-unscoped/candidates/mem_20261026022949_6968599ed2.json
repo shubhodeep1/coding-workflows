@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"All 13 consumers\" have a successful updater run, the current pin, and \"no open updater PR.\"\n  expected_change_site: docs/deploy-activation/issue-6902.md, step 11 final verification entry (line 80)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: docs/deploy-activation/issue-6902.md lines 76-79 confirm successful run, current pin and no open updater PR for 12 consumers, but line 80 confirms only run 40254086692 `completed/success` and pin `5596e7520ef4` for atlas-bridge.gd and does not state it has no open updater PR (severity NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"All 13 consumers\" have a successful updater run, the current pin, and \"no open updater PR.\"\nExpected change site: docs/deploy-activation/issue-6902.md, step 11's final verification entries.\nEvidence of absence: The updated Step 11 confirms the successful run and current pin for atlas-bridge.gd, but does not explicitly confirm that it has \"no open updater PR\", unlike the preceding entries for the other 12 consumers.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"All 13 consumers\" must have a successful updater run, the current pin, AND \"no open updater PR.\" The PR description states each consumer must show a successful `ai-update-workflows.yml` run, the current pin, and no open updater PR.\nExpected change site: `docs/deploy-activation/issue-6902.md`, step 11 final verification entries (lines 76-80).\nEvidence of absence: Lines 76-79 enumerate the 12 non-pending consumers with three explicit attributes, and tag atlas-bridge.gd as \"Pending\" (run `queued`, pin `8164dcf9593d`). Line 80 closes out atlas-bridge.gd with \"run 40254086692 `completed/success`, pin `5596e7520ef4`. 13/13 consumers synced to v1.40.2\", confirming run and pin but not the \"no open `auto/update-workflows-*` PR\" criterion, so a reader cannot confirm it without re-checking atlas-bridge.gd's PR list.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cAll 13 consumers\u201d have a successful updater run, the current pin, and \u201cno open updater PR.\u201d\nExpected change site: `docs/deploy-activation/issue-6902.md`, step 11\u2019s final verification entries.\nEvidence of absence: Lines 76\u201379 confirm the successful run, current pin, and no open updater PR for 12 consumers. Line 80 confirms atlas-bridge.gd\u2019s successful run and current pin, but does not confirm that it has no open updater PR.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"All 13 consumers\" have a successful updater run, the current pin, and \"no open updater PR\" (PR description / step 11 verification).\nExpected change site: docs/deploy-activation/issue-6902.md, step 11 final verification entry (line 80).\nEvidence of absence: Line 79 lists the no-open-`auto/update-workflows-*`-PR condition for 12 consumers and marks atlas-bridge.gd pending; line 80 records atlas-bridge.gd's run 40254086692 `completed/success` and `pin=5596e7520ef4`, but never states that atlas-bridge.gd has no open updater PR, so the 13th consumer's verification is only partially recorded relative to the stated criterion.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\nNote: the three wording edits in LAST RUN DIFF (line 48 heading \"superseded by Q5: A\", line 71 \"Next (done, see the next bullet):\", line 75 heading naming v1.40.2) are accurate against the surrounding content and introduce no defects.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "da4ff7a190facce9ee05fc11ae19e74dbfb650cf76317707c2aa90aa3e54ec9a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8172,
+    "run_id": "40257932891",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40257932891",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261026022949_6968599ed2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8172,
+    "run_id": "40257932891"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-26T02:29:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
