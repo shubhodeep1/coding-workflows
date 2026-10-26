@@ -4427,5 +4427,68 @@ def test_security_audit_removes_a_stale_export_when_nothing_is_upstream_managed(
 		assert not export_path.exists()
 
 
+SECURITY_AUDIT_REJECTED_REPLY_PATH = "${{ runner.temp }}/security-audit-claude-rejected.txt"
+SECURITY_AUDIT_PROMPT_PATHS = (
+	REPO_ROOT / "prompts" / "mode-security-audit.txt",
+	REPO_ROOT / "prompts" / "_templates" / "mode-security-audit.txt",
+)
+SECURITY_AUDIT_FINAL_ARRAY_LINES = (
+	"- Your FINAL message must be only that JSON array: no prose, headings or summary before or after it.",
+	"- A clean audit (no supported findings) is exactly `[]`.",
+	"- Every array element must use the key `finding_id` for its identifier (not `id`, `name` or `title`).",
+)
+
+
+def test_security_audit_step_keeps_rejected_claude_reply_under_runner_temp() -> None:
+	step = _audit_workflow_step("Run security audit")
+	assert step["env"]["SECURITY_AUDIT_CLAUDE_REJECTED_OUT"] == SECURITY_AUDIT_REJECTED_REPLY_PATH
+
+
+def test_security_audit_uploads_rejected_reply_only_for_private_repos_on_failure() -> None:
+	import yaml
+
+	workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["security-audit"]["steps"]
+	names = [step.get("name") for step in steps]
+	upload_index = names.index("Upload rejected Claude audit reply")
+	audit_index = next(i for i, step in enumerate(steps) if step.get("id") == "run_security_audit")
+	assert upload_index > audit_index
+	upload = steps[upload_index]
+	condition = upload["if"]
+	assert "failure()" in condition
+	assert "github.event.repository.private == true" in condition
+	assert "always()" not in condition
+	assert upload["uses"].startswith("actions/upload-artifact@")
+	with_block = upload["with"]
+	assert with_block["path"] == steps[audit_index]["env"]["SECURITY_AUDIT_CLAUDE_REJECTED_OUT"]
+	retention = with_block["retention-days"]
+	assert isinstance(retention, int) and not isinstance(retention, bool)
+	assert 1 <= retention <= 3
+	assert with_block["if-no-files-found"] == "ignore"
+	assert "${{ github.run_id }}" in with_block["name"]
+	others = [
+		step
+		for i, step in enumerate(steps)
+		if i != upload_index and SECURITY_AUDIT_REJECTED_REPLY_PATH in str(step.get("with", {}))
+	]
+	assert others == []
+
+
+def test_security_audit_prompts_require_final_array_only() -> None:
+	contract_blocks = []
+	for path in SECURITY_AUDIT_PROMPT_PATHS:
+		lines = path.read_text(encoding="utf-8").splitlines()
+		assert "- Output one JSON array and nothing else." in lines, path
+		start = next(
+			index
+			for index, line in enumerate(lines)
+			if line.startswith("- When the audit finds nothing, your final message is exactly `[]`.")
+		)
+		block = lines[start + 1 : start + 1 + len(SECURITY_AUDIT_FINAL_ARRAY_LINES)]
+		assert tuple(block) == SECURITY_AUDIT_FINAL_ARRAY_LINES, path
+		contract_blocks.append(block)
+	assert contract_blocks[0] == contract_blocks[1]
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
