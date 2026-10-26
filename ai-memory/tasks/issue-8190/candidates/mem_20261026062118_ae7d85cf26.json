@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8190,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8190\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8196\",\"pr_number\":8196,\"branch\":\"ai/issue-8190\",\"run_id\":\"40276208809\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40276208809\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/implement.yml\",\"README.md\",\"agents.d/8190-prepush-gate-implement.md\",\"changelog.d/8190-prepush-gate-implement.md\",\"docs/INVENTORY.md\",\"docs/scripts-pending-removal.md\",\"prompts/_templates/mode-implement-repair-tests.txt\",\"prompts/_templates/mode-implement.txt\",\"prompts/mode-implement-repair-tests.txt\",\"prompts/mode-implement.txt\",\"scripts/codex_isolated_exec.sh\",\"scripts/implement_step_prepush_test_gate.sh\",\"scripts/prepush_test_gate_run.sh\",\"scripts/stage_workflow_support.sh\",\"tests/test_implement_prepush_test_gate.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_prepush_affected_tests.py\",\"tests/test_review_semble_contract.py\"]}",
+  "fingerprint": "f55d41c47604ff5cbb8177a0222920422e05a30dd322e6b0b03d4007b987fda9",
+  "lineage": {
+    "issue_number": 8190,
+    "parent_ids": [],
+    "pr_number": 8196,
+    "run_id": "40276208809",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40276208809",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8196"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261026062118_ae7d85cf26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8190,
+    "level": "run",
+    "pr_number": 8196,
+    "run_id": "40276208809"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8190: https://github.com/shubhodeep1/coding-workflows/pull/8196",
+  "timestamps": {
+    "created_at": "2026-10-26T06:21:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
