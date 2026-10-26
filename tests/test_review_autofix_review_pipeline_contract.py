@@ -1287,9 +1287,9 @@ def _run_review_tier_harness(
 			"HAS_PR_DIFF": "true",
 			"REVIEW_TIER_RESOLVER_ENABLED": "true",
 			"REVIEW_TIER_LITE_MAX_LOC": "50",
-			"REVIEW_TIER_LITE_REVIEWER_SLUG": "qwen/qwen3.7-plus",
+			"REVIEW_TIER_LITE_REVIEWER_SLUG": "google/gemini-3.1-flash-lite",
 			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,z-ai/glm-5.3-flash,qwen/qwen3.7-plus,openai/gpt-6-luna",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,z-ai/glm-5.3-flash,google/gemini-3.1-flash-lite,openai/gpt-6-luna",
 			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
 			"PR_DIFF_FILE": str(files["pr_diff"]),
 			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
@@ -4435,7 +4435,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert lite_result["REVIEW_TIER"] == "lite"
 	assert lite_result["REVIEW_TIER_REASON"] == "doc_only_<=50_loc"
 	assert lite_result["review_tier_file"] == "lite"
-	assert lite_result["active_models"] == ["qwen/qwen3.7-plus"]
+	assert lite_result["active_models"] == ["google/gemini-3.1-flash-lite"]
 	assert lite_result["REVIEW_TIER_FORCED_FULL"] == "false"
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" in lite_result["github_env"]
 	assert "REVIEW_TIER: tier=lite" in lite_result["stdout"]
@@ -4445,7 +4445,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	code_lite_result = _run_review_tier_harness(diff_text=unprotected_code_diff)
 	assert code_lite_result["REVIEW_TIER"] == "lite"
 	assert code_lite_result["REVIEW_TIER_REASON"] == "code_<=50_loc_unprotected"
-	assert code_lite_result["active_models"] == ["qwen/qwen3.7-plus"]
+	assert code_lite_result["active_models"] == ["google/gemini-3.1-flash-lite"]
 
 	# A small diff under a protected path never drops below four reviewers.
 	standard_result = _run_review_tier_harness(diff_text=standard_diff)
@@ -4456,7 +4456,7 @@ def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_override
 	assert standard_result["active_models"] == [
 		"minimax/minimax-m3",
 		"z-ai/glm-5.3-flash",
-		"qwen/qwen3.7-plus",
+		"google/gemini-3.1-flash-lite",
 		"openai/gpt-6-luna",
 	]
 	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
@@ -4666,7 +4666,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	becomes the lite pool (PR #6438: the panel models now cost about the same,
 	so no model is reserved for the full tier)."""
 	reviewer_models = _workflow_reviewer_models()
-	assert len(reviewer_models) == 6
+	assert len(reviewer_models) == 5
 
 	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
 	default_line = "REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}"
@@ -4695,7 +4695,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	assert default_standard_picks == set(reviewer_models)
 
 	# A repo that pins the standard list: lite draws from that list only.
-	pinned_standard = ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
+	pinned_standard = ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "google/gemini-3.1-flash-lite", "openai/gpt-6-luna"]
 	assert set(pinned_standard) < set(reviewer_models)
 	excluded = set(reviewer_models) - set(pinned_standard)
 	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(pinned_standard)}
@@ -4728,7 +4728,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 
 	# A standard list with an unknown slug: lite draws from the full panel and
 	# says so, while standard itself fails open to the full panel as before.
-	bad_standard = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "qwen/qwen3.7-plus,unknown/model"}
+	bad_standard = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "google/gemini-3.1-flash-lite,unknown/model"}
 	bad_lite = _run_review_tier_harness(diff_text=lite_diff, extra_env={**bad_standard, "PR_NUMBER": "4242"})
 	assert bad_lite["REVIEW_TIER"] == "lite"
 	assert bad_lite["active_models"] == expected_lite("4242", reviewer_models)
@@ -4739,11 +4739,11 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 		diff_text=lite_diff,
 		extra_env={
 			"REVIEW_TIER_LITE_REVIEWER_SLUG": "",
-			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "qwen/qwen3.7-plus,qwen/qwen3.7-plus",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "google/gemini-3.1-flash-lite,google/gemini-3.1-flash-lite",
 			"PR_NUMBER": "9",
 		},
 	)
-	assert dup_lite["active_models"] == ["qwen/qwen3.7-plus"]
+	assert dup_lite["active_models"] == ["google/gemini-3.1-flash-lite"]
 
 	# A pinned lite slug still wins over the standard pool.
 	pinned_lite = _run_review_tier_harness(
@@ -5205,7 +5205,6 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 		"google/gemini-3.1-flash-lite",
 		"minimax/minimax-m3",
 		"openai/gpt-6-luna",
-		"qwen/qwen3.7-plus",
 		"z-ai/glm-5.3-flash",
 	]
 	# The Claude review-panel slot never runs on OpenRouter: it retries on
@@ -5221,6 +5220,8 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
 	assert chains["openai/gpt-6-luna"] == ["openai/gpt-5.6-luna"]
+	# Retired from the panel in the 2026-10-26 cost cut (lowest unique-finding
+	# yield per dollar); kept for operator overrides.
 	assert chains["qwen/qwen3.7-plus"] == ["qwen/qwen3.6-plus"]
 	# Retired-roster mappings stay for operator overrides (CLAUDE.md §6).
 	assert chains["z-ai/glm-5.2"] == ["z-ai/glm-5.3-flashx"]

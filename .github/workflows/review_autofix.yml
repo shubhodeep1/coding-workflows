@@ -129,7 +129,6 @@ env:
     anthropic/claude-sonnet-5.5
     z-ai/glm-5.3-flash
     google/gemini-3.1-flash-lite
-    qwen/qwen3.7-plus
     openai/gpt-6-luna
   # The anthropic/claude-* slot above runs on the Claude account pool, not
   # OpenRouter (scripts/review_run_reviewers.sh run_pool_reviewer). When its

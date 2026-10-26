@@ -2862,14 +2862,14 @@ Operational behavior:
 
 ### OpenCode Phase 1 live smoke
 
-OpenCode is installed by `.github/workflows/opencode-live-smoke.yml`, a `workflow_dispatch` rollout gate, and by `.github/workflows/review_autofix.yml`, which warms the models.dev cache before running the complete review/autofix model pipeline. The smoke generates role-scoped OpenRouter configuration for all six reviewer models plus the primary and fallback editor slots, runs each entry twice with the same stdin request, verifies non-empty ANSI-stripped output, intended provider/model stream evidence, and provider-reported reasoning usage, and fails if any entry fails. Production reviewer, summariser, interim-judge, behavioural-smoke synthesiser, editor, review-blocked judge/fix, consolidator, and conflict-resolver calls use isolated OpenCode configurations; OpenCode failures do not fall back to Codex.
+OpenCode is installed by `.github/workflows/opencode-live-smoke.yml`, a `workflow_dispatch` rollout gate, and by `.github/workflows/review_autofix.yml`, which warms the models.dev cache before running the complete review/autofix model pipeline. The smoke generates role-scoped OpenRouter configuration for all five reviewer models plus the primary and fallback editor slots, runs each entry twice with the same stdin request, verifies non-empty ANSI-stripped output, intended provider/model stream evidence, and provider-reported reasoning usage, and fails if any entry fails. Production reviewer, summariser, interim-judge, behavioural-smoke synthesiser, editor, review-blocked judge/fix, consolidator, and conflict-resolver calls use isolated OpenCode configurations; OpenCode failures do not fall back to Codex.
 
 Both paths default `OPENCODE_VERSION` to `1.18.23`. `CODEX_VERSION` remains independently pinned at `v0.114.0` for production paths outside the migrated review/autofix model pipeline.
 
 <!-- Historical Phase 1 rollout snapshot retained for integration fingerprint verification:
 | `CODEX_VERSION` | `v0.114.0` | Pinned Codex CLI version retained by every existing production workflow, including review/autofix during the inert OpenCode Phase 1 rollout. |
 | `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used only by the dispatchable `opencode-live-smoke.yml` Phase 1 rollout gate. No existing production workflow invokes OpenCode in this phase. |
-OpenCode is currently installed only by `.github/workflows/opencode-live-smoke.yml`, a `workflow_dispatch` rollout gate. The smoke generates role-scoped OpenRouter configuration for all six reviewer models plus the primary and fallback editor slots, runs each entry twice with the same stdin request, verifies non-empty ANSI-stripped output, intended provider/model stream evidence, and provider-reported reasoning usage, and fails if any entry fails. After the Phase 1 change merges, dispatch the workflow without a model filter and record its all-green run URL on tracking issue `#3845` before beginning the read-side or write-side cutover.
+OpenCode is currently installed only by `.github/workflows/opencode-live-smoke.yml`, a `workflow_dispatch` rollout gate. The smoke generates role-scoped OpenRouter configuration for all five reviewer models plus the primary and fallback editor slots, runs each entry twice with the same stdin request, verifies non-empty ANSI-stripped output, intended provider/model stream evidence, and provider-reported reasoning usage, and fails if any entry fails. After the Phase 1 change merges, dispatch the workflow without a model filter and record its all-green run URL on tracking issue `#3845` before beginning the read-side or write-side cutover.
 The smoke defaults `OPENCODE_VERSION` to `1.18.23`. `CODEX_VERSION` remains independently pinned at `v0.114.0` and continues to select the runtime for all production workflow paths; the smoke does not change existing runtime routing or prompt-cache behavior.
 -->
 
@@ -3002,7 +3002,7 @@ ignored with a warning. Role names: `CLARIFY`, `CLARIFY_RESPOND`, `PLAN`,
 `RB_JUDGE`, `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`,
 `SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `ACTIVATION_VERIFY`,
 `LOG_ANALYSIS`, `LOG_AUDIT`, `LOG_SUMMARY`, `RETRO`, `MATERIALITY`,
-`SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER`. Five of the six reviewer
+`SUMMARISER`, `BEHAVIOURAL_SMOKE`, `PANEL_REVIEWER`. Four of the five reviewer
 slots run on OpenRouter through OpenCode and have no engine switch. The
 `anthropic/claude-sonnet-5.5` slot is `PANEL_REVIEWER`: it runs
 `claude-sonnet-5-5` on the Claude account pool in a read-only

@@ -2649,7 +2649,7 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
 | implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_REPAIR` |
 | implement-diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_DIAGNOSE` |
 | review autofix editor | `openai/gpt-6-sol` | `high` (smoke: `medium`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_EDITOR` |
-| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `anthropic/claude-sonnet-5.5`, `z-ai/glm-5.3-flash`, `google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode for five slots; the `anthropic/claude-sonnet-5.5` slot runs on the Claude account pool (Sonnet 5.5, one Haiku 5.5 retry, skipped when the pool is unavailable) · `PANEL_REVIEWER` |
+| review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `anthropic/claude-sonnet-5.5`, `z-ai/glm-5.3-flash`, `google/gemini-3.1-flash-lite`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode for four slots; the `anthropic/claude-sonnet-5.5` slot runs on the Claude account pool (Sonnet 5.5, one Haiku 5.5 retry, skipped when the pool is unavailable) · `PANEL_REVIEWER` |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | Same as pass 1 · `PANEL_REVIEWER` for the Claude slot |
 | review consolidator | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_CONSOLIDATOR` |
 | conflict resolver | `openai/gpt-6-sol` | `high` (decoupled from smoke; `scripts/review_conflict_resolve.sh` validates `xhigh`, `high`, `medium`, `none` only — `low` is rejected; default lowered from `xhigh` after runs `25627236793` / `25627316961` hit `timeout`-killed retries on degenerate orchestrator-stack integrations; override per-repo via `vars.THINKING_LEVEL_CONFLICT_RESOLVER`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `CONFLICT_RESOLVER` |
@@ -2714,7 +2714,7 @@ the `model_verbosity = "low"` line that `scripts/write_codex_config.sh:242`
 writes into `config.toml`, and the `"default_verbosity": "low"` for
 `openai/gpt-6-sol` in `scripts/codex_model_catalog.json`. Third-party
 reviewer models (`minimax/minimax-m3`, `z-ai/glm-5.3-flash`,
-`google/gemini-3.1-flash-lite`, `qwen/qwen3.7-plus`) carry
+`google/gemini-3.1-flash-lite`) carry
 `support_verbosity = false` in the catalog (the `anthropic/claude-sonnet-5.5`
 slot runs on the Claude account pool, not codex/OpenCode)
 (the `openai/gpt-6-luna` reviewer slot supports it, with catalog default
@@ -2744,7 +2744,7 @@ the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
 The reviewer-only multi-model run (claude-branch-review) uses the same
 reviewer models (`minimax/minimax-m3`, `anthropic/claude-sonnet-5.5`,
 `z-ai/glm-5.3-flash`, `google/gemini-3.1-flash-lite`,
-`qwen/qwen3.7-plus`, `openai/gpt-6-luna`) plus
+`openai/gpt-6-luna`) plus
 `unattended_system_instructions.md` as system context. Nothing triggers it
 by default any more: PR #6438 removed the `claude/**` push trigger from
 `internal-review.yml`, so a `claude/**` branch is reviewed once it has a
