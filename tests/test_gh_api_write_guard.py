@@ -1683,8 +1683,10 @@ def test_auto_mode_denies_a_write_hidden_behind_a_shell_hazard():
 @pytest.mark.parametrize("command", [
 	# The prompts from the 2026-10-26 activation sessions.
 	"D=/tmp/s; for id in 6113664576 6111267295; do gh api repos/o/r/issues/comments/$id > $D/fresh_$id.json; done",
-	"cd /tmp/s && for id in 6016877098 6035928540; do gh api repos/o/r/issues/comments/$id > live_$id.json; done; "
-	"python3 -I -c \"print(1)\"",
+	(
+		"cd /tmp/s && for id in 6016877098 6035928540; do gh api repos/o/r/issues/comments/$id > live_$id.json; done; "
+		"python3 -I -c \"print(1)\""
+	),
 	"python3 - docs/log.md <<'EOF'\nimport sys\nprint('gh api repos/o/r --jq .permissions.admin')\nEOF",
 ])
 def test_auto_mode_denies_the_activation_session_prompts_with_rewrite_steps(command):
