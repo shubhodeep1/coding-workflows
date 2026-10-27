@@ -328,6 +328,28 @@ Copy this block when adding a new entry:
   - `docs/INVENTORY.md` row and the `tests/test_prepush_affected_tests.py` wrapper tests are removed in the same PR.
 - **Owner:** @shubhodeep1
 
+### `scripts/implement_step_prepush_test_gate.sh`
+
+- **Introduced in:** PR for #8190 (2026-10-26)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the implement-side caller of the pre-push affected-test gate (plan phase P3); removing it stops AI implement runs from testing their change before push.
+- **Removal preflight checks:**
+  - `grep -rn implement_step_prepush_test_gate .github/workflows scripts` returns no callers other than this file.
+  - `tests/test_implement_prepush_test_gate.py` is removed in the same PR.
+  - The README note "Pre-push affected-test gate (in-job, issue #8190)" and the `PREPUSH_TEST_GATE_*` variable rows are removed in the same PR.
+- **Owner:** @shubhodeep1
+
+### `scripts/review_autofix_step_prepush_test_gate.sh`
+
+- **Introduced in:** PR for #8201 (2026-10-26)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It runs the pre-push affected-test gate for review autofix, the conflict resolver and the workflow-heal editor (plan phase P4); removing it stops those paths from testing their change before push.
+- **Removal preflight checks:**
+  - `grep -rn review_autofix_step_prepush_test_gate .github/workflows scripts` returns no callers other than this file (today: `review_autofix.yml`, `scripts/review_conflict_resolve.sh`, `scripts/heal_isolated_implement.sh`, `scripts/stage_workflow_support.sh`).
+  - `tests/test_review_prepush_test_gate.py` is removed in the same PR, and the "Pre-push affected-test gate" entry leaves `tests/review_autofix_step_scripts.py`.
+  - `grep -n -- '--repair-turn' scripts/review_apply_fixes.sh` and `grep -n -- '--extra-allowed-file' scripts/check_resolver_diff.sh` are either removed with it or still have another caller.
+- **Owner:** @shubhodeep1
+
 ### `.github/workflows/pr6576-shard-followup.yml` + `scripts/pr6576_shard_followup.py` + `tests/test_pr6576_shard_followup.py`
 
 - **Introduced in:** issue #7072 (2026-10-10); PR number assigned when the implementation PR opens.

@@ -1828,6 +1828,17 @@ jobs:
           if [ -f scripts/codex_model_catalog.json ]; then
             install -m 0644 scripts/codex_model_catalog.json "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
           fi
+          # Pre-push affected-test gate (#8190): optional pre-editor copies, run dir only.
+          mkdir -p -- "${RUNTIME_DIR}/staged_support_run/prompts"
+          for _gate_pair in scripts/implement_step_prepush_test_gate.sh:scripts scripts/prepush_test_gate_run.sh:scripts \
+            workflow-templates/.claude/hooks/prepush_affected_tests.py:scripts prompts/mode-implement-repair-tests.txt:prompts; do
+            _gate_src=".codex-workflow-src/${_gate_pair%%:*}"
+            if [ -f "${_gate_src}" ] && [ ! -L "${_gate_src}" ]; then
+              install -m 0755 "${_gate_src}" "${RUNTIME_DIR}/staged_support_run/${_gate_pair##*:}/${_gate_src##*/}"
+            else
+              echo "::notice::Pre-push test gate file ${_gate_pair%%:*} is unavailable on ${SCRIPT_REF}; the gate skips."
+            fi
+          done
           # Workspace hooks that run after the editor (after_run) come from
           # this pre-editor copy: run_workspace_hook.sh resolves implement
           # hooks next to its own directory, so running it from the trusted
@@ -2605,6 +2616,8 @@ jobs:
 
       - name: Build implementation context
         if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
         run: |
           set -euo pipefail
           if [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
@@ -2630,6 +2643,8 @@ jobs:
               echo "(none)"
             fi
             echo
+            h="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/implement_step_prepush_test_gate.sh"
+            if [ -f "$h" ]; then bash "$h" expected-files "${PLAN_FILE}" "${ISSUE_BODY_FILE}" || true; fi
             echo "ISSUE COMMENTS"
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${IMPLEMENTATION_CONTEXT_FILE}"
@@ -3031,6 +3046,8 @@ jobs:
             UNVERIFIED in your summary.
           - For `npm test`, treat "Missing script" errors as a pass; treat any
             other test failure as a real error.
+          - Update the tests and registries listed under Expected files together
+            with the code; a pre-push gate re-runs them.
 
           Pinned-SHA test discipline: never write a test that asserts a specific
           upstream commit SHA in a file the workflow sync manages, such as a wrapper's
@@ -5345,6 +5362,30 @@ jobs:
             exit 1
           fi
 
+      # Never blocks the push (#8190); PREPUSH_TEST_GATE_MODE=off turns it off.
+      - name: Pre-push affected-test gate
+        if: env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true'
+        id: prepush_test_gate
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
+          PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
+          PREPUSH_TEST_GATE_TIMEOUT_MINUTES: ${{ vars.PREPUSH_TEST_GATE_TIMEOUT_MINUTES || '15' }}
+          PREPUSH_TEST_GATE_LARGE_FILE_TESTS: ${{ vars.PREPUSH_TEST_GATE_LARGE_FILE_TESTS || '50' }}
+          PREPUSH_TEST_GATE_SHARDS: ${{ vars.PREPUSH_TEST_GATE_SHARDS || '4' }}
+        run: |
+          set -euo pipefail
+          for gate_step in "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/implement_step_prepush_test_gate.sh" "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/implement_step_prepush_test_gate.sh"; do
+            if [ -f "${gate_step}" ] && [ ! -L "${gate_step}" ]; then
+              # shellcheck source=/dev/null
+              source "${gate_step}"
+              exit 0
+            fi
+          done
+          echo "PREPUSH_TEST_GATE phase=implement outcome=skipped reason=module_absent"
+
       - name: Commit changes
         if: env.SKIP_IMPLEMENT != 'true'
         id: commit_changes
@@ -6067,6 +6108,10 @@ jobs:
             else
               echo "::warning::Could not render the auto-decisions section for issue #${ISSUE_NUMBER}; the PR body omits it."
             fi
+          fi
+          GATE_SUMMARY="${RUNTIME_DIR}/prepush_test_gate_summary.md"
+          if [ -f "${GATE_SUMMARY}" ] && [ ! -L "${GATE_SUMMARY}" ] && [ -s "${GATE_SUMMARY}" ]; then
+            { echo; cat "${GATE_SUMMARY}"; } >> "${PR_BODY_FILE}"
           fi
           printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
           cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"

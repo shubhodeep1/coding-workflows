@@ -1037,3 +1037,466 @@ def test_source_repo_without_its_conflict_set_still_fails_closed(tmp_path):
 	assert result.returncode == 1 and "guard-passed" not in result.stdout
 	assert "Conflict resolver paired live copy check failed" in result.stderr
 	assert "reason=sandbox_path_unsupported" in result.stderr
+
+
+# --- pre-push affected-test gate (issue #8201, plan P4) --------------------------------
+
+CHECK_RESOLVER_DIFF = SCRIPT.parent / "check_resolver_diff.sh"
+
+
+def _gate_function_body() -> str:
+	text = SCRIPT.read_text(encoding="utf-8")
+	start = text.index("_resolver_prepush_test_gate()\n{")
+	return text[start:text.index("\n}\n", start)]
+
+
+def test_resolver_gate_runs_after_every_guard_and_before_the_commit() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	commit = text.index('git commit -m "[ai-merge-resolve] resolve merge conflicts"')
+	call = text.index("_resolver_prepush_test_gate || true")
+	assert call < commit
+	# Every existing guard runs first; the commit follows whatever the gate says.
+	assert text.rindex('"${SUPPORT_SCRIPTS_DIR}/check_resolver_diff.sh" \\', 0, call) < call
+	assert text.rindex("verify_resolver_index_complete_or_fail", 0, call) < call
+	assert text.rindex("git diff --cached --quiet", 0, call) < call
+	assert text[call:commit].count("\n") <= 2
+
+
+def test_resolver_gate_repair_contract() -> None:
+	body = _gate_function_body()
+	assert "review_autofix_step_prepush_test_gate.sh" in body
+	assert 'gate --phase resolver --worktree "${PWD}" --base "${gate_base}"' in body
+	assert "prepare-ephemeral codex" in body and "cleanup" in body
+	# One extra sandbox attempt: Claude, then OpenCode only on exit 75.
+	# Trusted support only, and the conflicted set (not the merge diff) seeds the allow-list.
+	assert "${SUPPORT_SCRIPTS_DIR:-scripts}" not in body
+	assert 'git diff --name-only HEAD -- > "${gate_dir}/changed.txt"' not in body
+	assert '"${CONFLICTED_PATHS_FILE:-/nonexistent}" > "${gate_dir}/changed.txt"' in body
+	assert body.count("_resolver_sandbox_attempt claude") == 1
+	# The repair attempt's prepare-ephemeral is bounded to the 630 s reserved.
+	assert "local resolver_gate_prepare_bounded=true" in body
+	attempt = SCRIPT.read_text(encoding="utf-8").split("_resolver_sandbox_attempt()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert '[ "${resolver_gate_prepare_bounded:-}" != true ] || sandbox_attempt_prepare=(timeout --kill-after=30s 600' in attempt
+	assert body.count("_resolver_sandbox_attempt codex") == 2
+	assert "--extra-allowed-file" in body
+	assert '--conflicted-set "${CONFLICTED_PATHS_FILE}"' in body
+	assert "_verify_fingerprints_soft" in body and 'RESOLVER_FP_EXIT:-0}" -eq 1' in body
+	# Reverts go back to the merge index, never to HEAD.
+	assert 'gate_index_tree="$(git write-tree' in body and 'git read-tree "${gate_index_tree}"' in body
+	assert "--source=HEAD" not in body
+	# Fail-open: the gate never exits the resolver.
+	assert not re.search(r"(^|[;&|]\s*)\s*exit\b", body, re.MULTILINE)
+	assert body.rstrip().endswith("return 0")
+
+
+def _resolver_diff_repo(tmp_path: Path) -> Path:
+	repo = tmp_path / "repo"
+	(repo / "tests").mkdir(parents=True)
+	(repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+	(repo / "tests" / "test_a.py").write_text("y = 1\n", encoding="utf-8")
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
+	(tmp_path / "conflicted.txt").write_text("a.py\n", encoding="utf-8")
+	(tmp_path / "touched.txt").write_text("a.py\ntests/test_a.py\n", encoding="utf-8")
+	return repo
+
+
+def _run_check(tmp_path: Path, repo: Path, *extra: str) -> subprocess.CompletedProcess:
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	return subprocess.run(["bash", str(CHECK_RESOLVER_DIFF), "--conflicted-set", str(tmp_path / "conflicted.txt"),
+		"--touched-set", str(tmp_path / "touched.txt"), "--repo-root", str(repo), *extra],
+		capture_output=True, text=True, env=env, timeout=60)
+
+
+def test_check_resolver_diff_without_extra_paths_is_unchanged(tmp_path: Path) -> None:
+	repo = _resolver_diff_repo(tmp_path)
+	proc = _run_check(tmp_path, repo)
+	assert proc.returncode == 1
+	assert "edited files outside the conflicted set" in proc.stderr and "tests/test_a.py" in proc.stderr
+
+
+def test_check_resolver_diff_extra_allowed_file_passes_the_subset_check(tmp_path: Path) -> None:
+	repo = _resolver_diff_repo(tmp_path)
+	proc = _run_check(tmp_path, repo, "--extra-allowed-file", "tests/test_a.py")
+	assert proc.returncode == 0, proc.stderr
+	assert "check_resolver_diff: OK" in proc.stdout
+
+
+def test_check_resolver_diff_extra_allowed_file_without_value_is_a_usage_error(tmp_path: Path) -> None:
+	repo = _resolver_diff_repo(tmp_path)
+	proc = _run_check(tmp_path, repo, "--extra-allowed-file")
+	assert proc.returncode == 2
+	assert "--extra-allowed-file needs a value" in proc.stderr
+
+
+@pytest.mark.parametrize("value", ["/abs/tests/test_a.py", "../tests/test_a.py", "tests/../tests/test_a.py", "tests/test\x01a.py"])
+def test_check_resolver_diff_ignores_unsafe_extra_paths(tmp_path: Path, value: str) -> None:
+	repo = _resolver_diff_repo(tmp_path)
+	proc = _run_check(tmp_path, repo, "--extra-allowed-file", value)
+	assert proc.returncode == 1
+	assert "ignoring unsafe --extra-allowed-file value" in proc.stderr
+
+
+_GATE_DOCKER = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "__WORK__/docker.log"
+if [ "$1" = run ]; then
+	for arg in "$@"; do
+		case "$arg" in
+			type=bind,src=*,dst=/results) results="${arg#type=bind,src=}"; results="${results%,dst=/results}" ;;
+		esac
+	done
+	n=$(( $(cat "__WORK__/count" 2>/dev/null || echo 0) + 1 ))
+	echo "$n" > "__WORK__/count"
+	if [ "$n" = 1 ]; then cp "__WORK__/fail.json" "$results/result.json"; else cp "__WORK__/pass.json" "$results/result.json"; fi
+fi
+exit 0
+'''
+
+
+def _gate_result(status: str, failures: list) -> str:
+	return json.dumps({"schema": "prepush_test_gate.v1", "status": status, "ran": ["tests/test_a.py"], "failures": failures,
+		"inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1})
+
+
+def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: int = 0, full_prepare: bool = True) -> tuple:
+	root = SCRIPT.parent.parent
+	work = tmp_path / "work"
+	work.mkdir()
+	failure = [{"test": "tests/test_a.py", "file": "tests/test_a.py", "names": ["test_x"], "tail": "AssertionError"}]
+	(work / "fail.json").write_text(_gate_result("fail", failure), encoding="utf-8")
+	(work / "pass.json").write_text(_gate_result("pass", []), encoding="utf-8")
+	repo = tmp_path / "repo"
+	(repo / "tests").mkdir(parents=True)
+	(repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+	(repo / "tests" / "test_a.py").write_text("# covers a.py\nimport a\n", encoding="utf-8")
+	(repo / "outside.py").write_text("keep\n", encoding="utf-8")
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PREPUSH_", "AI_ENGINE_"))}
+	git = ["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t"]
+	subprocess.run(["git", "init", "-q"], cwd=repo, check=True, env=env)
+	subprocess.run([*git, "add", "-A"], cwd=repo, check=True, env=env)
+	subprocess.run([*git, "commit", "-q", "-m", "base"], cwd=repo, check=True, env=env)
+	(repo / "a.py").write_text("x = 2\n", encoding="utf-8")
+	(repo / "base_side.py").write_text("from base\n", encoding="utf-8")
+	subprocess.run(["git", "add", "a.py", "base_side.py"], cwd=repo, check=True, env=env)
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("review_autofix_step_prepush_test_gate.sh", "prepush_test_gate_run.sh", "review_untrusted_workspace.py", "check_resolver_diff.sh"):
+		shutil.copy2(root / "scripts" / name, support / name)
+	shutil.copy2(root / "workflow-templates/.claude/hooks/prepush_affected_tests.py", support / "prepush_affected_tests.py")
+	prompts = tmp_path / "prompts"
+	prompts.mkdir()
+	shutil.copy2(root / "prompts/mode-implement-repair-tests.txt", prompts / "mode-implement-repair-tests.txt")
+	sandbox_root = tmp_path / "review-isolated-gate"
+	sandbox_root.mkdir()
+	prepare_branch = (
+		f'prepare) printf "sha256:{"c" * 64}\\n" > "{sandbox_root}/image"; mkdir -p "{sandbox_root}/source/.review-venv/bin"; '
+		f'printf "REVIEW_SANDBOX_ROOT=%s\\n" "{sandbox_root}" >> "$GITHUB_ENV" ;; '
+	) if full_prepare else 'prepare) exit 1 ;; '
+	(support / "review_untrusted_sandbox.sh").write_text(
+		f'#!/usr/bin/env bash\necho "$*" >> "{work}/sandbox.log"\ncase "$1" in {prepare_branch}'
+		f'prepare-ephemeral) printf "sha256:{"c" * 64}\\n" > "{sandbox_root}/image"; echo "{sandbox_root}" ;; esac\nexit 0\n',
+		encoding="utf-8")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "docker").write_text(_GATE_DOCKER.replace("__WORK__", str(work)), encoding="utf-8")
+	(bin_dir / "docker").chmod(0o755)
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	conflicted = runtime / "conflicted_paths.txt"
+	conflicted.write_text("a.py\n", encoding="utf-8")
+	text = SCRIPT.read_text(encoding="utf-8")
+	start = text.index("_resolver_prepush_test_gate()\n{")
+	function = text[start:text.index("\n}\n", start) + 3]
+	harness = f'''set -euo pipefail
+_resolver_sandbox_attempt() {{ echo "attempt $1" >> "{work}/attempts"; cp "${{_effective_prompt_file}}" "{work}/prompt"; {repair_edit}; return 0; }}
+_verify_fingerprints_soft() {{ RESOLVER_FP_EXIT=0; }}
+{function}
+SECONDS={start_seconds}
+_resolver_prepush_test_gate
+git commit -q -m "[ai-merge-resolve] resolve merge conflicts"
+echo COMMITTED
+'''
+	env.update(PATH=f"{bin_dir}{os.pathsep}{env.get('PATH', '')}", SUPPORT_SCRIPTS_DIR=str(support), SUPPORT_PROMPTS_DIR=str(prompts),
+		RUNTIME_DIR=str(runtime), RUNNER_TEMP=str(tmp_path), CONFLICTED_PATHS_FILE=str(conflicted), GITHUB_WORKSPACE=str(repo),
+		GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+	proc = subprocess.run(["bash", "-c", harness], cwd=repo, env=env, capture_output=True, text=True, timeout=180)
+	assert "COMMITTED" in proc.stdout, proc.stderr
+	return proc, work, repo, env
+
+
+@pytest.mark.parametrize("repair_edit, expect_kept", [
+	("printf 'fixed\\n' > tests/test_a.py", True),
+	("printf 'fixed\\n' > tests/test_a.py; printf 'bad\\n' > outside.py", False),
+	# A non-conflicted file the merge brought in stays outside the extra
+	# allowed paths, even though it differs from the pre-merge head.
+	("printf 'fixed\\n' > tests/test_a.py; printf 'rewritten\\n' > base_side.py", False),
+])
+def test_resolver_gate_fixture_runs_one_repair_and_keeps_or_reverts_it(tmp_path: Path, repair_edit: str, expect_kept: bool) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, repair_edit)
+	assert (work / "attempts").read_text(encoding="utf-8") == "attempt codex\n"
+	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in (work / "prompt").read_text(encoding="utf-8")
+	committed = subprocess.run(["git", "show", "HEAD:tests/test_a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout
+	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"
+	assert (repo / "outside.py").read_text(encoding="utf-8") == "keep\n"
+	assert subprocess.run(["git", "show", "HEAD:base_side.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "from base\n"
+	if expect_kept:
+		assert committed == "fixed\n"
+		assert "phase=resolver outcome=pass" in proc.stderr and "repair=ran" in proc.stderr
+		assert (work / "count").read_text(encoding="utf-8").strip() == "2"
+	else:
+		assert committed == "# covers a.py\nimport a\n"
+		assert "outcome=repair_reverted reason=check_resolver_diff" in proc.stderr
+
+
+def test_resolver_gate_skips_the_repair_when_the_step_budget_is_short(tmp_path: Path) -> None:
+	# 5000s into the step: run1 still fits, a 3000s repair attempt plus a gate
+	# run does not. The commit still lands.
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, "printf 'fixed\\n' > tests/test_a.py", start_seconds=5000)
+	assert not (work / "attempts").exists()
+	assert (work / "count").read_text(encoding="utf-8").strip() == "1"
+	assert "phase=resolver outcome=fail" in proc.stderr and "repair=skipped_step_time_budget" in proc.stderr
+	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"
+
+
+def test_resolver_gate_is_skipped_when_no_gate_run_fits_the_step_budget(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, "printf 'fixed\\n' > tests/test_a.py", start_seconds=8500)
+	assert not (work / "count").exists() and not (work / "attempts").exists()
+	assert "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=step_budget" in proc.stderr
+	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"
+
+
+# ── --test-repair (#8210, plan phase P5) ─────────────────────────────
+
+_REPO_ROOT = SCRIPT.parent.parent
+
+
+def _test_repair_functions() -> str:
+	src = _source()
+	start = src.index("# ── Integration post-sync test repair (#8210")
+	end = src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then', start)
+	return src[start:end]
+
+
+def _tr_git(repo: Path, *args: str) -> str:
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
+	return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=env).stdout
+
+
+def _test_repair_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_tr_git(repo, "init", "--quiet", "-b", "main")
+	(repo / "tests").mkdir()
+	(repo / "lib.py").write_text("def value():\n\treturn 1\n", encoding="utf-8")
+	(repo / "other.py").write_text("X = 1\n", encoding="utf-8")
+	(repo / "tests" / "test_lib.py").write_text("from lib import value\n\n\ndef test_value():\n\tassert value() == 1\n", encoding="utf-8")
+	_tr_git(repo, "add", "-A")
+	_tr_git(repo, "commit", "--quiet", "-m", "base")
+	_tr_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	_tr_git(repo, "checkout", "--quiet", "-b", "orchestrator/project-1")
+	(repo / "lib.py").write_text("def value():\n\treturn 2\n", encoding="utf-8")
+	_tr_git(repo, "commit", "--quiet", "-am", "sync broke the test")
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	result = runtime / "result.json"
+	result.write_text(json.dumps({
+		"schema": "prepush_test_gate.v1", "status": "fail", "ran": ["tests/test_lib.py"],
+		"failures": [{"test": "tests/test_lib.py", "file": "tests/test_lib.py", "names": ["test_value"], "tail": "assert 2 == 1"}],
+		"inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1,
+	}), encoding="utf-8")
+	return repo, runtime, result
+
+
+def _run_test_repair(tmp_path: Path, mode: str, result_override: str | None = None, fp_json: str = "") -> tuple[subprocess.CompletedProcess, Path, Path]:
+	repo, runtime, result = _test_repair_fixture(tmp_path)
+	github_env = tmp_path / "github_env"
+	github_env.touch()
+	calls = tmp_path / "calls"
+	program = _test_repair_functions() + """
+_resolver_test_repair_context() {
+  _test_repair_title="t" _test_repair_body="b" _test_repair_merged_list="none" _test_repair_merged_count=0
+  INTEGRATION_FINGERPRINTS_FILE="${RUNTIME_DIR}/fp.json"
+  if [ -n "${FP_JSON:-}" ]; then printf '%s' "${FP_JSON}"; else printf '{}'; fi > "${INTEGRATION_FINGERPRINTS_FILE}"
+}
+_resolver_sandbox_attempt() {
+  printf 'sandbox-attempt %s prompt=%s\\n' "$1" "${_effective_prompt_file}" >> "$CALLS"
+  case "${MODE}" in
+    fix) printf 'def value():\\n\\treturn 1\\n' > lib.py ;;
+    stray) printf 'def value():\\n\\treturn 1\\n' > lib.py; printf 'X = 2\\n' > other.py ;;
+    fail) printf 'def value():\\n\\treturn 1\\n' > lib.py; return 1 ;;
+  esac
+  return 0
+}
+_resolver_test_repair_main
+"""
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+	env.update({
+		"SUPPORT_SCRIPTS_DIR": str(_REPO_ROOT / "scripts"), "SUPPORT_PROMPTS_DIR": str(_REPO_ROOT / "prompts"),
+		"RUNTIME_DIR": str(runtime), "GITHUB_ENV": str(github_env), "TARGET_BRANCH": "orchestrator/project-1",
+		"BASE_BRANCH": "main", "MODE": mode, "CALLS": str(calls), "GITHUB_WORKSPACE": str(tmp_path / "none"),
+		"RESOLVER_TEST_REPAIR_RESULT_FILE": result_override if result_override is not None else str(result),
+		"RESOLVER_TEST_REPAIR_BUDGET_SECS": "7000", "PREPUSH_TEST_GATE_MODE": "repair",
+		"FP_JSON": fp_json,
+	})
+	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program], cwd=repo, env=env, capture_output=True, text=True)
+	return proc, repo, github_env
+
+
+def test_test_repair_commits_one_repair_on_the_integration_head(tmp_path):
+	proc, repo, github_env = _run_test_repair(tmp_path, "fix")
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=committed" in proc.stderr, proc.stderr
+	log = _tr_git(repo, "log", "--format=%s", "-3").splitlines()
+	assert log[0] == "[ai-merge-resolve] repair post-sync test failures"
+	assert log.count("[ai-merge-resolve] repair post-sync test failures") == 1
+	assert "INTEGRATION_TEST_REPAIRED=true" in github_env.read_text(encoding="utf-8")
+	prompt = (tmp_path / "runtime" / "integration_test_repair" / "repair-prompt.txt").read_text(encoding="utf-8")
+	assert "Repair test failures on an orchestrator integration branch" in prompt
+	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in prompt
+	assert "orchestrator/project-1" in prompt and "{{" not in prompt.split("=== CAPTURED")[0]
+	assert "lib.py" in (tmp_path / "runtime" / "integration_test_repair" / "allow.txt").read_text(encoding="utf-8")
+
+
+def test_test_repair_prompt_carries_the_intent_fingerprints(tmp_path):
+	# The context helper sets INTEGRATION_FINGERPRINTS_FILE as a plain shell
+	# variable; the renderer must still receive it, or the model gets "{}".
+	fp = '{"11":{"must_contain":[{"file":"lib.py","pattern":"keep_me_marker"}]}}'
+	proc, _repo, _env = _run_test_repair(tmp_path, "none", fp_json=fp)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=no_edits" in proc.stderr, proc.stderr
+	rendered = (tmp_path / "runtime" / "integration_test_repair" / "rendered-template.txt").read_text(encoding="utf-8")
+	assert "keep_me_marker" in rendered and "{{INTENT_FINGERPRINTS_JSON}}" not in rendered
+
+
+def test_test_repair_commits_despite_fingerprint_drift_already_on_the_head(tmp_path):
+	# The pattern is missing before the model runs (a sync can do this): the
+	# baseline compare lets the repair through.
+	fp = '{"11":{"issue":11,"pr":12,"must_contain":[{"file":"lib.py","regex":"keep_me_marker"}]}}'
+	proc, repo, github_env = _run_test_repair(tmp_path, "fix", fp_json=fp)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=committed" in proc.stderr, proc.stderr
+	assert "INTEGRATION_TEST_REPAIRED=true" in github_env.read_text(encoding="utf-8")
+
+
+def test_test_repair_reverts_a_repair_that_adds_fingerprint_drift(tmp_path):
+	# "return 2" is present before the repair and removed by it.
+	fp = '{"11":{"issue":11,"pr":12,"must_contain":[{"file":"lib.py","regex":"return 2"}]}}'
+	proc, repo, github_env = _run_test_repair(tmp_path, "fix", fp_json=fp)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=repair_reverted reason=fingerprints" in proc.stderr, proc.stderr
+	assert _tr_git(repo, "log", "--format=%s", "-1").strip() == "sync broke the test"
+	assert "INTEGRATION_TEST_REPAIRED" not in github_env.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("mode,reason", [("stray", "check_resolver_diff"), ("fail", "editor_exit_1")])
+def test_test_repair_reverts_rejected_repairs_without_committing(tmp_path, mode, reason):
+	proc, repo, github_env = _run_test_repair(tmp_path, mode)
+	assert proc.returncode == 0, proc.stderr
+	assert f"outcome=repair_reverted reason={reason}" in proc.stderr, proc.stderr
+	assert _tr_git(repo, "log", "--format=%s", "-1").strip() == "sync broke the test"
+	assert _tr_git(repo, "status", "--porcelain").strip() == ""
+	assert "INTEGRATION_TEST_REPAIRED" not in github_env.read_text(encoding="utf-8")
+
+
+def test_test_repair_refuses_a_symlinked_result_without_a_model_run(tmp_path):
+	link = tmp_path / "runtime-link.json"
+	proc, _repo, _env = _run_test_repair(tmp_path, "fix", result_override="")
+	assert "reason=invalid_input" in proc.stderr
+	(tmp_path / "runtime" / "linked.json").symlink_to(tmp_path / "runtime" / "result.json")
+	env_override = str(tmp_path / "runtime" / "linked.json")
+	program = _test_repair_functions() + '\n_resolver_sandbox_attempt() { echo model >> "$CALLS"; }\n_resolver_test_repair_main\n'
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+	env.update({"RUNTIME_DIR": str(tmp_path / "runtime"), "TARGET_BRANCH": "orchestrator/project-1",
+		"RESOLVER_TEST_REPAIR_RESULT_FILE": env_override, "CALLS": str(link)})
+	proc = subprocess.run(["bash", "-c", program], cwd=tmp_path / "repo", env=env, capture_output=True, text=True)
+	assert "reason=invalid_input detail=result_file" in proc.stderr
+	assert not link.exists()
+	assert not (tmp_path / "calls").exists()
+
+
+def test_test_repair_rejects_unknown_arguments_and_skips_the_conflict_path():
+	proc = subprocess.run(["bash", str(SCRIPT), "--bogus"], capture_output=True, text=True)
+	assert proc.returncode == 2 and "unknown argument" in proc.stderr
+	proc = subprocess.run(["bash", str(SCRIPT), "--test-repair"], capture_output=True, text=True)
+	assert proc.returncode == 2 and "needs a result file" in proc.stderr
+	src = _source()
+	branch = src[src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then'):]
+	branch = branch[:branch.index("\nfi\n")]
+	# No integration-judge dispatch (EXIT trap) and nothing conflict-specific.
+	assert "trap - EXIT" in branch and "_resolver_test_repair_main" in branch and "exit 0" in branch
+	assert src.index("_resolver_sandbox_attempt()") < src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then')
+	assert src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then') < src.index(': > "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"')
+
+
+def _run_test_repair_context(tmp_path: Path, comments: list) -> tuple[subprocess.CompletedProcess, Path]:
+	if shutil.which("jq") is None:
+		pytest.skip("jq binary not available in test environment")
+	runtime = tmp_path / "runtime"
+	runtime.mkdir(exist_ok=True)
+	comments_file = tmp_path / "comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	program = _test_repair_functions() + """
+gh() {
+  case "$*" in
+    "api user"*) echo bot ;;
+    *"--paginate"*) cat "$COMMENTS_FILE" ;;
+    *) echo '{"title":"t","body":"b"}' ;;
+  esac
+}
+rc=0
+_resolver_test_repair_context 7 || rc=$?
+echo "RC=${rc}"
+echo "MERGED=${_test_repair_merged_count}"
+[ -z "${INTEGRATION_FINGERPRINTS_FILE:-}" ] || echo "FP=$(cat "${INTEGRATION_FINGERPRINTS_FILE}")"
+"""
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+	env.update({"SUPPORT_SCRIPTS_DIR": str(_REPO_ROOT / "scripts"), "RUNTIME_DIR": str(runtime),
+		"GITHUB_REPOSITORY": "o/r", "COMMENTS_FILE": str(comments_file), "GITHUB_WORKSPACE": str(tmp_path / "none")})
+	proc = subprocess.run(["bash", "-c", program], cwd=tmp_path, env=env, capture_output=True, text=True)
+	return proc, runtime
+
+
+def test_test_repair_context_reads_v2_state_before_legacy_v1(tmp_path):
+	v2_state = {"waves": [{"issues": [{"id": "a", "github_issue": 11, "status": "merged"}]}],
+		"merged_issue_fingerprints": {"11": {"must_contain": [{"file": "lib.py", "pattern": "v2"}]}}}
+	v1_state = {"waves": [], "merged_issue_fingerprints": {"9": {"stale": True}}}
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps(v2_state), encoding="utf-8")
+	chunks = tmp_path / "chunks"
+	subprocess.run(["python3", "-I", "-B", str(_REPO_ROOT / "scripts" / "orchestrate_state_v2.py"), "pack",
+		"--state-file", str(state_file), "--out-dir", str(chunks)], check=True)
+	comments = [{"user": {"login": "bot"}, "body": "ORCHESTRATOR_STATE_V1\n" + json.dumps(v1_state) + "\nORCHESTRATOR_STATE_V1"}]
+	comments += [{"user": {"login": "bot"}, "body": p.read_text(encoding="utf-8")} for p in sorted(chunks.iterdir())]
+	proc, _runtime = _run_test_repair_context(tmp_path, comments)
+	assert "RC=0" in proc.stdout, proc.stdout + proc.stderr
+	assert "MERGED=1" in proc.stdout
+	assert '"pattern":"v2"' in proc.stdout and "stale" not in proc.stdout
+
+
+def test_test_repair_context_fails_closed_without_trusted_state(tmp_path):
+	# Only another author's state: no trusted state, so no repair (rc 2).
+	comments = [{"user": {"login": "someone"}, "body": "ORCHESTRATOR_STATE_V1\n{\"waves\": []}\nORCHESTRATOR_STATE_V1"}]
+	proc, _runtime = _run_test_repair_context(tmp_path, comments)
+	assert "RC=2" in proc.stdout, proc.stdout + proc.stderr
+	src = _source()
+	assert 'reason=state_unavailable' in src[src.index("_resolver_test_repair_main()"):]
+
+
+def test_resolver_gate_full_prepare_passes_the_venv_and_cleans_up(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, "printf 'fixed\\n' > tests/test_a.py")
+	sandbox_log = (work / "sandbox.log").read_text(encoding="utf-8").splitlines()
+	assert sandbox_log[0] == "prepare codex" and sandbox_log[-1] == "cleanup"
+	assert "prepare-ephemeral codex" not in sandbox_log
+	runs = [line for line in (work / "docker.log").read_text(encoding="utf-8").splitlines() if line.startswith("run ")]
+	assert len(runs) == 2 and all("dst=/opt/codex-venv,readonly" in line for line in runs)
+	assert "reason=venv_absent" not in proc.stderr
+
+
+def test_resolver_gate_falls_back_to_an_image_only_prepare(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, "printf 'fixed\\n' > tests/test_a.py", full_prepare=False)
+	sandbox_log = (work / "sandbox.log").read_text(encoding="utf-8").splitlines()
+	assert sandbox_log[:2] == ["prepare codex", "prepare-ephemeral codex"] and sandbox_log[-1] == "cleanup"
+	assert "/opt/codex-venv" not in (work / "docker.log").read_text(encoding="utf-8")
+	assert "phase=resolver outcome=warning reason=venv_absent" in proc.stderr
+	assert "phase=resolver outcome=pass" in proc.stderr
