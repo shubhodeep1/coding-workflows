@@ -1616,6 +1616,9 @@ _check_final_merge_ineligibility_alert()
 		msg+=$'\n'"Blockers: ${blocker_summary}"
 	fi
 	msg+=$'\n'"Resolution: re-run or dismiss the blocking check-run(s), merge manually, or set ORCH_FINAL_MERGE_REQUIRED_CHECKS to omit advisory checks."
+	if [[ "${blocker_summary}" == *"ruleset: "* ]]; then
+		msg+=$'\n'"Ruleset blockers must be fixed (or bypassed) in the repository ruleset; ORCH_FINAL_MERGE_REQUIRED_CHECKS does not affect them."
+	fi
 
 	tg_notify "${msg}" "CRITICAL"
 
@@ -1630,7 +1633,11 @@ _check_final_merge_ineligibility_alert()
 	comment_body+="**Resolution options:**"$'\n'
 	comment_body+="- Re-run, dismiss, or fix the blocking check-run(s) so they return \`success\`/\`neutral\`/\`skipped\`."$'\n'
 	comment_body+="- Merge PR #${final_pr} manually via the GitHub UI (works when the base branch isn't protected)."$'\n'
-	comment_body+="- Override the gate per-repo via \`ORCH_FINAL_MERGE_REQUIRED_CHECKS\` to exclude advisory checks."$'\n\n'
+	comment_body+="- Override the gate per-repo via \`ORCH_FINAL_MERGE_REQUIRED_CHECKS\` to exclude advisory checks."$'\n'
+	if [[ "${blocker_summary}" == *"ruleset: "* ]]; then
+		comment_body+="- \`ruleset:\` blockers come from the repository ruleset: fix the failing check or adjust the ruleset. \`ORCH_FINAL_MERGE_REQUIRED_CHECKS\` does not affect them."$'\n'
+	fi
+	comment_body+=$'\n'
 	comment_body+="This alert fires once per head SHA. A fresh push to PR #${final_pr} resets the clock and requires another ${alert_hours}h before re-alerting."$'\n\n'
 	comment_body+="*(Threshold configurable via \`ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS\`, currently ${alert_hours}h; set to 0 to disable.)*"
 	post_tracking_comment "${comment_body}" || true

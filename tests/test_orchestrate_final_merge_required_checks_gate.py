@@ -958,6 +958,24 @@ def test_ruleset_blockers_falls_back_to_check_runs_and_flags_missing(tmp_path):
 	assert "EXIT=1 SUMMARY=Lint (pending), Never Reported (missing)" in result.stdout
 
 
+def test_ruleset_blockers_fetches_check_runs_when_other_statuses_exist(tmp_path):
+	# A required context backed only by a check-run must not be reported as
+	# missing just because the head carries some unrelated commit status.
+	_make_gh_stub(tmp_path, gh_state={
+		"rules": {"main": ["CI"]},
+		"statuses": {_RULESET_SHA: [
+			{"context": "orchestrator/integration-pr-not-ready", "state": "success"},
+		]},
+		"check_runs": {_RULESET_SHA: [
+			{"id": 1, "name": "CI", "status": "completed", "conclusion": "success"},
+		]},
+	})
+	result = _run_shell(tmp_path, _RULESET_PROBE)
+	assert result.returncode == 0, result.stderr
+	assert "EXIT=0 SUMMARY=" in result.stdout
+	assert any("/check-runs" in p for p in _api_paths(tmp_path))
+
+
 def test_ruleset_blockers_lookup_failure_returns_two(tmp_path):
 	_make_gh_stub(tmp_path, gh_state={"rules": {"main": "fail"}})
 	result = _run_shell(tmp_path, _RULESET_PROBE)

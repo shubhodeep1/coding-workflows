@@ -510,7 +510,7 @@ _pr_ruleset_required_check_blockers()
 	# Check-runs are fetched only when a required context has no commit status.
 	local ruleset_check_runs_json='[]'
 	if printf '%s' "${combined_status_json}" | jq -e --argjson req "${ruleset_contexts_json}" '
-		[(.statuses // [])[] | .context] as $seen | [$req[] | select(($seen | index(.)) == null)] | length > 0
+		[(.statuses // [])[] | .context] as $seen | [$req[] as $ctx | select(($seen | index($ctx)) == null)] | length > 0
 	' >/dev/null 2>&1; then
 		ruleset_check_runs_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/commits/${head_sha}/check-runs?per_page=100" 2>/dev/null)" || return 2
 		ruleset_check_runs_json="$(printf '%s' "${ruleset_check_runs_json}" | jq -c '
