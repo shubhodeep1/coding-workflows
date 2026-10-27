@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\" (Issue #8217, item 4)\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, preflight step in the E2E jobs (e2e-smoke-test, e2e-alt-model-test, orchestrate-decompose-test) or the resolve-version job\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No preflight step exists in the diff, and the diff at lines 994-1018, 1223-1235, 1598-1610, 4471-4514, 5057-5068 only adds in-loop capacity checks. The orchestrate dispatch step checks for a kind=capacity tracker only after its 90-second TRACKING_DEADLINE search at line 4459. The changelog describes only the in-loop handling. Severity NIT, and the issue marks the item optional.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\" (Issue #8217, item 4.)\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, preflight step in the E2E jobs (`e2e-smoke-test`, `e2e-alt-model-test`, `orchestrate-decompose-test`) or `resolve-version` job, before the live phases dispatch.\n  Evidence of absence: No preflight step exists in the diff; the PR diff at lines 994-1018, 1223-1235, 1598-1610, 4471-4514, 5057-5068 only adds in-loop capacity checks. The orchestrator dispatch step at lines 4471-4514 checks for an open `kind=capacity` tracker only after its 90-second `TRACKING_DEADLINE` search at line 4459 expires, so it does not stop the gate before the live phases start.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, E2E jobs or `resolve-version`.\n  Evidence of absence: The PR adds capacity checks inside the clarify, plan, implement, alt-model, and orchestrate-decompose paths, but no diff hunk adds a preflight before the live phases. The changelog also describes the in-loop handling, not a preflight. The issue marks this deliverable optional.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0a44605f6a2112e93f3df013520c7d2d9791a66e7ceaceb430c3750dc57afed8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8221,
+    "run_id": "40526914374",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40526914374",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027151648_9d3ccdd116",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8221,
+    "run_id": "40526914374"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T15:16:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
