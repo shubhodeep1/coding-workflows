@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-10-27T08:59:43Z",
+  "issue_number": 8217,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=changelog.d/8217-release-gate-capacity-wait.md:6; cited_path=.github/workflows/test-and-mark-stable.yml; files_touched=.github/workflows/test-and-mark-stable.yml, changelog.d/8217-release-gate-capacity-wait.md, tests/test_test_and_mark_stable_step_scripts_contract.py.",
+  "phase": "review_autofix",
+  "pr_number": 8221,
+  "record_id": "lesson_20261027085943_0e195b8b60",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/test-and-mark-stable.yml",
+    "changelog.d/8217-release-gate-capacity-wait.md",
+    "tests/test_test_and_mark_stable_step_scripts_contract.py"
+  ]
+}
