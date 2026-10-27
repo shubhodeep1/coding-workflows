@@ -45,7 +45,15 @@
 #   PREPUSH_TEST_GATE_SHARDS            4
 #
 # Never blocks the push: the sourced step ends with status 0 on every path.
-# Log prefix: PREPUSH_TEST_GATE phase=review|resolver|heal.
+# Log prefix: PREPUSH_TEST_GATE phase=review|resolver|heal|integration.
+#
+# Integration mode (#8210, plan phase P5): sourced with
+# PREPUSH_TEST_GATE_STEP_MODE=integration by review_autofix.yml's
+# "Integration post-sync test repair" step. Only with POST_SYNC_TEST_REPAIR=true
+# on an orchestrator/project-<N> head it writes INTEGRATION_TEST_REPAIR_ACTIVE=true
+# to GITHUB_ENV (the reviewer/editor steps skip), gates the PR head against its
+# merge-base with BASE_BRANCH and, on failures that head caused, runs
+# `review_conflict_resolve.sh --test-repair <result.json>` once.
 set -euo pipefail
 
 review_prepush_test_gate_log()
@@ -355,7 +363,10 @@ review_prepush_test_gate_build_prompt()
 		cat "${rpg_template}"
 		echo
 		echo "=== CAPTURED TEST FAILURES (UNTRUSTED) ==="
-		review_prepush_test_gate_py failures "${result}"
+		# Every line is prefixed so test output cannot imitate the trusted
+		# section headers below; the END marker closes the untrusted block.
+		review_prepush_test_gate_py failures "${result}" | sed 's/^/UNTRUSTED_DATA: /'
+		echo "=== END CAPTURED TEST FAILURES (UNTRUSTED) ==="
 		if [ -n "${changed}" ] && [ -f "${changed}" ]; then
 			echo
 			echo "=== CHANGED FILES ==="
@@ -665,6 +676,99 @@ review_prepush_test_gate_main()
 	return 0
 }
 
+# Integration mode (#8210): see the header. Always returns 0.
+review_prepush_test_gate_integration_main()
+{
+	set +eu
+	set +o pipefail
+	local branch="${TARGET_BRANCH:-}" base_branch="${BASE_BRANCH:-}" base="" sd resolver
+	local gate_dir root="" image="" status_line status="" pr_caused=0 inherited=0 repair="not needed" rc=0
+	# The step has timeout-minutes 120; keep 300 s for the push and summary.
+	local step_started="${SECONDS}" step_budget=6900 left
+	rpg_phase=integration
+	if [ "${POST_SYNC_TEST_REPAIR:-false}" != "true" ] || ! [[ "${branch}" =~ ^orchestrator/project-[1-9][0-9]*$ ]]; then
+		review_prepush_test_gate_log "outcome=skipped reason=not_requested"
+		return 0
+	fi
+	# First, so the reviewer/editor steps skip even when the gate cannot run.
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		echo "INTEGRATION_TEST_REPAIR_ACTIVE=true" >> "${GITHUB_ENV}"
+	fi
+	review_prepush_test_gate_mode
+	if [ "${rpg_mode}" = off ]; then
+		review_prepush_test_gate_log "outcome=skipped reason=mode_off"
+		return 0
+	fi
+	if [ "${AUTOFIX_PRE_REVIEW_RESOLVE:-false}" = "true" ] || [ "${MERGE_CONFLICT:-false}" = "true" ]; then
+		review_prepush_test_gate_log "outcome=skipped reason=conflict_path"
+		return 0
+	fi
+	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ]; then
+		review_prepush_test_gate_log "outcome=skipped reason=runtime_dir_missing"
+		return 0
+	fi
+	cd "${WORKSPACE_PATH:-${GITHUB_WORKSPACE:-$PWD}}" 2>/dev/null || return 0
+	rpg_worktree="$(git rev-parse --show-toplevel 2>/dev/null)" || rpg_worktree=""
+	[ -n "${rpg_worktree}" ] && cd "${rpg_worktree}" || { review_prepush_test_gate_log "outcome=skipped reason=no_git_checkout"; return 0; }
+	if [[ "${base_branch}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+		git rev-parse --verify --quiet "refs/remotes/origin/${base_branch}" >/dev/null 2>&1 \
+			|| git fetch --no-tags --quiet origin "+refs/heads/${base_branch}:refs/remotes/origin/${base_branch}" 2>/dev/null || true
+		base="$(git merge-base HEAD "refs/remotes/origin/${base_branch}" 2>/dev/null || true)"
+	fi
+	if ! [[ "${base}" =~ ^[0-9a-f]{40}$ ]]; then
+		review_prepush_test_gate_log "outcome=skipped reason=merge_base_unresolved"
+		return 0
+	fi
+	sd="$(review_prepush_test_gate_abs "${SUPPORT_SCRIPTS_DIR:-}")"
+	gate_dir="${RUNTIME_DIR}/prepush_gate_integration"
+	mkdir -p "${gate_dir}" 2>/dev/null || return 0
+	if [ -n "${sd}" ] && [ -f "${sd}/review_untrusted_sandbox.sh" ] \
+		&& root="$(timeout --kill-after=30s 600 bash "${sd}/review_untrusted_sandbox.sh" prepare-ephemeral codex 2>/dev/null)" && [ -n "${root}" ]; then
+		if [ -f "${root}/image" ] && [ ! -L "${root}/image" ]; then
+			image="$(head -n 1 "${root}/image" 2>/dev/null | tr -d '[:space:]')"
+		fi
+		REVIEW_SANDBOX_ROOT="${root}" bash "${sd}/review_untrusted_sandbox.sh" cleanup >/dev/null 2>&1 || true
+	fi
+	status_line="$(review_prepush_test_gate_cmd_gate --phase integration --worktree "${rpg_worktree}" --base "${base}" \
+		--image "${image}" --image-reason integration_image_unavailable --out "${gate_dir}/run1" | tail -n 1)" || status_line=""
+	rpg_phase=integration
+	read -r status pr_caused inherited <<< "${status_line:-unverified 0 0}"
+	if [ "${status}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
+		resolver="$(review_prepush_test_gate_pick "${sd:+${sd}/review_conflict_resolve.sh}")" || resolver=""
+		if [ "${rpg_mode}" != repair ]; then
+			repair="not run (report mode)"
+		elif [ -z "${resolver}" ]; then
+			repair="skipped (resolver absent)"
+		else
+			rc=0
+			left=$(( step_budget - (SECONDS - step_started) ))
+			[ "${left}" -gt 0 ] || left=0
+			RESOLVER_TEST_REPAIR_BUDGET_SECS="${left}" bash "${resolver}" --test-repair "${gate_dir}/run1/result.json" || rc=$?
+			repair="resolver exit ${rc}"
+			if [ -n "${GITHUB_ENV:-}" ] && grep -qx 'INTEGRATION_TEST_REPAIRED=true' "${GITHUB_ENV}" 2>/dev/null; then
+				repair="committed"
+				# Re-run the gate on the repaired head; a repair that leaves
+				# PR-caused failures is not pushed (the later env line wins).
+				left=$(( step_budget - (SECONDS - step_started) ))
+				if [ "${left}" -lt $(( ${rpg_timeout:-15} * 60 + 120 )) ]; then
+					repair="committed (re-run skipped: step time budget)"
+				else
+					status_line="$(review_prepush_test_gate_cmd_gate --phase integration --worktree "${rpg_worktree}" --base "${base}" \
+						--image "${image}" --image-reason integration_image_unavailable --out "${gate_dir}/run2" | tail -n 1)" || status_line=""
+					rpg_phase=integration
+					read -r status pr_caused inherited <<< "${status_line:-unverified 0 0}"
+					if [ "${status}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
+						echo "INTEGRATION_TEST_REPAIRED=false" >> "${GITHUB_ENV}"
+						repair="withheld (failures remain after repair)"
+					fi
+				fi
+			fi
+		fi
+	fi
+	review_prepush_test_gate_log "outcome=${status:-unverified} failures=${pr_caused:-0} inherited=${inherited:-0} mode=${rpg_mode} repair=$(printf '%s' "${repair}" | tr ' ()' '_  ' | tr -d ' ')"
+	return 0
+}
+
 # gate --worktree DIR --base SHA --image IMG --out DIR [--venv DIR] [--phase P]
 review_prepush_test_gate_cmd_gate()
 {
@@ -680,7 +784,7 @@ review_prepush_test_gate_cmd_gate()
 			--out) out="${2:-}"; shift 2 ;;
 			--venv) rpg_venv="${2:-}"; shift 2 ;;
 			--phase)
-				case "${2:-}" in resolver|heal|review) rpg_phase="$2" ;; esac
+				case "${2:-}" in resolver|heal|review|integration) rpg_phase="$2" ;; esac
 				shift 2
 				;;
 			*) review_prepush_test_gate_log "outcome=error reason=unknown_argument"; return 2 ;;
@@ -710,7 +814,11 @@ review_prepush_test_gate_cmd_gate()
 rpg_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)" || rpg_script_dir=""
 
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
-	( review_prepush_test_gate_main ) || true
+	if [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "integration" ]; then
+		( review_prepush_test_gate_integration_main ) || true
+	else
+		( review_prepush_test_gate_main ) || true
+	fi
 	return 0
 fi
 rpg_phase="${rpg_phase:-review}"
@@ -719,9 +827,16 @@ shift || true
 case "${rpg_cmd}" in
 	gate) review_prepush_test_gate_cmd_gate "$@"; exit $? ;;
 	repair-prompt)
+		# repair-prompt RESULT OUT [ALLOW_FILE] [TEMPLATE] [CHANGED_FILE]: a
+		# regular, non-symlink TEMPLATE replaces the implement repair template
+		# (the integration test repair passes its rendered prompt, #8210).
 		[ -f "${1:-}" ] && [ -n "${2:-}" ] || exit 2
 		review_prepush_test_gate_locate || exit 1
-		review_prepush_test_gate_build_prompt "$1" "$2" "${3:-}" || exit 1
+		if [ -n "${4:-}" ]; then
+			[ -f "$4" ] && [ ! -L "$4" ] || exit 2
+			rpg_template="$4"
+		fi
+		review_prepush_test_gate_build_prompt "$1" "$2" "${3:-}" "${5:-}" || exit 1
 		exit 0
 		;;
 	allow-list)

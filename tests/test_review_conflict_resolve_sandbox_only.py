@@ -1257,3 +1257,221 @@ def test_resolver_gate_is_skipped_when_no_gate_run_fits_the_step_budget(tmp_path
 	assert not (work / "count").exists() and not (work / "attempts").exists()
 	assert "PREPUSH_TEST_GATE phase=resolver outcome=skipped reason=step_budget" in proc.stderr
 	assert subprocess.run(["git", "show", "HEAD:a.py"], cwd=repo, capture_output=True, text=True, env=env).stdout == "x = 2\n"
+
+
+# ── --test-repair (#8210, plan phase P5) ─────────────────────────────
+
+_REPO_ROOT = SCRIPT.parent.parent
+
+
+def _test_repair_functions() -> str:
+	src = _source()
+	start = src.index("# ── Integration post-sync test repair (#8210")
+	end = src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then', start)
+	return src[start:end]
+
+
+def _tr_git(repo: Path, *args: str) -> str:
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
+	return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, env=env).stdout
+
+
+def _test_repair_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_tr_git(repo, "init", "--quiet", "-b", "main")
+	(repo / "tests").mkdir()
+	(repo / "lib.py").write_text("def value():\n\treturn 1\n", encoding="utf-8")
+	(repo / "other.py").write_text("X = 1\n", encoding="utf-8")
+	(repo / "tests" / "test_lib.py").write_text("from lib import value\n\n\ndef test_value():\n\tassert value() == 1\n", encoding="utf-8")
+	_tr_git(repo, "add", "-A")
+	_tr_git(repo, "commit", "--quiet", "-m", "base")
+	_tr_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	_tr_git(repo, "checkout", "--quiet", "-b", "orchestrator/project-1")
+	(repo / "lib.py").write_text("def value():\n\treturn 2\n", encoding="utf-8")
+	_tr_git(repo, "commit", "--quiet", "-am", "sync broke the test")
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	result = runtime / "result.json"
+	result.write_text(json.dumps({
+		"schema": "prepush_test_gate.v1", "status": "fail", "ran": ["tests/test_lib.py"],
+		"failures": [{"test": "tests/test_lib.py", "file": "tests/test_lib.py", "names": ["test_value"], "tail": "assert 2 == 1"}],
+		"inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1,
+	}), encoding="utf-8")
+	return repo, runtime, result
+
+
+def _run_test_repair(tmp_path: Path, mode: str, result_override: str | None = None, fp_json: str = "") -> tuple[subprocess.CompletedProcess, Path, Path]:
+	repo, runtime, result = _test_repair_fixture(tmp_path)
+	github_env = tmp_path / "github_env"
+	github_env.touch()
+	calls = tmp_path / "calls"
+	program = _test_repair_functions() + """
+_resolver_test_repair_context() {
+  _test_repair_title="t" _test_repair_body="b" _test_repair_merged_list="none" _test_repair_merged_count=0
+  INTEGRATION_FINGERPRINTS_FILE="${RUNTIME_DIR}/fp.json"
+  if [ -n "${FP_JSON:-}" ]; then printf '%s' "${FP_JSON}"; else printf '{}'; fi > "${INTEGRATION_FINGERPRINTS_FILE}"
+}
+_resolver_sandbox_attempt() {
+  printf 'sandbox-attempt %s prompt=%s\\n' "$1" "${_effective_prompt_file}" >> "$CALLS"
+  case "${MODE}" in
+    fix) printf 'def value():\\n\\treturn 1\\n' > lib.py ;;
+    stray) printf 'def value():\\n\\treturn 1\\n' > lib.py; printf 'X = 2\\n' > other.py ;;
+    fail) printf 'def value():\\n\\treturn 1\\n' > lib.py; return 1 ;;
+  esac
+  return 0
+}
+_resolver_test_repair_main
+"""
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+	env.update({
+		"SUPPORT_SCRIPTS_DIR": str(_REPO_ROOT / "scripts"), "SUPPORT_PROMPTS_DIR": str(_REPO_ROOT / "prompts"),
+		"RUNTIME_DIR": str(runtime), "GITHUB_ENV": str(github_env), "TARGET_BRANCH": "orchestrator/project-1",
+		"BASE_BRANCH": "main", "MODE": mode, "CALLS": str(calls), "GITHUB_WORKSPACE": str(tmp_path / "none"),
+		"RESOLVER_TEST_REPAIR_RESULT_FILE": result_override if result_override is not None else str(result),
+		"RESOLVER_TEST_REPAIR_BUDGET_SECS": "7000", "PREPUSH_TEST_GATE_MODE": "repair",
+		"FP_JSON": fp_json,
+	})
+	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program], cwd=repo, env=env, capture_output=True, text=True)
+	return proc, repo, github_env
+
+
+def test_test_repair_commits_one_repair_on_the_integration_head(tmp_path):
+	proc, repo, github_env = _run_test_repair(tmp_path, "fix")
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=committed" in proc.stderr, proc.stderr
+	log = _tr_git(repo, "log", "--format=%s", "-3").splitlines()
+	assert log[0] == "[ai-merge-resolve] repair post-sync test failures"
+	assert log.count("[ai-merge-resolve] repair post-sync test failures") == 1
+	assert "INTEGRATION_TEST_REPAIRED=true" in github_env.read_text(encoding="utf-8")
+	prompt = (tmp_path / "runtime" / "integration_test_repair" / "repair-prompt.txt").read_text(encoding="utf-8")
+	assert "Repair test failures on an orchestrator integration branch" in prompt
+	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in prompt
+	assert "orchestrator/project-1" in prompt and "{{" not in prompt.split("=== CAPTURED")[0]
+	assert "lib.py" in (tmp_path / "runtime" / "integration_test_repair" / "allow.txt").read_text(encoding="utf-8")
+
+
+def test_test_repair_prompt_carries_the_intent_fingerprints(tmp_path):
+	# The context helper sets INTEGRATION_FINGERPRINTS_FILE as a plain shell
+	# variable; the renderer must still receive it, or the model gets "{}".
+	fp = '{"11":{"must_contain":[{"file":"lib.py","pattern":"keep_me_marker"}]}}'
+	proc, _repo, _env = _run_test_repair(tmp_path, "none", fp_json=fp)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=no_edits" in proc.stderr, proc.stderr
+	rendered = (tmp_path / "runtime" / "integration_test_repair" / "rendered-template.txt").read_text(encoding="utf-8")
+	assert "keep_me_marker" in rendered and "{{INTENT_FINGERPRINTS_JSON}}" not in rendered
+
+
+def test_test_repair_commits_despite_fingerprint_drift_already_on_the_head(tmp_path):
+	# The pattern is missing before the model runs (a sync can do this): the
+	# baseline compare lets the repair through.
+	fp = '{"11":{"issue":11,"pr":12,"must_contain":[{"file":"lib.py","regex":"keep_me_marker"}]}}'
+	proc, repo, github_env = _run_test_repair(tmp_path, "fix", fp_json=fp)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=committed" in proc.stderr, proc.stderr
+	assert "INTEGRATION_TEST_REPAIRED=true" in github_env.read_text(encoding="utf-8")
+
+
+def test_test_repair_reverts_a_repair_that_adds_fingerprint_drift(tmp_path):
+	# "return 2" is present before the repair and removed by it.
+	fp = '{"11":{"issue":11,"pr":12,"must_contain":[{"file":"lib.py","regex":"return 2"}]}}'
+	proc, repo, github_env = _run_test_repair(tmp_path, "fix", fp_json=fp)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=repair_reverted reason=fingerprints" in proc.stderr, proc.stderr
+	assert _tr_git(repo, "log", "--format=%s", "-1").strip() == "sync broke the test"
+	assert "INTEGRATION_TEST_REPAIRED" not in github_env.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("mode,reason", [("stray", "check_resolver_diff"), ("fail", "editor_exit_1")])
+def test_test_repair_reverts_rejected_repairs_without_committing(tmp_path, mode, reason):
+	proc, repo, github_env = _run_test_repair(tmp_path, mode)
+	assert proc.returncode == 0, proc.stderr
+	assert f"outcome=repair_reverted reason={reason}" in proc.stderr, proc.stderr
+	assert _tr_git(repo, "log", "--format=%s", "-1").strip() == "sync broke the test"
+	assert _tr_git(repo, "status", "--porcelain").strip() == ""
+	assert "INTEGRATION_TEST_REPAIRED" not in github_env.read_text(encoding="utf-8")
+
+
+def test_test_repair_refuses_a_symlinked_result_without_a_model_run(tmp_path):
+	link = tmp_path / "runtime-link.json"
+	proc, _repo, _env = _run_test_repair(tmp_path, "fix", result_override="")
+	assert "reason=invalid_input" in proc.stderr
+	(tmp_path / "runtime" / "linked.json").symlink_to(tmp_path / "runtime" / "result.json")
+	env_override = str(tmp_path / "runtime" / "linked.json")
+	program = _test_repair_functions() + '\n_resolver_sandbox_attempt() { echo model >> "$CALLS"; }\n_resolver_test_repair_main\n'
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+	env.update({"RUNTIME_DIR": str(tmp_path / "runtime"), "TARGET_BRANCH": "orchestrator/project-1",
+		"RESOLVER_TEST_REPAIR_RESULT_FILE": env_override, "CALLS": str(link)})
+	proc = subprocess.run(["bash", "-c", program], cwd=tmp_path / "repo", env=env, capture_output=True, text=True)
+	assert "reason=invalid_input detail=result_file" in proc.stderr
+	assert not link.exists()
+	assert not (tmp_path / "calls").exists()
+
+
+def test_test_repair_rejects_unknown_arguments_and_skips_the_conflict_path():
+	proc = subprocess.run(["bash", str(SCRIPT), "--bogus"], capture_output=True, text=True)
+	assert proc.returncode == 2 and "unknown argument" in proc.stderr
+	proc = subprocess.run(["bash", str(SCRIPT), "--test-repair"], capture_output=True, text=True)
+	assert proc.returncode == 2 and "needs a result file" in proc.stderr
+	src = _source()
+	branch = src[src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then'):]
+	branch = branch[:branch.index("\nfi\n")]
+	# No integration-judge dispatch (EXIT trap) and nothing conflict-specific.
+	assert "trap - EXIT" in branch and "_resolver_test_repair_main" in branch and "exit 0" in branch
+	assert src.index("_resolver_sandbox_attempt()") < src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then')
+	assert src.index('if [ -n "${RESOLVER_TEST_REPAIR_RESULT_FILE}" ]; then') < src.index(': > "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"')
+
+
+def _run_test_repair_context(tmp_path: Path, comments: list) -> tuple[subprocess.CompletedProcess, Path]:
+	if shutil.which("jq") is None:
+		pytest.skip("jq binary not available in test environment")
+	runtime = tmp_path / "runtime"
+	runtime.mkdir(exist_ok=True)
+	comments_file = tmp_path / "comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	program = _test_repair_functions() + """
+gh() {
+  case "$*" in
+    "api user"*) echo bot ;;
+    *"--paginate"*) cat "$COMMENTS_FILE" ;;
+    *) echo '{"title":"t","body":"b"}' ;;
+  esac
+}
+rc=0
+_resolver_test_repair_context 7 || rc=$?
+echo "RC=${rc}"
+echo "MERGED=${_test_repair_merged_count}"
+[ -z "${INTEGRATION_FINGERPRINTS_FILE:-}" ] || echo "FP=$(cat "${INTEGRATION_FINGERPRINTS_FILE}")"
+"""
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+	env.update({"SUPPORT_SCRIPTS_DIR": str(_REPO_ROOT / "scripts"), "RUNTIME_DIR": str(runtime),
+		"GITHUB_REPOSITORY": "o/r", "COMMENTS_FILE": str(comments_file), "GITHUB_WORKSPACE": str(tmp_path / "none")})
+	proc = subprocess.run(["bash", "-c", program], cwd=tmp_path, env=env, capture_output=True, text=True)
+	return proc, runtime
+
+
+def test_test_repair_context_reads_v2_state_before_legacy_v1(tmp_path):
+	v2_state = {"waves": [{"issues": [{"id": "a", "github_issue": 11, "status": "merged"}]}],
+		"merged_issue_fingerprints": {"11": {"must_contain": [{"file": "lib.py", "pattern": "v2"}]}}}
+	v1_state = {"waves": [], "merged_issue_fingerprints": {"9": {"stale": True}}}
+	state_file = tmp_path / "state.json"
+	state_file.write_text(json.dumps(v2_state), encoding="utf-8")
+	chunks = tmp_path / "chunks"
+	subprocess.run(["python3", "-I", "-B", str(_REPO_ROOT / "scripts" / "orchestrate_state_v2.py"), "pack",
+		"--state-file", str(state_file), "--out-dir", str(chunks)], check=True)
+	comments = [{"user": {"login": "bot"}, "body": "ORCHESTRATOR_STATE_V1\n" + json.dumps(v1_state) + "\nORCHESTRATOR_STATE_V1"}]
+	comments += [{"user": {"login": "bot"}, "body": p.read_text(encoding="utf-8")} for p in sorted(chunks.iterdir())]
+	proc, _runtime = _run_test_repair_context(tmp_path, comments)
+	assert "RC=0" in proc.stdout, proc.stdout + proc.stderr
+	assert "MERGED=1" in proc.stdout
+	assert '"pattern":"v2"' in proc.stdout and "stale" not in proc.stdout
+
+
+def test_test_repair_context_fails_closed_without_trusted_state(tmp_path):
+	# Only another author's state: no trusted state, so no repair (rc 2).
+	comments = [{"user": {"login": "someone"}, "body": "ORCHESTRATOR_STATE_V1\n{\"waves\": []}\nORCHESTRATOR_STATE_V1"}]
+	proc, _runtime = _run_test_repair_context(tmp_path, comments)
+	assert "RC=2" in proc.stdout, proc.stdout + proc.stderr
+	src = _source()
+	assert 'reason=state_unavailable' in src[src.index("_resolver_test_repair_main()"):]
