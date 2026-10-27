@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_discovery_bootstrap.py:928-946 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: `_is_bot_only_discovery_pr` treats the unverified commit author name `codex-bot` as proof that the runner wrote every commit, so a person's commit with that name passes as bot-only.\n  WHY: The sweep, including the pre-close re-check at line 1166, can then close a PR that holds human work, and `kept_human_commits` is never produced. All three reviewers rated it MAJOR. The anthropic reviewer notes that the PR can be reopened because its branch is kept. Line ranges differ between reviewers: gemini cited 831-840, the others 928-946.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/validation_discovery_bootstrap.py:928-946 | severity=MAJOR | confidence=3\n  PROBLEM: `_is_bot_only_discovery_pr` (line 944) compares only the commit author display name to \"codex-bot\", which is set by local git config and not verified. Callers are line 1031 (`list_open_discovery_prs`) and line 1166 (`close_superseded_discovery_prs`).\n  WHY: A human with push access can commit to a discovery-prefix branch with `user.name=codex-bot`. The PR is then marked `bot_only=True` and closed by the sweep, and `kept_human_commits` is never produced. The PR can be reopened because its branch is kept.\n- HARDENING_SUGGESTIONS: also require the commit author email to match the one the runner sets, or add a runner-only commit trailer and require it in the same check (6-10 lines).\n- HARDENING_RISK_SCORE: 3\n- Other checklist categories: NONE. Task completeness: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_discovery_bootstrap.py:831-840 | severity=MAJOR | confidence=4\n  PROBLEM: `_is_bot_only_discovery_pr` relies solely on the commit author name `codex-bot` to verify that the runner owns the PR.\n  WHY: Any contributor can set the author name to `codex-bot`, so the sweep may close a PR with human-authored edits. A more robust signal is needed, such as commit signing or a unique identifier known only to the runner.\n- Other checklist categories: NONE. Task completeness: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validation_discovery_bootstrap.py:928-946 | severity=MAJOR | confidence=4\n  PROBLEM: The check treats the mutable commit author name `codex-bot` as proof that the runner authored every commit. It is reused before closing at line 1166.\n  WHY: A contributor can push a human-authored commit with `author.name` set to `codex-bot`. Both the listing check and the pre-close recheck accept it, so the sweep can close a PR containing human work.\n- Other checklist categories: NONE. Task completeness: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- (No findings reported.)\n- The reviewer verified the last-run changes: `CommandFailure` handling covers the timeout path, the SHA regex is anchored, and the ancestry filter only narrows the close set. It saw the author-name issue in `_is_bot_only_discovery_pr` (scripts/validation_discovery_bootstrap.py:928-946) but did not flag it, because it predates the last-run diff and the effect is reversible.\n- HARDENING_SUGGESTIONS: scripts/validation_refresh_runner.py, `_sweep_superseded_discovery_prs`, line 964-986. The local `closed_numbers` now also holds `kept_human_commits` entries, which is misleading. Suggested fix: rename it to `resolved_numbers` (3 lines).\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4ffcdaac62a7535e7fd3d09dd774aed2e0f75b97aeed0110236eae5c58db0cec",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8228,
+    "run_id": "40456689103",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40456689103",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027060840_7a4b67792c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8228,
+    "run_id": "40456689103"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T06:08:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
