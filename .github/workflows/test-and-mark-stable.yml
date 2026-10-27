@@ -4474,19 +4474,29 @@ jobs:
             # A decomposer paused on Claude capacity (#7370) creates no tracking
             # issue: report it as claude_capacity instead (#8217). Logs are only matched, never printed.
             CAP_EVIDENCE=""
+            CAP_LOG_FAILS=0
             ORCH_RUN_ID=$(sed -n 's/^run_id=//p' "$GITHUB_OUTPUT" | tail -n 1)
             if [[ "${ORCH_RUN_ID}" =~ ^[0-9]+$ ]]; then
               for JOB_ID in $(gh api "repos/${TEST_REPO}/actions/runs/${ORCH_RUN_ID}/jobs?per_page=100" --jq '.jobs[].id' 2>/dev/null || true); do
                 [[ "${JOB_ID}" =~ ^[0-9]+$ ]] || continue
-                JOB_LOG=$(gh api "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null || true)
-                if [[ "${JOB_LOG}" == *"AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred"* ]]; then
+                # Job logs carry ANSI codes; gh refuses them without the flag.
+                if ! JOB_LOG=$(gh api --allow-escape-sequences "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null); then
+                  CAP_LOG_FAILS=$((CAP_LOG_FAILS + 1))
+                  continue
+                fi
+                # "Z " (end of the log timestamp) matches only the emitted line, not the echoed run: source.
+                if [[ "${JOB_LOG}" == *"Z AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred"* ]]; then
                   CAP_EVIDENCE="run_log"
                   break
                 fi
               done
+              if [ -z "${CAP_EVIDENCE}" ] && [ "${CAP_LOG_FAILS}" -gt 0 ]; then
+                echo "::warning::Could not read ${CAP_LOG_FAILS} job log(s) of orchestrate run ${ORCH_RUN_ID} while checking for a Claude capacity wait"
+              fi
             else
               ORCH_RUN_ID=""
             fi
+            # TEST_REPO's own poller files its capacity tracker in TEST_REPO.
             if [ -z "${CAP_EVIDENCE}" ]; then
               CAP_TRACKERS=$(gh api "repos/${TEST_REPO}/issues?state=open&labels=ai:provider-outage&per_page=20" \
                 --jq '[.[] | select(.pull_request == null) | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR")) | select((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))] | length' 2>/dev/null || echo "0")

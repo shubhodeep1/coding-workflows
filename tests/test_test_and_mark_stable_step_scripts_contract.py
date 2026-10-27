@@ -315,6 +315,76 @@ def test_alt_model_wait_stops_on_capacity_without_approving() -> None:
 		assert rc == 0
 
 
+def _run_orchestrate_capacity_check(tmp: Path, log: str, trackers: str = "0", log_fail: bool = False) -> tuple[int, str, str]:
+	"""Run the #8217 capacity block of the orchestrate dispatch step against a stub gh."""
+	bash = shutil.which("bash")
+	assert bash is not None
+	run = _step(_all_steps(_raw()), ORCHESTRATE_STEP)["run"]
+	snippet = run[run.index('CAP_EVIDENCE=""'):run.index('echo "::error::Could not locate tracking issue')]
+	bindir = tmp / "bin"
+	bindir.mkdir()
+	(tmp / "job.log").write_text(log, encoding="utf-8")
+	stub = bindir / "gh"
+	stub.write_text(
+		"#!/usr/bin/env bash\n"
+		'case "$*" in\n'
+		'  *runs/777/jobs*) printf "11\\n12\\n" ;;\n'
+		'  *jobs/*/logs*)\n'
+		'    [ "${STUB_LOG_FAIL}" = "1" ] && exit 1\n'
+		'    case "$*" in *--allow-escape-sequences*) cat "${STUB_LOG}" ;; *) echo "use --allow-escape-sequences" >&2; exit 1 ;; esac ;;\n'
+		'  *issues*) printf "%s\\n" "${STUB_TRACKERS}" ;;\n'
+		"  *) exit 1 ;;\n"
+		"esac\n",
+		encoding="utf-8",
+	)
+	stub.chmod(0o755)
+	output = tmp / "github_output"
+	output.write_text("run_id=777\n", encoding="utf-8")
+	env = dict(os.environ)
+	env.update(
+		{
+			"PATH": f"{bindir}{os.pathsep}{env.get('PATH', '')}",
+			"STUB_LOG": str(tmp / "job.log"),
+			"STUB_TRACKERS": trackers,
+			"STUB_LOG_FAIL": "1" if log_fail else "0",
+			"GITHUB_OUTPUT": str(output),
+			"TEST_REPO": "o/r",
+		}
+	)
+	result = subprocess.run([bash, "-c", snippet], env=env, capture_output=True, text=True, check=False, timeout=60)
+	return result.returncode, output.read_text(encoding="utf-8"), result.stdout
+
+
+def test_orchestrate_capacity_check_reads_emitted_log_line_only() -> None:
+	if shutil.which("bash") is None:
+		raise unittest.SkipTest("bash is not installed")
+	import tempfile
+
+	emitted = "2026-10-27T00:40:51.1234567Z AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred stage=orchestrate\n"
+	echoed = (
+		"2026-10-27T00:40:50.1234567Z \x1b[36;1m    echo \"AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE "
+		"outcome=deferred stage=orchestrate\"\x1b[0m\n"
+	)
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout = _run_orchestrate_capacity_check(Path(tmp), echoed + emitted)
+		assert rc == 1
+		assert "status=claude_capacity" in output
+		assert "evidence=run_log" in stdout
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, _ = _run_orchestrate_capacity_check(Path(tmp), echoed)
+		assert rc == 0
+		assert "claude_capacity" not in output
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout = _run_orchestrate_capacity_check(Path(tmp), echoed, trackers="1")
+		assert rc == 1
+		assert "evidence=capacity_tracker" in stdout
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, stdout = _run_orchestrate_capacity_check(Path(tmp), emitted, log_fail=True)
+		assert rc == 0
+		assert "claude_capacity" not in output
+		assert "Could not read 2 job log(s)" in stdout
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	skipped = 0
