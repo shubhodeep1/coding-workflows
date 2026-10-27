@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Item 4 of the linked issue says \"Optional but recommended: add one preflight step in the E2E jobs (or resolve-version). If a trusted, open ai:provider-outage tracker with the kind=capacity marker exists, stop the gate at once with a claude_capacity notice.\"\n  expected_change_site: a new step in the E2E jobs or `resolve-version` in .github/workflows/test-and-mark-stable.yml\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: no diff hunk adds a preflight step; the only capacity-tracker lookup is in the orchestrate dispatch step, after the 90-second tracking-issue search. The issue marks this item optional, and the in-loop checks already fail the gate within one poll.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=NIT, confidence=1)\n  Requirement: Item 4 of the linked issue says \"Optional but recommended: add one preflight step in the E2E jobs (or resolve-version). If a trusted, open ai:provider-outage tracker with the kind=capacity marker exists, stop the gate at once with a claude_capacity notice.\"\n  Expected change site: a new step in the E2E jobs or `resolve-version` in .github/workflows/test-and-mark-stable.yml.\n  Evidence of absence: no diff hunk adds a preflight step. The only capacity-tracker lookup is in the orchestrate dispatch step, after the 90-second tracking-issue search. The issue itself marks this item optional, and the in-loop checks already fail the gate within one poll.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "52392ce165ced97f76ec0b559cd25846f4c9f3788942dd28d12e11960f03ff07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8221,
+    "run_id": "40489811624",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40489811624",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027105430_5bd705013c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8221,
+    "run_id": "40489811624"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-27T10:54:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
