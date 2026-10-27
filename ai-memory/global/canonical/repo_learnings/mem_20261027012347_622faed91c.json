@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Merged implementation and review gate changes touched several of these layers together, including shared workflow-support staging and orchestration code. When adding or changing a gate, trace the full execution path and update the relevant workflow, script or prompt, and tests so their behavior stays aligned.",
+  "fingerprint": "12033f4732b38ae848c7257156e5d3827d584651dc1ab48131b038c0d810789f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40430842917",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40430842917",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8189",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8190",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8201",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8206",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8208",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8193",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8196",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8202",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8207",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8209"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261027012347_622faed91c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow pre-push gates span workflow definitions, scripts, prompts, and contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-27T01:23:47Z",
+    "promoted_at": "2026-10-27T01:26:03Z",
+    "superseded_at": null
+  }
+}
