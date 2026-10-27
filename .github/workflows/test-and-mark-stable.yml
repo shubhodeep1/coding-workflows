@@ -4477,7 +4477,11 @@ jobs:
             CAP_LOG_FAILS=0
             ORCH_RUN_ID=$(sed -n 's/^run_id=//p' "$GITHUB_OUTPUT" | tail -n 1)
             if [[ "${ORCH_RUN_ID}" =~ ^[0-9]+$ ]]; then
-              for JOB_ID in $(gh api "repos/${TEST_REPO}/actions/runs/${ORCH_RUN_ID}/jobs?per_page=100" --jq '.jobs[].id' 2>/dev/null || true); do
+              if ! CAP_JOB_IDS=$(gh api "repos/${TEST_REPO}/actions/runs/${ORCH_RUN_ID}/jobs?per_page=100" --jq '.jobs[].id' 2>/dev/null); then
+                CAP_JOB_IDS=""
+                echo "::warning::Could not list the jobs of orchestrate run ${ORCH_RUN_ID} while checking for a Claude capacity wait"
+              fi
+              for JOB_ID in ${CAP_JOB_IDS}; do
                 [[ "${JOB_ID}" =~ ^[0-9]+$ ]] || continue
                 # Job logs carry ANSI codes; gh refuses them without the flag.
                 if ! JOB_LOG=$(gh api --allow-escape-sequences "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null); then
