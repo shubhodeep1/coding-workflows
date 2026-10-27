@@ -1750,6 +1750,8 @@ def test_dispatch_discovery_sweep_closes_older_pr_after_opening_replacement() ->
 				PlannedCall(("git", "push", "-u", "origin")),
 				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/99\n"),
 				# Second pass reuses the first listing: no new gh pr list.
+				# #196's SHA is an ancestor of this run's HEAD, so it is older.
+				PlannedCall(("git", "merge-base", "--is-ancestor", "38b0e3d9fa3d"), check=False),
 				PlannedCall(("gh", "pr", "view", "196"), stdout=SWEEP_BOT_VIEW_JSON),
 				PlannedCall(("gh", "pr", "close", "196"), callback=on_close),
 			]
@@ -1770,6 +1772,51 @@ def test_dispatch_discovery_sweep_closes_older_pr_after_opening_replacement() ->
 		gh_pr_lists = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "list"]]
 		assert len(gh_pr_lists) == 2  # sweep listing + the existing per-branch lookup
 		executor.assert_consumed()
+
+
+def test_discovery_prs_at_or_before_head_keeps_newer_and_unresolvable_prs() -> None:
+	# A concurrent run may have opened a PR for a newer HEAD; only PRs whose
+	# branch SHA is this run's HEAD or an ancestor of it are passed on to close.
+	prefix = "automation/validate-discovery"
+	replacement = f"{prefix}/abc123def456/node-runtime"
+
+	def _pr(number: int, branch: str) -> "refresh_runner.discovery_module.OpenDiscoveryPr":
+		return refresh_runner.discovery_module.OpenDiscoveryPr(
+			number=number,
+			url=f"https://github.com/octo/demo-repo/pull/{number}",
+			head_branch=branch,
+			title=SWEEP_SEED_TITLE,
+			bot_only=True,
+		)
+
+	executor = FakeExecutor(
+		[
+			PlannedCall(("git", "merge-base", "--is-ancestor", "38b0e3d9fa3d"), check=False),
+			PlannedCall(("git", "merge-base", "--is-ancestor", "fedcba987654"), returncode=1, check=False),
+		]
+	)
+	runner = _make_runner(executor, "ai/validation-refresh", discovery_ctx=_enabled_discovery_ctx(close_superseded=True))
+	result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch="ai/validation-refresh")
+	stdout = io.StringIO()
+	with contextlib.redirect_stdout(stdout):
+		older = runner._discovery_prs_at_or_before_head(
+			result=result,
+			repository="octo/demo-repo",
+			repo_dir=Path("/nonexistent"),
+			consumer_head_sha="abc123def4567890",
+			open_prs=[
+				_pr(196, f"{prefix}/38b0e3d9fa3d/node-runtime"),
+				_pr(300, f"{prefix}/fedcba987654/node-runtime"),
+				_pr(301, f"{prefix}/--upload-pack=x/node-runtime"),
+				_pr(99, replacement),
+			],
+			replacement_branch=replacement,
+		)
+	assert [pr.number for pr in older] == [196]
+	assert "pr=300 branch=automation/validate-discovery/fedcba987654/node-runtime" in stdout.getvalue()
+	assert "pr=301" in stdout.getvalue() and "outcome=kept_not_older" in stdout.getvalue()
+	assert "superseded_pr: #300 reason=superseded_by_newer_pr outcome=kept_not_older" in result.discovery_diagnostics
+	executor.assert_consumed()  # no merge-base for the non-hex branch or the replacement
 
 
 def test_dispatch_discovery_sweep_list_failure_does_not_block_discovery() -> None:

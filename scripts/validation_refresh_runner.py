@@ -44,6 +44,10 @@ except ModuleNotFoundError:
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
+# SHA segment of a discovery PR branch (`<prefix>/<sha>/<type>`). Hex only, so
+# a branch name can never reach `git merge-base` as an option.
+_DISCOVERY_BRANCH_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
 # Per-`codex exec` wall-clock cap (seconds) for the discovery dispatch. This
 # is the unit the aggregate discovery budget (VALIDATION_DISCOVERY_BUDGET_SECS)
 # reasons about: a single repo's discovery can consume at most
@@ -854,13 +858,29 @@ class ValidationRefreshRunner:
 							)
 						# The opened or reused PR replaces every older discovery
 						# PR on this consumer. Reuses the earlier listing (§15).
-						if remaining_discovery_prs:
+						# Only PRs opened for this run's consumer HEAD or an
+						# ancestor of it count as older: a concurrent run with
+						# another branch_name may already have opened a PR for a
+						# newer HEAD, which this run must not close.
+						older_discovery_prs = (
+							self._discovery_prs_at_or_before_head(
+								result=result,
+								repository=repository,
+								repo_dir=repo_dir,
+								consumer_head_sha=consumer_head_sha,
+								open_prs=remaining_discovery_prs,
+								replacement_branch=pr_branch,
+							)
+							if remaining_discovery_prs
+							else []
+						)
+						if older_discovery_prs:
 							self._sweep_superseded_discovery_prs(
 								result=result,
 								repository=repository,
 								default_branch=default_branch,
 								committed_manifest_text=committed_manifest_text,
-								open_prs=remaining_discovery_prs,
+								open_prs=older_discovery_prs,
 								replacement_branch=pr_branch,
 								replacement_url=pr_url,
 							)
@@ -959,9 +979,70 @@ class ValidationRefreshRunner:
 			result.discovery_diagnostics.append(
 				f"superseded_pr: #{outcome.number} reason={outcome.reason} outcome={outcome.outcome}"
 			)
-			if outcome.outcome == "closed":
+			# A PR kept for human commits stays open but is dropped from the
+			# returned list, so the post-open pass does not re-check it.
+			if outcome.outcome in ("closed", "kept_human_commits"):
 				closed_numbers.add(outcome.number)
 		return [pr for pr in open_prs if pr.number not in closed_numbers]
+
+	def _discovery_prs_at_or_before_head(
+		self,
+		*,
+		result: RefreshResult,
+		repository: str,
+		repo_dir: Path,
+		consumer_head_sha: str | None,
+		open_prs: "list[discovery_module.OpenDiscoveryPr]",
+		replacement_branch: str | None,
+	) -> "list[discovery_module.OpenDiscoveryPr]":
+		"""Return the discovery PRs whose branch SHA is the consumer HEAD or an ancestor of it.
+
+		The branch is `<prefix>/<sha>/<type>`. A PR whose SHA is newer, not in
+		the clone, or not a hex SHA is kept open and logged as `kept_not_older`.
+		The replacement branch itself is dropped. Cost: one local
+		`git merge-base --is-ancestor` per PR, no GitHub API call.
+		"""
+
+		ctx = self.discovery_ctx
+		prefix = (
+			discovery_module._slugify_for_branch_prefix(ctx.pr_branch_prefix) + "/"
+			if ctx is not None
+			else ""
+		)
+		older: "list[discovery_module.OpenDiscoveryPr]" = []
+		for pr in open_prs:
+			if pr.head_branch == replacement_branch:
+				continue
+			parts = (
+				pr.head_branch[len(prefix):].split("/")
+				if prefix and pr.head_branch.startswith(prefix)
+				else []
+			)
+			pr_sha = parts[0] if len(parts) == 2 else ""
+			is_older = False
+			if consumer_head_sha and _DISCOVERY_BRANCH_SHA_RE.match(pr_sha):
+				try:
+					proc = self.executor.run(
+						["git", "merge-base", "--is-ancestor", pr_sha, consumer_head_sha],
+						cwd=repo_dir,
+						check=False,
+						timeout=30,
+					)
+					is_older = proc.returncode == 0
+				except CommandFailure:
+					is_older = False
+			if is_older:
+				older.append(pr)
+				continue
+			print(
+				"VALIDATION_DISCOVERY_SUPERSEDED "
+				f"repository={repository} pr={pr.number} branch={pr.head_branch} "
+				"reason=superseded_by_newer_pr outcome=kept_not_older"
+			)
+			result.discovery_diagnostics.append(
+				f"superseded_pr: #{pr.number} reason=superseded_by_newer_pr outcome=kept_not_older"
+			)
+		return older
 
 	def _read_default_branch_head_sha(self, repo_dir: Path) -> str | None:
 		try:
