@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Several merged CI changes involving poll, unblock, stall, or healing steps also updated `tests/test_ci_poll_test_sharding.py`. When modifying these workflow steps, check that the sharding contract remains covered rather than validating only the workflow YAML.",
+  "fingerprint": "50a4092559b5e32b98e8687920daf5b5ecac917f1085d15b3db8053330fe2fcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40430842917",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40430842917",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8189",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8190",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8201",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8206",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8208",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8193",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8196",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8202",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8207",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8209"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261027011911_5a73026cca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Changes to workflow polling and job-step behavior should include CI sharding regression coverage.",
+  "timestamps": {
+    "created_at": "2026-10-27T01:19:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
