@@ -264,7 +264,8 @@ jobs:
           sed -E 's#(https?://)[^/@[:space:]]+@#\1***@#g' "${push_log}" >&2 || true
           if [ "${push_exit}" -ne 0 ]; then
             if grep -qiE 'GH006|GH013|protected branch|push declined|repository rule' "${push_log}"; then
-              echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=push_rejected_by_ruleset branch=${safe_branch} token=${token_source}; the push identity is not a bypass actor on this branch's ruleset; the status commit was not delivered."
+              echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=push_rejected_by_ruleset branch=${safe_branch} token=${token_source}"
+              echo "The push identity is not a bypass actor on this branch's ruleset; the status commit was not delivered."
             else
               echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=push_failed branch=${safe_branch} token=${token_source} rc=${push_exit}"
             fi

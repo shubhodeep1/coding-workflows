@@ -211,6 +211,8 @@ def test_commit_step_classifies_ruleset_rejection() -> None:
 		"::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=push_rejected_by_ruleset branch=main token=gh_pat"
 		in proc.stdout
 	), proc.stdout
+	assert re.search(r"reason=push_rejected_by_ruleset branch=main token=gh_pat$", proc.stdout, re.MULTILINE), \
+		"token= must be the last field on the ::error:: line"
 	assert "outcome=pushed" not in proc.stdout
 	assert "GH013" in proc.stderr
 
