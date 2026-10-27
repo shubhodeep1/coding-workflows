@@ -2223,6 +2223,24 @@ def test_intake_workflow_run_preserves_slash_bearing_target_branch() -> None:
 	assert branch_calls and "%2F" in next(part for part in branch_calls[0] if "/branches/" in part)
 
 
+@pytest.mark.parametrize(("default_branch", "expected"), (("main", "main"), ("develop", "develop"), ("", "main")))
+def test_intake_workflow_run_on_promote_candidate_targets_the_default_branch(default_branch: str, expected: str) -> None:
+	"""#8217 -> PR #8221: a release gate failure on the pipeline-only
+	promote-candidate mirror filed a heal issue against that branch, and its
+	PR could never merge (the ruleset blocks every non-pipeline update)."""
+	run_payload = heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Test & Mark Stable Release [cycle:40427177661]", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "promote-candidate", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Test & Mark Stable Release [cycle:40427177661]"},
+	)
+	state = _intake_state(branches=["stable", "main", "develop", "promote-candidate"])
+	result, state_after, _ = _run_intake(run_payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": default_branch})
+	assert result.returncode == 0, result.stderr + result.stdout
+	match = TARGET_BRANCH_RE.search(_composed_issues(state_after)[0]["body"])
+	assert match and (match.group(1) or match.group(2)) == expected
+	assert f"target_branch_retarget from=promote-candidate to={expected} reason=pipeline_mirror_branch" in result.stdout
+	assert f"target_branch={expected}" in result.stdout and "target_branch_source=pipeline_mirror_branch" in result.stdout
+
+
 def _gate_run_payload() -> dict:
 	return heal.build_workflow_run_payload(
 		repo=SELF_REPO,
