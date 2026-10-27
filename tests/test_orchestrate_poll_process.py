@@ -25356,7 +25356,8 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert (
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
-		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh"'
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
+		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh"'
 	) in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
@@ -28536,6 +28537,166 @@ def test_poller_curl_shim_fails_fast_and_redacts_authorization() -> None:
 		_write_poller_curl_shim(curl_shim_bin)
 		completed = subprocess.run(["curl", "https://api.github.com/x"], env=curl_shim_env, capture_output=True, text=True, timeout=30)
 		assert completed.returncode == 7
+
+
+# ── Integration post-sync test repair dispatch (#8210, plan phase P5) ──
+
+_ITR_SIGNATURE = "_dispatch_integration_test_repair()\n{"
+
+
+def _itr_git_env() -> dict[str, str]:
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
+	return env
+
+
+def _itr_fixture(tmp: str, wrapper_text: str | None) -> str:
+	"""Bare origin with main (optionally carrying review_autofix.yml) and an
+	orchestrator/project-1 branch; returns a clone to run the poller in."""
+	env = _itr_git_env()
+	seed = os.path.join(tmp, "seed")
+	origin = os.path.join(tmp, "origin.git")
+	work = os.path.join(tmp, "work")
+	subprocess.run(["git", "init", "--quiet", "-b", "main", seed], check=True, env=env)
+	os.makedirs(os.path.join(seed, ".github", "workflows"))
+	with open(os.path.join(seed, "README.md"), "w", encoding="utf-8") as fh:
+		fh.write("x\n")
+	if wrapper_text is not None:
+		with open(os.path.join(seed, ".github", "workflows", "review_autofix.yml"), "w", encoding="utf-8") as fh:
+			fh.write(wrapper_text)
+	subprocess.run(["git", "-C", seed, "add", "-A"], check=True, env=env)
+	subprocess.run(["git", "-C", seed, "commit", "--quiet", "-m", "seed"], check=True, env=env)
+	subprocess.run(["git", "-C", seed, "branch", "orchestrator/project-1"], check=True, env=env)
+	subprocess.run(["git", "clone", "--quiet", "--bare", seed, origin], check=True, env=env)
+	subprocess.run(["git", "clone", "--quiet", origin, work], check=True, env=env)
+	return work
+
+
+_ITR_WRAPPER_WITH_INPUT = (
+	"on:\n  workflow_dispatch:\n    inputs:\n      post_sync_test_repair:\n        type: boolean\n"
+)
+_ITR_WRAPPER_WITH_PASS_THROUGH_ONLY = (
+	"jobs:\n  review:\n    with:\n      post_sync_test_repair: ${{ inputs.x == 'true' }}\n"
+)
+
+
+def _itr_run(tmp: str, work: str, state: dict, env_extra: dict[str, str], calls: int = 1) -> tuple[str, dict, str]:
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	fn = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), _ITR_SIGNATURE)
+	state_file = os.path.join(tmp, "state.json")
+	with open(state_file, "w", encoding="utf-8") as fh:
+		json.dump(state, fh)
+	gh_log = os.path.join(tmp, "gh.log")
+	tracker = os.path.join(tmp, "tracker")
+	open(tracker, "w").close()
+	snippet = fn + (
+		'\ngh_retry() { printf "%s\\n" "$*" >> "${GH_LOG}"; return "${GH_RC:-0}"; }\n'
+		'post_state_comment() { echo posted >> "${GH_LOG}.state"; }\n'
+	) + '\n_dispatch_integration_test_repair 7 orchestrator/project-1 42 main\n' * calls
+	env = dict(_itr_git_env())
+	env.update({"STATE_FILE": state_file, "GH_LOG": gh_log, "_CONFLICT_DISPATCH_TRACKER": tracker,
+		"GITHUB_REPOSITORY": "o/r", "PREPUSH_TEST_GATE_MODE": "repair"})
+	env.update(env_extra)
+	snippet = "_CONFLICT_DISPATCH_TRACKER=\"${_CONFLICT_DISPATCH_TRACKER}\"\n" + snippet
+	proc = subprocess.run(["bash", "-c", snippet], cwd=work, env=env, capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stderr
+	with open(state_file, encoding="utf-8") as fh:
+		new_state = json.load(fh)
+	gh = open(gh_log, encoding="utf-8").read() if os.path.exists(gh_log) else ""
+	return proc.stdout + proc.stderr, new_state, gh
+
+
+def test_integration_test_repair_dispatches_once_and_records_the_head():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		head = subprocess.run(["git", "-C", work, "rev-parse", "origin/orchestrator/project-1"], check=True, capture_output=True, text=True, env=_itr_git_env()).stdout.strip()
+		out, state, gh = _itr_run(tmp, work, {"integration_conflict_total_dispatches": 1}, {"INTEGRATION_CONFLICT_LIFETIME_MAX": "1"}, calls=2)
+		lines = [ln for ln in gh.splitlines() if ln.startswith("gh workflow run")]
+		assert len(lines) == 1, gh
+		assert "review_autofix.yml" in lines[0] and "-f pr_number=42" in lines[0]
+		assert "-f post_sync_test_repair=true" in lines[0] and "--ref" not in lines[0]
+		assert state["integration_test_repair_sha"] == head
+		# Repairs use their own counter: a full conflict budget does not stop
+		# them, and they never consume conflict-resolver slots.
+		assert state["integration_test_repair_dispatches"] == 1
+		assert state["integration_conflict_total_dispatches"] == 1
+		assert f"outcome=dispatched pr=42 sha={head} workflow=review_autofix.yml" in out
+		# The second call in the same tick sees the recorded SHA.
+		assert f"reason=already_dispatched sha={head}" in out
+
+
+def test_integration_test_repair_dedupes_a_recorded_head_sha():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		head = subprocess.run(["git", "-C", work, "rev-parse", "origin/orchestrator/project-1"], check=True, capture_output=True, text=True, env=_itr_git_env()).stdout.strip()
+		out, state, gh = _itr_run(tmp, work, {"integration_test_repair_sha": head}, {})
+		assert "gh workflow run" not in gh
+		assert "reason=already_dispatched" in out
+		assert "integration_test_repair_dispatches" not in state
+
+
+def test_integration_test_repair_mode_off_stops_dispatch():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		out, state, gh = _itr_run(tmp, work, {}, {"PREPUSH_TEST_GATE_MODE": "OFF"})
+		assert gh == ""
+		assert "outcome=skipped reason=mode_off" in out
+		assert "integration_test_repair_sha" not in state
+
+
+def test_integration_test_repair_skips_wrappers_without_the_input():
+	for wrapper in (None, _ITR_WRAPPER_WITH_PASS_THROUGH_ONLY):
+		with tempfile.TemporaryDirectory() as tmp:
+			work = _itr_fixture(tmp, wrapper)
+			out, state, gh = _itr_run(tmp, work, {}, {})
+			assert gh == "", gh
+			assert "PREPUSH_TEST_GATE phase=integration" in out and "outcome=skipped reason=wrapper_input_absent" in out
+			assert "integration_test_repair_sha" not in state
+
+
+def test_integration_test_repair_respects_the_lifetime_cap_and_failed_dispatch():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		out, state, gh = _itr_run(tmp, work, {"integration_test_repair_dispatches": 3}, {"INTEGRATION_CONFLICT_LIFETIME_MAX": "3"})
+		assert gh == "" and "reason=lifetime_cap" in out
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		out, state, gh = _itr_run(tmp, work, {}, {"GH_RC": "1"})
+		assert "outcome=dispatch_failed" in out
+		assert "integration_test_repair_sha" not in state
+		assert "integration_test_repair_dispatches" not in state
+
+
+def test_integration_test_repair_skips_when_the_fetch_fails():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		subprocess.run(["git", "-C", work, "remote", "set-url", "origin", os.path.join(tmp, "missing.git")], check=True, env=_itr_git_env())
+		out, state, gh = _itr_run(tmp, work, {}, {})
+		assert gh == "" and "outcome=skipped reason=fetch_failed" in out
+		assert "integration_test_repair_sha" not in state
+
+
+def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn = _extract_bash_function(script, _ITR_SIGNATURE)
+	# One dispatch call and no REST/GraphQL read (unattended section 14).
+	assert fn.count("gh workflow run") == 1
+	assert "_has_active_autofix_run" not in fn and "_safe_gh_jq" not in fn and "gh api" not in fn
+	calls = script.count('_dispatch_integration_test_repair "${TRACKING_NUM:-}"')
+	assert calls == 4, calls
+	clean_calls = re.findall(r'mark_integration_sync_clean "\$\{default_branch\}"\n\s+_dispatch_integration_test_repair ', script)
+	assert len(clean_calls) == 3, len(clean_calls)
+	rtm = script[script.index('echo "  PR #${RTM_PR} merged directly."'):]
+	rtm = rtm[:rtm.index("else\n")] + rtm[rtm.index("refresh_integration_backpressure_gate_after_merge || true"):][:400]
+	assert '_dispatch_integration_test_repair "${TRACKING_NUM:-}" "${RTM_INTEGRATION_BRANCH:-}"' in rtm
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	step = workflow[workflow.index("      - name: Process each tracking issue"):]
+	step = step[:step.index("\n      - name: ", 10)]
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in step
+	sweep = workflow[workflow.index("      - name: Run standalone stall recovery without active projects"):]
+	sweep = sweep[:sweep.index("\n      - name: ", 10)]
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in sweep
 
 
 if __name__ == "__main__":

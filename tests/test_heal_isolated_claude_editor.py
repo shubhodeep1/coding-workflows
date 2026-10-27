@@ -7,6 +7,7 @@ unavailable (exit 75) runs the isolated codex editor; any other Claude
 failure fails the run. The harness replaces docker and claude_run with fakes.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -23,7 +24,13 @@ FAKE_AI_ENGINE = """\
 claude_run()
 {
 	printf 'role=%s workdir=%s root=%s mode=%s\\n' "$1" "$4" "${CODEX_ISOLATED_ROOT:-unset}" "${CODEX_ISOLATED_MODE:-unset}" >> "${FAKE_CLAUDE_CALLS}"
-	if [ "${FAKE_CLAUDE_RC:-0}" -eq 0 ]; then
+	if [ "${FAKE_CLAUDE_RC:-0}" -eq 0 ] && [ "$(wc -l < "${FAKE_CLAUDE_CALLS}")" -ge 2 ]; then
+		# Second turn: the pre-push gate's test-repair prompt.
+		cp "$2" "${FAKE_CLAUDE_CALLS}.repair_prompt"
+		mkdir -p "$4/tests"
+		printf 'repaired\\n' > "$4/tests/test_fix.py"
+		printf 'claude repair\\n' > "$3"
+	elif [ "${FAKE_CLAUDE_RC:-0}" -eq 0 ]; then
 		printf 'claude\\n' > "$4/scripts/fix.py"
 		printf 'claude result\\n' > "$3"
 	elif [ "${FAKE_CLAUDE_RC}" -eq 75 ]; then
@@ -39,6 +46,14 @@ printf '%s\\n' "$*" >> "__DOCKER_COMMANDS__"
 case "$1" in
   build) echo fake-image ;;
   run)
+    if [[ "$*" == *"dst=/gate/prepush_affected_tests.py"* ]]; then
+      for arg in "$@"; do
+        case "$arg" in
+          type=bind,src=*,dst=/results) dest="${arg#type=bind,src=}"; cp "__GATE_RESULT__" "${dest%%,dst=*}/result.json" ;;
+        esac
+      done
+      exit 0
+    fi
     for arg in "$@"; do
       case "$arg" in
         type=bind,src=*,dst=/results)
@@ -58,14 +73,29 @@ esac
 """
 
 
-def _run(tmp_path: Path, *, engine: str = "claude", claude_rc: int = 0, with_ai_engine: bool = True) -> dict[str, object]:
+def _run(tmp_path: Path, *, engine: str = "claude", claude_rc: int = 0, with_ai_engine: bool = True, with_gate: bool = False) -> dict[str, object]:
 	host = tmp_path / "host"
 	(host / "scripts").mkdir(parents=True)
 	(host / "scripts/fix.py").write_text("old\n")
+	if with_gate:
+		(host / "tests").mkdir()
+		(host / "tests/test_fix.py").write_text("old test\n")
 	subprocess.run(["git", "init", "-q", str(host)], check=True)
 	subprocess.run(["git", "add", "--all"], cwd=host, check=True)
-	support = tmp_path / "support"
-	support.mkdir()
+	support = tmp_path / "support" / "scripts" if with_gate else tmp_path / "support"
+	support.mkdir(parents=True)
+	gate_result = tmp_path / "gate-result.json"
+	if with_gate:
+		# The gate needs a commit for its trusted worktree.
+		subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "base"], cwd=host, check=True)
+		for name in ("prepush_test_gate_run.sh", "review_autofix_step_prepush_test_gate.sh"):
+			shutil.copy(ROOT / "scripts" / name, support / name)
+		shutil.copy(ROOT / "workflow-templates/.claude/hooks/prepush_affected_tests.py", support / "prepush_affected_tests.py")
+		(support.parent / "prompts").mkdir()
+		shutil.copy(ROOT / "prompts/mode-implement-repair-tests.txt", support.parent / "prompts/mode-implement-repair-tests.txt")
+		gate_result.write_text(json.dumps({"schema": "prepush_test_gate.v1", "status": "fail", "ran": ["tests/test_fix.py"],
+			"failures": [{"test": "tests/test_fix.py", "file": "tests/test_fix.py", "names": ["test_fix"], "tail": "AssertionError"}],
+			"inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1}))
 	for name in ("review_untrusted_workspace.py", "files_touched_scope_guard.py"):
 		shutil.copy(ROOT / "scripts" / name, support / name)
 	(support / "validate_changed_files_syntax.sh").write_text("#!/bin/bash\nexit 0\n")
@@ -81,12 +111,12 @@ def _run(tmp_path: Path, *, engine: str = "claude", claude_rc: int = 0, with_ai_
 	bin_dir.mkdir()
 	commands = tmp_path / "docker-commands"
 	docker = bin_dir / "docker"
-	docker.write_text(FAKE_DOCKER.replace("__DOCKER_COMMANDS__", str(commands)))
+	docker.write_text(FAKE_DOCKER.replace("__DOCKER_COMMANDS__", str(commands)).replace("__GATE_RESULT__", str(gate_result)))
 	docker.chmod(0o755)
 	prompt = tmp_path / "prompt"
 	prompt.write_text("Edit the file")
 	scope = tmp_path / "scope"
-	scope.write_text("scripts/fix.py\n")
+	scope.write_text("scripts/fix.py\ntests/**\n" if with_gate else "scripts/fix.py\n")
 	output = tmp_path / "output"
 	claude_calls = tmp_path / "claude-calls"
 	env = dict(
@@ -118,6 +148,8 @@ def _run(tmp_path: Path, *, engine: str = "claude", claude_rc: int = 0, with_ai_
 		"stderr": result.stderr,
 		"stdout": result.stdout,
 		"host_file": (host / "scripts/fix.py").read_text(),
+		"host_test": (host / "tests/test_fix.py").read_text() if with_gate else None,
+		"repair_prompt": Path(f"{claude_calls}.repair_prompt").read_text() if Path(f"{claude_calls}.repair_prompt").exists() else None,
 		"output": output.read_text() if output.exists() else None,
 		"claude_calls": claude_calls.read_text().splitlines() if claude_calls.exists() else [],
 		"editor_docker_runs": [line for line in docker_log.splitlines() if line.startswith("run ") and "/validator.sh" not in line],
@@ -182,3 +214,16 @@ def test_missing_engine_support_falls_back_to_codex(tmp_path: Path) -> None:
 	assert result["claude_calls"] == []
 	assert result["host_file"] == "codex\n"
 	assert "AI_ENGINE_FALLBACK role=IMPLEMENT reason=support_missing" in result["stderr"]
+
+
+def test_claude_heal_gate_failure_runs_one_more_claude_turn(tmp_path: Path) -> None:
+	result = _run(tmp_path, with_gate=True)
+	assert result["rc"] == 0, result["stderr"]
+	assert len(result["claude_calls"]) == 2
+	# Only the gate's own container ran besides the validator; no codex editor.
+	assert [line for line in result["editor_docker_runs"] if "dst=/gate/prepush_affected_tests.py" not in line] == []
+	assert len(result["validator_runs"]) == 2
+	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in result["repair_prompt"]
+	assert result["host_file"] == "claude\n"
+	assert result["host_test"] == "repaired\n"
+	assert "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repaired failures=1 repair=ran" in result["stderr"]

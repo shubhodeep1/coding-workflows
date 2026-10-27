@@ -10747,5 +10747,110 @@ def _run_reviewer_pass2_shadow_tests() -> None:
 	test_reviewer_pass2_shadow_is_never_read_by_pass2_control()
 
 
+# ── Integration post-sync test repair (#8210, plan phase P5) ──────────
+
+_POST_SYNC_REPAIR_SKIP_CLAUSE = "env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'"
+
+
+def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	pre_review = [line for line in raw.splitlines() if "env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'" in line]
+	assert len(pre_review) == 17, len(pre_review)
+	for line in pre_review:
+		assert line.lstrip().startswith("if: "), line
+		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in line, line
+	# Plus the two merge-authorizing steps: a repair-only run reviewed nothing,
+	# so it must neither enable auto-merge nor apply ai:ready-to-merge.
+	# The security-pass gate and the review-blocked judge skip too: neither may
+	# dispatch an audit, use up a cycle, or fix/merge on a repair-only run.
+	for name in (
+		"Enable auto-merge on PR",
+		"Mark linked issues ready to merge",
+		"Single-issue security pass",
+		"Review-blocked judge decision",
+		# With the judge skipped its outputs are empty, so the exhaustion
+		# fallbacks would label, comment, poll and page without a verdict.
+		"Mark linked issues review-blocked (autofix exhaustion)",
+		"Force orchestrate poll after review-blocked exhaustion",
+		"Post review-blocked comment on PR (autofix exhaustion)",
+		"Telegram review-blocked judge decision",
+		"Telegram success",
+	):
+		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 26
+
+
+def test_post_sync_test_repair_commit_is_pushed() -> None:
+	push = _step_block("Push all pending commits")
+	assert (
+		"(env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true' || env.INTEGRATION_TEST_REPAIRED == 'true')"
+		in push
+	)
+	retrigger = _step_block("Re-trigger review via workflow_dispatch")
+	assert "INTEGRATION_TEST_REPAIRED" not in retrigger
+
+
+def test_post_sync_test_repair_step_follows_the_topology_gate() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	topology = raw.index("      - name: Pre-review deterministic merge-topology gate\n")
+	step = raw.index("      - name: Integration post-sync test repair\n")
+	reviewers = raw.index("      - name: Run reviewer models\n")
+	assert topology < step < reviewers
+	following = raw[topology + 1:step]
+	assert following.count("      - name: ") == 0
+	block = raw[step:reviewers]
+	assert "if: inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-') && env.CAN_PUSH == 'true'" in block
+	assert "continue-on-error: true" in block
+	assert "PREPUSH_TEST_GATE_STEP_MODE: integration" in block
+	assert "POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair }}" in block
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in block
+	assert 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"' in block
+	assert "review_autofix_step_prepush_test_gate.sh" in block
+
+
+def test_post_sync_test_repair_input_is_declared_on_both_triggers_and_the_template() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	declaration = (
+		"      post_sync_test_repair:\n"
+		"        description: \"Integration branch only: gate and repair post-sync test failures (#8210)\"\n"
+		"        required: false\n"
+		"        default: false\n"
+		"        type: boolean\n"
+	)
+	assert raw.count(declaration) == 2
+	call_start = raw.index("  workflow_call:\n")
+	dispatch_start = raw.index("  workflow_dispatch:\n")
+	positions = [m.start() for m in re.finditer(re.escape(declaration), raw)]
+	assert any(call_start < pos < dispatch_start for pos in positions)
+	assert any(pos > dispatch_start for pos in positions)
+	template = (REPO_ROOT / "workflow-templates" / "ai-review.yml").read_text(encoding="utf-8")
+	assert re.search(r"^      post_sync_test_repair:\n        description: ", template, re.M)
+	assert (
+		"      post_sync_test_repair: ${{ github.event_name == 'workflow_dispatch' && "
+		"github.event.inputs.post_sync_test_repair == 'true' }}\n"
+	) in template
+	# internal-review.yml calls review_autofix.yml@main, which must declare
+	# the input before a pass-through can land (PR #4438 startup_failure).
+	internal = (REPO_ROOT / ".github" / "workflows" / "internal-review.yml").read_text(encoding="utf-8")
+	assert "post_sync_test_repair" not in internal
+
+
+def test_post_sync_test_repair_keeps_review_autofix_well_under_the_size_guard() -> None:
+	assert WORKFLOW.stat().st_size < 430_000, WORKFLOW.stat().st_size
+
+
+def test_post_sync_test_repair_step_script_mode_and_resolver_hand_off() -> None:
+	script = (REPO_ROOT / "scripts" / "review_autofix_step_prepush_test_gate.sh").read_text(encoding="utf-8")
+	assert 'if [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "integration" ]; then' in script
+	body = script[script.index("review_prepush_test_gate_integration_main()\n{"):]
+	body = body[:body.index("\n}\n")]
+	# The skip flag is written before any mode/conflict/merge-base check.
+	active = body.index('echo "INTEGRATION_TEST_REPAIR_ACTIVE=true" >> "${GITHUB_ENV}"')
+	assert active < body.index("review_prepush_test_gate_mode")
+	assert active < body.index("reason=conflict_path")
+	assert 'bash "${resolver}" --test-repair "${gate_dir}/run1/result.json"' in body
+	assert "--phase integration" in body
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

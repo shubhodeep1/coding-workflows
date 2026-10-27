@@ -105,6 +105,7 @@ fi
 # reviewers, seven runs in a row). The step probes for the marker below and
 # skips older staged copies that lack it.
 # supports: --preflight
+# supports: --repair-turn
 #
 # The preflight runs after the helper sourcing above, so a helper that unsets
 # or rewrites a variable at source time is seen exactly as the editor sees it.
@@ -294,6 +295,47 @@ run_editor_codex_attempt() {
 
   exec "${editor_opencode_cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2>"${stderr_target}"
 }
+
+# One editor turn for the "Pre-push affected-test gate" step
+# (scripts/review_autofix_step_prepush_test_gate.sh): runs the prompt once
+# through run_editor_codex_attempt, so engine selection, the Claude ->
+# OpenCode fallback, the workspace safety check and the sandbox's validated
+# transfer stay in this one owner. The step probes the marker above.
+review_apply_fixes_repair_turn()
+{
+	local repair_prompt="${1:-}" repair_out="${2:-}" repair_rc=0
+	if [ -z "${repair_prompt}" ] || [ ! -f "${repair_prompt}" ] || [ -L "${repair_prompt}" ] || [ -z "${repair_out}" ]; then
+		echo "::warning::review_apply_fixes --repair-turn needs a regular prompt file and an output path" >&2
+		return 2
+	fi
+	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${RUNTIME_DIR}" ] || ! : > "${repair_out}"; then
+		echo "::warning::review_apply_fixes --repair-turn has no writable RUNTIME_DIR or output" >&2
+		return 2
+	fi
+	MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-6-sol}"
+	EDITOR_REASONING_EFFORT="${EDITOR_REASONING_EFFORT:-high}"
+	EDITOR_ATTEMPT_MODEL="${MODEL_EDITOR}"
+	rm -f "${RUNTIME_DIR}/review_sandbox_transfer_reason_${repair_out##*/}"
+	(
+		trap '' PIPE
+		# A Claude capacity wait (exit 80) in this extra turn writes
+		# AUTOFIX_FAILURE_REASON=claude_capacity to GITHUB_ENV. The gate step
+		# reports it and the main fix is still committed, so it must not mark
+		# the whole review run as paused: give the turn a throwaway file.
+		GITHUB_ENV="${RUNTIME_DIR}/prepush_gate_repair_github_env"
+		: > "${GITHUB_ENV}" || exit 2
+		export GITHUB_ENV
+		PATH="${EDITOR_CODEX_PATH:-${PATH}}" run_editor_codex_attempt "${repair_prompt}" "${repair_out}" \
+			"${RUNTIME_DIR}/prepush_gate_repair_stderr.txt" "${RUNTIME_DIR}/prepush_gate_repair_activity" \
+			"${RUNTIME_DIR}/prepush_gate_repair_status"
+	) || repair_rc=$?
+	return "${repair_rc}"
+}
+
+if [ "${1:-}" = "--repair-turn" ]; then
+	review_apply_fixes_repair_turn "${2:-}" "${3:-}"
+	exit $?
+fi
 
 emit_context_budget_warn_for_prompt() {
   local phase="$1"
