@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\n  expected_change_site: tests/test_security_audit_workflow_contract.py (alongside the Claude reply-check tests; a new test freezing the moved parser heredoc)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: none of the test_security_audit_claude_repair_* tests (tests/test_security_audit_workflow_contract.py:3632\u20133753) compares the parser heredoc in scripts/security_audit.sh to a frozen copy, so the PR description's claim of a confirming test is not backed by the diff; behaviour is covered by existing reply-check and repair tests; severity NIT (wording mismatch in PR description, not a runtime problem)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: The PR description says the reply check \"moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\n  Expected change site: `tests/test_security_audit_workflow_contract.py`, next to the Claude reply-check tests.\n  Evidence of absence: None of the `test_security_audit_claude_repair_*` tests compares the parser heredoc to a frozen copy, so the description's claim of a confirming test is not backed by the diff. The behaviour is covered by the existing reply-check tests plus the repair tests. The earlier autofix pass also judged a frozen-source test brittle and deferred it. The defect is a wording mismatch in the PR description, not a runtime problem.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Note: the last run's only change was the changelog sentence; it matches `scripts/security_audit.sh`, `README.md` and the `agents.d` fragment, and no new defect was found. HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\n  Expected change site: tests/test_security_audit_workflow_contract.py\n  Evidence of absence: The PR includes multiple new tests, but none explicitly assert that the parser source code (the Python heredoc in `security_audit.sh`) remains byte-for-byte identical to the original version.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\n  Expected change site: tests/test_security_audit_workflow_contract.py \u2014 a new test that freezes the moved Python parser heredoc text\n  Evidence of absence: PR description text on this line remains unverified. The eight new test_security_audit_claude_repair_* tests cover behaviour, session handling, and fallback paths but none compares the parser heredoc body to a frozen copy. The moved source is byte-identical at scripts/security_audit.sh:1610-1717, so the behaviour holds; the PR description's literal claim of a confirming test is not backed by any test added in this PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING: changelog.d/8223-security-audit-claude-repair-turn.md line 9, \"New log line\" table cell: pipe escaping inconsistent inside the code span (`accepted\\|rejected\\|failed|skipped`); suggested fix: escape all pipes (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\n  Expected change site: `tests/test_security_audit_workflow_contract.py`, alongside the Claude reply-check tests.\n  Evidence of absence: The PR adds tests for repair behavior and session handling at lines 3632\u20133753, but none verifies that the moved parser source is unchanged. The PR description names this as a deliverable, and the diff contains no test for it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8d8d700128f6edc74e24c87a21f6d2da24b1963915eedc2999e700619e1b0f71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8223,
+    "run_id": "40449310741",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40449310741",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027044724_2e4a8f7acc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8223,
+    "run_id": "40449310741"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T04:47:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
