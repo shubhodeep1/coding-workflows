@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/8217-release-gate-capacity-wait.md:2 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The lead sentence says a clarify, plan, implement or orchestrate run labels its item `ai:claude-capacity-wait`, but an orchestrate pause has no item to label.\n  WHY: Operators reading the changelog would look for a label that is never applied; the sentence is documentation wording only. Reviewers rated it NIT. Cited evidence: orchestrate.yml:898-905 and tests/test_ai_engine.py:1476-1481.\n- .github/workflows/test-and-mark-stable.yml:5060-5080 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The alt-model wait checks `ai:claude-capacity-wait` before its success branch, unlike the clarify/plan/implement waits (lines 998, 1227, 1602), which check it after.\n  WHY: A run that reached `ai:done` while still labeled would be reported as `claude_capacity`; the gate fails either way, so the only effect is misattribution. Rated NIT.\n- .github/workflows/test-and-mark-stable.yml:4480 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The jobs listing uses `2>/dev/null || true`, so a failed listing produces no warning, unlike the log-fetch path at lines 4493-4495.\n  WHY: The operator gets no signal that the per-job log scan was skipped. Rated NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #8217 item 4, \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`)\" that stops the gate when an open trusted `kind=capacity` tracker exists.\n  expected_change_site: A preflight step in `.github/workflows/test-and-mark-stable.yml`, either in `resolve-version` or at the start of the E2E jobs.\n  confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: No hunk adds a preflight step. The issue marks it optional, and the in-loop checks already fail the gate within one poll, or after the orchestrate step's 90-second search.\n- requirement: \"In the results step, show `claude_capacity` as its own reason (for example `\u2717 Clarify .... FAILED (claude_capacity)`)\" (issue #8217, Suggested fix item 1) and \"Alt-model wait loop: add `ai:claude-capacity-wait` to the fail-fast checks, with the same message and status\" (item 2).\n  expected_change_site: A consumer of `status=claude_capacity` for `e2e-alt-model-test` (wait step around lines 5049-5088) and `orchestrate-decompose-test` (dispatch step around lines 4381-4513), such as the results summary rows (around 3385-3550) or the notify reads (around 6422-6425, 6518-6527).\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The diff writes `status=claude_capacity` to `$GITHUB_OUTPUT` only (lines 4508-4509 and 5062-5063). No `steps.dispatch.outputs.status` or `steps.wait.outputs.status` reference exists, the summary table has no row for either job, and notify reads only `needs.<job>.result`. The changelog discloses the alt-model case but not the orchestrate-decompose case.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/8217-release-gate-capacity-wait.md:2 | severity=NIT | confidence=2\n  PROBLEM: An orchestrate pause has no item to label, so the sentence overstates what orchestrate does.\n  WHY: Documentation wording only; nothing fails at runtime.\nTASK_GAP:\n- Requirement: Issue #8217 item 4, \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`)\" that stops the gate when an open trusted `kind=capacity` tracker exists.\n  Expected change site: A preflight step in `.github/workflows/test-and-mark-stable.yml`, either in `resolve-version` or at the start of the E2E jobs.\n  Evidence of absence: No hunk adds a preflight step. The issue marks it optional, and the in-loop checks already fail the gate within one poll, or after the orchestrate step's 90-second search.\n  SEVERITY: NIT, ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:5060-5066 vs 5077-5080 | severity=NIT | confidence=3\n  PROBLEM: The alt-model wait checks `ai:claude-capacity-wait` before its success branch, unlike the sibling waits (lines 998, 1227, 1602).\n  WHY: A run that reached `ai:done` while still labeled would be misattributed as `claude_capacity`; the gate fails either way.\n- changelog.d/8217-release-gate-capacity-wait.md:2 | severity=NIT | confidence=4\n  PROBLEM: The lead sentence claims an orchestrate pause labels its item, but orchestrate only logs `AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred` and sets `CLAUDE_CAPACITY_WAIT=true`.\n  WHY: Operators would misattribute where to look, which affects runbook accuracy only.\n- .github/workflows/test-and-mark-stable.yml:4480 | severity=NIT | confidence=3\n  PROBLEM: The jobs listing is silenced with `2>/dev/null || true`, so a failed listing yields no warning, unlike the log-fetch path at lines 4493-4495.\n  WHY: The operator gets no hint that the per-job log evidence was skipped.\nTASK_GAP:\n- Requirement: \"In the results step, show `claude_capacity` as its own reason (for example `\u2717 Clarify .... FAILED (claude_capacity)`)\" (issue #8217, Suggested fix item 1) and \"Alt-model wait loop: add `ai:claude-capacity-wait` to the fail-fast checks, with the same message and status\" (item 2).\n  Expected change site: A consumer of `status=claude_capacity` for `e2e-alt-model-test` (wait step around lines 5049-5088) and `orchestrate-decompose-test` (dispatch step around lines 4381-4513).\n  Evidence of absence: The diff writes `status=claude_capacity` to `$GITHUB_OUTPUT` only (lines 4508-4509 and 5062-5063). No `steps.dispatch.outputs.status` or `steps.wait.outputs.status` reference exists, and the summary table has no row for either job.\n  SEVERITY: NIT, ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/8217-release-gate-capacity-wait.md:2 | severity=NIT | confidence=4\n  PROBLEM: The sentence attributes item labeling to all four phase kinds, but orchestrate.yml:898-905 sets `CLAUDE_CAPACITY_WAIT=true` with no item, and tests/test_ai_engine.py:1476-1481 shows a run-kind record makes no `/labels` call.\n  WHY: This is a factual misstatement in the operator-facing changelog, not a runtime failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3cd4c0d481ea1edd9a4d6df87b5b32af47b373275f3eff1b97c0eb65dee64e3e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8221,
+    "run_id": "40551322898",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40551322898",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027174845_425a1a68cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8221,
+    "run_id": "40551322898"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T17:48:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
