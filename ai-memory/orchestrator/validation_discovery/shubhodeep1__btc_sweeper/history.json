@@ -335,6 +335,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-10-27T00:50:35Z"
+    },
+    {
+      "codex_attempts_used": 1,
+      "committed_type": null,
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "b86ae336036558ab35bdd7a79a4c5870063e3a70",
+      "discovered_type": "python-mongo-repo-checks",
+      "failure_reason": null,
+      "outcome": "success_seeded",
+      "pr_branch": "automation/validate-discovery/b86ae3360365/python-mongo-repo-checks",
+      "pr_url": "https://github.com/shubhodeep1/btc_sweeper/pull/235",
+      "recorded_at": "2026-10-27T02:54:02Z"
     }
   ],
   "repository": "shubhodeep1/btc_sweeper",
