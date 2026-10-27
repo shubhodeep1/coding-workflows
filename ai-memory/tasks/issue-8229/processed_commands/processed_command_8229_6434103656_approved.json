@@ -5,13 +5,30 @@
   "entry_id": "processed_command_8229_6434103656_approved",
   "issue_number": 8229,
   "metadata": {
+    "branch": "ai/issue-8229",
+    "changed_files": [
+      ".github/workflows/nightly-validation-selftest.yml",
+      "README.md",
+      "agents.d/8225-nightly-selftest-status-push.md",
+      "agents.d/8229-nightly-selftest-status-pr.md",
+      "changelog.d/8229-nightly-selftest-status-pr.md",
+      "probably_unnecessary_but_read_if_stuck.md",
+      "scripts/validation_selftest_status.py",
+      "tests/test_nightly_validation_selftest_workflow_contract.py",
+      "tests/test_validation_selftest_status.py"
+    ],
+    "issue_number": 8229,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8229",
+    "pr_number": 8230,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8230",
+    "run_attempt": "1",
+    "run_id": "40452446023",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40452446023"
   },
   "run_attempt": 1,
   "run_id": "40452446023",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-27T04:58:48Z",
+  "status": "completed",
+  "timestamp": "2026-10-27T05:24:08Z",
   "workflow": "implement"
 }
