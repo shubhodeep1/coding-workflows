@@ -416,6 +416,15 @@ def test_status_commit_job_is_serialized_without_cancelling() -> None:
 	assert 'cancel-in-progress: false' in head
 
 
+def test_status_commit_job_checks_out_the_branch_tip() -> None:
+	# A run queued behind the concurrency group must see a status PR that
+	# merged while it waited, so the checkout takes the branch tip (#8229).
+	commit_job = _workflow_text().split('  commit-selftest-status:', 1)[1]
+	checkout = commit_job.split('uses: actions/checkout@v5', 1)[1].split('- name:', 1)[0]
+	assert 'ref: ${{ github.ref }}' in checkout
+	assert 'persist-credentials: false' in checkout
+
+
 _FAKE_GH_SEED = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${FAKE_GH_LOG}"
 if [ "$1" = "api" ] && [ "$2" = "user" ]; then
@@ -582,6 +591,7 @@ def main() -> int:
 		test_commit_step_skips_when_open_pr_already_carries_status,
 		test_unchanged_status_still_closes_older_status_prs,
 		test_status_commit_job_is_serialized_without_cancelling,
+		test_status_commit_job_checks_out_the_branch_tip,
 		test_seed_step_picks_newest_trusted_status_pr,
 		test_seed_step_no_matching_pr_leaves_outputs_empty,
 		test_seed_step_failures_leave_outputs_empty,

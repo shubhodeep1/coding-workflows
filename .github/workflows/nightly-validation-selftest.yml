@@ -203,9 +203,14 @@ jobs:
     steps:
       # Fresh runner and checkout: nothing the self-test executed can have
       # touched this .git (hooks, config, HEAD) before the token is used.
+      # `ref` checks out the branch tip at job start, not the triggering SHA:
+      # a run queued behind the concurrency group must see a status PR that
+      # merged while it waited, or it would read a stale streak and open a
+      # PR that conflicts on the status file (#8229).
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.ref }}
           fetch-depth: 1
           persist-credentials: false
 
