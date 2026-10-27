@@ -153,6 +153,11 @@ def _install_mock_claude(bin_dir: Path) -> None:
 
 	MOCK_CLAUDE_MODE: ok (default), crash, timeout, limit. MOCK_CLAUDE_RESULT
 	is the final result text the audit reads as its findings output.
+	MOCK_CLAUDE_SESSION=1 makes it behave like the real CLI's session store:
+	the init event carries a session id (the --session-id / --resume value, or
+	a new one) and the session is written under the mounted ~/.claude, unless
+	MOCK_CLAUDE_SESSION_UNSTORED=1. A --resume call answers with
+	MOCK_CLAUDE_RESUME_RESULT and runs in MOCK_CLAUDE_RESUME_MODE.
 	"""
 	claude_script = r'''#!/usr/bin/env python3
 import json
@@ -168,9 +173,29 @@ state.setdefault("claude_mounts", []).append(json.loads(os.environ.get("FAKE_CON
 state.setdefault("claude_secret_env", []).append(sorted(name for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "TG_BOT_SECRET") if name in os.environ))
 state_path.write_text(json.dumps(state), encoding="utf-8")
 mode = os.environ.get("MOCK_CLAUDE_MODE", "ok")
+result_text = os.environ.get("MOCK_CLAUDE_RESULT", "[]")
+argv = sys.argv[1:]
+init_event = {"type": "system", "subtype": "init"}
+if os.environ.get("MOCK_CLAUDE_SESSION") == "1":
+	import uuid
+	session_id = str(uuid.uuid4())
+	for flag in ("--session-id", "--resume"):
+		if flag in argv:
+			session_id = argv[argv.index(flag) + 1]
+	if "--resume" in argv:
+		mode = os.environ.get("MOCK_CLAUDE_RESUME_MODE", "ok")
+		result_text = os.environ.get("MOCK_CLAUDE_RESUME_RESULT", result_text)
+	init_event["session_id"] = session_id
+	if os.environ.get("MOCK_CLAUDE_SESSION_UNSTORED") != "1":
+		mounts = json.loads(os.environ.get("FAKE_CONTAINER_MOUNTS", "[]"))
+		store = next(mount["src"] for mount in mounts if mount.get("dst") == "/home/agent/.claude")
+		session_path = Path(store) / "projects" / "-fake-workdir" / f"{session_id}.jsonl"
+		session_path.parent.mkdir(parents=True, exist_ok=True)
+		with session_path.open("a", encoding="utf-8") as handle:
+			handle.write(json.dumps({"type": "user"}) + "\n")
 def emit(event):
 	print(json.dumps(event), flush=True)
-emit({"type": "system", "subtype": "init"})
+emit(init_event)
 if mode == "crash":
 	print("boom", file=sys.stderr)
 	sys.exit(3)
@@ -180,7 +205,7 @@ if mode == "limit":
 	emit({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
 	emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "API Error"})
 	sys.exit(1)
-emit({"type": "result", "subtype": "success", "is_error": False, "result": os.environ.get("MOCK_CLAUDE_RESULT", "[]"), "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 2}})
+emit({"type": "result", "subtype": "success", "is_error": False, "result": result_text, "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 2}})
 '''
 	_write_exec(bin_dir / "claude", claude_script)
 
@@ -3584,6 +3609,127 @@ def test_security_audit_claude_engine_whole_reply_json_is_not_reported_as_extrac
 		assert "security-audit: engine=claude" in proc.stdout
 		assert "SECURITY_AUDIT_CLAUDE_EXTRACTED" not in proc.stdout
 		assert "SECURITY_AUDIT_CLAUDE_REJECTED" not in proc.stdout
+
+
+# Run 40333816067: a clean audit replied "[]" and then a summary, which the
+# strict reply check rejects. One repair turn resumes the same session.
+_EMPTY_ARRAY_THEN_SUMMARY = "[]\n\nI found no supported security issues in the changed files, so the result is an empty array."
+_REPAIR_PROMPT_TEXT = "Reply again with only that JSON array."
+
+
+def _session_ids(state: dict) -> list[tuple[str, str]]:
+	pairs = []
+	for argv in state.get("claude_calls", []):
+		for flag in ("--session-id", "--resume"):
+			if flag in argv:
+				pairs.append((flag, argv[argv.index(flag) + 1]))
+				break
+		else:
+			pairs.append(("", ""))
+	return pairs
+
+
+def test_security_audit_claude_repair_turn_turns_a_summarised_empty_array_into_a_clean_audit() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-repair-") as td:
+		proc, state, payload = _claude_engine_audit(
+			Path(td),
+			claude_env={"MOCK_CLAUDE_SESSION": "1", "MOCK_CLAUDE_RESULT": _EMPTY_ARRAY_THEN_SUMMARY, "MOCK_CLAUDE_RESUME_RESULT": "[]"},
+		)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		assert "security-audit: engine=claude" in proc.stdout
+		assert "SECURITY_AUDIT_CLAUDE_REJECTED reason=malformed_output bytes=" in proc.stdout
+		assert "SECURITY_AUDIT_CLAUDE_REPAIR outcome=accepted reason=ok" in proc.stdout
+		assert "AI_ENGINE_FALLBACK" not in proc.stderr
+		assert "SECURITY_AUDIT_CLAUDE_FALLBACK" not in proc.stdout
+		assert not state.get("codex_calls")
+		# The first run starts its own session; the repair resumes exactly it.
+		calls = _session_ids(state)
+		assert len(calls) == 2 and calls[0] == ("", "") and calls[1][0] == "--resume", calls
+		assert _REPAIR_PROMPT_TEXT in state["claude_stdin"][1]
+		assert "Audit scope" not in state["claude_stdin"][1]
+		# The repair keeps the read profile of the audit.
+		assert state["claude_calls"][1][state["claude_calls"][1].index("--tools") + 1] == "Read,Grep,Glob,WebSearch"
+		assert payload["findings"] == []
+
+
+def test_security_audit_claude_repair_reply_with_findings_uses_the_same_check() -> None:
+	repaired = "Here is the array:\n" + json.dumps([_finding_payload("repaired-finding", file_path="file_b.py")])
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-repair-findings-") as td:
+		proc, state, payload = _claude_engine_audit(
+			Path(td),
+			claude_env={"MOCK_CLAUDE_SESSION": "1", "MOCK_CLAUDE_RESULT": _EMPTY_ARRAY_THEN_SUMMARY, "MOCK_CLAUDE_RESUME_RESULT": repaired},
+		)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		assert "SECURITY_AUDIT_CLAUDE_REPAIR outcome=accepted reason=extracted" in proc.stdout
+		assert "SECURITY_AUDIT_CLAUDE_EXTRACTED items=1 leading_chars=" in proc.stdout
+		assert not state.get("codex_calls")
+		assert _kept_ids(payload) == ["repaired-finding"]
+
+
+def test_security_audit_claude_repair_that_is_still_malformed_fails_closed() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-repair-bad-") as td:
+		kept_path = Path(td) / "kept.txt"
+		proc, state, payload = _claude_engine_audit(
+			Path(td),
+			claude_env={
+				"MOCK_CLAUDE_SESSION": "1",
+				"MOCK_CLAUDE_RESULT": _EMPTY_ARRAY_THEN_SUMMARY,
+				"MOCK_CLAUDE_RESUME_RESULT": "[]\nStill no issues found.",
+				"SECURITY_AUDIT_CLAUDE_REJECTED_OUT": str(kept_path),
+			},
+		)
+		_assert_refused(proc, state, payload, "malformed_output")
+		assert "SECURITY_AUDIT_CLAUDE_REPAIR outcome=rejected reason=malformed_output" in proc.stdout
+		assert proc.stdout.count("SECURITY_AUDIT_CLAUDE_REJECTED reason=malformed_output") == 2
+		assert len(state["claude_calls"]) == 2
+		# The kept copy is the audit's own reply, not the repair's.
+		assert kept_path.read_text(encoding="utf-8") == _EMPTY_ARRAY_THEN_SUMMARY
+
+
+def test_security_audit_claude_repair_crash_falls_back_as_malformed_output() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-repair-crash-") as td:
+		proc, state, payload = _claude_engine_audit(
+			Path(td),
+			claude_env={
+				"MOCK_CLAUDE_SESSION": "1",
+				"MOCK_CLAUDE_RESULT": _EMPTY_ARRAY_THEN_SUMMARY,
+				"MOCK_CLAUDE_RESUME_MODE": "crash",
+				"AI_ENGINE_FALLBACK_POLICY": "always",
+			},
+		)
+		assert "SECURITY_AUDIT_CLAUDE_REPAIR outcome=failed reason=claude_run_rc_1" in proc.stdout
+		_assert_codex_fallback(proc, state, payload, "malformed_output", claude_called=True)
+
+
+def test_security_audit_claude_repair_never_starts_a_new_session() -> None:
+	# A session id claude_run cannot find would start a new session that never
+	# audited anything, and it could answer "[]": the repair is skipped.
+	cases = (
+		({"MOCK_CLAUDE_SESSION": "1", "MOCK_CLAUDE_SESSION_UNSTORED": "1"}, "session_not_stored"),
+		({}, "no_session_id"),
+	)
+	for session_env, reason in cases:
+		with tempfile.TemporaryDirectory(prefix="security-audit-claude-repair-nosession-") as td:
+			proc, state, payload = _claude_engine_audit(
+				Path(td),
+				claude_env={**session_env, "MOCK_CLAUDE_RESULT": _EMPTY_ARRAY_THEN_SUMMARY, "MOCK_CLAUDE_RESUME_RESULT": "[]"},
+			)
+			_assert_refused(proc, state, payload, "malformed_output")
+			assert f"SECURITY_AUDIT_CLAUDE_REPAIR outcome=skipped reason={reason}" in proc.stdout
+			assert len(state["claude_calls"]) == 1
+
+
+def test_security_audit_claude_repair_only_follows_malformed_output() -> None:
+	# A reply that is JSON of the wrong shape, or empty, falls back at once.
+	for reply, reason in ((json.dumps({"findings": []}), "schema_mismatch"), ("", "missing_output")):
+		with tempfile.TemporaryDirectory(prefix="security-audit-claude-repair-shape-") as td:
+			proc, state, payload = _claude_engine_audit(
+				Path(td),
+				claude_env={"MOCK_CLAUDE_SESSION": "1", "MOCK_CLAUDE_RESULT": reply, "MOCK_CLAUDE_RESUME_RESULT": "[]"},
+			)
+			_assert_refused(proc, state, payload, reason)
+			assert "SECURITY_AUDIT_CLAUDE_REPAIR" not in proc.stdout
+			assert len(state["claude_calls"]) == 1
 
 
 def test_security_audit_rejected_claude_reply_is_logged_and_kept() -> None:
