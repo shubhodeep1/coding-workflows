@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description states \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\n  expected_change_site: tests/test_security_audit_workflow_contract.py, test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair (lines 3725-3737)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: tests/test_security_audit_workflow_contract.py:3725-3737 checks only structure (one parser definition, one extraction line, audit reply at scripts/security_audit.sh:1858 and repair reply at scripts/security_audit.sh:1804 both go through the function), and does not compare the parser source with its pre-move version; severity NIT, wording gap in the PR description, no runtime defect, and prior autofix rounds deferred it as brittle to freeze.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP\nRequirement: The PR description says \"a test confirms the parser source is unchanged\" after the reply check moved into `security_audit_check_claude_reply`.\nExpected change site: `tests/test_security_audit_workflow_contract.py`, near `test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair`.\nEvidence of absence: That test (lines 3725-3737) checks the structure only. There is one parser definition, one `accept(...)` extraction line, and both the audit reply and the repair reply go through the function. It does not compare the moved source with the pre-move version. This is a wording gap in the PR description. A test that froze the heredoc text would break on any harmless edit, and earlier autofix rounds deferred this item for that reason. No runtime defect.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\nRequirement: \"a test confirms the parser source is unchanged\" (PR description's summary of the move into `security_audit_check_claude_reply`).\nExpected change site: tests/test_security_audit_workflow_contract.py \u2014 the new parser-sharing test at lines 3725-3737.\nEvidence of absence: The added test `test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair` (tests/test_security_audit_workflow_contract.py:3725-3737) asserts four structural invariants: exactly one `security_audit_check_claude_reply()\\n{` definition, exactly one `accept(value, f\"extracted items=\u2026\")` line, both `CLAUDE_AUDIT_OUTPUT_FILE` and `repair_output_file` callers go through that function, and the extraction line lies between the function's opening `{` and the next `\\n}\\n`. It does NOT freeze or compare the heredoc text against its pre-move version, so the PR description's claim is stronger than what the test checks. A harmless edit inside the heredoc would still pass. Prior autofix rounds (entries 6434014145, 6434665225, 6434988004) deferred this wording gap as the PR author's responsibility.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\nRequirement: \"A test confirms the parser source is unchanged.\"\nExpected change site: tests/test_security_audit_workflow_contract.py, in test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair.\nEvidence of absence: The test at lines 3725\u20133737 checks for one parser definition, a single extraction line, and calls from both audit and repair paths. It does not compare the parser source with its pre-move version or otherwise verify that the source is unchanged.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\nRequirement: PR description states \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\nExpected change site: tests/test_security_audit_workflow_contract.py, in `test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair` (lines 3725-3737).\nEvidence of absence: The test verifies the structural invariant (one parser definition, the extraction line appears exactly once inside it, and both the audit reply at scripts/security_audit.sh:1858 and the repair reply at scripts/security_audit.sh:1804 route through it), but no test compares the parser body against its pre-move source text or hash. Prior autofix rounds deferred this as PR-description wording; the structural test is the closest reasonable in-repo delivery and a frozen-source test was rejected as brittle.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "aaf843c200e9d71bde09672af8a104aa3b3047cfbc87d6ae8e4f536434d02211",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8223,
+    "run_id": "40458990270",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40458990270",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027062046_dd64dfdc0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8223,
+    "run_id": "40458990270"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T06:20:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
