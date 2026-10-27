@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #8217, suggested fix item 4: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml`, a preflight step in an E2E job or the `resolve-version` job\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: No diff hunk adds a preflight step. Capacity handling exists only inside the clarify, plan, implement, alt-model and orchestrate-decompose wait loops (`test-and-mark-stable.yml` hunks at 994-1006, 1223-1235, 1598-1610, 4471-4514, 5057-5068). Severity NIT in all three reviews. The issue marks this item optional, and sonnet-5_5 judged it a deferrable nice-to-have and not a correctness defect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: Issue #8217, suggested fix item 4: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, in an E2E job or the `resolve-version` job.\n  Evidence of absence: No diff hunk adds a preflight step. The capacity tracker lookup exists only inside the orchestrate-decompose step, after its 90-second tracking-issue search. The issue marks this item optional, so it is a deferrable nice-to-have. It is not a correctness defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\" (issue #8217 item 4)\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, a new preflight step in the E2E jobs (or `resolve-version`).\n  Evidence of absence: The PR adds capacity handling inside the clarify, plan, implement, alt-model and orchestrate-decompose wait loops (`test-and-mark-stable.yml` hunks at 994-1006, 1223-1235, 1598-1610, 4471-4514, 5057-5068). It adds no preflight step that short-circuits the live phases when a `kind=capacity` tracker is already open in `TEST_REPO`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, an E2E job or `resolve-version` preflight.\n  Evidence of absence: The PR adds capacity checks inside the clarify, plan, implement, alt-model and orchestrate-decompose waits. It contains no preflight that checks for an open capacity tracker before starting the live phases.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "feb0400ae0b3d6e9a8a3ee1398e6dd0c3f287fdae2c4212805a425e289e52448",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8221,
+    "run_id": "40546566194",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40546566194",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027171935_2d983103db",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8221,
+    "run_id": "40546566194"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T17:19:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
