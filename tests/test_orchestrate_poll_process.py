@@ -1977,6 +1977,9 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 			if pr.get('mergeable') is False:
 				print('conflict', file=sys.stderr)
 				sys.exit(1)
+			if pr.get('merge_error'):
+				print(pr['merge_error'], file=sys.stderr)
+				sys.exit(1)
 			pr['state'] = 'closed'
 			pr['merged'] = True
 			store.setdefault('merged_prs', []).append(pr_num)
@@ -2752,6 +2755,23 @@ if args[0] == 'api':
 			sys.exit(1)
 		save()
 		print(json.dumps({'merged': True}))
+		sys.exit(0)
+
+	# Ruleset + combined-status reads for _pr_ruleset_required_check_blockers
+	# (fun-token-multi-chain#579). Served only when a test sets
+	# 'ruleset_required_contexts'; otherwise the legacy '{}' fallback applies.
+	m = re.search(r'/rules/branches/([^?]+)(\?.*)?$', path)
+	if m and 'ruleset_required_contexts' in store:
+		ctxs = store.get('ruleset_required_contexts') or []
+		body = [{'type': 'deletion'}]
+		if ctxs:
+			body.append({'type': 'required_status_checks', 'parameters': {'required_status_checks': [{'context': c} for c in ctxs]}})
+		print(json.dumps(body))
+		sys.exit(0)
+
+	m = re.search(r'/commits/([^/]+)/status(\?.*)?$', path)
+	if m and 'ruleset_required_contexts' in store:
+		print(json.dumps({'state': 'pending', 'statuses': store.get('commit_statuses', {}).get(m.group(1), [])}))
 		sys.exit(0)
 
 	m = re.search(r'/branches/(.+)$', path)
@@ -11974,6 +11994,129 @@ def test_final_merge_waits_for_required_checks_before_merging():
 	assert result["latest_state"]["final_merge_status"] == "pending"
 	assert result["latest_state"]["final_merge_pr"] == 352
 	assert result.get("merged_prs", []) == []
+
+
+def test_final_merge_refusal_keeps_github_error_and_mergeable_state():
+	# fun-token-multi-chain#579: the final PR was mergeable=true but
+	# mergeable_state=blocked by a failing required commit status
+	# (coding-workflows/workflow-integrity). The check-runs gate never reads
+	# commit statuses, so the merge was tried and refused, and the recorded
+	# error said only "state=open, mergeable=true". GitHub's refusal text and
+	# mergeable_state must reach final_merge_error, which the exhausted-budget
+	# comment prints as "Last recorded error".
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"merge_error": (
+				"X Pull request owner/repo#353 is not mergeable: the base branch policy prohibits the merge.\n"
+				"Required status check `coding-workflows/workflow-integrity` is failing."
+			),
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result.get("merged_prs", []) == []
+	err = result["state_on_disk"]["final_merge_error"]
+	assert err == (
+		"Final PR #353 could not be merged automatically (state=open, mergeable=true, mergeable_state=blocked). "
+		"GitHub: X Pull request owner/repo#353 is not mergeable: the base branch policy prohibits the merge. "
+		"Required status check coding-workflows/workflow-integrity is failing."
+	)
+	assert "[final-merge] " + err in result["stdout"]
+	comments = [
+		c.get("body", "") if isinstance(c, dict) else str(c)
+		for c in result["issues"]["192"]["comments"]
+	]
+	blocked = [c for c in comments if c.startswith("## ⚠️ Final merge blocked")]
+	assert blocked, comments
+	assert "mergeable_state=`blocked`" in blocked[-1]
+	assert "Required status check coding-workflows/workflow-integrity is failing." in blocked[-1]
+
+
+def test_final_merge_defers_on_failing_ruleset_required_status_without_spending_budget():
+	# fun-token-multi-chain#579: GitHub reported the final PR blocked by a
+	# failing ruleset-required commit status. The poller must hold the merge,
+	# name the blocker, and keep the final-merge budget intact instead of
+	# spending three refused attempts and parking the project.
+	head = "7ca98c4747ea6d5b73c95c46501b8483cd037b89"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 354,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"headSha": head,
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_store_extra={
+			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
+			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "failure"}]},
+		},
+	)
+	assert result.get("merged_prs", []) == []
+	assert (
+		"[final-merge] PR #354 is blocked by ruleset-required check(s): "
+		"coding-workflows/workflow-integrity (failure). Will retry next poll."
+	) in result["stdout"]
+	assert "ORCH_MERGE_HEAD_BOUND pr=354" not in result["stdout"]
+	disk = result["state_on_disk"]
+	assert disk["final_merge_status"] == "pending"
+	assert int(disk.get("final_merge_attempt_count", 0) or 0) == 0
+
+
+def test_final_merge_proceeds_when_ruleset_required_status_passes():
+	head = "7ca98c4747ea6d5b73c95c46501b8483cd037b89"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 355,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"headSha": head,
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_store_extra={
+			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
+			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "success"}]},
+		},
+	)
+	assert 355 in result.get("merged_prs", [])
+	assert "blocked by ruleset-required check(s)" not in result["stdout"]
 
 
 def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge():
