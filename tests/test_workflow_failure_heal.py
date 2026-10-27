@@ -1156,8 +1156,8 @@ def test_budget_cli_verifies_reported_source_issue(tmp_path: Path) -> None:
 		repository=SELF_REPO, author="workflow-bot")]), encoding="utf-8")
 	completed = subprocess.run(
 		[sys.executable, str(LIB_PATH), "budget", "--issues-json", str(issues_json),
-		 "--fingerprint", "1" * 64, "--preferred-repo", SELF_REPO, "--source-gen", "2",
-		 "--source-issue", f"{SELF_REPO}#42", "--trusted-author", "workflow-bot"],
+			"--fingerprint", "1" * 64, "--preferred-repo", SELF_REPO, "--source-gen", "2",
+			"--source-issue", f"{SELF_REPO}#42", "--trusted-author", "workflow-bot"],
 		capture_output=True, text=True, check=True,
 	)
 	assert json.loads(completed.stdout)["lineage_source"] == "verified_source_issue"
@@ -1238,7 +1238,8 @@ def test_heal_issue_does_not_accept_routing_from_untrusted_evidence() -> None:
 def test_heal_issue_body_validator_rejects_untrusted_metadata() -> None:
 	payload = heal.validate_payload(_autofix_payload())
 	body = heal.compose_issue_body(payload=payload, diagnosis="x", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[])
-	validate = lambda candidate: heal.validate_heal_issue_body_routing(candidate, target_branch="stable", integration_branch=None)
+	def validate(candidate):
+		return heal.validate_heal_issue_body_routing(candidate, target_branch="stable", integration_branch=None)
 	assert validate(body) == ""
 	assert validate(body + "Integration branch: main\n") == "routing_key"
 	assert validate(body + "- **Target branch:** `main`\n") == "routing_key"
@@ -1357,11 +1358,11 @@ def test_compose_issue_body_rejects_routing_directives_left_after_neutralization
 def test_workflow_run_heal_issue_intro_distinguishes_ci_from_release() -> None:
 	for workflow_name, expected_intro, unexpected_intro in (
 		("CI", "A CI run on the default branch failed.",
-		 "A release / promotion workflow run failed."),
+			"A release / promotion workflow run failed."),
 		("Mark Stable Release", "A release / promotion workflow run failed.",
-		 "A CI run on the default branch failed."),
+			"A CI run on the default branch failed."),
 		("Nightly Validation Self-Test", "A scheduled self-check workflow run on the default branch failed.",
-		 "A release / promotion workflow run failed."),
+			"A release / promotion workflow run failed."),
 	):
 		workflow_run_payload = heal.validate_payload(heal.build_workflow_run_payload(
 			repo=SELF_REPO,
@@ -2239,6 +2240,23 @@ def test_intake_workflow_run_on_promote_candidate_targets_the_default_branch(def
 	assert match and (match.group(1) or match.group(2)) == expected
 	assert f"target_branch_retarget from=promote-candidate to={expected} reason=pipeline_mirror_branch" in result.stdout
 	assert f"target_branch={expected}" in result.stdout and "target_branch_source=pipeline_mirror_branch" in result.stdout
+
+
+def test_intake_consumer_app_defect_on_promote_candidate_targets_the_default_branch() -> None:
+	"""The consumer-app-defect arm opens a heal issue in this repo for a release
+	run too; it must not target the pipeline-only promote-candidate mirror."""
+	run_payload = heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 501, "name": "Test & Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "promote-candidate", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/501", "display_title": "Test & Mark Stable Release"},
+	)
+	state = _intake_state(branches=["stable", "main", "promote-candidate"])
+	result, state_after, _ = _run_intake(run_payload, state, diagnosis=DIAG_CONSUMER_APP_SCOPE, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	issues = _composed_issues(state_after)
+	assert issues, result.stdout
+	match = TARGET_BRANCH_RE.search(issues[0]["body"])
+	assert match and (match.group(1) or match.group(2)) == "main"
+	assert "target_branch_retarget from=promote-candidate to=main reason=pipeline_mirror_branch" in result.stdout
 
 
 def _gate_run_payload() -> dict:
@@ -4217,7 +4235,7 @@ def test_fingerprint_cap_block_records_the_support_sha_on_its_marker() -> None:
 		assert f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason={HOST_ONLY_REASON} count=1 support={SUPPORT_S1} -->" in state["comments_posted"][0]
 	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-bad-") as tmp_name:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_env={**cap_env, "REVIEW_SUPPORT_SHA": "bad sha"})
-		assert f"count=1 -->" in state["comments_posted"][0] and "support=" not in state["comments_posted"][0]
+		assert "count=1 -->" in state["comments_posted"][0] and "support=" not in state["comments_posted"][0]
 
 
 def test_gate_force_rb_judge_skips_conflict_steps_only_on_trusted_same_head_host_only_marker() -> None:
@@ -6544,7 +6562,7 @@ def test_engine_fallback_cli_round_trip(tmp_path: Path) -> None:
 	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
 	built = subprocess.run(
 		[sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
-		 "--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)],
+			"--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)],
 		capture_output=True, text=True, env=env, check=True,
 	)
 	payload = json.loads(built.stdout)
@@ -6557,7 +6575,7 @@ def test_engine_fallback_cli_round_trip(tmp_path: Path) -> None:
 		capture_output=True, text=True, env=env, check=True).stdout.strip()
 	assert fp == heal.engine_fallback_fingerprint("PLAN", "no_credential")
 	bad = subprocess.run([sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
-		 "--reason", "all_gated", "--workflow-name", "AI Plan"], capture_output=True, text=True, env=env, check=False)
+			"--reason", "all_gated", "--workflow-name", "AI Plan"], capture_output=True, text=True, env=env, check=False)
 	assert bad.returncode == 2
 
 

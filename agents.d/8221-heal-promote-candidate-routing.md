@@ -9,4 +9,6 @@
   `merge_failed` on every cycle. The intake logs
   `target_branch_retarget from=promote-candidate to=<default> reason=pipeline_mirror_branch`
   and files the issue against the default branch (`target_branch_source=pipeline_mirror_branch`),
-  which `promote-candidate-follow.yml` then fast-forwards the mirror to.
+  which `promote-candidate-follow.yml` then fast-forwards the mirror to. The
+  `consumer-app-defect` arm, which files a release run's issue in this repo,
+  applies the same retarget and logs the same `target_branch_retarget` line.

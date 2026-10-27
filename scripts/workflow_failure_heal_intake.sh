@@ -2947,7 +2947,13 @@ case "${CLASSIFICATION}" in
 	consumer-app-defect)
 		if [ -z "${ISSUE_NUMBER}" ]; then
 			# A release run has no consumer; keep the diagnosis in this repo.
-			_open_issue "${SELF_REPO}" "${HEAD_BRANCH:-}" || exit 1
+			HEAL_CONSUMER_APP_TARGET_BRANCH="${HEAD_BRANCH:-}"
+			if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${HEAD_BRANCH:-}" = "${HEAL_PIPELINE_MIRROR_BRANCH}" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+				# Same pipeline-only mirror rule as the workflow-defect arm.
+				HEAL_CONSUMER_APP_TARGET_BRANCH="${PROVENANCE_DEFAULT_BRANCH:-main}"
+				log "target_branch_retarget from=${HEAD_BRANCH} to=${HEAL_CONSUMER_APP_TARGET_BRANCH} reason=pipeline_mirror_branch"
+			fi
+			_open_issue "${SELF_REPO}" "${HEAL_CONSUMER_APP_TARGET_BRANCH}" || exit 1
 			log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
 		else
 			_open_issue "${SOURCE_REPO}" "" || exit 1
