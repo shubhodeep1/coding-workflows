@@ -195,6 +195,11 @@ jobs:
     # refused with GH013 (#8225, #8229). github.token writes nothing here.
     permissions:
       contents: read
+    # Serialize status delivery so a second run lists the first run's status
+    # PR before opening its own; never cancel a push-and-PR sequence midway.
+    concurrency:
+      group: nightly-validation-selftest-status-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       # Fresh runner and checkout: nothing the self-test executed can have
       # touched this .git (hooks, config, HEAD) before the token is used.
@@ -348,6 +353,17 @@ jobs:
           if [ -n "${PREVIOUS_STATUS_PATH:-}" ] && [ -f "${PREVIOUS_STATUS_PATH}" ] \
             && cmp -s "${PREVIOUS_STATUS_PATH}" "${status_file}"; then
             echo "VALIDATION_SELFTEST_STATUS outcome=unchanged reason=matches_open_pr pr=${previous_pr:-unknown}"
+            # Still close older status PRs; the newest open one carries this status.
+            if [ -n "${previous_pr}" ] && [ -n "${GH_TOKEN:-}" ]; then
+              for old in ${SUPERSEDED_PRS:-}; do
+                [[ "${old}" =~ ^[0-9]+$ ]] && [ "${old}" -lt "${previous_pr}" ] || continue
+                if gh pr close "${old}" --repo "${GITHUB_REPOSITORY}" --comment "Superseded by #${previous_pr} (nightly validation self-test status)." >/dev/null 2>&1; then
+                  echo "VALIDATION_SELFTEST_STATUS outcome=superseded pr=${old} by=${previous_pr}"
+                else
+                  echo "::warning::VALIDATION_SELFTEST_STATUS outcome=supersede_close_failed pr=${old}"
+                fi
+              done
+            fi
             exit 0
           fi
 
@@ -417,6 +433,9 @@ jobs:
             exit "${push_exit}"
           fi
 
+          # The base is the branch this run checked out (github.ref_name, main
+          # for the nightly cron): the commit sits on that branch's HEAD, so a
+          # PR into another branch would also carry that branch's commits.
           # The pull_request event of this GH_PAT-created PR starts CI and the
           # review workflow, which post the required checks and merge it.
           create_err="${work_tmp}/create.err"

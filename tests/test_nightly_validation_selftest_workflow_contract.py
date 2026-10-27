@@ -398,6 +398,24 @@ def test_commit_step_skips_when_open_pr_already_carries_status() -> None:
 	assert gh_calls == []
 
 
+def test_unchanged_status_still_closes_older_status_prs() -> None:
+	status = '{"overall_status": "pass"}\n'
+	proc, git_calls, gh_calls = _run_commit_step(previous_status=status, status_text=status, superseded="40 31")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "outcome=unchanged reason=matches_open_pr pr=40" in proc.stdout
+	closes = [call for call in gh_calls if call.startswith("pr close")]
+	assert [call.split()[2] for call in closes] == ["31"], closes
+	assert "VALIDATION_SELFTEST_STATUS outcome=superseded pr=31 by=40" in proc.stdout
+	assert _pushes(git_calls) == []
+
+
+def test_status_commit_job_is_serialized_without_cancelling() -> None:
+	commit_job = _workflow_text().split('  commit-selftest-status:', 1)[1]
+	head = commit_job.split('    steps:', 1)[0]
+	assert 'group: nightly-validation-selftest-status-${{ github.ref }}' in head
+	assert 'cancel-in-progress: false' in head
+
+
 _FAKE_GH_SEED = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${FAKE_GH_LOG}"
 if [ "$1" = "api" ] && [ "$2" = "user" ]; then
@@ -562,6 +580,8 @@ def main() -> int:
 		test_commit_step_closes_superseded_prs_without_deleting_branches,
 		test_commit_step_supersede_close_failure_only_warns,
 		test_commit_step_skips_when_open_pr_already_carries_status,
+		test_unchanged_status_still_closes_older_status_prs,
+		test_status_commit_job_is_serialized_without_cancelling,
 		test_seed_step_picks_newest_trusted_status_pr,
 		test_seed_step_no_matching_pr_leaves_outputs_empty,
 		test_seed_step_failures_leave_outputs_empty,
