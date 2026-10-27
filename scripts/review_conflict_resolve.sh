@@ -1022,6 +1022,7 @@ _resolver_prepush_test_gate()
   case "${gate_root}" in "${RUNNER_TEMP:-/tmp}"/review-isolated-*) ;; *) gate_root="" ;; esac
   [ -z "${gate_root}" ] || [ -d "${gate_root}" ] || gate_root=""
   if [ -z "${gate_root}" ] && [ -f "${gate_sandbox_sh}" ] && [ $(( gate_budget_end - SECONDS )) -ge $(( gate_wall + 630 )) ]; then
+    echo "PREPUSH_TEST_GATE phase=resolver outcome=warning reason=prepare_failed fallback=image_only" >&2
     gate_root="$(timeout --kill-after=30s 600 bash "${gate_sandbox_sh}" prepare-ephemeral codex 2>/dev/null)" || gate_root=""
   fi
   if [ -n "${gate_root}" ] && [ -f "${gate_root}/image" ] && [ ! -L "${gate_root}/image" ]; then

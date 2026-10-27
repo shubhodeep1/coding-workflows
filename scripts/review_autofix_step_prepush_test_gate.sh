@@ -627,6 +627,8 @@ review_prepush_test_gate_main()
 	fi
 	if [ -n "${root}" ] && [ -d "${root}/source/.review-venv/bin" ] && [ ! -L "${root}/source/.review-venv" ]; then
 		rpg_venv="${root}/source/.review-venv"
+	elif [ -n "${root}" ]; then
+		review_prepush_test_gate_log "outcome=warning reason=venv_absent"
 	fi
 	if [ -n "${root}" ] && [ -d "${root}/source/node_modules" ] && [ ! -L "${root}/source/node_modules" ]; then
 		rpg_node_modules="${root}/source/node_modules"
@@ -801,6 +803,7 @@ review_prepush_test_gate_integration_main()
 }
 
 # gate --worktree DIR --base SHA --image IMG --out DIR [--venv DIR] [--phase P]
+#      [--image-reason R] [--node-modules DIR]
 review_prepush_test_gate_cmd_gate()
 {
 	set +e
