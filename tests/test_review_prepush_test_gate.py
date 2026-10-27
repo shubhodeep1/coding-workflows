@@ -510,3 +510,100 @@ def test_resolver_step_receives_the_gate_mode():
 	assert resolver_steps
 	for step in resolver_steps:
 		assert step["env"]["PREPUSH_TEST_GATE_MODE"] == "${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}"
+
+
+# --- integration post-sync test repair (#8210, plan phase P5) --------------------
+
+FAKE_SANDBOX = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "__WORK__/sandbox.log"
+case "$1" in
+	prepare)
+		[ "${FAKE_PREPARE_RC:-0}" = 0 ] || exit 1
+		mkdir -p "__SB__/source/.review-venv/bin" "__SB__/source/node_modules"
+		printf 'REVIEW_SANDBOX_ROOT=%s\n' "__SB__" >> "${GITHUB_ENV:?}"
+		;;
+	prepare-ephemeral) echo "__SB__" ;;
+esac
+exit 0
+'''
+
+FAKE_RESOLVER = r'''#!/usr/bin/env bash
+printf '%s budget=%s\n' "$*" "${RESOLVER_TEST_REPAIR_BUDGET_SECS:-unset}" >> "__WORK__/resolver.log"
+echo "INTEGRATION_TEST_REPAIRED=true" >> "${GITHUB_ENV:?}"
+exit 0
+'''
+
+
+def _setup_integration(tmp_path: Path, queue: list[dict]) -> tuple[Path, dict[str, str], Path]:
+	repo, env = _setup(tmp_path, queue)
+	_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+	_git(repo, "checkout", "-q", "-b", "orchestrator/project-1")
+	work = _work(tmp_path)
+	sandbox = tmp_path / "review-isolated-x"
+	support = tmp_path / "support" / "scripts"
+	for name, text in (("review_untrusted_sandbox.sh", FAKE_SANDBOX), ("review_conflict_resolve.sh", FAKE_RESOLVER)):
+		path = support / name
+		path.write_text(text.replace("__WORK__", str(work)).replace("__SB__", str(sandbox)), encoding="utf-8")
+		path.chmod(0o755)
+	github_env = tmp_path / "github_env"
+	github_env.touch()
+	env.pop("REVIEW_SANDBOX_ROOT", None)
+	env.update({"PREPUSH_TEST_GATE_STEP_MODE": "integration", "POST_SYNC_TEST_REPAIR": "true",
+		"TARGET_BRANCH": "orchestrator/project-1", "BASE_BRANCH": "main", "GITHUB_ENV": str(github_env)})
+	return repo, env, github_env
+
+
+def test_integration_mode_prepares_a_venv_and_runs_one_resolver_repair(tmp_path):
+	repo, env, github_env = _setup_integration(tmp_path, [FAIL, PASS])
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	recorded = github_env.read_text(encoding="utf-8")
+	assert recorded.splitlines()[0] == "INTEGRATION_TEST_REPAIR_ACTIVE=true"
+	assert "INTEGRATION_TEST_REPAIRED=true" in recorded
+	# The prepare's root goes to a private GITHUB_ENV, never the step's.
+	assert "REVIEW_SANDBOX_ROOT" not in recorded
+	sandbox_log = (_work(tmp_path) / "sandbox.log").read_text(encoding="utf-8").splitlines()
+	assert sandbox_log[0] == "prepare codex" and sandbox_log[-1] == "cleanup"
+	assert "prepare-ephemeral codex" not in sandbox_log
+	resolver = (_work(tmp_path) / "resolver.log").read_text(encoding="utf-8").splitlines()
+	assert len(resolver) == 1 and resolver[0].startswith("--test-repair ") and "/run1/result.json" in resolver[0]
+	assert _docker_runs(tmp_path) == 2
+	docker_log = (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert "dst=/opt/codex-venv,readonly" in docker_log
+	assert "dst=/source/node_modules,readonly" in docker_log
+	assert "phase=integration outcome=pass" in proc.stderr and "repair=committed" in proc.stderr
+
+
+def test_integration_mode_falls_back_to_an_image_only_prepare(tmp_path):
+	repo, env, github_env = _setup_integration(tmp_path, [PASS])
+	env["FAKE_PREPARE_RC"] = "1"
+	(tmp_path / "review-isolated-x" / "image").write_text(IMAGE + "\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "outcome=warning reason=prepare_failed fallback=image_only" in proc.stderr
+	assert "outcome=warning reason=venv_absent" in proc.stderr
+	sandbox_log = (_work(tmp_path) / "sandbox.log").read_text(encoding="utf-8").splitlines()
+	assert sandbox_log[:2] == ["prepare codex", "prepare-ephemeral codex"] and sandbox_log[-1] == "cleanup"
+	assert "/opt/codex-venv" not in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
+	assert not (_work(tmp_path) / "resolver.log").exists()
+	assert "phase=integration outcome=pass" in proc.stderr
+
+
+def test_integration_mode_without_the_input_writes_nothing(tmp_path):
+	repo, env, github_env = _setup_integration(tmp_path, [FAIL])
+	env["POST_SYNC_TEST_REPAIR"] = "false"
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert github_env.read_text(encoding="utf-8") == ""
+	assert "reason=not_requested" in proc.stderr
+	assert _docker_runs(tmp_path) == 0
+
+
+def test_integration_and_resolver_steps_forward_the_dependency_allow_list():
+	text = REVIEW_YML.read_text(encoding="utf-8")
+	line = "DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}"
+	step = text[text.index("      - name: Integration post-sync test repair\n"):]
+	step = step[:step.index("\n      - name: ", 10)]
+	assert line in step
+	resolver_env = text[text.index("CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}\n          PREPUSH_TEST_GATE_MODE"):]
+	assert line in resolver_env[:400]

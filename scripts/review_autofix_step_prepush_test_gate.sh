@@ -21,7 +21,7 @@
 #
 # Executed with a subcommand (resolver and heal):
 #   gate --worktree DIR --base SHA --image IMG --out DIR [--venv DIR] [--phase P]
-#        [--image-reason R] runs the wrapper once; writes DIR/result.json (synthetic when the run
+#        [--image-reason R] [--node-modules DIR] runs the wrapper once; writes DIR/result.json (synthetic when the run
 #        wrote none) and prints "<status> <pr_caused> <inherited>".
 #   repair-prompt RESULT OUT [ALLOW_FILE]
 #        trusted template + "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" block.
@@ -327,6 +327,10 @@ review_prepush_test_gate_run_once()
 	if [ -n "${rpg_venv:-}" ] && [ -d "${rpg_venv}/bin" ] && [ ! -L "${rpg_venv}" ]; then
 		args+=(--venv "${rpg_venv}")
 	fi
+	# Node dependencies the sandbox prepare installed (the snapshot leaves node_modules out).
+	if [ -n "${rpg_node_modules:-}" ] && [ -d "${rpg_node_modules}" ] && [ ! -L "${rpg_node_modules}" ]; then
+		args+=(--node-modules "${rpg_node_modules}")
+	fi
 	bash "${rpg_wrapper}" "${args[@]}" || true
 	[ -f "${out}/result.json" ] || review_prepush_test_gate_py synthetic "${out}/result.json" wrapper_no_result
 }
@@ -615,7 +619,7 @@ review_prepush_test_gate_main()
 		review_prepush_test_gate_log "outcome=skipped reason=no_changes"
 		return 0
 	fi
-	rpg_image="" rpg_image_reason="review_image_unavailable" rpg_venv=""
+	rpg_image="" rpg_image_reason="review_image_unavailable" rpg_venv="" rpg_node_modules=""
 	root="${REVIEW_SANDBOX_ROOT:-}"
 	if [ -n "${root}" ] && [ -f "${root}/image" ] && [ ! -L "${root}/image" ]; then
 		rpg_image="$(head -n 1 "${root}/image" 2>/dev/null | tr -d '[:space:]')"
@@ -623,6 +627,9 @@ review_prepush_test_gate_main()
 	fi
 	if [ -n "${root}" ] && [ -d "${root}/source/.review-venv/bin" ] && [ ! -L "${root}/source/.review-venv" ]; then
 		rpg_venv="${root}/source/.review-venv"
+	fi
+	if [ -n "${root}" ] && [ -d "${root}/source/node_modules" ] && [ ! -L "${root}/source/node_modules" ]; then
+		rpg_node_modules="${root}/source/node_modules"
 	fi
 	local fit_minutes=$(( (rpg_step_budget - (SECONDS - rpg_started) - 120) / 60 ))
 	if [ "${fit_minutes}" -lt 1 ]; then
@@ -743,6 +750,11 @@ review_prepush_test_gate_integration_main()
 		fi
 		if [ -n "${root}" ] && [ -d "${root}/source/.review-venv/bin" ] && [ ! -L "${root}/source/.review-venv" ]; then
 			venv_args=(--venv "${root}/source/.review-venv")
+		elif [ -n "${root}" ]; then
+			review_prepush_test_gate_log "outcome=warning reason=venv_absent"
+		fi
+		if [ -n "${root}" ] && [ -d "${root}/source/node_modules" ] && [ ! -L "${root}/source/node_modules" ]; then
+			venv_args+=(--node-modules "${root}/source/node_modules")
 		fi
 	fi
 	status_line="$(review_prepush_test_gate_cmd_gate --phase integration --worktree "${rpg_worktree}" --base "${base}" \
@@ -793,7 +805,7 @@ review_prepush_test_gate_cmd_gate()
 {
 	set +e
 	local out=""
-	rpg_worktree="" rpg_base="" rpg_image="" rpg_venv="" rpg_image_reason="image_unavailable"
+	rpg_worktree="" rpg_base="" rpg_image="" rpg_venv="" rpg_node_modules="" rpg_image_reason="image_unavailable"
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
 			--worktree) rpg_worktree="${2:-}"; shift 2 ;;
@@ -802,6 +814,7 @@ review_prepush_test_gate_cmd_gate()
 			--image-reason) rpg_image_reason="$(printf '%s' "${2:-}" | tr -dc 'a-z0-9_')"; shift 2 ;;
 			--out) out="${2:-}"; shift 2 ;;
 			--venv) rpg_venv="${2:-}"; shift 2 ;;
+			--node-modules) rpg_node_modules="${2:-}"; shift 2 ;;
 			--phase)
 				case "${2:-}" in resolver|heal|review|integration) rpg_phase="$2" ;; esac
 				shift 2

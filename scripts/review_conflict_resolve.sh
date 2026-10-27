@@ -1029,6 +1029,11 @@ _resolver_prepush_test_gate()
   fi
   if [ -n "${gate_root}" ] && [ -d "${gate_root}/source/.review-venv/bin" ] && [ ! -L "${gate_root}/source/.review-venv" ]; then
     gate_venv_args=(--venv "${gate_root}/source/.review-venv")
+  elif [ -n "${gate_root}" ]; then
+    echo "PREPUSH_TEST_GATE phase=resolver outcome=warning reason=venv_absent" >&2
+  fi
+  if [ -n "${gate_root}" ] && [ -d "${gate_root}/source/node_modules" ] && [ ! -L "${gate_root}/source/node_modules" ]; then
+    gate_venv_args+=(--node-modules "${gate_root}/source/node_modules")
   fi
   bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
     --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true

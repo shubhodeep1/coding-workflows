@@ -3353,6 +3353,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair }}
+          DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           PREPUSH_TEST_GATE_STEP_MODE: integration
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
           PREPUSH_TEST_GATE_TIMEOUT_MINUTES: ${{ vars.PREPUSH_TEST_GATE_TIMEOUT_MINUTES || '15' }}
@@ -4107,6 +4108,7 @@ jobs:
           # xhigh, high, medium, none.
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
+          DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
         run: |
           set -euo pipefail
           echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"

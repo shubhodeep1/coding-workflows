@@ -1138,6 +1138,7 @@ def test_check_resolver_diff_ignores_unsafe_extra_paths(tmp_path: Path, value: s
 
 
 _GATE_DOCKER = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "__WORK__/docker.log"
 if [ "$1" = run ]; then
 	for arg in "$@"; do
 		case "$arg" in
@@ -1157,7 +1158,7 @@ def _gate_result(status: str, failures: list) -> str:
 		"inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1})
 
 
-def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: int = 0) -> tuple:
+def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: int = 0, full_prepare: bool = True) -> tuple:
 	root = SCRIPT.parent.parent
 	work = tmp_path / "work"
 	work.mkdir()
@@ -1187,8 +1188,13 @@ def _run_resolver_gate_fixture(tmp_path: Path, repair_edit: str, start_seconds: 
 	shutil.copy2(root / "prompts/mode-implement-repair-tests.txt", prompts / "mode-implement-repair-tests.txt")
 	sandbox_root = tmp_path / "review-isolated-gate"
 	sandbox_root.mkdir()
+	prepare_branch = (
+		f'prepare) printf "sha256:{"c" * 64}\\n" > "{sandbox_root}/image"; mkdir -p "{sandbox_root}/source/.review-venv/bin"; '
+		f'printf "REVIEW_SANDBOX_ROOT=%s\\n" "{sandbox_root}" >> "$GITHUB_ENV" ;; '
+	) if full_prepare else 'prepare) exit 1 ;; '
 	(support / "review_untrusted_sandbox.sh").write_text(
-		f'#!/usr/bin/env bash\ncase "$1" in prepare-ephemeral) printf "sha256:{"c" * 64}\\n" > "{sandbox_root}/image"; echo "{sandbox_root}" ;; esac\nexit 0\n',
+		f'#!/usr/bin/env bash\necho "$*" >> "{work}/sandbox.log"\ncase "$1" in {prepare_branch}'
+		f'prepare-ephemeral) printf "sha256:{"c" * 64}\\n" > "{sandbox_root}/image"; echo "{sandbox_root}" ;; esac\nexit 0\n',
 		encoding="utf-8")
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
@@ -1475,3 +1481,22 @@ def test_test_repair_context_fails_closed_without_trusted_state(tmp_path):
 	assert "RC=2" in proc.stdout, proc.stdout + proc.stderr
 	src = _source()
 	assert 'reason=state_unavailable' in src[src.index("_resolver_test_repair_main()"):]
+
+
+def test_resolver_gate_full_prepare_passes_the_venv_and_cleans_up(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, "printf 'fixed\\n' > tests/test_a.py")
+	sandbox_log = (work / "sandbox.log").read_text(encoding="utf-8").splitlines()
+	assert sandbox_log[0] == "prepare codex" and sandbox_log[-1] == "cleanup"
+	assert "prepare-ephemeral codex" not in sandbox_log
+	runs = [line for line in (work / "docker.log").read_text(encoding="utf-8").splitlines() if line.startswith("run ")]
+	assert len(runs) == 2 and all("dst=/opt/codex-venv,readonly" in line for line in runs)
+	assert "reason=venv_absent" not in proc.stderr
+
+
+def test_resolver_gate_falls_back_to_an_image_only_prepare(tmp_path: Path) -> None:
+	proc, work, repo, env = _run_resolver_gate_fixture(tmp_path, "printf 'fixed\\n' > tests/test_a.py", full_prepare=False)
+	sandbox_log = (work / "sandbox.log").read_text(encoding="utf-8").splitlines()
+	assert sandbox_log[:2] == ["prepare codex", "prepare-ephemeral codex"] and sandbox_log[-1] == "cleanup"
+	assert "/opt/codex-venv" not in (work / "docker.log").read_text(encoding="utf-8")
+	assert "phase=resolver outcome=warning reason=venv_absent" in proc.stderr
+	assert "phase=resolver outcome=pass" in proc.stderr
