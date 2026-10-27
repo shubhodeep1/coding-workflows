@@ -1596,6 +1596,16 @@ _check_final_merge_ineligibility_alert()
 
 	local blocker_summary pr_url
 	blocker_summary="$(_summarize_final_merge_blockers "${final_pr}" "${current_sha}")"
+	# Ruleset-required statuses are invisible to the check-runs summary above
+	# (fun-token-multi-chain#579); add them when GitHub reports the PR blocked.
+	if [ "$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')" = "blocked" ] \
+		&& declare -F _pr_ruleset_required_check_blockers >/dev/null 2>&1; then
+		local alert_ruleset_rc=0
+		_pr_ruleset_required_check_blockers "${current_sha}" "${_final_merge_ineligibility_base_ref}" || alert_ruleset_rc=$?
+		if [ "${alert_ruleset_rc}" = "1" ] && [ -n "${PR_RULESET_BLOCKERS_SUMMARY}" ]; then
+			blocker_summary="${blocker_summary:+${blocker_summary}, }ruleset: ${PR_RULESET_BLOCKERS_SUMMARY}"
+		fi
+	fi
 	pr_url="$(_gh_url "pull/${final_pr}")"
 
 	local msg
@@ -13733,6 +13743,26 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
     return 1
+  fi
+
+  # Ruleset-required checks (fun-token-multi-chain#579): when GitHub says the
+  # PR is blocked, look for a ruleset-required status or check-run that is not
+  # passing. A known blocker defers without spending the final-merge budget,
+  # so the ineligibility alert (ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS) names
+  # it instead of three refused merges parking the project. A failed lookup
+  # fails open to the merge attempt, which records GitHub's refusal reason.
+  if [ "${pr_state}" = "open" ] && [ "$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')" = "blocked" ] \
+    && declare -F _pr_ruleset_required_check_blockers >/dev/null 2>&1; then
+    local final_ruleset_rc=0
+    _pr_ruleset_required_check_blockers "${pr_head_sha}" "${default_branch}" || final_ruleset_rc=$?
+    if [ "${final_ruleset_rc}" = "1" ]; then
+      FINAL_MERGE_BUDGET_ELIGIBLE="0"
+      echo "  [final-merge] PR #${final_pr} is blocked by ruleset-required check(s): ${PR_RULESET_BLOCKERS_SUMMARY}. Will retry next poll."
+      return 1
+    fi
+    if [ "${final_ruleset_rc}" = "2" ]; then
+      echo "::warning::  [final-merge] Could not read ruleset-required checks for PR #${final_pr}; attempting the merge."
+    fi
   fi
 
   # Promote cycle: a VERIFYING run's ready-to-merge point promotes the pinned

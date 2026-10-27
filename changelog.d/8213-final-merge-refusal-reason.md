@@ -1,6 +1,14 @@
 <!-- changelog: fixed -->
-- **A refused final integration merge now records why GitHub refused it.** The tracking issue shows the failing required check, not just `mergeable=true`.
+- **The final integration merge now waits on failing ruleset-required checks instead of burning its merge attempts.** When a merge is still refused, the tracking issue records why.
 
-When `gh pr merge` refuses the final integration PR, the poller records two things: GitHub's refusal text and the PR's `mergeable_state` (for example `blocked`). Both go into `final_merge_error`, the `## ⚠️ Final merge blocked` tracking comment, and the poller log. Before this fix the reason was thrown away. In shubhodeep1/fun-token-multi-chain#579, all three attempts ended with "could not be merged automatically (state=open, mergeable=true)". The real blocker was a failing required ruleset status, `coding-workflows/workflow-integrity`. The "Final integration merge could not complete" comment prints this field as "Last recorded error".
+Before this change, the final-merge gate read required checks only from classic branch protection, and it judged only check-runs. A required commit status from a repository ruleset was invisible to it. In shubhodeep1/fun-token-multi-chain#579, that status was `coding-workflows/workflow-integrity`. The poller tried the merge three times, GitHub refused each one, and the project parked with "Last recorded error: ... (state=open, mergeable=true)".
 
-What this means for operators: when a project parks with `final_merge_exhausted`, the tracking issue names the check or policy that blocked the merge. You no longer have to open the PR to find it.
+Now, when GitHub reports the final PR as `mergeable_state=blocked`, the poller reads the base branch's ruleset-required checks. If one is failing, pending or missing, it holds the merge without spending the attempt budget and logs `[final-merge] PR #N is blocked by ruleset-required check(s): ...`. The `ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS` alert (default 6h) lists those blockers as `ruleset: <context> (<state>)`. If a merge is still refused, `final_merge_error` and the "Final merge blocked" comment include the `mergeable_state` and GitHub's refusal text.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra API calls on an unblocked final PR | 0 |
+| Extra API calls on a `blocked` final PR, per poll | 2, or 3 when a required context has no commit status |
+| Refusal text kept | first 600 characters, one line |
+
+What this means for operators: a project whose final PR is held by a ruleset check stays in progress and raises the stuck-merge alert naming the check. It no longer parks with `final_merge_exhausted` and a misleading "mergeable=true". If the ruleset lookup fails, the poller warns and tries the merge as before.

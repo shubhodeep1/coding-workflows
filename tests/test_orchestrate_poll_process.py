@@ -2757,6 +2757,23 @@ if args[0] == 'api':
 		print(json.dumps({'merged': True}))
 		sys.exit(0)
 
+	# Ruleset + combined-status reads for _pr_ruleset_required_check_blockers
+	# (fun-token-multi-chain#579). Served only when a test sets
+	# 'ruleset_required_contexts'; otherwise the legacy '{}' fallback applies.
+	m = re.search(r'/rules/branches/([^?]+)(\?.*)?$', path)
+	if m and 'ruleset_required_contexts' in store:
+		ctxs = store.get('ruleset_required_contexts') or []
+		body = [{'type': 'deletion'}]
+		if ctxs:
+			body.append({'type': 'required_status_checks', 'parameters': {'required_status_checks': [{'context': c} for c in ctxs]}})
+		print(json.dumps(body))
+		sys.exit(0)
+
+	m = re.search(r'/commits/([^/]+)/status(\?.*)?$', path)
+	if m and 'ruleset_required_contexts' in store:
+		print(json.dumps({'state': 'pending', 'statuses': store.get('commit_statuses', {}).get(m.group(1), [])}))
+		sys.exit(0)
+
 	m = re.search(r'/branches/(.+)$', path)
 	if m:
 		encoded_branch = m.group(1)
@@ -12027,6 +12044,79 @@ def test_final_merge_refusal_keeps_github_error_and_mergeable_state():
 	assert blocked, comments
 	assert "mergeable_state=`blocked`" in blocked[-1]
 	assert "Required status check coding-workflows/workflow-integrity is failing." in blocked[-1]
+
+
+def test_final_merge_defers_on_failing_ruleset_required_status_without_spending_budget():
+	# fun-token-multi-chain#579: GitHub reported the final PR blocked by a
+	# failing ruleset-required commit status. The poller must hold the merge,
+	# name the blocker, and keep the final-merge budget intact instead of
+	# spending three refused attempts and parking the project.
+	head = "7ca98c4747ea6d5b73c95c46501b8483cd037b89"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 354,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"headSha": head,
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_store_extra={
+			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
+			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "failure"}]},
+		},
+	)
+	assert result.get("merged_prs", []) == []
+	assert (
+		"[final-merge] PR #354 is blocked by ruleset-required check(s): "
+		"coding-workflows/workflow-integrity (failure). Will retry next poll."
+	) in result["stdout"]
+	assert "ORCH_MERGE_HEAD_BOUND pr=354" not in result["stdout"]
+	disk = result["state_on_disk"]
+	assert disk["final_merge_status"] == "pending"
+	assert int(disk.get("final_merge_attempt_count", 0) or 0) == 0
+
+
+def test_final_merge_proceeds_when_ruleset_required_status_passes():
+	head = "7ca98c4747ea6d5b73c95c46501b8483cd037b89"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 355,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"headSha": head,
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_store_extra={
+			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
+			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "success"}]},
+		},
+	)
+	assert 355 in result.get("merged_prs", [])
+	assert "blocked by ruleset-required check(s)" not in result["stdout"]
 
 
 def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge():
