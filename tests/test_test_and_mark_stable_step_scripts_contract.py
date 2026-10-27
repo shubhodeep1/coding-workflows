@@ -181,6 +181,140 @@ def test_expanded_bodies_parse_as_bash() -> None:
 		assert result.returncode == 0, (script, result.stderr)
 
 
+CAPACITY_MATCH = '*",ai:claude-capacity-wait,"*'
+CAPACITY_STATUS = 'echo "status=claude_capacity" >> "$GITHUB_OUTPUT"'
+CLARIFY_STEP = "Phase 1: Wait for clarify to complete"
+PLAN_STEP = "Phase 2: Wait for plan to complete"
+IMPLEMENT_STEP = "Phase 3b: Wait for PR creation (implement phase)"
+ALT_MODEL_STEP = "Wait for clarify→plan→implement (alt-model)"
+ORCHESTRATE_STEP = "Dispatch internal-orchestrate.yml with multi-issue project"
+
+
+def _all_steps(text: str) -> list[dict]:
+	"""Split every job's steps (issue #8217); same shape as _e2e_steps."""
+	chunks = re.split(r"\n(?=      - name: )", text)[1:]
+	steps = []
+	for chunk in chunks:
+		lines = chunk.split("\n")
+		name = lines[0][len("      - name: "):].strip()
+		if len(name) >= 2 and name[0] == name[-1] and name[0] in "\"'":
+			name = name[1:-1]
+		run_lines: list[str] = []
+		if "        run: |" in lines:
+			for line in lines[lines.index("        run: |") + 1:]:
+				if line and not line.startswith(" " * 10):
+					break
+				run_lines.append(line[10:])
+		run = "\n".join(run_lines).rstrip("\n") + "\n" if run_lines else ""
+		steps.append({"name": name, "text": chunk, "run": run})
+	return steps
+
+
+def _ordered(run: str, *needles: str) -> None:
+	positions = []
+	for needle in needles:
+		assert run.count(needle) >= 1, needle
+		positions.append(run.index(needle))
+	assert positions == sorted(positions), list(zip(needles, positions))
+
+
+def test_wait_loops_fail_fast_on_claude_capacity() -> None:
+	"""Issue #8217: a phase paused on Claude capacity fails the gate at once."""
+	steps = _all_steps(_raw())
+	clarify = _step(steps, CLARIFY_STEP)["run"]
+	_ordered(clarify, "grep -qE 'ai:planning|ai:awaiting-approval'", CAPACITY_MATCH, CAPACITY_STATUS, "Clarify phase stalled")
+	plan = _step(steps, PLAN_STEP)["run"]
+	_ordered(plan, "grep -q 'ai:implementing'", CAPACITY_MATCH, CAPACITY_STATUS, 'if [ "$PLAN_RUN_STATUS" = "completed" ]')
+	implement = _step(steps, IMPLEMENT_STEP)["run"]
+	_ordered(implement, 'if [ -n "$PR_NUMBER" ]; then', CAPACITY_MATCH, CAPACITY_STATUS, "status=implement_failed")
+	alt = _step(steps, ALT_MODEL_STEP)["run"]
+	_ordered(alt, CAPACITY_MATCH, CAPACITY_STATUS, 'body="/approved"', "grep -qE 'ai:done|")
+	for run in (clarify, plan, implement, alt):
+		assert "Claude pool at capacity (ai:claude-capacity-wait)" in run
+
+
+def test_orchestrate_dispatch_reports_claude_capacity() -> None:
+	run = _step(_all_steps(_raw()), ORCHESTRATE_STEP)["run"]
+	_ordered(
+		run,
+		"AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred",
+		'IN("OWNER","MEMBER","COLLABORATOR")',
+		"kind=capacity",
+		CAPACITY_STATUS,
+		"Could not locate tracking issue",
+	)
+	assert '[[ "${ORCH_RUN_ID}" =~ ^[0-9]+$ ]]' in run
+	assert '[[ "${CAP_TRACKERS}" =~ ^[0-9]+$ ]]' in run
+	capacity_part = run[run.index('CAP_EVIDENCE=""'):run.index("Could not locate tracking issue")]
+	assert "grep" not in capacity_part
+	assert "JOB_LOG}\"\n" not in capacity_part and "echo \"${JOB_LOG" not in capacity_part
+
+
+def test_capacity_edited_step_bodies_parse_as_bash() -> None:
+	bash = shutil.which("bash")
+	if bash is None:
+		raise unittest.SkipTest("bash is not installed")
+	steps = _all_steps(_raw())
+	for name in (CLARIFY_STEP, PLAN_STEP, IMPLEMENT_STEP, ALT_MODEL_STEP, ORCHESTRATE_STEP):
+		run = _step(steps, name)["run"]
+		result = subprocess.run([bash, "-n"], input=run, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, (name, result.stderr)
+
+
+def _run_alt_model_wait(tmp: Path, labels: str) -> tuple[int, str, str]:
+	bash = shutil.which("bash")
+	assert bash is not None
+	run = _step(_all_steps(_raw()), ALT_MODEL_STEP)["run"]
+	bindir = tmp / "bin"
+	bindir.mkdir()
+	gh_log = tmp / "gh.log"
+	stub = bindir / "gh"
+	stub.write_text(
+		"#!/usr/bin/env bash\n"
+		'case "$*" in\n'
+		'  *comments*) printf "%s\\n" "$*" >> "${GH_LOG}" ;;\n'
+		'  *) printf "%s\\n" "${STUB_LABELS}" ;;\n'
+		"esac\n",
+		encoding="utf-8",
+	)
+	stub.chmod(0o755)
+	output = tmp / "github_output"
+	output.write_text("", encoding="utf-8")
+	env = dict(os.environ)
+	env.update(
+		{
+			"PATH": f"{bindir}{os.pathsep}{env.get('PATH', '')}",
+			"GH_LOG": str(gh_log),
+			"STUB_LABELS": labels,
+			"GITHUB_OUTPUT": str(output),
+			"TEST_REPO": "o/r",
+			"ISSUE_NUMBER": "42",
+		}
+	)
+	result = subprocess.run([bash, "-c", run], env=env, capture_output=True, text=True, check=False, timeout=60)
+	posted = gh_log.read_text(encoding="utf-8") if gh_log.exists() else ""
+	return result.returncode, output.read_text(encoding="utf-8"), posted
+
+
+def test_alt_model_wait_stops_on_capacity_without_approving() -> None:
+	if shutil.which("bash") is None:
+		raise unittest.SkipTest("bash is not installed")
+	import tempfile
+
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, posted = _run_alt_model_wait(Path(tmp), "ai:awaiting-approval,ai:claude-capacity-wait")
+		assert rc == 1
+		assert "status=claude_capacity" in output
+		assert posted == ""
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, posted = _run_alt_model_wait(Path(tmp), "ai:claude-capacity-wait-x,ai:done")
+		assert rc == 0
+		assert "claude_capacity" not in output
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, output, _ = _run_alt_model_wait(Path(tmp), "ai:done")
+		assert rc == 0
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	skipped = 0

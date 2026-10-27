@@ -994,6 +994,13 @@ jobs:
               exit 0
             fi
 
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Clarify phase paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
             # Check for failure: look for error comments from bot
             LAST_BOT_COMMENT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=5&direction=desc" \
               --jq '[.[] | select(.user.login == "github-actions[bot]")] | .[0].body // ""' || echo "")
@@ -1214,6 +1221,13 @@ jobs:
               echo "run_id=${PLAN_RUN_ID}" >> "$GITHUB_OUTPUT"
               echo "status=auto_approved" >> "$GITHUB_OUTPUT"
               exit 0
+            fi
+
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Plan phase paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
             fi
 
             # Detect plan workflow failure (completed but no expected label)
@@ -1582,6 +1596,13 @@ jobs:
             # A failed label read returns "" and must not erase the last observation.
             if [ -n "$LABELS" ]; then
               IMPL_PREV_LABELS="$LABELS"
+            fi
+
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Implement phase paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
             fi
 
             # ── Adaptive signals: step name + commit count ──
@@ -4450,6 +4471,34 @@ jobs:
               sed 's/^/  /' "${TRACKING_ERR_FILE}" || true
             fi
             rm -f "${TRACKING_ERR_FILE}"
+            # A decomposer paused on Claude capacity (#7370) creates no tracking
+            # issue: report it as claude_capacity instead (#8217). Logs are only matched, never printed.
+            CAP_EVIDENCE=""
+            ORCH_RUN_ID=$(sed -n 's/^run_id=//p' "$GITHUB_OUTPUT" | tail -n 1)
+            if [[ "${ORCH_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              for JOB_ID in $(gh api "repos/${TEST_REPO}/actions/runs/${ORCH_RUN_ID}/jobs?per_page=100" --jq '.jobs[].id' 2>/dev/null || true); do
+                [[ "${JOB_ID}" =~ ^[0-9]+$ ]] || continue
+                JOB_LOG=$(gh api "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null || true)
+                if [[ "${JOB_LOG}" == *"AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred"* ]]; then
+                  CAP_EVIDENCE="run_log"
+                  break
+                fi
+              done
+            else
+              ORCH_RUN_ID=""
+            fi
+            if [ -z "${CAP_EVIDENCE}" ]; then
+              CAP_TRACKERS=$(gh api "repos/${TEST_REPO}/issues?state=open&labels=ai:provider-outage&per_page=20" \
+                --jq '[.[] | select(.pull_request == null) | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR")) | select((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))] | length' 2>/dev/null || echo "0")
+              if [[ "${CAP_TRACKERS}" =~ ^[0-9]+$ ]] && [ "${CAP_TRACKERS}" -gt 0 ]; then
+                CAP_EVIDENCE="capacity_tracker"
+              fi
+            fi
+            if [ -n "${CAP_EVIDENCE}" ]; then
+              echo "::error::Orchestrate decomposer paused — Claude pool at capacity (evidence=${CAP_EVIDENCE}, run=${ORCH_RUN_ID:-unknown}); no tracking issue is created until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID} after 90s polling (label=ai:orchestrator-tracking, since=${DISPATCH_START_ISO}, body must contain ${GITHUB_RUN_ID})"
             exit 1
           fi
@@ -4998,6 +5047,12 @@ jobs:
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
             echo "  labels: ${LABELS:-none}"
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Alt-model run paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             # Auto-approve the plan when the issue lands in awaiting-approval.
             if echo "${LABELS}" | grep -q 'ai:awaiting-approval'; then
               gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
