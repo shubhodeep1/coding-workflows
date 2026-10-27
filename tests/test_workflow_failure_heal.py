@@ -2242,21 +2242,23 @@ def test_intake_workflow_run_on_promote_candidate_targets_the_default_branch(def
 	assert f"target_branch={expected}" in result.stdout and "target_branch_source=pipeline_mirror_branch" in result.stdout
 
 
-def test_intake_consumer_app_defect_on_promote_candidate_targets_the_default_branch() -> None:
+@pytest.mark.parametrize(("default_branch", "expected"), (("main", "main"), ("develop", "develop"), ("", "main")))
+def test_intake_consumer_app_defect_on_promote_candidate_targets_the_default_branch(default_branch: str, expected: str) -> None:
 	"""The consumer-app-defect arm opens a heal issue in this repo for a release
 	run too; it must not target the pipeline-only promote-candidate mirror."""
 	run_payload = heal.build_workflow_run_payload(
 		repo=SELF_REPO,
 		workflow_run={"id": 501, "name": "Test & Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "promote-candidate", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/501", "display_title": "Test & Mark Stable Release"},
 	)
-	state = _intake_state(branches=["stable", "main", "promote-candidate"])
-	result, state_after, _ = _run_intake(run_payload, state, diagnosis=DIAG_CONSUMER_APP_SCOPE, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+	state = _intake_state(branches=["stable", "main", "develop", "promote-candidate"])
+	result, state_after, _ = _run_intake(run_payload, state, diagnosis=DIAG_CONSUMER_APP_SCOPE, extra_env={"WORKFLOW_HEAL_DEFAULT_BRANCH": default_branch})
 	assert result.returncode == 0, result.stderr + result.stdout
 	issues = _composed_issues(state_after)
 	assert issues, result.stdout
 	match = TARGET_BRANCH_RE.search(issues[0]["body"])
-	assert match and (match.group(1) or match.group(2)) == "main"
-	assert "target_branch_retarget from=promote-candidate to=main reason=pipeline_mirror_branch" in result.stdout
+	assert match and (match.group(1) or match.group(2)) == expected
+	assert f"target_branch_retarget from=promote-candidate to={expected} reason=pipeline_mirror_branch" in result.stdout
+	assert f"target_branch={expected} target_branch_source=pipeline_mirror_branch" in result.stdout
 
 
 def _gate_run_payload() -> dict:
