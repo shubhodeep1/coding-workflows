@@ -650,6 +650,19 @@ class ValidationRefreshRunner:
 			print(f"VALIDATION_DISCOVERY_SKIPPED_DISABLED repository={repository}")
 			return
 
+		committed_manifest_text = self._read_committed_manifest_yaml(repo_dir)
+
+		# Close obsolete discovery PRs before the dedup and budget gates, so a
+		# seed PR left open after a manifest landed is closed on the next cycle
+		# instead of after the dedup window (btc_sweeper#196 conflicted with the
+		# seed merged by #235 and blocked review/autofix on a host-only path).
+		remaining_discovery_prs = self._sweep_superseded_discovery_prs(
+			result=result,
+			repository=repository,
+			default_branch=default_branch,
+			committed_manifest_text=committed_manifest_text,
+		)
+
 		# Dedup runs before the budget gate: a repo with a recent successful
 		# discovery is `skipped_dedup` whether or not budget remains, so late repos
 		# no longer report `skipped_budget` for a skip they would have had anyway.
@@ -683,7 +696,6 @@ class ValidationRefreshRunner:
 				return
 
 		consumer_head_sha = self._read_default_branch_head_sha(repo_dir)
-		committed_manifest_text = self._read_committed_manifest_yaml(repo_dir)
 
 		print(
 			"VALIDATION_DISCOVERY_STARTED "
@@ -840,6 +852,18 @@ class ValidationRefreshRunner:
 								"VALIDATION_DISCOVERY_PR_OPENED "
 								f"repository={repository} pr_url={pr_url} kind={'seed' if is_seed else 'disagree'}"
 							)
+						# The opened or reused PR replaces every older discovery
+						# PR on this consumer. Reuses the earlier listing (§15).
+						if remaining_discovery_prs:
+							self._sweep_superseded_discovery_prs(
+								result=result,
+								repository=repository,
+								default_branch=default_branch,
+								committed_manifest_text=committed_manifest_text,
+								open_prs=remaining_discovery_prs,
+								replacement_branch=pr_branch,
+								replacement_url=pr_url,
+							)
 
 		# Record outcome on the ai-memory branch (fail-open). Failed and dry-run
 		# entries are kept for observability; the dedup gate counts only
@@ -857,6 +881,87 @@ class ValidationRefreshRunner:
 			codex_attempts_used=codex_attempts_used or None,
 			failure_reason=failure_reason,
 		)
+
+	def _sweep_superseded_discovery_prs(
+		self,
+		*,
+		result: RefreshResult,
+		repository: str,
+		default_branch: str,
+		committed_manifest_text: str | None,
+		open_prs: "list[discovery_module.OpenDiscoveryPr] | None" = None,
+		replacement_branch: str | None = None,
+		replacement_url: str | None = None,
+	) -> "list[discovery_module.OpenDiscoveryPr] | None":
+		"""Close obsolete discovery PRs on one consumer; never blocks discovery.
+
+		With `open_prs=None` it lists them first (one `gh pr list`); a caller
+		that already holds the list passes it in. Returns the discovery PRs
+		still open afterwards, or None when the sweep is off or the listing
+		failed (the caller then skips its second pass).
+		"""
+
+		ctx = self.discovery_ctx
+		if ctx is None or not ctx.close_superseded:
+			return None
+		try:
+			if open_prs is None:
+				open_prs, list_error = discovery_module.list_open_discovery_prs(
+					consumer_slug=repository,
+					base_branch=default_branch,
+					pr_branch_prefix=ctx.pr_branch_prefix,
+					executor=self.executor,
+				)
+				if list_error:
+					result.discovery_diagnostics.append(f"superseded_sweep_list_failed: {list_error}")
+					print(
+						"VALIDATION_DISCOVERY_SUPERSEDED "
+						f"repository={repository} outcome=list_failed "
+						f"detail={json.dumps(_compact_log_value(list_error))}"
+					)
+					return None
+			outcomes = discovery_module.close_superseded_discovery_prs(
+				consumer_slug=repository,
+				base_branch=default_branch,
+				pr_branch_prefix=ctx.pr_branch_prefix,
+				open_prs=open_prs,
+				committed_type=discovery_module.manifest_type_from_yaml(committed_manifest_text),
+				manifest_committed=committed_manifest_text is not None,
+				replacement_branch=replacement_branch,
+				replacement_url=replacement_url,
+				dry_run=ctx.dry_run,
+				executor=self.executor,
+			)
+		except Exception as exc:  # fail open: the sweep must never block discovery (Q4:A)
+			result.discovery_diagnostics.append(f"superseded_sweep_error: {exc!r}")
+			print(
+				"VALIDATION_DISCOVERY_SUPERSEDED "
+				f"repository={repository} outcome=error "
+				f"detail={json.dumps(_compact_log_value(repr(exc)))}"
+			)
+			return None
+
+		closed_numbers: set[int] = set()
+		for outcome in outcomes:
+			parts = [
+				"VALIDATION_DISCOVERY_SUPERSEDED",
+				f"repository={repository}",
+				f"pr={outcome.number}",
+				f"branch={outcome.head_branch}",
+				f"reason={outcome.reason}",
+				f"outcome={outcome.outcome}",
+			]
+			if replacement_url:
+				parts.append(f"replacement={json.dumps(replacement_url)}")
+			if outcome.detail:
+				parts.append(f"detail={json.dumps(_compact_log_value(outcome.detail))}")
+			print(" ".join(parts))
+			result.discovery_diagnostics.append(
+				f"superseded_pr: #{outcome.number} reason={outcome.reason} outcome={outcome.outcome}"
+			)
+			if outcome.outcome == "closed":
+				closed_numbers.add(outcome.number)
+		return [pr for pr in open_prs if pr.number not in closed_numbers]
 
 	def _read_default_branch_head_sha(self, repo_dir: Path) -> str | None:
 		try:
@@ -1094,6 +1199,7 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 	- VALIDATION_DISCOVERY_PR_LABEL           (default: automation:validate-bootstrap)
 	- VALIDATION_DISCOVERY_DRY_RUN            (default: false)
 	- VALIDATION_DISCOVERY_BUDGET_SECS        (default: 2100)
+	- VALIDATION_DISCOVERY_CLOSE_SUPERSEDED   (default: true)
 	"""
 
 	return discovery_module.DiscoveryRunContext(
@@ -1115,6 +1221,7 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 		discovery_budget_secs=_env_int("VALIDATION_DISCOVERY_BUDGET_SECS", 2100, minimum=-sys.maxsize),
 		enabled=_env_bool("VALIDATION_DISCOVERY_ENABLED", True),
 		dry_run=_env_bool("VALIDATION_DISCOVERY_DRY_RUN", False),
+		close_superseded=_env_bool("VALIDATION_DISCOVERY_CLOSE_SUPERSEDED", True),
 	)
 
 
