@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:4496-4498 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The capacity tracker check uses `contains(\"<!-- ai:provider-outage:v1 kind=capacity \")`, a strict string match that may be brittle if the comment format deviates slightly.\n  WHY: The reviewer calls it an acceptable heuristic consistent with other tracker lookups, but a potential point of failure. The source gave no explicit severity, so low is assigned.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, an E2E job or `resolve-version` preflight step\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: No hunk adds a preflight step, the capacity-tracker query appears only in the orchestrate missing-tracking-issue handler after the 90-second tracking-issue search, the other capacity checks run inside the phase wait loops after the live phases have started. Both reviewers rate it NIT because the issue marks it optional.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\nExpected change site: `.github/workflows/test-and-mark-stable.yml`, an E2E job or `resolve-version`.\nEvidence of absence: No hunk adds a preflight step. The capacity-tracker query appears only in the orchestrate missing-tracking-issue handler. The other capacity checks run inside the wait loops after the live phases have started. The issue marks this item optional, and the in-loop checks already fail the gate within one poll.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/test-and-mark-stable.yml:4496-4498 | confidence=2\n  PROBLEM: The capacity tracker label check uses `contains(\"<!-- ai:provider-outage:v1 kind=capacity \")`.\n  WHY: The check might be brittle if the comment format deviates slightly. It is acceptable as a heuristic and consistent with other tracker lookups, but remains a potential point of failure.\n\nTASK_GAP:\nRequirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\nExpected change site: .github/workflows/test-and-mark-stable.yml, an E2E job or `resolve-version` preflight\nEvidence of absence: The PR adds no preflight check. The capacity-tracker query is only in the orchestrate missing-tracking-issue handler, after dispatch and the 90-second tracking-issue search. The other capacity checks run inside phase wait loops after the live phases have started. The linked issue explicitly states this is \"Optional but recommended\".\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f3e7fbc2364b7b6404f2acd8accd5f1e4367176a55422c0477b3c33796570052",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8221,
+    "run_id": "40516587657",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40516587657",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027142016_a8a89d499a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8221,
+    "run_id": "40516587657"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T14:20:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
