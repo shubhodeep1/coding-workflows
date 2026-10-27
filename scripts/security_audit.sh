@@ -1599,52 +1599,14 @@ security_audit_claude_fallback()
 	echo "SECURITY_AUDIT_CLAUDE_FALLBACK reason=${fallback_reason}"
 }
 
-# Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
-# post-filter reads), 1 after logging a fallback that may run codex, 2
-# after logging a refused fallback (AI_ENGINE_FALLBACK_EXIT=76): the audit
-# then fails closed instead of running codex, or 3 on a Claude capacity wait
-# (AI_ENGINE_FALLBACK_EXIT=80, issue #7370): the audit exits 80 without codex.
-security_audit_try_claude()
+# security_audit_check_claude_reply <reply_file>: the reply check described in
+# security_audit_try_claude. Prints the verdict (ok, extracted ..., or a
+# fallback reason) and returns 0 with the accepted array in CODEX_OUTPUT_FILE,
+# 1 otherwise.
+security_audit_check_claude_reply()
 {
-	local claude_rc=0 claude_include="" claude_check_result="" claude_check_reason=""
-	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
-		security_audit_claude_fallback all_gated
-		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 80 ] && return 3
-		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
-		return 1
-	fi
-	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
-		claude_include="${OVERSIZED_EXPORT_DIR}"
-	fi
-	AI_ENGINE_LAST_FALLBACK_REASON=""
-	AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" AI_ENGINE_READ_ONLY="true" \
-		AI_ENGINE_INCLUDE_PATHS="${claude_include}" \
-		claude_run SECURITY_AUDIT "${RENDERED_PROMPT_FILE}" "${CLAUDE_AUDIT_OUTPUT_FILE}" "${PWD}" || claude_rc=$?
-	case "${claude_rc}" in
-		0) ;;
-		# claude_run already logged AI_ENGINE_FALLBACK with its reason; 76
-		# also logged AI_ENGINE_FALLBACK_REFUSED.
-		75) security_audit_claude_fallback claude_run; return 1 ;;
-		76) security_audit_claude_fallback claude_run; return 2 ;;
-		80) security_audit_claude_fallback claude_run; return 3 ;;
-		124) security_audit_claude_fallback timeout ;;
-		*) security_audit_claude_fallback "crashed_rc_${claude_rc}" ;;
-	esac
-	if [ "${claude_rc}" -ne 0 ]; then
-		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
-		return 1
-	fi
-	# Same top-level contract the post-filter enforces on codex output: a JSON
-	# array. A reply that is one JSON array, or one outer ```json fence around
-	# it, is used as is. Otherwise the last top-level JSON array in the reply
-	# whose items are all objects with a finding_id is used (orchestrator run
-	# 38113094454 and others fell back to codex with malformed_output, so a
-	# sentence around the array cost the Claude result). An empty array
-	# counts there only when nothing but a closing fence follows it, so a
-	# "[]" inside prose or a cut-off reply is never read as a clean audit.
-	# The post-filter's field checks apply to whatever is accepted. Anything
-	# else falls back.
-	if ! claude_check_result="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
+	local claude_check_result=""
+	if ! claude_check_result="$(python3 - "${1:?reply file required}" "${CODEX_OUTPUT_FILE}" <<'PY'
 import json
 import re
 import sys
@@ -1755,11 +1717,166 @@ value, start, end = candidate
 accept(value, f"extracted items={len(value)} leading_chars={start} trailing_chars={len(text) - end}")
 PY
 )"; then
-		claude_check_reason="${claude_check_result:-malformed_output}"
-		security_audit_claude_fallback "${claude_check_reason}"
-		security_audit_log_rejected_claude_reply "${claude_check_reason}"
+		printf '%s\n' "${claude_check_result:-malformed_output}"
+		return 1
+	fi
+	printf '%s\n' "${claude_check_result}"
+}
+
+# security_audit_repair_claude_reply <include_paths>: one repair turn for a
+# reply rejected as malformed_output, that is text around the JSON array (run
+# 40333816067 replied "[]" and then a summary despite the prompt and §16 of
+# unattended_system_instructions.md). It resumes the audit's own Claude
+# session with a request for the array alone, so the answer comes from the
+# audit already done, and checks the new reply with the same strict check.
+# The session id comes from the successful run's transcript, and the repair
+# runs only when that session is in the job's session store: claude_run starts
+# a new session for an id it cannot find, and a new session that never
+# audited anything could answer "[]". Returns 0 with the accepted array in
+# CODEX_OUTPUT_FILE and the check verdict in security_audit_repair_verdict;
+# otherwise returns 1 and the caller falls back as malformed_output, as before,
+# or 2 when claude_run itself fell back (75, 76, 80) and the caller records
+# that reason (AI_ENGINE_LAST_FALLBACK_REASON) instead. A repair claude_run that
+# fails writes no fallback record (AI_ENGINE_FALLBACK_RECORDS_FILE=/dev/null):
+# the caller's malformed_output fallback is the one the report step counts.
+# Log lines go to stdout as SECURITY_AUDIT_CLAUDE_REPAIR outcome= reason=.
+security_audit_repair_claude_reply()
+{
+	local repair_include="${1:-}" repair_session_id="" repair_rc=0 repair_check_result=""
+	security_audit_repair_verdict=""
+	local repair_prompt_file="${SECURITY_AUDIT_RUNTIME_DIR}/claude-repair-prompt.txt"
+	local repair_output_file="${SECURITY_AUDIT_RUNTIME_DIR}/claude-repair-output.txt"
+	repair_session_id="$(python3 - "${AI_ENGINE_LAST_RUN_DIR:-}/successful-transcript.jsonl" <<'PY' 2>/dev/null || true
+import json
+import re
+import sys
+
+try:
+	with open(sys.argv[1], encoding="utf-8", errors="replace") as handle:
+		for line in handle:
+			try:
+				event = json.loads(line)
+			except ValueError:
+				continue
+			if isinstance(event, dict) and event.get("type") == "system" and event.get("subtype") == "init":
+				session_id = event.get("session_id")
+				if isinstance(session_id, str) and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", session_id):
+					print(session_id)
+				break
+except OSError:
+	pass
+PY
+)"
+	if [ -z "${repair_session_id}" ]; then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=skipped reason=no_session_id"
+		return 1
+	fi
+	if ! compgen -G "$(ai_engine_claude_home)/projects/*/${repair_session_id}.jsonl" >/dev/null; then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=skipped reason=session_not_stored"
+		return 1
+	fi
+	if ! cat > "${repair_prompt_file}" <<'REPAIR'
+Your last reply could not be used: the script that reads it needs one JSON array and nothing else, and your reply had text before or after the array.
+
+Reply again with only that JSON array. Put no words, headings, summary or code fence before or after it. Include every finding your audit supports, each with exactly the fields the output contract lists. If your audit found no finding, reply with [] alone. Do not start a new audit.
+
+If your audit did not finish, or did not cover every file in scope, do not reply []: say so in plain words instead, and the audit will be treated as failed.
+REPAIR
+	then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=skipped reason=prompt_write_failed"
+		return 1
+	fi
+	rm -f -- "${repair_output_file}"
+	AI_ENGINE_FALLBACK_RECORDS_FILE=/dev/null \
+		AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" AI_ENGINE_READ_ONLY="true" \
+		AI_ENGINE_INCLUDE_PATHS="${repair_include}" \
+		claude_run SECURITY_AUDIT "${repair_prompt_file}" "${repair_output_file}" "${PWD}" "${repair_session_id}" || repair_rc=$?
+	if [ "${repair_rc}" -ne 0 ]; then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=failed reason=claude_run_rc_${repair_rc}"
+		# 75, 76 and 80 are claude_run's own fallback results (a capacity wait,
+		# a refused or a codex fallback): return 2 so the caller records the
+		# engine's reason instead of malformed_output (issue #7370).
+		case "${repair_rc}" in
+			75|76|80) return 2 ;;
+		esac
+		return 1
+	fi
+	if ! repair_check_result="$(security_audit_check_claude_reply "${repair_output_file}")"; then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=rejected reason=${repair_check_result:-malformed_output}"
+		security_audit_log_rejected_claude_reply "${repair_check_result:-malformed_output}" "${repair_output_file}" ""
+		return 1
+	fi
+	echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=accepted reason=${repair_check_result%% *}"
+	security_audit_repair_verdict="${repair_check_result}"
+}
+
+# Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
+# post-filter reads), 1 after logging a fallback that may run codex, 2
+# after logging a refused fallback (AI_ENGINE_FALLBACK_EXIT=76): the audit
+# then fails closed instead of running codex, or 3 on a Claude capacity wait
+# (AI_ENGINE_FALLBACK_EXIT=80, issue #7370): the audit exits 80 without codex.
+security_audit_try_claude()
+{
+	local claude_rc=0 claude_include="" claude_check_result="" claude_check_reason="" claude_repair_rc=1
+	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
+		security_audit_claude_fallback all_gated
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 80 ] && return 3
 		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
 		return 1
+	fi
+	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
+		claude_include="${OVERSIZED_EXPORT_DIR}"
+	fi
+	AI_ENGINE_LAST_FALLBACK_REASON=""
+	AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" AI_ENGINE_READ_ONLY="true" \
+		AI_ENGINE_INCLUDE_PATHS="${claude_include}" \
+		claude_run SECURITY_AUDIT "${RENDERED_PROMPT_FILE}" "${CLAUDE_AUDIT_OUTPUT_FILE}" "${PWD}" || claude_rc=$?
+	case "${claude_rc}" in
+		0) ;;
+		# claude_run already logged AI_ENGINE_FALLBACK with its reason; 76
+		# also logged AI_ENGINE_FALLBACK_REFUSED.
+		75) security_audit_claude_fallback claude_run; return 1 ;;
+		76) security_audit_claude_fallback claude_run; return 2 ;;
+		80) security_audit_claude_fallback claude_run; return 3 ;;
+		124) security_audit_claude_fallback timeout ;;
+		*) security_audit_claude_fallback "crashed_rc_${claude_rc}" ;;
+	esac
+	if [ "${claude_rc}" -ne 0 ]; then
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
+		return 1
+	fi
+	# Same top-level contract the post-filter enforces on codex output: a JSON
+	# array. A reply that is one JSON array, or one outer ```json fence around
+	# it, is used as is. Otherwise the last top-level JSON array in the reply
+	# whose items are all objects with a finding_id is used (orchestrator run
+	# 38113094454 and others fell back to codex with malformed_output, so a
+	# sentence around the array cost the Claude result). An empty array
+	# counts there only when nothing but a closing fence follows it, so a
+	# "[]" inside prose or a cut-off reply is never read as a clean audit.
+	# The post-filter's field checks apply to whatever is accepted. Anything
+	# else falls back.
+	if ! claude_check_result="$(security_audit_check_claude_reply "${CLAUDE_AUDIT_OUTPUT_FILE}")"; then
+		claude_check_reason="${claude_check_result:-malformed_output}"
+		security_audit_log_rejected_claude_reply "${claude_check_reason}"
+		# Text around the array gets one repair turn before the reply falls back.
+		if [ "${claude_check_reason}" = "malformed_output" ]; then
+			claude_repair_rc=0
+			security_audit_repair_claude_reply "${claude_include}" || claude_repair_rc=$?
+		fi
+		if [ "${claude_repair_rc}" -eq 0 ]; then
+			claude_check_result="${security_audit_repair_verdict}"
+		else
+			if [ "${claude_repair_rc}" -eq 2 ]; then
+				# The repair's claude_run fell back on its own (a capacity wait,
+				# for example): record that reason, so a wait still exits 80.
+				security_audit_claude_fallback "${AI_ENGINE_LAST_FALLBACK_REASON:-${claude_check_reason}}"
+			else
+				security_audit_claude_fallback "${claude_check_reason}"
+			fi
+			[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 80 ] && return 3
+			[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
+			return 1
+		fi
 	fi
 	case "${claude_check_result}" in
 		extracted\ *) echo "SECURITY_AUDIT_CLAUDE_EXTRACTED ${claude_check_result#extracted }" ;;
@@ -1772,9 +1889,12 @@ PY
 # security_audit_sanitize_log_value), so the next failure shows its shape.
 # SECURITY_AUDIT_CLAUDE_REJECTED_OUT (default unset) keeps the first 64 KiB of
 # the reply there. Diagnostics only: any error here is ignored.
+# Usage: security_audit_log_rejected_claude_reply <reason> [reply_file]
+# [kept_path]; the reply defaults to CLAUDE_AUDIT_OUTPUT_FILE and the kept
+# path to SECURITY_AUDIT_CLAUDE_REJECTED_OUT (an empty kept_path keeps none).
 security_audit_log_rejected_claude_reply()
 {
-	python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${1:-unknown}" "${SECURITY_AUDIT_CLAUDE_REJECTED_OUT:-}" <<'PY' || true
+	python3 - "${2:-${CLAUDE_AUDIT_OUTPUT_FILE}}" "${1:-unknown}" "${3-${SECURITY_AUDIT_CLAUDE_REJECTED_OUT:-}}" <<'PY' || true
 import re
 import sys
 from pathlib import Path
