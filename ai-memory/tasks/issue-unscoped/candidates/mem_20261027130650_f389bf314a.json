@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, in an E2E job or `resolve-version`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: No diff hunk adds a preflight step before the live phases; capacity checks are only inside the wait loops, and the tracker lookup runs only after the orchestrate step's tracking-issue search fails. The issue marks it optional (severity NIT).\n- requirement: Issue item 1 asks for the clarify loop \"and the matching plan and implement wait loops\" to fail fast; the root-cause text says the gate's E2E wait loops were all written for the old codex-fallback behaviour.\n  expected_change_site: the Phase 4 review wait in `.github/workflows/test-and-mark-stable.yml`\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: No hunk touches the Phase 4 review wait. The issue's fix and affected-files lists do not name it, and the changelog discloses this scope boundary (severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\nExpected change site: `.github/workflows/test-and-mark-stable.yml`, in an E2E job or `resolve-version`.\nEvidence of absence: No diff hunk adds a preflight step. The capacity checks are in the wait loops, and the tracker lookup runs only after the orchestrate step's tracking-issue search fails. The issue marks this item optional, and the in-loop checks already fail the gate within one poll (or after the orchestrate step's 90-second search).\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n\nTASK_GAP:\nRequirement: Issue item 1 asks for the clarify loop \"and the matching plan and implement wait loops\" to fail fast. The issue's root-cause text says the gate's E2E wait loops were all written for the old codex-fallback behaviour.\nExpected change site: the Phase 4 review wait in `.github/workflows/test-and-mark-stable.yml`.\nEvidence of absence: No hunk touches the Phase 4 review wait. The issue's fix list and affected-files list name only the clarify, plan, implement, alt-model and orchestrate-decompose waits. The changelog says the Phase 4 review wait keeps its generic timeout error. This is a disclosed scope boundary, not a missed deliverable.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Optional but recommended: add one preflight step in the E2E jobs (or resolve-version). If a trusted, open ai:provider-outage tracker with the kind=capacity marker exists, stop the gate at once with a claude_capacity notice rather than starting the live phases.\"\nExpected change site: .github/workflows/test-and-mark-stable.yml, in an E2E job or resolve-version.\nEvidence of absence: The PR adds capacity checks inside phase wait loops and a tracker fallback after orchestrate fails to locate its tracking issue, but adds no preflight that checks for an open capacity tracker before the live phases start. The issue marks this as optional and recommended.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\nExpected change site: `.github/workflows/test-and-mark-stable.yml`, an E2E job or `resolve-version`, before live phases start.\nEvidence of absence: The PR adds capacity checks inside phase wait loops and checks for a capacity tracker only after the orchestrate step fails to locate its tracking issue. It adds no preflight check before live phases start.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Optional but recommended: add one preflight step in the E2E jobs (or `resolve-version`). If a trusted, open `ai:provider-outage` tracker with the `kind=capacity` marker exists, stop the gate at once with a `claude_capacity` notice rather than starting the live phases.\"\nExpected change site: .github/workflows/test-and-mark-stable.yml, in an E2E job setup or `resolve-version`.\nEvidence of absence: No hunk in the PR diff adds a preflight tracker check before the live phases; the only tracker lookup is the post-failure fallback inside the orchestrate dispatch step (lines ~4471-4514), which runs only after the tracking-issue search already failed.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1a000aba60e531fb89870defe5347011118b34bc76283eb23f1ac99df2bad04f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8221,
+    "run_id": "40506570073",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40506570073",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027130650_f389bf314a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8221,
+    "run_id": "40506570073"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T13:06:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
