@@ -25,6 +25,14 @@ def build_parser() -> argparse.ArgumentParser:
 		default="analysis/validation-selftest-status.json",
 		help="Path to the committed status JSON artifact.",
 	)
+	parser.add_argument(
+		"--previous-status-path",
+		default=None,
+		help=(
+			"Optional path to the previous status JSON (the newest open status pull request's copy). "
+			"When absent, missing or invalid, the previous status is read from --status-path."
+		),
+	)
 	return parser
 
 
@@ -100,6 +108,26 @@ def _load_previous_status(status_path: Path) -> dict[str, Any]:
 	}
 
 
+def _resolve_previous_status(previous_status_path: str | None, status_path: Path) -> tuple[dict[str, Any], str]:
+	"""Read the previous status from the open status PR's copy, else from --status-path.
+
+	While a status pull request is open, the default branch still holds the
+	streak from before it, so the newest open PR's copy wins when it is
+	readable. Any problem with that copy falls back to --status-path (#8229).
+	"""
+	if previous_status_path:
+		previous_path = Path(previous_status_path)
+		if previous_path.is_file():
+			try:
+				return _load_previous_status(previous_path), "open_pr"
+			except ValueError as exc:
+				print(
+					f"validation-selftest-status: warning: ignoring previous status {previous_path.as_posix()}: {exc}",
+					file=sys.stderr,
+				)
+	return _load_previous_status(status_path), "status_path"
+
+
 def _build_next_status(previous_status: dict[str, Any], latest_run: dict[str, Any]) -> dict[str, Any]:
 	previous_latest = previous_status.get("latest_run", {})
 	if not isinstance(previous_latest, dict):
@@ -127,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
 	status_path = Path(args.status_path)
 	try:
 		summary = _read_json(summary_path, "summary")
-		previous_status = _load_previous_status(status_path)
+		previous_status, previous_source = _resolve_previous_status(args.previous_status_path, status_path)
 		latest_run = _build_latest_run(summary)
 		next_status = _build_next_status(previous_status, latest_run)
 	except ValueError as exc:
@@ -140,7 +168,8 @@ def main(argv: list[str] | None = None) -> int:
 		"validation-selftest-status: "
 		f"overall_status={next_status['latest_run']['overall_status']} "
 		f"consecutive_green_runs={next_status['consecutive_green_runs']} "
-		f"status_path={status_path.as_posix()}"
+		f"status_path={status_path.as_posix()} "
+		f"previous_source={previous_source}"
 	)
 	return 0
 
