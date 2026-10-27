@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_refresh_runner.py:979-1042 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: `_discovery_prs_at_or_before_head` has no top-level fail-open guard, unlike sibling `_sweep_superseded_discovery_prs`, so an unexpected non-`CommandFailure` exception aborts `_dispatch_discovery` and skips the post-open sweep.\n  WHY: An unhandled exception leaves older discovery PRs open. Severity disagreement: gemini rated MAJOR, minimax rated NIT; the highest is used.\n- tests/test_validation_refresh_runner.py:1750-1816 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `test_discovery_prs_at_or_before_head_keeps_newer_and_unresolvable_prs` asserts the diagnostic only for PR #300 and not for PR #301 (the regex-mismatch path).\n  WHY: A regression that drops the diagnostic on the regex-mismatch path would still pass the test.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The documentation for the log prefix `VALIDATION_DISCOVERY_SUPERSEDED` in `agents.d/8228-validation-discovery-superseded-log.md` must accurately reflect the structure logged by `scripts/validation_refresh_runner.py`.\n  expected_change_site: agents.d/8228-validation-discovery-superseded-log.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The doc defines only the `reason=` and `outcome=` fields, but `scripts/validation_refresh_runner.py` (lines 940-945) optionally logs `replacement=` and `detail=`, which the registry does not document.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_refresh_runner.py:997-1036 | severity=MAJOR | confidence=3\n  PROBLEM: The function `_discovery_prs_at_or_before_head` lacks robust error handling for its git commands and potential exceptions, unlike `_sweep_superseded_discovery_prs` which handles errors to fail open.\n  WHY: If `self.executor.run` raises an unexpected exception (other than `CommandFailure`) while running `git merge-base`, the entire discovery pipeline for the current consumer repo aborts, because this function is called outside the safe try-except block used in `_sweep_superseded_discovery_prs`.\n- TASK_GAP:\n  Requirement: The documentation for the log prefix `VALIDATION_DISCOVERY_SUPERSEDED` in `agents.d/8228-validation-discovery-superseded-log.md` must accurately reflect the structure logged by `scripts/validation_refresh_runner.py`.\n  Expected change site: agents.d/8228-validation-discovery-superseded-log.md\n  Evidence of absence: The documentation in `agents.d/8228-validation-discovery-superseded-log.md` only defines the `reason=` and `outcome=` fields, but `scripts/validation_refresh_runner.py` (lines 940-945) optionally logs additional fields `replacement=` and `detail=`, which are missing from the registry documentation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validation_refresh_runner.py:979-1042 | severity=NIT | confidence=3\n  PROBLEM: The function catches `CommandFailure` from the local `git merge-base --is-ancestor` call but has no top-level try/except like its fail-open sibling `_sweep_superseded_discovery_prs` (scripts/validation_refresh_runner.py:909-957). An unexpected exception from `print(...)`, `result.discovery_diagnostics.append(...)`, the regex call, or a non-`CommandFailure` error from `self.executor.run(...)` propagates out of `_dispatch_discovery` and skips the post-open sweep.\n  WHY: A single unicode/IO glitch or an executor error outside the `CommandFailure` contract (e.g. `TimeoutError`) would crash the discovery dispatch and leave older discovery PRs open.\n- tests/test_validation_refresh_runner.py:1750-1816 | severity=NIT | confidence=3\n  PROBLEM: The test asserts the diagnostic for PR #300 (older-SHA case) but not for PR #301 (the non-hex `--upload-pack=x` branch), although the implementation appends a diagnostic for every PR whose `is_older` is False.\n  WHY: A regression that removes the diagnostic append on the regex-mismatch path would still pass this test, leaving operators without a recorded line.\n- HARDENING_SUGGESTION: scripts/validation_refresh_runner.py `_discovery_prs_at_or_before_head` (around 989-1042): wrap the per-PR body in try/except Exception, append a diagnostic, print a `VALIDATION_DISCOVERY_SUPERSEDED ... outcome=error` line and `continue`, matching the sibling pattern (~6 lines). HARDENING_RISK_SCORE: 2\n- HARDENING_SUGGESTION: tests/test_validation_refresh_runner.py:1750-1816: add `assert \"superseded_pr: #301 reason=superseded_by_newer_pr outcome=kept_not_older\" in result.discovery_diagnostics` (~1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- HARDENING_SUGGESTION: scripts/validation_refresh_runner.py `_discovery_prs_at_or_before_head` (lines 988-1044), call site 865-876: unlike sibling `_sweep_superseded_discovery_prs`, this helper has no top-level guard, so an unforeseen exception would abort `_dispatch_discovery` before the memory append. No concrete trigger exists today since `run()` raises only `CommandFailure`. Suggested fix: wrap the loop body in try/except Exception, append a `superseded_prs_ancestor_check_error` diagnostic, and return the PRs resolved so far (~6 lines). HARDENING_RISK_SCORE: 1\n- Reviewer reported NONE in all categories, including TASK COMPLETENESS / INTENT GAPS, after verifying `CommandExecutor.run` raises only `CommandFailure`, the `_DISCOVERY_BRANCH_SHA_RE` guard, and the presence of the PR-description deliverables.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "998e0eef3f43fe4a34ad11ead3225052ba70e8878ddac70f7b4fb12493f8a876",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8228,
+    "run_id": "40459867080",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40459867080",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027063602_d3cc4b0191",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8228,
+    "run_id": "40459867080"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T06:36:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
