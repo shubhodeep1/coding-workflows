@@ -3701,6 +3701,27 @@ def test_security_audit_claude_repair_crash_falls_back_as_malformed_output() -> 
 		_assert_codex_fallback(proc, state, payload, "malformed_output", claude_called=True)
 
 
+def test_security_audit_claude_repair_capacity_wait_still_exits_80() -> None:
+	# A capacity wait during the repair turn keeps its own reason and exits 80
+	# (issue #7370) instead of being refused as malformed_output.
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-repair-wait-") as td:
+		proc, state, payload = _claude_engine_audit(
+			Path(td),
+			claude_env={"MOCK_CLAUDE_SESSION": "1", "MOCK_CLAUDE_RESULT": _EMPTY_ARRAY_THEN_SUMMARY, "MOCK_CLAUDE_RESUME_MODE": "limit"},
+		)
+		assert proc.returncode == 80, proc.stdout + proc.stderr
+		assert "SECURITY_AUDIT_CLAUDE_REPAIR outcome=failed reason=claude_run_rc_80" in proc.stdout
+		assert "SECURITY_AUDIT_CLAUDE_FALLBACK reason=all_usage_limit" in proc.stdout
+		assert "AI_ENGINE_FALLBACK_REFUSED" not in proc.stderr
+		assert "outcome=deferred reason=claude_capacity_wait" in proc.stdout
+		assert not state.get("codex_calls")
+
+
+def test_security_audit_claude_repair_prompt_never_turns_an_unfinished_audit_into_a_clean_one() -> None:
+	script = (REPO_ROOT / "scripts" / "security_audit.sh").read_text(encoding="utf-8")
+	assert "If your audit did not finish, or did not cover every file in scope, do not reply []" in script
+
+
 def test_security_audit_claude_repair_never_starts_a_new_session() -> None:
 	# A session id claude_run cannot find would start a new session that never
 	# audited anything, and it could answer "[]": the repair is skipped.

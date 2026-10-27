@@ -1734,7 +1734,9 @@ PY
 # a new session for an id it cannot find, and a new session that never
 # audited anything could answer "[]". Returns 0 with the accepted array in
 # CODEX_OUTPUT_FILE and the check verdict in security_audit_repair_verdict;
-# otherwise returns 1 and the caller falls back as malformed_output, as before. A repair claude_run that
+# otherwise returns 1 and the caller falls back as malformed_output, as before,
+# or 2 when claude_run itself fell back (75, 76, 80) and the caller records
+# that reason (AI_ENGINE_LAST_FALLBACK_REASON) instead. A repair claude_run that
 # fails writes no fallback record (AI_ENGINE_FALLBACK_RECORDS_FILE=/dev/null):
 # the caller's malformed_output fallback is the one the report step counts.
 # Log lines go to stdout as SECURITY_AUDIT_CLAUDE_REPAIR outcome= reason=.
@@ -1777,6 +1779,8 @@ PY
 Your last reply could not be used: the script that reads it needs one JSON array and nothing else, and your reply had text before or after the array.
 
 Reply again with only that JSON array. Put no words, headings, summary or code fence before or after it. Include every finding your audit supports, each with exactly the fields the output contract lists. If your audit found no finding, reply with [] alone. Do not start a new audit.
+
+If your audit did not finish, or did not cover every file in scope, do not reply []: say so in plain words instead, and the audit will be treated as failed.
 REPAIR
 	then
 		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=skipped reason=prompt_write_failed"
@@ -1789,6 +1793,12 @@ REPAIR
 		claude_run SECURITY_AUDIT "${repair_prompt_file}" "${repair_output_file}" "${PWD}" "${repair_session_id}" || repair_rc=$?
 	if [ "${repair_rc}" -ne 0 ]; then
 		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=failed reason=claude_run_rc_${repair_rc}"
+		# 75, 76 and 80 are claude_run's own fallback results (a capacity wait,
+		# a refused or a codex fallback): return 2 so the caller records the
+		# engine's reason instead of malformed_output (issue #7370).
+		case "${repair_rc}" in
+			75|76|80) return 2 ;;
+		esac
 		return 1
 	fi
 	if ! repair_check_result="$(security_audit_check_claude_reply "${repair_output_file}")"; then
@@ -1807,7 +1817,7 @@ REPAIR
 # (AI_ENGINE_FALLBACK_EXIT=80, issue #7370): the audit exits 80 without codex.
 security_audit_try_claude()
 {
-	local claude_rc=0 claude_include="" claude_check_result="" claude_check_reason=""
+	local claude_rc=0 claude_include="" claude_check_result="" claude_check_reason="" claude_repair_rc=1
 	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
 		security_audit_claude_fallback all_gated
 		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 80 ] && return 3
@@ -1849,10 +1859,21 @@ security_audit_try_claude()
 		claude_check_reason="${claude_check_result:-malformed_output}"
 		security_audit_log_rejected_claude_reply "${claude_check_reason}"
 		# Text around the array gets one repair turn before the reply falls back.
-		if [ "${claude_check_reason}" = "malformed_output" ] && security_audit_repair_claude_reply "${claude_include}"; then
+		if [ "${claude_check_reason}" = "malformed_output" ]; then
+			claude_repair_rc=0
+			security_audit_repair_claude_reply "${claude_include}" || claude_repair_rc=$?
+		fi
+		if [ "${claude_repair_rc}" -eq 0 ]; then
 			claude_check_result="${security_audit_repair_verdict}"
 		else
-			security_audit_claude_fallback "${claude_check_reason}"
+			if [ "${claude_repair_rc}" -eq 2 ]; then
+				# The repair's claude_run fell back on its own (a capacity wait,
+				# for example): record that reason, so a wait still exits 80.
+				security_audit_claude_fallback "${AI_ENGINE_LAST_FALLBACK_REASON:-${claude_check_reason}}"
+			else
+				security_audit_claude_fallback "${claude_check_reason}"
+			fi
+			[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 80 ] && return 3
 			[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
 			return 1
 		fi
