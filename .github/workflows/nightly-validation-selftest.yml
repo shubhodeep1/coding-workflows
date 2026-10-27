@@ -223,7 +223,11 @@ jobs:
         if: always() && github.ref_type == 'branch'
         env:
           TARGET_BRANCH: ${{ github.ref_name }}
-          STATUS_PUSH_TOKEN: ${{ github.token }}
+          # Same push identity as the other bot pushes to main
+          # (workflow-log-analysis.yml); github.token is not a bypass actor on
+          # the main ruleset (#8225). Only this fresh-runner job sees it (#6568).
+          STATUS_PUSH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          STATUS_PUSH_TOKEN_SOURCE: ${{ secrets.GH_PAT != '' && 'gh_pat' || 'github_token' }}
         run: |
           set -euo pipefail
           status_file="analysis/validation-selftest-status.json"
@@ -247,4 +251,24 @@ jobs:
           export GIT_CONFIG_KEY_0=credential.helper
           export GIT_CONFIG_VALUE_0='!f() { printf "username=x-access-token\npassword=%s\n" "${STATUS_PUSH_TOKEN}"; }; f'
           git pull --rebase origin "${TARGET_BRANCH}"
-          git push origin "HEAD:${TARGET_BRANCH}"
+          # Name the cause when the push is refused (#8225, run 40439152665:
+          # GH013, "2 of 2 required status checks are expected"). A refused
+          # push still fails the step; it is never turned into a success.
+          token_source="${STATUS_PUSH_TOKEN_SOURCE:-unknown}"
+          token_source="${token_source//[^a-z_]/_}"
+          safe_branch="${TARGET_BRANCH//[^A-Za-z0-9._\/-]/_}"
+          push_log="$(mktemp)"
+          trap 'rm -f "${push_log}"' EXIT
+          push_exit=0
+          git push origin "HEAD:${TARGET_BRANCH}" >"${push_log}" 2>&1 || push_exit=$?
+          sed -E 's#(https?://)[^/@[:space:]]+@#\1***@#g' "${push_log}" >&2 || true
+          if [ "${push_exit}" -ne 0 ]; then
+            if grep -qiE 'GH006|GH013|protected branch|push declined|repository rule' "${push_log}"; then
+              echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=push_rejected_by_ruleset branch=${safe_branch} token=${token_source}"
+              echo "The push identity is not a bypass actor on this branch's ruleset; the status commit was not delivered."
+            else
+              echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=push_failed branch=${safe_branch} token=${token_source} rc=${push_exit}"
+            fi
+            exit "${push_exit}"
+          fi
+          echo "VALIDATION_SELFTEST_STATUS outcome=pushed branch=${safe_branch} token=${token_source}"
