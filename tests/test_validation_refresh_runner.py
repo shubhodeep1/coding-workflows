@@ -1816,6 +1816,7 @@ def test_discovery_prs_at_or_before_head_keeps_newer_and_unresolvable_prs() -> N
 	assert "pr=300 branch=automation/validate-discovery/fedcba987654/node-runtime" in stdout.getvalue()
 	assert "pr=301" in stdout.getvalue() and "outcome=kept_not_older" in stdout.getvalue()
 	assert "superseded_pr: #300 reason=superseded_by_newer_pr outcome=kept_not_older" in result.discovery_diagnostics
+	assert "superseded_pr: #301 reason=superseded_by_newer_pr outcome=kept_not_older" in result.discovery_diagnostics
 	executor.assert_consumed()  # no merge-base for the non-hex branch or the replacement
 
 
