@@ -3722,6 +3722,21 @@ def test_security_audit_claude_repair_prompt_never_turns_an_unfinished_audit_int
 	assert "If your audit did not finish, or did not cover every file in scope, do not reply []" in script
 
 
+def test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair() -> None:
+	# The reply check moved unchanged into security_audit_check_claude_reply.
+	# There must be exactly one copy of it, and both the audit's reply and the
+	# repair's reply must go through it, so the repair is never checked by a
+	# looser rule.
+	script = (REPO_ROOT / "scripts" / "security_audit.sh").read_text(encoding="utf-8")
+	assert script.count("security_audit_check_claude_reply()\n{") == 1
+	assert script.count('accept(value, f"extracted items={len(value)} leading_chars={start} trailing_chars={len(text) - end}")') == 1
+	assert 'security_audit_check_claude_reply "${CLAUDE_AUDIT_OUTPUT_FILE}"' in script
+	assert 'security_audit_check_claude_reply "${repair_output_file}"' in script
+	parser_start = script.index("security_audit_check_claude_reply()\n{")
+	parser_end = script.index("\n}\n", parser_start)
+	assert 'accept(value, f"extracted items=' in script[parser_start:parser_end]
+
+
 def test_security_audit_claude_repair_never_starts_a_new_session() -> None:
 	# A session id claude_run cannot find would start a new session that never
 	# audited anything, and it could answer "[]": the repair is skipped.
