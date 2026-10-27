@@ -1596,6 +1596,16 @@ _check_final_merge_ineligibility_alert()
 
 	local blocker_summary pr_url
 	blocker_summary="$(_summarize_final_merge_blockers "${final_pr}" "${current_sha}")"
+	# Ruleset-required statuses are invisible to the check-runs summary above
+	# (fun-token-multi-chain#579); add them when GitHub reports the PR blocked.
+	if [ "$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')" = "blocked" ] \
+		&& declare -F _pr_ruleset_required_check_blockers >/dev/null 2>&1; then
+		local alert_ruleset_rc=0
+		_pr_ruleset_required_check_blockers "${current_sha}" "${_final_merge_ineligibility_base_ref}" || alert_ruleset_rc=$?
+		if [ "${alert_ruleset_rc}" = "1" ] && [ -n "${PR_RULESET_BLOCKERS_SUMMARY}" ]; then
+			blocker_summary="${blocker_summary:+${blocker_summary}, }ruleset: ${PR_RULESET_BLOCKERS_SUMMARY}"
+		fi
+	fi
 	pr_url="$(_gh_url "pull/${final_pr}")"
 
 	local msg
@@ -1606,6 +1616,9 @@ _check_final_merge_ineligibility_alert()
 		msg+=$'\n'"Blockers: ${blocker_summary}"
 	fi
 	msg+=$'\n'"Resolution: re-run or dismiss the blocking check-run(s), merge manually, or set ORCH_FINAL_MERGE_REQUIRED_CHECKS to omit advisory checks."
+	if [[ "${blocker_summary}" == *"ruleset: "* ]]; then
+		msg+=$'\n'"Ruleset blockers must be fixed (or bypassed) in the repository ruleset; ORCH_FINAL_MERGE_REQUIRED_CHECKS does not affect them."
+	fi
 
 	tg_notify "${msg}" "CRITICAL"
 
@@ -1620,7 +1633,11 @@ _check_final_merge_ineligibility_alert()
 	comment_body+="**Resolution options:**"$'\n'
 	comment_body+="- Re-run, dismiss, or fix the blocking check-run(s) so they return \`success\`/\`neutral\`/\`skipped\`."$'\n'
 	comment_body+="- Merge PR #${final_pr} manually via the GitHub UI (works when the base branch isn't protected)."$'\n'
-	comment_body+="- Override the gate per-repo via \`ORCH_FINAL_MERGE_REQUIRED_CHECKS\` to exclude advisory checks."$'\n\n'
+	comment_body+="- Override the gate per-repo via \`ORCH_FINAL_MERGE_REQUIRED_CHECKS\` to exclude advisory checks."$'\n'
+	if [[ "${blocker_summary}" == *"ruleset: "* ]]; then
+		comment_body+="- \`ruleset:\` blockers come from the repository ruleset: fix the failing check or adjust the ruleset. \`ORCH_FINAL_MERGE_REQUIRED_CHECKS\` does not affect them."$'\n'
+	fi
+	comment_body+=$'\n'
 	comment_body+="This alert fires once per head SHA. A fresh push to PR #${final_pr} resets the clock and requires another ${alert_hours}h before re-alerting."$'\n\n'
 	comment_body+="*(Threshold configurable via \`ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS\`, currently ${alert_hours}h; set to 0 to disable.)*"
 	post_tracking_comment "${comment_body}" || true
@@ -13738,6 +13755,26 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
+  # Ruleset-required checks (fun-token-multi-chain#579): when GitHub says the
+  # PR is blocked, look for a ruleset-required status or check-run that is not
+  # passing. A known blocker defers without spending the final-merge budget,
+  # so the ineligibility alert (ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS) names
+  # it instead of three refused merges parking the project. A failed lookup
+  # fails open to the merge attempt, which records GitHub's refusal reason.
+  if [ "${pr_state}" = "open" ] && [ "$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')" = "blocked" ] \
+    && declare -F _pr_ruleset_required_check_blockers >/dev/null 2>&1; then
+    local final_ruleset_rc=0
+    _pr_ruleset_required_check_blockers "${pr_head_sha}" "${default_branch}" || final_ruleset_rc=$?
+    if [ "${final_ruleset_rc}" = "1" ]; then
+      FINAL_MERGE_BUDGET_ELIGIBLE="0"
+      echo "  [final-merge] PR #${final_pr} is blocked by ruleset-required check(s): ${PR_RULESET_BLOCKERS_SUMMARY}. Will retry next poll."
+      return 1
+    fi
+    if [ "${final_ruleset_rc}" = "2" ]; then
+      echo "::warning::  [final-merge] Could not read ruleset-required checks for PR #${final_pr}; attempting the merge."
+    fi
+  fi
+
   # Promote cycle: a VERIFYING run's ready-to-merge point promotes the pinned
   # commit and holds this merge until the release finishes (README 12f).
   if ! comprehensive_promotion_gate_before_final_merge "${final_pr}"; then
@@ -13842,11 +13879,38 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     return 1
   fi
 
-  jq --arg err "Final PR #${final_pr} could not be merged automatically (state=${pr_state:-unknown}, mergeable=${pr_mergeable:-unknown})." '.final_merge_error = $err' \
+  # Keep GitHub's refusal reason. mergeable=true with mergeable_state=blocked
+  # is a ruleset or required-status block (for example a failing required
+  # commit status, which the check-runs gate above never reads), and only the
+  # merge error names it. gh_retry ends a failed call with its
+  # "::error::gh command failed after" line followed by gh's raw stderr, so
+  # only that raw text is kept when present. Flattened to one line,
+  # workflow-command prefixes and backticks dropped, capped so it fits the
+  # tracking comment.
+  local final_pr_mergeable_state=""
+  local merge_refusal_detail=""
+  final_pr_mergeable_state="$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')"
+  if [ -n "${merge_err}" ]; then
+    merge_refusal_detail="$(printf '%s\n' "${merge_err}" \
+      | awk '/^::error::gh command failed after / { buf = ""; next } { buf = buf $0 "\n" } END { printf "%s", buf }')"
+    [ -n "${merge_refusal_detail//[[:space:]]/}" ] || merge_refusal_detail="${merge_err}"
+    merge_refusal_detail="$(printf '%s\n' "${merge_refusal_detail}" \
+      | sed -E 's/^::(warning|error|notice)::[[:space:]]*//' \
+      | tr -d '`' | tr -d '\000-\010\013-\037\177' | tr '\n' ' ' \
+      | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | head -c 600)"
+  fi
+  local final_merge_refusal_msg="Final PR #${final_pr} could not be merged automatically (state=${pr_state:-unknown}, mergeable=${pr_mergeable:-unknown}, mergeable_state=${final_pr_mergeable_state:-unknown})."
+  if [ -n "${merge_refusal_detail}" ]; then
+    final_merge_refusal_msg+=" GitHub: ${merge_refusal_detail}"
+  fi
+  echo "  [final-merge] ${final_merge_refusal_msg}"
+  jq --arg err "${final_merge_refusal_msg}" '.final_merge_error = $err' \
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_tracking_comment "## ⚠️ Final merge blocked
 
-Final PR #${final_pr} could not be merged automatically. Review branch protections/checks and merge manually if needed."
+Final PR #${final_pr} could not be merged automatically (mergeable_state=\`${final_pr_mergeable_state:-unknown}\`). Review branch protections/checks and merge manually if needed.
+
+GitHub's response: \`${merge_refusal_detail:-none recorded}\`"
   return 1
 }
 
