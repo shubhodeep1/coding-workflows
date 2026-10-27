@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8229,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8229\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8230\",\"pr_number\":8230,\"branch\":\"ai/issue-8229\",\"run_id\":\"40452446023\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40452446023\",\"changed_files\":[\".github/workflows/nightly-validation-selftest.yml\",\"README.md\",\"agents.d/8225-nightly-selftest-status-push.md\",\"agents.d/8229-nightly-selftest-status-pr.md\",\"changelog.d/8229-nightly-selftest-status-pr.md\",\"probably_unnecessary_but_read_if_stuck.md\",\"scripts/validation_selftest_status.py\",\"tests/test_nightly_validation_selftest_workflow_contract.py\",\"tests/test_validation_selftest_status.py\"]}",
+  "fingerprint": "4391a93c33691af090e7cacb8ad792064d9e6ab746b0c49b4746c505e51bb7ca",
+  "lineage": {
+    "issue_number": 8229,
+    "parent_ids": [],
+    "pr_number": 8230,
+    "run_id": "40452446023",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40452446023",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8230"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261027052220_1a361fc922",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8229,
+    "level": "run",
+    "pr_number": 8230,
+    "run_id": "40452446023"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8229: https://github.com/shubhodeep1/coding-workflows/pull/8230",
+  "timestamps": {
+    "created_at": "2026-10-27T05:22:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
