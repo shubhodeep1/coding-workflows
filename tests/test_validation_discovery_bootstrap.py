@@ -793,6 +793,12 @@ def _bot_commits() -> list[dict[str, object]]:
 	return [{"oid": "a1", "authors": [{"name": "codex-bot", "email": "codex@users.noreply.github.com"}]}]
 
 
+def _bot_view_json() -> str:
+	import json as _json
+
+	return _json.dumps({"commits": _bot_commits()})
+
+
 def _human_commits() -> list[dict[str, object]]:
 	return _bot_commits() + [{"oid": "b2", "authors": [{"name": "Some Person", "email": "p@example.com"}]}]
 
@@ -897,7 +903,9 @@ def test_close_superseded_closes_seed_pr_once_manifest_committed() -> None:
 		assert command[command.index("--repo") + 1] == "octo/demo"
 		seen_comments.append(command[command.index("--comment") + 1])
 
-	executor = FakeExecutor([PlannedRun(("gh", "pr", "close"), callback=on_close)])
+	executor = FakeExecutor(
+		[PlannedRun(("gh", "pr", "view", "196"), stdout=_bot_view_json()), PlannedRun(("gh", "pr", "close"), callback=on_close)]
+	)
 	outcomes = discovery.close_superseded_discovery_prs(
 		consumer_slug="octo/demo",
 		base_branch="main",
@@ -924,7 +932,9 @@ def test_close_superseded_closes_seed_pr_once_manifest_committed() -> None:
 
 
 def test_close_superseded_closes_type_change_pr_when_type_already_committed() -> None:
-	executor = FakeExecutor([PlannedRun(("gh", "pr", "close", "300"))])
+	executor = FakeExecutor(
+		[PlannedRun(("gh", "pr", "view", "300"), stdout=_bot_view_json()), PlannedRun(("gh", "pr", "close", "300"))]
+	)
 	outcomes = discovery.close_superseded_discovery_prs(
 		consumer_slug="octo/demo",
 		base_branch="main",
@@ -961,7 +971,9 @@ def test_close_superseded_closes_older_prs_when_replacement_opened() -> None:
 	def on_close(command: list[str], _cwd: Path | None, _input_text: str | None) -> None:
 		assert "https://github.com/octo/demo/pull/235" in command[command.index("--comment") + 1]
 
-	executor = FakeExecutor([PlannedRun(("gh", "pr", "close", "196"), callback=on_close)])
+	executor = FakeExecutor(
+		[PlannedRun(("gh", "pr", "view", "196"), stdout=_bot_view_json()), PlannedRun(("gh", "pr", "close", "196"), callback=on_close)]
+	)
 	outcomes = discovery.close_superseded_discovery_prs(
 		consumer_slug="octo/demo",
 		base_branch="main",
@@ -1023,7 +1035,9 @@ def test_close_superseded_dry_run_issues_no_close() -> None:
 def test_close_superseded_records_close_failure_and_continues() -> None:
 	executor = FakeExecutor(
 		[
+			PlannedRun(("gh", "pr", "view", "196"), stdout=_bot_view_json()),
 			PlannedRun(("gh", "pr", "close", "196"), returncode=1, stderr="GraphQL: Could not close"),
+			PlannedRun(("gh", "pr", "view", "197"), stdout=_bot_view_json()),
 			PlannedRun(("gh", "pr", "close", "197")),
 		]
 	)
@@ -1042,6 +1056,47 @@ def test_close_superseded_records_close_failure_and_continues() -> None:
 	assert [(o.number, o.outcome) for o in outcomes] == [(196, "close_failed"), (197, "closed")]
 	assert outcomes[0].detail is not None and "Could not close" in outcomes[0].detail
 	executor.assert_consumed()
+
+
+def test_close_superseded_rechecks_commits_before_closing() -> None:
+	# A person pushed after the listing: the re-check keeps the PR open.
+	import json as _json
+
+	executor = FakeExecutor(
+		[PlannedRun(("gh", "pr", "view", "196"), stdout=_json.dumps({"commits": _human_commits()}))]
+	)
+	outcomes = discovery.close_superseded_discovery_prs(
+		consumer_slug="octo/demo",
+		base_branch="main",
+		pr_branch_prefix=DISCOVERY_PREFIX,
+		open_prs=[_open_pr(196, f"{DISCOVERY_PREFIX}/38b0e3d9fa3d/python-mongo-repo-checks", title=SEED_TITLE)],
+		committed_type="python-mongo-repo-checks",
+		manifest_committed=True,
+		executor=executor,
+	)
+	assert [(o.number, o.outcome) for o in outcomes] == [(196, "kept_human_commits")]
+	executor.assert_consumed()  # no gh pr close
+
+
+def test_close_superseded_recheck_failure_closes_nothing() -> None:
+	executor = FakeExecutor([PlannedRun(("gh", "pr", "view", "196"), returncode=1, stderr="HTTP 502")])
+	outcomes = discovery.close_superseded_discovery_prs(
+		consumer_slug="octo/demo",
+		base_branch="main",
+		pr_branch_prefix=DISCOVERY_PREFIX,
+		open_prs=[_open_pr(196, f"{DISCOVERY_PREFIX}/38b0e3d9fa3d/python-mongo-repo-checks", title=SEED_TITLE)],
+		committed_type="python-mongo-repo-checks",
+		manifest_committed=True,
+		executor=executor,
+	)
+	assert [(o.number, o.outcome) for o in outcomes] == [(196, "close_failed")]
+	assert outcomes[0].detail is not None and outcomes[0].detail.startswith("recheck_failed")
+	executor.assert_consumed()
+
+
+def test_seed_title_prefix_matches_runner_title() -> None:
+	runner_text = (REPO_ROOT / "scripts" / "validation_refresh_runner.py").read_text(encoding="utf-8")
+	assert "{discovery_module.SEED_PR_TITLE_PREFIX} (type: " in runner_text
 
 
 def main() -> int:

@@ -1664,6 +1664,7 @@ def test_dispatch_discovery_dedup_check_runs_before_budget_gate() -> None:
 
 SWEEP_SEED_TITLE = "chore(validation): seed .ai/validate.yml (type: node-runtime)"
 SWEEP_BOT_COMMITS = [{"oid": "a1", "authors": [{"name": "codex-bot", "email": "codex@users.noreply.github.com"}]}]
+SWEEP_BOT_VIEW_JSON = json.dumps({"commits": SWEEP_BOT_COMMITS})
 
 
 def _sweep_pr_list_json(entries: list[tuple[int, str]]) -> str:
@@ -1699,6 +1700,7 @@ def test_dispatch_discovery_sweep_closes_stale_seed_pr_even_on_dedup_hit() -> No
 					("gh", "pr", "list"),
 					stdout=_sweep_pr_list_json([(196, "automation/validate-discovery/38b0e3d9fa3d/node-runtime")]),
 				),
+				PlannedCall(("gh", "pr", "view", "196"), stdout=SWEEP_BOT_VIEW_JSON),
 				PlannedCall(("gh", "pr", "close", "196")),
 			]
 		)
@@ -1748,6 +1750,7 @@ def test_dispatch_discovery_sweep_closes_older_pr_after_opening_replacement() ->
 				PlannedCall(("git", "push", "-u", "origin")),
 				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/99\n"),
 				# Second pass reuses the first listing: no new gh pr list.
+				PlannedCall(("gh", "pr", "view", "196"), stdout=SWEEP_BOT_VIEW_JSON),
 				PlannedCall(("gh", "pr", "close", "196"), callback=on_close),
 			]
 		)

@@ -1001,6 +1001,14 @@ def list_open_discovery_prs(
 	if not isinstance(payload, list):
 		return [], "gh_pr_list_unparseable"
 
+	if len(payload) >= DISCOVERY_PR_LIST_LIMIT:
+		# The limit applies before the prefix filter, so older discovery PRs
+		# may be missing from this listing. Say so instead of missing them silently.
+		print(
+			"VALIDATION_DISCOVERY_SUPERSEDED "
+			f"repository={consumer_slug} outcome=list_truncated limit={DISCOVERY_PR_LIST_LIMIT}"
+		)
+
 	branch_prefix = _slugify_for_branch_prefix(pr_branch_prefix) + "/"
 	prs: list[OpenDiscoveryPr] = []
 	for item in payload:
@@ -1063,10 +1071,12 @@ def close_superseded_discovery_prs(
 
 	An obsolete PR is closed with `gh pr close --comment` (its branch is
 	kept). It is left open, as `kept_human_commits`, when any commit on it
-	was not written by the runner, and as `dry_run` in dry-run mode.
+	was not written by the runner (checked in the listing and again right
+	before the close), and as `dry_run` in dry-run mode.
 
-	API cost: one `gh pr close` per closed PR, no lookups (the caller passes
-	the list from `list_open_discovery_prs`). Fails open: a failed close is
+	API cost: one `gh pr view --json commits` re-check plus one `gh pr close`
+	per PR to be closed (the caller passes the list from
+	`list_open_discovery_prs`). Fails open: a failed re-check or close is
 	reported as `close_failed` and the sweep goes on.
 	"""
 
@@ -1119,6 +1129,48 @@ def close_superseded_discovery_prs(
 					head_branch=pr.head_branch,
 					reason=reason,
 					outcome="dry_run",
+				)
+			)
+			continue
+
+		# Re-read the commits right before closing: the listing can be minutes
+		# old (the post-open pass runs after the discovery model), and a person
+		# may have pushed since. A failed or unparseable re-read closes nothing.
+		recheck_detail: str | None = None
+		try:
+			view = executor.run(
+				["gh", "pr", "view", str(pr.number), "--repo", consumer_slug, "--json", "commits"],
+				check=True,
+			)
+			view_payload = json.loads((view.stdout or "").strip() or "{}")
+			if not isinstance(view_payload, dict):
+				recheck_detail = "recheck_unparseable"
+		except json.JSONDecodeError:
+			recheck_detail = "recheck_unparseable"
+		except Exception as exc:
+			if not _known_executor_failure(exc):
+				raise
+			recheck_detail = "recheck_failed: " + (_command_exception_text(exc).strip() or str(exc))[:280]
+		if recheck_detail is not None:
+			outcomes.append(
+				DiscoverySupersedeOutcome(
+					number=pr.number,
+					url=pr.url,
+					head_branch=pr.head_branch,
+					reason=reason,
+					outcome="close_failed",
+					detail=recheck_detail,
+				)
+			)
+			continue
+		if not _is_bot_only_discovery_pr(view_payload.get("commits")):
+			outcomes.append(
+				DiscoverySupersedeOutcome(
+					number=pr.number,
+					url=pr.url,
+					head_branch=pr.head_branch,
+					reason=reason,
+					outcome="kept_human_commits",
 				)
 			)
 			continue

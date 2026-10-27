@@ -785,7 +785,7 @@ class ValidationRefreshRunner:
 							entry_script_text = None
 
 					pr_title = (
-						f"chore(validation): seed .ai/validate.yml (type: {discovered_type or 'unknown'})"
+						f"{discovery_module.SEED_PR_TITLE_PREFIX} (type: {discovered_type or 'unknown'})"
 						if is_seed
 						else f"chore(validation): discovery proposes type change "
 						f"({committed_type or 'unknown'} → {discovered_type or 'unknown'})"

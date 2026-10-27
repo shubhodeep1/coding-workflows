@@ -1,3 +1,3 @@
 <!-- agents: section="Stable log prefixes (contractual)" -->
-- `VALIDATION_DISCOVERY_SUPERSEDED` (`scripts/validation_refresh_runner.py`: `repository= pr= branch= reason=superseded_by_newer_pr|manifest_already_committed|proposed_type_already_committed outcome=closed|kept_human_commits|dry_run|close_failed`, or `outcome=list_failed|error detail=` when the sweep itself fails)
+- `VALIDATION_DISCOVERY_SUPERSEDED` (`scripts/validation_refresh_runner.py`: `repository= pr= branch= reason=superseded_by_newer_pr|manifest_already_committed|proposed_type_already_committed outcome=closed|kept_human_commits|dry_run|close_failed`, or `outcome=list_failed|error detail=` when the sweep itself fails, or `outcome=list_truncated limit=100` when the open-PR listing hit its limit; `close_failed` with `detail=recheck_failed|recheck_unparseable` means the pre-close commit re-check failed and nothing was closed)
 LOG_PREFIX.name=VALIDATION_DISCOVERY_SUPERSEDED
