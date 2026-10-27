@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\n  expected_change_site: tests/test_security_audit_workflow_contract.py, test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair (anthropic_claude-sonnet-5_5 instead names the PR description wording)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: No test compares the parser with its pre-move source, and the structural test at tests/test_security_audit_workflow_contract.py:3725-3737 only checks that one parser exists and both replies use it. All four reviewers rated it NIT. Sonnet and GLM treat it as a PR-description wording gap deferred by earlier autofix rounds.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\nExpected change site: PR description wording. The structural test in `tests/test_security_audit_workflow_contract.py` already covers the invariant that matters.\nEvidence of absence: No test compares the parser with its pre-move source. This is the same gap earlier autofix rounds deferred, and no runtime defect comes from it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"The reply check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\nExpected change site: tests/test_security_audit_workflow_contract.py, test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair\nEvidence of absence: The test at lines 3725-3737 checks that there is one parser and both replies use it, but does not compare the parser source with its pre-move implementation. The PR diff contains no test that verifies the parser source is unchanged.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"The reply check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\nExpected change site: `tests/test_security_audit_workflow_contract.py`, `test_security_audit_claude_reply_parser_is_shared_by_the_audit_and_the_repair`\nEvidence of absence: The added test verifies that one parser exists and both replies use it, but does not verify that the parser source is unchanged. No test in the PR diff compares the parser with its pre-move implementation.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: PR Description, \"Files changed\": \"The check moved byte-for-byte into `security_audit_check_claude_reply <reply_file>`; a test confirms the parser source is unchanged.\"\nExpected change site: tests/test_security_audit_workflow_contract.py (a test comparing `security_audit_check_claude_reply`'s body with its pre-move source)\nEvidence of absence: The PR diff and last-run diff contain no test that compares the parser heredoc with its pre-move implementation. The new structural test (tests/test_security_audit_workflow_contract.py:3725-3737) verifies one definition, one extraction line, and both call sites, but never compares the parser source against its pre-move text, so the PR description's claim is stronger than what any test in the diff checks. Four consecutive autofix rounds deferred this as PR-description wording the author must fix, and prior reviewers rated it NIT.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9c4e957a41a885ecd03af2c633c5ee79909079069c633a7af86704ced5034a5d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8223,
+    "run_id": "40456412664",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40456412664",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261027060016_45b712cd83",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8223,
+    "run_id": "40456412664"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-27T06:00:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
