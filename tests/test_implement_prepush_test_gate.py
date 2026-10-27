@@ -347,7 +347,12 @@ def test_timeout_above_the_step_budget_is_clamped(tmp_path):
 	assert "STEP_RETURNED" in proc.stdout, proc.stderr
 	assert "name=PREPUSH_TEST_GATE_TIMEOUT_MINUTES clamped=53" in proc.stderr
 	log = (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
-	assert "--timeout-minutes 53" in log
+	# The step budget clamp may lower it further by the setup time already used.
+	match = re.search(r"--timeout-minutes (\d+) ", log)
+	assert match and 1 <= int(match.group(1)) <= 53, log
+	budget = re.search(r"timeout_clamped=(\d+)", proc.stderr)
+	if budget:
+		assert int(match.group(1)) == int(budget.group(1))
 
 
 def test_zero_padded_timeout_is_read_as_decimal(tmp_path):

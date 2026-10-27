@@ -682,7 +682,7 @@ review_prepush_test_gate_integration_main()
 	set +eu
 	set +o pipefail
 	local branch="${TARGET_BRANCH:-}" base_branch="${BASE_BRANCH:-}" base="" sd resolver
-	local gate_dir root="" image="" status_line status="" pr_caused=0 inherited=0 repair="not needed" rc=0
+	local gate_dir root="" image="" prep_env="" venv_args=() status_line status="" pr_caused=0 inherited=0 repair="not needed" rc=0
 	# The step has timeout-minutes 120; keep 300 s for the push and summary.
 	local step_started="${SECONDS}" step_budget=6900 left
 	rpg_phase=integration
@@ -722,15 +722,31 @@ review_prepush_test_gate_integration_main()
 	sd="$(review_prepush_test_gate_abs "${SUPPORT_SCRIPTS_DIR:-}")"
 	gate_dir="${RUNTIME_DIR}/prepush_gate_integration"
 	mkdir -p "${gate_dir}" 2>/dev/null || return 0
-	if [ -n "${sd}" ] && [ -f "${sd}/review_untrusted_sandbox.sh" ] \
-		&& root="$(timeout --kill-after=30s 600 bash "${sd}/review_untrusted_sandbox.sh" prepare-ephemeral codex 2>/dev/null)" && [ -n "${root}" ]; then
-		if [ -f "${root}/image" ] && [ ! -L "${root}/image" ]; then
+	if [ -n "${sd}" ] && [ -f "${sd}/review_untrusted_sandbox.sh" ]; then
+		# A full prepare also builds the dependency venv with pytest, which the
+		# gate needs to fail (not just mark unverified) pytest suites. prepare
+		# reports its root only through GITHUB_ENV, so give it a private file.
+		prep_env="${gate_dir}/prepare_github_env"
+		: > "${prep_env}" 2>/dev/null || prep_env=""
+		if [ -n "${prep_env}" ] && GITHUB_ENV="${prep_env}" timeout --kill-after=30s 1200 \
+			bash "${sd}/review_untrusted_sandbox.sh" prepare codex >/dev/null 2>&1; then
+			root="$(sed -n 's/^REVIEW_SANDBOX_ROOT=//p' "${prep_env}" | tail -n 1)"
+		fi
+		case "${root}" in "${RUNNER_TEMP:-/tmp}"/review-isolated-*) ;; *) root="" ;; esac
+		[ -z "${root}" ] || [ -d "${root}" ] || root=""
+		if [ -z "${root}" ]; then
+			review_prepush_test_gate_log "outcome=warning reason=prepare_failed fallback=image_only"
+			root="$(timeout --kill-after=30s 600 bash "${sd}/review_untrusted_sandbox.sh" prepare-ephemeral codex 2>/dev/null)" || root=""
+		fi
+		if [ -n "${root}" ] && [ -f "${root}/image" ] && [ ! -L "${root}/image" ]; then
 			image="$(head -n 1 "${root}/image" 2>/dev/null | tr -d '[:space:]')"
 		fi
-		REVIEW_SANDBOX_ROOT="${root}" bash "${sd}/review_untrusted_sandbox.sh" cleanup >/dev/null 2>&1 || true
+		if [ -n "${root}" ] && [ -d "${root}/source/.review-venv/bin" ] && [ ! -L "${root}/source/.review-venv" ]; then
+			venv_args=(--venv "${root}/source/.review-venv")
+		fi
 	fi
 	status_line="$(review_prepush_test_gate_cmd_gate --phase integration --worktree "${rpg_worktree}" --base "${base}" \
-		--image "${image}" --image-reason integration_image_unavailable --out "${gate_dir}/run1" | tail -n 1)" || status_line=""
+		--image "${image}" --image-reason integration_image_unavailable ${venv_args[@]+"${venv_args[@]}"} --out "${gate_dir}/run1" | tail -n 1)" || status_line=""
 	rpg_phase=integration
 	read -r status pr_caused inherited <<< "${status_line:-unverified 0 0}"
 	if [ "${status}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
@@ -754,7 +770,7 @@ review_prepush_test_gate_integration_main()
 					repair="committed (re-run skipped: step time budget)"
 				else
 					status_line="$(review_prepush_test_gate_cmd_gate --phase integration --worktree "${rpg_worktree}" --base "${base}" \
-						--image "${image}" --image-reason integration_image_unavailable --out "${gate_dir}/run2" | tail -n 1)" || status_line=""
+						--image "${image}" --image-reason integration_image_unavailable ${venv_args[@]+"${venv_args[@]}"} --out "${gate_dir}/run2" | tail -n 1)" || status_line=""
 					rpg_phase=integration
 					read -r status pr_caused inherited <<< "${status_line:-unverified 0 0}"
 					if [ "${status}" = fail ] && [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
@@ -764,6 +780,9 @@ review_prepush_test_gate_integration_main()
 				fi
 			fi
 		fi
+	fi
+	if [ -n "${root}" ]; then
+		REVIEW_SANDBOX_ROOT="${root}" bash "${sd}/review_untrusted_sandbox.sh" cleanup >/dev/null 2>&1 || true
 	fi
 	review_prepush_test_gate_log "outcome=${status:-unverified} failures=${pr_caused:-0} inherited=${inherited:-0} mode=${rpg_mode} repair=$(printf '%s' "${repair}" | tr ' ()' '_  ' | tr -d ' ')"
 	return 0

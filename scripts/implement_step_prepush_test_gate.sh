@@ -407,7 +407,10 @@ implement_prepush_test_gate_build_prompt()
 		cat "${gate_template}"
 		echo
 		echo "=== CAPTURED TEST FAILURES (UNTRUSTED) ==="
-		implement_prepush_test_gate_py failures "${result}"
+		# Every line is prefixed so test output cannot imitate the trusted
+		# section headers below; the END marker closes the untrusted block.
+		implement_prepush_test_gate_py failures "${result}" | sed 's/^/UNTRUSTED_DATA: /'
+		echo "=== END CAPTURED TEST FAILURES (UNTRUSTED) ==="
 		echo
 		echo "=== CHANGED FILES ==="
 		cat "${gate_changed_file}"

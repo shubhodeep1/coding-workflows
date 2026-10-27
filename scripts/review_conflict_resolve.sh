@@ -1009,16 +1009,29 @@ _resolver_prepush_test_gate()
   fi
   mkdir -p "${gate_dir}" 2>/dev/null || return 0
   gate_base="$(git rev-parse HEAD 2>/dev/null || true)"
-  if [ -f "${gate_sandbox_sh}" ] && gate_root="$(timeout --kill-after=30s 600 bash "${gate_sandbox_sh}" prepare-ephemeral codex 2>/dev/null)" && [ -n "${gate_root}" ]; then
-    if [ -f "${gate_root}/image" ] && [ ! -L "${gate_root}/image" ]; then
-      gate_image="$(head -n 1 "${gate_root}/image" 2>/dev/null | tr -d '[:space:]')"
-    fi
+  # A full prepare also builds the dependency venv with pytest, without which
+  # pytest suites are only ever "unverified". It stays inside the 630 s
+  # reserve: installs get a 300 s budget and the whole prepare 600 s. prepare
+  # reports its root only through GITHUB_ENV, so it gets a private file.
+  local gate_prep_env="${gate_dir}/prepare_github_env" gate_venv_args=()
+  if [ -f "${gate_sandbox_sh}" ] && : > "${gate_prep_env}" 2>/dev/null \
+    && GITHUB_ENV="${gate_prep_env}" REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=true REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS=300 \
+      DEPENDENCY_INSTALL_TIMEOUT_SECONDS=300 timeout --kill-after=30s 600 bash "${gate_sandbox_sh}" prepare codex >/dev/null 2>&1; then
+    gate_root="$(sed -n 's/^REVIEW_SANDBOX_ROOT=//p' "${gate_prep_env}" | tail -n 1)"
   fi
-  if [ -n "${gate_root}" ]; then
-    REVIEW_SANDBOX_ROOT="${gate_root}" bash "${gate_sandbox_sh}" cleanup >/dev/null 2>&1 || true
+  case "${gate_root}" in "${RUNNER_TEMP:-/tmp}"/review-isolated-*) ;; *) gate_root="" ;; esac
+  [ -z "${gate_root}" ] || [ -d "${gate_root}" ] || gate_root=""
+  if [ -z "${gate_root}" ] && [ -f "${gate_sandbox_sh}" ] && [ $(( gate_budget_end - SECONDS )) -ge $(( gate_wall + 630 )) ]; then
+    gate_root="$(timeout --kill-after=30s 600 bash "${gate_sandbox_sh}" prepare-ephemeral codex 2>/dev/null)" || gate_root=""
+  fi
+  if [ -n "${gate_root}" ] && [ -f "${gate_root}/image" ] && [ ! -L "${gate_root}/image" ]; then
+    gate_image="$(head -n 1 "${gate_root}/image" 2>/dev/null | tr -d '[:space:]')"
+  fi
+  if [ -n "${gate_root}" ] && [ -d "${gate_root}/source/.review-venv/bin" ] && [ ! -L "${gate_root}/source/.review-venv" ]; then
+    gate_venv_args=(--venv "${gate_root}/source/.review-venv")
   fi
   bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
-    --image-reason resolver_image_unavailable --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true
+    --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} --out "${gate_dir}/run1" > "${gate_dir}/run1.status" || true
   read -r gate_status gate_pr gate_inh < "${gate_dir}/run1.status" || true
   if [ "${gate_status}" = fail ] && [ "${gate_pr:-0}" -gt 0 ] 2>/dev/null && [ "${gate_mode}" = repair ] \
     && [ $(( gate_budget_end - SECONDS )) -lt $(( gate_attempt_secs + gate_wall + 630 )) ]; then
@@ -1106,7 +1119,7 @@ _resolver_prepush_test_gate()
       fi
       if [ "${gate_repair}" = ran ]; then
         bash "${gate_step}" gate --phase resolver --worktree "${PWD}" --base "${gate_base}" --image "${gate_image}" \
-          --image-reason resolver_image_unavailable --out "${gate_dir}/run2" > "${gate_dir}/run2.status" || true
+          --image-reason resolver_image_unavailable ${gate_venv_args[@]+"${gate_venv_args[@]}"} --out "${gate_dir}/run2" > "${gate_dir}/run2.status" || true
         read -r gate_status gate_pr gate_inh < "${gate_dir}/run2.status" || true
       fi
     else
@@ -1114,6 +1127,9 @@ _resolver_prepush_test_gate()
     fi
   elif [ "${gate_status}" = fail ] && [ "${gate_mode}" = report ]; then
     gate_repair="not run (report mode)"
+  fi
+  if [ -n "${gate_root}" ]; then
+    REVIEW_SANDBOX_ROOT="${gate_root}" bash "${gate_sandbox_sh}" cleanup >/dev/null 2>&1 || true
   fi
   echo "PREPUSH_TEST_GATE phase=resolver outcome=${gate_status:-unverified} failures=${gate_pr:-0} inherited=${gate_inh:-0} mode=${gate_mode} repair=$(printf '%s' "${gate_repair}" | tr ' ()' '_  ' | tr -d ' ')" >&2
   return 0
