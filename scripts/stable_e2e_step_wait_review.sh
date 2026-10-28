@@ -112,6 +112,27 @@ review_phase_deadline_extension_allowed() {
   return 1
 }
 # END phase4 review deadline extension (#8004)
+# Watched run URLs (#8248): ids already read, no API calls.
+E2E_WATCHED_RUN_IDS=""
+e2e_note_watched_run() {
+  local -a ids=()
+  local watched_id watched_seen=0 watched_rest=""
+  [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
+  # A repeat moves to the newest slot (no new line), so the cap never evicts a run still polled.
+  for watched_id in ${E2E_WATCHED_RUN_IDS}; do
+    if [ "$watched_id" = "$1" ]; then watched_seen=1; else watched_rest+=" $watched_id"; fi
+  done
+  read -r -a ids <<< "${watched_rest} $1"
+  [ "${#ids[@]}" -le 5 ] || ids=("${ids[@]: -5}")
+  E2E_WATCHED_RUN_IDS="${ids[*]}"
+  [ "$watched_seen" = 1 ] || echo "  ↳ Watching ${2:-} run $1: https://github.com/${TEST_REPO}/actions/runs/$1"
+}
+e2e_watched_run_urls() {
+  local id urls=""
+  for id in ${E2E_WATCHED_RUN_IDS}; do urls+=" https://github.com/${TEST_REPO}/actions/runs/${id}"; done
+  [ -z "$urls" ] || printf ' (watched runs:%s)' "$urls"
+}
+
 LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
 PREV_STATE=""
 LAST_STEP_GUARD_RUN_ID=""
@@ -299,7 +320,7 @@ while true; do
         REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1
       fi
     else
-      echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
+      echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget$(e2e_watched_run_urls)"
       echo "status=timeout" >> "$GITHUB_OUTPUT"
       exit 1
     fi
@@ -454,6 +475,7 @@ while true; do
     RUN_STATUS=$(echo "$REVIEW_RUN" | jq -r '.status // "unknown"')
     RUN_CONCLUSION=$(echo "$REVIEW_RUN" | jq -r '.conclusion // "null"')
     RUN_ID=$(echo "$REVIEW_RUN" | jq -r '.id // "unknown"')
+    e2e_note_watched_run "$RUN_ID" Review
     if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi
 
     echo "  Review run #${RUN_ID}: status=${RUN_STATUS}, conclusion=${RUN_CONCLUSION}"
@@ -812,7 +834,7 @@ while true; do
     # "null" rather than empty, so both branches are needed.
     if [ -n "${BAIT_SHA:-}" ] && { [ -z "${REVIEW_RUN:-}" ] || [ "${REVIEW_RUN}" = "null" ]; }; then
       if [ "${PIN_SHA:-}" != "${BAIT_SHA:-}" ]; then
-        echo "::error::Review run pin was advanced from BAIT_SHA=${BAIT_SHA} to PIN_SHA=${PIN_SHA} after a cancellation, but no successor run with head_sha=${PIN_SHA} appeared within ${REVIEW_TIMEOUT}m — the editor's fix-commit push did not produce a review_autofix run"
+        echo "::error::Review run pin was advanced from BAIT_SHA=${BAIT_SHA} to PIN_SHA=${PIN_SHA} after a cancellation, but no successor run with head_sha=${PIN_SHA} appeared within ${REVIEW_TIMEOUT}m — the editor's fix-commit push did not produce a review_autofix run$(e2e_watched_run_urls)"
       else
         echo "::error::No review workflow run (Internal: AI Review & Autofix) with head_sha=${BAIT_SHA} ever appeared within ${REVIEW_TIMEOUT}m — neither the bait push's pull_request:synchronize event nor the Phase 3c workflow_dispatch fallback produced a review run"
       fi
@@ -823,7 +845,7 @@ while true; do
         || echo "  (inventory fetch failed)" >&2
       exit 1
     fi
-    echo "::error::Review phase stalled — no activity for ${REVIEW_TIMEOUT} minutes"
+    echo "::error::Review phase stalled — no activity for ${REVIEW_TIMEOUT} minutes$(e2e_watched_run_urls)"
     echo "status=timeout" >> "$GITHUB_OUTPUT"
     exit 1
   fi
