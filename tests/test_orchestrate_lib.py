@@ -3826,6 +3826,10 @@ def test_prepush_gate_orchestrator_scoping_wiring_contract():
 	augment_idx = workflow.index("python3 scripts/orchestrate_lib.py augment-files-touched")
 	partition_idx = workflow.index("python3 scripts/orchestrate_lib.py check-partition")
 	assert validate_idx < augment_idx < partition_idx
+	# A model-supplied marker is dropped before augmentation (issue #8244).
+	strip_idx = workflow.index("jq 'del(.prepush_augmented_paths)' \"${DECOMPOSITION_FILE}\"")
+	assert validate_idx < strip_idx < workflow.index('_prepush_gate_mode="$(printf') < augment_idx
+	assert "outcome=marker_dropped reason=model_supplied" in workflow
 	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in workflow
 	assert '"${PREPUSH_TEST_GATE_MODE:-repair}"' in workflow
 	assert "PREPUSH_TEST_GATE outcome=mode_invalid" in workflow

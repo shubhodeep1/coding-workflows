@@ -1091,6 +1091,21 @@ jobs:
           # pending_issue_defs read files_touched. The gate module comes only
           # from the trusted support checkout; the repository checkout is
           # read as data. A missing module or any failure is a no-op.
+          # The decomposition was just written from model output, so a
+          # prepush_augmented_paths key in it can only be model-supplied. Drop
+          # it before augmentation, so the partition guard only ever sees a
+          # marker augment-files-touched wrote in this run, also when the
+          # gate is off, fails or times out (issue #8244).
+          if jq -e 'type == "object" and has("prepush_augmented_paths")' "${DECOMPOSITION_FILE}" >/dev/null 2>&1; then
+            if jq 'del(.prepush_augmented_paths)' "${DECOMPOSITION_FILE}" > "${DECOMPOSITION_FILE}.marker-strip.tmp"; then
+              mv "${DECOMPOSITION_FILE}.marker-strip.tmp" "${DECOMPOSITION_FILE}"
+              echo "PREPUSH_TEST_GATE phase=augment outcome=marker_dropped reason=model_supplied"
+            else
+              rm -f "${DECOMPOSITION_FILE}.marker-strip.tmp"
+              echo "::error::PREPUSH_TEST_GATE phase=augment outcome=failed reason=marker_strip_failed"
+              exit 1
+            fi
+          fi
           _prepush_gate_mode="$(printf '%s' "${PREPUSH_TEST_GATE_MODE:-repair}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
           case "${_prepush_gate_mode}" in
             off|report|repair) ;;

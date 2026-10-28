@@ -807,6 +807,10 @@ def test_implement_prepush_gate_limit_keys_on_the_working_run_step_only() -> Non
 	cur_state = next(line for line in script.splitlines() if line.strip().startswith("CUR_STATE="))
 	assert cur_state.strip() == 'CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT};working=${IMPL_RUN_ID_WORKING}"', cur_state
 	assert "INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))" in script
+	# The literal must match the step implement.yml runs, or the extended
+	# limit silently stops applying.
+	implement = (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8")
+	assert implement.count(f"- name: {PREPUSH_GATE_STEP}\n") == 1
 
 
 # --- Watched run URLs (issue #8248) -----------------------------------------
