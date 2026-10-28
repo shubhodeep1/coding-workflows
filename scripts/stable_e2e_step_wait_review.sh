@@ -830,7 +830,7 @@ while true; do
     # "null" rather than empty, so both branches are needed.
     if [ -n "${BAIT_SHA:-}" ] && { [ -z "${REVIEW_RUN:-}" ] || [ "${REVIEW_RUN}" = "null" ]; }; then
       if [ "${PIN_SHA:-}" != "${BAIT_SHA:-}" ]; then
-        echo "::error::Review run pin was advanced from BAIT_SHA=${BAIT_SHA} to PIN_SHA=${PIN_SHA} after a cancellation, but no successor run with head_sha=${PIN_SHA} appeared within ${REVIEW_TIMEOUT}m — the editor's fix-commit push did not produce a review_autofix run"
+        echo "::error::Review run pin was advanced from BAIT_SHA=${BAIT_SHA} to PIN_SHA=${PIN_SHA} after a cancellation, but no successor run with head_sha=${PIN_SHA} appeared within ${REVIEW_TIMEOUT}m — the editor's fix-commit push did not produce a review_autofix run$(e2e_watched_run_urls)"
       else
         echo "::error::No review workflow run (Internal: AI Review & Autofix) with head_sha=${BAIT_SHA} ever appeared within ${REVIEW_TIMEOUT}m — neither the bait push's pull_request:synchronize event nor the Phase 3c workflow_dispatch fallback produced a review run"
       fi

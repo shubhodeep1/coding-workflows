@@ -453,8 +453,6 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 			"STUB_GH_LOG": str(log_file),
 			"STUB_RUN_PAGES": str(pages_file),
 			"STUB_LABELS": labels,
-			# wait-implement reads its window start from the step env (#8248).
-			"IMPL_CREATED_AFTER_INPUT": APPROVED_AT,
 		})
 		if pr_number is not None:
 			env["STUB_PR_NUMBER"] = str(pr_number)
@@ -739,18 +737,6 @@ def test_implement_activity_state_tracks_working_run() -> None:
 	assert "Implement phase stalled" in script
 
 
-def main() -> int:
-	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-	for test in tests:
-		test()
-	print(f"{len(tests)} passed")
-	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # --- Watched run URLs (issue #8248) -----------------------------------------
 # Heal #8241 could not see the Implement run behind release run 40608957733:
 # the e2e job's log never printed its id. The waits now name the scoped runs
@@ -817,3 +803,15 @@ def test_wait_implement_takes_its_window_start_from_env() -> None:
 	script = _phase_step_script("wait-implement")
 	assert 'IMPL_CREATED_AFTER="${IMPL_CREATED_AFTER_INPUT:-}"' in script
 	assert "${{" not in script
+
+
+def main() -> int:
+	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

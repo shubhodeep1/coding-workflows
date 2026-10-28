@@ -9200,6 +9200,30 @@ def test_linked_run_timeline_running_steps_sanitized_names_and_caps() -> None:
 	assert len(text.encode("utf-8")) <= heal.LINKED_RUN_TEXT_MAX_BYTES + 32
 
 
+def test_linked_run_timeline_finds_long_steps_past_the_display_caps() -> None:
+	# The Implement gate sits after more than 40 non-skipped steps: it must
+	# still be marked [LONG], shown and chosen as the longest step.
+	base = datetime(2026, 10, 27, 10, 0, 0, tzinfo=timezone.utc)
+	steps = []
+	for index in range(55):
+		start = base + timedelta(seconds=index * 10)
+		steps.append({"name": f"step {index}", "status": "completed", "conclusion": "success",
+			"started_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": (start + timedelta(seconds=5)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+	gate_start = base + timedelta(seconds=600)
+	steps.append({"name": "Pre-push affected-test gate", "status": "completed", "conclusion": "cancelled",
+		"started_at": gate_start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": (gate_start + timedelta(seconds=1868)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+	jobs = [{"id": 9000 + index, "name": f"job {index}", "steps": []} for index in range(25)]
+	jobs.append({"id": 9600, "name": "implement", "status": "completed", "conclusion": "cancelled", "steps": steps})
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": jobs}, repo=CONSUMER_REPO, run_id="600")
+	assert result["ok"] is True
+	assert result["longest"]["job_id"] == 9600
+	assert result["longest"]["start"] == gate_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+	assert "Pre-push affected-test gate:" in result["text"] and "[LONG]" in result["text"]
+	assert "job: implement" in result["text"]
+	assert "more steps not shown" in result["text"] and "more jobs not shown" in result["text"]
+	assert len(result["text"].encode("utf-8")) <= heal.LINKED_RUN_TEXT_MAX_BYTES + 32
+
+
 def test_slice_log_to_window() -> None:
 	assert heal.slice_log_to_window(LINKED_JOB_LOG, "2026-10-27T10:02:00Z", "2026-10-27T10:33:08Z") == (
 		"2026-10-27T10:02:01.0000000Z PREPUSH_TEST_GATE phase=implement running 214 tests\n"

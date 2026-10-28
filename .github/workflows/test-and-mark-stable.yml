@@ -1642,6 +1642,7 @@ jobs:
             fi
 
             e2e_note_watched_run "${IMPL_RUN_ID_LATEST:-}" Implement
+            e2e_note_watched_run "${IMPL_RUN_ID_WORKING:-}" Implement
 
             if [ "$IMPL_RETURNED_TO_APPROVAL" = true ]; then
               echo "  ↩ Issue #${ISSUE_NUMBER} returned to ai:awaiting-approval — latest scoped Implement run: id=${IMPL_RUN_ID_LATEST:-unknown} status=${IMPL_RUN_STATUS} conclusion=${IMPL_RUN_CONCLUSION_LATEST}"

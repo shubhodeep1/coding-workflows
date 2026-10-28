@@ -848,14 +848,20 @@ def render_linked_run_timeline(
 		f" | created: {_linked_run_name(run.get('created_at'))}"
 		f" | updated: {_linked_run_name(run.get('updated_at'))} ---"
 	]
+	# [LONG] marks and the longest step are decided over every job and step;
+	# the caps below only limit what is rendered, so a stalled step past the
+	# 40th (the Implement gate) is still shown and its log still fetched.
 	longest: dict[str, Any] | None = None
 	longest_secs = -1
+	longest_key: tuple[int, int] | None = None
 	job_list = [job for job in jobs["jobs"] if isinstance(job, dict)]
-	for job in job_list[:LINKED_RUN_MAX_JOBS]:
+	rendered_jobs: list[tuple[int, str, list[tuple[int, str, bool]], int]] = []
+	for job_index, job in enumerate(job_list):
 		job_id = job.get("id")
-		lines.append(f"job: {_linked_run_name(job.get('name'))} (status: {_linked_run_name(job.get('status'))}, conclusion: {_linked_run_name(job.get('conclusion') or 'none')})")
+		header = f"job: {_linked_run_name(job.get('name'))} (status: {_linked_run_name(job.get('status'))}, conclusion: {_linked_run_name(job.get('conclusion') or 'none')})"
 		steps = [step for step in (job.get("steps") or []) if isinstance(step, dict) and step.get("conclusion") != "skipped"]
-		for step in steps[:LINKED_RUN_MAX_STEPS_PER_JOB]:
+		step_lines: list[tuple[int, str, bool]] = []
+		for step_index, step in enumerate(steps):
 			start = _parse_actions_ts(step.get("started_at"))
 			end = _parse_actions_ts(step.get("completed_at"))
 			running = False
@@ -865,30 +871,57 @@ def render_linked_run_timeline(
 			name = _linked_run_name(step.get("name"))
 			conclusion = _linked_run_name(step.get("conclusion") or step.get("status") or "unknown")
 			if start is None:
-				lines.append(f"  - {name}: not started ({conclusion})")
+				step_lines.append((step_index, f"  - {name}: not started ({conclusion})", False))
 				continue
 			start_text = start.strftime("%Y-%m-%dT%H:%M:%SZ")
 			if end is None or end < start:
-				lines.append(f"  - {name}: {start_text} -> ? ({conclusion})")
+				step_lines.append((step_index, f"  - {name}: {start_text} -> ? ({conclusion})", False))
 				continue
 			end_text = end.strftime("%Y-%m-%dT%H:%M:%SZ")
 			duration = int((end - start).total_seconds())
-			mark = ""
-			if duration >= long_step_secs or (stall_secs is not None and duration > stall_secs):
-				mark = " [LONG]"
+			is_long = duration >= long_step_secs or (stall_secs is not None and duration > stall_secs)
+			mark = " [LONG]" if is_long else ""
 			suffix = " (still running)" if running else ""
-			lines.append(f"  - {name}: {start_text} -> {end_text}{suffix} ({_format_duration(duration)}) {conclusion}{mark}")
+			step_lines.append((step_index, f"  - {name}: {start_text} -> {end_text}{suffix} ({_format_duration(duration)}) {conclusion}{mark}", is_long))
 			if isinstance(job_id, int) and duration > longest_secs:
 				longest_secs = duration
 				longest = {"job_id": job_id, "start": start_text, "end": end_text}
-		if len(steps) > LINKED_RUN_MAX_STEPS_PER_JOB:
-			lines.append(f"  ({len(steps) - LINKED_RUN_MAX_STEPS_PER_JOB} more steps not shown)")
-	if len(job_list) > LINKED_RUN_MAX_JOBS:
-		lines.append(f"({len(job_list) - LINKED_RUN_MAX_JOBS} more jobs not shown)")
-	total = jobs.get("total_count")
-	if isinstance(total, int) and total > 100:
-		lines.append(f"(jobs listing truncated: {total} jobs, first 100 read)")
-	text = "\n".join(lines) + "\n"
+				longest_key = (job_index, step_index)
+		rendered_jobs.append((job_index, header, step_lines, len(steps)))
+
+	def _is_priority(job_index: int, step_index: int, is_long: bool) -> bool:
+		return is_long or longest_key == (job_index, step_index)
+
+	def _render(priority_only: bool) -> str:
+		out = list(lines)
+		shown_jobs = 0
+		for job_index, header, step_lines, step_count in rendered_jobs:
+			has_priority = any(_is_priority(job_index, idx, flag) for idx, _line, flag in step_lines)
+			if job_index >= LINKED_RUN_MAX_JOBS and not has_priority:
+				continue
+			shown_jobs += 1
+			out.append(header)
+			shown_steps = 0
+			for step_index, line, is_long in step_lines:
+				keep = _is_priority(job_index, step_index, is_long)
+				if not priority_only and step_index < LINKED_RUN_MAX_STEPS_PER_JOB:
+					keep = True
+				if keep:
+					out.append(line)
+					shown_steps += 1
+			if step_count > shown_steps:
+				out.append(f"  ({step_count - shown_steps} more steps not shown)")
+		if len(job_list) > shown_jobs:
+			out.append(f"({len(job_list) - shown_jobs} more jobs not shown)")
+		total = jobs.get("total_count")
+		if isinstance(total, int) and total > 100:
+			out.append(f"(jobs listing truncated: {total} jobs, first 100 read)")
+		return "\n".join(out) + "\n"
+
+	text = _render(False)
+	if len(text.encode("utf-8")) > LINKED_RUN_TEXT_MAX_BYTES:
+		# Too long: keep only the [LONG] steps and the longest step.
+		text = _render(True)
 	encoded = text.encode("utf-8")
 	if len(encoded) > LINKED_RUN_TEXT_MAX_BYTES:
 		text = encoded[:LINKED_RUN_TEXT_MAX_BYTES].decode("utf-8", errors="ignore").rsplit("\n", 1)[0] + "\n(timeline truncated)\n"
