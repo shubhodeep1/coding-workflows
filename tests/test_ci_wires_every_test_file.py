@@ -22,7 +22,12 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 
 # "tests/<file>": "why it cannot run in CI". Keep it empty when possible.
-UNWIRED_ALLOWLIST: dict[str, str] = {}
+UNWIRED_ALLOWLIST: dict[str, str] = {
+	"tests/test_static_context_agents_index_implement.py": (
+		"runs through tests/test_static_context_agents_index_clarify_plan.py, which imports its tests; "
+		"issue #8262 could not edit ci.yml. Drop this entry once a ci.yml step names the file."
+	),
+}
 
 
 def _strip_comment(line: str) -> str:

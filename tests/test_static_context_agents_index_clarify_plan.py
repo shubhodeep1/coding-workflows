@@ -6,10 +6,16 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+# The implement-phase cases live in their own file; importing them here makes
+# the CI step that runs this file run them too (issue #8262).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_static_context_agents_index_implement import *  # noqa: F403
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "build_static_context.sh"
@@ -150,19 +156,23 @@ def test_no_agents_file_logs_absent(phase: str, mode: str | None) -> None:
 		]
 
 
-def test_implement_phase_ignores_switch() -> None:
+def test_implement_phase_honours_switch() -> None:
+	# Since #8262 implement indexes the local agents file too; inline mode keeps
+	# the full block (tests/test_static_context_agents_index_implement.py).
 	with tempfile.TemporaryDirectory() as tmp:
 		root = _repo(tmp)
-		outputs = []
+		outputs = {}
 		for mode in (None, "index", "inline"):
 			result = _run(root, "implement", mode)
 			assert result.returncode == 0, result.stderr
-			assert _size_lines(result.stderr) == []
-			outputs.append((root / "out.txt").read_bytes())
-		assert outputs[0] == outputs[1] == outputs[2]
-		text = outputs[0].decode("utf-8")
-		assert "=== REPO-SPECIFIC AGENTS.MD ===\n" + AGENTS_TEXT in text
-		assert "=== AGENTS.MD INDEX ===" not in text
+			assert len(_size_lines(result.stderr)) == 1
+			outputs[mode] = (root / "out.txt").read_bytes()
+		assert outputs[None] == outputs["index"] != outputs["inline"]
+		assert "=== AGENTS.MD INDEX ===" in outputs["index"].decode("utf-8")
+		assert "BODY_A_SENTINEL" not in outputs["index"].decode("utf-8")
+		inline_text = outputs["inline"].decode("utf-8")
+		assert "=== REPO-SPECIFIC AGENTS.MD ===\n" + AGENTS_TEXT in inline_text
+		assert "=== AGENTS.MD INDEX ===" not in inline_text
 
 
 def _base_script() -> Path | None:

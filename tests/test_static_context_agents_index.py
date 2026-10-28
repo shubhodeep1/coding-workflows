@@ -399,7 +399,8 @@ def _existing_phase_fixture(root: Path) -> str:
 		# clarify and plan inline agents.md only in inline mode since #8260.
 		("clarify", ("inline", "junk", "INLINE")),
 		("plan", ("inline", "junk", "INLINE")),
-		("implement", (None, "index", "inline", "junk")),
+		# implement too since #8262.
+		("implement", ("inline", "junk", "INLINE")),
 	],
 )
 def test_existing_phases_still_inline_full_agents_md(phase: str, modes: tuple) -> None:

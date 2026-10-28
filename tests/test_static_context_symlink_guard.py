@@ -487,7 +487,9 @@ def test_implement_static_context_emits_agents_once_without_canonical_copy() -> 
 			shutil.copy(REPO_ROOT / name, tmp / name)
 		(tmp / "agents.md").write_text("# Agents\nSELF_REPO_AGENTS_SENTINEL\n", encoding="utf-8")
 		out = tmp / "static.txt"
-		env = {**_safe_env(), "RUNTIME_DIR": str(tmp / "runtime")}
+		# Implement indexes agents.md by default since #8262; inline mode keeps
+		# the full file, which is what this checks.
+		env = {**_safe_env(), "RUNTIME_DIR": str(tmp / "runtime"), "STATIC_CONTEXT_AGENTS_MODE": "inline"}
 		(tmp / "runtime").mkdir()
 		subprocess.run(["bash", str(REPO_ROOT / "scripts" / "build_static_context.sh"), "implement", str(out)], cwd=tmp, env=env, check=True)
 		text = out.read_text(encoding="utf-8")
