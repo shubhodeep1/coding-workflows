@@ -1787,12 +1787,13 @@ class MovedPollGroupTwoStepsContractTest(unittest.TestCase):
 # minutes (run 39575950300, budget-watch issue #7798): step name -> (owning job
 # id, module paths or tool directory its body names). The group-2 steps of the
 # same move are in GROUP_PINNED_STEPS. Issue #8179 added three more steps.
+# Issue #8268 moved the Node pair on to tests-heal-plan-and-validation.
 HOOKS_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
 HOOKS_NODE_SETUP_STEP = "Set up Node 22 for the claude-pool-broker Worker tests"
 HOOKS_VITEST_STEP = "claude-pool-broker Worker tests (vitest)"
 MOVED_HOOKS_JOB_STEPS = {
-	HOOKS_NODE_SETUP_STEP: ("tests-release-and-log-analysis", ()),
-	HOOKS_VITEST_STEP: ("tests-release-and-log-analysis", ("tools/claude-pool-broker",)),
+	HOOKS_NODE_SETUP_STEP: ("tests-heal-plan-and-validation", ()),
+	HOOKS_VITEST_STEP: ("tests-heal-plan-and-validation", ("tools/claude-pool-broker",)),
 	# tests-hooks-and-orchestrator took 15m01s of its 20 minutes again (run
 	# 40264887710, budget-watch issue #8179); these three steps moved,
 	# unchanged, to tests-promote-stall-and-review.
@@ -2056,6 +2057,88 @@ class MovedReleaseToPromoteStepsContractTest(unittest.TestCase):
 			with self.subTest(step=name):
 				self.assertIn(name, names)
 				self.assertLess(setup_index, names.index(name))
+
+# Steps moved out of tests-release-and-log-analysis, which took 15m13s of its
+# 20 minutes (run 40716905879, budget-watch issue #8268): step name -> module
+# paths its body names. The Node pair of the same move is in
+# MOVED_HOOKS_JOB_STEPS.
+RELEASE_LOG_TO_HEAL_SOURCE_JOB_ID = "tests-release-and-log-analysis"
+RELEASE_LOG_TO_HEAL_TARGET_JOB_ID = "tests-heal-plan-and-validation"
+RELEASE_LOG_TO_HEAL_SETUP_STEP = "Install Python CI dependencies"
+MOVED_RELEASE_LOG_TO_HEAL_STEPS = {
+	"Workflow log analysis contract tests": (
+		"tests/test_workflow_retro.py",
+		"tests/test_workflow_log_analysis_failure_contract.py",
+		"tests/test_stage_workflow_log_bundle.py",
+	),
+	"Semantic cache unit tests": (
+		"tests/test_semantic_cache.py",
+	),
+}
+
+
+class MovedReleaseLogStepsToHealContractTest(unittest.TestCase):
+	"""The steps moved out of tests-release-and-log-analysis run once, in one job (#8268)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def target_step_names(self) -> list:
+		return [step.get("name") for step in self.jobs()[RELEASE_LOG_TO_HEAL_TARGET_JOB_ID]["steps"]]
+
+	def test_each_step_is_owned_only_by_the_heal_job(self) -> None:
+		for name in MOVED_RELEASE_LOG_TO_HEAL_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[RELEASE_LOG_TO_HEAL_TARGET_JOB_ID],
+				)
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_RELEASE_LOG_TO_HEAL_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_RELEASE_LOG_TO_HEAL_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[RELEASE_LOG_TO_HEAL_SOURCE_JOB_ID]["steps"]}
+		for name in (*MOVED_RELEASE_LOG_TO_HEAL_STEPS, HOOKS_NODE_SETUP_STEP, HOOKS_VITEST_STEP):
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_heal_job_setup(self) -> None:
+		names = self.target_step_names()
+		self.assertIn(RELEASE_LOG_TO_HEAL_SETUP_STEP, names, RELEASE_LOG_TO_HEAL_TARGET_JOB_ID)
+		setup_index = names.index(RELEASE_LOG_TO_HEAL_SETUP_STEP)
+		for name in MOVED_RELEASE_LOG_TO_HEAL_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(setup_index, names.index(name))
+
+	def test_node_pair_runs_in_order_after_the_heal_job_setup(self) -> None:
+		names = self.target_step_names()
+		for name in (RELEASE_LOG_TO_HEAL_SETUP_STEP, HOOKS_NODE_SETUP_STEP, HOOKS_VITEST_STEP):
+			self.assertIn(name, names)
+		self.assertLess(names.index(RELEASE_LOG_TO_HEAL_SETUP_STEP), names.index(HOOKS_NODE_SETUP_STEP))
+		self.assertLess(names.index(HOOKS_NODE_SETUP_STEP), names.index(HOOKS_VITEST_STEP))
+
 
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
 PROMOTE_CYCLE_JOB_ID = "tests-release-and-log-analysis"
