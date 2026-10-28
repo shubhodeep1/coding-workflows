@@ -2172,9 +2172,11 @@ jobs:
       # timings were not readable when this was planned; these steps were
       # picked by test and subprocess counts, not measured. This job had the
       # most room: since its last issue it gave up four steps in #8208, four
-      # in #8245 and four in #8268, and #8268 removed the collector test that
-      # took about 5 minutes here. None needs Node or the prepared .claude/
-      # live copies. Names and bodies unchanged.
+      # in #8245 and four in #8268, and #8268 fixed the collector test whose
+      # step took about 5 minutes here (it now runs in seconds). All four steps
+      # below come from the source job; the last two first reached it from
+      # tests-promote-stall-and-review (#7677), noted above them. None needs
+      # Node or the prepared .claude/ live copies. Names and bodies unchanged.
       - name: Validate process cross-cycle escalation unit tests
         run: |
           set -euo pipefail
