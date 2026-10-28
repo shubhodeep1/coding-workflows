@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-10-28T06:38:41Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=docs/plans/unattended-prompt-diet-plan.md:212-251; cited_path=.github/workflows/clarify.yml, .github/workflows/plan.yml, .github/workflows/implement.yml, scripts/stage_workflow_support.sh; files_touched=docs/plans/unattended-prompt-diet-plan.md.",
+  "phase": "review_autofix",
+  "pr_number": 8252,
+  "record_id": "lesson_20261028063841_d5d5db5f15",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/clarify.yml, .github/workflows/plan.yml, .github/workflows/implement.yml, scripts/stage_workflow_support.sh",
+    "docs/plans/unattended-prompt-diet-plan.md"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-10-28T06:38:41Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=docs/plans/unattended-prompt-diet-plan.md:7-8, 49-52; cited_path=PR description; files_touched=docs/plans/unattended-prompt-diet-plan.md.",
+  "phase": "review_autofix",
+  "pr_number": 8252,
+  "record_id": "lesson_20261028063841_9a0e1ef6aa",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description",
+    "docs/plans/unattended-prompt-diet-plan.md"
+  ]
+}
