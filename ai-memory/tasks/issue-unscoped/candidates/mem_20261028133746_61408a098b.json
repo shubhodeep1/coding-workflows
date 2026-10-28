@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate.yml:1094-1114 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The `mv \"${DECOMPOSITION_FILE}.marker-strip.tmp\" \"${DECOMPOSITION_FILE}\"` in the marker-strip block is not explicitly gated, so a failure could leave the model-supplied `prepush_augmented_paths` marker in place and an orphan temp file behind.\n  WHY: Severity disagreement: minimax_minimax-m3 said MAJOR, google_gemini-3_1-flash-lite said NIT, and z-ai_glm-5_3-flash said NIT. The highest is used. z-ai_glm-5_3-flash and anthropic_claude-sonnet-5_5 both checked that `set -euo pipefail` at line 1077 aborts the step on a failed `mv`, so the only residual defects are a missing structured `PREPUSH_TEST_GATE` failure line and the leftover temp file. anthropic_claude-sonnet-5_5 dropped the finding as not reproducible.\n- tests/test_orchestrate_lib.py:3807-3813 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash, anthropic_claude-sonnet-5_5]\n  PROBLEM: `test_orchestrate_overlap_log_filter_compiles_and_formats` prints \"SKIP jq not installed\" and returns when jq is absent, so pytest records a PASS while the jq filter never runs.\n  WHY: A jq regression would pass silently on a runner without jq. CI runners ship jq, so this is test hygiene only (NIT). anthropic_claude-sonnet-5_5 mentioned it as a NIT without raising it as a defect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_lib.py | severity=low\n  PROBLEM: The jq-filter test prints SKIP and returns when jq is absent, so it passes without running the filter.\n  WHY: GitHub runners ship jq, so the filter runs in CI. The reviewer called this a NIT and did not raise it as a defect.\n- .github/workflows/orchestrate.yml:1094-1107 (pass-1 finding from minimax_minimax-m3, dropped by this reviewer)\n  PROBLEM: A failing `mv` would let the model-supplied marker survive.\n  WHY: Dropped as not reproducible. Line 1077 sets `set -euo pipefail` inside this step before the block, so a failing `mv` aborts the step.\n- All other checklist sections were reported as NONE. HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate.yml:1099-1100 | severity=low | confidence=3\n  PROBLEM: The `mv \"${DECOMPOSITION_FILE}.marker-strip.tmp\" \"${DECOMPOSITION_FILE}\"` is not checked for success. If it fails, the decomposition file could be left inconsistent or lost, and an orphan temp file remains.\n  WHY: If the filesystem operation fails (permissions or disk space), the script continues without the expected decomposition file, likely breaking later steps. The reviewer labelled it SEVERITY: NIT.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/orchestrate.yml:1094-1114 | severity=high | confidence=4\n  PROBLEM: The marker-strip block fails closed only when `jq 'del(.prepush_augmented_paths)'` exits non-zero. The following `mv` is not gated, so a failure leaves an orphan `.marker-strip.tmp` and the original file still carrying the model-supplied marker. The success log line `PREPUSH_TEST_GATE phase=augment outcome=marker_dropped reason=model_supplied` is printed unconditionally after the `mv`.\n  WHY: The surviving marker reaches `augment-files-touched`, `check-partition` and `compute-waves`, so siblings sharing only an augmented path can still be auto-serialized, which is the failure the strip was added to prevent. The reviewer labelled it SEVERITY: MAJOR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_lib.py:3807-3813 | severity=low | confidence=5\n  PROBLEM: When jq is not on PATH, `test_orchestrate_overlap_log_filter_compiles_and_formats` prints \"SKIP jq not installed\" and returns, so pytest records a PASS while the filter is never executed. The reviewer said the issue was introduced in the original PR, not by the last run.\n  WHY: A regression in the jq filter would pass silently on a jq-less runner. CI runners have jq, so this is test hygiene, not a product defect. The reviewer labelled it SEVERITY: NIT.\n- .github/workflows/orchestrate.yml:1099-1108 | severity=low | confidence=4\n  PROBLEM: The `mv` at line 1101 that installs the stripped decomposition is not explicitly gated like the `jq 'del(...)'` call. The reviewer corrected the pass-1 claim: `set -euo pipefail` (line 1077) makes a failing `mv` abort the step. The residual defects are that no structured `PREPUSH_TEST_GATE phase=augment outcome=failed reason=marker_strip_failed` line is emitted and the temp file `${DECOMPOSITION_FILE}.marker-strip.tmp` is left behind.\n  WHY: This only occurs on a `mv` failure, which is very unlikely, and the step fails closed. The reviewer labelled it SEVERITY: NIT.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bee872e27bd1af3caef322a18ad98c732808f4573a6c466f78adb9778d2ce8bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8259,
+    "run_id": "40695269559",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40695269559",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028133746_61408a098b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8259,
+    "run_id": "40695269559"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T13:37:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
