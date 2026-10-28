@@ -1529,6 +1529,41 @@ jobs:
           # Issue #4701: default-branch review dispatches and PR-named run lookups.
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_dispatch_default_branch.py
 
+      # Moved from tests-release-and-log-analysis, which took 15m13s of its 20
+      # minutes on main (run 40716905879, budget-watch issue #8268). That run's
+      # step timings were not readable, so these steps were chosen by estimated
+      # cost, not measured. The Node pair came to that job from
+      # tests-hooks-and-orchestrator (#7798) and moves as a pair: the Node setup
+      # runs first and the vitest step keeps its working directory. None of the
+      # four steps needs git history, so this job's default depth-1 checkout is
+      # enough (the source job fetches full history only for
+      # tests/claude_template_drift.py). Names and bodies unchanged.
+      - name: Set up Node 22 for the claude-pool-broker Worker tests
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: claude-pool-broker Worker tests (vitest)
+        working-directory: tools/claude-pool-broker
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx vitest run
+
+      - name: Workflow log analysis contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stage_workflow_log_bundle.py
+
+      - name: Semantic cache unit tests
+        run: |
+          set -euo pipefail
+          python3 -m coverage erase
+          python3 -m coverage run tests/test_semantic_cache.py
+          python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
+
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -2171,40 +2206,6 @@ jobs:
           python3 -m coverage erase
           PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
           python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
-
-      - name: Workflow log analysis contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stage_workflow_log_bundle.py
-
-      - name: Semantic cache unit tests
-        run: |
-          set -euo pipefail
-          python3 -m coverage erase
-          python3 -m coverage run tests/test_semantic_cache.py
-          python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
-
-      # Moved from tests-hooks-and-orchestrator, which took 15m06s of its 20
-      # minutes on main (run 39575950300, budget-watch issue #7798). That run's
-      # step timings were not readable and the implement sandbox had no network
-      # for `npm ci`, so this pair is from the plan's fallback list, chosen by
-      # estimated cost, not measured. This job is estimated at about 12-13
-      # minutes after #7699 sharded its promote-cycle step. The Node setup runs
-      # first and the vitest step keeps its working directory. Names and bodies
-      # unchanged.
-      - name: Set up Node 22 for the claude-pool-broker Worker tests
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-
-      - name: claude-pool-broker Worker tests (vitest)
-        working-directory: tools/claude-pool-broker
-        run: |
-          set -euo pipefail
-          npm ci --no-audit --no-fund
-          npx vitest run
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path

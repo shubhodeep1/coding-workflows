@@ -460,8 +460,9 @@ case "${REPORT_ORIGIN}" in
 esac
 # A synced_security_finding report needs a verified identity whatever
 # WORKFLOW_HEAL_REQUIRE_REPORT_AUTH says, and its release SHA must be the ref
-# the consumer's security-audit.yml ran at.
-if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
+# the consumer's security-audit.yml ran at. A synced_check_failure report
+# (issue #8265) is held to the same rule against check_failure_triage.yml.
+if [ "${SOURCE_KIND}" = "synced_security_finding" ] || [ "${SOURCE_KIND}" = "synced_check_failure" ]; then
 	if [ "${REPORT_AUTH}" != "verified" ]; then
 		_report_auth_reject "identity_required"
 	fi
@@ -494,6 +495,10 @@ fi
 # coding-workflows files its own audit findings in-repo.
 if [ "${SOURCE_KIND}" = "synced_security_finding" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
 	log "skip reason=synced_security_self_repo source=${SOURCE_REPO}"
+	exit 0
+fi
+if [ "${SOURCE_KIND}" = "synced_check_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+	log "skip reason=synced_check_self_repo source=${SOURCE_REPO}"
 	exit 0
 fi
 
@@ -662,6 +667,7 @@ _git_fetch_diagnosis_ref()
 _heal_report_claimed_no_runs()
 {
 	[ "${SOURCE_KIND:-}" != "synced_security_finding" ] \
+		&& [ "${SOURCE_KIND:-}" != "synced_check_failure" ] \
 		&& [ -z "${ENGINE_REPORTER_RUN_REF:-}" ] \
 		&& [ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
@@ -733,6 +739,51 @@ _heal_intake_scope_guard_permits_create()
 	return 1
 }
 
+# --- Shared release checks for pointer-only synced reports -------------------
+#
+# synced_security_finding and synced_check_failure reports name a consumer's
+# release SHA (bound to the verified identity above). Writes into <dir>:
+# release_compare.json, managed_digests.json, audit_gate_contract.json and
+# retired_paths.txt, and sets SYNCED_REPORTER_RUN. Any failure rejects the
+# report (_report_auth_reject exits).
+_synced_release_prepare()
+{
+	local sr_dir="$1"
+	mkdir -p "${sr_dir}"
+	SYNCED_REPORTER_RUN="$(jq -r '.claims.run_id // ""' "${VERIFY_FILE}" 2>/dev/null || echo "")"
+	[[ "${SYNCED_REPORTER_RUN}" =~ ^[1-9][0-9]*$ ]] || _report_auth_reject "reporter_run_unbound"
+
+	# The release tree the consumer synced from.
+	if ! git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null; then
+		_git_fetch_diagnosis_ref "${WRAPPER_SHA}" || true
+	fi
+	git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null || _report_auth_reject "release_unavailable"
+	# CLAUDE.md §14 audit: no other intake call proves that the release SHA is
+	# on `stable` (a fetch by SHA can return a fork-network commit whose tree
+	# would forge the managed-paths list). One call per report, not per finding.
+	if ! gh_api_json_to_file "${sr_dir}/release_compare.json" gh api --method GET "repos/${SELF_REPO}/compare/${WRAPPER_SHA}...stable" 2>/dev/null; then
+		_report_auth_reject "release_unavailable"
+	fi
+	jq -e '.status == "ahead" or .status == "identical"' "${sr_dir}/release_compare.json" >/dev/null 2>&1 || _report_auth_reject "release_not_on_stable"
+	if ! timeout 120 env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
+		python3 -I -B "$(dirname "${HEAL_PY}")/build_sync_manifest.py" managed-digests --repo-root . --commit "${WRAPPER_SHA}" > "${sr_dir}/managed_digests.json" 2>/dev/null \
+		|| ! jq -e 'type == "object" and length > 0' "${sr_dir}/managed_digests.json" >/dev/null 2>&1; then
+		_report_auth_reject "release_unavailable"
+	fi
+	if ! git show "${WRAPPER_SHA}:workflow-templates/audit-gate/contract.json" > "${sr_dir}/audit_gate_contract.json" 2>/dev/null \
+		|| ! jq -e 'type == "object"' "${sr_dir}/audit_gate_contract.json" >/dev/null 2>&1; then
+		printf '{}' > "${sr_dir}/audit_gate_contract.json"
+	fi
+	# Retired files are managed paths (the consumer's sync deletes byte-identical
+	# copies), but coding-workflows no longer ships them, so a finding on one has
+	# no source to fix. Their consumer paths come from the release's own list
+	# and from HEAD's (a file retired after the consumer's pin has no source at
+	# HEAD either); an absent or unreadable list means no file is retired.
+	{ git show "${WRAPPER_SHA}:workflow-templates/retired_files.txt" 2>/dev/null || true
+		git show "HEAD:workflow-templates/retired_files.txt" 2>/dev/null || true; } \
+		| awk '$1 != "" && substr($1, 1, 1) != "#" { print $1 }' > "${sr_dir}/retired_paths.txt" 2>/dev/null || : > "${sr_dir}/retired_paths.txt"
+}
+
 # --- Synced-file security findings (synced_security_finding) ----------------
 #
 # A consumer security audit reports high / critical findings on files the
@@ -752,7 +803,7 @@ _synced_security_finding_intake()
 	local ss_dir="${RUNTIME_DIR}/synced_security"
 	local ss_bucket="${HEAL_SYNCED_SECURITY_LINE_BUCKET:-25}"
 	local ss_findings=0 ss_opened=0 ss_occurrences=0 ss_skipped=0 ss_failed=0 ss_attention=0
-	local ss_reporter_run="" ss_compare="" ss_digests="" ss_contract="" ss_groups="" ss_issues=""
+	local ss_reporter_run="" ss_digests="" ss_contract="" ss_groups="" ss_issues=""
 	local ss_path_check="" ss_count=0 ss_index=0 ss_links="" ss_action="" ss_reason="" ss_level="DEBUG"
 	local ss_group="" ss_decision="" ss_existing="" ss_prior="" ss_gen="" ss_root="" ss_label=""
 	local ss_scope="" ss_scope_input="" ss_scope_status="" ss_title="" ss_body="" ss_url="" ss_number=""
@@ -762,42 +813,11 @@ _synced_security_finding_intake()
 	CLASSIFICATION="workflow-defect"
 	FP="none"
 	ss_findings="$(jq -r '.findings | length' "${PAYLOAD_FILE}" 2>/dev/null || echo 0)"
-	ss_reporter_run="$(jq -r '.claims.run_id // ""' "${VERIFY_FILE}" 2>/dev/null || echo "")"
-	[[ "${ss_reporter_run}" =~ ^[1-9][0-9]*$ ]] || _report_auth_reject "reporter_run_unbound"
-
-	# The release tree the consumer synced from.
-	if ! git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null; then
-		_git_fetch_diagnosis_ref "${WRAPPER_SHA}" || true
-	fi
-	git cat-file -e "${WRAPPER_SHA}^{commit}" 2>/dev/null || _report_auth_reject "release_unavailable"
-	# CLAUDE.md §14 audit: no other intake call proves that the release SHA is
-	# on `stable` (a fetch by SHA can return a fork-network commit whose tree
-	# would forge the managed-paths list). One call per report, not per finding.
-	ss_compare="${ss_dir}/release_compare.json"
-	if ! gh_api_json_to_file "${ss_compare}" gh api --method GET "repos/${SELF_REPO}/compare/${WRAPPER_SHA}...stable" 2>/dev/null; then
-		_report_auth_reject "release_unavailable"
-	fi
-	jq -e '.status == "ahead" or .status == "identical"' "${ss_compare}" >/dev/null 2>&1 || _report_auth_reject "release_not_on_stable"
+	_synced_release_prepare "${ss_dir}"
+	ss_reporter_run="${SYNCED_REPORTER_RUN}"
 	ss_digests="${ss_dir}/managed_digests.json"
-	if ! timeout 120 env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
-		python3 -I -B "$(dirname "${HEAL_PY}")/build_sync_manifest.py" managed-digests --repo-root . --commit "${WRAPPER_SHA}" > "${ss_digests}" 2>/dev/null \
-		|| ! jq -e 'type == "object" and length > 0' "${ss_digests}" >/dev/null 2>&1; then
-		_report_auth_reject "release_unavailable"
-	fi
 	ss_contract="${ss_dir}/audit_gate_contract.json"
-	if ! git show "${WRAPPER_SHA}:workflow-templates/audit-gate/contract.json" > "${ss_contract}" 2>/dev/null \
-		|| ! jq -e 'type == "object"' "${ss_contract}" >/dev/null 2>&1; then
-		printf '{}' > "${ss_contract}"
-	fi
-	# Retired files are managed paths (the consumer's sync deletes byte-identical
-	# copies), but coding-workflows no longer ships them, so a finding on one has
-	# no source to fix. Their consumer paths come from the release's own list
-	# and from HEAD's (a file retired after the consumer's pin has no source at
-	# HEAD either); an absent or unreadable list means no file is retired.
 	ss_retired="${ss_dir}/retired_paths.txt"
-	{ git show "${WRAPPER_SHA}:workflow-templates/retired_files.txt" 2>/dev/null || true
-		git show "HEAD:workflow-templates/retired_files.txt" 2>/dev/null || true; } \
-		| awk '$1 != "" && substr($1, 1, 1) != "#" { print $1 }' > "${ss_retired}" 2>/dev/null || : > "${ss_retired}"
 	if ! ss_path_check="$(python3 "${HEAL_PY}" synced-security-check-paths --payload-json "${PAYLOAD_FILE}" --managed-digests-json "${ss_digests}" 2>/dev/null)"; then
 		ss_reason="$(jq -r '.reason // "unmanaged_path"' <<< "${ss_path_check}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
 		_report_auth_reject "${ss_reason:-unmanaged_path}"
@@ -970,10 +990,181 @@ _synced_security_finding_intake()
 	[ "${ss_failed}" -eq 0 ]
 }
 
+# --- Synced-file check failures (synced_check_failure, issue #8265) ----------
+#
+# A consumer's check-failure triage traced a failing check to files the
+# @stable sync manages and the consumer has not modified. Pointers only (no
+# log read, no diagnosis model): the release must be on `stable`, every path a
+# managed path of that release. One fingerprint over the sorted paths, so the
+# same defect from several PRs or consumers becomes one issue with occurrence
+# comments. A path whose template source changed between the release and
+# `stable` is skipped: the consumer's next sync brings the change.
+_synced_check_failure_intake()
+{
+	local sc_dir="${RUNTIME_DIR}/synced_check"
+	local sc_paths=0 sc_outcome="skipped" sc_reason="" sc_level="DEBUG" sc_link="" sc_check=""
+	local sc_sources="" sc_decision="" sc_action="" sc_gen="" sc_root="" sc_existing="" sc_prior="" sc_label=""
+	local sc_scope="" sc_scope_input="" sc_scope_json="" sc_scope_rc=0 sc_scope_status="" sc_title="" sc_body="" sc_url=""
+	local sc_issues="" sc_files_count="" sc_path=""
+	mkdir -p "${sc_dir}"
+	HEAL_SCOPE_RECOVERY_ACTIVE="false"
+	CLASSIFICATION="workflow-defect"
+	FP="none"
+	sc_paths="$(jq -r '.paths | length' "${PAYLOAD_FILE}" 2>/dev/null || echo 0)"
+	_synced_release_prepare "${sc_dir}"
+	if ! sc_check="$(python3 "${HEAL_PY}" synced-check-check-paths --payload-json "${PAYLOAD_FILE}" --managed-digests-json "${sc_dir}/managed_digests.json" 2>/dev/null)"; then
+		sc_reason="$(jq -r '.reason // "unmanaged_path"' <<< "${sc_check}" 2>/dev/null | tr -cd 'a-z_' | head -c 40 || true)"
+		_report_auth_reject "${sc_reason:-unmanaged_path}"
+	fi
+	FP="$(python3 "${HEAL_PY}" synced-check-fingerprint --payload-json "${PAYLOAD_FILE}" 2>/dev/null | tr -cd '0-9a-f' | head -c 64)"
+	if [ "${#FP}" -ne 64 ]; then
+		log "error synced_check_fingerprint_failed source=${SOURCE_REPO}"
+		exit 1
+	fi
+	sc_sources="${sc_dir}/sources.json"
+	python3 "${HEAL_PY}" synced-check-sources --payload-json "${PAYLOAD_FILE}" --audit-gate-contract-json "${sc_dir}/audit_gate_contract.json" > "${sc_sources}" 2>/dev/null \
+		|| printf '[]' > "${sc_sources}"
+
+	while IFS= read -r sc_path; do
+		[ -n "${sc_path}" ] || continue
+		if [ -s "${sc_dir}/retired_paths.txt" ] && grep -Fxq -- "${sc_path}" "${sc_dir}/retired_paths.txt"; then
+			log "skip reason=retired_file file=${sc_path} fp=${FP} source=${SOURCE_REPO}"
+			sc_reason="retired_file"
+			break
+		fi
+	done < <(jq -r '.paths[]' "${PAYLOAD_FILE}")
+	if [ -z "${sc_reason}" ]; then
+		# The compare response lists at most 300 files; a full page is unknown.
+		sc_files_count="$(jq -r '(.files // []) | length' "${sc_dir}/release_compare.json" 2>/dev/null || echo 300)"
+		if [[ "${sc_files_count}" =~ ^[0-9]+$ ]] && [ "${sc_files_count}" -lt 300 ] \
+			&& jq -e --slurpfile sources "${sc_sources}" '[(.files // [])[] | .filename] as $changed | any($sources[0][]; . as $s | $changed | index($s) != null)' \
+				"${sc_dir}/release_compare.json" >/dev/null 2>&1; then
+			log "skip reason=release_superseded fp=${FP} source=${SOURCE_REPO}"
+			sc_reason="release_superseded"
+		fi
+	fi
+
+	if [ -z "${sc_reason}" ]; then
+		sc_issues="${sc_dir}/heal_issues.json"
+		if ! _heal_fetch_issue_list "${SELF_REPO}" "${sc_issues}"; then
+			log "error heal_issue_list_failed"
+			tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; synced-file check failure from ${SOURCE_REPO} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
+			exit 1
+		fi
+		jq -e 'type == "array"' "${sc_issues}" >/dev/null 2>&1 || printf '[]' > "${sc_issues}"
+		sc_decision="${sc_dir}/decision.json"
+		if ! python3 "${HEAL_PY}" budget --issues-json "${sc_issues}" --fingerprint "${FP}" --preferred-repo "${SELF_REPO}" \
+			--max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}" > "${sc_decision}"; then
+			log "error budget_failed fp=${FP} source=${SOURCE_REPO}"
+			exit 1
+		fi
+		sc_action="$(jq -r '.action' "${sc_decision}")"
+		sc_gen="$(jq -r '.gen // 1' "${sc_decision}")"
+		sc_root="$(jq -r '.root // ""' "${sc_decision}")"
+		case "${sc_action}" in
+			duplicate)
+				sc_existing="$(jq -r '.existing_issue // ""' "${sc_decision}")"
+				if ! python3 "${HEAL_PY}" compose-synced-check-occurrence --payload-json "${PAYLOAD_FILE}" --intake-run-url "${RUN_URL}" > "${sc_dir}/occurrence.md"; then
+					log "error occurrence_compose_failed fp=${FP} source=${SOURCE_REPO}"
+					exit 1
+				fi
+				if [[ "${sc_existing}" =~ ^[0-9]+$ ]] && gh_retry gh api "repos/${SELF_REPO}/issues/${sc_existing}/comments" \
+					-F body=@"${sc_dir}/occurrence.md" >/dev/null 2>&1; then
+					log "duplicate fp=${FP} existing_issue=${sc_existing} occurrence=recorded source=${SOURCE_REPO}"
+					sc_outcome="occurrence"
+					sc_link="occurrence on #${sc_existing}"
+				else
+					log "warn occurrence_comment_failed fp=${FP} existing_issue=${sc_existing:-none} source=${SOURCE_REPO}"
+					sc_reason="occurrence_comment_failed"
+					sc_level="WARNING"
+				fi
+				;;
+			escalate)
+				sc_prior="$(jq -r '.prior_issue // ""' "${sc_decision}")"
+				sc_label="none"
+				if [[ "${sc_prior}" =~ ^[0-9]+$ ]]; then
+					sc_label="applied"
+					gh_retry gh issue edit "${sc_prior}" --repo "${SELF_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || sc_label="failed"
+				fi
+				log "escalate reason=lineage_cap fp=${FP} gen=${sc_gen} prior_issue=${sc_prior:-none} label=${sc_label} source=${SOURCE_REPO}"
+				sc_reason="lineage_cap"
+				sc_level="WARNING"
+				;;
+			budget_exhausted)
+				log "skip reason=budget_exhausted detail=$(jq -r '.reason // "unknown"' "${sc_decision}" | tr -cd 'a-z_') fp=${FP} source=${SOURCE_REPO}"
+				sc_reason="budget_exhausted"
+				sc_level="WARNING"
+				;;
+			open)
+				sc_scope="${sc_dir}/scope_marker.txt"
+				sc_scope_input="${sc_dir}/scope_input.json"
+				: > "${sc_scope}"
+				jq -n --arg run "${SOURCE_REPO}:${SYNCED_REPORTER_RUN}" --slurpfile sources "${sc_sources}" \
+					'{crash_file: null, workflow_paths: $sources[0], changed_files: [], runs: [$run], failing_tests: {names: [], files: [], pairs: []}}' \
+					> "${sc_scope_input}"
+				python3 "${HEAL_PY}" heal-scope render --input-json "${sc_scope_input}" --checkout . --ref HEAD > "${sc_scope}" 2>/dev/null || : > "${sc_scope}"
+				sc_scope_json=""
+				sc_scope_rc=0
+				sc_scope_json="$(python3 "${HEAL_PY}" heal-scope check-marker --marker-file "${sc_scope}" 2>/dev/null)" || sc_scope_rc=$?
+				sc_scope_status="$(jq -r '.status // "unknown"' <<< "${sc_scope_json}" 2>/dev/null || echo unknown)"
+				[[ "${sc_scope_status}" =~ ^[a-z_]{1,20}$ ]] || sc_scope_status="unknown"
+				if [ "${sc_scope_rc}" -ne 0 ] && [ "${sc_scope_status}" = "valid" ]; then
+					sc_scope_status="unknown"
+				fi
+				if [ "${sc_scope_status}" != "valid" ]; then
+					log "skip reason=scope_unresolved fp=${FP} status=${sc_scope_status} source=${SOURCE_REPO}"
+					sc_reason="scope_unresolved"
+					sc_level="WARNING"
+				elif ! _heal_intake_scope_guard_is_on; then
+					log "skip reason=scope_guard_disabled fp=${FP} source=${SOURCE_REPO}"
+					sc_reason="scope_guard_disabled"
+					sc_level="WARNING"
+				else
+					sc_title="${sc_dir}/issue_title.txt"
+					sc_body="${sc_dir}/issue_body.md"
+					if ! python3 "${HEAL_PY}" compose-synced-check-issue --payload-json "${PAYLOAD_FILE}" --scope-marker-file "${sc_scope}" \
+						--audit-gate-contract-json "${sc_dir}/audit_gate_contract.json" --gen "${sc_gen}" --root "${sc_root}" \
+						--max-depth "${MAX_DEPTH}" --intake-run-url "${RUN_URL}" --title-out "${sc_title}" --body-out "${sc_body}"; then
+						log "error issue_compose_failed fp=${FP} source=${SOURCE_REPO}"
+						exit 1
+					fi
+					if ! _heal_intake_scope_guard_permits_create "${SELF_REPO}" "${sc_body}" "${HEAL_LABEL}" ""; then
+						exit 1
+					fi
+					sc_url="$(gh_retry gh issue create --repo "${SELF_REPO}" --title "$(head -1 "${sc_title}")" --body-file "${sc_body}" --label "${HEAL_LABEL}" 2>/dev/null || echo '')"
+					sc_url="${sc_url%%[[:space:]]*}"
+					if [ -z "${sc_url}" ]; then
+						log "error issue_create_failed fp=${FP} source=${SOURCE_REPO}"
+						exit 1
+					fi
+					log "opened issue=${sc_url} fp=${FP} gen=${sc_gen} source=${SOURCE_REPO}"
+					sc_outcome="opened"
+					sc_link="opened ${sc_url}"
+				fi
+				;;
+			*)
+				log "error unknown_decision action=$(printf '%s' "${sc_action}" | tr -cd 'a-z_') fp=${FP}"
+				exit 1
+				;;
+		esac
+	fi
+
+	log "received kind=synced_check_failure paths=${sc_paths} outcome=${sc_outcome}${sc_reason:+ reason=${sc_reason}} fp=${FP}"
+	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+		echo "Workflow failure heal: synced-file check failure from \`${SOURCE_REPO}\`: paths=${sc_paths} outcome=${sc_outcome}${sc_reason:+ (${sc_reason})}${sc_link:+ - ${sc_link}}." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+	fi
+	tg_send_msg "Workflow failure heal: synced-file check failure from ${SOURCE_REPO}: paths=${sc_paths} outcome=${sc_outcome}${sc_reason:+ (${sc_reason})}${sc_link:+ - ${sc_link}}."$'\n'"Run: ${RUN_URL}" "${sc_level}" >/dev/null 2>&1 || true
+	return 0
+}
+
 if [ "${SOURCE_KIND}" = "synced_security_finding" ]; then
 	# A plain call keeps `set -e` active inside the function; a failed group
 	# makes it return 1, which ends the run red.
 	_synced_security_finding_intake
+	exit 0
+fi
+if [ "${SOURCE_KIND}" = "synced_check_failure" ]; then
+	_synced_check_failure_intake
 	exit 0
 fi
 
