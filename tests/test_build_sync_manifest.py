@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -277,6 +278,113 @@ def test_changelog_ensure_assets_paths_are_allowed(tmp_path):
 	assert paths, "ensure-assets reported no changed paths in an empty consumer"
 	for path in paths:
 		assert module.path_allowed(path, compiled), path
+
+
+
+# ---------------------------------------------------------------------------
+# Issue #8265: classify-paths and parity with the security audit's inline copy
+# ---------------------------------------------------------------------------
+
+SECURITY_AUDIT = REPO_ROOT / "scripts" / "security_audit.sh"
+_PIN_A = "1" * 40
+_PIN_B = "2" * 40
+_WRAPPER_TEMPLATE = (
+	"jobs:\n  review:\n    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{pin} # stable\n"
+	"      - uses: actions/checkout@v5\n        with:\n          ref: {pin} # stable\n"
+)
+
+
+def _audit_namespace(repo_root: Path, digests: dict) -> dict:
+	"""Exec the audit's inline WRAPPER_PIN_PATTERNS / normalize_wrapper_pins /
+	upstream_managed_status from scripts/security_audit.sh."""
+	text = SECURITY_AUDIT.read_text(encoding="utf-8")
+	start = text.index("WRAPPER_PIN_PATTERNS = (")
+	end = text.index("\n\n\nraw_findings = ", start)
+	namespace = {"re": re, "hashlib": hashlib, "Path": Path, "repo_root": repo_root.resolve(), "upstream_managed_digests": digests}
+	exec(compile(text[start:end], "security_audit_inline", "exec"), namespace)  # noqa: S102 - trusted repository source
+	return namespace
+
+
+def _classify_fixture(tmp_path: Path) -> tuple[Path, dict, list]:
+	module = _load_builder()
+	repo = tmp_path / "consumer"
+	(repo / ".github" / "workflows").mkdir(parents=True)
+	(repo / ".claude" / "commands").mkdir(parents=True)
+	files = {
+		".github/workflows/same-pin.yml": _WRAPPER_TEMPLATE.format(pin=_PIN_A),
+		".github/workflows/other-pin.yml": _WRAPPER_TEMPLATE.format(pin=_PIN_B),
+		".github/workflows/edited.yml": _WRAPPER_TEMPLATE.format(pin=_PIN_B) + "# edit\n",
+		".claude/commands/do.md": "do\n",
+		".claude/commands/changed.md": "changed\n",
+		"app.js": "x\n",
+	}
+	for rel, content in files.items():
+		(repo / rel).write_text(content, encoding="utf-8")
+	(repo / ".github" / "workflows" / "linked.yml").symlink_to("same-pin.yml")
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "consumer")
+	rendered = _WRAPPER_TEMPLATE.format(pin=_PIN_A).encode("utf-8")
+	normalized = module.normalize_wrapper_pins(rendered)
+	wrapper_digests = sorted({hashlib.sha256(rendered).hexdigest(), hashlib.sha256(normalized).hexdigest()})
+	digests = {
+		".github/workflows/same-pin.yml": wrapper_digests,
+		".github/workflows/other-pin.yml": wrapper_digests,
+		".github/workflows/edited.yml": wrapper_digests,
+		".github/workflows/linked.yml": wrapper_digests,
+		".github/workflows/missing.yml": wrapper_digests,
+		".claude/commands/do.md": [hashlib.sha256(b"do\n").hexdigest()],
+		".claude/commands/changed.md": [hashlib.sha256(b"do\n").hexdigest()],
+	}
+	paths = [*files, ".github/workflows/linked.yml", ".github/workflows/missing.yml", "unknown.txt"]
+	return repo, digests, paths
+
+
+def test_classify_paths_reads_git_objects(tmp_path):
+	module = _load_builder()
+	repo, digests, paths = _classify_fixture(tmp_path)
+	# A working-tree edit after the commit must not change the result.
+	(repo / ".claude" / "commands" / "do.md").write_text("edited in the working tree\n", encoding="utf-8")
+	result = module.classify_paths(repo, _git(repo, "rev-parse", "HEAD"), digests, paths)
+	assert result == {
+		".github/workflows/same-pin.yml": "unmodified",
+		".github/workflows/other-pin.yml": "unmodified",
+		".github/workflows/edited.yml": "modified",
+		".github/workflows/linked.yml": "modified",
+		".github/workflows/missing.yml": "modified",
+		".claude/commands/do.md": "unmodified",
+		".claude/commands/changed.md": "modified",
+		"app.js": "unmanaged",
+		"unknown.txt": "unmanaged",
+	}
+
+
+def test_classify_paths_cli(tmp_path):
+	repo, digests, paths = _classify_fixture(tmp_path)
+	digests_file = tmp_path / "digests.json"
+	digests_file.write_text(json.dumps(digests), encoding="utf-8")
+	paths_file = tmp_path / "paths.txt"
+	paths_file.write_text("\n".join(paths) + "\n", encoding="utf-8")
+	result = run_builder("classify-paths", "--digests-json", str(digests_file), "--repo-root", str(repo), "--commit", "HEAD", "--paths-file", str(paths_file))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["app.js"] == "unmanaged"
+	digests_file.write_text("{}", encoding="utf-8")
+	assert run_builder("classify-paths", "--digests-json", str(digests_file), "--repo-root", str(repo), "--commit", "HEAD", "--paths-file", str(paths_file)).returncode == 1
+	assert run_builder("classify-paths", "--digests-json", str(tmp_path / "missing.json"), "--repo-root", str(repo), "--commit", "HEAD", "--paths-file", str(paths_file)).returncode == 1
+
+
+def test_classifier_matches_the_security_audit_inline_copy(tmp_path):
+	"""The audit keeps its own inline copy (D1 of the #8265 plan); both must agree."""
+	module = _load_builder()
+	repo, digests, paths = _classify_fixture(tmp_path)
+	audit = _audit_namespace(repo, digests)
+	assert [pattern.pattern for pattern in audit["WRAPPER_PIN_PATTERNS"]] == [pattern.pattern for pattern in module.WRAPPER_PIN_PATTERNS]
+	for pin in (_PIN_A, _PIN_B):
+		data = _WRAPPER_TEMPLATE.format(pin=pin).encode("utf-8")
+		assert audit["normalize_wrapper_pins"](data) == module.normalize_wrapper_pins(data)
+	shared = module.classify_paths(repo, _git(repo, "rev-parse", "HEAD"), digests, paths)
+	for path in paths:
+		assert audit["upstream_managed_status"](path) == shared[path], path
 
 
 if __name__ == "__main__":

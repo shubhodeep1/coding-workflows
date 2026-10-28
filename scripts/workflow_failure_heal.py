@@ -81,7 +81,7 @@ MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 # project validations fail on it.
 SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure", "synced_check_failure")
 
 # A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
 # non-capacity reason and the role failed instead of running codex. The report
@@ -219,6 +219,22 @@ SYNCED_SECURITY_ISSUE_TITLE = "Synced-file security findings"
 SYNCED_SECURITY_WORKFLOW_NAME = "AI Security Audit"
 _SYNCED_SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
 _SYNCED_SECURITY_FILE_RE = re.compile(r"^[A-Za-z0-9._/+-]{1,300}$")
+# A consumer check that fails because of an unmodified upstream-managed file
+# (issue #8265): check-failure triage routes it here instead of filing a
+# consumer issue no consumer PR could fix. Pointers only, like
+# synced_security_finding (Q245): no log text and no diagnosis prose.
+SYNCED_CHECK_FAILURE_REASON = "synced_check_failure"
+SYNCED_CHECK_ISSUE_TITLE = "Synced workflow file breaks a consumer check"
+SYNCED_CHECK_WORKFLOW_NAME = "AI Check Failure Triage"
+SYNCED_CHECK_MAX_PATHS = 20
+SYNCED_CHECK_MAX_RUNS = 3
+SYNCED_CHECK_PAYLOAD_KEYS = frozenset({
+	"schema_version", "source_repo", "source_kind", "pr_number", "check_name", "check_run_ids", "paths",
+	"cause_path", "head_sha", "wrapper_sha", "reporter_run_url", "reporter_run_id", "reported_at", "run_refs",
+})
+_SYNCED_CHECK_NAME_DROP_RE = re.compile(r"[^A-Za-z0-9 ._:/()-]")
+AFFECTED_FILES_BEGIN = "AFFECTED_FILES_BEGIN"
+AFFECTED_FILES_END = "AFFECTED_FILES_END"
 # A01..A10 followed by the 2021 year (any of `:`, `-` or spaces before it) or
 # by no year at all. Any other number after the code (A01:2017, A011) is
 # rejected: 2017 numbering maps codes to different categories.
@@ -429,6 +445,8 @@ REPORT_IDENTITY_WORKFLOW_BY_KIND = {
 	"phase_failure": ("clarify.yml", "plan.yml", "implement.yml"),
 	# The consumer's security audit run (reusable security-audit.yml).
 	"synced_security_finding": ("security-audit.yml",),
+	# The consumer's check-failure triage run (reusable check_failure_triage.yml, #8265).
+	"synced_check_failure": ("check_failure_triage.yml",),
 	# The consumer's runtime validation run (reusable validate.yml).
 	"validation_failure": ("validate.yml",),
 }
@@ -2328,6 +2346,25 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		failure_reason = SYNCED_SECURITY_FAILURE_REASON
 		failure_streak = 1
 		failure_fingerprint = None
+	elif kind == "synced_check_failure":
+		extra_keys = sorted(key for key in payload if key not in SYNCED_CHECK_PAYLOAD_KEYS)
+		if extra_keys:
+			raise ValueError("synced_check_failure reports carry no other fields: " + ", ".join(safe_token(key, 40) or "?" for key in extra_keys[:5]))
+		if payload.get("run_refs"):
+			raise ValueError("synced_check_failure reports carry no run references")
+		raw_reporter_run_id = payload.get("reporter_run_id")
+		if raw_reporter_run_id is not None and not re.fullmatch(r"[1-9][0-9]{0,19}", str(raw_reporter_run_id) if not isinstance(raw_reporter_run_id, bool) else ""):
+			raise ValueError("reporter_run_id must be a positive integer")
+		for sha_key in ("wrapper_sha", "head_sha"):
+			raw_sha = payload.get(sha_key)
+			if not (isinstance(raw_sha, str) and is_valid_sha(raw_sha.lower())):
+				raise ValueError(f"{sha_key} must be a 40-hex commit SHA for synced_check_failure reports")
+		validate_synced_check_fields(payload)
+		issue_number = None
+		label = None
+		failure_reason = SYNCED_CHECK_FAILURE_REASON
+		failure_streak = 1
+		failure_fingerprint = None
 	elif kind == "validation_failure":
 		extra_keys = sorted(key for key in payload if key not in VALIDATION_FAILURE_PAYLOAD_KEYS)
 		if extra_keys:
@@ -2469,6 +2506,23 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			"failure_evidence": "",
 			"reported_at": _iso(_utc_now()),
 			"findings": validate_synced_security_findings(payload.get("findings")),
+		})
+	if kind == "synced_check_failure":
+		# Only validated pointers reach the public issue (no log or diagnosis text).
+		normalized.update({
+			"issue_title": SYNCED_CHECK_ISSUE_TITLE,
+			"issue_url": None,
+			"labels": [],
+			"source_gen": None,
+			"source_root": None,
+			"issue_excerpt": "",
+			"comments_excerpt": "",
+			"workflow_name": SYNCED_CHECK_WORKFLOW_NAME,
+			"head_branch": None,
+			"conclusion": None,
+			"failure_evidence": "",
+			"reported_at": _iso(_utc_now()),
+			**validate_synced_check_fields(payload),
 		})
 	if kind == "validation_failure":
 		# Only fixed vocabulary plus the neutralised signature reaches the
@@ -5905,6 +5959,432 @@ def _cmd_compose_synced_security_occurrence(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Synced-file check failures (source_kind synced_check_failure, issue #8265)
+# ---------------------------------------------------------------------------
+
+def sanitize_synced_check_name(value: Any) -> str:
+	"""A consumer check name reduced to a safe charset (100 chars; ``check`` when empty)."""
+	text = _SYNCED_CHECK_NAME_DROP_RE.sub("", value if isinstance(value, str) else "")
+	text = " ".join(text.split())[:100].strip()
+	return text or "check"
+
+
+def _synced_check_paths(raw: Any) -> list[str]:
+	if not isinstance(raw, list) or not raw:
+		raise ValueError("paths must be a non-empty list")
+	if len(raw) > SYNCED_CHECK_MAX_PATHS:
+		raise ValueError(f"paths holds more than {SYNCED_CHECK_MAX_PATHS} entries")
+	paths: list[str] = []
+	for item in raw:
+		if not _synced_security_file_ok(item):
+			raise ValueError("paths holds an invalid repository-relative path")
+		if item in paths:
+			raise ValueError("paths holds a duplicate entry")
+		paths.append(item)
+	return paths
+
+
+def validate_synced_check_fields(payload: dict[str, Any]) -> dict[str, Any]:
+	"""Validate and normalise the pointer fields of a synced_check_failure report."""
+	paths = _synced_check_paths(payload.get("paths"))
+	cause = payload.get("cause_path")
+	if cause is not None and cause not in paths:
+		raise ValueError("cause_path must be one of paths")
+	pr_number = _positive_int(payload.get("pr_number"))
+	if pr_number is None or isinstance(payload.get("pr_number"), bool):
+		raise ValueError("pr_number must be a positive integer")
+	raw_runs = payload.get("check_run_ids") or []
+	if not isinstance(raw_runs, list) or len(raw_runs) > SYNCED_CHECK_MAX_RUNS:
+		raise ValueError(f"check_run_ids must be a list of at most {SYNCED_CHECK_MAX_RUNS} run ids")
+	runs: list[str] = []
+	for item in raw_runs:
+		if isinstance(item, bool) or not re.fullmatch(r"[1-9][0-9]{0,19}", str(item)):
+			raise ValueError("check_run_ids holds an invalid run id")
+		if str(item) not in runs:
+			runs.append(str(item))
+	return {
+		"pr_number": pr_number,
+		"check_name": sanitize_synced_check_name(payload.get("check_name")),
+		"check_run_ids": runs,
+		"paths": paths,
+		"cause_path": cause,
+		"head_sha": str(payload.get("head_sha") or "").lower(),
+	}
+
+
+def synced_check_fingerprint(paths: Iterable[str]) -> str:
+	"""One fingerprint per set of consumer paths, whatever PR, check or release reported it."""
+	return hashlib.sha256(("synced_check_failure\n" + "\n".join(sorted(set(paths)))).encode("utf-8")).hexdigest()
+
+
+def parse_check_triage_affected_files(text: Any) -> dict[str, Any]:
+	"""Read the triage diagnosis's AFFECTED_FILES block (untrusted model output).
+
+	Status ``ok``, ``missing`` (no block), ``malformed`` (anything but one
+	well-formed block of at most SYNCED_CHECK_MAX_PATHS valid paths) or
+	``empty`` (a well-formed block that lists no path).
+	"""
+	result: dict[str, Any] = {"status": "missing", "paths": [], "cause": None}
+	if not isinstance(text, str):
+		return result
+	lines = text.split("\n")
+	begins = [index for index, line in enumerate(lines) if line.strip() == AFFECTED_FILES_BEGIN]
+	ends = [index for index, line in enumerate(lines) if line.strip() == AFFECTED_FILES_END]
+	if not begins and not ends:
+		return result
+	result["status"] = "malformed"
+	if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
+		return result
+	paths: list[str] = []
+	cause = None
+	for raw_line in lines[begins[0] + 1:ends[0]]:
+		line = raw_line.strip()
+		if not line:
+			continue
+		if line.startswith("- "):
+			path = line[2:].strip()
+			if not _synced_security_file_ok(path):
+				return result
+			if path not in paths:
+				paths.append(path)
+		elif line.startswith("cause:"):
+			value = line[len("cause:"):].strip()
+			if cause is not None or not _synced_security_file_ok(value):
+				return result
+			cause = value
+		else:
+			return result
+	if len(paths) > SYNCED_CHECK_MAX_PATHS:
+		return result
+	if cause is not None and cause not in paths:
+		if len(paths) >= SYNCED_CHECK_MAX_PATHS:
+			return result
+		paths.append(cause)
+	result.update({"status": "ok" if paths else "empty", "paths": paths, "cause": cause})
+	return result
+
+
+def _load_sync_manifest_module():
+	"""Load the sibling build_sync_manifest.py by path (callers run ``python3 -I``)."""
+	import importlib.util
+
+	module_path = Path(__file__).resolve().with_name("build_sync_manifest.py")
+	spec = importlib.util.spec_from_file_location("heal_build_sync_manifest", module_path)
+	if spec is None or spec.loader is None:
+		raise ValueError("build_sync_manifest.py is missing")
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def check_triage_route(
+	*,
+	diagnosis: str,
+	digests: Any,
+	repo_root: str,
+	commit: str,
+	enabled: str,
+	repo: str,
+	upstream_repo: str,
+	historical: str,
+) -> dict[str, Any]:
+	"""Decide whether a failing consumer check belongs upstream (issue #8265).
+
+	``route`` only when every listed path is an unmodified managed file, or the
+	named cause is an unmodified managed workflow; anything else ``file``s the
+	consumer issue as before. Never raises for bad input.
+	"""
+	decision: dict[str, Any] = {"decision": "file", "reason": "", "paths": [], "statuses": {}, "cause": None, "heal_fp": ""}
+	if str(enabled or "").strip().lower() != "true":
+		decision["reason"] = "disabled"
+		return decision
+	if (repo or "").lower() == (upstream_repo or "").lower():
+		decision["reason"] = "self_repo"
+		return decision
+	if str(historical or "").strip().lower() == "true":
+		decision["reason"] = "historical_mode"
+		return decision
+	block = parse_check_triage_affected_files(diagnosis)
+	decision["paths"], decision["cause"] = block["paths"], block["cause"]
+	if block["status"] != "ok":
+		decision["reason"] = {"missing": "no_block", "malformed": "malformed_block"}.get(block["status"], "no_paths")
+		return decision
+	if not isinstance(digests, dict) or not digests:
+		decision["reason"] = "manifest_unavailable"
+		return decision
+	try:
+		statuses = _load_sync_manifest_module().classify_paths(Path(repo_root), str(commit), digests, block["paths"])
+	except Exception:  # noqa: BLE001 - any classifier failure files the consumer issue
+		decision["reason"] = "classify_failed"
+		return decision
+	decision["statuses"] = statuses
+	values = [statuses.get(path) for path in block["paths"]]
+	if "modified" in values or any(value not in ("unmanaged", "unmodified") for value in values):
+		decision["reason"] = "consumer_modified"
+		return decision
+	cause = block["cause"]
+	if all(value == "unmodified" for value in values):
+		decision["reason"] = "all_unmodified_managed"
+	elif cause and cause.startswith(".github/workflows/") and statuses.get(cause) == "unmodified":
+		decision["reason"] = "managed_wrapper_cause"
+	else:
+		decision["reason"] = "unmanaged_paths"
+		return decision
+	managed = [path for path in block["paths"] if statuses.get(path) == "unmodified"]
+	decision.update({"decision": "route", "paths": managed, "heal_fp": synced_check_fingerprint(managed)})
+	if cause not in managed:
+		decision["cause"] = None
+	return decision
+
+
+def build_synced_check_payload(
+	*,
+	decision: dict[str, Any],
+	repo: str,
+	pr_number: Any,
+	check_name: Any,
+	check_run_id: Any,
+	details_url: Any,
+	head_sha: Any,
+	wrapper_sha: Any,
+	run_id: Any,
+) -> dict[str, Any]:
+	"""The dispatch payload for a routed check failure (pointers only)."""
+	# A check-run id is not an Actions run id; only a same-repository Actions
+	# details URL yields a run link.
+	runs: list[str] = []
+	match = _RUN_URL_RE.search(str(details_url or ""))
+	if match and match.group("repo") == repo:
+		runs.append(match.group("run_id"))
+	payload: dict[str, Any] = {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "synced_check_failure",
+		"pr_number": _positive_int(pr_number),
+		"check_name": sanitize_synced_check_name(check_name),
+		"check_run_ids": runs[:SYNCED_CHECK_MAX_RUNS],
+		"paths": list(decision.get("paths") or []),
+		"head_sha": str(head_sha or "").lower(),
+		"wrapper_sha": str(wrapper_sha or "").lower(),
+		"run_refs": [],
+		"reported_at": _iso(_utc_now()),
+	}
+	if decision.get("cause"):
+		payload["cause_path"] = decision["cause"]
+	if re.fullmatch(r"[1-9][0-9]{0,19}", str(run_id or "")):
+		payload["reporter_run_id"] = str(run_id)
+		payload["reporter_run_url"] = f"https://github.com/{repo}/actions/runs/{run_id}"
+	return payload
+
+
+def check_synced_check_managed_paths(paths: Iterable[str], digests: Any) -> str | None:
+	"""None when every path is a managed path of the release, else a reason token."""
+	if not isinstance(digests, dict) or not digests:
+		return "release_unavailable"
+	for path in paths:
+		if path not in digests:
+			return "unmanaged_path"
+	return None
+
+
+def synced_check_source_paths(paths: Iterable[str], audit_gate_contract: Any = None) -> list[str]:
+	sources: list[str] = []
+	for path in paths:
+		for source in synced_security_source_paths(path, audit_gate_contract):
+			if source not in sources:
+				sources.append(source)
+	return sources
+
+
+def _synced_check_run_links(payload: dict[str, Any]) -> str:
+	repo = payload["source_repo"]
+	links = [f"https://github.com/{repo}/actions/runs/{run}" for run in payload.get("check_run_ids") or []]
+	return ", ".join(links) or "(unavailable)"
+
+
+def _synced_check_rows(payload: dict[str, Any], sources: list[str]) -> list[str]:
+	rows = [f"- **Consumer file:** `{path}`" for path in payload["paths"]]
+	if payload.get("cause_path"):
+		rows.append(f"- **Named cause:** `{payload['cause_path']}`")
+	rows.append("- **Source in this repository:** " + (", ".join(f"`{path}`" for path in sources) or "the source of these files"))
+	return rows
+
+
+def compose_synced_check_issue(
+	*,
+	payload: dict[str, Any],
+	fp: str,
+	gen: int,
+	root: str,
+	scope_marker: str,
+	max_depth: int,
+	intake_run_url: str,
+	sources: list[str],
+) -> tuple[str, str]:
+	"""Title and body of a synced-file check-failure heal issue (validated pointers only)."""
+	if not _FP_HEX_RE.match(fp or "") or not _FP_HEX_RE.match(root or ""):
+		raise ValueError("invalid fingerprint")
+	repo = payload["source_repo"]
+	release = payload.get("wrapper_sha") or ""
+	if not is_valid_repo_slug(repo) or not is_valid_sha(release):
+		raise ValueError("invalid source repository or release SHA")
+	first = payload["paths"][0]
+	more = f" (+{len(payload['paths']) - 1} more)" if len(payload["paths"]) > 1 else ""
+	title = f"[synced] {first}{more} breaks a consumer check"
+	parts = [
+		f"<!-- {MARKER_PREFIX}fp={fp} -->",
+		f"<!-- {MARKER_PREFIX}gen={int(gen)} -->",
+		f"<!-- {MARKER_PREFIX}root={root} -->",
+		f"<!-- {MARKER_PREFIX}source={repo}#run -->",
+		f"<!-- {MARKER_PREFIX}classification=workflow-defect -->",
+		"",
+		f"## Synced file breaks a consumer check (generation {int(gen)} of max {int(max_depth)})",
+		"",
+		("A consumer's check-failure triage traced a failing check to a file the `@stable` workflow sync "
+		"manages and the consumer has not modified. The consumer cannot change that file (the managed-wrapper "
+		"integrity check refuses it), so this issue was filed here instead of in the consumer repository."),
+		"",
+		*_synced_check_rows(payload, sources),
+		f"- **Consumer repository:** `{repo}`",
+		# No bare #N: GitHub would resolve it against this repository (#8265).
+		f"- **Pull request:** `{repo}` PR {int(payload['pr_number'])}",
+		f"- **Failing check:** `{payload['check_name']}`",
+		f"- **Failing check run:** {_synced_check_run_links(payload)}",
+		f"- **Release SHA (wrapper pin):** `{release}`",
+		f"- **Consumer head SHA:** `{payload.get('head_sha') or ''}`",
+		f"- **Reporting triage run:** {_synced_security_run_url(payload)}",
+		f"- **Heal intake run:** {intake_run_url}",
+		"",
+		("The failing check's logs and the triage diagnosis stay in the consumer repository; they are not copied "
+		"into this public repository. Read them from the run link above when access allows."),
+		"",
+		"## Fix constraints",
+		"",
+		("- Fix the template in this repository, never the consumer's copy: the next workflow sync overwrites it, "
+		"and the integrity check rejects a hand-edited managed wrapper."),
+		"- Add a regression test that would have caught the defect in the rendered template.",
+		"- Keep the change minimal and backward compatible; never rename or remove existing identifiers, env vars, labels, or log prefixes.",
+		"",
+		(f"_Filed by the workflow failure heal intake. Lineage generation {int(gen)} (cap {int(max_depth)}). "
+		"Further reports of the same files are recorded as occurrence comments on this issue while it stays open._"),
+	]
+	marker = (scope_marker or "").strip()
+	if marker:
+		parts.extend(["", marker])
+	return title, "\n".join(parts) + "\n"
+
+
+def compose_synced_check_occurrence(*, payload: dict[str, Any], intake_run_url: str) -> str:
+	lines = [
+		f"<!-- {MARKER_PREFIX}occurrence -->",
+		"Another consumer check failed because of these synced files:",
+		"",
+		f"- **Consumer repository:** `{payload['source_repo']}`",
+		f"- **Pull request:** `{payload['source_repo']}` PR {int(payload['pr_number'])}",
+		f"- **Failing check:** `{payload['check_name']}`",
+		f"- **Failing check run:** {_synced_check_run_links(payload)}",
+		f"- **Release SHA (wrapper pin):** `{payload.get('wrapper_sha') or ''}`",
+		f"- **Reporting triage run:** {_synced_security_run_url(payload)}",
+		f"- **Heal intake run:** {intake_run_url}",
+	]
+	return "\n".join(lines) + "\n"
+
+
+def _load_synced_check_payload(path: str) -> dict[str, Any]:
+	payload = _load_json_file(path)
+	if not isinstance(payload, dict) or payload.get("source_kind") != "synced_check_failure":
+		raise ValueError("not a synced_check_failure payload")
+	payload = dict(payload)
+	payload.update(validate_synced_check_fields(payload))
+	return payload
+
+
+def _cmd_synced_check_fingerprint(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	print(synced_check_fingerprint(payload["paths"]))
+	return 0
+
+
+def _cmd_synced_check_check_paths(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	try:
+		digests = _load_json_file(args.managed_digests_json)
+	except (OSError, ValueError):
+		digests = None
+	reason = check_synced_check_managed_paths(payload["paths"], digests)
+	_write_json({"reason": reason or "managed"})
+	return 1 if reason else 0
+
+
+def _cmd_synced_check_sources(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	contract: Any = {}
+	if args.audit_gate_contract_json:
+		try:
+			contract = _load_json_file(args.audit_gate_contract_json)
+		except (OSError, ValueError):
+			contract = {}
+	_write_json(synced_check_source_paths(payload["paths"], contract))
+	return 0
+
+
+def _cmd_check_triage_route(args: argparse.Namespace) -> int:
+	try:
+		diagnosis = Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace")
+	except OSError:
+		diagnosis = ""
+	try:
+		digests = _load_json_file(args.digests_json) if args.digests_json else None
+	except (OSError, ValueError):
+		digests = None
+	_write_json(check_triage_route(
+		diagnosis=diagnosis, digests=digests, repo_root=args.repo_root, commit=args.commit,
+		enabled=args.enabled, repo=args.repo, upstream_repo=args.upstream_repo, historical=args.historical,
+	))
+	return 0
+
+
+def _cmd_build_synced_check_payload(args: argparse.Namespace) -> int:
+	decision = _load_json_file(args.decision_json)
+	if not isinstance(decision, dict) or decision.get("decision") != "route":
+		raise ValueError("decision is not a route")
+	_write_json(build_synced_check_payload(
+		decision=decision, repo=args.repo, pr_number=args.pr, check_name=args.check_name,
+		check_run_id=args.check_run_id, details_url=args.details_url, head_sha=args.head_sha,
+		wrapper_sha=args.wrapper_sha, run_id=args.run_id,
+	))
+	return 0
+
+
+def _cmd_compose_synced_check_issue(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	marker = Path(args.scope_marker_file).read_text(encoding="utf-8").strip() if args.scope_marker_file else ""
+	if marker and not HEAL_SCOPE_RE.fullmatch(marker):
+		raise ValueError("scope marker is malformed")
+	contract: Any = {}
+	if args.audit_gate_contract_json:
+		try:
+			contract = _load_json_file(args.audit_gate_contract_json)
+		except (OSError, ValueError):
+			contract = {}
+	fp = synced_check_fingerprint(payload["paths"])
+	title, body = compose_synced_check_issue(
+		payload=payload, fp=fp, gen=args.gen, root=args.root or fp, scope_marker=marker,
+		max_depth=args.max_depth, intake_run_url=args.intake_run_url,
+		sources=synced_check_source_paths(payload["paths"], contract),
+	)
+	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
+	Path(args.body_out).write_text(body, encoding="utf-8")
+	return 0
+
+
+def _cmd_compose_synced_check_occurrence(args: argparse.Namespace) -> int:
+	payload = _load_synced_check_payload(args.payload_json)
+	sys.stdout.write(compose_synced_check_occurrence(payload=payload, intake_run_url=args.intake_run_url))
+	return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -7311,6 +7791,60 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--group-json", required=True)
 	p.add_argument("--intake-run-url", required=True)
 	p.set_defaults(func=_cmd_compose_synced_security_occurrence)
+
+	p = sub.add_parser("check-triage-route", help="Decide whether a failing consumer check belongs upstream (issue #8265); prints the decision JSON, exits 0")
+	p.add_argument("--diagnosis-file", required=True)
+	p.add_argument("--digests-json", default="")
+	p.add_argument("--repo-root", required=True)
+	p.add_argument("--commit", required=True)
+	p.add_argument("--enabled", default="true")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--upstream-repo", default="shubhodeep1/coding-workflows")
+	p.add_argument("--historical", default="false")
+	p.set_defaults(func=_cmd_check_triage_route)
+
+	p = sub.add_parser("build-synced-check-payload", help="Print the synced_check_failure dispatch payload for a route decision")
+	p.add_argument("--decision-json", required=True)
+	p.add_argument("--repo", required=True)
+	p.add_argument("--pr", required=True)
+	p.add_argument("--check-name", default="")
+	p.add_argument("--check-run-id", default="")
+	p.add_argument("--details-url", default="")
+	p.add_argument("--head-sha", required=True)
+	p.add_argument("--wrapper-sha", required=True)
+	p.add_argument("--run-id", default="")
+	p.set_defaults(func=_cmd_build_synced_check_payload)
+
+	p = sub.add_parser("synced-check-fingerprint", help="Print the dedup fingerprint of a synced_check_failure report (its sorted paths)")
+	p.add_argument("--payload-json", required=True)
+	p.set_defaults(func=_cmd_synced_check_fingerprint)
+
+	p = sub.add_parser("synced-check-check-paths", help="Exit 0 when every path is a managed path of the release, else print {reason} and exit 1")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--managed-digests-json", required=True)
+	p.set_defaults(func=_cmd_synced_check_check_paths)
+
+	p = sub.add_parser("synced-check-sources", help="Print the coding-workflows source paths of a synced_check_failure report")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--audit-gate-contract-json", default="")
+	p.set_defaults(func=_cmd_synced_check_sources)
+
+	p = sub.add_parser("compose-synced-check-issue", help="Compose the heal issue of a synced_check_failure report")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--scope-marker-file", default="")
+	p.add_argument("--audit-gate-contract-json", default="")
+	p.add_argument("--gen", type=int, default=1)
+	p.add_argument("--root", default="")
+	p.add_argument("--max-depth", type=int, default=3)
+	p.add_argument("--intake-run-url", default="")
+	p.add_argument("--title-out", required=True)
+	p.add_argument("--body-out", required=True)
+	p.set_defaults(func=_cmd_compose_synced_check_issue)
+
+	p = sub.add_parser("compose-synced-check-occurrence", help="Print the occurrence comment of a synced_check_failure report")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--intake-run-url", default="")
+	p.set_defaults(func=_cmd_compose_synced_check_occurrence)
 
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
 	p.add_argument("--payload-json", required=True)

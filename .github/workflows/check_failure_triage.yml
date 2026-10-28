@@ -207,7 +207,8 @@ jobs:
     needs: derive_check_name_key
     permissions:
       contents: read
-      # Only the Claude pool credential step uses OIDC; both callers grant it.
+      # OIDC: the Claude pool credential step and the "Route upstream-managed
+      # check failure" step (its heal report identity, #8265); both callers grant it.
       id-token: write
     # Cost gate: enabled by default; a consumer opts OUT via
     # CHECK_FAILURE_TRIAGE_ENABLED=false. Only genuine failure conclusions on a
@@ -251,6 +252,9 @@ jobs:
       # Issue #6726: add a verified Integration branch line for orchestrator/project-<N> PR heads.
       TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED: ${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED || 'true' }}
+      # Issue #8265: a failure whose fix is only in unmodified upstream-managed
+      # files goes upstream as one heal report instead of a consumer issue.
+      CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED || 'true' }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       # Job-level override of the workflow-level default: a PR carrying the
@@ -550,6 +554,34 @@ jobs:
           fi
           echo "CHECK_TRIAGE_TRUSTED_SUPPORT_DIR=${trusted_dir}" >> "$GITHUB_ENV"
 
+          # Issue #8265: build the managed-digest map from the SHA-verified
+          # pinned support checkout before it is pruned below. Consumers on a
+          # 40-hex wrapper pin only; this repository never routes upstream.
+          for sync_helper in build_sync_manifest.py workflow_wrapper_refs.py; do
+            if [ -f ".codex-workflow-src/scripts/${sync_helper}" ] && [ ! -L ".codex-workflow-src/scripts/${sync_helper}" ]; then
+              install -m 0755 ".codex-workflow-src/scripts/${sync_helper}" "${trusted_dir}/scripts/${sync_helper}"
+            fi
+          done
+          upstream_digests="${RUNNER_TEMP}/check-triage-managed-digests.json"
+          : > "${upstream_digests}"
+          upstream_routing_switch="${CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED:-true}"
+          if [ "${GITHUB_REPOSITORY:-}" != "${wf_source}" ] &&
+             [ "${upstream_routing_switch,,}" != "false" ] &&
+             [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] &&
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" = "${SCRIPT_REF}" ] &&
+             [ -f "${trusted_dir}/scripts/build_sync_manifest.py" ]; then
+            if timeout 120 env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
+              python3 -I -B .codex-workflow-src/scripts/build_sync_manifest.py managed-digests \
+              --repo-root .codex-workflow-src --commit HEAD > "${upstream_digests}" 2>/dev/null &&
+              jq -e 'type == "object" and length > 0' "${upstream_digests}" >/dev/null 2>&1; then
+              echo "CHECK_TRIAGE_WRAPPER_SHA=${SCRIPT_REF}" >> "$GITHUB_ENV"
+            else
+              : > "${upstream_digests}"
+              echo "::notice::Upstream-managed routing is unavailable for this run: the managed-digest map could not be built."
+            fi
+          fi
+          echo "CHECK_TRIAGE_UPSTREAM_MANAGED_DIGESTS_FILE=${upstream_digests}" >> "$GITHUB_ENV"
+
           # The Claude credential step's post action (token cleanup) runs from
           # the support checkout at job end, so keep only that action
           # directory. The sandbox snapshot never includes .codex-workflow-src.
@@ -626,10 +658,29 @@ jobs:
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
           bash scripts/check_failure_triage.sh
 
+      # Issue #8265: a failure whose fix is only in unmodified upstream-managed
+      # files is reported upstream (one repository_dispatch with an OIDC
+      # identity) instead of filing a consumer issue. Any failure here leaves
+      # `routed` unset, so the post step below files the issue as before.
+      - name: Route upstream-managed check failure
+        id: upstream_route
+        if: ${{ steps.diagnose_triage.outputs.ready == 'true' && github.repository != 'shubhodeep1/coding-workflows' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          CHECK_TRIAGE_STAGE: route
+          # The consumer's heal opt-out also stops the upstream report.
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
+          bash scripts/check_failure_triage.sh
+
       # A fine-grained PAT with Issues: write (and Metadata: read) keeps
       # issues:opened dispatching clarify; github.token would suppress it.
       - name: Post check-failure triage issue
-        if: ${{ steps.diagnose_triage.outputs.ready == 'true' }}
+        if: ${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
