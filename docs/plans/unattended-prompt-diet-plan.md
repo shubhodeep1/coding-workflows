@@ -5,12 +5,15 @@ Stop pasting the whole of `agents.md` (about 708 KB with `agents.d/` fragments
 folded in) into every unattended prompt. Paste a generated section index
 instead, and let the model read the sections it needs from its sandbox copy.
 This cuts the static prefix from about 750 KB (about 190k tokens) to under
-60 KB per call.
+75 KB per call (about 57 KB of other prefix plus an index of at most 15 KB).
 
 ## Automation (§18.E)
 - Scripts: one new helper, `scripts/build_agents_index.py`, called by the
   existing prompt builders at prompt-build time. No standalone or manual
-  script. Everything else extends existing scripts.
+  script. Everything else extends existing scripts. The helper is added to
+  every staged-support list that already carries `build_static_context.sh`
+  or `assemble_agents.py` (see Implementation Steps 1, 6 and 7), so consumer
+  runs get it too.
 - Scheduler / entry points: the existing phase workflows that already build
   the prefix (`clarify.yml`, `plan.yml`, `implement.yml`, `orchestrate.yml`,
   `orchestrate_clarify_respond.yml`, `orchestrate_poll.yml` through
@@ -44,7 +47,36 @@ This cuts the static prefix from about 750 KB (about 190k tokens) to under
 - **Alternatives considered:** headings only (1.6 KB but far too coarse, since
   one section is 158 KB), or a full per-bullet map (about 55 KB).
 - **Why:** it keeps the index at or under 15 KB while still pointing at specific
-  facts.
+  facts. With the measured non-agents remainder (56,638 B for clarify,
+  57,146 B for plan) that puts the clarify and plan prefixes at about 72 KB,
+  which is why the size goal is 75 KB, not 60 KB.
+
+### D4 — Which agents copy the index points at
+- **Chosen:** the index and `agents.rendered.md` are always built from the
+  same trusted copy the inline mode pastes today: the verified support copy
+  (`SUPPORT_AGENTS_FILE`, staged from the workflow support commit) in review,
+  and the copy each builder already reads elsewhere. The rendered file is
+  written outside the checkout (under `RUNTIME_DIR`) and mounted read-only
+  into the sandbox, never read from the PR or branch checkout.
+- **Alternatives considered:** point the model at the checkout's `agents.md`,
+  as the reviewer panel does.
+- **Why:** the editor, judges and consolidator take repository conventions
+  from this text. A PR that edits its own `agents.md` must not change the
+  rules applied to it in the same run. A role whose sandbox cannot mount the
+  trusted rendered file keeps the inline copy.
+
+### D5 — Phase 4 gate and the codex fallback
+- **Chosen:** the stdin system block is dropped only inside the Claude launch
+  paths, on a temporary copy of the prompt file, and only while
+  `STATIC_CONTEXT_AGENTS_MODE=index`. The original prompt file is left
+  untouched for the codex fallback.
+- **Alternatives considered:** drop the block when the prompt is assembled.
+- **Why:** `claude_run_selected` in `scripts/ai_engine.sh` runs the codex
+  command on the same prompt file after a Claude exit 75
+  (`"$@" < "${prompt_file}"`, about line 799), and codex has no
+  `--system-prompt-file`. Removing the block at assembly time would run that
+  fallback without the unattended rules or the output contract. Gating on the
+  same variable keeps one rollback switch for all four phases.
 
 ## Context
 - `scripts/build_static_context.sh` builds the prefix for clarify, plan and
@@ -78,12 +110,13 @@ This cuts the static prefix from about 750 KB (about 190k tokens) to under
 ## Goals
 - The prefix of clarify, plan, implement, orchestrate, clarify-respond,
   orchestrate judges, validate, review editor/judges/consolidator and
-  workflow-heal intake is below 60 KB in this repo when the new mode is on.
+  workflow-heal intake is below 75 KB in this repo when the new mode is on.
 - The model can still reach every agents.md section, including pending
   `agents.d/` fragments and, in consumer runs, coding-workflows' canonical
   file.
 - Each run logs `STATIC_CONTEXT_SIZE phase=<p> mode=<inline|index> bytes=<n>`.
-- The Claude engine no longer sends the system instructions twice.
+- The Claude engine no longer sends the system instructions twice, and the
+  codex fallback still receives them.
 
 ## Non-goals
 - `check_failure_triage`: it hides agent-instruction files from `/source` on
@@ -102,24 +135,36 @@ This cuts the static prefix from about 750 KB (about 190k tokens) to under
 - §27: check `wc -c` on every workflow file touched.
 
 ## Approach
-1. New `scripts/build_agents_index.py` renders the agents file through
-   `assemble_agents.py render` into the sandbox (or `--include`) as
-   `agents.rendered.md`. It emits an index of every `##`/`###` heading and
-   every bold-lead or first-level bullet in the 6 sections over 30 KB, with
-   line ranges. Target index size is 15 KB or less.
+1. New `scripts/build_agents_index.py` renders the trusted agents file (D4)
+   through `assemble_agents.py render` as
+   `${RUNTIME_DIR}/static-context/agents.rendered.md`, outside the repository
+   tree, so no commit step, conflict resolver or `files_touched` scope guard
+   can see it. Each phase mounts that file read-only into its sandbox at a
+   fixed path (`codex_isolated_exec.sh --include`, the review sandbox's
+   support mount, or a new read-only file mount in `clarify_isolated_run.sh`,
+   whose `/source` copy is a whitelist and would drop it). It emits an index of
+   every `##`/`###` heading and every bold-lead or first-level bullet in the
+   6 sections over 30 KB, with line ranges, and names the in-sandbox path.
+   Target index size is 15 KB or less.
 2. The prefix then carries the index plus one instruction: read the listed
    line ranges of `agents.rendered.md` (and grep it) before relying on
    repo-architecture facts.
 3. Repo variable `STATIC_CONTEXT_AGENTS_MODE` (`inline` | `index`) selects the
-   mode, with `index` as the default (see Q2). Any failure to build the index
-   falls back to `inline` and logs `STATIC_CONTEXT_SIZE ... fallback=inline`.
+   mode, with `index` as the default (see D1). Any failure to build the index,
+   a missing helper, or a caller that cannot confirm the rendered file is
+   mounted into its sandbox (the builder takes the in-sandbox path as an
+   argument and refuses `index` mode without it) falls back to `inline` and
+   logs `STATIC_CONTEXT_SIZE ... fallback=inline reason=<r>`.
 4. Consumer implement stages the canonical file into the sandbox with
    `--include` and indexes it under its own heading.
 5. Prompt text that says everything is already loaded is updated
    (`clarify.yml:1466`, `run_plan_codex.sh:16`,
-   `prompts/mode-validate-generate.txt:15`).
-6. When the engine is Claude, the stdin copy of the system instructions is
-   dropped.
+   `prompts/mode-validate-generate.txt:15` and its hand-maintained source
+   `prompts/_templates/mode-validate-generate.txt:7-9`).
+6. When the engine is Claude and the mode is `index`, the stdin copy of the
+   system instructions is dropped inside the Claude launch path only (D5).
+   The prompt sentences that say the system instructions are "provided ABOVE"
+   are reworded so they stay true on both engines.
 
 ## Phases & Merge Strategy
 Each phase stands alone and leaves `inline` behaviour intact when the
@@ -127,29 +172,35 @@ variable is `inline`.
 
 1. **Index builder and shared builder.** `build_agents_index.py`, the
    `index` mode in `build_static_context.sh` (clarify, plan, implement), the
-   consumer `--include` staging, and the size log. Done: the measured prefix
-   is under 60 KB in index mode and `tests/test_static_context_symlink_guard.py`
-   passes in both modes. Rollback: set the variable to `inline`, or revert.
+   consumer `--include` staging, the staged-support entries, and the size
+   log. Done: the measured prefix is under 75 KB in index mode and
+   `tests/test_static_context_symlink_guard.py` passes in both modes.
+   Rollback: set the variable to `inline`, or revert.
 2. **Hand-built prefixes.** orchestrate, clarify-respond, orchestrate judges,
    validate and workflow-heal intake switch to the shared index helper.
    Rollback: same.
-3. **Review pipeline.** The editor, judges and consolidator use the
-   reviewer-style split (prefix without agents.md, plus the index). Rollback:
+3. **Review pipeline.** The editor, judges and consolidator get the index of
+   the trusted support copy (D4) in place of the inlined file. Rollback:
    same.
-4. **No duplicate system prompt on the Claude engine.** Rollback: revert.
+4. **No duplicate system prompt on the Claude engine.** Only while the mode
+   is `index`, and never for the codex fallback (D5). Rollback: same.
 
 ## Implementation Steps
 Phase 1
 1. Add `scripts/build_agents_index.py` (render, index, line ranges, size
-   log) and `tests/test_build_agents_index.py`.
+   log) and `tests/test_build_agents_index.py`. Stage it wherever
+   `build_static_context.sh` is staged today: the support-script lists of
+   `clarify.yml`, `plan.yml` and `implement.yml`, plus `docs/INVENTORY.md`.
 2. `scripts/build_static_context.sh`: read `STATIC_CONTEXT_AGENTS_MODE`
    (default `index`). In `index` mode, emit the index and the read-on-demand
    instruction in place of `emit_agents_md`, falling back to `inline` on
    any error.
 3. `implement.yml:1770-1777`: stage the canonical file into the sandbox
-   (`--include`) for consumer runs, and index it under its own heading.
+   (`--include`) for consumer runs, and index it under its own heading. Mount
+   `agents.rendered.md` read-only in the clarify, plan and implement
+   sandboxes (`clarify_isolated_run.sh` gets the new read-only file mount).
 4. `clarify.yml:1466` and `run_plan_codex.sh:16`: change the "already
-   loaded" wording.
+   loaded" wording for agents.md.
 5. Pass the variable through `env:` in `clarify.yml`, `plan.yml` and
    `implement.yml`, and document it in the README variables table.
 
@@ -157,33 +208,56 @@ Phase 2
 6. Use the index helper in `orchestrate.yml:697`,
    `orchestrate_clarify_respond.yml:919`, `assemble_judge_static_context`
    (`orchestrate_poll_process.sh:1433-1488`), `validate_process.sh:4134-4172`
-   and `workflow_failure_heal_intake.sh:2340`. Update
-   `prompts/mode-validate-generate.txt:15`.
+   and `workflow_failure_heal_intake.sh:2340`. Mount the rendered file into
+   each of those sandboxes (heal intake today includes only `HEAL_SOURCE_DIR`
+   and `HEAL_BRANCH_TIP_DIR`, so it gets an extra `--include`); a phase that
+   cannot mount it stays `inline`. Add the helper to the staged-support lists
+   of `orchestrate.yml`, `orchestrate_clarify_respond.yml`,
+   `orchestrate_poll.yml` and `validate.yml` (its `required_scripts`
+   manifest), and to `workflow_failure_heal.yml`'s staging if the intake runs
+   from there. Update `prompts/mode-validate-generate.txt:15` and
+   `prompts/_templates/mode-validate-generate.txt:7-9`.
 
 Phase 3
 7. `review_autofix.yml:2630-2695`: in index mode, the shared
-   `pre_assembled_static.txt` carries the index instead of
-   `SUPPORT_AGENTS_FILE`. The editor, judges and consolidator scripts keep
+   `pre_assembled_static.txt` carries the index of `SUPPORT_AGENTS_FILE`
+   (the verified support copy, D4) instead of the file itself. The rendered
+   file goes under `RUNTIME_DIR` and is mounted read-only by
+   `review_untrusted_sandbox.sh` for the editor, judges and consolidator;
+   the prompt names that path and says the checkout's `agents.md` is PR data.
+   Add the helper to `REQUIRED_BOOTSTRAP_SCRIPTS` in
+   `scripts/stage_workflow_support.sh` and `REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS`
+   in `review_autofix.yml`. The editor, judges and consolidator scripts keep
    their `cat` and get the smaller file.
 
 Phase 4
-8. `scripts/ai_engine.sh` and the prompt assemblers: when the engine is
-   Claude, leave the system-instruction block out of stdin, since
-   `--system-prompt-file` already carries it.
+8. The prompt assemblers wrap the system-instruction block in fixed begin
+   and end markers. In every Claude launch path that passes
+   `--system-prompt-file` (`claude_run` in `scripts/ai_engine.sh`,
+   `clarify_isolated_run.sh`, `review_untrusted_sandbox.sh`), when the mode is
+   `index`, feed Claude a temporary copy of the prompt with that block removed.
+   The original prompt file is unchanged, so the exit-75 codex fallback still
+   gets the block. Reword the "system instructions ... provided ABOVE"
+   sentences in `run_plan_codex.sh:15-17` and both `mode-validate-generate.txt`
+   copies so they are true on both engines.
 
 ## Files & Modules
 - `scripts/build_agents_index.py` [new]
 - `scripts/build_static_context.sh`, `scripts/assemble_agents.py` (render
   target only, if needed)
 - `.github/workflows/clarify.yml`, `plan.yml`, `implement.yml`,
-  `orchestrate.yml`, `orchestrate_clarify_respond.yml`, `review_autofix.yml`
+  `orchestrate.yml`, `orchestrate_clarify_respond.yml`, `orchestrate_poll.yml`,
+  `validate.yml`, `review_autofix.yml` (staged-support lists and `env:`)
+- `scripts/clarify_isolated_run.sh`, `scripts/codex_isolated_exec.sh` callers,
+  `scripts/review_untrusted_sandbox.sh` (read-only mount of the rendered file)
 - `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`,
-  `scripts/self_heal_validation.sh`, `scripts/workflow_failure_heal_intake.sh`,
+  `scripts/workflow_failure_heal_intake.sh`,
   `scripts/review_apply_fixes.sh`, `scripts/review_rb_judge.sh`,
   `scripts/review_run_judge_interim.sh`, `scripts/review_consolidate.sh`,
   `scripts/run_plan_codex.sh`, `scripts/ai_engine.sh`,
   `scripts/stage_workflow_support.sh`
-- `prompts/mode-validate-generate.txt`
+- `prompts/mode-validate-generate.txt`, `prompts/_templates/mode-validate-generate.txt`
+- `docs/INVENTORY.md`
 - `README.md` (Prompt Caching section and variables table), `agents.d/`
   fragment, `changelog.d/` fragment per phase
 - Tests listed below
@@ -195,7 +269,17 @@ Phase 4
   "contains agents text exactly once" asserts become mode-aware) and
   `tests/test_review_static_context_readme.py`.
 - New size-guard test: the index-mode prefix of each phase stays under
-  60 KB in this repo.
+  75 KB in this repo.
+- Staging test: every workflow that stages `build_static_context.sh` also
+  stages `build_agents_index.py`.
+- Trust test: in review index mode the index and rendered file come from
+  `SUPPORT_AGENTS_FILE`, never from the checkout, and the rendered file is not
+  inside the repository tree (so no commit helper can stage it).
+- Fallback tests: `index` mode without a confirmed sandbox mount, or without
+  the helper, produces the inline prefix and `fallback=inline`.
+- Phase 4 test: after a forced Claude exit 75, the codex command's stdin
+  still contains the system-instruction block; with the mode `inline`, the
+  Claude stdin keeps it too.
 - After each phase merges, compare `STATIC_CONTEXT_SIZE` logs and Claude
   transcript usage on the next 5 runs of each phase against the last 5
   before it.
@@ -205,6 +289,9 @@ Phase 4
   Mitigation: the index points at line ranges, the prompt says to read them,
   the per-phase rollout keeps the variable as a quick rollback, and runs are
   compared after each phase.
+- An index points at a file the sandbox cannot open, so the content is lost
+  silently. Mitigation: the builder refuses `index` mode unless its caller
+  passes the confirmed in-sandbox path, and falls back to `inline`.
 - A large section is indexed too coarsely. Mitigation: bullet-level index
   for the 6 sections over 30 KB.
 - More tool calls offset part of the saving. ACCEPTED: reading 5–20 KB on
