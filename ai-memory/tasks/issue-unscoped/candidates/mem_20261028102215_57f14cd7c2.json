@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs\" for Phase 1 Clarify, Phase 2 Plan, Phase 3b Implement, Phase 4 Review waits\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, Clarify stall `::error::` (about line 1017) and the two Plan stall `::error::` lines (about lines 1125 and 1316), plus the Clarify and Plan polling loops\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The diff covers Implement (Phase 3b) and Review (Phase 4) only, and no hunk touches the Clarify or Plan stall/timeout `::error::` lines at 1017, 1125 and 1316. Clarify captures its run ID only after success at line 990. The Plan polling lookup at line 1190 requests only `status` and discards the run ID. No tests exist for Phase 1 or Phase 2. The narrowing is documented in agents.d/8248-heal-intake-linked-runs.md. Severity disagreement: MAJOR (google_gemini-3_1-flash-lite, openai_gpt-6-luna) vs NIT (anthropic_claude-sonnet-5_5, minimax_minimax-m3). Reviewers also disagree on feasibility without new API calls. Gemini says the scoped run ids are already in the loops. The others say a new lookup would be needed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"the phase wait loops (Phase 1 clarify, Phase 2 plan, Phase 3b implement, Phase 4 review) \u2026 When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, Clarify stall error (about line 1017) and two Plan stall errors (about lines 1125 and 1316).\n  Evidence of absence: The diff covers Implement and Review only. The PR records this as a deliberate narrowing, because the Clarify and Plan loops hold no run id while polling and a lookup would be a new API call. It is documented in `agents.d/8248-heal-intake-linked-runs.md`. Described as a partial-coverage note, not a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\nAll other checklist categories: NONE. The test assertion added in `tests/test_test_and_mark_stable_plan_polling_guard.py` matches workflow line about 1649. The new `_heal_collect_linked_runs` was checked for trust-boundary issues and none were found.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"When a scoped run id is first seen, and in every stall / timeout ::error:: line, print the watched run URLs\" for Phase 1 Clarify, Phase 2 Plan, Phase 3b Implement, Phase 4 Review waits.\n  Expected change site: .github/workflows/test-and-mark-stable.yml (Phase 1 and Phase 2 polling loops and stall error messages)\n  Evidence of absence: The diff adds watched-run URLs for Implement and Review, but the Phase 1 and Phase 2 wait loops and their stall/timeout ::error:: lines carry none. The polling loops already contain the scoped run ids (e.g. clarify_run_id, plan_run_id), so the requirement is achievable without new API calls.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nAll other checklist categories: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs\" for Phase 1 clarify, Phase 2 plan, Phase 3b implement, Phase 4 review waits.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml` \u2014 Phase 1 Clarify stall `::error::` line (around line 1017) and the two Phase 2 Plan stall `::error::` lines (around lines 1125 and 1316), plus the polling code that holds the Clarify and Plan run ids.\n  Evidence of absence: No diff hunk adds `e2e_note_watched_run` to the Clarify stall line, the Plan \"no runs found\" line, or the Plan \"stalled\" line. Tests exist for Phase 3b (`test_implement_terminal_failure_names_the_watched_run`) and Phase 4 (`test_wait_review_errors_append_the_watched_run_urls`), but none for Phase 1 or Phase 2. The narrowing is recorded in `agents.d/8248-heal-intake-linked-runs.md`. The editor's justification is that `capture_run_id` runs only on success branches that exit 0 immediately, and the Plan polling read fetches status only, so URLs would need a new run lookup that the \"no new API calls\" rule forbids.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\nAll other checklist categories: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs\" for the Clarify, Plan, Implement, and Review waits.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, Clarify and Plan polling loops and their stall errors.\n  Evidence of absence: The PR adds watched-run URL handling for Implement and Review. The Clarify stall error at line 1017 and Plan stall errors at lines 1125 and 1316 are unchanged and carry no watched-run URLs. Clarify captures its run ID only after success at line 990. Plan's polling lookup at line 1190 requests only `status` and discards the run ID.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\nAll other checklist categories: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nThe reviewer reported NONE for the task-completeness category. It verified the Clarify/Plan watched-run-URL gap as an accepted, documented narrowing. `capture_run_id` runs only on success branches that exit 0 (.github/workflows/test-and-mark-stable.yml:990, 1209, 1219), so adding URLs would need new API calls. The deferral is recorded in agents.d/8248-heal-intake-linked-runs.md. The added assertion at tests/test_test_and_mark_stable_plan_polling_guard.py:778-779 matches `.github/workflows/test-and-mark-stable.yml:1649`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6fd5cef26d4466f5d8069369e4d54fe489aa15bb77d17cad8e46f41292f7df58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8256,
+    "run_id": "40668018857",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40668018857",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028102215_57f14cd7c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8256,
+    "run_id": "40668018857"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T10:22:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
