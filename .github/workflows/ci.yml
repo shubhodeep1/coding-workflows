@@ -1145,6 +1145,7 @@ jobs:
             tests/test_implement_heal_preflight.py
             tests/test_implement_pr_body_tracking_refs.py
             tests/test_partial_delivery.py
+            tests/test_plan_heal_counterfactual_gate.py
             tests/test_issue_pr_status_partial_delivery.py
             tests/test_clarify_partial_delivery_restart.py
             tests/test_partial_delivery_sweep_guard.py

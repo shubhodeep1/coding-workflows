@@ -27647,6 +27647,117 @@ def test_plan_gate_poller_wiring() -> None:
 	assert "_plan_auto_approval_gate" not in release
 
 
+# --------------------------------------------------------------------------
+# Heal-route counterfactual gate in stall recovery (issue #8249)
+# --------------------------------------------------------------------------
+
+_HEAL_CF_FAIL_LINE = "HEAL_COUNTERFACTUAL: FAIL: the gate still times out after 30 min"
+
+
+def _heal_cf_plan_comment(line: str) -> dict:
+	body = ("Implementation Plan\n\n### 1. Files likely to change\n- `src/app.py`\n\n"
+		"## Counterfactual check\n\n- e2e-smoke-test: walked the recorded failure.\n\n"
+		f"{line}\n\nSTATUS: CLEAR\n\n<!-- ai:plan-proposal:v1 -->")
+	return {"body": body, "user": {"login": _PLAN_GATE_LOGIN}, "author_association": "OWNER",
+		"created_at": "2026-01-01T00:00:00Z"}
+
+
+def _heal_cf_holds(result: dict, issue: str) -> list[str]:
+	return [c.get("body", "") for c in result["issues"][issue]["comments"]
+		if f"<!-- ai:heal-counterfactual-hold:v1 issue={issue} " in c.get("body", "")]
+
+
+def _managed_heal_cf_run(comments: list, **overrides) -> dict:
+	kwargs = {
+		"state": _managed_awaiting_approval_state(), "enable_validation": "false", "max_validate_cycles": "3",
+		"issue_labels": {10: ["ai:awaiting-approval", "ai:orchestrator-managed", "ai:workflow-heal"]},
+		"issue_comments": {10: comments},
+	}
+	kwargs.update(overrides)
+	return _run_poller(**kwargs)
+
+
+def test_managed_auto_approve_holds_heal_plan_whose_counterfactual_fails() -> None:
+	result = _managed_heal_cf_run([_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE)])
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=hold result=FAIL "
+		"reason=fail issue=10") in log
+	assert "STALL_SKIP issue=10 reason=heal_counterfactual_hold phase=ai:awaiting-approval action=none" in log
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+	# A held heal plan never gets a pipeline grant written into its body.
+	assert result.get("issue_body_patch_calls", []) == []
+	holds = _heal_cf_holds(result, "10")
+	assert len(holds) == 1, log
+	assert " result=FAIL source=poller -->" in holds[0]
+	assert "Stall recovery did not post `/approved`" in holds[0]
+	# The next tick holds again but does not post a second comment.
+	posted = {"body": holds[0], "user": {"login": _PLAN_GATE_LOGIN}, "author_association": "OWNER",
+		"created_at": "2026-01-01T00:00:05Z"}
+	second = _managed_heal_cf_run([_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE), posted])
+	second_log = second["stdout"] + second["stderr"]
+	assert _approved_bodies(second, "10") == [], second_log
+	assert "reason=heal_counterfactual_hold" in second_log
+	assert _heal_cf_holds(second, "10") == [holds[0]], second_log
+
+
+def test_managed_auto_approve_posts_heal_plan_whose_counterfactual_passes() -> None:
+	result = _managed_heal_cf_run([_heal_cf_plan_comment("HEAL_COUNTERFACTUAL: PASS")])
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10"), log
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=approve result=PASS "
+		"reason=pass issue=10") in log
+	assert _heal_cf_holds(result, "10") == []
+
+
+def test_managed_heal_counterfactual_gate_can_be_turned_off() -> None:
+	result = _managed_heal_cf_run([_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE)],
+		env_overrides={"HEAL_COUNTERFACTUAL_GATE_ENABLED": "false"})
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10"), log
+	assert "reason=gate_disabled issue=10" in log
+	assert "reason=heal_counterfactual_hold" not in log
+
+
+def test_non_heal_issue_skips_the_heal_counterfactual_gate() -> None:
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE)]},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10"), log
+	assert "gate=heal_counterfactual" not in log
+
+
+def test_standalone_auto_approve_holds_heal_plan_whose_counterfactual_fails() -> None:
+	result = _run_poller(
+		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval", "ai:workflow-heal"]},
+		issue_comments={501: [_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE), _standalone_awaiting_approval_state_comment()]},
+		mock_gh_issue_list_label_filter=True,
+		tracking_issues_override=[],
+		env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true"},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "501") == [], log
+	assert "gate=heal_counterfactual outcome=hold result=FAIL reason=fail issue=501" in log
+	assert "STALL_SKIP issue=501 reason=heal_counterfactual_hold phase=ai:awaiting-approval action=none" in log
+	assert len(_heal_cf_holds(result, "501")) == 1, log
+
+
+def test_heal_counterfactual_poller_wiring() -> None:
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"' in poller
+	gate = poller.split("\n_plan_auto_approval_gate()\n", 1)[1].split("\n}\n", 1)[0]
+	assert gate.index("_plan_heal_counterfactual_check") < gate.index("--plan-auto-approval-gate")
+	assert "partial_delivery.py" in poller.split("\n_plan_heal_counterfactual_check()\n", 1)[1].split("\n}\n", 1)[0]
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert " pr_dependency.py partial_delivery.py pr_checks_lib.sh " in workflow
+	assert workflow.count(
+		"HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}") == 5
+
+
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer
