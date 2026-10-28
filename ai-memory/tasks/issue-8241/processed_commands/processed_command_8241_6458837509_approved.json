@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8241_6458837509_approved",
   "issue_number": 8241,
   "metadata": {
+    "branch": "ai/issue-8241",
+    "changed_files": [
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/8241-release-gate-implement-working-run.md",
+      "tests/test_test_and_mark_stable_plan_polling_guard.py"
+    ],
+    "issue_number": 8241,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8241",
+    "pr_number": 8243,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8243",
+    "run_attempt": "1",
+    "run_id": "40619915704",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40619915704"
   },
   "run_attempt": 1,
   "run_id": "40619915704",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-28T02:19:26Z",
+  "status": "completed",
+  "timestamp": "2026-10-28T02:44:14Z",
   "workflow": "implement"
 }
