@@ -775,6 +775,8 @@ def test_wait_review_errors_append_the_watched_run_urls() -> None:
 	workflow = _read_workflow()
 	assert 'echo "::error::Implement phase stalled — no activity for ${PHASE_TIMEOUT} minutes$(e2e_watched_run_urls)"' in workflow
 	assert 'e2e_note_watched_run "${IMPL_RUN_ID_LATEST:-}" Implement' in workflow
+	# The in-progress run the loop polls when a newer queued run is the latest.
+	assert 'e2e_note_watched_run "${IMPL_RUN_ID_WORKING:-}" Implement' in workflow
 
 
 def test_watched_run_helpers_ignore_unknown_skip_repeats_and_keep_five() -> None:
