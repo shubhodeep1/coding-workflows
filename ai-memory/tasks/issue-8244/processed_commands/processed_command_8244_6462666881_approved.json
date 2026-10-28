@@ -5,13 +5,29 @@
   "entry_id": "processed_command_8244_6462666881_approved",
   "issue_number": 8244,
   "metadata": {
+    "branch": "ai/issue-8244",
+    "changed_files": [
+      ".github/workflows/orchestrate.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "agents.d/8244-prepush-gate-release-gate.md",
+      "changelog.d/8244-prepush-gate-release-gate.md",
+      "scripts/orchestrate_lib.py",
+      "tests/test_orchestrate_lib.py",
+      "tests/test_test_and_mark_stable_plan_polling_guard.py",
+      "tests/test_test_and_mark_stable_review_blocked_budget.py"
+    ],
+    "issue_number": 8244,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8244",
+    "pr_number": 8259,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8259",
+    "run_attempt": "1",
+    "run_id": "40646394421",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40646394421"
   },
   "run_attempt": 1,
   "run_id": "40646394421",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-28T06:53:52Z",
+  "status": "completed",
+  "timestamp": "2026-10-28T07:59:34Z",
   "workflow": "implement"
 }
