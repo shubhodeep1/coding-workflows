@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:9662 and 9777 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Heuristic scan reports \"unexpected indent\" in Python heredocs used for agents file processing.\n  WHY: If these heredocs are indeed syntactically invalid Python, they will cause the `assemble_agents.py` call or similar Python-invoking steps to fail, leading to an index failure and falling back to inlining agents files unnecessarily, or breaking the poller entirely. (Source gave no severity.)\n- scripts/validate_process.sh:3420 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Heuristic scan reports \"unexpected indent\" in Python heredoc.\n  WHY: Similar to above, this could break the validation process or cause fallback to inlining when not intended. (Source gave no severity.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The authoritative Phase 4 plan section requires removing the duplicated system-instruction block only from Claude's prompt copy in index mode, leaving the original prompt intact for the exit-75 Codex fallback, and testing that fallback. It also requires updating the \"system instructions ... provided ABOVE\" wording for both engines (in `scripts/run_plan_codex.sh` and both validate-generate prompt copies).\n  expected_change_site: `scripts/ai_engine.sh` (`claude_run`), `scripts/clarify_isolated_run.sh`, `scripts/review_untrusted_sandbox.sh`, `scripts/run_plan_codex.sh`, both validate-generate prompt copies, and a Phase 4 fallback test.\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR diff does not modify `scripts/ai_engine.sh`, `scripts/clarify_isolated_run.sh`, `scripts/review_untrusted_sandbox.sh`, or `scripts/run_plan_codex.sh`, and it adds no Phase 4 fallback test. The validate-generate prompt edits still say the system instructions \"appear above\" and change only the agents-file/index wording. The structural removal of the duplicated system-instruction block is not in the diff. Three reviewers disputed this gap as out of scope: anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash. Their reasons are that this is D5 work, that these files are outside the files_touched grant, and that the issue scopes plan authority to \"Phase 4 section and Decisions D1-D3\".\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:9662 and 9777 | confidence=3\n  PROBLEM: Heuristic scan reports \"unexpected indent\" in Python heredocs used for agents file processing.\n  WHY: If these heredocs are indeed syntactically invalid Python, they will cause the `assemble_agents.py` call or similar Python-invoking steps to fail, leading to an index failure and falling back to inlining agents files unnecessarily, or breaking the poller entirely.\n- scripts/validate_process.sh:3420 | confidence=3\n  PROBLEM: Heuristic scan reports \"unexpected indent\" in Python heredoc.\n  WHY: Similar to above, this could break the validation process or cause fallback to inlining when not intended.\n- TASK_GAP\n  Requirement: The linked issue references the plan's Phase 4 section as authoritative. Phase 4 requires removing the duplicated system-instruction block from each Claude launch prompt (specifically in index mode), keeping the original prompt for the Codex exit-75 fallback, and updating wording in `scripts/run_plan_codex.sh` and both validate-generate prompt copies.\n  Expected change site: scripts/ai_engine.sh, scripts/clarify_isolated_run.sh, scripts/review_untrusted_sandbox.sh, scripts/run_plan_codex.sh\n  Evidence of absence: The PR diff does not modify `scripts/ai_engine.sh`, `scripts/clarify_isolated_run.sh`, `scripts/review_untrusted_sandbox.sh`, or `scripts/run_plan_codex.sh`. While the prompt template wording was updated, the structural removal of the duplicated system instruction block as required by the authoritative plan (per the finding in `openai_gpt-6-luna`) is not present in the diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The authoritative Phase 4 plan section requires removing the duplicated system-instruction block only from Claude's prompt copy in index mode, leaving the original prompt intact for the exit-75 Codex fallback, and testing that fallback. It also requires updating the \"system instructions ... provided ABOVE\" wording for both engines.\n  Expected change site: `scripts/ai_engine.sh` (`claude_run`), `scripts/clarify_isolated_run.sh`, `scripts/review_untrusted_sandbox.sh`, `scripts/run_plan_codex.sh`, both validate-generate prompt copies, and a Phase 4 fallback test.\n  Evidence of absence: The PR diff does not change the three Claude launch paths or add a Phase 4 fallback test. The validate-generate prompt edits still say the system instructions \"appear above\"; they only change the agents-file/index wording. `scripts/run_plan_codex.sh` is unchanged.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1d16569a052c1731f52e922af812de3418f727a971f61115325ffd704bdcec86",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8271,
+    "run_id": "40750311605",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40750311605",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028193006_ad5615cbd6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8271,
+    "run_id": "40750311605"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T19:30:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
