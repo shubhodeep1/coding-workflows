@@ -1786,9 +1786,11 @@ class MovedReleaseToPromoteStepsContractTest(unittest.TestCase):
 
 	def test_moved_steps_run_after_the_promote_job_setup(self) -> None:
 		names = [step.get("name") for step in self.jobs()[RELEASE_TO_PROMOTE_TARGET_JOB_ID]["steps"]]
+		self.assertIn(RELEASE_TO_PROMOTE_SETUP_STEP, names, RELEASE_TO_PROMOTE_TARGET_JOB_ID)
 		setup_index = names.index(RELEASE_TO_PROMOTE_SETUP_STEP)
 		for name in MOVED_RELEASE_TO_PROMOTE_STEPS:
 			with self.subTest(step=name):
+				self.assertIn(name, names)
 				self.assertLess(setup_index, names.index(name))
 
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
