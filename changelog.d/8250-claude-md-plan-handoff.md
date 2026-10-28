@@ -5,7 +5,7 @@
 
 | The numbers that matter | Value |
 | --- | --- |
-| `CLAUDE.md` size | 97,531 → 65,559 bytes |
+| `CLAUDE.md` size | 97,531 → about 65,900 bytes |
 | New reference files | 6, under `.claude/docs/` |
 | "Small fix" limit (§31.A) | at most 2 files, not counting a test for the fix or the §20/§30 fragments |
 
