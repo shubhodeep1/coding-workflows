@@ -52,9 +52,17 @@
 #
 # STATIC_CONTEXT_AGENTS_MODE (default index): unset, empty or `index` (any
 # letter case) selects the index, `inline` the full file, anything else inline
-# with one warning. `_static_context_agents_mode` is the single parser later
-# phases call; the existing clarify / plan / implement phases do not read it
-# yet, and the `agents-index` phase always emits the index.
+# with one warning. `_static_context_agents_mode` is the single parser. The
+# clarify and plan phases read it (issue #8260, project #8253 Phase 2): index
+# mode writes the index in place of `=== AGENTS.MD ===` plus the inlined file,
+# and falls back to the inlined file when the index cannot be built; inline
+# mode keeps the previous output byte for byte. Their sandboxes snapshot the
+# local agents.md and agents.d/, so the model can read the listed sections.
+# The implement phase does not read the switch yet, and the `agents-index`
+# phase always emits the index. clarify and plan print one stderr line,
+# `STATIC_CONTEXT_SIZE phase=clarify|plan mode=index|inline bytes=<output size>`, plus
+# ` fallback=inline reason=<r>` after a fallback and ` agents=absent` when
+# there is no local agents file.
 #
 # Inputs (read from CWD): unattended_system_instructions.md, ai_pipeline.md,
 # agents.md, README.md. For the implement phase, also reads
@@ -85,6 +93,11 @@ if [ "${phase}" != readme ] && [ "${phase}" != agents-index ] && { [ ! -f unatte
 	echo "Missing required input file(s): unattended_system_instructions.md and/or ai_pipeline.md" >&2
 	exit 1
 fi
+
+# Set by emit_agents_md for the clarify / plan STATIC_CONTEXT_SIZE line.
+static_context_agents_effective_mode=""
+static_context_agents_fallback_reason=""
+static_context_agents_absent=false
 
 emit_system_instructions() {
 	echo "=== SYSTEM INSTRUCTIONS (unattended) ==="
@@ -157,6 +170,36 @@ emit_agents_md() {
 				fi
 			fi
 			;;
+		clarify|plan)
+			local static_context_agents_requested static_context_agents_index_tmp=""
+			static_context_agents_requested="$(_static_context_agents_mode)"
+			static_context_agents_effective_mode="${static_context_agents_requested}"
+			static_context_agents_fallback_reason=""
+			if [ -z "${local_agents_file}" ]; then
+				static_context_agents_absent=true
+				return 0
+			fi
+			if [ "${static_context_agents_requested}" = index ]; then
+				if static_context_agents_index_tmp="$(mktemp "${TMPDIR:-/tmp}/static-agents-index-phase.XXXXXX" 2>/dev/null)"; then
+					emit_agents_index > "${static_context_agents_index_tmp}" || true
+					if [ -s "${static_context_agents_index_tmp}" ]; then
+						cat "${static_context_agents_index_tmp}"
+						echo
+						rm -f "${static_context_agents_index_tmp}"
+						return 0
+					fi
+					rm -f "${static_context_agents_index_tmp}"
+					static_context_agents_fallback_reason=index_unavailable
+				else
+					static_context_agents_fallback_reason=tmp_unavailable
+				fi
+				echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+			fi
+			static_context_agents_effective_mode=inline
+			echo "=== AGENTS.MD ==="
+			_static_context_cat_agents "${local_agents_file}"
+			echo
+			;;
 		*)
 			if [ -n "${local_agents_file}" ]; then
 				echo "=== AGENTS.MD ==="
@@ -165,6 +208,24 @@ emit_agents_md() {
 			fi
 			;;
 	esac
+}
+
+# One STATIC_CONTEXT_SIZE line on stderr for the clarify / plan phases. Only
+# constants and an integer are printed.
+emit_static_context_size_line() {
+	local static_context_size_bytes static_context_size_line
+	static_context_size_bytes="$(wc -c < "${output}" | tr -d '[:space:]')"
+	case "${static_context_size_bytes}" in
+		''|*[!0-9]*) static_context_size_bytes=0 ;;
+	esac
+	static_context_size_line="STATIC_CONTEXT_SIZE phase=${phase} mode=${static_context_agents_effective_mode} bytes=${static_context_size_bytes}"
+	if [ -n "${static_context_agents_fallback_reason}" ]; then
+		static_context_size_line="${static_context_size_line} fallback=inline reason=${static_context_agents_fallback_reason}"
+	fi
+	if [ "${static_context_agents_absent}" = true ]; then
+		static_context_size_line="${static_context_size_line} agents=absent"
+	fi
+	echo "${static_context_size_line}" >&2
 }
 
 emit_readme_trimmed() {
@@ -550,6 +611,7 @@ case "${phase}" in
 			emit_readme_trimmed
 			emit_overflow_pointer
 		} > "${output}"
+		emit_static_context_size_line
 		;;
 	plan)
 		{
@@ -561,6 +623,7 @@ case "${phase}" in
 			emit_readme_trimmed
 			emit_overflow_pointer
 		} > "${output}"
+		emit_static_context_size_line
 		;;
 	implement)
 		{
