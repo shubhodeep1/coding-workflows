@@ -2292,7 +2292,11 @@ through `clarify → plan → implement → review`.
   implement work against the stable line and the PR is a hotfix on `stable`;
   `auto-release-stable.yml` releases it within its 6-hourly schedule and
   `forward-merge-stable-to-main.yml` carries it to `main`. A failed release run
-  targets the branch it failed on. A failed review/autofix run on a pull
+  targets the branch it failed on, except a run on the pipeline-only
+  `promote-candidate` mirror: no PR based on it can merge, so the issue targets
+  the default branch that the mirror follows
+  (`target_branch_retarget … reason=pipeline_mirror_branch`; #8217 / PR #8221).
+  A failed review/autofix run on a pull
   request **in coding-workflows itself** targets the verified support-script
   branch when the reported `script_ref` is `stable` or an ancestor of `main`;
   it targets the PR head only when the reported `script_ref` equals the PR head
@@ -2306,7 +2310,7 @@ through `clarify → plan → implement → review`.
   targets the default branch instead, because `stable` has none of the code
   that failed (`target_branch_retarget … reason=wrapper_pin_not_on_target`;
   #7063). An unavailable compare keeps `stable`. The `created` log line records the choice as
-  `target_branch_source=default|failed_run_branch|support_ref|source_pr_head|shared_workflow|base_branch|wrapper_pin_not_on_target`.
+  `target_branch_source=default|failed_run_branch|pipeline_mirror_branch|support_ref|source_pr_head|shared_workflow|base_branch|wrapper_pin_not_on_target`.
   Two further tokens cover review/autofix failures **self-inflicted** by a
   branch of this repository. The autofix reporter sends ownership facts with
   its report (`base_branch`, `script_ref`, the PR's `changed_files`, and

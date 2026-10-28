@@ -43,7 +43,8 @@
 #        workflow-defect, inconclusive -> issue in coding-workflows
 #          (label ai:workflow-heal, `Target branch: stable` so the fix is a
 #          hotfix on the stable line; a failed release run targets the branch it
-#          failed on; a failed review/autofix run on a pull request in this
+#          failed on, except the pipeline-only promote-candidate mirror, which
+#          routes to the default branch it follows; a failed review/autofix run on a pull request in this
 #          repo targets that pull request's head branch only when the run
 #          staged the PR's own scripts (script_ref == head SHA), falling back
 #          to stable when the branch no longer exists; otherwise the run hit
@@ -209,6 +210,11 @@ HEAL_PY="${WORKFLOW_HEAL_PY:-scripts/workflow_failure_heal.py}"
 PROMPT_FILE_SRC="${WORKFLOW_HEAL_PROMPT_FILE:-prompts/mode-workflow-failure-heal.txt}"
 REGISTRY_FILE="${WORKFLOW_HEAL_CONSUMER_REGISTRY:-.github/ai/consumer_repos.json}"
 TARGET_BRANCH_DEFAULT="${WORKFLOW_HEAL_TARGET_BRANCH:-stable}"
+# The promote-cycle mirror of main (scripts/promote_candidate_follow.sh). Its
+# ruleset lets only the pipeline update it, so a PR based on it can never merge
+# (PR #8221 for heal issue #8217): a release run that failed on it routes its
+# fix to the default branch, which the mirror then follows.
+HEAL_PIPELINE_MIRROR_BRANCH="promote-candidate"
 SOURCE_CHECKOUT="${WORKFLOW_HEAL_SOURCE_CHECKOUT:-true}"
 SELF_INFLICTED_ROUTING_ENABLED="${WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED:-true}"
 # Only the exact value "false" disables the pre-filing scope-marker check, so
@@ -2842,6 +2848,14 @@ case "${CLASSIFICATION}" in
 		if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAD_BRANCH}" ]; then
 			TARGET_BRANCH="${HEAD_BRANCH}"
 			TARGET_BRANCH_SOURCE="failed_run_branch"
+			if [ "${HEAD_BRANCH}" = "${HEAL_PIPELINE_MIRROR_BRANCH}" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+				# PROVENANCE_DEFAULT_BRANCH is resolved (no API call) for every
+				# workflow_run report; `main` covers an unreadable event file.
+				HEAL_MIRROR_RETARGET_BRANCH="${PROVENANCE_DEFAULT_BRANCH:-main}"
+				log "target_branch_retarget from=${TARGET_BRANCH} to=${HEAL_MIRROR_RETARGET_BRANCH} reason=pipeline_mirror_branch"
+				TARGET_BRANCH="${HEAL_MIRROR_RETARGET_BRANCH}"
+				TARGET_BRANCH_SOURCE=pipeline_mirror_branch
+			fi
 		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
 			# A review/autofix run in this repo normally executes the verified
 			# workflow-support commit (main's shared scripts), not the pull
@@ -2933,8 +2947,20 @@ case "${CLASSIFICATION}" in
 	consumer-app-defect)
 		if [ -z "${ISSUE_NUMBER}" ]; then
 			# A release run has no consumer; keep the diagnosis in this repo.
-			_open_issue "${SELF_REPO}" "${HEAD_BRANCH:-}" || exit 1
-			log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
+			HEAL_CONSUMER_APP_TARGET_BRANCH="${HEAD_BRANCH:-}"
+			HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE="failed_run_branch"
+			if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${HEAD_BRANCH:-}" = "${HEAL_PIPELINE_MIRROR_BRANCH}" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+				# Same pipeline-only mirror rule as the workflow-defect arm.
+				HEAL_CONSUMER_APP_TARGET_BRANCH="${PROVENANCE_DEFAULT_BRANCH:-main}"
+				HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE="pipeline_mirror_branch"
+				log "target_branch_retarget from=${HEAD_BRANCH} to=${HEAL_CONSUMER_APP_TARGET_BRANCH} reason=pipeline_mirror_branch"
+			fi
+			[ -n "${HEAL_CONSUMER_APP_TARGET_BRANCH}" ] || HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE="default"
+			# The scope guard's skip line (guard off) reads the shared globals.
+			TARGET_BRANCH="${HEAL_CONSUMER_APP_TARGET_BRANCH}"
+			TARGET_BRANCH_SOURCE="${HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE}"
+			_open_issue "${SELF_REPO}" "${HEAL_CONSUMER_APP_TARGET_BRANCH}" || exit 1
+			log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL} target_branch=${HEAL_CONSUMER_APP_TARGET_BRANCH:-default} target_branch_source=${HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE}"
 		else
 			_open_issue "${SOURCE_REPO}" "" || exit 1
 			log "created issue=${NEW_ISSUE_URL} repo=${SOURCE_REPO} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
