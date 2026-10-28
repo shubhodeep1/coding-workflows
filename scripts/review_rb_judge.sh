@@ -2143,7 +2143,12 @@ fi
 if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
   && [ "${RB_ORCH_INTEGRATION_HOLD_ACTION}" = "true" ] \
   && rb_judge_head_ref_is_orchestrator_integration "${POST_REVIEW_HEAD_REF:-}"; then
-  if [ "${RB_MERGE_ACTION}" = "true" ] && [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+  # ai-review/head-gate success only after the security merge gate passes,
+  # as on every other judge path; the orchestrator's required-checks read
+  # (pr_checks_lib.sh) can include this status. The gate itself skips
+  # orchestrator integration PRs, so it normally returns 0 at no cost.
+  if [ "${RB_MERGE_ACTION}" = "true" ] && [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+    && rb_security_merge_gate; then
     review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved; orchestrator owns the final merge" || true
   fi
   echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=skip reason=orchestrator_integration_pr judge_action=${RB_ACTION}"

@@ -6382,13 +6382,17 @@ prepare_security_pass_final_pr_head() {
 
 # external_finalize_validation_notice <merged_head_sha> [<pr_number>] (#8232)
 # Decides whether the merged final-PR head passed runtime validation, for the
-# external-finalize completion comment. Prints nothing; always returns 0.
+# external-finalize completion comment. Writes one EXTERNAL_FINALIZE_VALIDATION
+# log line to stdout (do not capture it); always returns 0.
 # Sets:
-#   EXTFIN_VALIDATION_OUTCOME  validated | unvalidated | unknown
+#   EXTFIN_VALIDATION_OUTCOME  validated | unvalidated | unknown | skipped
 #   EXTFIN_VALIDATION_REASON   short token
 #   EXTFIN_LAST_VALIDATED_SHA  state validation_last_passed_sha (40-hex) or ""
 # Reads the validation history from the memory branch only; no GitHub API
-# call. A failed history read gives `unknown` (completion fails open).
+# call. A failed history read gives `unknown` (completion fails open), even
+# when the state field names the merged head: only the history confirms a
+# pass. With ENABLE_VALIDATION off there is no validation to report, so the
+# outcome is `skipped` and the caller adds nothing.
 external_finalize_validation_notice() {
   local merged_head_sha="${1:-}"
   local pr_number="${2:-}"
@@ -6402,7 +6406,11 @@ external_finalize_validation_notice() {
   EXTFIN_LAST_VALIDATED_SHA="$(printf '%s' "${EXTFIN_LAST_VALIDATED_SHA}" | tr '[:upper:]' '[:lower:]')"
   [[ "${EXTFIN_LAST_VALIDATED_SHA}" =~ ^[0-9a-f]{40}$ ]] || EXTFIN_LAST_VALIDATED_SHA=""
   merged_head_sha="$(printf '%s' "${merged_head_sha}" | tr '[:upper:]' '[:lower:]')"
-  if ! [[ "${merged_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+  if [ "${ENABLE_VALIDATION:-true}" != "true" ]; then
+    EXTFIN_VALIDATION_OUTCOME="skipped"
+    EXTFIN_VALIDATION_REASON="validation_disabled"
+    [[ "${merged_head_sha}" =~ ^[0-9a-f]{40}$ ]] || merged_head_sha=""
+  elif ! [[ "${merged_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
     EXTFIN_VALIDATION_REASON="merged_head_unavailable"
     merged_head_sha=""
   else
@@ -6424,9 +6432,6 @@ external_finalize_validation_notice() {
     elif [ "${available}" = "true" ]; then
       EXTFIN_VALIDATION_OUTCOME="unvalidated"
       EXTFIN_VALIDATION_REASON="${reason}"
-    elif [ -n "${EXTFIN_LAST_VALIDATED_SHA}" ] && [ "${EXTFIN_LAST_VALIDATED_SHA}" = "${merged_head_sha}" ]; then
-      EXTFIN_VALIDATION_OUTCOME="validated"
-      EXTFIN_VALIDATION_REASON="state_last_passed"
     else
       EXTFIN_VALIDATION_OUTCOME="unknown"
       EXTFIN_VALIDATION_REASON="${reason}"

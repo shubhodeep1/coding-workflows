@@ -686,6 +686,7 @@ def _ihold_run(
 	already_merged: str = "false",
 	pattern: str | None = None,
 	judged_sha: str = IHOLD_SHA,
+	security_gate_rc: int = 0,
 ) -> dict:
 	block = _ihold_extract_block()
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_integration_hold_") as td:
@@ -699,6 +700,7 @@ def _ihold_run(
 			gh_retry() { printf 'gh_retry %s\\n' "$(printf '%s' "$*" | tr '\\n' ' ')" >> "${CALL_LOG}"; return 0; }
 			review_head_gate_post_status() { printf 'status %s\\n' "$*" >> "${CALL_LOG}"; return 0; }
 			_resilient_phase_swap() { printf 'phase_swap %s\\n' "$*" >> "${CALL_LOG}"; return 0; }
+			rb_security_merge_gate() { printf 'security_gate\\n' >> "${CALL_LOG}"; return "${IHOLD_SECURITY_GATE_RC:-0}"; }
 			"""
 		)
 		script = prelude + block + "\necho FELLTHROUGH\n"
@@ -713,6 +715,7 @@ def _ihold_run(
 			"RB_JUDGED_HEAD_SHA": judged_sha,
 			"REPOSITORY": "owner/repo",
 			"PR_NUMBER": "42",
+			"IHOLD_SECURITY_GATE_RC": str(security_gate_rc),
 		}
 		if pattern is not None:
 			env["ORCH_INTEGRATION_BRANCH_PATTERN"] = pattern
@@ -761,8 +764,20 @@ def test_integration_hold_held_actions(action: str, is_final: str, merge_type: b
 	status_calls = [c for c in result["calls"] if c.startswith("status ")]
 	if merge_type:
 		assert status_calls == [f"status owner/repo {IHOLD_SHA} success review-blocked judge approved; orchestrator owns the final merge"]
+		# The success status follows the security merge gate, as elsewhere.
+		assert result["calls"].index("security_gate") < result["calls"].index(status_calls[0])
 	else:
 		assert status_calls == []
+		assert "security_gate" not in result["calls"]
+
+
+def test_integration_hold_security_gate_hold_posts_no_status() -> None:
+	# The hold still applies, but a held security gate keeps head-gate pending.
+	result = _ihold_run("merge", security_gate_rc=1)
+	assert result["outputs"] == IHOLD_HELD_OUTPUTS
+	assert "FELLTHROUGH" not in result["stdout"]
+	assert "security_gate" in result["calls"]
+	assert not any(c.startswith("status ") for c in result["calls"])
 
 
 def test_integration_hold_final_fix_comment_says_it_counts_as_merge() -> None:

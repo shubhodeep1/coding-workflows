@@ -9075,6 +9075,7 @@ def _external_finalize_delivery_run(
 	enable_security_pass: str = "false",
 	state_extra: dict | None = None,
 	pull_ref_sha: str | None = "__integration_head__",
+	enable_validation: str = "false",
 	**poller_kwargs: object,
 ) -> dict:
 	"""Issue #7611: run one tick that reaches external-finalize for final PR
@@ -9106,7 +9107,7 @@ def _external_finalize_delivery_run(
 		branch_ref_shas["main"] = default_tip
 	return _run_poller(
 		state=state,
-		enable_validation="false",
+		enable_validation=enable_validation,
 		max_validate_cycles="3",
 		enable_security_pass=enable_security_pass,
 		security_audit_payload=_security_audit_findings_payload(),
@@ -9210,6 +9211,7 @@ def _extfin_completion(result: dict) -> tuple[str, str, str]:
 def test_external_finalize_validated_head_keeps_completion_text_unchanged() -> None:
 	# Issue #8232: a merged head with a runtime-validation pass adds nothing.
 	result = _external_finalize_delivery_run(
+		enable_validation="true",
 		mock_validation_history_payload=_validation_history_payload(
 			integration_sha="__integration_head__",
 			entries=[_extfin_history_entry("passed")],
@@ -9230,6 +9232,7 @@ def test_external_finalize_unvalidated_head_is_flagged_and_still_completes() -> 
 	# a head two autofix commits after the last validated one.
 	last_validated = "b" * 40
 	result = _external_finalize_delivery_run(
+		enable_validation="true",
 		state_extra={"validation_last_passed_sha": last_validated},
 	)
 	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
@@ -9240,7 +9243,8 @@ def test_external_finalize_unvalidated_head_is_flagged_and_still_completes() -> 
 	for text in (body, message):
 		assert f"⚠️ Runtime validation: merged head `{merged_head}` has no successful runtime validation (reason=missing_pass)" in text
 		assert f"Last validated integration SHA: `{last_validated}`" in text
-		assert "was not runtime-validated before reaching main" in text
+		# The branch name is shown only when the default branch was resolved.
+		assert "was not runtime-validated before reaching " in text
 	assert (
 		f"EXTERNAL_FINALIZE_VALIDATION tracking_issue=192 pr=395 merged_head={merged_head} outcome=unvalidated reason=missing_pass last_validated={last_validated}"
 		in output
@@ -9249,6 +9253,7 @@ def test_external_finalize_unvalidated_head_is_flagged_and_still_completes() -> 
 
 def test_external_finalize_unvalidated_head_without_recorded_pass_says_none() -> None:
 	result = _external_finalize_delivery_run(
+		enable_validation="true",
 		mock_validation_history_payload=_validation_history_payload(
 			integration_sha="__integration_head__",
 			entries=[_extfin_history_entry("passed"), {**_extfin_history_entry("failed"), "recorded_at": "2026-05-24T10:00:00Z"}],
@@ -9261,7 +9266,8 @@ def test_external_finalize_unvalidated_head_without_recorded_pass_says_none() ->
 
 
 def test_external_finalize_unconfirmed_validation_fails_open() -> None:
-	result = _external_finalize_delivery_run(mock_validation_history_get_exit_code=3)
+	result = _external_finalize_delivery_run(
+		enable_validation="true",mock_validation_history_get_exit_code=3)
 	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
 	assert result["latest_state"]["status"] == "complete"
 	assert "ai:merged" in result["tracking_labels"]
@@ -9272,15 +9278,30 @@ def test_external_finalize_unconfirmed_validation_fails_open() -> None:
 	assert "outcome=unknown reason=history_read_failed" in output
 
 
-def test_external_finalize_unavailable_history_uses_state_last_passed_sha() -> None:
+def test_external_finalize_unavailable_history_ignores_state_last_passed_sha() -> None:
+	# An unreadable history says "could not be confirmed" even when the state
+	# field names the merged head: only the history confirms a pass.
 	result = _external_finalize_delivery_run(
+		enable_validation="true",
 		state_extra={"validation_last_passed_sha": "__integration_head__"},
 		mock_validation_history_get_exit_code=3,
 	)
+	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	body, message, output = _extfin_completion(result)
+	expected = f"Runtime validation status of merged head `{merged_head}` could not be confirmed (reason=history_read_failed)."
+	assert expected in body
+	assert expected in message
+	assert f"outcome=unknown reason=history_read_failed last_validated={merged_head}" in output
+
+
+def test_external_finalize_validation_disabled_adds_no_notice() -> None:
+	# With ENABLE_VALIDATION off there is no runtime validation to report.
+	result = _external_finalize_delivery_run(enable_validation="false")
+	assert result["latest_state"]["status"] == "complete"
 	body, message, output = _extfin_completion(result)
 	assert "Runtime validation" not in body
 	assert "Runtime validation" not in message
-	assert "outcome=validated reason=state_last_passed" in output
+	assert "outcome=skipped reason=validation_disabled" in output
 
 
 def test_external_finalize_fails_closed_when_integration_tip_does_not_descend_from_merged_head() -> None:
