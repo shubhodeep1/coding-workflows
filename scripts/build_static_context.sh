@@ -330,7 +330,7 @@ MAX_LINE_CHARS = 200
 # imports nothing from the checkout.
 SECTION_MARKER = re.compile(r'^<!--\s*agents:\s*section="([^"<>\n]{1,200})"(\s+new)?\s*-->\s*$')
 FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
-H2 = re.compile(r"^## (.*)$")
+H2 = re.compile(r"^##\s+(.*?)\s*$")
 ANY_AGENTS_MARKER = re.compile(r"^<!--\s*agents:")
 FRAGMENT_H2 = re.compile(r"^##\s+(.*?)\s*$")
 GENERATED_SECTIONS = frozenset({"Repo-tree (auto-generated)"})
@@ -364,7 +364,9 @@ def read_no_follow(path, limit):
 	return data[:limit], len(data) > limit
 
 
-def heading_lines(text):
+def heading_lines(text, known):
+	# known collects the raw heading texts, compared like assemble_agents.py
+	# _section_bounds() does when it looks a fragment's section up.
 	found = []
 	fence = ""
 	for number, raw in enumerate(text.split("\n"), start=1):
@@ -379,11 +381,12 @@ def heading_lines(text):
 			continue
 		heading = H2.match(line)
 		if heading:
+			known.add(heading.group(1))
 			found.append("- L%d: %s" % (number, clean(heading.group(1)).strip()))
 	return found
 
 
-def fragment_sections(text):
+def fragment_sections(text, known):
 	# Same rejection rules as scripts/assemble_agents.py parse_fragment(): a
 	# fragment the release fold would refuse raises, which (D3) drops the
 	# whole fragment list instead of promising a fold that never happens.
@@ -405,6 +408,13 @@ def fragment_sections(text):
 				raise ValueError("empty_section_name")
 			if heading in GENERATED_SECTIONS:
 				raise ValueError("generated_section")
+			# apply_block(): a missing section without ` new` is refused; a
+			# ` new` block creates it for later blocks and fragments.
+			if known is not None:
+				if marker.group(2):
+					known.add(heading)
+				elif heading not in known:
+					raise ValueError("section_not_found")
 			sections.append('section="%s"' % clean(heading))
 			block_has_text.append(False)
 			continue
@@ -430,7 +440,7 @@ def fragment_sections(text):
 	return sections
 
 
-def fragment_lines():
+def fragment_lines(known):
 	fragments_dir = os.path.join(repo_root, "agents.d")
 	try:
 		info = os.lstat(fragments_dir)
@@ -448,14 +458,16 @@ def fragment_lines():
 		data, truncated = read_no_follow(path, MAX_FRAGMENT_BYTES)
 		if truncated:
 			raise ValueError("fragment_too_large")
-		entries.append("- agents.d/%s: %s" % (clean(name), ", ".join(fragment_sections(data.decode("utf-8")))))
+		entries.append("- agents.d/%s: %s" % (clean(name), ", ".join(fragment_sections(data.decode("utf-8"), known))))
 	return entries
 
 
 data, agents_truncated = read_no_follow(os.path.join(repo_root, agents_name), MAX_AGENTS_BYTES)
-items = heading_lines(data.decode("utf-8", errors="replace"))
+known_headings = set()
+items = heading_lines(data.decode("utf-8", errors="replace"), known_headings)
 try:
-	fragments = fragment_lines()
+	# A cut-off agents file has an incomplete heading set; skip that check then.
+	fragments = fragment_lines(None if agents_truncated else known_headings)
 except Exception:
 	# D3: any fragment parse failure means no fragments listed.
 	fragments = []

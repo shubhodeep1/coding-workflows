@@ -149,7 +149,7 @@ def test_no_agents_file_writes_empty_output_without_pipeline_inputs() -> None:
 def test_agents_d_fragments_listed_with_sections() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = _repo(tmp)
-		(root / "agents.md").write_text("## Workflow architecture\n", encoding="utf-8")
+		(root / "agents.md").write_text("## Workflow architecture\n## Utility helpers\n", encoding="utf-8")
 		fragments = root / "agents.d"
 		fragments.mkdir()
 		(fragments / "b-two.md").write_text(
@@ -171,6 +171,7 @@ def test_agents_d_fragments_listed_with_sections() -> None:
 		assert "not yet in agents.md" in text
 		assert _item_lines(text) == [
 			"- L1: Workflow architecture",
+			"- L2: Utility helpers",
 			'- agents.d/a-one.md: section="Utility helpers"',
 			'- agents.d/b-two.md: section="Workflow architecture", section="Brand new"',
 		]
@@ -229,6 +230,35 @@ def test_fragment_the_assembler_rejects_drops_fragment_block(bad_fragment: str) 
 		assert "agents.d/" not in text
 
 
+def test_fragment_for_missing_section_drops_fragment_block() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = _repo(tmp)
+		(root / "agents.md").write_text("## Kept\n", encoding="utf-8")
+		fragments = root / "agents.d"
+		fragments.mkdir()
+		(fragments / "a-good.md").write_text('<!-- agents: section="Kept" -->\nx\n', encoding="utf-8")
+		(fragments / "b-missing.md").write_text('<!-- agents: section="Not there" -->\nx\n', encoding="utf-8")
+		text, _ = _index(root)
+		assert _item_lines(text) == ["- L1: Kept"]
+		assert "agents.d/" not in text
+
+
+def test_section_created_by_earlier_new_fragment_is_known() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = _repo(tmp)
+		(root / "agents.md").write_text("##\tTabbed\n", encoding="utf-8")
+		fragments = root / "agents.d"
+		fragments.mkdir()
+		(fragments / "a.md").write_text('<!-- agents: section="Fresh" new -->\nx\n', encoding="utf-8")
+		(fragments / "b.md").write_text('<!-- agents: section="Fresh" -->\ny\n<!-- agents: section="Tabbed" -->\nz\n', encoding="utf-8")
+		text, _ = _index(root)
+		assert _item_lines(text) == [
+			"- L1: Tabbed",
+			'- agents.d/a.md: section="Fresh"',
+			'- agents.d/b.md: section="Fresh", section="Tabbed"',
+		]
+
+
 def test_item_cap_never_leaves_an_empty_fragments_note() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = _repo(tmp)
@@ -265,7 +295,7 @@ def test_headings_and_sections_are_neutralised() -> None:
 		)
 		fragments = root / "agents.d"
 		fragments.mkdir()
-		(fragments / "x.md").write_text('<!-- agents: section="::error::bad\x1b[0m" -->\nx\n', encoding="utf-8")
+		(fragments / "x.md").write_text('<!-- agents: section="::error::bad\x1b[0m" new -->\nx\n', encoding="utf-8")
 		text, _ = _index(root)
 		for line in text.splitlines():
 			assert not line.startswith("::"), line
