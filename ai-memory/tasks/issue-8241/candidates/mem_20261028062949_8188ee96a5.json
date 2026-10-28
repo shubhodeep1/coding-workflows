@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The frozen heal scope marker (`<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/test-and-mark-stable.yml,tests/**,changelog.d/*.md ... -->`) does not include `.github/workflows/orchestrate.yml`. Implement enforces that marker no matter how the plan is approved, so option B would be held as `heal_scope_plan_out_of_scope` and would need a human to finish it outside the pipeline. GITHUB FACTS show PR #8243 (`ai/issue-8241`) merged into `main` at 2026-10-28T06:09:37Z. That PR carries the confirmed, in-scope part of the fix: the Phase 3b activity signal in `test-and-mark-stable.yml`. Closing this issue as delivered and moving the orchestrate.yml work to an ordinary issue keeps it on the normal clarify \u2192 plan \u2192 implement path. Option C would throw away diagnostics we need to explain failure 2.\nQ2: The cause of the one-child decomposition is unconfirmed. The evidence does not include the \"Partition guard\" / \"Deferring\" lines of orchestrate run 40609251819, so options B and C would each guess at a cause. Option A is the smallest safe change and makes the next failure name its own cause. It adds logging of deferred issue ids with the edges or overlaps that moved them, and a hard failure when `gh issue create` returns no number. It does not weaken the gate's `>= 2` assertion or the decomposition logic.\n\nSETUP REQUIRED:\n- Follow-up issue (resource): a maintainer files a new ordinary issue with no `workflow-failure-heal` markers and no `ai:workflow-heal` label. Its body:\n  - covers Q2:A only: in the orchestrate.yml \"Create Wave 1 issues only\" step, log each non-Wave-1 issue id with the dependency edges or auto-serialize overlaps that deferred it, and fail the step when `gh_retry gh issue create` returns no issue number;\n  - carries a `files_touched:` block listing `.github/workflows/orchestrate.yml`, `tests/**` and `changelog.d/<N>-<slug>.md`;\n  - refers back to this issue with `Refs #<this issue>`.\n\n  Until that issue exists, nothing changes in `orchestrate.yml`. The E2E gate's `>= 2` child assertion stays strict, and a repeat failure is still reported by the heal intake.",
+  "fingerprint": "fcddac18df8ecbe7e1b66b18db62dfd6f6f9f2290d81e00a908942fadfac82c7",
+  "lineage": {
+    "issue_number": 8241,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40643139432",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40643139432",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8241"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261028062949_8188ee96a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8241,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40643139432"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8241",
+  "timestamps": {
+    "created_at": "2026-10-28T06:29:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
