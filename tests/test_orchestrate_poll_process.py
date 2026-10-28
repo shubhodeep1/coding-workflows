@@ -934,6 +934,7 @@ def _run_poller(
 	security_audit_exit_code: int = 0,
 	security_audit_stderr: str = "",
 	capture_telegram_calls: bool = False,
+	capture_tg_send_msg: bool = False,
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
 	env_overrides: dict[str, str] | None = None,
@@ -1202,6 +1203,18 @@ esac
 		bin_dir.mkdir(parents=True)
 		home_dir.mkdir(parents=True)
 		runtime_dir.mkdir(parents=True)
+		tg_send_msg_capture = runtime_dir / "tg_send_msg_calls.jsonl"
+		if capture_tg_send_msg:
+			# #8232: record untracked tg_send_msg calls (message + level) in a
+			# separate file so telegram_notifications keeps its shape.
+			with (sandbox / "scripts" / "tg_helpers.sh").open("a", encoding="utf-8") as tg_send_msg_helpers_file:
+				tg_send_msg_helpers_file.write(
+					'\ntg_send_msg() {\n'
+					'\t"${REAL_PYTHON_BIN}" -c \'import json, sys; open(sys.argv[1], "a", encoding="utf-8").write(json.dumps({"message": sys.argv[2], "level": sys.argv[3]}) + "\\n")\' '
+					'"%s" "$1" "${2:-CRITICAL}"\n'
+					'\treturn 0\n'
+					'}\n' % tg_send_msg_capture
+				)
 		if capture_telegram_calls:
 			with (sandbox / "scripts" / "tg_helpers.sh").open("a", encoding="utf-8") as telegram_helpers_file:
 				telegram_helpers_file.write(
@@ -1355,7 +1368,7 @@ esac
 									**state,
 									**{
 										pointer_key: _resolve_sandbox_sha_alias(str(state[pointer_key]))
-										for pointer_key in ("security_pass_last_audited_sha", "security_pass_head_sha", "integration_conflict_episode_base_sha")
+										for pointer_key in ("security_pass_last_audited_sha", "security_pass_head_sha", "integration_conflict_episode_base_sha", "validation_last_passed_sha")
 										if isinstance(state.get(pointer_key), str)
 									},
 								}
@@ -1482,7 +1495,15 @@ esac
 			"compare_commit_parent_counts": (
 				None if compare_commit_parent_counts is None else [int(n) for n in compare_commit_parent_counts]
 			),
-			"mock_validation_history_payload": mock_validation_history_payload,
+			# #8232: sandbox SHA aliases resolve in the seeded history SHA.
+			"mock_validation_history_payload": (
+				{
+					**mock_validation_history_payload,
+					"integration_sha": _resolve_sandbox_sha_alias(str(mock_validation_history_payload["integration_sha"])),
+				}
+				if isinstance(mock_validation_history_payload.get("integration_sha"), str)
+				else mock_validation_history_payload
+			),
 			"mock_validation_history_get_exit_code": mock_validation_history_get_exit_code,
 			"mock_validation_history_get_json": mock_validation_history_get_json,
 			"mock_validation_history_append_exit_code": mock_validation_history_append_exit_code,
@@ -3983,6 +4004,11 @@ sys.exit(proc.returncode)
 		result["curl_calls"] = (
 			curl_call_capture.read_text(encoding="utf-8").splitlines()
 			if curl_call_capture.exists()
+			else []
+		)
+		result["tg_send_msg_calls"] = (
+			[json.loads(tg_send_msg_line) for tg_send_msg_line in tg_send_msg_capture.read_text(encoding="utf-8").splitlines()]
+			if tg_send_msg_capture.exists()
 			else []
 		)
 		result["telegram_notifications"] = (
@@ -9049,6 +9075,7 @@ def _external_finalize_delivery_run(
 	enable_security_pass: str = "false",
 	state_extra: dict | None = None,
 	pull_ref_sha: str | None = "__integration_head__",
+	**poller_kwargs: object,
 ) -> dict:
 	"""Issue #7611: run one tick that reaches external-finalize for final PR
 	395 with the integration branch still present."""
@@ -9091,6 +9118,8 @@ def _external_finalize_delivery_run(
 		# After a squash merge every integration commit stays "ahead".
 		compare_ahead_by=1,
 		capture_telegram_calls=True,
+		capture_tg_send_msg=True,
+		**poller_kwargs,
 	)
 
 
@@ -9148,6 +9177,110 @@ def test_external_finalize_completes_when_squash_merged_content_is_on_default() 
 	assert result["latest_state"]["final_merge_status"] == "merged"
 	assert result["latest_state"]["final_merge_pr"] == 395
 	assert "outcome=delivered_by_content reason=tip_content_on_default" in result["stdout"] + result["stderr"]
+
+
+def _extfin_history_entry(outcome: str = "passed") -> dict:
+	return {
+		"outcome": outcome,
+		"raw_status": "pass" if outcome == "passed" else "fail",
+		"raw_conclusion": "success" if outcome == "passed" else "failure",
+		"run_id": 9001,
+		"run_attempt": 1,
+		"run_url": "https://example.invalid/runs/9001",
+		"recorded_at": "2026-05-23T10:00:00Z",
+		"cycle": 1,
+		"context": "validation passed",
+		"source": "test",
+	}
+
+
+def _extfin_completion(result: dict) -> tuple[str, str, str]:
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	complete = [b for b in bodies if b.startswith("## ✅ Project complete — integration PR #395 merged externally")]
+	assert len(complete) == 1
+	messages = [
+		n.get("message", "")
+		for n in result["tg_send_msg_calls"]
+		if n.get("level") == "CRITICAL" and "completed (integration PR #395 merged externally)" in n.get("message", "")
+	]
+	assert len(messages) == 1
+	return complete[0], messages[0], result["stdout"] + result["stderr"]
+
+
+def test_external_finalize_validated_head_keeps_completion_text_unchanged() -> None:
+	# Issue #8232: a merged head with a runtime-validation pass adds nothing.
+	result = _external_finalize_delivery_run(
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="__integration_head__",
+			entries=[_extfin_history_entry("passed")],
+		),
+	)
+	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	assert result["latest_state"]["status"] == "complete"
+	assert "ai:merged" in result["tracking_labels"]
+	body, message, output = _extfin_completion(result)
+	assert "Runtime validation" not in body
+	assert "Runtime validation" not in message
+	assert message.splitlines()[1].startswith("Tracking: ")
+	assert f"EXTERNAL_FINALIZE_VALIDATION tracking_issue=192 pr=395 merged_head={merged_head} outcome=validated reason=pass_record_present" in output
+
+
+def test_external_finalize_unvalidated_head_is_flagged_and_still_completes() -> None:
+	# Issue #8232 (incident tele-funtoken-msg-scoring#4861): the judge merged
+	# a head two autofix commits after the last validated one.
+	last_validated = "b" * 40
+	result = _external_finalize_delivery_run(
+		state_extra={"validation_last_passed_sha": last_validated},
+	)
+	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:merged" in result["tracking_labels"]
+	body, message, output = _extfin_completion(result)
+	for text in (body, message):
+		assert f"⚠️ Runtime validation: merged head `{merged_head}` has no successful runtime validation (reason=missing_pass)" in text
+		assert f"Last validated integration SHA: `{last_validated}`" in text
+		assert "was not runtime-validated before reaching main" in text
+	assert (
+		f"EXTERNAL_FINALIZE_VALIDATION tracking_issue=192 pr=395 merged_head={merged_head} outcome=unvalidated reason=missing_pass last_validated={last_validated}"
+		in output
+	)
+
+
+def test_external_finalize_unvalidated_head_without_recorded_pass_says_none() -> None:
+	result = _external_finalize_delivery_run(
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="__integration_head__",
+			entries=[_extfin_history_entry("passed"), {**_extfin_history_entry("failed"), "recorded_at": "2026-05-24T10:00:00Z"}],
+		),
+	)
+	body, message, _output = _extfin_completion(result)
+	assert "(reason=later_non_harness_failure)" in body
+	assert "Last validated integration SHA: none recorded." in body
+	assert "none recorded" in message
+
+
+def test_external_finalize_unconfirmed_validation_fails_open() -> None:
+	result = _external_finalize_delivery_run(mock_validation_history_get_exit_code=3)
+	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	assert result["latest_state"]["status"] == "complete"
+	assert "ai:merged" in result["tracking_labels"]
+	body, message, output = _extfin_completion(result)
+	expected = f"Runtime validation status of merged head `{merged_head}` could not be confirmed (reason=history_read_failed)."
+	assert expected in body
+	assert expected in message
+	assert "outcome=unknown reason=history_read_failed" in output
+
+
+def test_external_finalize_unavailable_history_uses_state_last_passed_sha() -> None:
+	result = _external_finalize_delivery_run(
+		state_extra={"validation_last_passed_sha": "__integration_head__"},
+		mock_validation_history_get_exit_code=3,
+	)
+	body, message, output = _extfin_completion(result)
+	assert "Runtime validation" not in body
+	assert "Runtime validation" not in message
+	assert "outcome=validated reason=state_last_passed" in output
 
 
 def test_external_finalize_fails_closed_when_integration_tip_does_not_descend_from_merged_head() -> None:
@@ -13152,6 +13285,53 @@ def test_mark_validation_complete_fails_open_on_history_write_error():
 	assert result.get("mock_validation_history_append_calls", 0) == 1
 	assert result.get("mock_validation_history_get_calls", 0) == 0
 	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_write_failed_current_tick)." in (result["stdout"] + result["stderr"])
+
+
+def test_mark_validation_complete_records_last_passed_sha():
+	# Issue #8232: the passed integration SHA is kept in state so an external
+	# merge of a later head can name the last validated one.
+	validated_sha = "c" * 40
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	prs = [
+		{
+			"number": 368,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": validated_sha},
+	)
+	assert result.get("mock_validation_history_append_calls", 0) == 1
+	assert result["latest_state"]["validation_last_passed_sha"] == validated_sha
+
+
+def test_validation_history_decision_for_current_sha_delegates_to_for_sha():
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	current = poller.split("validation_history_gate_decision_for_current_sha() {", 1)[1].split("\n}", 1)[0]
+	assert "validation_history_current_integration_sha" in current
+	assert 'validation_history_gate_decision_for_sha "${current_integration_sha}"' in current
+	for_sha = poller.split("validation_history_gate_decision_for_sha() {", 1)[1].split("\n}", 1)[0]
+	assert 'reason: "integration_sha_unavailable"' in for_sha
+	assert "history_write_failed_current_tick" in for_sha
+	assert 'reason: "missing_pass"' in for_sha
+	# External-finalize reads the decision for the merged head, never the
+	# current integration tip.
+	assert 'validation_history_gate_decision_for_sha "${merged_head_sha}"' in poller
 
 
 def test_mark_validation_complete_fails_open_on_shell_wrapper_history_write_error():

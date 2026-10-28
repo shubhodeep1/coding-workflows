@@ -6380,6 +6380,62 @@ prepare_security_pass_final_pr_head() {
   return 0
 }
 
+# external_finalize_validation_notice <merged_head_sha> [<pr_number>] (#8232)
+# Decides whether the merged final-PR head passed runtime validation, for the
+# external-finalize completion comment. Prints nothing; always returns 0.
+# Sets:
+#   EXTFIN_VALIDATION_OUTCOME  validated | unvalidated | unknown
+#   EXTFIN_VALIDATION_REASON   short token
+#   EXTFIN_LAST_VALIDATED_SHA  state validation_last_passed_sha (40-hex) or ""
+# Reads the validation history from the memory branch only; no GitHub API
+# call. A failed history read gives `unknown` (completion fails open).
+external_finalize_validation_notice() {
+  local merged_head_sha="${1:-}"
+  local pr_number="${2:-}"
+  local decision_json=""
+  local available=""
+  local allow=""
+  local reason=""
+  EXTFIN_VALIDATION_OUTCOME="unknown"
+  EXTFIN_VALIDATION_REASON=""
+  EXTFIN_LAST_VALIDATED_SHA="$(jq -r '.validation_last_passed_sha // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
+  EXTFIN_LAST_VALIDATED_SHA="$(printf '%s' "${EXTFIN_LAST_VALIDATED_SHA}" | tr '[:upper:]' '[:lower:]')"
+  [[ "${EXTFIN_LAST_VALIDATED_SHA}" =~ ^[0-9a-f]{40}$ ]] || EXTFIN_LAST_VALIDATED_SHA=""
+  merged_head_sha="$(printf '%s' "${merged_head_sha}" | tr '[:upper:]' '[:lower:]')"
+  if ! [[ "${merged_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    EXTFIN_VALIDATION_REASON="merged_head_unavailable"
+    merged_head_sha=""
+  else
+    decision_json="$(validation_history_gate_decision_for_sha "${merged_head_sha}" 2>/dev/null || echo "")"
+    if [ -n "${decision_json}" ] && printf '%s' "${decision_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      available="$(printf '%s' "${decision_json}" | jq -r '(.available // false) | tostring' 2>/dev/null || echo "false")"
+      allow="$(printf '%s' "${decision_json}" | jq -r '(.allow // false) | tostring' 2>/dev/null || echo "false")"
+      reason="$(printf '%s' "${decision_json}" | jq -r '.reason // ""' 2>/dev/null || echo "")"
+    else
+      available="false"
+      reason="history_read_invalid"
+    fi
+    # Reasons are interpolated into comments; keep them to a token shape.
+    reason="$(printf '%s' "${reason}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-80)"
+    [ -n "${reason}" ] || reason="unknown"
+    if [ "${available}" = "true" ] && [ "${allow}" = "true" ]; then
+      EXTFIN_VALIDATION_OUTCOME="validated"
+      EXTFIN_VALIDATION_REASON="${reason}"
+    elif [ "${available}" = "true" ]; then
+      EXTFIN_VALIDATION_OUTCOME="unvalidated"
+      EXTFIN_VALIDATION_REASON="${reason}"
+    elif [ -n "${EXTFIN_LAST_VALIDATED_SHA}" ] && [ "${EXTFIN_LAST_VALIDATED_SHA}" = "${merged_head_sha}" ]; then
+      EXTFIN_VALIDATION_OUTCOME="validated"
+      EXTFIN_VALIDATION_REASON="state_last_passed"
+    else
+      EXTFIN_VALIDATION_OUTCOME="unknown"
+      EXTFIN_VALIDATION_REASON="${reason}"
+    fi
+  fi
+  echo "EXTERNAL_FINALIZE_VALIDATION tracking_issue=${TRACKING_NUM:-unknown} pr=${pr_number:-unknown} merged_head=${merged_head_sha:-none} outcome=${EXTFIN_VALIDATION_OUTCOME} reason=${EXTFIN_VALIDATION_REASON} last_validated=${EXTFIN_LAST_VALIDATED_SHA:-none}"
+  return 0
+}
+
 # external_finalize_delivery_check <integration_branch> <default_branch> <final_pr_number> <final_pr_json>
 #
 # Issue #7611: before the external-finalize path marks a project complete,
@@ -11859,11 +11915,19 @@ validation_history_gate_next_action() {
 }
 
 validation_history_gate_decision_for_current_sha() {
-	local integration_sha=""
+	local current_integration_sha=""
+	current_integration_sha="$(validation_history_current_integration_sha 2>/dev/null || true)"
+	validation_history_gate_decision_for_sha "${current_integration_sha}"
+}
+
+# validation_history_gate_decision_for_sha <sha>: the validation-history
+# decision for one integration SHA (#8232). An empty SHA returns
+# {available:false, allow:true, reason:"integration_sha_unavailable"}.
+validation_history_gate_decision_for_sha() {
+	local integration_sha="${1:-}"
 	local history_json=""
 	local warning_code=""
 
-	integration_sha="$(validation_history_current_integration_sha 2>/dev/null || true)"
 	if [ -z "${integration_sha}" ]; then
 		jq -cn '{available: false, allow: true, reason: "integration_sha_unavailable", integration_sha: null}'
 		return 0
@@ -16386,6 +16450,20 @@ mark_validation_complete() {
 		"${validation_cycle}" \
 		"validation passed" \
 		"orchestrate_poll.mark_validation_complete"
+	# #8232: remember the last integration SHA that passed runtime
+	# validation, so an external merge of a later head can name it.
+	local _validation_last_passed_sha="${VALIDATION_HISTORY_LAST_APPEND_SHA:-}"
+	if ! [[ "${_validation_last_passed_sha}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+		_validation_last_passed_sha="$(validation_history_current_integration_sha 2>/dev/null || true)"
+	fi
+	_validation_last_passed_sha="$(printf '%s' "${_validation_last_passed_sha}" | tr '[:upper:]' '[:lower:]')"
+	if [[ "${_validation_last_passed_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		if ! { jq --arg sha "${_validation_last_passed_sha}" '.validation_last_passed_sha = $sha' \
+			"${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; }; then
+			rm -f "${STATE_FILE}.tmp" 2>/dev/null || true
+			echo "::warning::Could not record validation_last_passed_sha=${_validation_last_passed_sha} in state."
+		fi
+	fi
 
   if ! finalize_integration_merge_if_needed "${integration_branch}" "${default_branch}" "${project_title}" "${_security_final_pr_json}"; then
     # Budget-ineligible final-merge deferrals/failures should return without
@@ -25728,9 +25806,35 @@ Delivery check: \`${EXTFIN_DELIVERY_OUTCOME}\` — merged final-PR head \`${EXTF
               _orch_extfin_complete_body+="
 Security pass audited \`${_orch_extfin_audited}\`."
             fi
+            # #8232: say when the merged head never passed runtime
+            # validation. Completion still proceeds (fail open).
+            external_finalize_validation_notice "${EXTFIN_MERGED_HEAD_SHA:-}" "${_orch_extfin_pr}"
+            _orch_extfin_validation_line=""
+            case "${EXTFIN_VALIDATION_OUTCOME}" in
+              unvalidated)
+                _orch_extfin_validation_line="⚠️ Runtime validation: merged head \`${EXTFIN_MERGED_HEAD_SHA:-unknown}\` has no successful runtime validation (reason=${EXTFIN_VALIDATION_REASON}). Last validated integration SHA: "
+                if [ -n "${EXTFIN_LAST_VALIDATED_SHA}" ]; then
+                  _orch_extfin_validation_line+="\`${EXTFIN_LAST_VALIDATED_SHA}\`"
+                else
+                  _orch_extfin_validation_line+="none recorded"
+                fi
+                _orch_extfin_validation_line+=". The merged code was not runtime-validated before reaching ${DEFAULT_BRANCH_TRACKING:-the default branch}."
+                ;;
+              unknown)
+                _orch_extfin_validation_line="Runtime validation status of merged head \`${EXTFIN_MERGED_HEAD_SHA:-unknown}\` could not be confirmed (reason=${EXTFIN_VALIDATION_REASON})."
+                ;;
+            esac
+            if [ -n "${_orch_extfin_validation_line}" ]; then
+              _orch_extfin_complete_body+="
+
+${_orch_extfin_validation_line}"
+            fi
             post_tracking_comment "${_orch_extfin_complete_body}"
             tg_cleanup_msgs "${TRACKING_NUM}"
             MSG="✅ Project #${TRACKING_NUM} completed (integration PR #${_orch_extfin_pr} merged externally)."
+            if [ -n "${_orch_extfin_validation_line}" ]; then
+              MSG+=$'\n'"${_orch_extfin_validation_line}"
+            fi
             MSG+=$'\n'"Tracking: $(_gh_url "issues/${TRACKING_NUM}")"
             if [ -n "${GITHUB_RUN_ID:-}" ]; then
               MSG+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"

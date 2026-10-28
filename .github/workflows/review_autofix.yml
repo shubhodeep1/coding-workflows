@@ -5442,6 +5442,11 @@ jobs:
                 # pipeline to implement: nothing left for a person.
                 MSG="Review-blocked judge merged PR and created a follow-up issue"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
+              orchestrator_integration_hold)
+                # #8232: the orchestrator merges its integration PR after
+                # runtime validation of the current head; no person needed.
+                MSG="Review-blocked judge held action on orchestrator integration PR; the orchestrator merges it after runtime validation of the current head"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
               *)
                 MSG="Review-blocked judge action: ${JUDGE_ACTION}" ;;
             esac
