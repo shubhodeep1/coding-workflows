@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8241,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8241\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8243\",\"pr_number\":8243,\"branch\":\"ai/issue-8241\",\"run_id\":\"40619915704\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40619915704\",\"changed_files\":[\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/8241-release-gate-implement-working-run.md\",\"tests/test_test_and_mark_stable_plan_polling_guard.py\"]}",
+  "fingerprint": "959f2e2b19a2e84d7038a5d0257e3c3b5148ffeda96fbb3032cfdf9dc87df1b0",
+  "lineage": {
+    "issue_number": 8241,
+    "parent_ids": [],
+    "pr_number": 8243,
+    "run_id": "40619915704",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40619915704",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8243"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261028024150_02b4eb30ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8241,
+    "level": "run",
+    "pr_number": 8243,
+    "run_id": "40619915704"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8241: https://github.com/shubhodeep1/coding-workflows/pull/8243",
+  "timestamps": {
+    "created_at": "2026-10-28T02:41:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
