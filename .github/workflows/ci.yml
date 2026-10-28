@@ -1070,12 +1070,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_healthcheck_test_strings.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_test_script_prologue.py
 
-      - name: Validate process cross-cycle escalation unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_owner_routing.py
-
       # Moved from tests-hooks-and-orchestrator, which took 15m09s of its 20
       # minutes on main (run 38508333607, budget-watch issue #7366). Step
       # timings were not readable when this was planned; these are the hooks
@@ -1085,11 +1079,8 @@ jobs:
       # harness sandbox and the check-failure triage security tests) moved on
       # to tests-release-and-log-analysis after this job took 15m19s of its
       # 20 minutes on main (run 38564033998, budget-watch issue #7383).
-      - name: Activation verification tests (port P4)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
-
+      # The activation verification step moved on to
+      # tests-release-and-log-analysis in #8279.
       - name: Tracking issue comment cap tests
         run: |
           set -euo pipefail
@@ -1274,37 +1265,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
-
-      # Moved from tests-promote-stall-and-review, which took 16m06s of its
-      # 20 minutes on main (run 39216253741, budget-watch issue #7677). Step
-      # timings were not readable when this was planned; chosen by estimated
-      # cost (test count, weighted for subprocess use), not measured. None
-      # needs git history, Node or the prepared .claude/ live copies. Names
-      # and bodies unchanged.
-      - name: Clarify loop guard unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_wrapper_predicate_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_backoff.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_git_env_isolation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_check_triage_branch_guard.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_header_prompt_staging.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_split_dispatch.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_answer_recommended_parser.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_codex_step_extraction.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
-
-      - name: Implement files_touched scope guard unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_files_touched_scope_guard.py
 
       - name: Implement leftover issue-branch replacement tests
         run: |
@@ -2206,6 +2166,58 @@ jobs:
           python3 -m coverage erase
           PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
           python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
+
+      # Moved from tests-heal-plan-and-validation, which took 15m06s of its 20
+      # minutes on main (run 40750326439, budget-watch issue #8279). Step
+      # timings were not readable when this was planned; these steps were
+      # picked by test and subprocess counts, not measured. This job had the
+      # most room: budget-watch issues #8208, #8245 and #8268 each moved four
+      # steps out of it (#8268 was its last issue), and #8268 fixed the collector test whose
+      # step took about 5 minutes here (it now runs in seconds). All four steps
+      # below come from the source job; the last two first reached it from
+      # tests-promote-stall-and-review (#7677), noted above them. None needs
+      # Node or the prepared .claude/ live copies. Names and bodies unchanged.
+      - name: Validate process cross-cycle escalation unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_owner_routing.py
+
+      - name: Activation verification tests (port P4)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
+
+      # Moved from tests-promote-stall-and-review, which took 16m06s of its
+      # 20 minutes on main (run 39216253741, budget-watch issue #7677). Step
+      # timings were not readable when this was planned; chosen by estimated
+      # cost (test count, weighted for subprocess use), not measured. None
+      # needs git history, Node or the prepared .claude/ live copies. Names
+      # and bodies unchanged.
+      - name: Clarify loop guard unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_wrapper_predicate_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_backoff.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_git_env_isolation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_check_triage_branch_guard.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_header_prompt_staging.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_split_dispatch.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_answer_recommended_parser.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_codex_step_extraction.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
+
+      - name: Implement files_touched scope guard unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_files_touched_scope_guard.py
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
