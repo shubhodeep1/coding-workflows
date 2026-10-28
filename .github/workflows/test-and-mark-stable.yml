@@ -611,6 +611,17 @@ jobs:
       # e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
       E2E_JOB_TIMEOUT_MINUTES: 300
+      # Phase 3b inactivity limit while the watched Implement run's current
+      # step is "Pre-push affected-test gate" (issue #8244). That one step
+      # ran 31 minutes in run 40610855593 (two gate runs plus a repair turn);
+      # implement.yml gives it timeout-minutes: 60 and
+      # scripts/implement_step_prepush_test_gate.sh sizes it to 3300 s. The
+      # default is 35, not 60: 60 would push the conservative serial budget
+      # below past the 300-minute job timeout, which #8244 forbids raising.
+      # To give the gate its full 55 minutes, raise this value and
+      # E2E_JOB_TIMEOUT_MINUTES (plus the job's timeout-minutes) together in
+      # one PR; the budget check fails closed if only this one is raised.
+      PREPUSH_GATE_STEP_STALL_MINUTES: 35
       REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
       PHASE7_WAIT_BUDGET_MINUTES: 10
@@ -710,12 +721,18 @@ jobs:
             "${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}" \
             "${EDITOR_RETRY_BUDGET_MINUTES}" \
             "${PHASE7_WAIT_BUDGET_MINUTES}" \
-            "${E2E_FINALIZATION_RESERVE_MINUTES}"; do
+            "${E2E_FINALIZATION_RESERVE_MINUTES}" \
+            "${PREPUSH_GATE_STEP_STALL_MINUTES}"; do
             if ! [[ "${timeout_value}" =~ ^[0-9]+$ ]] || [ "${timeout_value}" -lt 1 ]; then
               echo "::error::E2E timeout budgets must be positive integers."
               exit 1
             fi
           done
+          # Extra time Phase 3b may wait on the pre-push gate step (#8244).
+          PREPUSH_GATE_EXTRA_BUDGET_MINUTES=$((PREPUSH_GATE_STEP_STALL_MINUTES - PHASE_TIMEOUT))
+          if [ "${PREPUSH_GATE_EXTRA_BUDGET_MINUTES}" -lt 0 ]; then
+            PREPUSH_GATE_EXTRA_BUDGET_MINUTES=0
+          fi
           REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_STEP_TIMEOUT}"
           if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then
             REVIEW_EFFECTIVE_BUDGET_MINUTES=90
@@ -731,12 +748,13 @@ jobs:
             EDITOR_RETRY_BUDGET_MINUTES +
             PHASE_TIMEOUT +
             PHASE7_WAIT_BUDGET_MINUTES +
-            E2E_FINALIZATION_RESERVE_MINUTES
+            E2E_FINALIZATION_RESERVE_MINUTES +
+            PREPUSH_GATE_EXTRA_BUDGET_MINUTES
           ))
           echo "E2E conservative serial budget: ${E2E_SERIAL_BUDGET_MINUTES}/${E2E_JOB_TIMEOUT_MINUTES} minutes"
           if [ "${E2E_SERIAL_BUDGET_MINUTES}" -gt "${E2E_JOB_TIMEOUT_MINUTES}" ]; then
             echo "::error::Configured E2E phase budgets require ${E2E_SERIAL_BUDGET_MINUTES}m, exceeding the ${E2E_JOB_TIMEOUT_MINUTES}m job timeout."
-            echo "::error::Budget = 2*phase(${PHASE_TIMEOUT}) + plan(${PLAN_PHASE_TIMEOUT}) + max(review=${REVIEW_TIMEOUT}, min(review-step=${REVIEW_STEP_TIMEOUT}, cap=90) + handoff=${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}) + editor-retry(${EDITOR_RETRY_BUDGET_MINUTES}) + phase-6(${PHASE_TIMEOUT}) + phase-7(${PHASE7_WAIT_BUDGET_MINUTES}) + finalization(${E2E_FINALIZATION_RESERVE_MINUTES})."
+            echo "::error::Budget = 2*phase(${PHASE_TIMEOUT}) + plan(${PLAN_PHASE_TIMEOUT}) + max(review=${REVIEW_TIMEOUT}, min(review-step=${REVIEW_STEP_TIMEOUT}, cap=90) + handoff=${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}) + editor-retry(${EDITOR_RETRY_BUDGET_MINUTES}) + phase-6(${PHASE_TIMEOUT}) + phase-7(${PHASE7_WAIT_BUDGET_MINUTES}) + finalization(${E2E_FINALIZATION_RESERVE_MINUTES}) + prepush-gate-extra(${PREPUSH_GATE_EXTRA_BUDGET_MINUTES})."
             exit 1
           fi
           echo "Target repo: ${TEST_REPO}"
@@ -1370,6 +1388,15 @@ jobs:
           echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
           echo "Inactivity timeout: ${PHASE_TIMEOUT} minutes"
           INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))
+          # The pre-push affected-test gate step may legitimately run longer
+          # than PHASE_TIMEOUT without a state change (#8244); it gets its own
+          # limit, which never shortens the normal one.
+          PREPUSH_GATE_STEP_NAME="Pre-push affected-test gate"
+          PREPUSH_GATE_STEP_STALL_MINUTES="${PREPUSH_GATE_STEP_STALL_MINUTES:-35}"
+          if ! [[ "${PREPUSH_GATE_STEP_STALL_MINUTES}" =~ ^[0-9]+$ ]]; then
+            PREPUSH_GATE_STEP_STALL_MINUTES="${PHASE_TIMEOUT}"
+          fi
+          PREPUSH_GATE_STALL_LIMIT=$((10#${PREPUSH_GATE_STEP_STALL_MINUTES} * 60))
           LAST_ACTIVITY=$(date +%s)
           PHASE_START=$(date +%s)
           # Grace period before declaring "all runs completed" failure.
@@ -1743,15 +1770,23 @@ jobs:
             e2e_note_watched_run "${SCOPED_IMPL_RUN_ID:-}" Implement
             e2e_note_watched_run "${SCOPED_IMPL_ACTIVE_ID:-}" Implement
 
-            # Inactivity timeout
-            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
-              echo "::error::Implement phase stalled — no activity for ${PHASE_TIMEOUT} minutes$(e2e_watched_run_urls)"
+            # Inactivity timeout (extended while the pre-push gate step runs)
+            EFFECTIVE_LIMIT=$INACTIVITY_LIMIT
+            EFFECTIVE_LIMIT_MINUTES=$PHASE_TIMEOUT
+            LIMIT_SUFFIX=""
+            if [ "$IMPL_STEP_NAME" = "$PREPUSH_GATE_STEP_NAME" ] && [ "$PREPUSH_GATE_STALL_LIMIT" -gt "$INACTIVITY_LIMIT" ]; then
+              EFFECTIVE_LIMIT=$PREPUSH_GATE_STALL_LIMIT
+              EFFECTIVE_LIMIT_MINUTES=$PREPUSH_GATE_STEP_STALL_MINUTES
+              LIMIT_SUFFIX=" (pre-push gate step: limit ${PREPUSH_GATE_STEP_STALL_MINUTES}m)"
+            fi
+            if [ "$IDLE" -ge "$EFFECTIVE_LIMIT" ]; then
+              echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}$(e2e_watched_run_urls)"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               exit 1
             fi
 
-            REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
-            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — impl_runs: ${IMPL_RUN_TOTAL} total, ${IMPL_RUN_IN_PROGRESS} active, latest: ${IMPL_RUN_STATUS}, labels: ${LABELS:-none}"
+            REMAINING=$(( (EFFECTIVE_LIMIT - IDLE + 59) / 60 ))
+            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — impl_runs: ${IMPL_RUN_TOTAL} total, ${IMPL_RUN_IN_PROGRESS} active, latest: ${IMPL_RUN_STATUS}, labels: ${LABELS:-none}${LIMIT_SUFFIX}"
             sleep "$POLL_INTERVAL"
           done
 
