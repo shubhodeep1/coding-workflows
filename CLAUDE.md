@@ -1461,7 +1461,9 @@ not change:
    it: no issue, no `/implement-plan-claude` dispatch, no implementation PR.
    The go is the approval §23.C requires for opening the issues or
    dispatching the orchestrator.
-4. **Open the issues.** One issue per repository that needs a change,
+4. **Open the issues** (single-PR path only; the multi-PR path ends at the
+   `/implement-plan-claude` dispatch, and the orchestrator opens its own
+   tracking and wave issues). One issue per repository that needs a change,
    labelled `ai:engine-claude` at creation, cross-linked with
    `Refs <owner>/<repo>#<N>` (never auto-close keywords, §19). Check that each
    target repository runs the pipeline (this repo, or a consumer in
