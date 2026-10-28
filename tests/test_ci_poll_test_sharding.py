@@ -1978,6 +1978,80 @@ class MovedReleaseToHealStepsContractTest(unittest.TestCase):
 				self.assertLess(setup_index, names.index(name))
 
 
+# Steps moved out of tests-release-and-log-analysis, which took 15m10s of its
+# 20 minutes (run 40625105162, budget-watch issue #8245): step name -> module
+# paths its body names.
+RELEASE_TO_PROMOTE_SOURCE_JOB_ID = "tests-release-and-log-analysis"
+RELEASE_TO_PROMOTE_TARGET_JOB_ID = "tests-promote-stall-and-review"
+RELEASE_TO_PROMOTE_SETUP_STEP = "Install Python CI dependencies"
+MOVED_RELEASE_TO_PROMOTE_STEPS = {
+	"Test-and-mark-stable plan polling guard regression tests": (
+		"tests/test_test_and_mark_stable_plan_polling_guard.py",
+	),
+	"Release smoke gate run-lookup regression tests": (
+		"tests/test_release_smoke_run_lookup.py",
+	),
+	"Consumer secrets propagation contract tests": (
+		"tests/test_propagate_consumer_secrets.py",
+	),
+	"Review autofix sweep stale-queued guard tests": (
+		"tests/test_review_autofix_sweep_stale_queued.py",
+	),
+}
+
+
+class MovedReleaseToPromoteStepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-release-and-log-analysis run once, in one job (#8245)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_promote_job(self) -> None:
+		for name in MOVED_RELEASE_TO_PROMOTE_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[RELEASE_TO_PROMOTE_TARGET_JOB_ID],
+				)
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_RELEASE_TO_PROMOTE_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_RELEASE_TO_PROMOTE_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[RELEASE_TO_PROMOTE_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_RELEASE_TO_PROMOTE_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_promote_job_setup(self) -> None:
+		names = [step.get("name") for step in self.jobs()[RELEASE_TO_PROMOTE_TARGET_JOB_ID]["steps"]]
+		self.assertIn(RELEASE_TO_PROMOTE_SETUP_STEP, names, RELEASE_TO_PROMOTE_TARGET_JOB_ID)
+		setup_index = names.index(RELEASE_TO_PROMOTE_SETUP_STEP)
+		for name in MOVED_RELEASE_TO_PROMOTE_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(setup_index, names.index(name))
+
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
 PROMOTE_CYCLE_JOB_ID = "tests-release-and-log-analysis"
 PROMOTE_CYCLE_AWK_RE = re.compile(

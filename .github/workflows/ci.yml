@@ -1870,6 +1870,31 @@ jobs:
             tests/test_clarify_github_facts.py \
             tests/test_clarify_sandbox_base_image_preseed.py
 
+      # Moved from tests-release-and-log-analysis, which took 15m10s of its 20
+      # minutes on main (run 40625105162, budget-watch issue #8245). The run's
+      # step timings could not be read, so these steps were chosen by their
+      # subprocess and test counts; the savings are an estimate, not a
+      # measurement. Names and bodies unchanged.
+      - name: Test-and-mark-stable plan polling guard regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
+
+      - name: Release smoke gate run-lookup regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_smoke_run_lookup.py
+
+      - name: Consumer secrets propagation contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_propagate_consumer_secrets.py
+
+      - name: Review autofix sweep stale-queued guard tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_stale_queued.py
+
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -1965,11 +1990,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_issue_pr_status_payload_fallback_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_phase_transition_contract.py
 
-      - name: Test-and-mark-stable plan polling guard regression tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
-
       - name: Test-and-mark-stable review-blocked budget contract tests
         run: |
           set -euo pipefail
@@ -1984,11 +2004,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
-
-      - name: Release smoke gate run-lookup regression tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_smoke_run_lookup.py
 
       - name: Alt-model cleanup PR-selector contract test
         run: |
@@ -2110,11 +2125,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_validate_ci_gate.py
 
-      - name: Consumer secrets propagation contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_propagate_consumer_secrets.py
-
       - name: Soft-error report consolidator unit tests
         run: |
           set -euo pipefail
@@ -2139,11 +2149,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
-
-      - name: Review autofix sweep stale-queued guard tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_stale_queued.py
 
       - name: Workflow log collector coverage gate
         run: |
