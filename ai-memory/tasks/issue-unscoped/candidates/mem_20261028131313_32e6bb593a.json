@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/partial_delivery.py:63-64 (used at 227-239) | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: HEAL_CF_HEADING_RE and HEAL_CF_ANY_HEADING_RE require `#` in column 0, so a heading indented by 1-3 spaces does not close the `## Counterfactual check` section, while HEAL_CF_LINE_RE accepts 0-3 leading spaces.\n  WHY: A later `HEAL_COUNTERFACTUAL: PASS` under an indented heading is recorded as in_section=True and the plan is auto-approved; severity disagreement: anthropic_claude-sonnet-5_5 said NIT (confidence 3), others said MAJOR (high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/partial_delivery.py:63-64 (HEAL_CF_ANY_HEADING_RE line 64, HEAL_CF_HEADING_RE line 63, heading tracking in `_evaluate_heal_counterfactual` about lines 227-239) | severity=NIT | confidence=3\n  PROBLEM: Both heading regexes require `#` in column 0, while the marker regex HEAL_CF_LINE_RE accepts 0-3 leading spaces. An indented `   ## Risks` after `## Counterfactual check` does not reset section_level.\n  WHY: A later `HEAL_COUNTERFACTUAL: PASS` is recorded as in_section=True and auto-approved. The trigger is unlikely because the prompt asks for line-start headings, but the failure direction is an approval.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/partial_delivery.py:63-64 | severity=MAJOR | confidence=4\n  PROBLEM: HEAL_CF_HEADING_RE and HEAL_CF_ANY_HEADING_RE only match headings starting at column 0.\n  WHY: An indented heading (`  ## Risks`) does not close the Counterfactual check section, so a marker in a later section can be attributed to it and an invalid plan auto-approved.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/partial_delivery.py:63-64 (used in `_evaluate_heal_counterfactual` heading tracking) | severity=MAJOR | confidence=3\n  PROBLEM: The heading regexes were not tightened symmetrically with HEAL_CF_LINE_RE and still require `#` in column 0, so `   ## Risks` leaves section_level == 2.\n  WHY: A heal plan can slip a PASS/PARTIAL marker through by indenting an intervening level-2 heading by 1-3 spaces. No test covers this case.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/partial_delivery.py:64 (used at lines 227-234) | severity=MAJOR | confidence=5\n  PROBLEM: HEAL_CF_ANY_HEADING_RE requires `#` in column 0, although HEAL_CF_LINE_RE accepts up to three leading spaces, so `   ## Risks` does not close the counterfactual section.\n  WHY: After an unindented `## Counterfactual check`, an indented `## Risks` followed by `HEAL_COUNTERFACTUAL: PASS` leaves section_level set and the heal plan is approved.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/partial_delivery.py:58, 63-64 (used by `_evaluate_heal_counterfactual` at lines 227-239) | severity=MAJOR | confidence=4\n  PROBLEM: The marker regex was made indentation-tolerant (`^[ ]{0,3}HEAL_COUNTERFACTUAL:`) but both heading regexes still require `#` in column 0, so a heading indented 1-3 spaces does not close the `## Counterfactual check` section.\n  WHY: The `outside_counterfactual_section` guard is bypassed, so a PASS marker in a different indented level-2 section is auto-approved by plan.yml's \"Auto-approve clear plan\" step and the poller's _plan_heal_counterfactual_check.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "097e2245d078d33a207c6195eb7c11b0d9d55b9a671b5464382f0435b2893be1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8258,
+    "run_id": "40690985935",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40690985935",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028131313_32e6bb593a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8258,
+    "run_id": "40690985935"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T13:13:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
