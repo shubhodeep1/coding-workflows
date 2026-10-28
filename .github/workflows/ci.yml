@@ -2434,6 +2434,7 @@ jobs:
             tests/test_review_rb_judge_reference_staging.py \
             tests/test_review_resolve_review_threads.py \
             tests/test_review_reviewer_attempt_prompt_isolation.py \
+            tests/test_static_context_agents_index.py \
             tests/test_static_context_symlink_guard.py \
             tests/test_summarize_unselected_runs.py \
             tests/test_test_and_mark_stable_phase7_unconflict.py \

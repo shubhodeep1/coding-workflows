@@ -40,6 +40,22 @@
 # The `readme` phase emits only the validated, fenced README section for
 # prompt assemblers that build the rest of their static context themselves.
 #
+# The `agents-index` phase (issue #8254, project #8253 Phase 1) writes a short
+# index of the local agents file instead of the file itself:
+# `=== AGENTS.MD INDEX ===`, one instruction line, one `- L<line>: <heading>`
+# line per `## ` heading outside fenced code (line numbers in the raw file),
+# and the pending `agents.d/*.md` fragments with their target sections. Text
+# is neutralised (control characters stripped, lines capped at 200 characters,
+# `::` / `##[` prefixed) and the index is capped at 300 items and 32 KiB. No
+# agents file means empty output and exit 0. Like `readme`, it needs neither
+# unattended_system_instructions.md nor ai_pipeline.md.
+#
+# STATIC_CONTEXT_AGENTS_MODE (default index): unset, empty or `index` (any
+# letter case) selects the index, `inline` the full file, anything else inline
+# with one warning. `_static_context_agents_mode` is the single parser later
+# phases call; the existing clarify / plan / implement phases do not read it
+# yet, and the `agents-index` phase always emits the index.
+#
 # Inputs (read from CWD): unattended_system_instructions.md, ai_pipeline.md,
 # agents.md, README.md. For the implement phase, also reads
 # "${RUNTIME_DIR}/agents_canonical.md" if present (consumer-repo flow).
@@ -48,7 +64,7 @@ set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
 	echo "Usage: $0 <phase> <output-file>" >&2
-	echo "  phase: clarify | plan | implement | readme" >&2
+	echo "  phase: clarify | plan | implement | readme | agents-index" >&2
 	exit 2
 fi
 
@@ -60,12 +76,12 @@ if [ -L "${output}" ] || { [ -e "${output}" ] && [ ! -f "${output}" ]; }; then
 	exit 1
 fi
 
-if [ "${phase}" != readme ] && { [ -L unattended_system_instructions.md ] || [ -L ai_pipeline.md ]; }; then
+if [ "${phase}" != readme ] && [ "${phase}" != agents-index ] && { [ -L unattended_system_instructions.md ] || [ -L ai_pipeline.md ]; }; then
 	echo "::error::Required static context input is a symbolic link; refusing to assemble the prompt." >&2
 	exit 1
 fi
 
-if [ "${phase}" != readme ] && { [ ! -f unattended_system_instructions.md ] || [ ! -f ai_pipeline.md ]; }; then
+if [ "${phase}" != readme ] && [ "${phase}" != agents-index ] && { [ ! -f unattended_system_instructions.md ] || [ ! -f ai_pipeline.md ]; }; then
 	echo "Missing required input file(s): unattended_system_instructions.md and/or ai_pipeline.md" >&2
 	exit 1
 fi
@@ -265,6 +281,197 @@ emit_overflow_pointer() {
 	fi
 }
 
+# Print `index` or `inline` from STATIC_CONTEXT_AGENTS_MODE (issue #8254).
+# Unset, empty or `index` (any letter case) mean index; `inline` means inline;
+# any other value means inline with one warning that never prints the value.
+_static_context_agents_mode() {
+	local static_context_agents_mode_value
+	static_context_agents_mode_value="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | tr '[:upper:]' '[:lower:]')"
+	case "${static_context_agents_mode_value}" in
+		""|index)
+			echo index
+			;;
+		inline)
+			echo inline
+			;;
+		*)
+			echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+			echo inline
+			;;
+	esac
+	return 0
+}
+
+# Write an index of the local agents file (issue #8254): headings with their
+# raw line numbers plus pending agents.d/ fragments. Fragment text is parsed
+# only, never executed. Any failure writes nothing to stdout and warns.
+emit_agents_index() {
+	local agents_index_file="" agents_index_tmp="" agents_index_rc=0
+	agents_index_file="$(_static_context_local_agents_file)" || agents_index_file=""
+	if [ -z "${agents_index_file}" ]; then
+		return 0
+	fi
+	agents_index_tmp="$(mktemp "${TMPDIR:-/tmp}/static-agents-index.XXXXXX")"
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${agents_index_file}" "${PWD}" > "${agents_index_tmp}" <<'PY' || agents_index_rc=$?
+import os
+import re
+import stat
+import sys
+
+MAX_AGENTS_BYTES = 8 * 1024 * 1024
+MAX_FRAGMENT_BYTES = 256 * 1024
+MAX_ITEMS = 300
+MAX_OUTPUT_BYTES = 32 * 1024
+MAX_LINE_CHARS = 200
+# Copies of scripts/assemble_agents.py's grammar; kept local so this phase
+# imports nothing from the checkout.
+SECTION_MARKER = re.compile(r'^<!--\s*agents:\s*section="([^"<>\n]{1,200})"(\s+new)?\s*-->\s*$')
+FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+H2 = re.compile(r"^## (.*)$")
+FRAGMENT_EXCLUDED_NAMES = frozenset({".gitkeep", "README.md"})
+CONTROL_CHARS = re.compile("[\x00-\x1f\x7f-\x9f]")
+NEUTRALISED_PREFIX = "[workflow-command-neutralised] "
+
+agents_name = sys.argv[1]
+repo_root = sys.argv[2]
+if agents_name not in ("agents.md", "AGENTS.md"):
+	sys.exit(1)
+
+
+def clean(text):
+	return CONTROL_CHARS.sub("", text)
+
+
+def finish_line(text):
+	line = clean(text)[:MAX_LINE_CHARS]
+	if line.startswith("::") or line.startswith("##["):
+		line = (NEUTRALISED_PREFIX + line)[:MAX_LINE_CHARS]
+	return line
+
+
+def read_no_follow(path, limit):
+	fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+	with os.fdopen(fd, "rb") as handle:
+		if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+			raise ValueError("not a regular file")
+		data = handle.read(limit + 1)
+	return data[:limit], len(data) > limit
+
+
+def heading_lines(text):
+	found = []
+	fence = ""
+	for number, raw in enumerate(text.split("\n"), start=1):
+		line = raw.rstrip("\r")
+		match = FENCE.match(line)
+		if fence:
+			if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
+				fence = ""
+			continue
+		if match:
+			fence = match.group(1)
+			continue
+		heading = H2.match(line)
+		if heading:
+			found.append("- L%d: %s" % (number, clean(heading.group(1)).strip()))
+	return found
+
+
+def fragment_lines():
+	fragments_dir = os.path.join(repo_root, "agents.d")
+	try:
+		info = os.lstat(fragments_dir)
+	except FileNotFoundError:
+		return []
+	if not stat.S_ISDIR(info.st_mode):
+		return []
+	entries = []
+	for name in sorted(os.listdir(fragments_dir)):
+		if name.startswith(".") or name in FRAGMENT_EXCLUDED_NAMES or not name.endswith(".md"):
+			continue
+		path = os.path.join(fragments_dir, name)
+		if not stat.S_ISREG(os.lstat(path).st_mode):
+			continue
+		data, _truncated = read_no_follow(path, MAX_FRAGMENT_BYTES)
+		text = data.decode("utf-8")
+		sections = []
+		fence = ""
+		for raw in text.replace("\r\n", "\n").split("\n"):
+			line = raw.rstrip()
+			match = FENCE.match(line)
+			if fence:
+				if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
+					fence = ""
+				continue
+			marker = SECTION_MARKER.match(line)
+			if marker:
+				sections.append('section="%s"' % " ".join(clean(marker.group(1)).split()))
+				continue
+			if match:
+				fence = match.group(1)
+		label = ", ".join(sections) if sections else "section=(none)"
+		entries.append("- agents.d/%s: %s" % (clean(name), label))
+	return entries
+
+
+data, agents_truncated = read_no_follow(os.path.join(repo_root, agents_name), MAX_AGENTS_BYTES)
+items = heading_lines(data.decode("utf-8", errors="replace"))
+try:
+	fragments = fragment_lines()
+except Exception:
+	# D3: any fragment parse failure means no fragments listed.
+	fragments = []
+
+out = []
+size = 0
+
+
+def emit(line):
+	global size
+	encoded = (line + "\n").encode("utf-8")
+	out.append(encoded)
+	size += len(encoded)
+
+
+emit("=== AGENTS.MD INDEX ===")
+emit(finish_line("The full %s is not inlined. Read only the sections relevant to your task with your file tools, from the working tree, using the line numbers below." % agents_name))
+emit(finish_line("(For example, read from line L<n> up to the next listed heading.)"))
+
+queue = [("item", finish_line(line)) for line in items]
+if fragments:
+	queue.append(("note", finish_line("Pending agents.d/ fragments (appended to the named sections at release time; not yet in %s):" % agents_name)))
+	queue.extend(("item", finish_line(line)) for line in fragments)
+
+# Reserve room for the closing cap line so the output never passes the limit.
+RESERVE = 256
+printed_items = 0
+total_items = sum(1 for kind, _line in queue if kind == "item")
+stopped = False
+for kind, line in queue:
+	line_bytes = len((line + "\n").encode("utf-8"))
+	if (kind == "item" and printed_items >= MAX_ITEMS) or size + line_bytes + RESERVE > MAX_OUTPUT_BYTES:
+		stopped = True
+		break
+	emit(line)
+	if kind == "item":
+		printed_items += 1
+
+if stopped:
+	emit("... (%d more headings)" % (total_items - printed_items))
+if agents_truncated:
+	emit(finish_line("... (%s is larger than %d bytes; headings past that point are not listed)" % (agents_name, MAX_AGENTS_BYTES)))
+
+sys.stdout.buffer.write(b"".join(out))
+PY
+	if [ "${agents_index_rc}" -eq 0 ]; then
+		cat "${agents_index_tmp}"
+	else
+		echo "::warning::Static context agents index omitted; the agents file could not be indexed." >&2
+	fi
+	rm -f "${agents_index_tmp}"
+	return 0
+}
+
 case "${phase}" in
 	clarify)
 		{
@@ -309,8 +516,13 @@ case "${phase}" in
 			emit_readme_trimmed
 		} > "${output}"
 		;;
+	agents-index)
+		{
+			emit_agents_index
+		} > "${output}"
+		;;
 	*)
-		echo "Unknown phase: ${phase} (expected clarify | plan | implement | readme)" >&2
+		echo "Unknown phase: ${phase} (expected clarify | plan | implement | readme | agents-index)" >&2
 		exit 2
 		;;
 esac
