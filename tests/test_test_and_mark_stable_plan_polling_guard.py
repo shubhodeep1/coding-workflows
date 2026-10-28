@@ -446,6 +446,7 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 			"TEST_REPO": "owner/repo",
 			"ISSUE_NUMBER": ISSUE_NUMBER,
 			"ISSUE_TITLE": issue_title,
+			"IMPL_CREATED_AFTER_INPUT": APPROVED_AT,
 			"PHASE_TIMEOUT": "60",
 			"POLL_INTERVAL": "0",
 			"GITHUB_OUTPUT": str(output_file),
@@ -678,6 +679,62 @@ def test_implement_terminal_check_preserves_pr_recheck() -> None:
 	assert rc == 0 and outputs.get("status") == "success", (outputs, log)
 	assert outputs.get("pr_number") == "42", outputs
 	assert len(_run_pages_requested(calls)) >= 2, calls
+
+
+def _jobs_lookup_run_ids(calls: list[list[str]]) -> set[str]:
+	ids = set()
+	for call in calls:
+		path = call[1] if len(call) > 1 else ""
+		if "/actions/runs/" in path and "/jobs?" in path:
+			ids.add(path.split("/actions/runs/")[1].split("/jobs?")[0])
+	return ids
+
+
+def test_implement_step_lookup_uses_in_progress_run_behind_newer_pending_run() -> None:
+	# Issue #8241 (run 40608957733): a second Implement run held pending by the
+	# ai-implement-<repo>-<issue> concurrency group became the newest run; the
+	# step-name lookup read its (empty) jobs and the gate declared a stall.
+	pages = [[
+		_run(777, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-09-28T03:50:56Z"),
+		_run(778, name="Internal: AI Implement", conclusion=None, status="pending", created_at="2026-09-28T03:55:00Z"),
+	]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, terminal_timeout="2")
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert _jobs_lookup_run_ids(calls) == {"777"}, calls
+	assert "2 total, 2 active, latest: pending" in log, log
+
+
+def test_implement_step_lookup_falls_back_to_latest_run_when_none_in_progress() -> None:
+	pages = [[_run(778, name="Internal: AI Implement", conclusion=None, status="pending")]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, terminal_timeout="2")
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert _jobs_lookup_run_ids(calls) == {"778"}, calls
+	assert not any("&page=2&" in path for path in _run_pages_requested(calls)), calls
+
+
+def test_implement_step_lookup_finds_in_progress_run_on_later_page() -> None:
+	# Review of PR for #8241: the counter stops at the first matching page, so
+	# a pending peer on a full page 1 must not hide the in_progress run on page 2.
+	pending = _run(778, name="Internal: AI Implement", conclusion=None, status="pending", created_at="2026-09-28T03:55:00Z")
+	working = _run(777, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-09-28T03:50:56Z")
+	pages = [[pending] + _noise_page(1000, 99), [working]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, terminal_timeout="2")
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert _jobs_lookup_run_ids(calls) == {"777"}, calls
+	assert "1 total, 1 active, latest: pending" in log, log
+
+
+def test_implement_activity_state_tracks_working_run() -> None:
+	script = _phase_step_script("wait-implement")
+	counter = script[script.index("scoped_implement_progress_counts() {"):script.index("IMPL_PREV_LABELS=\"\"")]
+	assert 'select(.status == "in_progress")' in counter
+	assert 'IMPL_RUN_ID_WORKING="$IMPL_RUN_ID_LATEST"' in counter
+	assert "actions/runs/${IMPL_RUN_ID_WORKING}/jobs?per_page=10" in script
+	assert "actions/runs/${IMPL_RUN_ID_LATEST}/jobs" not in script
+	cur_state = next(line for line in script.splitlines() if line.strip().startswith("CUR_STATE="))
+	assert "working=${IMPL_RUN_ID_WORKING}" in cur_state, cur_state
+	assert "PHASE_TIMEOUT" in script
+	assert "Implement phase stalled" in script
 
 
 def main() -> int:
