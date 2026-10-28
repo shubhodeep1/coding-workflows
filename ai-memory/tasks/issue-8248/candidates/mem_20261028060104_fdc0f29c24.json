@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8248,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8248\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8256\",\"pr_number\":8256,\"branch\":\"ai/issue-8248\",\"run_id\":\"40635461520\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40635461520\",\"changed_files\":[\".github/workflows/test-and-mark-stable.yml\",\"agents.d/8248-heal-intake-linked-runs.md\",\"changelog.d/8248-heal-intake-linked-runs.md\",\"prompts/_templates/mode-workflow-failure-heal.txt\",\"prompts/mode-workflow-failure-heal.txt\",\"scripts/stable_e2e_step_wait_review.sh\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/test_test_and_mark_stable_plan_polling_guard.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "ec52a3c4ed9482cd29238369692424ced19af09fe356e51156933fa95aa83605",
+  "lineage": {
+    "issue_number": 8248,
+    "parent_ids": [],
+    "pr_number": 8256,
+    "run_id": "40635461520",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40635461520",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8256"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261028060104_fdc0f29c24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8248,
+    "level": "run",
+    "pr_number": 8256,
+    "run_id": "40635461520"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8248: https://github.com/shubhodeep1/coding-workflows/pull/8256",
+  "timestamps": {
+    "created_at": "2026-10-28T06:01:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
