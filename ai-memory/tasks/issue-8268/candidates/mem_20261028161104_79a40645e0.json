@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: REFRAME\nQ2: A\n\nRATIONALE:\nQ1: Option A depends on reading step timings from run 40716905879. Neither the planner nor the implementer can read them: both run network-isolated with no GitHub token, and GITHUB FACTS only gives that run's status. Option B starts with \"Promote cycle and blocked-verdict unit tests\", but `PromoteCycleStepContractTest` in `tests/test_ci_poll_test_sharding.py` (#7699) requires that step to stay in its job, and the poll matrix needs group gating that has already overloaded groups before (#7697). This answer keeps A's intent and picks the steps and target from evidence in the repository, as #7689 and #7798 did when their timings were unreadable.\nQ2: The vitest step needs Node 22 from the setup step, and `MOVED_HOOKS_JOB_STEPS` already pins the two to the same job. Moving only one of them would break the vitest step or that contract.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe\n  inputs:\n    - .github/workflows/ci.yml: job `tests-release-and-log-analysis` (lines ~1899-2208) and target job `tests-heal-plan-and-validation` (lines ~910-1530)\n    - tests/test_ci_poll_test_sharding.py: `MOVED_HOOKS_JOB_STEPS` (lines ~1790-1840), and `MovedReleaseToPromoteStepsContractTest` (lines ~1986-2058) as the pattern to copy\n    - changelog.d/8246-ci-heal-job-wiring-shard.md: the heal job's \"part 1\" wiring step now runs in 4 pytest shards. Without readable timings, that makes it the receiving job most likely to have headroom. `tests-promote-stall-and-review` just took 4 steps in #8245, `tests-hooks-and-orchestrator` has hit 15 minutes several times (#7798, #8179), and `static-checks` has only a 15-minute timeout.\n  steps:\n    - Move these steps unchanged (same `name:`, body and `working-directory:`, no `if:`) from `tests-release-and-log-analysis` to the end of `tests-heal-plan-and-validation`, after its \"Install Python CI dependencies\" step, in this order:\n      1. \"Set up Node 22 for the claude-pool-broker Worker tests\"\n      2. \"claude-pool-broker Worker tests (vitest)\"\n      3. \"Workflow log analysis contract tests\"\n      4. \"Semantic cache unit tests\"\n    - Before moving, check that none of the four needs more git history than the target job's checkout fetches (compare the two jobs' `actions/checkout` settings). If one does, leave it where it is and note why in the moved-steps comment.\n    - Do not move \"Promote cycle and blocked-verdict unit tests\" (pinned by #7699) or the three coverage-gate steps. Do not change any `timeout-minutes`, and do not add or rename jobs.\n    - Above the moved block, add a comment in the existing style:\n      - the source job took 15m13s of its 20 minutes on main (run 40716905879, this budget-watch issue);\n      - step timings were not readable when this was planned, so the steps were chosen by estimated cost, not measured;\n      - the Node pair must run as a pair.\n    - In `tests/test_ci_poll_test_sharding.py`, change the owning job of `HOOKS_NODE_SETUP_STEP` and `HOOKS_VITEST_STEP` in `MOVED_HOOKS_JOB_STEPS` to `tests-heal-plan-and-validation`.\n    - In the same file, add a contract class modeled on `MovedReleaseToPromoteStepsContractTest` for \"Workflow log analysis contract tests\" and \"Semantic cache unit tests\". It checks that each step:\n      - is owned only by `tests-heal-plan-and-validation`;\n      - has no matrix guard;\n      - still names its modules (`tests/test_workflow_retro.py`, `tests/test_workflow_log_analysis_failure_contract.py`, `tests/test_stage_workflow_log_bundle.py`, `tests/test_semantic_cache.py`);\n      - has left the source job;\n      - runs after \"Install Python CI dependencies\".\n    - Also check that the Node setup step comes before the vitest step in the target job.\n    - Add a `changelog.d/<issue>-<slug>.md` fragment. Make sure `tests/test_ci_job_split_contract.py` and `tests/test_ci_wires_every_test_file.py` still pass, since each step stays in exactly one job.\n  replaces_acceptance_criterion: Option A's measured stop condition (\"source job at or below about 12 minutes; receiving job at or below about 75% of its timeout, per the run's step timings\").\n  equivalence_argument: The issue's real requirements are unchanged: slowest steps only, moved unchanged, job and step names kept, no timeout increase, no new required jobs. `budget-watch` re-measures both jobs on the next push to main. If either job still reaches 75% of its timeout, it opens a new deduplicated issue. That gives the measured check that Option A wanted to do up front.\n  reversibility: Moving steps between jobs is a pure YAML relocation. If a person disagrees, or the heal job crosses 15 minutes, move the steps back or on to another job and revert the mapping and contract-test entries.\nQ2:\n  (letter decision; no plan required)",
+  "fingerprint": "6cb3f3fa47b97cec54615ffc1a819bb809726a54eb70022ecba00ce7225d0bf7",
+  "lineage": {
+    "issue_number": 8268,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40721022443",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40721022443",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8268"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261028161104_79a40645e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8268,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40721022443"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8268",
+  "timestamps": {
+    "created_at": "2026-10-28T16:11:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
