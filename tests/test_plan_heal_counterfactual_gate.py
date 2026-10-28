@@ -117,6 +117,17 @@ def test_fenced_and_mid_line_and_lowercase_token_are_ignored() -> None:
 	assert (result["decision"], result["result"]) == ("hold", "FAIL"), result
 
 
+def test_indented_code_block_marker_is_ignored() -> None:
+	# Review finding: a marker indented by 4+ spaces or a tab is an indented
+	# code block, not the plan's line.
+	for extra in ("    HEAL_COUNTERFACTUAL: PASS", "\tHEAL_COUNTERFACTUAL: PASS"):
+		result = _check(_plan(None, extra=extra))
+		assert (result["decision"], result["reason"]) == ("hold", "no_line"), (extra, result)
+	result = _check(_plan("HEAL_COUNTERFACTUAL: FAIL: no", extra="    HEAL_COUNTERFACTUAL: PASS"))
+	assert (result["decision"], result["result"]) == ("hold", "FAIL"), result
+	assert _check(_plan("   HEAL_COUNTERFACTUAL: PASS"))["decision"] == "approve"
+
+
 def test_partial_approves_when_every_job_is_deferred() -> None:
 	text = _plan("HEAL_COUNTERFACTUAL: PARTIAL: E2E-Smoke-Test, lint",
 		deferred=["The e2e-smoke-test job still times out in the pre-push gate", "Fix the lint job separately"])

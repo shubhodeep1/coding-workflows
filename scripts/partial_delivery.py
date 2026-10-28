@@ -53,7 +53,9 @@ PR_SECTION_HEADING = "### Deferred scope (not delivered by this PR)"
 
 # Heal-route counterfactual line (issue #8249). Upper-case token at the start
 # of an unfenced line; a mention inside prose or a code fence does not count.
-HEAL_CF_LINE_RE = re.compile(r"^[ \t]*HEAL_COUNTERFACTUAL:[ \t]*(.*?)[ \t]*$")
+# At most 3 leading spaces (as FENCE_RE): a line indented by 4+ spaces or a tab
+# is a Markdown indented code block, so an example there is not the marker.
+HEAL_CF_LINE_RE = re.compile(r"^[ ]{0,3}HEAL_COUNTERFACTUAL:[ \t]*(.*?)[ \t]*$")
 HEAL_CF_VALUE_RE = re.compile(r"^(PASS|PARTIAL|FAIL|UNVERIFIED)(?:[ \t]*(:)[ \t]*(.*))?$")
 # The line counts only inside a "## Counterfactual check" section (to the next
 # heading of the same or a shallower level). Only a level-2 heading opens it,
