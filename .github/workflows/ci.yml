@@ -1910,15 +1910,16 @@ jobs:
       # took 326 s in run 36382913289 and is the job's largest. Name and body
       # unchanged; the history below is kept.
       # Moved from orchestrate-poll (2), which took 19m28s of its 20 minutes on
-      # main (run 39245970945, budget-watch issue #7697). This step ran in this
-      # job together with the review-blocked label propagation step before
-      # #7689; it comes back alone, and that step goes to
-      # tests-promote-stall-and-review. The choice rests on earlier recorded
-      # durations, not measurements. Name and body unchanged.
-      # Budget-watch issue #7699: this job then took 17m04s of its 20 minutes
-      # (run 39257527801). The step had moved three times (#7677, #7689,
-      # #7697) and every other job was estimated at or above the 15-minute
-      # warning line with it added, so it stays here and is split in place,
+      # main (run 39245970945, budget-watch issue #7697). This step ran in
+      # tests-release-and-log-analysis together with the review-blocked label
+      # propagation step before #7689; it went back there alone, and that step
+      # went to tests-promote-stall-and-review. The choice rested on earlier
+      # recorded durations, not measurements. Name and body unchanged.
+      # Budget-watch issue #7699: tests-release-and-log-analysis then took
+      # 17m04s of its 20 minutes (run 39257527801). The step had moved three
+      # times (#7677, #7689, #7697) and every other job was estimated at or
+      # above the 15-minute warning line with it added, so it stayed in that
+      # job and was split in place,
       # the way the merge-train step was (#7579): one collection over the five
       # modules, then 4 local shards split by test function (parametrized
       # cases together). Every test seeds its own temp dirs and subprocesses,
