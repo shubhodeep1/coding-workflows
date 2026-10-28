@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8246,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8246\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8251\",\"pr_number\":8251,\"branch\":\"ai/issue-8246\",\"run_id\":\"40630958915\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40630958915\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/8246-ci-heal-job-wiring-shard.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "b8a3a6017820535c7eebd75268be13d729716e049d1f73e723802bfe6df715d1",
+  "lineage": {
+    "issue_number": 8246,
+    "parent_ids": [],
+    "pr_number": 8251,
+    "run_id": "40630958915",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40630958915",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8251"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261028044832_3ceb844309",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8246,
+    "level": "run",
+    "pr_number": 8251,
+    "run_id": "40630958915"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8246: https://github.com/shubhodeep1/coding-workflows/pull/8251",
+  "timestamps": {
+    "created_at": "2026-10-28T04:48:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
