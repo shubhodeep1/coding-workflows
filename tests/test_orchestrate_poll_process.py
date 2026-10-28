@@ -9267,7 +9267,7 @@ def test_external_finalize_unvalidated_head_without_recorded_pass_says_none() ->
 
 def test_external_finalize_unconfirmed_validation_fails_open() -> None:
 	result = _external_finalize_delivery_run(
-		enable_validation="true",mock_validation_history_get_exit_code=3)
+		enable_validation="true", mock_validation_history_get_exit_code=3)
 	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
 	assert result["latest_state"]["status"] == "complete"
 	assert "ai:merged" in result["tracking_labels"]

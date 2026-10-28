@@ -16457,10 +16457,9 @@ mark_validation_complete() {
 		"orchestrate_poll.mark_validation_complete"
 	# #8232: remember the last integration SHA that passed runtime
 	# validation, so an external merge of a later head can name it.
+	# The append helper sets VALIDATION_HISTORY_LAST_APPEND_SHA from its own
+	# branch-head lookup; empty means that lookup failed, so no second call.
 	local _validation_last_passed_sha="${VALIDATION_HISTORY_LAST_APPEND_SHA:-}"
-	if ! [[ "${_validation_last_passed_sha}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-		_validation_last_passed_sha="$(validation_history_current_integration_sha 2>/dev/null || true)"
-	fi
 	_validation_last_passed_sha="$(printf '%s' "${_validation_last_passed_sha}" | tr '[:upper:]' '[:lower:]')"
 	if [[ "${_validation_last_passed_sha}" =~ ^[0-9a-f]{40}$ ]]; then
 		if ! { jq --arg sha "${_validation_last_passed_sha}" '.validation_last_passed_sha = $sha' \
