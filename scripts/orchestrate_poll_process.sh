@@ -1454,8 +1454,9 @@ _judge_static_agents_mode() {
 
 # assemble_judge_static_context OUT [inline]
 # The optional second argument `inline` always inlines the agents file. The
-# review-blocked and integration-conflict judges pass it (issue #8269): their
-# sandboxes snapshot a PR head or a merge worktree, not the tree the index is
+# review-blocked, integration-conflict and security-pass exhaustion judges pass
+# it (issue #8269): their sandboxes snapshot a PR head, a merge worktree or the
+# audit worktree (SECURITY_PASS_AUDIT_WORKTREE), not the tree the index is
 # built from.
 assemble_judge_static_context() {
   local out_file="$1"
