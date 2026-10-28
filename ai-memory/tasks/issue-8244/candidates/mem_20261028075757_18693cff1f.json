@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8244,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8244\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8259\",\"pr_number\":8259,\"branch\":\"ai/issue-8244\",\"run_id\":\"40646394421\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40646394421\",\"changed_files\":[\".github/workflows/orchestrate.yml\",\".github/workflows/test-and-mark-stable.yml\",\"agents.d/8244-prepush-gate-release-gate.md\",\"changelog.d/8244-prepush-gate-release-gate.md\",\"scripts/orchestrate_lib.py\",\"tests/test_orchestrate_lib.py\",\"tests/test_test_and_mark_stable_plan_polling_guard.py\",\"tests/test_test_and_mark_stable_review_blocked_budget.py\"]}",
+  "fingerprint": "e7dcfae3a87c68818e2e613bac8b885c0bc611a6ef7a1dae181b56050fca7020",
+  "lineage": {
+    "issue_number": 8244,
+    "parent_ids": [],
+    "pr_number": 8259,
+    "run_id": "40646394421",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40646394421",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8259"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261028075757_18693cff1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8244,
+    "level": "run",
+    "pr_number": 8259,
+    "run_id": "40646394421"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8244: https://github.com/shubhodeep1/coding-workflows/pull/8259",
+  "timestamps": {
+    "created_at": "2026-10-28T07:57:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
