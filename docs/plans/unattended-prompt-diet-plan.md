@@ -57,7 +57,14 @@ This cuts the static prefix from about 750 KB (about 190k tokens) to under
   (`SUPPORT_AGENTS_FILE`, staged from the workflow support commit) in review,
   and the copy each builder already reads elsewhere. The rendered file is
   written outside the checkout (under `RUNTIME_DIR`) and mounted read-only
-  into the sandbox, never read from the PR or branch checkout.
+  into the sandbox, never read from the PR or branch checkout. The helper
+  always calls `assemble_agents.py render` with an explicit `--agents-file`
+  and `--fragments-dir`, never with a checkout as `--repo-root` (whose
+  default `<repo-root>/agents.d` would fold in PR-controlled fragments). In
+  review, where the inline mode pastes `SUPPORT_AGENTS_FILE` with no
+  fragments today, `--fragments-dir` is an empty directory under
+  `RUNTIME_DIR`; elsewhere it is the fragment directory the builder already
+  folds today. A missing trusted fragment source falls back to `inline`.
 - **Alternatives considered:** point the model at the checkout's `agents.md`,
   as the reviewer panel does.
 - **Why:** the editor, judges and consolidator take repository conventions
@@ -154,7 +161,14 @@ This cuts the static prefix from about 750 KB (about 190k tokens) to under
    a missing helper, or a caller that cannot confirm the rendered file is
    mounted into its sandbox (the builder takes the in-sandbox path as an
    argument and refuses `index` mode without it) falls back to `inline` and
-   logs `STATIC_CONTEXT_SIZE ... fallback=inline reason=<r>`.
+   logs `STATIC_CONTEXT_SIZE ... fallback=inline reason=<r>`. "Mounted" means
+   the role that runs can read it, not only that the path exists: OpenCode
+   roles need a read grant for that one path (see Phase 3 step 7), and any
+   role that reuses a prefix built for another sandbox must mount the file
+   itself or rebuild an inline prefix.
+   Every workflow whose scripts read the variable passes it through `env:`
+   as `${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}`, and each script
+   also defaults it to `index` (§8), so `inline` reaches every phase.
 4. Consumer implement stages the canonical file into the sandbox with
    `--include` and indexes it under its own heading.
 5. Prompt text that says everything is already loaded is updated
@@ -199,6 +213,11 @@ Phase 1
    (`--include`) for consumer runs, and index it under its own heading. Mount
    `agents.rendered.md` read-only in the clarify, plan and implement
    sandboxes (`clarify_isolated_run.sh` gets the new read-only file mount).
+   `scripts/implement_diagnose_post_codex_failure.sh` copies
+   `./pre_assembled_static.txt` (about line 424) and runs its own isolated
+   read-only container with no include: give both its codex path
+   (`--include`) and its `claude_run` path (`AI_ENGINE_INCLUDE_PATHS`) the
+   rendered file, or have it rebuild an inline prefix when it cannot.
 4. `clarify.yml:1466` and `run_plan_codex.sh:16`: change the "already
    loaded" wording for agents.md.
 5. Pass the variable through `env:` in `clarify.yml`, `plan.yml` and
@@ -210,8 +229,12 @@ Phase 2
    (`orchestrate_poll_process.sh:1433-1488`), `validate_process.sh:4134-4172`
    and `workflow_failure_heal_intake.sh:2340`. Mount the rendered file into
    each of those sandboxes (heal intake today includes only `HEAL_SOURCE_DIR`
-   and `HEAL_BRANCH_TIP_DIR`, so it gets an extra `--include`); a phase that
-   cannot mount it stays `inline`. Add the helper to the staged-support lists
+   and `HEAL_BRANCH_TIP_DIR`; add the file to both its codex include list
+   `heal_isolated_args` and its Claude list `heal_include_paths`, which feeds
+   `AI_ENGINE_INCLUDE_PATHS`); a phase that cannot mount it stays `inline`.
+   Pass `STATIC_CONTEXT_AGENTS_MODE` through `env:` in `orchestrate.yml`,
+   `orchestrate_clarify_respond.yml`, `orchestrate_poll.yml`, `validate.yml`
+   and `workflow_failure_heal.yml` (or the intake's workflow). Add the helper to the staged-support lists
    of `orchestrate.yml`, `orchestrate_clarify_respond.yml`,
    `orchestrate_poll.yml` and `validate.yml` (its `required_scripts`
    manifest), and to `workflow_failure_heal.yml`'s staging if the intake runs
@@ -225,10 +248,17 @@ Phase 3
    file goes under `RUNTIME_DIR` and is mounted read-only by
    `review_untrusted_sandbox.sh` for the editor, judges and consolidator;
    the prompt names that path and says the checkout's `agents.md` is PR data.
-   Add the helper to `REQUIRED_BOOTSTRAP_SCRIPTS` in
+   Add the helper and `assemble_agents.py` (which review does not stage
+   today) to `REQUIRED_BOOTSTRAP_SCRIPTS` in
    `scripts/stage_workflow_support.sh` and `REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS`
-   in `review_autofix.yml`. The editor, judges and consolidator scripts keep
-   their `cat` and get the smaller file.
+   in `review_autofix.yml`. `scripts/write_opencode_config.sh` defines no
+   `external_directory` permission for the reviewer roles, so either add a
+   read grant scoped to the single rendered-file path or mount the file
+   inside the root those roles already read; the index mode is used only
+   after the role's read of that path is shown to work, else `inline`. Pass
+   `STATIC_CONTEXT_AGENTS_MODE` through `env:` in `review_autofix.yml`. The
+   editor, judges and consolidator scripts keep their `cat` and get the
+   smaller file.
 
 Phase 4
 8. The prompt assemblers wrap the system-instruction block in fixed begin
@@ -237,7 +267,11 @@ Phase 4
    `clarify_isolated_run.sh`, `review_untrusted_sandbox.sh`), when the mode is
    `index`, feed Claude a temporary copy of the prompt with that block removed.
    The original prompt file is unchanged, so the exit-75 codex fallback still
-   gets the block. Reword the "system instructions ... provided ABOVE"
+   gets the block. The strip matches only a block that starts at byte 0 with
+   an exact full-line BEGIN marker and ends at the next exact full-line END
+   marker; if either is missing it leaves the copy unchanged and logs the
+   reason, so marker-like text in the untrusted dynamic part of the prompt
+   can never remove trusted text. Reword the "system instructions ... provided ABOVE"
    sentences in `run_plan_codex.sh:15-17` and both `mode-validate-generate.txt`
    copies so they are true on both engines.
 
@@ -250,6 +284,11 @@ Phase 4
   `validate.yml`, `review_autofix.yml` (staged-support lists and `env:`)
 - `scripts/clarify_isolated_run.sh`, `scripts/codex_isolated_exec.sh` callers,
   `scripts/review_untrusted_sandbox.sh` (read-only mount of the rendered file)
+- `scripts/implement_diagnose_post_codex_failure.sh` (mount for the reused
+  implement prefix), `scripts/write_opencode_config.sh` (read grant for the
+  rendered file)
+- `.github/workflows/workflow_failure_heal.yml` (or the intake's workflow;
+  `env:` pass-through)
 - `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`,
   `scripts/workflow_failure_heal_intake.sh`,
   `scripts/review_apply_fixes.sh`, `scripts/review_rb_judge.sh`,
@@ -279,7 +318,15 @@ Phase 4
   the helper, produces the inline prefix and `fallback=inline`.
 - Phase 4 test: after a forced Claude exit 75, the codex command's stdin
   still contains the system-instruction block; with the mode `inline`, the
-  Claude stdin keeps it too.
+  Claude stdin keeps it too. Marker-shaped lines injected into the dynamic
+  part of the prompt leave the trusted block intact.
+- Render-source test: the helper never renders with a checkout as
+  `--repo-root`, and an `agents.d/` fragment added in the review checkout
+  does not appear in the review index or rendered file.
+- Rollback test: every workflow whose scripts read
+  `STATIC_CONTEXT_AGENTS_MODE` passes it through `env:`.
+- Diagnose test: with the implement prefix in `index` mode, the diagnose
+  sandbox can read the rendered file or gets an inline prefix.
 - After each phase merges, compare `STATIC_CONTEXT_SIZE` logs and Claude
   transcript usage on the next 5 runs of each phase against the last 5
   before it.
@@ -291,7 +338,10 @@ Phase 4
   compared after each phase.
 - An index points at a file the sandbox cannot open, so the content is lost
   silently. Mitigation: the builder refuses `index` mode unless its caller
-  passes the confirmed in-sandbox path, and falls back to `inline`.
+  passes the confirmed in-sandbox path, and falls back to `inline`. A path
+  that exists but the role's tool permissions refuse (OpenCode roles have no
+  `external_directory` grant today) counts as not mounted, and a prefix
+  reused by another role (implement diagnose) needs its own mount.
 - A large section is indexed too coarsely. Mitigation: bullet-level index
   for the 6 sections over 30 KB.
 - More tool calls offset part of the saving. ACCEPTED: reading 5–20 KB on
