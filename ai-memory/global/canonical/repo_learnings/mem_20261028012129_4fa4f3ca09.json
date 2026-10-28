@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.86,
+  "details": "Several merged changes to workflows, scripts, and prompts included a correspondingly scoped file under `changelog.d/`. For similar user-visible or operational changes, follow this repository convention and check existing changelog fragments for the expected naming and content style.",
+  "fingerprint": "b50ef0b9c8d75517df28874801d1580a00d9006e324e54203a0eca6d56c92ebd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40613569766",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40613569766",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8217",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8219",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8220",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8225",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8229",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8221",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8224",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8226",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8227",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8230"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261028012129_4fa4f3ca09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow and automation changes commonly include a `changelog.d` entry.",
+  "timestamps": {
+    "created_at": "2026-10-28T01:21:29Z",
+    "promoted_at": "2026-10-28T01:23:01Z",
+    "superseded_at": null
+  }
+}
