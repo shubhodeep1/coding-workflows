@@ -21,7 +21,7 @@ def _safe_env() -> dict[str, str]:
 	for key in (
 		"BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE",
 		"GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES", "STATIC_CONTEXT_AGENTS_MODE", "RUNTIME_DIR",
 	):
 		env.pop(key, None)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -223,6 +223,9 @@ def test_phase_static_context_skips_symlinks_but_keeps_canonical_agents() -> Non
 			"public overview\n### 2. Create wrapper workflows\nprivate runbook\n", encoding="utf-8",
 		)
 		(root / "agents.md").write_text("local agents\n", encoding="utf-8")
+		# clarify and plan index agents.md by default (#8260); inline mode keeps
+		# the full file, which is what this loop checks.
+		env["STATIC_CONTEXT_AGENTS_MODE"] = "inline"
 		for phase in ("clarify", "plan", "implement"):
 			output = root / f"{phase}-regular.txt"
 			result = subprocess.run(

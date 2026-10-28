@@ -393,13 +393,21 @@ def _existing_phase_fixture(root: Path) -> str:
 	return agents_text
 
 
-@pytest.mark.parametrize("phase", ["clarify", "plan", "implement"])
-def test_existing_phases_still_inline_full_agents_md(phase: str) -> None:
+@pytest.mark.parametrize(
+	("phase", "modes"),
+	[
+		# clarify and plan inline agents.md only in inline mode since #8260.
+		("clarify", ("inline", "junk", "INLINE")),
+		("plan", ("inline", "junk", "INLINE")),
+		("implement", (None, "index", "inline", "junk")),
+	],
+)
+def test_existing_phases_still_inline_full_agents_md(phase: str, modes: tuple) -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = _repo(tmp)
 		agents_text = _existing_phase_fixture(root)
 		outputs = []
-		for mode in (None, "index", "inline", "junk"):
+		for mode in modes:
 			env = {} if mode is None else {"STATIC_CONTEXT_AGENTS_MODE": mode}
 			result = _run(root, phase, **env)
 			assert result.returncode == 0, result.stderr
@@ -446,8 +454,9 @@ def test_existing_phases_byte_identical_to_base(phase: str) -> None:
 				fragments = root / "agents.d"
 				fragments.mkdir()
 				(fragments / "1-x.md").write_text('<!-- agents: section="Section A" -->\nadded\n', encoding="utf-8")
-			before = _run(before_root, phase)
-			after = _run(after_root, phase)
+			# The base script ignores the switch; inline keeps clarify/plan unchanged.
+			before = _run(before_root, phase, STATIC_CONTEXT_AGENTS_MODE="inline")
+			after = _run(after_root, phase, STATIC_CONTEXT_AGENTS_MODE="inline")
 			assert before.returncode == after.returncode == 0, (before.stderr, after.stderr)
 			assert (before_root / "out.txt").read_bytes() == (after_root / "out.txt").read_bytes()
 	finally:

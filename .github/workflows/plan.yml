@@ -1618,6 +1618,8 @@ jobs:
 
       - name: Pre-assemble static context (cacheable across runs)
         if: env.SKIP_PLAN != 'true'
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
           # See scripts/build_static_context.sh for trimming rationale and
