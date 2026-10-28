@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-28T22:13:48Z",
+  "tick_at": "2026-10-28T22:29:14Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -55,14 +55,13 @@
       "wave_complete": false
     },
     {
-      "current_wave": 4,
-      "integration_ahead_by": "17",
+      "current_wave": 0,
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -70,10 +69,10 @@
       },
       "number": 8253,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Cut the unattended pipelines' static prompt prefix: agents.md index instead of inline",
-      "total_waves": 4,
-      "wave_complete": true
+      "total_waves": 0,
+      "wave_complete": false
     }
   ]
 }
