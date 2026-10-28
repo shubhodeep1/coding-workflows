@@ -1181,7 +1181,7 @@ jobs:
           # Keep the raw collect output so a collection error prints its traceback.
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${wg1_modules[@]}" \
             > /tmp/wiring_part1_collect.log 2>&1 \
-            || { cat /tmp/wiring_part1_collect.log; echo "::error::Test collection failed for the wiring guard part 1 modules."; exit 1; }
+            || { sed 's/^/| /' /tmp/wiring_part1_collect.log; echo "::error::Test collection failed for the wiring guard part 1 modules."; exit 1; }
           # Keep only IDs whose path (the text before the first "::") is a listed
           # module, then group parametrized cases under their test function.
           printf '%s\n' "${wg1_modules[@]}" > /tmp/wiring_part1_modules.txt

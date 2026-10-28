@@ -1636,6 +1636,9 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 		tail = result.stdout[result.stdout.index("shard 1 failed; last 40 log lines"):]
 		self.assertIn("| ::error::forged", tail)
 		self.assertNotIn("\n::error::forged", tail)
+		group = result.stdout[: result.stdout.index("shard 1 failed; last 40 log lines")]
+		self.assertIn("| ::error::forged", group)
+		self.assertNotIn("\n::error::forged", "\n" + group)
 
 	def test_missing_rc_counts_as_failure(self) -> None:
 		files = self.green()
