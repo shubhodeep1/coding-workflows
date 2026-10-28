@@ -60,7 +60,7 @@
 # local agents.md and agents.d/, so the model can read the listed sections.
 # The implement phase does not read the switch yet, and the `agents-index`
 # phase always emits the index. clarify and plan print one stderr line,
-# `STATIC_CONTEXT_SIZE phase= mode=index|inline bytes=<output size>`, plus
+# `STATIC_CONTEXT_SIZE phase=clarify|plan mode=index|inline bytes=<output size>`, plus
 # ` fallback=inline reason=<r>` after a fallback and ` agents=absent` when
 # there is no local agents file.
 #
