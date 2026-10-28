@@ -1113,50 +1113,146 @@ jobs:
       # the largest addition (by test-module and subprocess count) since that
       # job measured about 535-604s. It moved there from static-checks in #7382,
       # where it also ran on a depth-1 checkout. Step name and body are unchanged.
+      # Sharded in place, not moved (#8246): this job took 15m06s of its 20
+      # minutes on main (run 40626853481). The run's step timings could not be
+      # read, and the recorded history shows no other job with headroom (moves
+      # in #8072, #8091, #8118 and #8208 each reopened budget-watch elsewhere),
+      # so this step splits its test functions across 4 local pytest processes
+      # on the runner's 4 cores, as #7387 and #8150 did. Sandbox timings are
+      # relative weights only: the 33 modules that ran there took about 31s
+      # of pytest time serially (heaviest: review_conflict_resolve_sandbox_only
+      # 8.3s, semble_helpers 4.7s, orchestrate_final_merge_required_checks_gate
+      # 4.2s). Not measurable there (no PyYAML): family_python_mongo_flask,
+      # family_python_repo_checks, render_validation_templates_node_hardhat_
+      # and _node_runtime_regressions, review_pipeline_integration,
+      # validate_process_manifest_shell_safety, workflow_support_ref_follows_pin.
+      # Most of this job's other steps abort early there for the same reason.
+      # The heal step's unsharded tail measured about 16s and stays serial.
+      # Every listed module must contribute at least one test, each collected
+      # function runs exactly once, and a shard without exit code 0 fails.
       - name: Regression tests wired by the CI wiring guard (part 1)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_ai_memory_cli.py \
-            tests/test_branch_rebuild.py \
-            tests/test_clarify_sandbox_base_image_preseed.py \
-            tests/test_codex_thread_reuse_review.py \
-            tests/test_family_python_mongo_flask.py \
-            tests/test_family_python_repo_checks.py \
-            tests/test_heal_plan_grant_body_edit_fix.py \
-            tests/test_implement_heal_preflight.py \
-            tests/test_implement_pr_body_tracking_refs.py \
-            tests/test_partial_delivery.py \
-            tests/test_issue_pr_status_partial_delivery.py \
-            tests/test_clarify_partial_delivery_restart.py \
-            tests/test_partial_delivery_sweep_guard.py \
-            tests/test_orchestrate_final_merge_required_checks_gate.py \
-            tests/test_prompt_compaction.py \
-            tests/test_render_validation_templates_node_hardhat_regressions.py \
-            tests/test_render_validation_templates_node_runtime_regressions.py \
-            tests/test_review_autofix_last_run_diff_oscillation_guard.py \
-            tests/test_review_commit_new_files_preserved.py \
-            tests/test_review_conflict_resolve_sandbox_only.py \
-            tests/test_review_freshness_ci_failed.py \
-            tests/test_review_head_gate.py \
-            tests/test_review_parse_consolidator.py \
-            tests/test_review_pipeline_integration.py \
-            tests/test_review_rb_judge_reissue_baseline.py \
-            tests/test_review_sandbox_hidden_build_dirs.py \
-            tests/test_review_sandbox_install_timeout.py \
-            tests/test_review_static_context_readme.py \
-            tests/test_semble_helpers.py \
-            tests/test_validate_driver_credential_scrub.py \
-            tests/test_validate_lint_graceful_shutdown_hooks.py \
-            tests/test_validate_lint_init_true.py \
-            tests/test_validate_preflight_canary_tools_scope.py \
-            tests/test_validate_process_manifest_shell_safety.py \
-            tests/test_validate_process_render_recovery.py \
-            tests/test_validation_import_audit_stdlib.py \
-            tests/test_verify_integration_fingerprints_partial_removal.py \
-            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py \
-            tests/test_workflow_retro_fanout.py \
+          wg1_shards=4
+          wg1_modules=(
+            tests/test_ai_memory_cli.py
+            tests/test_branch_rebuild.py
+            tests/test_clarify_sandbox_base_image_preseed.py
+            tests/test_codex_thread_reuse_review.py
+            tests/test_family_python_mongo_flask.py
+            tests/test_family_python_repo_checks.py
+            tests/test_heal_plan_grant_body_edit_fix.py
+            tests/test_implement_heal_preflight.py
+            tests/test_implement_pr_body_tracking_refs.py
+            tests/test_partial_delivery.py
+            tests/test_issue_pr_status_partial_delivery.py
+            tests/test_clarify_partial_delivery_restart.py
+            tests/test_partial_delivery_sweep_guard.py
+            tests/test_orchestrate_final_merge_required_checks_gate.py
+            tests/test_prompt_compaction.py
+            tests/test_render_validation_templates_node_hardhat_regressions.py
+            tests/test_render_validation_templates_node_runtime_regressions.py
+            tests/test_review_autofix_last_run_diff_oscillation_guard.py
+            tests/test_review_commit_new_files_preserved.py
+            tests/test_review_conflict_resolve_sandbox_only.py
+            tests/test_review_freshness_ci_failed.py
+            tests/test_review_head_gate.py
+            tests/test_review_parse_consolidator.py
+            tests/test_review_pipeline_integration.py
+            tests/test_review_rb_judge_reissue_baseline.py
+            tests/test_review_sandbox_hidden_build_dirs.py
+            tests/test_review_sandbox_install_timeout.py
+            tests/test_review_static_context_readme.py
+            tests/test_semble_helpers.py
+            tests/test_validate_driver_credential_scrub.py
+            tests/test_validate_lint_graceful_shutdown_hooks.py
+            tests/test_validate_lint_init_true.py
+            tests/test_validate_preflight_canary_tools_scope.py
+            tests/test_validate_process_manifest_shell_safety.py
+            tests/test_validate_process_render_recovery.py
+            tests/test_validation_import_audit_stdlib.py
+            tests/test_verify_integration_fingerprints_partial_removal.py
+            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py
+            tests/test_workflow_retro_fanout.py
             tests/test_workflow_support_ref_follows_pin.py
+          )
+          rm -f /tmp/wiring_part1_collect.log /tmp/wiring_part1_modules.txt /tmp/wiring_part1_tests.txt \
+            /tmp/wiring_part1_shard_*.txt /tmp/wiring_part1_shard_*.log /tmp/wiring_part1_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${wg1_modules[@]}" \
+            > /tmp/wiring_part1_collect.log 2>&1 \
+            || { cat /tmp/wiring_part1_collect.log; echo "::error::Test collection failed for the wiring guard part 1 modules."; exit 1; }
+          # Keep only IDs whose path (the text before the first "::") is a listed
+          # module, then group parametrized cases under their test function.
+          printf '%s\n' "${wg1_modules[@]}" > /tmp/wiring_part1_modules.txt
+          awk 'NR == FNR { listed[$0] = 1; next } { i = index($0, "::"); if (i > 1 && (substr($0, 1, i - 1) in listed)) print }' \
+            /tmp/wiring_part1_modules.txt /tmp/wiring_part1_collect.log \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/wiring_part1_tests.txt
+          # A listed module that collects nothing would drop out silently.
+          wg1_empty=()
+          for wg1_module in "${wg1_modules[@]}"; do
+            grep -q -F "${wg1_module}::" /tmp/wiring_part1_tests.txt || wg1_empty+=("${wg1_module}")
+          done
+          if [ "${#wg1_empty[@]}" -gt 0 ]; then
+            for wg1_module in "${wg1_empty[@]}"; do
+              echo "::error::No tests collected from ${wg1_module}."
+            done
+            exit 1
+          fi
+          wg1_test_count="$(wc -l < /tmp/wiring_part1_tests.txt | tr -d '[:space:]')"
+          if ! [ "${wg1_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from the wiring guard part 1 modules."
+            exit 1
+          fi
+          echo "wiring guard part 1: ${wg1_test_count} test functions across ${wg1_shards} shards"
+          wg1_pids=()
+          for wg1_shard in $(seq 0 "$((wg1_shards - 1))"); do
+            awk -v n="${wg1_shard}" -v total="${wg1_shards}" 'NR % total == n' \
+              /tmp/wiring_part1_tests.txt > "/tmp/wiring_part1_shard_${wg1_shard}.txt"
+            [ -s "/tmp/wiring_part1_shard_${wg1_shard}.txt" ] || continue
+            (
+              mapfile -t wg1_shard_tests < "/tmp/wiring_part1_shard_${wg1_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${wg1_shard_tests[@]}" > "/tmp/wiring_part1_shard_${wg1_shard}.log" 2>&1
+              echo "$?" > "/tmp/wiring_part1_shard_${wg1_shard}.rc"
+            ) &
+            wg1_pids+=("$!")
+          done
+          # Reap every process before judging any, so none is left orphaned.
+          for wg1_pid in "${wg1_pids[@]}"; do
+            wait "${wg1_pid}" || true
+          done
+          wg1_ids=()
+          for wg1_shard in $(seq 0 "$((wg1_shards - 1))"); do
+            [ -s "/tmp/wiring_part1_shard_${wg1_shard}.txt" ] || continue
+            wg1_ids+=("${wg1_shard}")
+          done
+          wg1_failed=()
+          for wg1_id in "${wg1_ids[@]}"; do
+            wg1_stem="/tmp/wiring_part1_shard_${wg1_id}"
+            echo "::group::wiring guard part 1 shard ${wg1_id}"
+            cat "${wg1_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            wg1_rc="$(cat "${wg1_stem}.rc" 2>/dev/null || echo 1)"
+            case "${wg1_rc}" in
+              ''|*[!0-9]*) wg1_rc=1 ;;
+            esac
+            if [ "${wg1_rc}" != "0" ]; then
+              wg1_failed+=("${wg1_id}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for wg1_id in "${wg1_failed[@]}"; do
+            echo "--- wiring guard part 1 shard ${wg1_id} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/wiring_part1_shard_${wg1_id}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#wg1_failed[@]}" -gt 0 ]; then
+            echo "::error::wiring guard part 1 shards failed: ${wg1_failed[*]}"
+            exit 1
+          fi
 
       # Moved from tests-promote-stall-and-review, which took 15m18s of its
       # 20 minutes on main (run 39039638823, budget-watch issue #7576). Step

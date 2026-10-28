@@ -1403,6 +1403,262 @@ class UnblockStepShardingContractTest(unittest.TestCase):
 		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 		self.assertNotIn("shard 3", result.stdout)
 
+
+WIRING_PART1_STEP_NAME = "Regression tests wired by the CI wiring guard (part 1)"
+WIRING_PART1_JOB_ID = "tests-heal-plan-and-validation"
+WIRING_PART1_MODULES = (
+	"tests/test_ai_memory_cli.py",
+	"tests/test_branch_rebuild.py",
+	"tests/test_clarify_sandbox_base_image_preseed.py",
+	"tests/test_codex_thread_reuse_review.py",
+	"tests/test_family_python_mongo_flask.py",
+	"tests/test_family_python_repo_checks.py",
+	"tests/test_heal_plan_grant_body_edit_fix.py",
+	"tests/test_implement_heal_preflight.py",
+	"tests/test_implement_pr_body_tracking_refs.py",
+	"tests/test_partial_delivery.py",
+	"tests/test_issue_pr_status_partial_delivery.py",
+	"tests/test_clarify_partial_delivery_restart.py",
+	"tests/test_partial_delivery_sweep_guard.py",
+	"tests/test_orchestrate_final_merge_required_checks_gate.py",
+	"tests/test_prompt_compaction.py",
+	"tests/test_render_validation_templates_node_hardhat_regressions.py",
+	"tests/test_render_validation_templates_node_runtime_regressions.py",
+	"tests/test_review_autofix_last_run_diff_oscillation_guard.py",
+	"tests/test_review_commit_new_files_preserved.py",
+	"tests/test_review_conflict_resolve_sandbox_only.py",
+	"tests/test_review_freshness_ci_failed.py",
+	"tests/test_review_head_gate.py",
+	"tests/test_review_parse_consolidator.py",
+	"tests/test_review_pipeline_integration.py",
+	"tests/test_review_rb_judge_reissue_baseline.py",
+	"tests/test_review_sandbox_hidden_build_dirs.py",
+	"tests/test_review_sandbox_install_timeout.py",
+	"tests/test_review_static_context_readme.py",
+	"tests/test_semble_helpers.py",
+	"tests/test_validate_driver_credential_scrub.py",
+	"tests/test_validate_lint_graceful_shutdown_hooks.py",
+	"tests/test_validate_lint_init_true.py",
+	"tests/test_validate_preflight_canary_tools_scope.py",
+	"tests/test_validate_process_manifest_shell_safety.py",
+	"tests/test_validate_process_render_recovery.py",
+	"tests/test_validation_import_audit_stdlib.py",
+	"tests/test_verify_integration_fingerprints_partial_removal.py",
+	"tests/test_verify_integration_fingerprints_post_capture_reintroduction.py",
+	"tests/test_workflow_retro_fanout.py",
+	"tests/test_workflow_support_ref_follows_pin.py",
+)
+WIRING_PART1_AWK_RE = re.compile(
+	r"""awk -v n="\$\{wg1_shard\}" -v total="\$\{wg1_shards\}" '(?P<expr>[^']+)'"""
+)
+
+
+def wiring_part1_step() -> dict:
+	job = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"][WIRING_PART1_JOB_ID]
+	for step in job["steps"]:
+		if step.get("name") == WIRING_PART1_STEP_NAME:
+			return step
+	raise AssertionError(f"{WIRING_PART1_STEP_NAME!r} step not found in {WIRING_PART1_JOB_ID}")
+
+
+def run_wiring_part1_judge(step_run: str, files: dict[int, dict[str, str]]) -> subprocess.CompletedProcess:
+	"""Run the wiring part 1 step's judgment part against fake shard files.
+
+	`files` maps a shard index to the files it left (`txt`, `log`, `rc`).
+	The cut starts after the reap loop and ends at the final exit, so the
+	shipped shell is exercised, pointed at a temp dir.
+	"""
+	start = step_run.index("wg1_ids=()")
+	end = step_run.index("\nfi\n", step_run.index("wiring guard part 1 shards failed")) + len("\nfi\n")
+	with tempfile.TemporaryDirectory(prefix="test_wg1_judge_") as tmp:
+		for shard, shard_files in files.items():
+			for suffix, content in shard_files.items():
+				Path(tmp, f"wiring_part1_shard_{shard}.{suffix}").write_text(content, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/wiring_part1_", f"{tmp}/wiring_part1_")
+		return subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nwg1_shards=4\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+
+def run_wiring_part1_filter(
+	step_run: str, modules: list[str], collect_log: str
+) -> tuple[subprocess.CompletedProcess, list[str]]:
+	"""Run the step's ID filter and per-module guard against a fake collect log.
+
+	Returns the process result and the filtered test IDs it wrote.
+	"""
+	start = step_run.index("printf '%s\\n' \"${wg1_modules[@]}\"")
+	end = step_run.index("\n", step_run.index('echo "wiring guard part 1: ')) + 1
+	with tempfile.TemporaryDirectory(prefix="test_wg1_filter_") as tmp:
+		Path(tmp, "wiring_part1_collect.log").write_text(collect_log, encoding="utf-8")
+		script = step_run[start:end].replace("/tmp/wiring_part1_", f"{tmp}/wiring_part1_")
+		array = " ".join(f"'{module}'" for module in modules)
+		result = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\nwg1_shards=4\nwg1_modules=({array})\n{script}"],
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		tests_file = Path(tmp, "wiring_part1_tests.txt")
+		tests = tests_file.read_text(encoding="utf-8").splitlines() if tests_file.exists() else []
+		return result, tests
+
+
+class WiringGuardPartOneShardingContractTest(unittest.TestCase):
+	"""The wiring guard part 1 step runs its 40 modules in local shards (#8246).
+
+	`tests-heal-plan-and-validation` took 15m06s of its 20 minutes (run
+	40626853481). The step stays in its job, by name and without a guard,
+	and splits its test functions across 4 processes, the way #7387 and
+	#8150 did. Every listed module must collect at least one test, every
+	test must run exactly once, and a shard that fails or records no exit
+	code must fail the step.
+	"""
+
+	def setUp(self) -> None:
+		self.step = wiring_part1_step()
+		self.run = self.step["run"]
+
+	def green(self) -> dict[int, dict[str, str]]:
+		return {n: {"txt": f"t{n}\n", "log": "ok\n", "rc": "0\n"} for n in range(4)}
+
+	def test_step_stays_in_its_job_without_guard(self) -> None:
+		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+		owners = [
+			job_id
+			for job_id, job in jobs.items()
+			for step in job.get("steps", [])
+			if step.get("name") == WIRING_PART1_STEP_NAME
+		]
+		self.assertEqual(owners, [WIRING_PART1_JOB_ID])
+		self.assertNotIn("if", self.step)
+		self.assertIn("wg1_shards=4", self.run)
+
+	def test_module_array_matches_the_constant_and_files_exist(self) -> None:
+		array = re.search(r"wg1_modules=\((?P<mods>[^)]*)\)", self.run)
+		self.assertIsNotNone(array)
+		self.assertEqual(tuple(array.group("mods").split()), WIRING_PART1_MODULES)
+		self.assertEqual(len(WIRING_PART1_MODULES), 40)
+		self.assertEqual(len(set(WIRING_PART1_MODULES)), 40)
+		for module in WIRING_PART1_MODULES:
+			with self.subTest(module=module):
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+
+	def test_collection_error_strings_are_present(self) -> None:
+		self.assertIn('--collect-only -q -p no:cacheprovider "${wg1_modules[@]}"', self.run)
+		self.assertIn("Test collection failed for the wiring guard part 1 modules.", self.run)
+		self.assertIn("No tests collected from ${wg1_module}.", self.run)
+		self.assertIn("No tests collected from the wiring guard part 1 modules.", self.run)
+
+	def test_partition_expression_is_a_true_partition(self) -> None:
+		match = WIRING_PART1_AWK_RE.search(self.run)
+		self.assertIsNotNone(match)
+		expression = match.group("expr").strip()
+		self.assertEqual(expression, "NR % total == n")
+		names = [f"tests/test_x.py::test_{i:03d}" for i in range(97)]
+		for total in range(1, 7):
+			with self.subTest(shards=total):
+				collected: list[str] = []
+				for n in range(total):
+					collected.extend(ShardPartitionTest.shard(self, names, total, n, expression))
+				self.assertCountEqual(collected, names)
+
+	def test_partition_covers_the_real_test_functions(self) -> None:
+		import ast
+
+		names: list[str] = []
+		for module in WIRING_PART1_MODULES:
+			tree = ast.parse((REPO_ROOT / module).read_text(encoding="utf-8"))
+			names.extend(
+				f"{module}::{node.name}"
+				for node in ast.walk(tree)
+				if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+			)
+		self.assertGreater(len(names), 0)
+		expression = WIRING_PART1_AWK_RE.search(self.run).group("expr").strip()
+		collected: list[str] = []
+		for n in range(4):
+			collected.extend(ShardPartitionTest.shard(self, names, 4, n, expression))
+		self.assertCountEqual(collected, names)
+
+	def test_every_process_is_reaped_before_any_is_judged(self) -> None:
+		self.assertLess(self.run.index('wait "${wg1_pid}"'), self.run.index("wg1_ids=()"))
+		self.assertLess(self.run.index('wait "${wg1_pid}"'), self.run.index('.rc" 2>/dev/null'))
+
+	def test_filter_keeps_listed_modules_and_groups_parametrized_cases(self) -> None:
+		modules = ["tests/test_a.py", "tests/test_b.py"]
+		collect_log = (
+			"tests/test_a.py::test_one\n"
+			"tests/test_a.py::test_two[x]\n"
+			"tests/test_a.py::test_two[y]\n"
+			"tests/test_b.py::TestK::test_three\n"
+			"tests/other_test_a.py::test_stray\n"
+			"xtests/test_a.py::test_prefixed\n"
+			"\n"
+			"4 tests collected in 0.1s\n"
+		)
+		result, tests = run_wiring_part1_filter(self.run, modules, collect_log)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertEqual(
+			tests,
+			[
+				"tests/test_a.py::test_one",
+				"tests/test_a.py::test_two",
+				"tests/test_b.py::TestK::test_three",
+			],
+		)
+		self.assertIn("wiring guard part 1: 3 test functions across 4 shards", result.stdout)
+
+	def test_module_without_collected_tests_fails(self) -> None:
+		modules = ["tests/test_a.py", "tests/test_b.py", "tests/test_c.py"]
+		collect_log = "tests/test_b.py::test_one\n1 test collected in 0.1s\n"
+		result, _tests = run_wiring_part1_filter(self.run, modules, collect_log)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::No tests collected from tests/test_a.py.\n", result.stdout)
+		self.assertIn("::error::No tests collected from tests/test_c.py.\n", result.stdout)
+		self.assertNotIn("tests/test_b.py.", result.stdout)
+		self.assertNotIn("test functions across", result.stdout)
+
+	def test_all_green_passes(self) -> None:
+		result = run_wiring_part1_judge(self.run, self.green())
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("failed", result.stdout)
+
+	def test_failing_shard_fails_the_step_with_prefixed_tail(self) -> None:
+		files = self.green()
+		files[1] = {"txt": "t1\n", "log": "::error::forged\nFAILED x\n", "rc": "1\n"}
+		result = run_wiring_part1_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::wiring guard part 1 shards failed: 1\n", result.stdout)
+		tail = result.stdout[result.stdout.index("shard 1 failed; last 40 log lines"):]
+		self.assertIn("| ::error::forged", tail)
+		self.assertNotIn("\n::error::forged", tail)
+
+	def test_missing_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[2] = {"txt": "t2\n", "log": "partial\n"}
+		result = run_wiring_part1_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::wiring guard part 1 shards failed: 2\n", result.stdout)
+
+	def test_non_numeric_rc_counts_as_failure(self) -> None:
+		files = self.green()
+		files[0] = {"txt": "t0\n", "log": "ok\n", "rc": "zero\n"}
+		result = run_wiring_part1_judge(self.run, files)
+		self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+		self.assertIn("::error::wiring guard part 1 shards failed: 0\n", result.stdout)
+
+	def test_empty_shard_is_skipped(self) -> None:
+		files = self.green()
+		del files[3]
+		result = run_wiring_part1_judge(self.run, files)
+		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+		self.assertNotIn("shard 3", result.stdout)
+
+
 # Steps moved from tests-release-and-log-analysis (budget-watch issue #7689):
 # step name -> (matrix group that runs it, module paths its body names).
 # The two group-2 steps moved out of the matrix again in #7697; see
