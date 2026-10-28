@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8279_6478835451_approved",
   "issue_number": 8279,
   "metadata": {
+    "branch": "ai/issue-8279",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/8279-heal-job-steps-to-release.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 8279,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8279",
+    "pr_number": 8283,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8283",
+    "run_attempt": "1",
+    "run_id": "40756570678",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40756570678"
   },
   "run_attempt": 1,
   "run_id": "40756570678",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-28T19:45:21Z",
+  "status": "completed",
+  "timestamp": "2026-10-28T20:00:34Z",
   "workflow": "implement"
 }
