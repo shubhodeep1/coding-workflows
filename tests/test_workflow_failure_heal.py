@@ -9070,3 +9070,274 @@ def test_intake_compose_payload_keys_match_validation_failure_keys() -> None:
 	assert match, body
 	keys = {key.strip() for key in match.group(1).split(",")}
 	assert keys == set(heal.VALIDATION_FAILURE_PAYLOAD_KEYS)
+
+
+# --- Linked runs (issue #8248) ----------------------------------------------
+# Heal #8241 diagnosed release run 40608957733 from the failed jobs' own logs:
+# the real causes sat in the Orchestrate and Implement runs those jobs
+# dispatched or polled. The intake now follows same-repository run links in
+# the filtered logs and gives the diagnosis their step timelines.
+
+
+def _linked_run(run_id: int, *, repo: str = CONSUMER_REPO, name: str = "AI Implement") -> dict:
+	return {
+		"id": run_id, "repository": {"full_name": repo}, "name": name, "status": "completed", "conclusion": "failure",
+		"created_at": "2026-10-27T10:00:00Z", "updated_at": "2026-10-27T10:40:00Z",
+		"html_url": f"https://github.com/{repo}/actions/runs/{run_id}",
+	}
+
+
+def _linked_jobs(job_id: int, step_secs: int = 1868) -> list[dict]:
+	start = datetime(2026, 10, 27, 10, 2, 0, tzinfo=timezone.utc)
+	end = start + timedelta(seconds=step_secs)
+	return [{
+		"id": job_id, "name": "implement", "status": "completed", "conclusion": "cancelled",
+		"steps": [
+			{"name": "Checkout", "status": "completed", "conclusion": "success", "started_at": "2026-10-27T10:00:05Z", "completed_at": "2026-10-27T10:00:10Z"},
+			{"name": "Skipped step", "status": "completed", "conclusion": "skipped", "started_at": None, "completed_at": None},
+			{"name": "Pre-push affected-test gate", "status": "completed", "conclusion": "cancelled",
+				"started_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": end.strftime("%Y-%m-%dT%H:%M:%SZ")},
+		],
+	}]
+
+
+LINKED_JOB_LOG = (
+	"2026-10-27T10:00:06.0000000Z checkout done\n"
+	"2026-10-27T10:02:01.0000000Z PREPUSH_TEST_GATE phase=implement running 214 tests\n"
+	"2026-10-27T10:20:00.0000000Z still running tests\n"
+)
+
+
+def _default_run_detail(run_id: int = 500) -> dict:
+	# Mirrors the default fixture _run_intake builds for the reported run.
+	return {
+		"id": run_id, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_A,
+		"html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/{run_id}",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml",
+		"pull_requests": [{"number": 42}],
+	}
+
+
+def _linked_state(job_log: str, *, run_details: dict | None = None, jobs: dict | None = None, job_logs: dict | None = None) -> dict:
+	base = _intake_state()
+	details = {"500": _default_run_detail()}
+	details.update(run_details if run_details is not None else {"600": _linked_run(600)})
+	all_jobs = dict(base["jobs"])
+	all_jobs.update(jobs if jobs is not None else {"600": _linked_jobs(9600)})
+	logs = {"9001": job_log}
+	logs.update(job_logs if job_logs is not None else {"9600": LINKED_JOB_LOG})
+	return _intake_state(run_details=details, jobs=all_jobs, job_logs=logs)
+
+
+LINKED_PARENT_LOG = JOB_LOG + (
+	f"2026-09-20T10:00:04.000Z ::error::Implement phase stalled — no activity for 30 minutes (watched runs: https://github.com/{CONSUMER_REPO}/actions/runs/600)\n"
+)
+
+
+def _linked_calls(state: dict, run_id: str, job_id: str) -> list[list[str]]:
+	return [call for call in state.get("calls", []) if any(f"/actions/runs/{run_id}" in part or f"/actions/jobs/{job_id}/" in part for part in call)]
+
+
+def test_select_linked_runs_same_repo_dedup_exclusion_cap_and_order() -> None:
+	texts = [
+		f"https://github.com/{CONSUMER_REPO}/actions/runs/1 https://github.com/other/repo/actions/runs/2",
+		f"https://github.com/{CONSUMER_REPO}/actions/runs/3 https://github.com/{CONSUMER_REPO}/actions/runs/1",
+		f"https://github.com/{CONSUMER_REPO}/actions/runs/500 https://github.com/{CONSUMER_REPO}/actions/runs/4",
+	]
+	refs = heal.select_linked_runs(texts, CONSUMER_REPO, ["500"], 10)
+	assert [ref["run_id"] for ref in refs] == ["3", "1", "4"]
+	assert [ref["run_id"] for ref in heal.select_linked_runs(texts, CONSUMER_REPO, ["500"], 2)] == ["1", "4"]
+	assert heal.select_linked_runs(texts, CONSUMER_REPO, [], 0) == []
+	assert heal.select_linked_runs(texts, "other/repo", [], 4) == [{"repo": "other/repo", "run_id": "2", "url": "https://github.com/other/repo/actions/runs/2"}]
+
+
+def test_stall_window_minutes_reads_named_windows() -> None:
+	text = (
+		"::error::Implement phase stalled — no activity for 30 minutes\n"
+		"the 45-min stall window elapsed\nstall window of 20 min\nvalue 9999 minutes ignored by range: no activity for 5000 minutes\n"
+	)
+	assert heal.stall_window_minutes([text]) == [20, 30, 45]
+	assert heal.stall_window_minutes(["nothing here"]) == []
+
+
+def test_linked_run_timeline_identity_checks() -> None:
+	jobs = {"jobs": _linked_jobs(9600)}
+	assert heal.render_linked_run_timeline(_linked_run(600, repo="other/repo"), jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "other_repository"
+	assert heal.render_linked_run_timeline(_linked_run(601), jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "run_malformed"
+	assert heal.render_linked_run_timeline({"id": 600}, jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "run_malformed"
+	assert heal.render_linked_run_timeline("x", jobs, repo=CONSUMER_REPO, run_id="600")["reason"] == "run_malformed"
+	assert heal.render_linked_run_timeline(_linked_run(600), {"jobs": None}, repo=CONSUMER_REPO, run_id="600")["reason"] == "jobs_malformed"
+	# The repository name is compared case-insensitively.
+	assert heal.render_linked_run_timeline(_linked_run(600, repo=CONSUMER_REPO.upper()), jobs, repo=CONSUMER_REPO, run_id="600")["ok"] is True
+
+
+def test_linked_run_timeline_rendering_and_long_steps() -> None:
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": _linked_jobs(9600)}, repo=CONSUMER_REPO, run_id="600", stall_minutes=[30])
+	assert result["ok"] is True
+	text = result["text"]
+	assert f"https://github.com/{CONSUMER_REPO}/actions/runs/600" in text
+	assert "Skipped step" not in text
+	assert "Pre-push affected-test gate: 2026-10-27T10:02:00Z -> 2026-10-27T10:33:08Z (31m08s) cancelled [LONG]" in text
+	assert "Checkout: 2026-10-27T10:00:05Z -> 2026-10-27T10:00:10Z (0m05s) success\n" in text
+	assert result["longest"] == {"job_id": 9600, "start": "2026-10-27T10:02:00Z", "end": "2026-10-27T10:33:08Z"}
+	# A 5-minute step is long only against a shorter stall window.
+	short = {"jobs": _linked_jobs(9600, step_secs=300)}
+	assert "[LONG]" not in heal.render_linked_run_timeline(_linked_run(600), short, repo=CONSUMER_REPO, run_id="600")["text"]
+	assert "[LONG]" in heal.render_linked_run_timeline(_linked_run(600), short, repo=CONSUMER_REPO, run_id="600", stall_minutes=[4])["text"]
+	assert "[LONG]" in heal.render_linked_run_timeline(_linked_run(600), {"jobs": _linked_jobs(9600, step_secs=600)}, repo=CONSUMER_REPO, run_id="600")["text"]
+
+
+def test_linked_run_timeline_running_steps_sanitized_names_and_caps() -> None:
+	jobs = _linked_jobs(9600)
+	jobs[0]["steps"][2].update({"status": "in_progress", "conclusion": None, "completed_at": None, "name": "Gate\x1b[31m\n::error::forged" + "x" * 300})
+	jobs.extend({"id": 9700 + index, "name": f"job {index}", "steps": []} for index in range(25))
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": jobs, "total_count": 150}, repo=CONSUMER_REPO, run_id="600")
+	text = result["text"]
+	assert "(still running)" in text and "-> 2026-10-27T10:40:00Z (still running)" in text
+	assert "\x1b" not in text and "\n::error::" not in text
+	assert all(len(line) < 400 for line in text.splitlines())
+	assert "more jobs not shown" in text and "jobs listing truncated: 150 jobs" in text
+	assert len(text.encode("utf-8")) <= heal.LINKED_RUN_TEXT_MAX_BYTES + 32
+
+
+def test_linked_run_timeline_finds_long_steps_past_the_display_caps() -> None:
+	# The Implement gate sits after more than 40 non-skipped steps: it must
+	# still be marked [LONG], shown and chosen as the longest step.
+	base = datetime(2026, 10, 27, 10, 0, 0, tzinfo=timezone.utc)
+	steps = []
+	for index in range(55):
+		start = base + timedelta(seconds=index * 10)
+		steps.append({"name": f"step {index}", "status": "completed", "conclusion": "success",
+			"started_at": start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": (start + timedelta(seconds=5)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+	gate_start = base + timedelta(seconds=600)
+	steps.append({"name": "Pre-push affected-test gate", "status": "completed", "conclusion": "cancelled",
+		"started_at": gate_start.strftime("%Y-%m-%dT%H:%M:%SZ"), "completed_at": (gate_start + timedelta(seconds=1868)).strftime("%Y-%m-%dT%H:%M:%SZ")})
+	jobs = [{"id": 9000 + index, "name": f"job {index}", "steps": []} for index in range(25)]
+	jobs.append({"id": 9600, "name": "implement", "status": "completed", "conclusion": "cancelled", "steps": steps})
+	result = heal.render_linked_run_timeline(_linked_run(600), {"jobs": jobs}, repo=CONSUMER_REPO, run_id="600")
+	assert result["ok"] is True
+	assert result["longest"]["job_id"] == 9600
+	assert result["longest"]["start"] == gate_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+	assert "Pre-push affected-test gate:" in result["text"] and "[LONG]" in result["text"]
+	assert "job: implement" in result["text"]
+	assert "more steps not shown" in result["text"] and "more jobs not shown" in result["text"]
+	assert len(result["text"].encode("utf-8")) <= heal.LINKED_RUN_TEXT_MAX_BYTES + 32
+
+
+def test_slice_log_to_window() -> None:
+	assert heal.slice_log_to_window(LINKED_JOB_LOG, "2026-10-27T10:02:00Z", "2026-10-27T10:33:08Z") == (
+		"2026-10-27T10:02:01.0000000Z PREPUSH_TEST_GATE phase=implement running 214 tests\n"
+		"2026-10-27T10:20:00.0000000Z still running tests\n"
+	)
+	# Untimestamped continuation lines follow the line before them.
+	text = "2026-10-27T10:02:01.0Z a\ncontinued\n2026-10-27T11:00:00.0Z b\n"
+	assert heal.slice_log_to_window(text, "2026-10-27T10:02:00Z", "2026-10-27T10:03:00Z") == "2026-10-27T10:02:01.0Z a\ncontinued\n"
+	# No match, no timestamps or bad bounds keep the whole text.
+	assert heal.slice_log_to_window(LINKED_JOB_LOG, "2027-01-01T00:00:00Z", "2027-01-01T00:01:00Z") == LINKED_JOB_LOG
+	assert heal.slice_log_to_window("plain\nlines\n", "2026-10-27T10:02:00Z", "2026-10-27T10:03:00Z") == "plain\nlines\n"
+	assert heal.slice_log_to_window(LINKED_JOB_LOG, "bad", "") == LINKED_JOB_LOG
+
+
+def test_intake_adds_linked_run_timeline_before_failed_logs() -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL classification=workflow-defect" in result.stdout
+	assert "=== LINKED RUN TIMELINES (UNTRUSTED) ===" in prompt
+	assert prompt.index("=== LINKED RUN TIMELINES (UNTRUSTED) ===") < prompt.index("=== FAILED RUN LOGS (UNTRUSTED) ===")
+	assert f"--- linked run https://github.com/{CONSUMER_REPO}/actions/runs/600" in prompt
+	assert "Pre-push affected-test gate: 2026-10-27T10:02:00Z -> 2026-10-27T10:33:08Z (31m08s) cancelled [LONG]" in prompt
+	assert "--- log of job 9600 (window of its longest step" in prompt and "PREPUSH_TEST_GATE phase=implement running 214 tests" in prompt
+	assert "checkout done" not in prompt  # outside the step's window
+	# Budget: three REST reads for the linked run (run, jobs, one job log).
+	assert len(_linked_calls(state, "600", "9600")) == 3
+	assert "linked_run_skipped" not in result.stdout
+
+
+def test_intake_without_links_makes_no_extra_reads_and_omits_the_section() -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(JOB_LOG), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	# The diagnosis template mentions the block by name; the section header is absent.
+	assert "=== LINKED RUN TIMELINES (UNTRUSTED) ===" not in prompt
+	assert _linked_calls(state, "600", "9600") == []
+
+
+def test_intake_linked_runs_switch_off() -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_MAX_LINKED_RUNS": "0"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	# The diagnosis template mentions the block by name; the section header is absent.
+	assert "=== LINKED RUN TIMELINES (UNTRUSTED) ===" not in prompt
+	assert _linked_calls(state, "600", "9600") == []
+
+
+@pytest.mark.parametrize(
+	("state_kwargs", "reason", "timeline"),
+	[
+		({"run_details": {}}, "run_unreadable", False),
+		({"run_details": {"600": _linked_run(600, repo="someone/else")}}, "other_repository", False),
+		({"run_details": {"600": {"id": 601, "repository": {"full_name": CONSUMER_REPO}}}}, "run_malformed", False),
+		({"jobs": {}}, "jobs_unreadable", False),
+		({"job_logs": {}}, "log_unavailable", True),
+	],
+)
+def test_intake_linked_run_failures_fail_open(state_kwargs: dict, reason: str, timeline: bool) -> None:
+	result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG, **state_kwargs), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL warn linked_run_skipped run=600 reason={reason}" in result.stdout
+	assert "WORKFLOW_HEAL classification=workflow-defect" in result.stdout
+	assert "=== FAILED RUN LOGS (UNTRUSTED) ===" in prompt
+	assert ("=== LINKED RUN TIMELINES (UNTRUSTED) ===" in prompt) is timeline
+	if timeline:
+		assert "(job log unavailable)" in prompt
+	if reason == "other_repository":
+		# A foreign run's jobs and logs are never read.
+		assert not any(part.endswith("/actions/runs/600/jobs") for call in state["calls"] for part in call)
+
+
+def test_intake_linked_runs_never_change_the_heal_scope_inputs() -> None:
+	frozen = []
+	for max_linked in ("0", "4"):
+		with tempfile.TemporaryDirectory(prefix="heal-linked-scope-") as tmp_name:
+			runtime = Path(tmp_name) / "runtime"
+			result, state, prompt = _run_intake(_consumer_payload(), _linked_state(LINKED_PARENT_LOG), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_MAX_LINKED_RUNS": max_linked, "RUNTIME_DIR": str(runtime)})
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert ("=== LINKED RUN TIMELINES (UNTRUSTED) ===" in prompt) is (max_linked == "4")
+			frozen.append((runtime / "scope_inputs_frozen.json").read_text(encoding="utf-8"))
+			body = state.get("composed_issue", {}).get("body", "")
+			frozen.append(next((line for line in body.splitlines() if "ai:workflow-heal-scope:v1" in line), ""))
+			assert "600" not in frozen[-2]
+	assert frozen[0] == frozen[2] and frozen[1] == frozen[3]
+
+
+def test_intake_replays_release_run_40608957733_evidence() -> None:
+	# The decompose job named its Orchestrate run; the e2e stall line (#8248
+	# watched runs) named the Implement run whose test gate ran past the
+	# 30-minute stall window.
+	orchestrate_id, implement_id = 40609251819, 40610855593
+	parent_log = JOB_LOG + (
+		f"2026-10-27T09:58:00.000Z Dispatched orchestrate run https://github.com/{CONSUMER_REPO}/actions/runs/{orchestrate_id}\n"
+		f"2026-10-27T11:00:00.000Z ::error::Implement phase stalled — no activity for 30 minutes (watched runs: https://github.com/{CONSUMER_REPO}/actions/runs/{implement_id})\n"
+	)
+	orchestrate_jobs = [{"id": 7001, "name": "decompose", "status": "completed", "conclusion": "success", "steps": [
+		{"name": "Validate decomposition JSON", "status": "completed", "conclusion": "success", "started_at": "2026-10-27T09:59:00Z", "completed_at": "2026-10-27T09:59:40Z"},
+	]}]
+	state = _linked_state(
+		parent_log,
+		run_details={str(orchestrate_id): _linked_run(orchestrate_id, name="AI Orchestrate"), str(implement_id): _linked_run(implement_id)},
+		jobs={str(orchestrate_id): orchestrate_jobs, str(implement_id): _linked_jobs(7002)},
+		job_logs={"7001": "2026-10-27T09:59:10.0000000Z PREPUSH_TEST_GATE phase=augment issue=smoke-canary-a added=11\n2026-10-27T09:59:20.0000000Z Will serialize: smoke-canary-a -> smoke-canary-b\n", "7002": LINKED_JOB_LOG},
+	)
+	result, _state_after, prompt = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	section = prompt.split("=== LINKED RUN TIMELINES (UNTRUSTED) ===", 1)[1].split("=== FAILED RUN LOGS (UNTRUSTED) ===", 1)[0]
+	assert f"actions/runs/{orchestrate_id} | workflow: AI Orchestrate" in section
+	assert "PREPUSH_TEST_GATE phase=augment issue=smoke-canary-a added=11" in section
+	assert f"actions/runs/{implement_id} | workflow: AI Implement" in section
+	assert "Pre-push affected-test gate: 2026-10-27T10:02:00Z -> 2026-10-27T10:33:08Z (31m08s) cancelled [LONG]" in section
+
+
+def test_heal_prompt_lists_linked_run_timelines() -> None:
+	text = PROMPT_FILE.read_text(encoding="utf-8")
+	assert "LINKED RUN TIMELINES" in text
+	assert "before attributing a stall or a missing artefact to the polling run" in text
+	assert "name its run id" in text
+	assert (REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt").read_text(encoding="utf-8") == text
