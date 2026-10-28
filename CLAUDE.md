@@ -1450,15 +1450,17 @@ not change:
 
 1. **Clarify** per §2 until no question is open, after reading the context
    the PRE-TASK rule names.
-2. **Plan.** Write the plan with the structure `/write-plan` uses, including
-   the §18.E section.
+2. **Plan.** Write the plan with the structure `/write-plan` uses, and add
+   a §18.E section to it (that structure does not list one).
    - Work that fits in one PR: the plan becomes the issue body.
    - Work that needs several independently-mergeable PRs: follow
-     `/write-plan` (a plan PR under `docs/plans/`), then hand it off with
+     `/write-plan` (a plan PR under `docs/plans/`); that plan PR is the
+     plan the user reviews in step 3. After the go, hand it off with
      `/implement-plan-claude`.
-3. **Show the plan and wait for the user's go.** Open nothing before it. The
-   go is the approval §23.C requires for opening the issues or dispatching
-   the orchestrator.
+3. **Show the plan and wait for the user's go.** Open nothing else before
+   it: no issue, no `/implement-plan-claude` dispatch, no implementation PR.
+   The go is the approval §23.C requires for opening the issues or
+   dispatching the orchestrator.
 4. **Open the issues.** One issue per repository that needs a change,
    labelled `ai:engine-claude` at creation, cross-linked with
    `Refs <owner>/<repo>#<N>` (never auto-close keywords, §19). Check that each
