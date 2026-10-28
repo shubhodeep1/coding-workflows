@@ -2345,7 +2345,9 @@ jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 #   ownership inputs or the fingerprint.
 #   API budget (CLAUDE.md §15): at most 3 REST calls per linked run (the run,
 #   its jobs, one job log), so at most 3 x WORKFLOW_HEAL_MAX_LINKED_RUNS per
-#   intake, and none when no linked run is found. No existing call returns
+#   intake, and none when no linked run is found. Each read makes a single
+#   attempt (GH_RETRY_MAX_ATTEMPTS=1, no retry), so the cap counts HTTP
+#   requests, not logical reads. No existing call returns
 #   these runs: run_refs and the provenance reads cover only reported runs.
 #   Fails open: a failed, malformed or foreign read logs
 #   `warn linked_run_skipped run=<id> reason=<token>` and the run is skipped.
@@ -2371,7 +2373,7 @@ _heal_collect_linked_runs()
 		[[ "${linked_id}" =~ ^[0-9]+$ ]] || continue
 		linked_run_file="${linked_dir}/run-${linked_id}.json"
 		linked_jobs_file="${linked_dir}/run-${linked_id}-jobs.json"
-		if ! gh_api_json_to_file "${linked_run_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${linked_id}" 2>/dev/null; then
+		if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${linked_run_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${linked_id}" 2>/dev/null; then
 			log "warn linked_run_skipped run=${linked_id} reason=run_unreadable"
 			continue
 		fi
@@ -2384,7 +2386,7 @@ _heal_collect_linked_runs()
 			log "warn linked_run_skipped run=${linked_id} reason=other_repository"
 			continue
 		fi
-		if ! gh_api_json_to_file "${linked_jobs_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${linked_id}/jobs" -F per_page=100 2>/dev/null; then
+		if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${linked_jobs_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${linked_id}/jobs" -F per_page=100 2>/dev/null; then
 			log "warn linked_run_skipped run=${linked_id} reason=jobs_unreadable"
 			continue
 		fi
