@@ -1510,7 +1510,7 @@ jobs:
             local progress_count=0
             local progress_page_matches=0
             local progress_matches="[]"
-            IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"
+            IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"; IMPL_RUN_ID_WORKING=""
             while [ "$progress_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
               progress_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${progress_page}&created=>${IMPL_CREATED_AFTER}") || return 1
               progress_summary=$(printf '%s' "$progress_json" | jq -sce --arg title "$ISSUE_TITLE" '
@@ -1536,6 +1536,11 @@ jobs:
             IMPL_RUN_IN_PROGRESS=$(printf '%s' "$progress_matches" | jq -r '[.[] | select(.status != "completed")] | length') || IMPL_RUN_IN_PROGRESS="0"
             IMPL_RUN_STATUS=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .status // "unknown"') || IMPL_RUN_STATUS="unknown"
             IMPL_RUN_ID_LATEST=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .id // empty') || IMPL_RUN_ID_LATEST=""
+            # Watch the newest in_progress run: a peer held pending by the
+            # ai-implement-<repo>-<issue> concurrency group has no jobs and hid
+            # the working run's steps (run 40608957733, issue #8241).
+            IMPL_RUN_ID_WORKING=$(printf '%s' "$progress_matches" | jq -r '[.[] | select(.status == "in_progress")] | sort_by(.created_at) | last | .id // empty') || IMPL_RUN_ID_WORKING=""
+            if [ -z "$IMPL_RUN_ID_WORKING" ]; then IMPL_RUN_ID_WORKING="$IMPL_RUN_ID_LATEST"; fi
             IMPL_RUN_CONCLUSION_LATEST=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .conclusion // "unknown"') || IMPL_RUN_CONCLUSION_LATEST="unknown"
             return 0
           }
@@ -1586,7 +1591,7 @@ jobs:
             if [ "$IMPL_RETURNED_TO_APPROVAL" = true ] || [ "$NOW" -ge "$IMPL_PROGRESS_NEXT_READ" ]; then
               IMPL_PROGRESS_NEXT_READ=$((NOW + 30))
               if ! scoped_implement_progress_counts; then
-                IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"
+                IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"; IMPL_RUN_ID_WORKING=""
               fi
             fi
 
@@ -1607,8 +1612,8 @@ jobs:
 
             # ── Adaptive signals: step name + commit count ──
             IMPL_STEP_NAME=""
-            if [ -n "$IMPL_RUN_ID_LATEST" ]; then
-              IMPL_STEP_NAME=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs/${IMPL_RUN_ID_LATEST}/jobs?per_page=10" \
+            if [ -n "$IMPL_RUN_ID_WORKING" ]; then
+              IMPL_STEP_NAME=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs/${IMPL_RUN_ID_WORKING}/jobs?per_page=10" \
                 --jq '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' || echo "")
             fi
 
@@ -1616,7 +1621,7 @@ jobs:
             COMMIT_COUNT=$(gh_api_safe_print "repos/${TEST_REPO}/commits?sha=${IMPL_BRANCH}&per_page=1" \
               --jq '.[0].sha // ""' || echo "")
 
-            CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT}"
+            CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT};working=${IMPL_RUN_ID_WORKING}"
 
             # Reset inactivity timer on any state change
             if [ "$CUR_STATE" != "$PREV_STATE" ]; then
