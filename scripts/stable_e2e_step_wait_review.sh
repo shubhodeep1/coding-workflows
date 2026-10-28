@@ -116,12 +116,16 @@ review_phase_deadline_extension_allowed() {
 E2E_WATCHED_RUN_IDS=""
 e2e_note_watched_run() {
   local -a ids=()
+  local watched_id watched_seen=0 watched_rest=""
   [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
-  [[ " ${E2E_WATCHED_RUN_IDS} " != *" $1 "* ]] || return 0
-  read -r -a ids <<< "${E2E_WATCHED_RUN_IDS} $1"
+  # A repeat moves to the newest slot (no new line), so the cap never evicts a run still polled.
+  for watched_id in ${E2E_WATCHED_RUN_IDS}; do
+    if [ "$watched_id" = "$1" ]; then watched_seen=1; else watched_rest+=" $watched_id"; fi
+  done
+  read -r -a ids <<< "${watched_rest} $1"
   [ "${#ids[@]}" -le 5 ] || ids=("${ids[@]: -5}")
   E2E_WATCHED_RUN_IDS="${ids[*]}"
-  echo "  ↳ Watching ${2:-} run $1: https://github.com/${TEST_REPO}/actions/runs/$1"
+  [ "$watched_seen" = 1 ] || echo "  ↳ Watching ${2:-} run $1: https://github.com/${TEST_REPO}/actions/runs/$1"
 }
 e2e_watched_run_urls() {
   local id urls=""

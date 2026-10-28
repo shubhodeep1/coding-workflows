@@ -792,8 +792,24 @@ def test_watched_run_helpers_ignore_unknown_skip_repeats_and_keep_five() -> None
 	lines = proc.stdout.splitlines()
 	assert lines[0] == "empty=[]"
 	assert lines[1:8] == [f"  ↳ Watching Review run {i}: https://github.com/owner/repo/actions/runs/{i}" for i in range(1, 8)]
-	assert lines[8] == "urls=[ (watched runs: " + " ".join(f"https://github.com/owner/repo/actions/runs/{i}" for i in range(3, 8)) + ")]"
+	# The repeated id 3 prints nothing and moves to the newest slot.
+	assert lines[8] == "urls=[ (watched runs: " + " ".join(f"https://github.com/owner/repo/actions/runs/{i}" for i in (4, 5, 6, 7, 3)) + ")]"
 	assert len(lines) == 9
+
+
+def test_watched_run_helper_keeps_a_repeatedly_seen_run_past_the_cap() -> None:
+	# An older run still being polled is seen every tick; newer ids must not evict it.
+	text = WAIT_REVIEW_SCRIPT.read_text(encoding="utf-8")
+	start = text.index('E2E_WATCHED_RUN_IDS=""\n')
+	end = text.index("\n}\n", text.index("e2e_watched_run_urls() {")) + 3
+	script = text[start:end] + (
+		"for id in 10 11 12 13 14 15 16; do e2e_note_watched_run 9 Implement; e2e_note_watched_run \"$id\" Implement; done\n"
+		"printf 'urls=[%s]\\n' \"$(e2e_watched_run_urls)\"\n"
+	)
+	proc = subprocess.run(["bash", "-euo", "pipefail", "-c", script], env={**os.environ, "TEST_REPO": "owner/repo"}, capture_output=True, text=True, timeout=30, check=True)
+	lines = proc.stdout.splitlines()
+	assert lines.count("  ↳ Watching Implement run 9: https://github.com/owner/repo/actions/runs/9") == 1
+	assert "https://github.com/owner/repo/actions/runs/9 " in lines[-1] and "actions/runs/10 " not in lines[-1]
 
 
 def test_wait_implement_takes_its_window_start_from_env() -> None:
