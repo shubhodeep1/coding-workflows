@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Change 1.1 gives PREPUSH_GATE_STEP_STALL_MINUTES as `${{ inputs.prepush_gate_step_stall_minutes || 60 }}` with a default (workflow input, default 60), or a plain job-level env default if adding a workflow input is not warranted.\n  expected_change_site: .github/workflows/test-and-mark-stable.yml (env of e2e-smoke-test)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: .github/workflows/test-and-mark-stable.yml has PREPUSH_GATE_STEP_STALL_MINUTES as a plain job-level env default of 35 and no workflow input. anthropic_claude-sonnet-5_5 (SEVERITY NIT, confidence 1) judged it a deliberate, reported deviation (AD-1 = B), since the issue allows a plain env default and 60 would make the serial budget 325/300. google_gemini-3_1-flash-lite (SEVERITY NIT, confidence 4) flagged the missing workflow input and the default of 35 instead of 60.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: Change 1.1 gives `PREPUSH_GATE_STEP_STALL_MINUTES` as `${{ inputs.prepush_gate_step_stall_minutes || 60 }}` with a default, or a plain job-level env default if adding a workflow input is not warranted. Change 1.4 says to stop and report the numbers rather than raise the job timeout if the budget cannot fit.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, env of `e2e-smoke-test`.\n  Evidence of absence: The variable is a plain job-level env default of 35, not 60, and there is no workflow input. The reviewer judged this a deliberate, reported deviation, not a gap (AD-1 = B).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Add PREPUSH_GATE_STEP_STALL_MINUTES as a workflow input with a default of 60 as per the issue example.\n  Expected change site: .github/workflows/test-and-mark-stable.yml\n  Evidence of absence: The PR adds PREPUSH_GATE_STEP_STALL_MINUTES to test-and-mark-stable.yml as a job env var with a hardcoded default of 35, but it is not added as a workflow input as suggested in the task requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "55671493b143f0f413caf483d31cc27065c3d40fb6ed7e870a007440c37d2d57",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8259,
+    "run_id": "40691268881",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40691268881",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028131343_50dbf2aa94",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8259,
+    "run_id": "40691268881"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T13:13:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
