@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The extra 30 minutes for the gate step pushes the default serial budget to 325 of 300 minutes. How should it fit?\nChoices:\n- A) Raise the job limit from 300 to 330 minutes, in both `E2E_JOB_TIMEOUT_MINUTES` and the job's `timeout-minutes`. That is still under GitHub's 360-minute cap for hosted runners, and it keeps the 60-minute default so the gate step gets its full 55-minute budget. (RECOMMENDED)\n- B) Keep the 300-minute job limit and lower the default `PREPUSH_GATE_STEP_STALL_MINUTES` to 35. The budget then comes to exactly 300/300. The 31-minute step seen in run 40610855593 fits, but a gate step that gets close to its 55-minute budget would still stall.\n- C) Keep 300 minutes and the 60-minute default, and take the 30 minutes from another term: cut `E2E_FINALIZATION_RESERVE_MINUTES` from 20 to 10 and `EDITOR_RETRY_BUDGET_MINUTES` from 25 to 5. This leaves less room for the review editor's retries and the job's cleanup.",
+  "fingerprint": "44370034e9243b1099f8b1e479b5e6db5e942228b137117b5372ff92ce98ecb9",
+  "lineage": {
+    "issue_number": 8244,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40643452751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40643452751",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261028063018_4bd85bca03",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8244,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40643452751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8244 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-28T06:30:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
