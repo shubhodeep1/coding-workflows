@@ -2692,11 +2692,28 @@ jobs:
 
       - name: Pre-assemble static context (cacheable across runs)
         if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
           # See scripts/build_static_context.sh for trimming rationale and
           # prompt-prefix caching motivation. The implement phase additionally
           # includes "${RUNTIME_DIR}/agents_canonical.md" if present.
+          # Issue #8262: in index mode the canonical file is indexed only when
+          # the staged isolation helper can mount it read-only at
+          # /support/static-context/; otherwise it stays inlined. The heal
+          # editor has no /support mount, so the heal route stays inline.
+          if [ "${HEAL_ROUTE:-false}" = true ]; then
+            export STATIC_CONTEXT_AGENTS_MODE=inline
+            echo "STATIC_CONTEXT_AGENTS implement mode=inline reason=heal_route"
+          elif [ -f "${RUNTIME_DIR}/agents_canonical.md" ] && [ ! -L "${RUNTIME_DIR}/agents_canonical.md" ]; then
+            if [ -n "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] && grep -qxF '# supports: CODEX_ISOLATED_STATIC_CONTEXT_FILES' "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_isolated_exec.sh" 2>/dev/null; then
+              export STATIC_CONTEXT_CANONICAL_SANDBOX_PATH=/support/static-context/agents_canonical.md
+              echo "CODEX_ISOLATED_STATIC_CONTEXT_FILES=${RUNTIME_DIR}/agents_canonical.md" >> "$GITHUB_ENV"
+            else
+              export STATIC_CONTEXT_CANONICAL_UNAVAILABLE_REASON=helper_unsupported
+            fi
+          fi
           bash scripts/build_static_context.sh implement ./pre_assembled_static.txt
 
       - name: Retrieve implementation memory context

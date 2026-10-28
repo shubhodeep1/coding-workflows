@@ -72,6 +72,13 @@
 #       CODEX_ISOLATED_GIT_BASE_REF (default empty) names a ref or commit in
 #       the work directory's repository; the sandbox git then also has its
 #       filtered tree as branch `isolated-base`, the parent of HEAD.
+#       CODEX_ISOLATED_STATIC_CONTEXT_FILES (default empty; issue #8262) is a
+#       newline-separated list of trusted host files, each named
+#       agents_canonical.md or agents.rendered.md, copied for every run to
+#       /support/static-context/<name> inside the read-only /support mount,
+#       so an indexed static prompt can point the model at them. It is read on
+#       the host only and never passed into the container; a symlink, a
+#       non-regular file, another name or a repeated name fails the run.
 #   codex_isolated_exec.sh cleanup --root DIR
 #   codex_isolated_exec.sh image
 #       Build (or pull) the codex sandbox image and print its reference, with
@@ -91,6 +98,8 @@
 # running on the host. There is no switch that turns isolation off.
 #
 # Stable log prefix: CODEX_ISOLATION.
+#
+# supports: CODEX_ISOLATED_STATIC_CONTEXT_FILES
 
 set -euo pipefail
 
@@ -595,6 +604,29 @@ else
 	install -m 0644 "${support_dir}/write_codex_config.sh" "${root}/support/write_codex_config.sh"
 	install -m 0644 "${support_dir}/codex_model_catalog.json" "${root}/support/codex_model_catalog.json"
 fi
+
+# Trusted static-context files (issue #8262): copied under the read-only
+# /support mount at a constant path, never into the work copy. A persistent
+# root is reused across attempts, so an earlier copy is removed first.
+rm -rf -- "${root}/support/static-context"
+static_context_count=0
+static_context_seen=" "
+while IFS= read -r static_context_src; do
+	[ -n "${static_context_src}" ] || continue
+	[ ! -L "${static_context_src}" ] && [ -f "${static_context_src}" ] || fail "static context file rejected"
+	static_context_src="$(realpath -e -- "${static_context_src}" 2>/dev/null)" || fail "static context file rejected"
+	valid_path "${static_context_src}" || fail "static context file rejected"
+	static_context_name="$(basename -- "${static_context_src}")"
+	case "${static_context_name}" in
+		agents_canonical.md|agents.rendered.md) ;;
+		*) fail "static context file rejected" ;;
+	esac
+	case "${static_context_seen}" in *" ${static_context_name} "*) fail "static context file rejected" ;; esac
+	static_context_seen="${static_context_seen}${static_context_name} "
+	workspace_py copy-include "${static_context_src}" "${root}/support/static-context/${static_context_name}" >/dev/null 2>&1 || fail "static context file rejected"
+	static_context_count=$((static_context_count + 1))
+done <<< "${CODEX_ISOLATED_STATIC_CONTEXT_FILES:-}"
+[ "${static_context_count}" -eq 0 ] || echo "CODEX_ISOLATION static_context files=${static_context_count}" >&2
 
 mounts=()
 work_mount="type=bind,src=${root}/work,dst=${workdir}"
