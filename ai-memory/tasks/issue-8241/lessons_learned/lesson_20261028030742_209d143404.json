@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-10-28T03:07:42Z",
+  "issue_number": 8241,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/orchestrate.yml:unknown; cited_path=.github/workflows/orchestrate.yml; files_touched=.github/workflows/test-and-mark-stable.yml, changelog.d/8241-release-gate-implement-working-run.md, tests/test_test_and_mark_stable_plan_polling_guard.py.",
+  "phase": "review_autofix",
+  "pr_number": 8243,
+  "record_id": "lesson_20261028030742_209d143404",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/orchestrate.yml",
+    ".github/workflows/test-and-mark-stable.yml",
+    "changelog.d/8241-release-gate-implement-working-run.md",
+    "tests/test_test_and_mark_stable_plan_polling_guard.py"
+  ]
+}
