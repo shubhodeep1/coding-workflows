@@ -4148,12 +4148,47 @@ fi
     echo
   fi
   VALIDATE_AGENTS_FILE=""
-  if [ -f AGENTS.md ]; then
+  # A symlinked agents file reads as absent (issue #8269).
+  if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
     VALIDATE_AGENTS_FILE="AGENTS.md"
-  elif [ -f agents.md ]; then
+  elif [ -f agents.md ] && [ ! -L agents.md ]; then
     VALIDATE_AGENTS_FILE="agents.md"
   fi
-  if [ -n "${VALIDATE_AGENTS_FILE}" ]; then
+  # BEGIN static context agents index (#8269)
+  # Index the agents file instead of inlining it unless STATIC_CONTEXT_AGENTS_MODE
+  # says inline (same rules as build_static_context.sh); any failure inlines.
+  VALIDATE_AGENTS_MODE="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  case "${VALIDATE_AGENTS_MODE}" in
+    ""|index) VALIDATE_AGENTS_MODE=index ;;
+    inline) VALIDATE_AGENTS_MODE=inline ;;
+    *)
+      echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+      VALIDATE_AGENTS_MODE=inline
+      ;;
+  esac
+  VALIDATE_AGENTS_EFFECTIVE_MODE="${VALIDATE_AGENTS_MODE}"
+  VALIDATE_AGENTS_FALLBACK_REASON=""
+  VALIDATE_AGENTS_INDEXED=false
+  if [ -n "${VALIDATE_AGENTS_FILE}" ] && [ "${VALIDATE_AGENTS_MODE}" = index ]; then
+    if VALIDATE_AGENTS_INDEX_TMP="$(mktemp "${RUNTIME_DIR:-/tmp}/validate-agents-index.XXXXXX" 2>/dev/null)"; then
+      if bash scripts/build_static_context.sh agents-index "${VALIDATE_AGENTS_INDEX_TMP}" "${VALIDATE_AGENTS_FILE}" && [ -s "${VALIDATE_AGENTS_INDEX_TMP}" ]; then
+        cat "${VALIDATE_AGENTS_INDEX_TMP}"
+        echo
+        VALIDATE_AGENTS_INDEXED=true
+      else
+        VALIDATE_AGENTS_FALLBACK_REASON=index_unavailable
+      fi
+      rm -f "${VALIDATE_AGENTS_INDEX_TMP}"
+    else
+      VALIDATE_AGENTS_FALLBACK_REASON=tmp_unavailable
+    fi
+    if [ "${VALIDATE_AGENTS_INDEXED}" != true ]; then
+      VALIDATE_AGENTS_EFFECTIVE_MODE=inline
+      echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+    fi
+  fi
+  # END static context agents index (#8269)
+  if [ -n "${VALIDATE_AGENTS_FILE}" ] && [ "${VALIDATE_AGENTS_INDEXED}" != true ]; then
     echo "=== AGENTS.MD ==="
     # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
     if [ -d agents.d ] && [ ! -L agents.d ] && VALIDATE_AGENTS_RENDER="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${VALIDATE_AGENTS_FILE}" 2>/dev/null)"; then
@@ -4171,6 +4206,14 @@ fi
   fi
 } > "${STATIC_CONTEXT_FILE}"
 rm -f "${VALIDATE_README_CONTEXT}"
+VALIDATE_STATIC_SIZE_LINE="STATIC_CONTEXT_SIZE phase=validate mode=${VALIDATE_AGENTS_EFFECTIVE_MODE} bytes=$(wc -c < "${STATIC_CONTEXT_FILE}" | tr -d '[:space:]')"
+if [ -n "${VALIDATE_AGENTS_FALLBACK_REASON}" ]; then
+  VALIDATE_STATIC_SIZE_LINE="${VALIDATE_STATIC_SIZE_LINE} fallback=inline reason=${VALIDATE_AGENTS_FALLBACK_REASON}"
+fi
+if [ -z "${VALIDATE_AGENTS_FILE}" ]; then
+  VALIDATE_STATIC_SIZE_LINE="${VALIDATE_STATIC_SIZE_LINE} agents=absent"
+fi
+echo "${VALIDATE_STATIC_SIZE_LINE}" >&2
 
 
 # ---------------------------------------------------------------
