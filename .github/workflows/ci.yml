@@ -2171,8 +2171,8 @@ jobs:
       # minutes on main (run 40750326439, budget-watch issue #8279). Step
       # timings were not readable when this was planned; these steps were
       # picked by test and subprocess counts, not measured. This job had the
-      # most room: since its last issue it gave up four steps in #8208, four
-      # in #8245 and four in #8268, and #8268 fixed the collector test whose
+      # most room: budget-watch issues #8208, #8245 and #8268 each moved four
+      # steps out of it (#8268 was its last issue), and #8268 fixed the collector test whose
       # step took about 5 minutes here (it now runs in seconds). All four steps
       # below come from the source job; the last two first reached it from
       # tests-promote-stall-and-review (#7677), noted above them. None needs
