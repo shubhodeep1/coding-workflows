@@ -1552,6 +1552,10 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 		self.assertIn("Test collection failed for the wiring guard part 1 modules.", self.run)
 		self.assertIn("No tests collected from ${wg1_module}.", self.run)
 		self.assertIn("No tests collected from the wiring guard part 1 modules.", self.run)
+		# The collect log reaches the job log prefixed, so its text cannot act
+		# as a workflow command.
+		self.assertIn("|| { sed 's/^/| /' /tmp/wiring_part1_collect.log;", self.run)
+		self.assertNotIn("cat /tmp/wiring_part1_collect.log", self.run)
 
 	def test_partition_expression_is_a_true_partition(self) -> None:
 		match = WIRING_PART1_AWK_RE.search(self.run)
