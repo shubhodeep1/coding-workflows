@@ -174,6 +174,19 @@ def test_line_outside_the_counterfactual_section_holds() -> None:
 		assert (result["decision"], result["reason"]) == ("hold", "outside_counterfactual_section"), (level, result)
 
 
+def test_indented_heading_closes_the_counterfactual_section() -> None:
+	# Review finding: a heading indented by 1-3 spaces is still a heading and
+	# ends the "## Counterfactual check" section.
+	for indent in (" ", "  ", "   "):
+		text = f"## Counterfactual check\n\n- walked it.\n\n{indent}## Risks\n\nHEAL_COUNTERFACTUAL: PASS\n"
+		result = _check(text)
+		assert (result["decision"], result["reason"]) == ("hold", "outside_counterfactual_section"), (indent, result)
+	assert _check("  ## Counterfactual check\n\nHEAL_COUNTERFACTUAL: PASS\n")["decision"] == "approve"
+	# A 4-space indent is a code block, not a heading, and does not close it.
+	code = "## Counterfactual check\n\n    ## Risks\n\nHEAL_COUNTERFACTUAL: PASS\n"
+	assert _check(code)["decision"] == "approve"
+
+
 def test_partial_job_names_match_whole_tokens_only() -> None:
 	text = _plan("HEAL_COUNTERFACTUAL: PARTIAL: build", deferred=["The build-image job still times out"])
 	result = _check(text)

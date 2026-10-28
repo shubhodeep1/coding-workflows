@@ -60,8 +60,10 @@ HEAL_CF_VALUE_RE = re.compile(r"^(PASS|PARTIAL|FAIL|UNVERIFIED)(?:[ \t]*(:)[ \t]
 # The line counts only inside a "## Counterfactual check" section (to the next
 # heading of the same or a shallower level). Only a level-2 heading opens it,
 # as the prompt requires; a deeper "### Counterfactual check" holds.
-HEAL_CF_HEADING_RE = re.compile(r"^(##)[ \t]+counterfactual[ \t]+check[ \t]*:?[ \t]*$", re.IGNORECASE)
-HEAL_CF_ANY_HEADING_RE = re.compile(r"^(#{1,6})(?:[ \t]|$)")
+HEAL_CF_HEADING_RE = re.compile(r"^[ ]{0,3}(##)[ \t]+counterfactual[ \t]+check[ \t]*:?[ \t]*$", re.IGNORECASE)
+# Up to 3 leading spaces, as HEAL_CF_LINE_RE: an indented ATX heading still
+# closes the section (CommonMark).
+HEAL_CF_ANY_HEADING_RE = re.compile(r"^[ ]{0,3}(#{1,6})(?:[ \t]|$)")
 HEAL_CF_MAX_JOBS = 20
 HEAL_CF_MAX_JOB_CHARS = 200
 HEAL_CF_MAX_LINE_CHARS = 300
