@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Reuse or factor out the audit's resolver; do not add a second managed-file list.\" (issue #8265, item 2)\n  expected_change_site: scripts/security_audit.sh (inline WRAPPER_PIN_PATTERNS / normalize_wrapper_pins / upstream_managed_status, lines 2349-2410) switched to the shared classifier in scripts/build_sync_manifest.py\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: scripts/security_audit.sh retains its own inline WRAPPER_PIN_PATTERNS, normalize_wrapper_pins and upstream_managed_status (scripts/security_audit.sh:2349-2410), scripts/build_sync_manifest.py:108-120 and 357-405 add a separate copy (normalize_wrapper_pins, classify_managed_path, classify_paths), the parity test test_classifier_matches_the_security_audit_inline_copy (tests/test_build_sync_manifest.py:376) only asserts agreement, the managed-digest map is reused but the resolver is not, scripts/security_audit.sh is outside the plan's files_touched grant and prior editor rounds deferred it. Severity disagreement: NIT (sonnet, minimax, luna, glm) vs MAJOR (gemini).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Reuse `build_sync_manifest.py managed-digests`. Reuse or factor out the audit's resolver; do not add a second managed-file list.\"\nExpected change site: `scripts/security_audit.sh` `upstream_managed_status` and `normalize_wrapper_pins`, switched to the shared classifier in `scripts/build_sync_manifest.py`.\nEvidence of absence: The audit keeps its inline copy of the pin patterns and classification rule, while the PR adds `normalize_wrapper_pins`, `classify_managed_path` and `classify_paths` to `build_sync_manifest.py`. The managed-digests map is reused, and `test_classifier_matches_the_security_audit_inline_copy` pins the two copies together. `scripts/security_audit.sh` is outside the plan's `files_touched` grant and the previous editor deferred it.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n\n(All other checklist sections: NONE. The pass-1 pre-push gate finding on `tests/test_promote_main_cycle.py` and `tests/test_review_semble_contract.py` was dropped as not tied to the changed code.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: Reuse or factor out the audit's resolver; do not add a second managed-file list.\nExpected change site: Shared managed-path resolver logic for both scripts/security_audit.sh and scripts/check_failure_triage.sh, likely consolidated in scripts/build_sync_manifest.py.\nEvidence of absence: scripts/security_audit.sh retains its own WRAPPER_PIN_PATTERNS, normalize_wrapper_pins, and upstream_managed_status logic, whereas the PR introduces a second implementation in scripts/build_sync_manifest.py (classify_paths and classify_managed_path). The parity test in tests/test_build_sync_manifest.py keeps them synchronized but they are not factored into a single shared resolver.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nFile: scripts/security_audit.sh\nLine or code reference: lines 2349-2410\nRequirement: \"Reuse or factor out the audit's resolver; do not add a second managed-file list.\" (Issue #8265, point 2)\nExpected change site: scripts/build_sync_manifest.py hosts the new resolver; scripts/security_audit.sh should call into it or have the functions moved out.\nEvidence of absence: scripts/security_audit.sh retains its own inline copy (scripts/security_audit.sh:2349-2410), while scripts/build_sync_manifest.py:108-120 and 357-405 add a separate copy. tests/test_build_sync_manifest.py:test_classifier_matches_the_security_audit_inline_copy only asserts the two agree. The managed-digest data is reused; the resolver code is not. The wording permits \"Reuse OR factor out\", so this is defensible but sub-optimal.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n\n(All other checklist sections: NONE. Notes: the last-run diff is correct, including the `REPO == UPSTREAM_REPOSITORY` guard at scripts/check_failure_triage.sh:1745-1750, the `${GITHUB_REPOSITORY:-}` fix at .github/workflows/check_failure_triage.yml:567-569, and the test at tests/test_check_failure_triage_workflow_security.py:3224. The pre-push gate failures in tests/test_promote_main_cycle.py and tests/test_review_semble_contract.py are inherited, not to be re-flagged.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Reuse or factor out the audit's resolver; do not add a second managed-file list.\"\nExpected change site: Shared managed-path resolver used by `scripts/security_audit.sh` and `scripts/check_failure_triage.sh`, with shared logic in `scripts/build_sync_manifest.py` if needed.\nEvidence of absence: `scripts/security_audit.sh` retains its own `WRAPPER_PIN_PATTERNS`, `normalize_wrapper_pins`, and `upstream_managed_status`. The PR adds separate `WRAPPER_PIN_PATTERNS`, `normalize_wrapper_pins`, and path-classification logic in `scripts/build_sync_manifest.py`; the parity test checks the two agree rather than sharing the resolver. The managed-digest map is reused, but the resolver is not.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Reuse or factor out the audit's resolver; do not add a second managed-file list\" (issue #8265, item 2).\nExpected change site: scripts/security_audit.sh (inline WRAPPER_PIN_PATTERNS / normalize_wrapper_pins / upstream_managed_status, lines 2349-2362) and scripts/build_sync_manifest.py.\nEvidence of absence: The managed-digest map is reused, but the pin-normalisation/classification rule remains duplicated: scripts/build_sync_manifest.py carries its own WRAPPER_PIN_PATTERNS, normalize_wrapper_pins and classify_managed_path, while scripts/security_audit.sh:2349-2362 keeps an independent inline copy. The only coupling is the parity test test_classifier_matches_the_security_audit_inline_copy (tests/test_build_sync_manifest.py:376). Prior editor rounds deferred full factoring because scripts/security_audit.sh is outside the plan grant's files_touched list.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n\n(All other checklist sections: NONE. All other issue deliverables were reported as delivered. The pre-push-gate failures in tests/test_promote_main_cycle.py and tests/test_review_semble_contract.py were litigated in prior rounds and are not re-flagged.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "61e0a0ac08af23dad02a4aa7a429658b7ba34d11928db4be250dbe8b8fb190b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8267,
+    "run_id": "40741735953",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40741735953",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028183052_1894bce2d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8267,
+    "run_id": "40741735953"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T18:30:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
