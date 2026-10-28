@@ -23,6 +23,11 @@
 #   2. Fetches the failed jobs + a filtered tail of their logs for the linked
 #      runs (bounded: WORKFLOW_HEAL_MAX_RUNS runs, WORKFLOW_HEAL_MAX_FAILED_JOBS
 #      jobs per run, WORKFLOW_HEAL_MAX_RUN_LOG_BYTES per job).
+#      Runs those logs link to (same repository only) are read later, after
+#      the heal-scope freeze, as evidence for the diagnosis only (#8248):
+#      WORKFLOW_HEAL_MAX_LINKED_RUNS runs (default 4, 0 turns it off), each
+#      with a step timeline and the log of its longest step
+#      (WORKFLOW_HEAL_LINKED_RUN_LOG_BYTES, default 30000).
 #   3. Fingerprints the failure (workflow + failing step + normalised error
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
@@ -268,6 +273,9 @@ MAX_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUNS:-}" 3)"
 MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
 MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
 LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
+# Linked runs (#8248): runs the failed-job logs link to. 0 turns it off.
+MAX_LINKED_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_LINKED_RUNS:-}" 4)"
+LINKED_RUN_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_LINKED_RUN_LOG_BYTES:-}" 30000)"
 REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
 # Time this run spent in the heal intake queue (scripts/workflow_failure_heal_queue.sh)
 # does not count against the report: the age limit applies at arrival.
@@ -2324,6 +2332,105 @@ jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
 	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
 
+# --- Linked runs (evidence only, #8248) --------------------------------------
+
+# _heal_collect_linked_runs
+#   Follows the same-repository `actions/runs/<id>` links found in the failed
+#   jobs' filtered logs (runs already in run_refs excluded, at most
+#   MAX_LINKED_RUNS, newest mention last) and writes their step timelines plus
+#   the filtered log window of each run's longest step to
+#   ${RUNTIME_DIR}/linked_run_timelines.txt. Files live under
+#   ${RUNTIME_DIR}/linked_runs/, never ${LOG_DIR}, and this runs after the
+#   heal-scope freeze, so linked data never feeds the scope marker, the
+#   ownership inputs or the fingerprint.
+#   API budget (CLAUDE.md §15): at most 3 REST calls per linked run (the run,
+#   its jobs, one job log), so at most 3 x WORKFLOW_HEAL_MAX_LINKED_RUNS per
+#   intake, and none when no linked run is found. Each read makes a single
+#   attempt (GH_RETRY_MAX_ATTEMPTS=1, no retry), so the cap counts HTTP
+#   requests, not logical reads. No existing call returns
+#   these runs: run_refs and the provenance reads cover only reported runs.
+#   Fails open: a failed, malformed or foreign read logs
+#   `warn linked_run_skipped run=<id> reason=<token>` and the run is skipped.
+_heal_collect_linked_runs()
+{
+	local linked_dir="${RUNTIME_DIR}/linked_runs"
+	local out_file="${RUNTIME_DIR}/linked_run_timelines.txt"
+	local exclude_ids="" linked_json="" linked_id="" linked_run_file="" linked_jobs_file=""
+	local timeline_json="" timeline_reason="" longest_job="" longest_start="" longest_end=""
+	local linked_raw="" linked_window="" linked_filtered=""
+	local -a parent_logs=()
+	: > "${out_file}"
+	[ "${MAX_LINKED_RUNS}" -gt 0 ] 2>/dev/null || return 0
+	[ -s "${SUMMARIES_FILE}" ] || return 0
+	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+	[ "${#parent_logs[@]}" -gt 0 ] || return 0
+	exclude_ids="$(jq -r '[.run_refs[]?.run_id | tostring] | join(",")' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+	linked_json="$(python3 "${HEAL_PY}" linked-runs --log-files "${parent_logs[@]}" --repo "${SOURCE_REPO}" \
+		--exclude-run-ids "${exclude_ids}" --limit "${MAX_LINKED_RUNS}" 2>/dev/null)" || return 1
+	jq -e 'type == "array" and length > 0' <<< "${linked_json}" >/dev/null 2>&1 || return 0
+	mkdir -p "${linked_dir}" || return 1
+	while IFS= read -r linked_id; do
+		[[ "${linked_id}" =~ ^[0-9]+$ ]] || continue
+		linked_run_file="${linked_dir}/run-${linked_id}.json"
+		linked_jobs_file="${linked_dir}/run-${linked_id}-jobs.json"
+		if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${linked_run_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${linked_id}" 2>/dev/null; then
+			log "warn linked_run_skipped run=${linked_id} reason=run_unreadable"
+			continue
+		fi
+		# Identity before the jobs read: the run must be this repository's.
+		if ! jq -e --arg id "${linked_id}" 'type == "object" and ((.id | tostring) == $id) and (.repository.full_name | type == "string")' "${linked_run_file}" >/dev/null 2>&1; then
+			log "warn linked_run_skipped run=${linked_id} reason=run_malformed"
+			continue
+		fi
+		if ! jq -e --arg repo "${SOURCE_REPO}" '(.repository.full_name | ascii_downcase) == ($repo | ascii_downcase)' "${linked_run_file}" >/dev/null 2>&1; then
+			log "warn linked_run_skipped run=${linked_id} reason=other_repository"
+			continue
+		fi
+		if ! GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${linked_jobs_file}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${linked_id}/jobs" -F per_page=100 2>/dev/null; then
+			log "warn linked_run_skipped run=${linked_id} reason=jobs_unreadable"
+			continue
+		fi
+		if ! timeline_json="$(python3 "${HEAL_PY}" linked-run-timeline --run-json "${linked_run_file}" --jobs-json "${linked_jobs_file}" \
+			--repo "${SOURCE_REPO}" --run-id "${linked_id}" --stall-hint-files "${parent_logs[@]}" 2>/dev/null)" \
+			|| ! jq -e 'type == "object" and (.ok | type == "boolean")' <<< "${timeline_json}" >/dev/null 2>&1; then
+			log "warn linked_run_skipped run=${linked_id} reason=timeline_failed"
+			continue
+		fi
+		if [ "$(jq -r '.ok' <<< "${timeline_json}")" != true ]; then
+			timeline_reason="$(jq -r '.reason // "timeline_failed"' <<< "${timeline_json}" | tr -cd 'a-z_' | head -c 40)"
+			log "warn linked_run_skipped run=${linked_id} reason=${timeline_reason:-timeline_failed}"
+			continue
+		fi
+		if ! jq -r '.text // ""' <<< "${timeline_json}" | python3 "${HEAL_PY}" redact-stream >> "${out_file}"; then
+			log "warn linked_run_skipped run=${linked_id} reason=timeline_failed"
+			continue
+		fi
+		longest_job="$(jq -r '.longest.job_id // empty' <<< "${timeline_json}")"
+		longest_start="$(jq -r '.longest.start // empty' <<< "${timeline_json}")"
+		longest_end="$(jq -r '.longest.end // empty' <<< "${timeline_json}")"
+		if [[ "${longest_job}" =~ ^[0-9]+$ ]]; then
+			linked_raw="${linked_dir}/run-${linked_id}-job-${longest_job}.raw"
+			linked_window="${linked_dir}/run-${linked_id}-job-${longest_job}.window"
+			linked_filtered="${linked_dir}/run-${linked_id}-job-${longest_job}.txt"
+			echo "--- log of job ${longest_job} (window of its longest step: ${longest_start} -> ${longest_end}) ---" >> "${out_file}"
+			# Same direct, redact-before-disk fetch as the failed-job loop above.
+			if gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${longest_job}/logs" 2>/dev/null \
+				| python3 "${HEAL_PY}" redact-stream > "${linked_raw}" && [ -s "${linked_raw}" ] \
+				&& python3 "${HEAL_PY}" log-window --log-file "${linked_raw}" --start "${longest_start}" --end "${longest_end}" > "${linked_window}" 2>/dev/null \
+				&& python3 "${HEAL_PY}" filter-log --log-file "${linked_window}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${LINKED_RUN_LOG_BYTES}" > "${linked_filtered}" 2>/dev/null; then
+				cat "${linked_filtered}" >> "${out_file}"
+			else
+				log "warn linked_run_skipped run=${linked_id} reason=log_unavailable"
+				echo "(job log unavailable)" >> "${out_file}"
+			fi
+			rm -f "${linked_raw}" "${linked_window}"
+		fi
+		echo >> "${out_file}"
+	done < <(jq -r '.[].run_id' <<< "${linked_json}")
+	return 0
+}
+_heal_collect_linked_runs || log "warn linked_runs_failed"
+
 # --- Run the diagnosis model -----------------------------------------------
 
 PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
@@ -2413,6 +2520,11 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	echo
 	if [ -n "${OWNERSHIP_FACTS_FILE}" ] && [ -s "${OWNERSHIP_FACTS_FILE}" ]; then
 		cat "${OWNERSHIP_FACTS_FILE}"
+		echo
+	fi
+	if [ -s "${RUNTIME_DIR}/linked_run_timelines.txt" ]; then
+		echo "=== LINKED RUN TIMELINES (UNTRUSTED) ==="
+		cat "${RUNTIME_DIR}/linked_run_timelines.txt"
 		echo
 	fi
 	echo "=== FAILED RUN LOGS (UNTRUSTED) ==="

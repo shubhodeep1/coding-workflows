@@ -1091,6 +1091,21 @@ jobs:
           # pending_issue_defs read files_touched. The gate module comes only
           # from the trusted support checkout; the repository checkout is
           # read as data. A missing module or any failure is a no-op.
+          # The decomposition was just written from model output, so a
+          # prepush_augmented_paths key in it can only be model-supplied. Drop
+          # it before augmentation, so the partition guard only ever sees a
+          # marker augment-files-touched wrote in this run, also when the
+          # gate is off, fails or times out (issue #8244).
+          if jq -e 'type == "object" and has("prepush_augmented_paths")' "${DECOMPOSITION_FILE}" >/dev/null 2>&1; then
+            if jq 'del(.prepush_augmented_paths)' "${DECOMPOSITION_FILE}" > "${DECOMPOSITION_FILE}.marker-strip.tmp"; then
+              mv "${DECOMPOSITION_FILE}.marker-strip.tmp" "${DECOMPOSITION_FILE}"
+              echo "PREPUSH_TEST_GATE phase=augment outcome=marker_dropped reason=model_supplied"
+            else
+              rm -f "${DECOMPOSITION_FILE}.marker-strip.tmp"
+              echo "::error::PREPUSH_TEST_GATE phase=augment outcome=failed reason=marker_strip_failed"
+              exit 1
+            fi
+          fi
           _prepush_gate_mode="$(printf '%s' "${PREPUSH_TEST_GATE_MODE:-repair}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
           case "${_prepush_gate_mode}" in
             off|report|repair) ;;
@@ -1166,10 +1181,16 @@ jobs:
           fi
           if [ "${PARTITION_OVERLAP_COUNT}" -gt 0 ]; then
             echo "::notice::Partition guard detected ${PARTITION_OVERLAP_COUNT} sibling file-touch overlap(s); auto-serialize will resolve them by injecting dependency_edges."
-            jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | "\(.issue_a)\u2194\(.issue_b) on \(.files | join(\", \"))"] | join("; "))' "${PARTITION_REPORT_FILE}" || true
+            # Plain concatenation: an escaped quote inside a \(...) interpolation
+            # is a jq compile error (issue #8244, run 40609251819).
+            jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | .issue_a + " <-> " + .issue_b + " on " + ((.files // []) | join(", "))] | join("; "))' "${PARTITION_REPORT_FILE}" || true
             jq -r '.planned_serializations[]? | "  Will serialize: \(.winner) -> \(.loser) (over " + (.overlap_type) + " on " + (.files | join(", ")) + ")"' "${PARTITION_REPORT_FILE}" || true
           else
             echo "Partition guard: no sibling file-touch overlaps detected."
+          fi
+          PARTITION_AUGMENTED_IGNORED="$(jq -r '.augmented_only_overlaps_ignored // 0' "${PARTITION_REPORT_FILE}" 2>/dev/null || echo 0)"
+          if [[ "${PARTITION_AUGMENTED_IGNORED}" =~ ^[0-9]+$ ]] && [ "${PARTITION_AUGMENTED_IGNORED}" -gt 0 ]; then
+            echo "Partition guard: ignored ${PARTITION_AUGMENTED_IGNORED} overlap(s) on affected-test paths that no sibling planned."
           fi
 
           # Compute waves with auto-serialize and write the resulting
