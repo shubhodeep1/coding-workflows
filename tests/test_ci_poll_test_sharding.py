@@ -1726,10 +1726,11 @@ class MovedReleaseStepsContractTest(unittest.TestCase):
 
 # Steps moved out of orchestrate-poll (2), which took 19m28s of its 20 minutes
 # (run 39245970945, budget-watch issue #7697): step name -> (owning job id,
-# module paths its body names).
+# module paths its body names). The promote-cycle step moved on to
+# tests-promote-stall-and-review in #8278.
 MOVED_POLL_GROUP_TWO_STEPS = {
 	"Promote cycle and blocked-verdict unit tests": (
-		"tests-release-and-log-analysis",
+		"tests-promote-stall-and-review",
 		(
 			"tests/test_promote_main_cycle.py",
 			"tests/test_apply_analysis_on_main.py",
@@ -2140,8 +2141,75 @@ class MovedReleaseLogStepsToHealContractTest(unittest.TestCase):
 		self.assertLess(names.index(HOOKS_NODE_SETUP_STEP), names.index(HOOKS_VITEST_STEP))
 
 
+# Steps moved out of tests-release-and-log-analysis, which took 15m14s of its
+# 20 minutes (run 40750326439, budget-watch issue #8278): step name -> (new job
+# id, module paths its body names). The pick is an estimate. The promote-cycle
+# step's modules are pinned by PromoteCycleStepContractTest. The collector and
+# analyzer coverage gates stay in the source job, which runs Inventory parity
+# (tests/test_ci_inventory_parity_order_contract.py).
+RELEASE_8278_SOURCE_JOB_ID = "tests-release-and-log-analysis"
+RELEASE_8278_SETUP_STEP = "Install Python CI dependencies"
+MOVED_RELEASE_8278_STEPS = {
+	"Promote cycle and blocked-verdict unit tests": ("tests-promote-stall-and-review", ()),
+	"Workflow scenario trace renderer coverage gate": (
+		"tests-hooks-and-orchestrator",
+		("tests/test_render_scenario_trace.py", "scripts/render_scenario_trace.py"),
+	),
+}
+
+
+class MovedRelease8278StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-release-and-log-analysis run once, in one job (#8278)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_its_target_job(self) -> None:
+		for name, (job_id, _modules) in MOVED_RELEASE_8278_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
+
+	def test_each_step_has_no_matrix_guard(self) -> None:
+		for name in MOVED_RELEASE_8278_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_job_id, modules) in MOVED_RELEASE_8278_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[RELEASE_8278_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_RELEASE_8278_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_target_job_setup(self) -> None:
+		for name, (job_id, _modules) in MOVED_RELEASE_8278_STEPS.items():
+			names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
+			with self.subTest(step=name):
+				self.assertIn(RELEASE_8278_SETUP_STEP, names, job_id)
+				self.assertIn(name, names)
+				self.assertLess(names.index(RELEASE_8278_SETUP_STEP), names.index(name))
+
+
 PROMOTE_CYCLE_STEP_NAME = "Promote cycle and blocked-verdict unit tests"
-PROMOTE_CYCLE_JOB_ID = "tests-release-and-log-analysis"
+# Moved from tests-release-and-log-analysis in budget-watch issue #8278.
+PROMOTE_CYCLE_JOB_ID = "tests-promote-stall-and-review"
 PROMOTE_CYCLE_AWK_RE = re.compile(
 	r"""awk -v n="\$\{pc_shard\}" -v total="\$\{pc_shards\}" '(?P<expr>[^']+)'"""
 )
@@ -2181,10 +2249,11 @@ class PromoteCycleStepContractTest(unittest.TestCase):
 	"""The promote-cycle step runs its five modules in local shards (#7699).
 
 	`tests-release-and-log-analysis` took 17m04s of its 20 minutes with this
-	step running serially (run 39257527801). The step stays in its job, by
+	step running serially (run 39257527801). The step stayed in that job, by
 	name and without a guard, and splits its test functions across 4
 	processes. Every test must still run exactly once, and a shard that fails
-	or records no exit code must fail the step.
+	or records no exit code must fail the step. Budget-watch issue #8278 moved
+	it, unchanged, to `tests-promote-stall-and-review`.
 	"""
 
 	def setUp(self) -> None:
