@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:1526-1543 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `scoped_implement_progress_counts` stops at the first page that has a matching Implement run, so `IMPL_RUN_ID_WORKING` is chosen only from that page. If a newer pending run is on an earlier page and the older in-progress run is on a later page, the function falls back to the pending run.\n  WHY: The jobs lookup then reads a run with no jobs, so the working run's progress stays invisible and Phase 3b can still time out. The new regression test puts both runs on one page, so it misses this. Both reviewers rated it MAJOR. anthropic_claude-sonnet-5_5 considered and dropped the same concern as pre-existing behaviour that needs more than 100 intervening runs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:1526-1528, 1542-1543 | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: The function stops at the first page containing matching Implement runs, then chooses `IMPL_RUN_ID_WORKING` only from that page.\n  WHY: If that page has a newer pending run and the older in-progress run is on a later page, the function falls back to the pending run. The jobs lookup reads a run with no jobs, so Phase 3b can still time out. The new regression test places both runs on one page.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:1526-1529, 1542-1543, 1615-1617 | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: The counter stops at the first page containing any matching Implement run, so `IMPL_RUN_ID_WORKING` is selected only from that page. A newer pending peer and an older in-progress run on different pages leave only the pending run in `progress_matches`. Line 1543 then falls back to `IMPL_RUN_ID_WORKING=\"$IMPL_RUN_ID_LATEST\"`, which is the pending run.\n  WHY: The jobs lookup at lines 1615-1617 reads the pending run, which has no jobs, so `IMPL_STEP_NAME` stays empty. `CUR_STATE` settles on `impl_run=pending;step=;working=<pending-id>`, and Phase 3b can still declare \"Implement phase stalled\" after 30 minutes. The new regression test puts both runs on one page, so it cannot catch this.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "869755b4e1ad3b4412ff2ce005f54489818b007007e4f31afe20f1e4650b2d43",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8243,
+    "run_id": "40625527636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40625527636",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028032907_36a71f943d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8243,
+    "run_id": "40625527636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T03:29:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
