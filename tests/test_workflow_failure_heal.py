@@ -9341,3 +9341,193 @@ def test_heal_prompt_lists_linked_run_timelines() -> None:
 	assert "before attributing a stall or a missing artefact to the polling run" in text
 	assert "name its run id" in text
 	assert (REPO_ROOT / "prompts" / "_templates" / "mode-workflow-failure-heal.txt").read_text(encoding="utf-8") == text
+
+
+# ---------------------------------------------------------------------------
+# Issue #8265: synced_check_failure (check-failure triage routed upstream)
+# ---------------------------------------------------------------------------
+
+_SYNCED_CHECK_WRAPPER = ".github/workflows/ai-review.yml"
+
+
+def _synced_check_payload(**overrides) -> dict:
+	payload = {
+		"schema_version": heal.SCHEMA_VERSION,
+		"source_repo": CONSUMER_REPO,
+		"source_kind": "synced_check_failure",
+		"pr_number": 688,
+		"check_name": "Workflow Ref Pinning Gate",
+		"check_run_ids": ["555"],
+		"paths": [_SYNCED_CHECK_WRAPPER],
+		"head_sha": "e" * 40,
+		"wrapper_sha": "c" * 40,
+		"reporter_run_id": "4242",
+		"reporter_run_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/4242",
+		"run_refs": [],
+	}
+	payload.update(overrides)
+	return payload
+
+
+def test_synced_check_kind_is_registered_with_its_reporter_workflow() -> None:
+	assert "synced_check_failure" in heal.SOURCE_KINDS
+	assert heal.SOURCE_KINDS[:8] == ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure")
+	assert heal.REPORT_IDENTITY_WORKFLOW_BY_KIND["synced_check_failure"] == ("check_failure_triage.yml",)
+
+
+def test_synced_check_payload_validates_to_pointers_only() -> None:
+	normalized = heal.validate_payload(_synced_check_payload(check_name="CI `<!-- x -->` lint", cause_path=_SYNCED_CHECK_WRAPPER))
+	assert normalized["failure_reason"] == heal.SYNCED_CHECK_FAILURE_REASON
+	assert normalized["workflow_name"] == heal.SYNCED_CHECK_WORKFLOW_NAME
+	assert normalized["issue_title"] == heal.SYNCED_CHECK_ISSUE_TITLE
+	assert normalized["issue_number"] is None and normalized["label"] is None
+	assert normalized["issue_excerpt"] == "" and normalized["comments_excerpt"] == "" and normalized["failure_evidence"] == ""
+	assert normalized["paths"] == [_SYNCED_CHECK_WRAPPER] and normalized["cause_path"] == _SYNCED_CHECK_WRAPPER
+	assert "`" not in normalized["check_name"] and "<" not in normalized["check_name"]
+	assert normalized["pr_number"] == 688 and normalized["check_run_ids"] == ["555"]
+	assert heal.validate_payload(_synced_check_payload(check_name="!!!"))["check_name"] == "check"
+
+
+@pytest.mark.parametrize(
+	"overrides",
+	[
+		{"extra_field": "x"},
+		{"run_refs": [{"repo": CONSUMER_REPO, "run_id": "1"}]},
+		{"wrapper_sha": "abc"},
+		{"head_sha": None},
+		{"paths": []},
+		{"paths": [f"dir/file{index}.js" for index in range(21)]},
+		{"paths": ["../etc/passwd"]},
+		{"paths": ["/abs/path"]},
+		{"paths": ["a//b"]},
+		{"paths": [_SYNCED_CHECK_WRAPPER, _SYNCED_CHECK_WRAPPER]},
+		{"cause_path": "app.js"},
+		{"pr_number": 0},
+		{"pr_number": True},
+		{"check_run_ids": ["1", "2", "3", "4"]},
+		{"check_run_ids": ["abc"]},
+		{"reporter_run_id": "x"},
+	],
+)
+def test_synced_check_payload_rejects_bad_fields(overrides) -> None:
+	with pytest.raises(ValueError):
+		heal.validate_payload(_synced_check_payload(**overrides))
+
+
+def test_synced_check_fingerprint_ignores_order_duplicates_pr_and_release() -> None:
+	first = heal.synced_check_fingerprint([_SYNCED_CHECK_WRAPPER, ".claude/commands/do.md"])
+	assert first == heal.synced_check_fingerprint([".claude/commands/do.md", _SYNCED_CHECK_WRAPPER, _SYNCED_CHECK_WRAPPER])
+	assert first != heal.synced_check_fingerprint([_SYNCED_CHECK_WRAPPER])
+	assert re.fullmatch(r"[0-9a-f]{64}", first)
+
+
+@pytest.mark.parametrize(
+	("text", "status", "paths", "cause"),
+	[
+		("no block", "missing", [], None),
+		("AFFECTED_FILES_BEGIN\n- a.yml\n- a.yml\nAFFECTED_FILES_END\n", "ok", ["a.yml"], None),
+		("AFFECTED_FILES_BEGIN\ncause: b.yml\n- a.yml\nAFFECTED_FILES_END\n", "ok", ["a.yml", "b.yml"], "b.yml"),
+		("AFFECTED_FILES_BEGIN\n\nAFFECTED_FILES_END\n", "empty", [], None),
+		("AFFECTED_FILES_BEGIN\n- a.yml\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\n- a.yml\nAFFECTED_FILES_END\nAFFECTED_FILES_BEGIN\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\nsome prose\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\n- ../x\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\n- dir/*.yml\nAFFECTED_FILES_END\n", "malformed", [], None),
+		("AFFECTED_FILES_BEGIN\ncause: a\ncause: b\n- a\nAFFECTED_FILES_END\n", "malformed", [], None),
+	],
+)
+def test_parse_check_triage_affected_files(text, status, paths, cause) -> None:
+	result = heal.parse_check_triage_affected_files(text)
+	assert result["status"] == status
+	if status == "ok":
+		assert result["paths"] == paths and result["cause"] == cause
+
+
+def test_parse_check_triage_affected_files_caps_the_count() -> None:
+	block = "AFFECTED_FILES_BEGIN\n" + "".join(f"- f{index}.js\n" for index in range(21)) + "AFFECTED_FILES_END\n"
+	assert heal.parse_check_triage_affected_files(block)["status"] == "malformed"
+
+
+def _route_repo(tmp_path: Path, wrapper_pin: str) -> tuple[Path, dict]:
+	repo = tmp_path / "consumer"
+	(repo / ".github" / "workflows").mkdir(parents=True)
+	text = "uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{} # stable\n"
+	(repo / _SYNCED_CHECK_WRAPPER).write_text(text.format(wrapper_pin), encoding="utf-8")
+	(repo / "app.js").write_text("x\n", encoding="utf-8")
+	env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+	for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(name, None)
+	subprocess.run(["git", "init", "-q", str(repo)], check=True, env=env)
+	subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
+	subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false", "commit", "-qm", "x"], check=True, env=env)
+	digest = hashlib.sha256(text.format("0" * 40).encode("utf-8")).hexdigest()
+	return repo, {_SYNCED_CHECK_WRAPPER: [digest]}
+
+
+def _route(tmp_path: Path, diagnosis: str, *, pin: str = "1" * 40, digests: object = "default", **overrides) -> dict:
+	repo, default_digests = _route_repo(tmp_path, pin)
+	args = {
+		"diagnosis": diagnosis,
+		"digests": default_digests if digests == "default" else digests,
+		"repo_root": str(repo),
+		"commit": "HEAD",
+		"enabled": "true",
+		"repo": CONSUMER_REPO,
+		"upstream_repo": SELF_REPO,
+		"historical": "false",
+	}
+	args.update(overrides)
+	return heal.check_triage_route(**args)
+
+
+def _block(*paths: str, cause: str | None = None) -> str:
+	return "AFFECTED_FILES_BEGIN\n" + (f"cause: {cause}\n" if cause else "") + "".join(f"- {path}\n" for path in paths) + "AFFECTED_FILES_END\n"
+
+
+def test_check_triage_route_decision_matrix(tmp_path: Path) -> None:
+	routed = _route(tmp_path / "a", _block(_SYNCED_CHECK_WRAPPER))
+	assert routed["decision"] == "route" and routed["reason"] == "all_unmodified_managed"
+	assert routed["heal_fp"] == heal.synced_check_fingerprint([_SYNCED_CHECK_WRAPPER])
+	assert _route(tmp_path / "b", _block(_SYNCED_CHECK_WRAPPER, "app.js"))["reason"] == "unmanaged_paths"
+	cause = _route(tmp_path / "c", _block(_SYNCED_CHECK_WRAPPER, "app.js", cause=_SYNCED_CHECK_WRAPPER))
+	assert cause["decision"] == "route" and cause["reason"] == "managed_wrapper_cause" and cause["paths"] == [_SYNCED_CHECK_WRAPPER]
+	assert _route(tmp_path / "d", "no block")["reason"] == "no_block"
+	assert _route(tmp_path / "e", "AFFECTED_FILES_BEGIN\n")["reason"] == "malformed_block"
+	assert _route(tmp_path / "f", _block(_SYNCED_CHECK_WRAPPER), digests={})["reason"] == "manifest_unavailable"
+	assert _route(tmp_path / "g", _block(_SYNCED_CHECK_WRAPPER), enabled="false")["reason"] == "disabled"
+	assert _route(tmp_path / "h", _block(_SYNCED_CHECK_WRAPPER), repo=SELF_REPO)["reason"] == "self_repo"
+	assert _route(tmp_path / "i", _block(_SYNCED_CHECK_WRAPPER), historical="true")["reason"] == "historical_mode"
+	assert _route(tmp_path / "j", _block(_SYNCED_CHECK_WRAPPER), commit="0" * 40)["reason"] == "classify_failed"
+	modified = _route(tmp_path / "k", _block(_SYNCED_CHECK_WRAPPER), digests={_SYNCED_CHECK_WRAPPER: ["f" * 64]})
+	assert modified["decision"] == "file" and modified["reason"] == "consumer_modified"
+
+
+def test_build_synced_check_payload_takes_only_same_repo_run_links() -> None:
+	decision = {"decision": "route", "paths": [_SYNCED_CHECK_WRAPPER], "cause": None}
+	payload = heal.build_synced_check_payload(
+		decision=decision, repo=CONSUMER_REPO, pr_number="688", check_name="Gate", check_run_id="1",
+		details_url="https://github.com/evil/repo/actions/runs/9", head_sha="E" * 40, wrapper_sha="c" * 40, run_id="77",
+	)
+	assert payload["check_run_ids"] == [] and payload["run_refs"] == []
+	assert payload["head_sha"] == "e" * 40 and "cause_path" not in payload
+	assert heal.validate_payload(payload)["reporter_run_url"].endswith("/actions/runs/77")
+
+
+def test_synced_check_issue_and_occurrence_carry_no_free_text() -> None:
+	payload = heal.validate_payload(_synced_check_payload(check_name="SECRET-LOG-TEXT", cause_path=_SYNCED_CHECK_WRAPPER))
+	fp = heal.synced_check_fingerprint(payload["paths"])
+	title, body = heal.compose_synced_check_issue(
+		payload=payload, fp=fp, gen=1, root=fp, scope_marker="", max_depth=3, intake_run_url="https://example.invalid/run",
+		sources=heal.synced_check_source_paths(payload["paths"]),
+	)
+	assert title.startswith("[synced] .github/workflows/ai-review.yml")
+	assert body.splitlines()[0] == f"<!-- workflow-failure-heal:fp={fp} -->"
+	assert "`workflow-templates/ai-review.yml`" in body
+	assert "https://github.com/" + CONSUMER_REPO + "/actions/runs/555" in body
+	assert "regression test" in body
+	occurrence = heal.compose_synced_check_occurrence(payload=payload, intake_run_url="https://example.invalid/run")
+	assert occurrence.startswith("<!-- workflow-failure-heal:occurrence -->")
+	assert "#688" in occurrence
+	assert heal.check_synced_check_managed_paths(payload["paths"], {_SYNCED_CHECK_WRAPPER: ["x"]}) is None
+	assert heal.check_synced_check_managed_paths(payload["paths"], {"other": ["x"]}) == "unmanaged_path"
+	assert heal.check_synced_check_managed_paths(payload["paths"], {}) == "release_unavailable"
