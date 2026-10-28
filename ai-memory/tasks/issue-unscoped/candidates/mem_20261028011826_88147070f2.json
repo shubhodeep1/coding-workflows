@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Scripts used by implement or review workflows appear alongside `scripts/stage_workflow_support.sh` and documentation such as `docs/INVENTORY.md` and `docs/scripts-pending-removal.md`. When adding or changing a script used in an isolated workflow environment, inspect the staging helper and these docs to ensure the script is available where needed and its lifecycle is recorded.",
+  "fingerprint": "2ff52e448626be96b9436a6cdf84571d142a800517d92ad31f31f30df9587b7f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40613569766",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40613569766",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8217",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8219",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8220",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8225",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8229",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8221",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8224",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8226",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8227",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8230"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261028011826_88147070f2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Changes to isolated workflow support scripts may require updating the staging helper and its documentation.",
+  "timestamps": {
+    "created_at": "2026-10-28T01:18:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
