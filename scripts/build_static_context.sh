@@ -286,7 +286,7 @@ emit_overflow_pointer() {
 # any other value means inline with one warning that never prints the value.
 _static_context_agents_mode() {
 	local static_context_agents_mode_value
-	static_context_agents_mode_value="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | tr '[:upper:]' '[:lower:]')"
+	static_context_agents_mode_value="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
 	case "${static_context_agents_mode_value}" in
 		""|index)
 			echo index
@@ -311,7 +311,10 @@ emit_agents_index() {
 	if [ -z "${agents_index_file}" ]; then
 		return 0
 	fi
-	agents_index_tmp="$(mktemp "${TMPDIR:-/tmp}/static-agents-index.XXXXXX")"
+	agents_index_tmp="$(mktemp "${TMPDIR:-/tmp}/static-agents-index.XXXXXX")" || {
+		echo "::warning::Static context agents index omitted; no temporary file could be created." >&2
+		return 0
+	}
 	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${agents_index_file}" "${PWD}" > "${agents_index_tmp}" <<'PY' || agents_index_rc=$?
 import os
 import re
@@ -328,6 +331,9 @@ MAX_LINE_CHARS = 200
 SECTION_MARKER = re.compile(r'^<!--\s*agents:\s*section="([^"<>\n]{1,200})"(\s+new)?\s*-->\s*$')
 FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 H2 = re.compile(r"^## (.*)$")
+ANY_AGENTS_MARKER = re.compile(r"^<!--\s*agents:")
+FRAGMENT_H2 = re.compile(r"^##\s+(.*?)\s*$")
+GENERATED_SECTIONS = frozenset({"Repo-tree (auto-generated)"})
 FRAGMENT_EXCLUDED_NAMES = frozenset({".gitkeep", "README.md"})
 CONTROL_CHARS = re.compile("[\x00-\x1f\x7f-\x9f]")
 NEUTRALISED_PREFIX = "[workflow-command-neutralised] "
@@ -377,6 +383,53 @@ def heading_lines(text):
 	return found
 
 
+def fragment_sections(text):
+	# Same rejection rules as scripts/assemble_agents.py parse_fragment(): a
+	# fragment the release fold would refuse raises, which (D3) drops the
+	# whole fragment list instead of promising a fold that never happens.
+	sections = []
+	block_has_text = []
+	fence = ""
+	for raw in text.replace("\r\n", "\n").split("\n"):
+		line = raw.rstrip()
+		if fence:
+			block_has_text[-1] = True
+			closing = FENCE.match(line)
+			if closing and closing.group(1)[0] == fence[0] and len(closing.group(1)) >= len(fence) and not line[closing.end():].strip():
+				fence = ""
+			continue
+		marker = SECTION_MARKER.match(line)
+		if marker:
+			heading = " ".join(marker.group(1).split())
+			if not heading:
+				raise ValueError("empty_section_name")
+			if heading in GENERATED_SECTIONS:
+				raise ValueError("generated_section")
+			sections.append('section="%s"' % clean(heading))
+			block_has_text.append(False)
+			continue
+		if ANY_AGENTS_MARKER.match(line):
+			raise ValueError("malformed_marker")
+		if not sections:
+			if line.strip():
+				raise ValueError("content_before_marker")
+			continue
+		if FRAGMENT_H2.match(line):
+			raise ValueError("heading_in_block")
+		opening = FENCE.match(line)
+		if opening:
+			fence = opening.group(1)
+		if line.strip():
+			block_has_text[-1] = True
+	if fence:
+		raise ValueError("unclosed_fence")
+	if not sections:
+		raise ValueError("no_marker")
+	if not all(block_has_text):
+		raise ValueError("empty_block")
+	return sections
+
+
 def fragment_lines():
 	fragments_dir = os.path.join(repo_root, "agents.d")
 	try:
@@ -392,25 +445,10 @@ def fragment_lines():
 		path = os.path.join(fragments_dir, name)
 		if not stat.S_ISREG(os.lstat(path).st_mode):
 			continue
-		data, _truncated = read_no_follow(path, MAX_FRAGMENT_BYTES)
-		text = data.decode("utf-8")
-		sections = []
-		fence = ""
-		for raw in text.replace("\r\n", "\n").split("\n"):
-			line = raw.rstrip()
-			match = FENCE.match(line)
-			if fence:
-				if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
-					fence = ""
-				continue
-			marker = SECTION_MARKER.match(line)
-			if marker:
-				sections.append('section="%s"' % " ".join(clean(marker.group(1)).split()))
-				continue
-			if match:
-				fence = match.group(1)
-		label = ", ".join(sections) if sections else "section=(none)"
-		entries.append("- agents.d/%s: %s" % (clean(name), label))
+		data, truncated = read_no_follow(path, MAX_FRAGMENT_BYTES)
+		if truncated:
+			raise ValueError("fragment_too_large")
+		entries.append("- agents.d/%s: %s" % (clean(name), ", ".join(fragment_sections(data.decode("utf-8")))))
 	return entries
 
 
@@ -444,20 +482,37 @@ if fragments:
 
 # Reserve room for the closing cap line so the output never passes the limit.
 RESERVE = 256
-printed_items = 0
-total_items = sum(1 for kind, _line in queue if kind == "item")
+printed_headings = 0
+printed_fragments = 0
+total_headings = len(items)
+total_fragments = len(fragments)
 stopped = False
-for kind, line in queue:
+for position, (kind, line) in enumerate(queue):
 	line_bytes = len((line + "\n").encode("utf-8"))
-	if (kind == "item" and printed_items >= MAX_ITEMS) or size + line_bytes + RESERVE > MAX_OUTPUT_BYTES:
+	printed_items = printed_headings + printed_fragments
+	if kind == "note":
+		# Print the fragments note only when its first entry fits after it.
+		following = queue[position + 1][1] if position + 1 < len(queue) else ""
+		line_bytes += len((following + "\n").encode("utf-8"))
+	if printed_items >= MAX_ITEMS or size + line_bytes + RESERVE > MAX_OUTPUT_BYTES:
 		stopped = True
 		break
 	emit(line)
 	if kind == "item":
-		printed_items += 1
+		if printed_headings < total_headings:
+			printed_headings += 1
+		else:
+			printed_fragments += 1
 
 if stopped:
-	emit("... (%d more headings)" % (total_items - printed_items))
+	omitted_headings = total_headings - printed_headings
+	omitted_fragments = total_fragments - printed_fragments
+	if omitted_fragments and omitted_headings:
+		emit("... (%d more headings, %d more agents.d/ fragments)" % (omitted_headings, omitted_fragments))
+	elif omitted_fragments:
+		emit("... (%d more agents.d/ fragments)" % omitted_fragments)
+	else:
+		emit("... (%d more headings)" % omitted_headings)
 if agents_truncated:
 	emit(finish_line("... (%s is larger than %d bytes; headings past that point are not listed)" % (agents_name, MAX_AGENTS_BYTES)))
 

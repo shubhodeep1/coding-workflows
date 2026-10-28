@@ -161,7 +161,6 @@ def test_agents_d_fragments_listed_with_sections() -> None:
 			encoding="utf-8",
 		)
 		(fragments / "a-one.md").write_text('<!-- agents: section="Utility helpers" -->\nx\n', encoding="utf-8")
-		(fragments / "c-nomarker.md").write_text("no marker here\n", encoding="utf-8")
 		(fragments / "README.md").write_text('<!-- agents: section="Readme" -->\n', encoding="utf-8")
 		(fragments / "notes.txt").write_text("ignored\n", encoding="utf-8")
 		outside = root / "outside.md"
@@ -174,7 +173,6 @@ def test_agents_d_fragments_listed_with_sections() -> None:
 			"- L1: Workflow architecture",
 			'- agents.d/a-one.md: section="Utility helpers"',
 			'- agents.d/b-two.md: section="Workflow architecture", section="Brand new"',
-			"- agents.d/c-nomarker.md: section=(none)",
 		]
 		assert "Linked" not in text and "Readme" not in text and "Fenced example" not in text
 
@@ -203,6 +201,57 @@ def test_unparseable_fragment_drops_fragment_block_only() -> None:
 		text, _ = _index(root)
 		assert _item_lines(text) == ["- L1: Kept"]
 		assert "agents.d/" not in text
+
+
+@pytest.mark.parametrize(
+	"bad_fragment",
+	[
+		"no marker here\n",
+		'stray text\n<!-- agents: section="Kept" -->\nx\n',
+		'<!-- agents: section="Kept" -->\nx\n<!-- agents: broken -->\n',
+		'<!-- agents: section="Kept" -->\nx\n## Split heading\n',
+		'<!-- agents: section="Kept" -->\n```\nnever closed\n',
+		'<!-- agents: section="Kept" -->\n\n',
+		'<!-- agents: section="Repo-tree (auto-generated)" -->\nx\n',
+	],
+	ids=["no_marker", "content_before_marker", "malformed_marker", "heading_in_block", "unclosed_fence", "empty_block", "generated_section"],
+)
+def test_fragment_the_assembler_rejects_drops_fragment_block(bad_fragment: str) -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = _repo(tmp)
+		(root / "agents.md").write_text("## Kept\n", encoding="utf-8")
+		fragments = root / "agents.d"
+		fragments.mkdir()
+		(fragments / "a-good.md").write_text('<!-- agents: section="Kept" -->\nx\n', encoding="utf-8")
+		(fragments / "b-bad.md").write_text(bad_fragment, encoding="utf-8")
+		text, _ = _index(root)
+		assert _item_lines(text) == ["- L1: Kept"]
+		assert "agents.d/" not in text
+
+
+def test_item_cap_never_leaves_an_empty_fragments_note() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = _repo(tmp)
+		(root / "agents.md").write_text("".join(f"## H{n}\n" for n in range(300)), encoding="utf-8")
+		fragments = root / "agents.d"
+		fragments.mkdir()
+		(fragments / "a.md").write_text('<!-- agents: section="H1" -->\nx\n', encoding="utf-8")
+		text, _ = _index(root)
+		assert len(_item_lines(text)) == 300
+		assert "Pending agents.d/ fragments" not in text
+		assert text.splitlines()[-1] == "... (1 more agents.d/ fragments)"
+
+
+def test_item_cap_counts_headings_and_fragments_separately() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = _repo(tmp)
+		(root / "agents.md").write_text("".join(f"## H{n}\n" for n in range(310)), encoding="utf-8")
+		fragments = root / "agents.d"
+		fragments.mkdir()
+		(fragments / "a.md").write_text('<!-- agents: section="H1" -->\nx\n', encoding="utf-8")
+		(fragments / "b.md").write_text('<!-- agents: section="H2" -->\nx\n', encoding="utf-8")
+		text, _ = _index(root)
+		assert text.splitlines()[-1] == "... (10 more headings, 2 more agents.d/ fragments)"
 
 
 def test_headings_and_sections_are_neutralised() -> None:
