@@ -111,6 +111,10 @@ def test_fenced_and_mid_line_and_lowercase_token_are_ignored() -> None:
 	# A fenced copy beside the real line is not a duplicate.
 	result = _check(_plan("HEAL_COUNTERFACTUAL: PASS", extra="```\nHEAL_COUNTERFACTUAL: FAIL: x\n```"))
 	assert result["decision"] == "approve", result
+	# Only a bare marker closes a fence: "```text" inside an open fence stays fenced.
+	nested = "## Counterfactual check\n\n```\nexample:\n```text\nHEAL_COUNTERFACTUAL: PASS\n```\n\nHEAL_COUNTERFACTUAL: FAIL: x\n"
+	result = _check(nested)
+	assert (result["decision"], result["result"]) == ("hold", "FAIL"), result
 
 
 def test_partial_approves_when_every_job_is_deferred() -> None:
@@ -422,6 +426,12 @@ def test_plan_step_missing_parser_holds() -> None:
 	run = _run_step(_HEAL_ISSUE, _plan("HEAL_COUNTERFACTUAL: PASS"), copy_parser=False)
 	assert "reason=heal_counterfactual_check_unavailable" in run["stdout"]
 	assert "auto_approve_hold_reason=heal_counterfactual_hold" in run["output"]
+	invalid = _run_step(_HEAL_ISSUE, _plan("HEAL_COUNTERFACTUAL: PASS"), copy_parser=False, flag="banana")
+	assert "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true" in invalid["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in invalid["output"]
+	off = _run_step(_HEAL_ISSUE, _plan("HEAL_COUNTERFACTUAL: PASS"), copy_parser=False, flag="false")
+	assert "reason=gate_disabled issue=123" in off["stdout"], off["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" not in off["output"]
 
 
 def test_plan_step_heal_route_env_gates_an_unlabelled_issue() -> None:

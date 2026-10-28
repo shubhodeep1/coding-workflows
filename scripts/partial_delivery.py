@@ -187,7 +187,10 @@ def _unfenced_lines(lines: list[str]) -> list[str]:
 			marker = fence_match.group(1)
 			if not fence:
 				fence = marker[0] * len(marker)
-			elif marker[0] == fence[0] and len(marker) >= len(fence):
+			elif (marker[0] == fence[0] and len(marker) >= len(fence)
+				and not line[fence_match.end():].strip()):
+				# CommonMark: only a bare marker closes a fence; "```text"
+				# inside an open fence stays fenced.
 				fence = ""
 			continue
 		if fence:

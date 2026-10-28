@@ -3033,6 +3033,11 @@ jobs:
                   :
                 else
                   heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[]}'
+                  case "${heal_cf_flag_norm}" in
+                    ""|true) ;;
+                    false) heal_cf_json='{"decision":"approve","result":"missing","reason":"gate_disabled","line":"","unmatched_jobs":[]}' ;;
+                    *) heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[],"flag_invalid":true}' ;;
+                  esac
                 fi
                 if printf '%s' "${heal_cf_json}" | jq -e '.flag_invalid == true' >/dev/null 2>&1; then
                   echo "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true"

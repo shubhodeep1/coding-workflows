@@ -18147,6 +18147,11 @@ _plan_heal_counterfactual_check()
     :
   else
     cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[]}'
+    case "${flag_norm}" in
+      ""|true) ;;
+      false) cf_json='{"decision":"approve","result":"missing","reason":"gate_disabled","line":"","unmatched_jobs":[]}' ;;
+      *) cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[],"flag_invalid":true}' ;;
+    esac
   fi
   if printf '%s' "${cf_json}" | jq -e '.flag_invalid == true' >/dev/null 2>&1; then
     echo "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true"
