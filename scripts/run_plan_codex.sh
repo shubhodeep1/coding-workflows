@@ -288,6 +288,21 @@ EOF
 if [ "${HEAL_ROUTE:-false}" = true ]; then
 	[ -s "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" ] || { echo '::error::Heal evidence bundle missing' >&2; exit 1; }
 	cat "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" >> "${CODEX_PROMPT_FILE}"
+	# Issue #8249: a heal plan must state whether the change would have turned
+	# the observed failing run green (HEAL_COUNTERFACTUAL line). A missing
+	# prompt does not fail planning: the plan then has no line and the plan
+	# auto-approval gate holds it for a human.
+	heal_cf_prompt="prompts/mode-plan-heal-counterfactual.txt"
+	heal_cf_rendered=""
+	if [ -f "${heal_cf_prompt}" ] && [ ! -L "${heal_cf_prompt}" ] \
+		&& heal_cf_rendered="$(bash scripts/render_prompt.sh "${heal_cf_prompt}")" && [ -n "${heal_cf_rendered}" ]; then
+		{
+			echo
+			printf '%s\n' "${heal_cf_rendered}"
+		} >> "${CODEX_PROMPT_FILE}"
+	else
+		echo "::warning::HEAL_COUNTERFACTUAL prompt unavailable; the plan auto-approval gate will hold this heal plan"
+	fi
 fi
 
 # Update progress comment to signal model invocation is starting

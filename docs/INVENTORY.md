@@ -25,6 +25,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-judge.txt` — Role: judge. Goal: evaluate whether the project is progressing correctly after a wave of issues has been implemented and merged.
 - `prompts/mode-orchestrate-poll-judge.txt` — Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly.
 - `prompts/mode-orchestrate.txt` — Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph.
+- `prompts/mode-plan-heal-counterfactual.txt` — Role: workflow-heal planner. Goal: append a `## Counterfactual check` with one `HEAL_COUNTERFACTUAL:` line to workflow-heal plans so plan auto-approval can tell whether the change would have made the failing run pass (issue #8249).
 - `prompts/mode-plan.txt` — Role: planning-phase auditor. Goal: emit a structured implementation plan or `BLOCKED:` line.
 - `prompts/mode-security-audit.txt` — Role: Chief Security Officer. Goal: emit a JSON-array security audit for default-branch scope.
 - `prompts/mode-review-apply-fixes-continuation.txt` — Role: review-autofix editor continuing the same-run editor session.
@@ -180,7 +181,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/plan_superseded_merged_pr.py` — Plan-phase check that closes a CI-repair issue (or a re-issue of one) whose pull request already merged with the failing check passing on its final head (issue #7216; log prefix `PLAN_SUPERSEDED_MERGED_PR`).
 - `scripts/plan_split_dispatch.sh` — Plan-phase hand-off that starts an orchestrator project (Claude engine) for a pipeline-authored plan listing more than 50 files, instead of holding it for `/approved` (Q151; log prefix `PLAN_SPLIT`).
-- `scripts/partial_delivery.py` — Parse an approved plan's `## Deferred scope` section, embed it in the implement PR body and render the remaining-items comment that keeps a partially delivered issue open (issue #7657; log prefix `PARTIAL_DELIVERY`).
+- `scripts/partial_delivery.py` — Parse an approved plan's `## Deferred scope` section, embed it in the implement PR body and render the remaining-items comment that keeps a partially delivered issue open (issue #7657; log prefix `PARTIAL_DELIVERY`); its `heal-counterfactual` subcommand decides a workflow-heal plan's auto-approval from its `HEAL_COUNTERFACTUAL` line (issue #8249).
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-full.patch` — Fixture asset for phase-b-risk-tier-full.patch.

@@ -2647,6 +2647,11 @@ fi
 # human /approved (see _plan_auto_approval_gate).
 AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED="${AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED:-true}"
 
+# Issue #8249: heal-route counterfactual gate for stall-recovery
+# auto-approval (see _plan_heal_counterfactual_check). On by default; `false`
+# turns it off, any other value is treated as `true` with a warning.
+HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"
+
 MAX_VALIDATE_CYCLES="${MAX_VALIDATE_CYCLES:-3}"
 if ! [[ "${MAX_VALIDATE_CYCLES}" =~ ^[0-9]+$ ]] || [ "${MAX_VALIDATE_CYCLES}" -lt 1 ]; then
   echo "::warning::MAX_VALIDATE_CYCLES must be a positive integer; defaulting to 3"
@@ -18068,6 +18073,155 @@ _plan_auto_approval_gate_comments()
   fi
 }
 
+# Issue #8249: heal-route counterfactual check for stall-recovery
+# auto-approval. A workflow-heal issue (the ai:workflow-heal label or the
+# workflow-failure-heal:fp= body marker, decided by workflow_failure_heal.py
+# heal-route from the batched details map) is approved only when its plan's
+# single HEAL_COUNTERFACTUAL line is PASS, or PARTIAL with every listed job
+# under ## Deferred scope (partial_delivery.py heal-counterfactual, the same
+# parser plan.yml calls). Runs in the main shell and sets HEAL_CF_GATE_DECISION,
+# HEAL_CF_GATE_RESULT, HEAL_CF_GATE_REASON, HEAL_CF_GATE_JSON and
+# HEAL_CF_GATE_PLAN_COMMENT. Non-heal issues return 0 without a log line.
+# Every error on a heal (or unknown) route holds. No GitHub API call.
+# Args: <issue_num> <details_map_json> <plan_file> <comments_json> <login>
+# Returns 0 to continue to the automation-path gate, 1 to hold.
+_plan_heal_counterfactual_check()
+{
+  local issue_num="$1"
+  local details_map_json="$2"
+  local plan_file="$3"
+  local comments_json="$4"
+  local login="$5"
+  local script_dir="" heal_py="" partial_py="" route_file="" route="" cf_json=""
+
+  HEAL_CF_GATE_DECISION="approve"
+  HEAL_CF_GATE_RESULT=""
+  HEAL_CF_GATE_REASON=""
+  HEAL_CF_GATE_JSON='{}'
+  HEAL_CF_GATE_PLAN_COMMENT="unknown"
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  heal_py="${script_dir}/workflow_failure_heal.py"
+  partial_py="${script_dir}/partial_delivery.py"
+  route_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/heal_cf_issue.XXXXXX" 2>/dev/null || true)"
+  if [ -n "${route_file}" ] && [ -f "${heal_py}" ] \
+    && printf '%s' "${details_map_json:-{\}}" | jq -ce --arg n "${issue_num}" '
+        .[$n]
+        | select(type == "object")
+        | select(((.labels // []) | type) == "array")
+        | select(((.labels // []) | length) > 0 or (((.body // "") | type) == "string" and ((.body // "") | length) > 0))
+        | {labels: (.labels // []), body: ((.body // "") | strings)}
+      ' > "${route_file}" 2>/dev/null; then
+    route="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${heal_py}" heal-route --issue-json "${route_file}" 2>/dev/null)" || route=""
+  fi
+  [ -z "${route_file}" ] || rm -f "${route_file}"
+  case "${route}" in
+    false) return 0 ;;
+    true) ;;
+    *) route="unknown" ;;
+  esac
+  HEAL_CF_GATE_PLAN_COMMENT="$(printf '%s' "${comments_json:-[]}" | jq -r --arg login "${login}" '
+      [ .[]?
+        | select(type == "object")
+        | select((.user.login // "") == $login)
+        | select(((.body // "") | split("\n") | map(sub("\r$"; "") | gsub("^[ \t]+|[ \t]+$"; "")) | any(. == "<!-- ai:plan-proposal:v1 -->")))
+      ]
+      | sort_by(.created_at // "")
+      | last
+      | ((.id // .databaseId // "") | tostring)' 2>/dev/null || true)"
+  [[ "${HEAL_CF_GATE_PLAN_COMMENT}" =~ ^[0-9]+$ ]] || HEAL_CF_GATE_PLAN_COMMENT="unknown"
+  if [ "${route}" = "unknown" ]; then
+    cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[]}'
+  elif [ -f "${partial_py}" ] \
+    && cf_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${partial_py}" heal-counterfactual --plan-file "${plan_file}" \
+      --gate-flag "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" 2>/dev/null)" \
+    && printf '%s' "${cf_json}" | jq -e '.decision | IN("approve", "hold")' >/dev/null 2>&1; then
+    :
+  else
+    cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[]}'
+  fi
+  if printf '%s' "${cf_json}" | jq -e '.flag_invalid == true' >/dev/null 2>&1; then
+    echo "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true"
+  fi
+  HEAL_CF_GATE_JSON="${cf_json}"
+  HEAL_CF_GATE_DECISION="$(printf '%s' "${cf_json}" | jq -r '.decision' 2>/dev/null | tr -cd 'a-z' || true)"
+  HEAL_CF_GATE_RESULT="$(printf '%s' "${cf_json}" | jq -r '.result // "missing"' 2>/dev/null | tr -cd 'A-Za-z_' | cut -c1-20 || true)"
+  HEAL_CF_GATE_REASON="$(printf '%s' "${cf_json}" | jq -r '.reason // "heal_counterfactual_check_unavailable"' 2>/dev/null | tr -cd 'a-z_' | cut -c1-80 || true)"
+  [ -n "${HEAL_CF_GATE_RESULT}" ] || HEAL_CF_GATE_RESULT="missing"
+  [ -n "${HEAL_CF_GATE_REASON}" ] || HEAL_CF_GATE_REASON="heal_counterfactual_check_unavailable"
+  if [ "${HEAL_CF_GATE_DECISION}" = "approve" ]; then
+    echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=approve result=${HEAL_CF_GATE_RESULT} reason=${HEAL_CF_GATE_REASON} issue=${issue_num}"
+    return 0
+  fi
+  HEAL_CF_GATE_DECISION="hold"
+  return 1
+}
+
+# Issue #8249: a poller heal counterfactual hold reaches a human once per
+# plan comment and result. Posts one ai:heal-counterfactual-hold:v1 comment
+# (source=poller) and one WARNING unless a trusted marker for this issue,
+# plan comment and result (plan.yml's included) is already in the caller's
+# comment snapshot. heal_route_unknown (the batched details map had no usable
+# entry this tick) only logs: the next tick re-checks, and a transient cache
+# miss must not page on ordinary issues. Failures only warn.
+# Args: <issue_num> <comments_json> <login>; reads the HEAL_CF_GATE_* globals.
+_heal_counterfactual_hold_notify()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local login="$3"
+  local plan_comment="${HEAL_CF_GATE_PLAN_COMMENT:-unknown}"
+  local result="${HEAL_CF_GATE_RESULT:-missing}"
+  local reason="${HEAL_CF_GATE_REASON:-heal_counterfactual_check_unavailable}"
+  local duplicate="false" hold_body=""
+
+  if [ "${reason}" = "heal_route_unknown" ]; then
+    return 0
+  fi
+  duplicate="$(printf '%s' "${comments_json:-[]}" | jq -r --arg prefix "<!-- ai:heal-counterfactual-hold:v1 issue=${issue_num} plan_comment=${plan_comment} result=${result} " --arg login "${login}" '
+    [ .[]?
+      | select(type == "object")
+      | select(((.user.login // "") == $login and $login != "")
+          or ((.user.login // "") | test("\\[bot\\]$"))
+          or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+      | (.body // "")
+      | select(contains($prefix))
+    ] | length > 0' 2>/dev/null)" || duplicate="false"
+  if [ "${duplicate}" = "true" ]; then
+    return 0
+  fi
+  if ! hold_body="$(printf '%s' "${HEAL_CF_GATE_JSON:-{\}}" | jq -r --arg issue "${issue_num}" --arg plan "${plan_comment}" \
+    --arg result "${result}" --arg reason "${reason}" '
+      def clean: tostring | gsub("[[:cntrl:]`]"; " ") | gsub("<!--"; "&lt;!--") | gsub("-->"; "--&gt;") | .[0:300];
+      ((.line // "") | clean) as $line
+      | [(.unmatched_jobs // [])[]? | clean] as $unmatched
+      | [
+          "**Automatic approval withheld: the plan does not show that the change would have made the failing run pass.**",
+          "",
+          (if $line != "" then "Counterfactual line: `\($line)`" else "Counterfactual line: _(none found)_" end),
+          "Reason: `\($reason | gsub("[^a-z_]"; ""))`",
+          "",
+          (if $reason == "fail" then "The plan says the observed run would still fail for a reason it does not address. The plan has to cover that cause, or list the job under `## Deferred scope` and say `PARTIAL`."
+           elif $reason == "unverified" then "The plan says the heal evidence cannot show whether the change helps. The evidence named on the line is missing: add it to the heal issue (for example the failing job step timeline) and re-plan."
+           elif $reason == "partial_jobs_not_deferred" then "These jobs would still fail but are not listed under `## Deferred scope`:\n" + ($unmatched | map("- " + .) | join("\n")) + "\nAdd them to `## Deferred scope` or fix them."
+           elif $reason == "deferred_scope_missing" then "The line says `PARTIAL`, but the plan has no readable `## Deferred scope` section listing the jobs that would still fail."
+           elif $reason == "partial_job_list_invalid" then "The `PARTIAL:` line must list the still-failing jobs, comma-separated (at most 20)."
+           elif $reason == "heal_counterfactual_check_unavailable" then "The heal counterfactual check could not run."
+           else "The plan must end its `## Counterfactual check` with exactly one `HEAL_COUNTERFACTUAL:` line." end),
+          "",
+          "Stall recovery did not post `/approved`. A maintainer can review the plan and reply `/approved`, or `/reclarify`.",
+          "",
+          "<!-- ai:heal-counterfactual-hold:v1 issue=\($issue) plan_comment=\($plan) result=\($result) source=poller -->"
+        ] | join("\n")' 2>/dev/null)"; then
+    echo "::warning::Could not render the heal counterfactual hold comment for issue #${issue_num}."
+    return 0
+  fi
+  if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+    echo "::warning::Could not post the heal counterfactual hold comment for issue #${issue_num}."
+  fi
+  tg_notify_issue "${issue_num}" "Stall recovery: heal plan auto-approval held (counterfactual ${result}, ${reason}); a maintainer must reply /approved." "WARNING" || true
+  return 0
+}
+
 # Issue #6769: hold automatic /approved posts from stall recovery for plans
 # that list automation paths (.github/, .claude/, scripts/, prompts/,
 # workflow-templates/). The plan is the newest comment carrying the
@@ -18129,6 +18283,11 @@ _plan_auto_approval_gate()
           | strings
         ' > "${gate_plan_file}" 2>/dev/null || [ ! -s "${gate_plan_file}" ]; then
         gate_reason="plan_comment_unavailable"
+      elif ! _plan_heal_counterfactual_check "${issue_num}" "${details_map_json}" "${gate_plan_file}" \
+        "${comments_json:-[]}" "${gate_login}"; then
+        # Issue #8249: checked before the automation-path guard so a held
+        # heal plan never gets a Q108 grant written into its issue body.
+        gate_reason="heal_counterfactual_hold"
       else
         # Issue metadata comes from the batched GraphQL cache (author fields
         # added for this gate). The guard needs it only when the flag is on
@@ -18202,6 +18361,13 @@ _plan_auto_approval_gate()
   # Sanitize model-derived values before logging.
   gate_reason="$(printf '%s' "${gate_reason}" | tr -cd 'a-z_' | cut -c1-80)"
   gate_paths="$(printf '%s' "${gate_paths}" | tr -cd 'A-Za-z0-9._/,-' | cut -c1-4200)"
+  if [ "${gate_reason}" = "heal_counterfactual_hold" ]; then
+    # Issue #8249: the issue keeps its phase and no recovery attempt counts.
+    echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=hold result=${HEAL_CF_GATE_RESULT:-missing} reason=${HEAL_CF_GATE_REASON:-heal_counterfactual_check_unavailable} issue=${issue_num}"
+    echo "STALL_SKIP issue=${issue_num} reason=heal_counterfactual_hold phase=${phase} action=none"
+    _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+    return 1
+  fi
   echo "AI_PHASE_GATE_V1 phase=stall_recovery gate=auto_approve reason=${gate_reason:-plan_gate_error} outcome=defer issue=${issue_num} paths=${gate_paths:-none}"
   echo "STALL_SKIP issue=${issue_num} reason=automation_path_plan_hold phase=${phase} action=none"
   _plan_auto_approval_hold_notify "${issue_num}" "${comments_json}" "${gate_reason:-plan_gate_error}" "${gate_paths:-none}" "${gate_login}" "${gate_display_paths:-[]}" || true

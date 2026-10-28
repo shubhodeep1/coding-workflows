@@ -587,7 +587,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh pr_dependency.py partial_delivery.py assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_base_image_preseed.sh clarify_isolated_run.sh files_touched_scope_guard.py plan_split_dispatch.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -745,6 +745,22 @@ jobs:
               exit 1
             fi
             install -m 0644 "${src}" prompts/references/security-money-lens.txt
+          fi
+
+          # Issue #8249: the heal-route counterfactual block that
+          # run_plan_codex.sh appends for workflow-heal plans. Optional: without
+          # it the heal plan carries no HEAL_COUNTERFACTUAL line and the plan
+          # auto-approval gate holds it for a human.
+          if [ ! -f prompts/mode-plan-heal-counterfactual.txt ]; then
+            src=".codex-workflow-src/prompts/mode-plan-heal-counterfactual.txt"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/prompts/mode-plan-heal-counterfactual.txt" ]; then
+              src=".codex-workflow-src-main/prompts/mode-plan-heal-counterfactual.txt"
+            fi
+            if [ -f "${src}" ] && [ ! -L "${src}" ]; then
+              install -m 0644 "${src}" prompts/mode-plan-heal-counterfactual.txt
+            else
+              echo "::warning::prompts/mode-plan-heal-counterfactual.txt unavailable in the support checkout; heal plans will be held for a human."
+            fi
           fi
 
           rm -rf .codex-workflow-src-main
@@ -2727,8 +2743,13 @@ jobs:
             exit 1
           fi
 
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="$(cat "${PLAN_COMMENT_FILE}")"
+          # Issue #8249: keep the plan comment id so the heal counterfactual
+          # hold marker names the plan it held (dedup with the poller).
+          PLAN_COMMENT_ID="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${PLAN_COMMENT_FILE}")" --jq '.id')"
+          if [[ "${PLAN_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+            echo "PLAN_COMMENT_ID=${PLAN_COMMENT_ID}" >> "$GITHUB_ENV"
+          fi
 
           ensure_label_exists "ai:awaiting-approval" "${{ github.repository }}"
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -2785,6 +2806,7 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           PLAN_SPLIT_TO_PROJECT_ENABLED: ${{ vars.PLAN_SPLIT_TO_PROJECT_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
           # Read as ${PLAN_STEP_REPO} so the run: body carries no expression
           # (tests/test_workflow_file_size_limit.py expression guard).
           PLAN_STEP_REPO: ${{ github.repository }}
@@ -2915,9 +2937,116 @@ jobs:
             return 0
           }
 
+          # Issue #8249: one deduplicated hold comment plus a WARNING for a
+          # workflow-heal plan whose HEAL_COUNTERFACTUAL line does not show the
+          # change would have turned the observed failing run green. Failures
+          # only warn; a hold never turns into an approval.
+          heal_counterfactual_plan_hold() {
+            local hold_body="" comments_json="" duplicate="false" plan_comment="${PLAN_COMMENT_ID:-unknown}"
+            [[ "${plan_comment}" =~ ^[0-9]+$ ]] || plan_comment="unknown"
+            if [ "${plan_comment}" != "unknown" ] \
+              && comments_json="$(gh_retry gh api --paginate "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=100" 2>/dev/null | jq -s -c 'add // []' 2>/dev/null)"; then
+              duplicate="$(printf '%s' "${comments_json}" | jq -r --arg prefix "<!-- ai:heal-counterfactual-hold:v1 issue=${ISSUE_NUMBER} plan_comment=${plan_comment} result=${heal_cf_result} " '
+                any(.[]?; ((.user.login // "" | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+                  and ((.body // "") | contains($prefix)))' 2>/dev/null)" || duplicate="false"
+            fi
+            if [ "${duplicate}" = "true" ]; then
+              echo "Heal counterfactual hold already reported for issue #${ISSUE_NUMBER}; not posting another comment."
+              return 0
+            fi
+            if ! hold_body="$(printf '%s' "${heal_cf_json}" | jq -r --arg issue "${ISSUE_NUMBER}" --arg plan "${plan_comment}" \
+              --arg result "${heal_cf_result}" --arg reason "${heal_cf_reason}" '
+                def clean: tostring | gsub("[[:cntrl:]`]"; " ") | gsub("<!--"; "&lt;!--") | gsub("-->"; "--&gt;") | .[0:300];
+                ((.line // "") | clean) as $line
+                | [(.unmatched_jobs // [])[]? | clean] as $unmatched
+                | [
+                    "**Automatic approval withheld: the plan does not show that the change would have made the failing run pass.**",
+                    "",
+                    (if $line != "" then "Counterfactual line: `\($line)`" else "Counterfactual line: _(none found)_" end),
+                    "Reason: `\($reason | gsub("[^a-z_]"; ""))`",
+                    "",
+                    (if $reason == "fail" then "The plan says the observed run would still fail for a reason it does not address. The plan has to cover that cause, or list the job under `## Deferred scope` and say `PARTIAL`."
+                     elif $reason == "unverified" then "The plan says the heal evidence cannot show whether the change helps. The evidence named on the line is missing: add it to the heal issue (for example the failing job step timeline) and re-plan."
+                     elif $reason == "partial_jobs_not_deferred" then "These jobs would still fail but are not listed under `## Deferred scope`:\n" + ($unmatched | map("- " + .) | join("\n")) + "\nAdd them to `## Deferred scope` or fix them."
+                     elif $reason == "deferred_scope_missing" then "The line says `PARTIAL`, but the plan has no readable `## Deferred scope` section listing the jobs that would still fail."
+                     elif $reason == "partial_job_list_invalid" then "The `PARTIAL:` line must list the still-failing jobs, comma-separated (at most 20)."
+                     elif ($reason | IN("heal_counterfactual_check_unavailable", "heal_route_unknown")) then "The heal counterfactual check could not run."
+                     else "The plan must end its `## Counterfactual check` with exactly one `HEAL_COUNTERFACTUAL:` line." end),
+                    "",
+                    "A maintainer can review the plan and reply `/approved`, or `/reclarify`.",
+                    "",
+                    "<!-- ai:heal-counterfactual-hold:v1 issue=\($issue) plan_comment=\($plan) result=\($result) source=plan -->"
+                  ] | join("\n")' 2>/dev/null)"; then
+              echo "::warning::Could not render the heal counterfactual hold comment for issue #${ISSUE_NUMBER}."
+              return 0
+            fi
+            if ! gh_retry gh api "repos/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+              echo "::warning::Could not post the heal counterfactual hold comment for issue #${ISSUE_NUMBER}."
+            fi
+            if [ -f scripts/tg_helpers.sh ]; then
+              # shellcheck disable=SC1091
+              source scripts/tg_helpers.sh >/dev/null 2>&1 || true
+            fi
+            if type tg_send_msg >/dev/null 2>&1; then
+              tg_send_msg "Heal plan auto-approval withheld for issue #${ISSUE_NUMBER}: counterfactual ${heal_cf_result} (${heal_cf_reason})."$'\n'"Issue: ${GITHUB_SERVER_URL:-https://github.com}/${PLAN_STEP_REPO}/issues/${ISSUE_NUMBER}" "WARNING" >/dev/null 2>&1 || true
+            fi
+            return 0
+          }
+
           normalized_flag="$(printf '%s' "${AUTO_IMPLEMENT_ON_CLEAR_PLAN:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
           case "${normalized_flag}" in
             1|true|yes|on)
+              # Heal counterfactual gate (issue #8249). A workflow-heal plan is
+              # auto-approved only when its single HEAL_COUNTERFACTUAL line is
+              # PASS, or PARTIAL with every listed job under ## Deferred scope
+              # (scripts/partial_delivery.py heal-counterfactual, which the
+              # poller's _plan_auto_approval_gate also calls). It runs before
+              # the automation-path gate so a held heal plan never gets a grant
+              # written. Every error holds; a human /approved still works.
+              # HEAL_COUNTERFACTUAL_GATE_ENABLED=false turns it off.
+              heal_cf_route="false"
+              if [ "${HEAL_ROUTE:-false}" = "true" ]; then
+                heal_cf_route="true"
+              else
+                heal_cf_issue_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/heal_cf_issue.XXXXXX")"
+                printf '%s' "${CURRENT_ISSUE_JSON}" > "${heal_cf_issue_file}"
+                heal_cf_route="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/workflow_failure_heal.py heal-route --issue-json "${heal_cf_issue_file}" 2>/dev/null)" || heal_cf_route="unknown"
+                rm -f "${heal_cf_issue_file}"
+                case "${heal_cf_route}" in true|false) ;; *) heal_cf_route="unknown" ;; esac
+              fi
+              if [ "${heal_cf_route}" != "false" ]; then
+                heal_cf_json=""
+                if [ "${heal_cf_route}" = "unknown" ]; then
+                  heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[]}'
+                elif [ -f scripts/partial_delivery.py ] && heal_cf_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/partial_delivery.py heal-counterfactual \
+                    --plan-file "${CODEX_OUTPUT_FILE:-}" --gate-flag "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" 2>/dev/null)" \
+                  && printf '%s' "${heal_cf_json}" | jq -e '.decision | IN("approve", "hold")' >/dev/null 2>&1; then
+                  :
+                else
+                  heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_counterfactual_check_unavailable","line":"","unmatched_jobs":[]}'
+                fi
+                if printf '%s' "${heal_cf_json}" | jq -e '.flag_invalid == true' >/dev/null 2>&1; then
+                  echo "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true"
+                fi
+                heal_cf_decision="$(printf '%s' "${heal_cf_json}" | jq -r '.decision' 2>/dev/null | tr -cd 'a-z' || true)"
+                heal_cf_result="$(printf '%s' "${heal_cf_json}" | jq -r '.result // "missing"' 2>/dev/null | tr -cd 'A-Za-z_' | cut -c1-20 || true)"
+                heal_cf_reason="$(printf '%s' "${heal_cf_json}" | jq -r '.reason // "heal_counterfactual_check_unavailable"' 2>/dev/null | tr -cd 'a-z_' | cut -c1-80 || true)"
+                [ "${heal_cf_decision}" = "approve" ] || heal_cf_decision="hold"
+                heal_cf_outcome="approve"
+                [ "${heal_cf_decision}" = "approve" ] || heal_cf_outcome="hold"
+                echo "AI_PHASE_GATE_V1 phase=plan gate=heal_counterfactual outcome=${heal_cf_outcome} result=${heal_cf_result:-missing} reason=${heal_cf_reason:-heal_counterfactual_check_unavailable} issue=${ISSUE_NUMBER}"
+                if [ "${heal_cf_decision}" != "approve" ]; then
+                  echo "auto_approve_hold_reason=heal_counterfactual_hold" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "### Automatic plan approval held (heal counterfactual)"
+                    echo ""
+                    echo "This workflow-heal plan does not show that the change would have made the failing run pass (result \`${heal_cf_result:-missing}\`, reason \`${heal_cf_reason}\`), so no automatic \`/approved\` was posted."
+                    echo "A maintainer can review the plan and reply \`/approved\`, or \`/reclarify\`."
+                  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+                  heal_counterfactual_plan_hold || true
+                  exit 0
+                fi
+              fi
               # Automation-path plan gate (issue #6769). Plans listing
               # .github/, .claude/, scripts/, prompts/ or workflow-templates/
               # paths are held while AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED

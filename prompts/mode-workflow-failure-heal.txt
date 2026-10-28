@@ -133,6 +133,16 @@ what (if anything) still has to happen for the fix to reach the failing
 context, such as a release, a forward-merge, or a consumer wrapper sync. Never propose renaming or
 removing an existing identifier, env var, label, or log prefix.
 
+## Would the suggested fix have passed?
+One bullet per failing job named in the evidence: `<job>: yes`, `<job>: no`
+or `<job>: unknown`, followed by one sentence on why, citing the timestamps,
+step names or log lines that show it. Answer `unknown` when the evidence does
+not show which step failed or used the time, and name what is missing. Never
+answer `yes` from the intent of the fix alone. For a `transient`,
+`consumer-config` or `already-fixed` classification, write one line
+`Not applicable: <classification>`. The planner starts its counterfactual
+check from this subsection but re-derives it from the evidence.
+
 ## Affected files
 A bullet list of the files most likely to need changes (repo-relative paths,
 prefixed with the repository they live in).
