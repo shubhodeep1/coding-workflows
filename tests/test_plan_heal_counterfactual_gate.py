@@ -152,6 +152,11 @@ def test_line_outside_the_counterfactual_section_holds() -> None:
 		assert (result["decision"], result["reason"]) == ("hold", "outside_counterfactual_section"), (text, result)
 	nested = "## Counterfactual check\n\n### job-a\n\nwalked.\n\nHEAL_COUNTERFACTUAL: PASS\n"
 	assert _check(nested)["decision"] == "approve"
+	# Only a level-2 heading opens the section.
+	for level in ("###", "######"):
+		deeper = f"{level} Counterfactual check\n\nHEAL_COUNTERFACTUAL: PASS\n"
+		result = _check(deeper)
+		assert (result["decision"], result["reason"]) == ("hold", "outside_counterfactual_section"), (level, result)
 
 
 def test_partial_job_names_match_whole_tokens_only() -> None:
@@ -433,9 +438,15 @@ def test_plan_step_gate_off_releases_an_unknown_route() -> None:
 	# A non-string issue body makes heal-route fail, so the route is unknown.
 	broken = dict(_ORDINARY_ISSUE, body=123)
 	held = _run_step(broken, _ORDINARY_PLAN)
-	if "reason=heal_route_unknown" not in held["stdout"]:
-		return
+	assert "reason=heal_route_unknown" in held["stdout"], held["stdout"]
 	assert "auto_approve_hold_reason=heal_counterfactual_hold" in held["output"]
+	# An invalid flag on an unknown route is held and logged as invalid.
+	invalid = _run_step(broken, _ORDINARY_PLAN, flag="banana")
+	assert "reason=heal_route_unknown" in invalid["stdout"], invalid["stdout"]
+	assert "::warning::HEAL_COUNTERFACTUAL_GATE_ENABLED has invalid value; treating as true" in invalid["stdout"]
+	# An unmatched quote in the flag does not abort the step.
+	quoted = _run_step(broken, _ORDINARY_PLAN, flag="fa'lse")
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in quoted["output"]
 	off = _run_step(broken, _ORDINARY_PLAN, flag="FALSE")
 	assert "reason=heal_route_unknown" not in off["stdout"]
 	assert "auto_approve_hold_reason=heal_counterfactual_hold" not in off["output"]

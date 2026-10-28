@@ -18092,7 +18092,7 @@ _plan_heal_counterfactual_check()
   local plan_file="$3"
   local comments_json="$4"
   local login="$5"
-  local script_dir="" heal_py="" partial_py="" route_file="" route="" cf_json=""
+  local script_dir="" heal_py="" partial_py="" route_file="" route="" cf_json="" flag_norm=""
 
   HEAL_CF_GATE_DECISION="approve"
   HEAL_CF_GATE_RESULT=""
@@ -18129,12 +18129,17 @@ _plan_heal_counterfactual_check()
       | last
       | ((.id // .databaseId // "") | tostring)' 2>/dev/null || true)"
   [[ "${HEAL_CF_GATE_PLAN_COMMENT}" =~ ^[0-9]+$ ]] || HEAL_CF_GATE_PLAN_COMMENT="unknown"
-  if [ "${route}" = "unknown" ] \
-    && [ "$(printf '%s' "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" = "false" ]; then
+  # sed, not xargs: xargs fails on an unmatched quote in the flag value.
+  flag_norm="$(printf '%s' "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+  if [ "${route}" = "unknown" ] && [ "${flag_norm}" = "false" ]; then
     # The rollback switch also releases an unknown-route hold.
     cf_json='{"decision":"approve","result":"missing","reason":"gate_disabled","line":"","unmatched_jobs":[]}'
   elif [ "${route}" = "unknown" ]; then
     cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[]}'
+    case "${flag_norm}" in
+      ""|true) ;;
+      *) cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[],"flag_invalid":true}' ;;
+    esac
   elif [ -f "${partial_py}" ] \
     && cf_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${partial_py}" heal-counterfactual --plan-file "${plan_file}" \
       --gate-flag "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" 2>/dev/null)" \
