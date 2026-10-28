@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data-file edit only. The whole file is replaced with the two required lines and a trailing newline:\n\n```\nstatus: ok\ndecompose-run: 40746491161\n```\n\nIf the file does not exist it is created with this content. Any other existing lines are dropped.\n\n## Data structures affected\nOnly the plain-text canary file `tests/e2e_smoke_canary.txt`. No schemas, state or workflow data change.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the whole file instead of editing lines in place\n- Chosen: write the file in full with exactly the two required lines and a trailing newline.\n- Alternatives considered: change only line 1 and append line 2 to whatever else is in the file.\n- Why: the issue says the file must end up with exactly these two lines whatever it held before. A full rewrite gives that result every time, and running it again changes nothing.\n\n### D2 \u2014 Leave the advisory \"Expected files\" test modules untouched\n- Chosen: edit only `tests/e2e_smoke_canary.txt`.\n- Alternatives considered: also update the listed `tests/test_*.py` modules.\n- Why: the issue's scope section says to edit only the canary file. The \"Expected files\" list is advisory output of the decomposition's affected-test selection; it is not a list of required edits. The pre-push gate runs those tests to confirm they still pass.\n\n## Security considerations\n- Trust boundaries touched: none. This is a static text fixture with no executable content.\n- Authorization: no new endpoint or other surface is added.\n- External-input validation: not applicable. The content is fixed by the issue.\n- Abuse cases: none. The file holds no secrets, credentials or money state.\n\n## Risks and edge cases\n- A sibling issue owns `tests/e2e_smoke_canary_b.txt`, so that file must not be touched. Editing only the one named file avoids a merge conflict on the integration branch.\n- Line endings must be LF and the file must end with exactly one trailing newline, with nothing after the second line.\n- The advisory test list includes smoke and contract tests that may read the canary file. If one of them asserts different canary content, the pre-push gate will report it. The issue limits this change to the canary file, so such a failure should be reported, not fixed here.\n- No conflicts between the issue and the codebase were found. The planning ref matches the integration branch (`Integration branch mismatch: false`).\n\n## Testing considerations\nCheck the three acceptance criteria:\n- `head -n1 tests/e2e_smoke_canary.txt` prints `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary.txt` prints `decompose-run: 40746491161`.\n- `git diff --stat` lists only `tests/e2e_smoke_canary.txt`.\n\nAlso check that `wc -l` reports 2 and that the file ends with a single newline. No test modules need edits.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies a single-file content change and explicitly forbids touching other files. Expanding into the advisory test modules would break the issue's scope rules and could collide with the parallel sibling issue. Holding scope is both the complete and the safest option, in line with the \u00a76 priorities (Correctness & safety before Speed).\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "cc4ce1fedaf3b9b48cba92b486f12ba34bd851896aa0fadba833c3c05c750afa",
+  "lineage": {
+    "issue_number": 8276,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40748431112",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40748431112",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8276"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261028190011_5651dce422",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8276,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40748431112"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8276",
+  "timestamps": {
+    "created_at": "2026-10-28T19:00:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
