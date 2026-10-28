@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the scope conflict be resolved so the root-cause fix can land?\nChoices:\nA) Re-issue this heal as a new issue whose scope (heal-scope marker or `files_touched`) lists exactly `scripts/ai_memory_lib.py`, `.github/workflows/memory_maintenance.yml`, `tests/**` and `changelog.d/*.md`, keeping `Target branch: stable`. Then close this issue as superseded. (RECOMMENDED)\nB) Keep the current scope and change only `test-and-mark-stable.yml` so the gate treats a timed-out or `cancelled` `internal-memory-maintenance` run as non-fatal. **Note:** this weakens the failing check, which the issue's fix constraints forbid. It also leaves the memory-maintenance run broken.\nC) Close this issue as not planned. A person makes the fix in an interactive session.\nQ2: Which of the two changes in \"Suggested fix\" should be implemented? (Applies only if Q1 = A or C.)\nChoices:\nA) Both changes:\n   - The single-branch `ai-memory` clone in `_clone_for_memory_branch`, falling back to the existing full clone when the branch does not exist yet.\n   - A step-level `timeout-minutes` (for example 10) on \"Extract repository learnings (fail-open)\".\n   - The regression tests for each change. (RECOMMENDED)\nB) Only the step-level `timeout-minutes` on the extraction step, plus its contract test. The run timings show this alone would have let run 40752760153 finish within 20 minutes, but with a thin margin that shrinks as the repository grows.\nC) Only the single-branch clone change and its regression test.",
+  "fingerprint": "ec07486085f2b1d6ad0f2e88bf461e729f343ae0d555fb3c7b84d79473fe072e",
+  "lineage": {
+    "issue_number": 8287,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40773365170",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40773365170",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261028214313_e609284243",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8287,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40773365170"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8287 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-28T21:43:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
