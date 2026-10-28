@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which steps of `tests-release-and-log-analysis` in `.github/workflows/ci.yml` should move, and into which job?\nChoices:\nA) Read the step timings and job durations from run 40716905879 (one run read, host-side, before planning). Move the slowest steps, unchanged, into the non-matrix job with the shortest duration in that run (`static-checks`, `tests-hooks-and-orchestrator`, `tests-heal-plan-and-validation` or `tests-promote-stall-and-review`). Stop once the source job's measured time is at or below about 12 minutes and the receiving job's projected time stays at or below about 75% of its own timeout. (RECOMMENDED)\nB) Skip the timings and judge by size. Move the largest step blocks (\"Promote cycle and blocked-verdict unit tests\"; then, if needed, \"Workflow log analysis contract tests\" and \"Semantic cache unit tests\") into `tests-heal-plan-and-validation`.\nC) Same as B, but the target is `tests-hooks-and-orchestrator`.\n**Note:** the `orchestrate-poll` job is a 5-group matrix, so a step moved there would run 5 times unless gated to one group. `static-checks` has only a 15-minute timeout. Neither is listed as a target for that reason.\nQ2: Should the Node-based \"Set up Node 22 for the claude-pool-broker Worker tests\" and \"claude-pool-broker Worker tests (vitest)\" steps stay together in one job if either one moves?\nChoices:\nA) Yes. Move them as a pair or not at all, so the vitest step always runs after its Node setup in the same job. (RECOMMENDED)\nB) No. Each step may move on its own.",
+  "fingerprint": "2018a126c9e21a3bd1f34a6fbacb71e6b89a7a7a4447034da922f5c5f7b09ead",
+  "lineage": {
+    "issue_number": 8268,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40719902299",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40719902299",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261028155842_4a9e15cc7a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8268,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40719902299"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8268 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-28T15:58:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
