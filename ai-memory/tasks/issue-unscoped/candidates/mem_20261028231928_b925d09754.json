@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:3219-3242 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: When the ls-remote probe or shallow clone fails, `_clone_for_memory_branch` silently falls back to the full clone without logging the return code or stderr.\n  WHY: A systematic fast-path failure in CI would quietly bring back the 135-209 s full clone and the 20-minute timeout with no log line naming the cause (all reviewers rated it NIT; the suggested diagnostic must not leak the token in `origin_url`).\n- scripts/ai_memory_lib.py:3237-3239 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `checkout -B <memory_branch> refs/remotes/origin/<memory_branch>` after a successful `--branch` shallow clone is a redundant no-op.\n  WHY: It resets the branch to the same SHA, so behavior is correct (NIT), but it could mislead readers into thinking the local branch does not exist.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ai_memory_lib.py:3219-3220, 3237-3242 | severity=NIT | confidence=3\n  PROBLEM: When the `ls-remote` probe or shallow clone returns nonzero, the function silently falls through to the full clone. `fast_clone.returncode` and `fast_clone.stderr` are never logged.\n  WHY: A systematic shallow-clone failure would send every memory write back to the 135-209 s full clone with no log line naming the cause. A one-line stderr diagnostic is suggested, and it must not include `origin_url`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ai_memory_lib.py:3237-3242 | severity=NIT | confidence=3\n  PROBLEM: The shallow clone fallback is silent; if the fast path fails systematically, the system quietly reverts to the slow full clone.\n  WHY: The performance regression goes undetected except through telemetry, so job timeouts could return in CI without clear log evidence.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_memory_lib.py:3237-3239 | severity=NIT | confidence=3\n  PROBLEM: After `git clone --single-branch --branch`, the follow-up `checkout -B` is a redundant no-op because the local branch already exists and is checked out.\n  WHY: It does not fail at runtime. It is a redundant shell-out that could mislead future readers.\n- scripts/ai_memory_lib.py:3219-3242 | severity=NIT | confidence=3\n  PROBLEM: When the probe or fast clone fails, the function silently falls through to the full clone, and `fast_clone.stderr`, `fast_clone.returncode` and `probe.stderr` are never read.\n  WHY: A systematic CI failure of the fast path would revert every memory write to the 135-209 s full clone. Only an elevated `clone_ms` aggregate would reveal it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/ai_memory_lib.py:3219-3220, 3237-3242 | severity=NIT | confidence=4\n  PROBLEM: Both the ls-remote probe and the shallow clone run with `check=False`, and neither `probe.returncode`/`probe.stderr` nor `fast_clone.stderr` is read, logged or surfaced.\n  WHY: A systematic shallow-clone failure silently reverts every memory write to the 135-209 s full clone. Memory maintenance would regress toward the 20-minute job timeout (run 40752760153) with no diagnostic, and `clone_ms` does not say why the fast path was skipped.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d72a720cd531368ec4bc833cff8ce876cffd86b02c86429b40f6ee2830fbe5b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8288,
+    "run_id": "40783722815",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40783722815",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028231928_b925d09754",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8288,
+    "run_id": "40783722815"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T23:19:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
