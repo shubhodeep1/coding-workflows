@@ -69,7 +69,7 @@ elif "/actions/runs?" in path:
 elif re.search(r"/actions/runs/\d+$", path):
 	payload = json.loads(os.environ.get("STUB_ACTIVE_RUN_JSON", "null"))
 elif re.search(r"/actions/runs/\d+/jobs\?", path):
-	payload = {"jobs": []}
+	payload = json.loads(os.environ.get("STUB_JOBS_JSON") or '{"jobs": []}')
 elif "/commits?" in path:
 	payload = []
 else:
@@ -413,7 +413,7 @@ def _phase_step_script(step_id: str) -> str:
 	raise AssertionError(f"{step_id} step not found")
 
 
-def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, terminal: bool = False, failed_page: int | None = None, pr_recheck_number: int | None = None, active_run: dict | None = None, later_pages: list | None = None, terminal_timeout: str = "0", labels_later: str | None = None, switch_after: int = 0) -> tuple[int, dict[str, str], list[list[str]], str]:
+def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int | None = None, issue_title: str = ISSUE_TITLE, terminal: bool = False, failed_page: int | None = None, pr_recheck_number: int | None = None, active_run: dict | None = None, later_pages: list | None = None, terminal_timeout: str = "0", labels_later: str | None = None, switch_after: int = 0, jobs: dict | None = None, extra_env: dict[str, str] | None = None) -> tuple[int, dict[str, str], list[list[str]], str]:
 	# Runs the real wait-clarify / wait-implement script against the stub gh
 	# and returns its exit code, GITHUB_OUTPUT, gh calls, and combined output.
 	with tempfile.TemporaryDirectory() as tmp:
@@ -470,6 +470,10 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 		if labels_later is not None:
 			env["STUB_LABELS_LATER"] = labels_later
 			env["STUB_LABELS_SWITCH_AFTER"] = str(switch_after)
+		if jobs is not None:
+			env["STUB_JOBS_JSON"] = json.dumps(jobs)
+		if extra_env:
+			env.update(extra_env)
 		proc = subprocess.run(["bash", "-c", _phase_step_script(step_id)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60)
 		outputs: dict[str, str] = {}
 		for line in output_file.read_text(encoding="utf-8").splitlines():
@@ -735,6 +739,74 @@ def test_implement_activity_state_tracks_working_run() -> None:
 	assert "working=${IMPL_RUN_ID_WORKING}" in cur_state, cur_state
 	assert "PHASE_TIMEOUT" in script
 	assert "Implement phase stalled" in script
+
+
+PREPUSH_GATE_STEP = "Pre-push affected-test gate"
+
+
+def _in_progress_step_jobs(step_name: str) -> dict:
+	return {"jobs": [{"steps": [
+		{"name": "Set up job", "status": "completed"},
+		{"name": step_name, "status": "in_progress"},
+	]}]}
+
+
+def _working_implement_pages() -> list:
+	return [[_run(777, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-09-28T03:50:56Z")]]
+
+
+def test_implement_prepush_gate_step_gets_its_own_stall_limit() -> None:
+	# Issue #8244 (run 40610855593): one 31-minute "Pre-push affected-test
+	# gate" step outlived the 30-minute Phase 3b inactivity limit. The fake
+	# clock makes IDLE 0, 120, 240 seconds; the normal limit is 60 s, the
+	# gate step's is 180 s, so the wait survives idle 120 and stalls at 240.
+	rc, outputs, calls, log = _run_phase_step(
+		"wait-implement", _working_implement_pages(), terminal=True, terminal_timeout="1",
+		jobs=_in_progress_step_jobs(PREPUSH_GATE_STEP),
+		extra_env={"PREPUSH_GATE_STEP_STALL_MINUTES": "3"},
+	)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "idle 120s (timeout in ~1m)" in log, log
+	assert "(pre-push gate step: limit 3m)" in log.split("idle 120s", 1)[1].splitlines()[0], log
+	assert "Implement phase stalled — no activity for 3 minutes (pre-push gate step: limit 3m)" in log, log
+	assert "idle 240s" not in log, log
+
+
+def test_implement_other_steps_keep_the_normal_stall_limit() -> None:
+	rc, outputs, calls, log = _run_phase_step(
+		"wait-implement", _working_implement_pages(), terminal=True, terminal_timeout="1",
+		jobs=_in_progress_step_jobs("Run Codex implementation"),
+		extra_env={"PREPUSH_GATE_STEP_STALL_MINUTES": "3"},
+	)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "::error::Implement phase stalled — no activity for 1 minutes\n" in log + "\n", log
+	assert "pre-push gate step" not in log, log
+	assert "idle 120s" not in log, log
+
+
+def test_implement_prepush_gate_limit_never_shortens_the_normal_limit() -> None:
+	# An extended value below PHASE_TIMEOUT leaves the normal limit in place.
+	rc, outputs, calls, log = _run_phase_step(
+		"wait-implement", _working_implement_pages(), terminal=True, terminal_timeout="2",
+		jobs=_in_progress_step_jobs(PREPUSH_GATE_STEP),
+		extra_env={"PREPUSH_GATE_STEP_STALL_MINUTES": "1"},
+	)
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert "Implement phase stalled — no activity for 2 minutes" in log, log
+	assert "pre-push gate step" not in log, log
+
+
+def test_implement_prepush_gate_limit_keys_on_the_working_run_step_only() -> None:
+	script = _phase_step_script("wait-implement")
+	assert 'PREPUSH_GATE_STEP_NAME="Pre-push affected-test gate"' in script
+	assert 'PREPUSH_GATE_STEP_STALL_MINUTES="${PREPUSH_GATE_STEP_STALL_MINUTES:-35}"' in script
+	assert 'if [ "$IMPL_STEP_NAME" = "$PREPUSH_GATE_STEP_NAME" ] && [ "$PREPUSH_GATE_STALL_LIMIT" -gt "$INACTIVITY_LIMIT" ]; then' in script
+	assert 'if [ "$IDLE" -ge "$EFFECTIVE_LIMIT" ]; then' in script
+	# The activity signals and the #8241 working-run lookup are unchanged.
+	assert "actions/runs/${IMPL_RUN_ID_WORKING}/jobs?per_page=10" in script
+	cur_state = next(line for line in script.splitlines() if line.strip().startswith("CUR_STATE="))
+	assert cur_state.strip() == 'CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT};working=${IMPL_RUN_ID_WORKING}"', cur_state
+	assert "INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))" in script
 
 
 def main() -> int:

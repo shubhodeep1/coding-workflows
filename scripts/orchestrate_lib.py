@@ -781,10 +781,51 @@ def _parallel_groups_from_edges(
 	return groups
 
 
+def trusted_prepush_augmented_paths(data: dict[str, Any]) -> dict[str, set[str]]:
+	"""Return the augmented-only paths per issue that the partition guard may ignore.
+
+	``data["prepush_augmented_paths"]`` (``PREPUSH_AUGMENTED_PATHS_KEY``) is
+	written by :func:`augment_files_touched`, but it travels inside
+	model-written decomposition JSON, so it is untrusted. An issue gets an
+	entry only when its marker value is a list of strings that are all in
+	that issue's ``files_touched`` and do not cover all of them (at least
+	one planned path remains, the ``marker_ignored`` rule of
+	``augment_files_touched``). Any other shape gives the issue no entry, so
+	its overlaps count as before. ``data`` is never mutated (issue #8244).
+	"""
+	raw = data.get(PREPUSH_AUGMENTED_PATHS_KEY) if isinstance(data, dict) else None
+	if not isinstance(raw, dict):
+		return {}
+	trusted: dict[str, set[str]] = {}
+	for issue in data.get("issues", []) or []:
+		if not isinstance(issue, dict):
+			continue
+		issue_id = issue.get("id")
+		if not isinstance(issue_id, str) or issue_id not in raw:
+			continue
+		entry = raw.get(issue_id)
+		if not isinstance(entry, list) or not entry:
+			continue
+		if not all(isinstance(p, str) for p in entry):
+			continue
+		touched_raw = issue.get("files_touched", []) or []
+		if not isinstance(touched_raw, list):
+			continue
+		touched = {p for p in touched_raw if isinstance(p, str)}
+		entry_set = set(entry)
+		if not entry_set <= touched:
+			continue
+		if not (touched - entry_set):
+			continue
+		trusted[issue_id] = entry_set
+	return trusted
+
+
 def validate_wave_file_partition(
 	wave_ids: list[str],
 	issues_by_id: dict[str, dict[str, Any]],
 	hot_files: set[str] | None = None,
+	augmented_paths: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
 	"""Detect sibling file-touch overlaps within a single wave.
 
@@ -816,9 +857,18 @@ def validate_wave_file_partition(
 		scope closes that bypass. Two unknown-scope siblings are also paired
 		with each other.
 
+	``augmented_paths`` (from :func:`trusted_prepush_augmented_paths`) maps
+	an issue id to the paths the pre-push gate added to its files_touched.
+	A shared path listed for BOTH issues of a pair was planned by neither,
+	so it does not count as an overlap (issue #8244: a shared affected test
+	serialized two independent siblings). A path at least one of the two
+	issues planned counts as before, hot-file handling included. The
+	``unknown_scope`` check still looks at the raw lists.
+
 	A wave with a single issue never yields overlaps.
 	"""
 	hot = hot_files or set()
+	augmented = augmented_paths or {}
 	overlaps: list[dict[str, Any]] = []
 
 	# Build {issue_id: set(paths)} once.
@@ -844,7 +894,9 @@ def validate_wave_file_partition(
 					"files": [],
 				})
 				continue
-			common = sorted(fa & fb)
+			shared = fa & fb
+			augmented_both = augmented.get(iid_a, set()) & augmented.get(iid_b, set())
+			common = sorted(shared - augmented_both)
 			if not common:
 				continue
 			pair_key = (iid_a, iid_b)
@@ -904,6 +956,8 @@ def auto_serialize_file_overlaps(
 	issues_by_id: dict[str, dict[str, Any]] = {i["id"]: i for i in data["issues"]}
 	edges: list[dict[str, str]] = list(data.get("dependency_edges", []) or [])
 	serializations: list[dict[str, Any]] = []
+	# Overlaps on paths only the pre-push gate added never serialize (#8244).
+	augmented = trusted_prepush_augmented_paths(data)
 
 	def _edge_exists(frm: str, to: str) -> bool:
 		for e in edges:
@@ -926,7 +980,7 @@ def auto_serialize_file_overlaps(
 		groups = _parallel_groups_from_edges(issues_by_id, edges)
 		any_new = False
 		for group_idx, wave_ids in enumerate(groups):
-			overlaps = validate_wave_file_partition(wave_ids, issues_by_id, hot)
+			overlaps = validate_wave_file_partition(wave_ids, issues_by_id, hot, augmented_paths=augmented)
 			if not overlaps:
 				continue
 			for record in overlaps:
@@ -3394,9 +3448,20 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 
 	wave_reports: list[dict[str, Any]] = []
 	total_overlaps = 0
+	# Same augmented-only rule as auto_serialize_file_overlaps (issue #8244),
+	# so the reported counts match the edges actually injected.
+	augmented = trusted_prepush_augmented_paths(data)
+	augmented_only_overlaps_ignored = 0
 	for wave_idx, wave in enumerate(raw_waves):
 		ids = [i["id"] for i in wave]
-		overlaps = validate_wave_file_partition(ids, issues_by_id, hot_files)
+		overlaps = validate_wave_file_partition(ids, issues_by_id, hot_files, augmented_paths=augmented)
+		if augmented:
+			unfiltered_pairs = {
+				(o["issue_a"], o["issue_b"])
+				for o in validate_wave_file_partition(ids, issues_by_id, hot_files)
+			}
+			kept_pairs = {(o["issue_a"], o["issue_b"]) for o in overlaps}
+			augmented_only_overlaps_ignored += len(unfiltered_pairs - kept_pairs)
 		total_overlaps += len(overlaps)
 		wave_reports.append({
 			"wave": wave_idx + 1,
@@ -3414,6 +3479,7 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 			"ok": False,
 			"error": str(exc),
 			"total_overlaps": total_overlaps,
+			"augmented_only_overlaps_ignored": augmented_only_overlaps_ignored,
 			"wave_reports": wave_reports,
 			"hot_files_audit": hot_files_audit,
 		})
@@ -3424,6 +3490,7 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 		"hot_files": sorted(hot_files),
 		"hot_files_audit": hot_files_audit,
 		"total_overlaps": total_overlaps,
+		"augmented_only_overlaps_ignored": augmented_only_overlaps_ignored,
 		"wave_reports": wave_reports,
 		"planned_serializations": planned,
 	})

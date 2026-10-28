@@ -1166,10 +1166,16 @@ jobs:
           fi
           if [ "${PARTITION_OVERLAP_COUNT}" -gt 0 ]; then
             echo "::notice::Partition guard detected ${PARTITION_OVERLAP_COUNT} sibling file-touch overlap(s); auto-serialize will resolve them by injecting dependency_edges."
-            jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | "\(.issue_a)\u2194\(.issue_b) on \(.files | join(\", \"))"] | join("; "))' "${PARTITION_REPORT_FILE}" || true
+            # Plain concatenation: an escaped quote inside a \(...) interpolation
+            # is a jq compile error (issue #8244, run 40609251819).
+            jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | .issue_a + " <-> " + .issue_b + " on " + ((.files // []) | join(", "))] | join("; "))' "${PARTITION_REPORT_FILE}" || true
             jq -r '.planned_serializations[]? | "  Will serialize: \(.winner) -> \(.loser) (over " + (.overlap_type) + " on " + (.files | join(", ")) + ")"' "${PARTITION_REPORT_FILE}" || true
           else
             echo "Partition guard: no sibling file-touch overlaps detected."
+          fi
+          PARTITION_AUGMENTED_IGNORED="$(jq -r '.augmented_only_overlaps_ignored // 0' "${PARTITION_REPORT_FILE}" 2>/dev/null || echo 0)"
+          if [[ "${PARTITION_AUGMENTED_IGNORED}" =~ ^[0-9]+$ ]] && [ "${PARTITION_AUGMENTED_IGNORED}" -gt 0 ]; then
+            echo "Partition guard: ignored ${PARTITION_AUGMENTED_IGNORED} overlap(s) on affected-test paths that no sibling planned."
           fi
 
           # Compute waves with auto-serialize and write the resulting

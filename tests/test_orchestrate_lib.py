@@ -3669,7 +3669,10 @@ def test_render_expected_files_section_has_no_allowlist():
 		assert proc.returncode == 0 and proc.stdout == "", (empty_input, proc.stdout)
 
 
-def test_augmented_siblings_get_partition_edge():
+def test_augmented_only_shared_test_does_not_serialize_siblings():
+	# Issue #8244 (run 40609251819): a test the pre-push gate added to both
+	# siblings, which neither planned, used to inject an edge and push the
+	# second sibling out of Wave 1.
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
 		stub = _write_prepush_stub(tmp_path, payload={
@@ -3685,9 +3688,136 @@ def test_augmented_siblings_get_partition_edge():
 		proc = _run_augment_cli(decomposition, stub)
 		assert proc.returncode == 0, proc.stderr
 		data = orchestrate_lib.validate_decomposition(json.loads(decomposition.read_text(encoding="utf-8")))
+		assert data["issues"][0]["files_touched"] == ["src/a.py", "tests/test_shared.py"]
+		assert data["issues"][1]["files_touched"] == ["src/b.py", "tests/test_shared.py"]
 		serializations = orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
-		assert len(serializations) == 1
-		assert {"from": "a", "to": "b"} in data["dependency_edges"]
+		assert serializations == []
+		assert data["dependency_edges"] == []
+
+
+def _augmented_pair(a_files, b_files, marker, hot_files=None, edges=None) -> dict:
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": list(a_files)},
+		{"id": "b", "title": "B", "body": "b", "priority": 2, "files_touched": list(b_files)},
+	], edges=edges)
+	if marker is not None:
+		data["prepush_augmented_paths"] = marker
+	return orchestrate_lib.validate_decomposition(data)
+
+
+def _check_partition_report(data: dict, hot_files: list[str] | None = None) -> dict:
+	import io
+	from contextlib import redirect_stdout
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "decomp.json"
+		_write_json(p, data)
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": hot_files or []})
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = orchestrate_lib.main(["check-partition", "--input-file", str(p), "--hot-files-path", str(hot_p)])
+		assert rc == 0, f"check-partition exit {rc}"
+		return json.loads(buf.getvalue())
+
+
+def test_trusted_prepush_augmented_paths_trust_rule():
+	shared = "tests/test_shared.py"
+	good = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], {"a": [shared], "b": [shared]})
+	assert orchestrate_lib.trusted_prepush_augmented_paths(good) == {"a": {shared}, "b": {shared}}
+	before = json.dumps(good, sort_keys=True)
+	orchestrate_lib.trusted_prepush_augmented_paths(good)
+	assert json.dumps(good, sort_keys=True) == before
+	assert orchestrate_lib.trusted_prepush_augmented_paths(_augmented_pair(["src/a.py"], ["src/b.py"], None)) == {}
+	assert orchestrate_lib.trusted_prepush_augmented_paths(_augmented_pair(["src/a.py"], ["src/b.py"], ["x"])) == {}
+	malformed = _augmented_pair(
+		["src/a.py", shared], ["src/b.py", shared],
+		{"a": [shared, 7], "b": "tests/test_shared.py"},
+	)
+	assert orchestrate_lib.trusted_prepush_augmented_paths(malformed) == {}
+	outside = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], {"a": [shared, "other.py"], "b": [shared]})
+	assert orchestrate_lib.trusted_prepush_augmented_paths(outside) == {"b": {shared}}
+	covers_all = _augmented_pair([shared], ["src/b.py", shared], {"a": [shared], "b": [shared]})
+	assert orchestrate_lib.trusted_prepush_augmented_paths(covers_all) == {"b": {shared}}
+
+
+def test_augmented_only_overlap_gives_one_wave_and_no_reported_overlap():
+	shared = "tests/test_shared.py"
+	data = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], {"a": [shared], "b": [shared]})
+	report = _check_partition_report(data)
+	assert report["total_overlaps"] == 0
+	assert report["augmented_only_overlaps_ignored"] == 1
+	assert report["planned_serializations"] == []
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	assert [[i["id"] for i in w] for w in waves] == [["a", "b"]]
+	assert data["partition_serializations"] == []
+
+
+def test_overlap_on_a_path_one_sibling_planned_still_serializes():
+	shared = "tests/test_shared.py"
+	# b planned the test itself; only a got it from augmentation.
+	data = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], {"a": [shared]})
+	report = _check_partition_report(data)
+	assert report["total_overlaps"] == 1
+	assert report["augmented_only_overlaps_ignored"] == 0
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	assert [[i["id"] for i in w] for w in waves] == [["a"], ["b"]]
+	assert {"from": "a", "to": "b"} in data["dependency_edges"]
+
+
+def test_augmented_hot_file_rule_matches_pair_rule():
+	hot = "tests/test_hot.py"
+	both_augmented = _augmented_pair(["src/a.py", hot], ["src/b.py", hot], {"a": [hot], "b": [hot]})
+	assert orchestrate_lib.validate_wave_file_partition(
+		["a", "b"], {i["id"]: i for i in both_augmented["issues"]}, {hot},
+		augmented_paths=orchestrate_lib.trusted_prepush_augmented_paths(both_augmented),
+	) == []
+	one_planned = _augmented_pair(["src/a.py", hot], ["src/b.py", hot], {"a": [hot]})
+	overlaps = orchestrate_lib.validate_wave_file_partition(
+		["a", "b"], {i["id"]: i for i in one_planned["issues"]}, {hot},
+		augmented_paths=orchestrate_lib.trusted_prepush_augmented_paths(one_planned),
+	)
+	assert overlaps == [{"type": "hot_file", "issue_a": "a", "issue_b": "b", "files": [hot]}]
+
+
+def test_malformed_augmented_marker_counts_overlap_as_before():
+	shared = "tests/test_shared.py"
+	for marker in (
+		["not", "a", "dict"],
+		{"a": [shared, 3], "b": [shared]},
+		{"a": [shared, "src/elsewhere.py"], "b": [shared]},
+		{"a": [shared], "b": ["src/b.py", shared]},
+	):
+		data = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], marker)
+		report = _check_partition_report(data)
+		assert report["total_overlaps"] == 1, marker
+		assert report["augmented_only_overlaps_ignored"] == 0, marker
+		serializations = orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+		assert len(serializations) == 1, marker
+		assert {"from": "a", "to": "b"} in data["dependency_edges"], marker
+
+
+def _orchestrate_overlap_log_filter() -> str:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
+	line = next(wf_line for wf_line in workflow.splitlines() if "jq -r '.wave_reports[]? | select(.overlap_count > 0)" in wf_line)
+	match = re.search(r"jq -r '([^']*)'", line)
+	assert match is not None, line
+	return match.group(1)
+
+
+def test_orchestrate_overlap_log_filter_compiles_and_formats():
+	import shutil
+	jq_filter = _orchestrate_overlap_log_filter()
+	assert "\\u2194" not in jq_filter and '\\"' not in jq_filter, jq_filter
+	if shutil.which("jq") is None:
+		print("  SKIP  jq not installed; overlap log filter not executed")
+		return
+	report = {"wave_reports": [
+		{"wave": 1, "overlap_count": 1, "overlaps": [{"type": "pair", "issue_a": "a", "issue_b": "b", "files": ["x", "y"]}]},
+		{"wave": 2, "overlap_count": 0, "overlaps": []},
+	]}
+	proc = subprocess.run(["jq", "-r", jq_filter], input=json.dumps(report), capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == "  Wave 1: 1 overlap(s): a <-> b on x, y\n", proc.stdout
 
 
 def test_prepush_gate_orchestrator_scoping_wiring_contract():
