@@ -1,0 +1,31 @@
+{
+  "discovered_at": "2026-10-28T19:33:37Z",
+  "issue_number": 8269,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/ai_engine.sh:1; cited_path=scripts/ai_engine.sh, scripts/clarify_isolated_run.sh, scripts/review_untrusted_sandbox.sh, scripts/run_plan_codex.sh; files_touched=.github/workflows/ci.yml, .github/workflows/orchestrate.yml, .github/workflows/orchestrate_clarify_respond.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/validate.yml, README.md, agents.d/8269-unattended-prompt-diet.md, changelog.d/8269-self-assembled-agents-index.md, prompts/_templates/mode-validate-generate.txt, prompts/mode-validate-generate.txt, scripts/build_static_context.sh, scripts/orchestrate_poll_process.sh, scripts/validate_process.sh, tests/test_judge_semble_prefetch_contract.py, tests/test_static_context_agents_index.py, tests/test_static_context_agents_index_self_assembled.py, tests/test_static_context_symlink_guard.py.",
+  "phase": "review_autofix",
+  "pr_number": 8271,
+  "record_id": "lesson_20261028193337_834fbc094b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/ai_engine.sh, scripts/clarify_isolated_run.sh, scripts/review_untrusted_sandbox.sh, scripts/run_plan_codex.sh",
+    "scripts/ai_engine.sh",
+    ".github/workflows/ci.yml",
+    ".github/workflows/orchestrate.yml",
+    ".github/workflows/orchestrate_clarify_respond.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/validate.yml",
+    "README.md",
+    "agents.d/8269-unattended-prompt-diet.md",
+    "changelog.d/8269-self-assembled-agents-index.md",
+    "prompts/_templates/mode-validate-generate.txt",
+    "prompts/mode-validate-generate.txt",
+    "scripts/build_static_context.sh",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/validate_process.sh",
+    "tests/test_judge_semble_prefetch_contract.py",
+    "tests/test_static_context_agents_index.py",
+    "tests/test_static_context_agents_index_self_assembled.py",
+    "tests/test_static_context_symlink_guard.py"
+  ]
+}
