@@ -1379,8 +1379,9 @@ jobs:
           # display_title (the issue title for issues / issue_comment runs).
           # Release run 36374918973 recorded another issue's Clarify run without it.
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
-          # Passed through env so the run: body holds no ${{ }} expression
-          # (18,000-character guard, tests/test_workflow_file_size_limit.py).
+          # Passed through env so the run body holds no ${{ }} expression and
+          # stays clear of the 18,000-character expression guard
+          # (tests/test_workflow_file_size_limit.py, #8248).
           IMPL_CREATED_AFTER_INPUT: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}
         run: |
           set -euo pipefail
@@ -1525,6 +1526,27 @@ jobs:
             exit 1
           }
 
+          # Watched run URLs (#8248): ids already read, no API calls.
+          E2E_WATCHED_RUN_IDS=""
+          e2e_note_watched_run() {
+            local -a ids=()
+            local watched_id watched_seen=0 watched_rest=""
+            [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
+            # A repeat moves to the newest slot (no new line), so the cap never evicts a run still polled.
+            for watched_id in ${E2E_WATCHED_RUN_IDS}; do
+              if [ "$watched_id" = "$1" ]; then watched_seen=1; else watched_rest+=" $watched_id"; fi
+            done
+            read -r -a ids <<< "${watched_rest} $1"
+            [ "${#ids[@]}" -le 5 ] || ids=("${ids[@]: -5}")
+            E2E_WATCHED_RUN_IDS="${ids[*]}"
+            [ "$watched_seen" = 1 ] || echo "  ↳ Watching ${2:-} run $1: https://github.com/${TEST_REPO}/actions/runs/$1"
+          }
+          e2e_watched_run_urls() {
+            local id urls=""
+            for id in ${E2E_WATCHED_RUN_IDS}; do urls+=" https://github.com/${TEST_REPO}/actions/runs/${id}"; done
+            [ -z "$urls" ] || printf ' (watched runs:%s)' "$urls"
+          }
+
           # Progress counter (issue #7968). Counts only THIS issue's non-skipped
           # Implement runs, with the selection and validation rules of
           # scoped_implement_runs_complete, walking pages of the created=>
@@ -1650,6 +1672,9 @@ jobs:
               fi
             fi
 
+            e2e_note_watched_run "${IMPL_RUN_ID_LATEST:-}" Implement
+            e2e_note_watched_run "${IMPL_RUN_ID_WORKING:-}" Implement
+
             if [ "$IMPL_RETURNED_TO_APPROVAL" = true ]; then
               echo "  ↩ Issue #${ISSUE_NUMBER} returned to ai:awaiting-approval — latest scoped Implement run: id=${IMPL_RUN_ID_LATEST:-unknown} status=${IMPL_RUN_STATUS} conclusion=${IMPL_RUN_CONCLUSION_LATEST}"
             fi
@@ -1726,7 +1751,8 @@ jobs:
                     continue
                   fi
                   if scoped_implement_runs_complete; then
-                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})"
+                    e2e_note_watched_run "${SCOPED_IMPL_RUN_ID:-}" Implement
+                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})$(e2e_watched_run_urls)"
                     echo "status=implement_failed" >> "$GITHUB_OUTPUT"
                     exit 1
                   fi
@@ -1741,6 +1767,9 @@ jobs:
               echo "  ⏳ All ${IMPL_RUN_TOTAL} implement run(s) completed but grace period active (${ELAPSED_SECS}s/${MIN_GRACE_SECONDS}s) — waiting for /approved-triggered run to start"
             fi
 
+            e2e_note_watched_run "${SCOPED_IMPL_RUN_ID:-}" Implement
+            e2e_note_watched_run "${SCOPED_IMPL_ACTIVE_ID:-}" Implement
+
             # Inactivity timeout (extended while the pre-push gate step runs)
             EFFECTIVE_LIMIT=$INACTIVITY_LIMIT
             EFFECTIVE_LIMIT_MINUTES=$PHASE_TIMEOUT
@@ -1751,7 +1780,7 @@ jobs:
               LIMIT_SUFFIX=" (pre-push gate step: limit ${PREPUSH_GATE_STEP_STALL_MINUTES}m)"
             fi
             if [ "$IDLE" -ge "$EFFECTIVE_LIMIT" ]; then
-              echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}"
+              echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}$(e2e_watched_run_urls)"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               exit 1
             fi
