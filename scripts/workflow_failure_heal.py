@@ -735,6 +735,193 @@ def extract_run_refs(texts: Iterable[str], repo: str, limit: int = MAX_RUN_REFS)
 	return refs[-limit:]
 
 
+# --- Linked runs (issue #8248) ----------------------------------------------
+# A failed release-gate job often only polls or dispatches the run where the
+# failure really happened. The intake follows same-repository run links found
+# in the failed jobs' filtered logs and renders their step timelines for the
+# network-isolated diagnosis. Evidence only: never a heal-scope input.
+
+LINKED_RUN_LONG_STEP_SECS = 600
+LINKED_RUN_MAX_JOBS = 20
+LINKED_RUN_MAX_STEPS_PER_JOB = 40
+LINKED_RUN_TEXT_MAX_BYTES = 8 * 1024
+LINKED_RUN_NAME_MAX = 120
+_STALL_WINDOW_RES = (
+	re.compile(r"no activity for (\d{1,4}) minutes?", re.IGNORECASE),
+	re.compile(r"(\d{1,4})[- ]?min(?:ute)?s?[- ]stall window", re.IGNORECASE),
+	re.compile(r"stall window of (\d{1,4}) min", re.IGNORECASE),
+	re.compile(r"stall(?:ed)?\b[^\n]{0,80}?\b(\d{1,4}) minutes?", re.IGNORECASE),
+)
+_ACTIONS_LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?Z ")
+# Distinct from _CONTROL_CHARS_RE above (which keeps \t/\n/\r): run and step
+# names must stay on one line.
+_LINKED_RUN_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def select_linked_runs(texts: Iterable[str], repo: str, exclude_run_ids: Iterable[str], limit: int) -> list[dict[str, Any]]:
+	"""Same-repository run links in ``texts`` that are not already reported.
+
+	Reuses :func:`extract_run_refs` (same ``_RUN_URL_RE``, same repository
+	filter, newest mention last) without its cap, drops ``exclude_run_ids``,
+	then keeps the last ``limit``. ``limit <= 0`` returns ``[]``.
+	"""
+	if limit <= 0:
+		return []
+	excluded = {str(run_id).strip() for run_id in exclude_run_ids if str(run_id).strip()}
+	refs = [ref for ref in extract_run_refs(texts, repo, limit=10_000) if ref["run_id"] not in excluded]
+	return refs[-limit:]
+
+
+def stall_window_minutes(texts: Iterable[str]) -> list[int]:
+	"""Stall windows (minutes, 1-1440) named in the parent's failing logs."""
+	found: set[int] = set()
+	for text in texts:
+		for pattern in _STALL_WINDOW_RES:
+			for match in pattern.finditer(text or ""):
+				value = int(match.group(1))
+				if 1 <= value <= 1440:
+					found.add(value)
+	return sorted(found)
+
+
+def _parse_actions_ts(value: Any) -> datetime | None:
+	if not isinstance(value, str) or not value:
+		return None
+	try:
+		parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+	except ValueError:
+		return None
+	if parsed.tzinfo is None:
+		parsed = parsed.replace(tzinfo=timezone.utc)
+	return parsed.astimezone(timezone.utc)
+
+
+def _linked_run_name(value: Any) -> str:
+	text = _LINKED_RUN_CONTROL_CHARS_RE.sub(" ", str(value or ""))
+	text = " ".join(text.split())
+	return text[:LINKED_RUN_NAME_MAX] or "?"
+
+
+def _format_duration(seconds: int) -> str:
+	seconds = max(0, int(seconds))
+	hours, rest = divmod(seconds, 3600)
+	minutes, secs = divmod(rest, 60)
+	if hours:
+		return f"{hours}h{minutes:02d}m{secs:02d}s"
+	return f"{minutes}m{secs:02d}s"
+
+
+def render_linked_run_timeline(
+	run: Any,
+	jobs: Any,
+	*,
+	repo: str,
+	run_id: str,
+	stall_minutes: Iterable[int] = (),
+	long_step_secs: int = LINKED_RUN_LONG_STEP_SECS,
+) -> dict[str, Any]:
+	"""Render a compact step timeline of one linked run.
+
+	The run must be ``run_id`` in ``repo`` (case-insensitive): another
+	repository's run is ``other_repository``. A step is marked ``[LONG]`` when
+	it ran at least ``long_step_secs`` or longer than the shortest stall
+	window. Returns ``{"ok": False, "reason": ...}`` or
+	``{"ok": True, "text": ..., "longest": {"job_id", "start", "end"} | None}``.
+	"""
+	if not isinstance(run, dict) or str(run.get("id")) != str(run_id) or not str(run_id).isdigit():
+		return {"ok": False, "reason": "run_malformed"}
+	repository = run.get("repository")
+	full_name = repository.get("full_name") if isinstance(repository, dict) else None
+	if not isinstance(full_name, str) or not full_name:
+		return {"ok": False, "reason": "run_malformed"}
+	if full_name.casefold() != str(repo).casefold():
+		return {"ok": False, "reason": "other_repository"}
+	if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
+		return {"ok": False, "reason": "jobs_malformed"}
+	windows = [int(value) for value in stall_minutes if isinstance(value, int) and value > 0]
+	stall_secs = min(windows) * 60 if windows else None
+	run_updated = _parse_actions_ts(run.get("updated_at"))
+	lines = [
+		f"--- linked run https://github.com/{full_name}/actions/runs/{run_id}"
+		f" | workflow: {_linked_run_name(run.get('name'))}"
+		f" | status: {_linked_run_name(run.get('status'))}/{_linked_run_name(run.get('conclusion') or 'none')}"
+		f" | created: {_linked_run_name(run.get('created_at'))}"
+		f" | updated: {_linked_run_name(run.get('updated_at'))} ---"
+	]
+	longest: dict[str, Any] | None = None
+	longest_secs = -1
+	job_list = [job for job in jobs["jobs"] if isinstance(job, dict)]
+	for job in job_list[:LINKED_RUN_MAX_JOBS]:
+		job_id = job.get("id")
+		lines.append(f"job: {_linked_run_name(job.get('name'))} (status: {_linked_run_name(job.get('status'))}, conclusion: {_linked_run_name(job.get('conclusion') or 'none')})")
+		steps = [step for step in (job.get("steps") or []) if isinstance(step, dict) and step.get("conclusion") != "skipped"]
+		for step in steps[:LINKED_RUN_MAX_STEPS_PER_JOB]:
+			start = _parse_actions_ts(step.get("started_at"))
+			end = _parse_actions_ts(step.get("completed_at"))
+			running = False
+			if start is not None and end is None and step.get("status") != "completed" and run_updated is not None:
+				end = run_updated
+				running = True
+			name = _linked_run_name(step.get("name"))
+			conclusion = _linked_run_name(step.get("conclusion") or step.get("status") or "unknown")
+			if start is None:
+				lines.append(f"  - {name}: not started ({conclusion})")
+				continue
+			start_text = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+			if end is None or end < start:
+				lines.append(f"  - {name}: {start_text} -> ? ({conclusion})")
+				continue
+			end_text = end.strftime("%Y-%m-%dT%H:%M:%SZ")
+			duration = int((end - start).total_seconds())
+			mark = ""
+			if duration >= long_step_secs or (stall_secs is not None and duration > stall_secs):
+				mark = " [LONG]"
+			suffix = " (still running)" if running else ""
+			lines.append(f"  - {name}: {start_text} -> {end_text}{suffix} ({_format_duration(duration)}) {conclusion}{mark}")
+			if isinstance(job_id, int) and duration > longest_secs:
+				longest_secs = duration
+				longest = {"job_id": job_id, "start": start_text, "end": end_text}
+		if len(steps) > LINKED_RUN_MAX_STEPS_PER_JOB:
+			lines.append(f"  ({len(steps) - LINKED_RUN_MAX_STEPS_PER_JOB} more steps not shown)")
+	if len(job_list) > LINKED_RUN_MAX_JOBS:
+		lines.append(f"({len(job_list) - LINKED_RUN_MAX_JOBS} more jobs not shown)")
+	total = jobs.get("total_count")
+	if isinstance(total, int) and total > 100:
+		lines.append(f"(jobs listing truncated: {total} jobs, first 100 read)")
+	text = "\n".join(lines) + "\n"
+	encoded = text.encode("utf-8")
+	if len(encoded) > LINKED_RUN_TEXT_MAX_BYTES:
+		text = encoded[:LINKED_RUN_TEXT_MAX_BYTES].decode("utf-8", errors="ignore").rsplit("\n", 1)[0] + "\n(timeline truncated)\n"
+	return {"ok": True, "text": text, "longest": longest}
+
+
+def slice_log_to_window(text: str, start: str, end: str) -> str:
+	"""Keep the Actions log lines timestamped within ``start``..``end``.
+
+	Untimestamped lines follow the line before them. When the bounds or no
+	line can be parsed, or nothing falls in the window, the whole text is
+	returned unchanged (the caller still caps it with ``filter-log``).
+	"""
+	start_dt = _parse_actions_ts(start)
+	end_dt = _parse_actions_ts(end)
+	if start_dt is None or end_dt is None:
+		return text
+	start_dt = start_dt.replace(microsecond=0)
+	end_dt = end_dt.replace(microsecond=0) + timedelta(seconds=1)
+	kept: list[str] = []
+	keep = False
+	for line in text.splitlines(keepends=True):
+		match = _ACTIONS_LOG_TS_RE.match(line)
+		if match:
+			stamp = _parse_actions_ts(match.group(1) + "Z")
+			keep = stamp is not None and start_dt <= stamp <= end_dt
+		if keep:
+			kept.append(line)
+	if not kept:
+		return text
+	return "".join(kept)
+
+
 def phase_report_workflow_paths(phase: str, *, source_repo: str, self_repo: str) -> tuple[str, ...]:
 	if phase not in PHASE_FAILURE_COMMENT_PREFIXES:
 		raise ValueError(f"unknown phase {phase!r}")
@@ -6746,6 +6933,51 @@ def _cmd_filter_log(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _read_text_files(paths: Iterable[str]) -> list[str]:
+	texts: list[str] = []
+	for path in paths:
+		try:
+			texts.append(Path(path).read_text(encoding="utf-8", errors="replace"))
+		except OSError:
+			continue
+	return texts
+
+
+def _cmd_linked_runs(args: argparse.Namespace) -> int:
+	excluded = [value for value in str(args.exclude_run_ids or "").split(",")]
+	refs = select_linked_runs(_read_text_files(args.log_files or []), args.repo, excluded, args.limit)
+	sys.stdout.write(json.dumps(refs) + "\n")
+	return 0
+
+
+def _cmd_linked_run_timeline(args: argparse.Namespace) -> int:
+	# Always exits 0: the intake fails open on {"ok": false, ...}.
+	try:
+		run = json.loads(Path(args.run_json).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		sys.stdout.write(json.dumps({"ok": False, "reason": "run_malformed"}) + "\n")
+		return 0
+	try:
+		jobs = json.loads(Path(args.jobs_json).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		jobs = None
+	try:
+		result = render_linked_run_timeline(
+			run, jobs, repo=args.repo, run_id=args.run_id,
+			stall_minutes=stall_window_minutes(_read_text_files(args.stall_hint_files or [])),
+		)
+	except Exception:  # noqa: BLE001 - fail open, evidence only
+		result = {"ok": False, "reason": "timeline_failed"}
+	sys.stdout.write(json.dumps(result) + "\n")
+	return 0
+
+
+def _cmd_log_window(args: argparse.Namespace) -> int:
+	text = Path(args.log_file).read_text(encoding="utf-8", errors="replace")
+	sys.stdout.write(slice_log_to_window(text, args.start, args.end))
+	return 0
+
+
 def _cmd_error_signature(args: argparse.Namespace) -> int:
 	chunks = [Path(path).read_text(encoding="utf-8", errors="replace") for path in args.log_file]
 	if args.strip_autofix_header:
@@ -7268,6 +7500,27 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--max-lines", type=int, default=400)
 	p.add_argument("--max-bytes", type=int, default=60_000)
 	p.set_defaults(func=_cmd_filter_log)
+
+	p = sub.add_parser("linked-runs", help="Same-repository run links in failed-job logs, not already reported")
+	p.add_argument("--log-files", nargs="*", default=[])
+	p.add_argument("--repo", required=True)
+	p.add_argument("--exclude-run-ids", default="")
+	p.add_argument("--limit", type=int, default=4)
+	p.set_defaults(func=_cmd_linked_runs)
+
+	p = sub.add_parser("linked-run-timeline", help="Render a linked run's step timeline (always exits 0)")
+	p.add_argument("--run-json", required=True)
+	p.add_argument("--jobs-json", required=True)
+	p.add_argument("--repo", required=True)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--stall-hint-files", nargs="*", default=[])
+	p.set_defaults(func=_cmd_linked_run_timeline)
+
+	p = sub.add_parser("log-window", help="Keep the log lines inside a step's time window")
+	p.add_argument("--log-file", required=True)
+	p.add_argument("--start", required=True)
+	p.add_argument("--end", required=True)
+	p.set_defaults(func=_cmd_log_window)
 
 	p = sub.add_parser("error-signature", help="Derive the normalised error signature of one or more logs")
 	p.add_argument("--log-file", action="append", required=True)

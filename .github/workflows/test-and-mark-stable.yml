@@ -1361,6 +1361,10 @@ jobs:
           # display_title (the issue title for issues / issue_comment runs).
           # Release run 36374918973 recorded another issue's Clarify run without it.
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
+          # Passed through env so the run body holds no ${{ }} expression and
+          # stays clear of the 18,000-character expression guard
+          # (tests/test_workflow_file_size_limit.py, #8248).
+          IMPL_CREATED_AFTER_INPUT: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}
         run: |
           set -euo pipefail
           echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
@@ -1399,7 +1403,7 @@ jobs:
           # stale runs triggered by AUTO_IMPLEMENT_ON_CLEAR_PLAN auto-approval
           # during the plan phase. Fall back to issue creation time if Phase 3a
           # was skipped (plan auto-approved directly to ai:implementing).
-          IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"
+          IMPL_CREATED_AFTER="${IMPL_CREATED_AFTER_INPUT:-}"
 
           # The progress-counter metrics below are only progress signals. A terminal
           # decision needs every page of this issue's runs (not other issues'
@@ -1493,6 +1497,23 @@ jobs:
             echo "::error::Issue #${ISSUE_NUMBER} completed ${scoped_phase_name} but no non-skipped ${scoped_phase_name} run titled '${ISSUE_TITLE}' was found in the first ${SCOPED_RUN_LOOKUP_MAX_PAGES} pages of runs — failing at ${scoped_phase_name} capture instead of reporting success without a run ID"
             echo "status=run_id_missing" >> "$GITHUB_OUTPUT"
             exit 1
+          }
+
+          # Watched run URLs (#8248): ids already read, no API calls.
+          E2E_WATCHED_RUN_IDS=""
+          e2e_note_watched_run() {
+            local -a ids=()
+            [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
+            [[ " ${E2E_WATCHED_RUN_IDS} " != *" $1 "* ]] || return 0
+            read -r -a ids <<< "${E2E_WATCHED_RUN_IDS} $1"
+            [ "${#ids[@]}" -le 5 ] || ids=("${ids[@]: -5}")
+            E2E_WATCHED_RUN_IDS="${ids[*]}"
+            echo "  ↳ Watching ${2:-} run $1: https://github.com/${TEST_REPO}/actions/runs/$1"
+          }
+          e2e_watched_run_urls() {
+            local id urls=""
+            for id in ${E2E_WATCHED_RUN_IDS}; do urls+=" https://github.com/${TEST_REPO}/actions/runs/${id}"; done
+            [ -z "$urls" ] || printf ' (watched runs:%s)' "$urls"
           }
 
           # Progress counter (issue #7968). Counts only THIS issue's non-skipped
@@ -1590,6 +1611,8 @@ jobs:
               fi
             fi
 
+            e2e_note_watched_run "${IMPL_RUN_ID_LATEST:-}" Implement
+
             if [ "$IMPL_RETURNED_TO_APPROVAL" = true ]; then
               echo "  ↩ Issue #${ISSUE_NUMBER} returned to ai:awaiting-approval — latest scoped Implement run: id=${IMPL_RUN_ID_LATEST:-unknown} status=${IMPL_RUN_STATUS} conclusion=${IMPL_RUN_CONCLUSION_LATEST}"
             fi
@@ -1666,7 +1689,8 @@ jobs:
                     continue
                   fi
                   if scoped_implement_runs_complete; then
-                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})"
+                    e2e_note_watched_run "${SCOPED_IMPL_RUN_ID:-}" Implement
+                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})$(e2e_watched_run_urls)"
                     echo "status=implement_failed" >> "$GITHUB_OUTPUT"
                     exit 1
                   fi
@@ -1681,9 +1705,12 @@ jobs:
               echo "  ⏳ All ${IMPL_RUN_TOTAL} implement run(s) completed but grace period active (${ELAPSED_SECS}s/${MIN_GRACE_SECONDS}s) — waiting for /approved-triggered run to start"
             fi
 
+            e2e_note_watched_run "${SCOPED_IMPL_RUN_ID:-}" Implement
+            e2e_note_watched_run "${SCOPED_IMPL_ACTIVE_ID:-}" Implement
+
             # Inactivity timeout
             if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
-              echo "::error::Implement phase stalled — no activity for ${PHASE_TIMEOUT} minutes"
+              echo "::error::Implement phase stalled — no activity for ${PHASE_TIMEOUT} minutes$(e2e_watched_run_urls)"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               exit 1
             fi

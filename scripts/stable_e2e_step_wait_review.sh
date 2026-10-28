@@ -112,6 +112,23 @@ review_phase_deadline_extension_allowed() {
   return 1
 }
 # END phase4 review deadline extension (#8004)
+# Watched run URLs (#8248): ids already read, no API calls.
+E2E_WATCHED_RUN_IDS=""
+e2e_note_watched_run() {
+  local -a ids=()
+  [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
+  [[ " ${E2E_WATCHED_RUN_IDS} " != *" $1 "* ]] || return 0
+  read -r -a ids <<< "${E2E_WATCHED_RUN_IDS} $1"
+  [ "${#ids[@]}" -le 5 ] || ids=("${ids[@]: -5}")
+  E2E_WATCHED_RUN_IDS="${ids[*]}"
+  echo "  ↳ Watching ${2:-} run $1: https://github.com/${TEST_REPO}/actions/runs/$1"
+}
+e2e_watched_run_urls() {
+  local id urls=""
+  for id in ${E2E_WATCHED_RUN_IDS}; do urls+=" https://github.com/${TEST_REPO}/actions/runs/${id}"; done
+  [ -z "$urls" ] || printf ' (watched runs:%s)' "$urls"
+}
+
 LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
 PREV_STATE=""
 LAST_STEP_GUARD_RUN_ID=""
@@ -299,7 +316,7 @@ while true; do
         REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1
       fi
     else
-      echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
+      echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget$(e2e_watched_run_urls)"
       echo "status=timeout" >> "$GITHUB_OUTPUT"
       exit 1
     fi
@@ -454,6 +471,7 @@ while true; do
     RUN_STATUS=$(echo "$REVIEW_RUN" | jq -r '.status // "unknown"')
     RUN_CONCLUSION=$(echo "$REVIEW_RUN" | jq -r '.conclusion // "null"')
     RUN_ID=$(echo "$REVIEW_RUN" | jq -r '.id // "unknown"')
+    e2e_note_watched_run "$RUN_ID" Review
     if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi
 
     echo "  Review run #${RUN_ID}: status=${RUN_STATUS}, conclusion=${RUN_CONCLUSION}"
@@ -823,7 +841,7 @@ while true; do
         || echo "  (inventory fetch failed)" >&2
       exit 1
     fi
-    echo "::error::Review phase stalled — no activity for ${REVIEW_TIMEOUT} minutes"
+    echo "::error::Review phase stalled — no activity for ${REVIEW_TIMEOUT} minutes$(e2e_watched_run_urls)"
     echo "status=timeout" >> "$GITHUB_OUTPUT"
     exit 1
   fi
