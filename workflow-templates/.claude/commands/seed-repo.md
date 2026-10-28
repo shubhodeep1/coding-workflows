@@ -13,7 +13,7 @@ $ARGUMENTS
 4. **Compose the seed file set.** Keep non-wrapper assets byte-for-byte. For every wrapper, run the same release renderer as the automatic sync; never hand-edit or duplicate its regex:
    - Every wrapper listed in `workflow-templates/profiles/<profile>.txt` → run `scripts/workflow_wrapper_refs.py --input <source> --output <rendered> --sha "$UPSTREAM_SHA"` → target `.github/workflows/<same-name>`. The resulting reusable-workflow `uses:` line must end in `@<40-character SHA> # stable`, with no coding-workflows reusable-workflow `@stable` ref remaining.
    - **`workflow-templates/ai-update-workflows.yml` — always, whatever the profile.** The sync never creates this self-updater when it is absent, but refreshes an existing copy to the current release pin regardless of profile. Because `core`/`standard` manifests omit it, a seed without it never receives another update.
-   - The whole `workflow-templates/.claude/` tree → target `.claude/` (commands, `hooks/session-start.sh`, `hooks/pr_merge_status_guard.py`, `hooks/pr_watch_guard.py`, `hooks/gh_api_write_guard.py`, `settings.json`) — the same set the sync's ".claude/ assets" step mirrors afterwards.
+   - The whole `workflow-templates/.claude/` tree → target `.claude/` (commands, `docs/` (the CLAUDE.md reference files), `hooks/session-start.sh`, `hooks/pr_merge_status_guard.py`, `hooks/pr_watch_guard.py`, `hooks/gh_api_write_guard.py`, `settings.json`) — the same set the sync's ".claude/ assets" step mirrors afterwards.
    - Root `CLAUDE.md` → target root `CLAUDE.md`. In the library checkout `workflow-templates/CLAUDE.md` is a symlink to `../CLAUDE.md` — copy the **dereferenced content** (the sync uses `cp -L` for the same reason).
    If the target already has any of these paths with **different** content (e.g. its own root `CLAUDE.md`), do not overwrite silently — stop and ask (§2) with one batched question listing every collision and a recommended per-file action.
 
@@ -33,7 +33,7 @@ Source: shubhodeep1/coding-workflows@stable (<resolved SHA>)
 
 Seeded (<N> files):
 - .github/workflows/<wrapper>.yml  × <n>  (profile manifest + ai-update-workflows.yml)
-- .claude/  (commands × <n>, hooks × <n>, settings.json)
+- .claude/  (commands × <n>, docs × <n>, hooks × <n>, settings.json)
 - CLAUDE.md
 
 PRs:
