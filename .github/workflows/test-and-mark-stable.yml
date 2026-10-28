@@ -1361,6 +1361,9 @@ jobs:
           # display_title (the issue title for issues / issue_comment runs).
           # Release run 36374918973 recorded another issue's Clarify run without it.
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
+          # Passed through env so the run: body holds no ${{ }} expression
+          # (18,000-character guard, tests/test_workflow_file_size_limit.py).
+          IMPL_CREATED_AFTER_INPUT: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}
         run: |
           set -euo pipefail
           echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
@@ -1399,7 +1402,7 @@ jobs:
           # stale runs triggered by AUTO_IMPLEMENT_ON_CLEAR_PLAN auto-approval
           # during the plan phase. Fall back to issue creation time if Phase 3a
           # was skipped (plan auto-approved directly to ai:implementing).
-          IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"
+          IMPL_CREATED_AFTER="${IMPL_CREATED_AFTER_INPUT:-}"
 
           # The progress-counter metrics below are only progress signals. A terminal
           # decision needs every page of this issue's runs (not other issues'

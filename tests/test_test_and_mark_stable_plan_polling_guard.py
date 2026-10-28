@@ -446,6 +446,7 @@ def _run_phase_step(step_id: str, pages: list, labels: str = "", pr_number: int 
 			"TEST_REPO": "owner/repo",
 			"ISSUE_NUMBER": ISSUE_NUMBER,
 			"ISSUE_TITLE": issue_title,
+			"IMPL_CREATED_AFTER_INPUT": APPROVED_AT,
 			"PHASE_TIMEOUT": "60",
 			"POLL_INTERVAL": "0",
 			"GITHUB_OUTPUT": str(output_file),
