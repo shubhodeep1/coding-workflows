@@ -1491,9 +1491,11 @@ assemble_judge_static_context() {
     cat ai_pipeline.md
     echo
     local judge_agents_file="" judge_agents_render=""
-    if [ -f AGENTS.md ]; then
+    # A symlinked agents file reads as absent (issue #8269): the inline
+    # fallback below must never cat through a link the checkout controls.
+    if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
       judge_agents_file="AGENTS.md"
-    elif [ -f agents.md ]; then
+    elif [ -f agents.md ] && [ ! -L agents.md ]; then
       judge_agents_file="agents.md"
     fi
     if [ "${judge_static_override}" = inline ]; then
@@ -8362,13 +8364,15 @@ security_pass_exhaustion_judge() {
   error_file="${RUNTIME_DIR}/security_pass_judge_${TRACKING_NUM}.err"
   verdict_file="${RUNTIME_DIR}/security_pass_judge_verdict_${TRACKING_NUM}.json"
   semble_query_file="${RUNTIME_DIR}/security_pass_judge_semble_query_${TRACKING_NUM}.txt"
-  static_file="${RUNTIME_DIR}/judge_static.txt"
+  # Own, always-inline static file (issue #8269): this judge runs in the
+  # audit worktree, not the tree an index would be built from.
+  static_file="${RUNTIME_DIR}/judge_static_sec.txt"
   {
     printf '%s\n' 'Security-pass exhaustion judge context.'
     append_judge_semble_query_text "Remaining findings:" "$(security_pass_findings_rows_json "${findings_file}")" 7000
   } > "${semble_query_file}"
   if [ ! -s "${static_file}" ]; then
-    if ! assemble_judge_static_context "${static_file}"; then
+    if ! assemble_judge_static_context "${static_file}" inline; then
       echo "WARNING: failed to assemble security-pass judge static context; continuing without it" >&2
       : > "${static_file}"
     fi

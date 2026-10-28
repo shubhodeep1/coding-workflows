@@ -4148,9 +4148,10 @@ fi
     echo
   fi
   VALIDATE_AGENTS_FILE=""
-  if [ -f AGENTS.md ]; then
+  # A symlinked agents file reads as absent (issue #8269).
+  if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
     VALIDATE_AGENTS_FILE="AGENTS.md"
-  elif [ -f agents.md ]; then
+  elif [ -f agents.md ] && [ ! -L agents.md ]; then
     VALIDATE_AGENTS_FILE="agents.md"
   fi
   # BEGIN static context agents index (#8269)

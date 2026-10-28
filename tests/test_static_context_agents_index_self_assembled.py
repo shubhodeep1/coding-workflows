@@ -236,6 +236,23 @@ def test_failed_index_falls_back_to_inline(site: str) -> None:
 
 
 @pytest.mark.parametrize("site", sorted(SITES))
+def test_symlinked_agents_file_is_never_read(site: str) -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = _repo(tmp, lower=False)
+		secret = root / "secret.txt"
+		secret.write_text("## x-access-token:SENTINEL_SECRET\n", encoding="utf-8")
+		for name in ("AGENTS.md", "agents.md"):
+			try:
+				(root / name).symlink_to(secret)
+			except FileExistsError:
+				pass  # case-insensitive file system
+		for mode in ("index", "inline"):
+			text, stderr = _run_site(site, root, mode)
+			assert "SENTINEL_SECRET" not in text + stderr
+			assert _size_lines(stderr)[0].endswith(" agents=absent")
+
+
+@pytest.mark.parametrize("site", sorted(SITES))
 def test_missing_agents_file_logs_absent(site: str) -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = _repo(tmp, lower=False)
@@ -261,8 +278,11 @@ def test_review_blocked_and_integration_judges_stay_inline() -> None:
 	assert 'if [ ! -s "${RUNTIME_DIR}/judge_static_rb.txt" ]; then' in poller
 	assert 'cat "${RUNTIME_DIR}/judge_static_rb.txt"' in poller
 	assert 'assemble_judge_static_context "${judge_static_file}" inline' in poller
-	# The wave, stall and security-exhaustion judges follow the switch.
-	assert poller.count('assemble_judge_static_context "${static_file}"; then') == 2
+	# The security-exhaustion judge runs in the audit worktree, so it inlines too.
+	assert 'static_file="${RUNTIME_DIR}/judge_static_sec.txt"' in poller
+	assert poller.count('assemble_judge_static_context "${static_file}" inline; then') == 1
+	# The wave and stall judges follow the switch.
+	assert poller.count('assemble_judge_static_context "${static_file}"; then') == 1
 	assert 'assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"\n' in poller
 
 
