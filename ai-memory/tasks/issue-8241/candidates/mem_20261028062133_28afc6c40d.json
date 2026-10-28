@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the remaining orchestrate.yml work be delivered, given that the heal pipeline cannot touch that file for this issue?\nChoices:\n- A: Close this heal issue as delivered by PR #8243. A maintainer files the orchestrate.yml work as a new ordinary issue with no heal markers, with a `files_touched` list naming `.github/workflows/orchestrate.yml` (plus `tests/**` and its changelog fragment), so the normal clarify \u2192 plan \u2192 implement pipeline can ship it. (RECOMMENDED)\n- B: Plan the orchestrate.yml change in this issue anyway. **Note:** the plan will be held as `heal_scope_plan_out_of_scope`, and `/approved` alone does not help because implement enforces the frozen marker. A person has to finish it outside the heal pipeline.\n- C: Drop the remaining item and close this issue with no follow-up. If the one-child failure recurs, the heal intake files a new report with fresh evidence.\nQ2: If the orchestrate.yml work goes ahead (Q1:A or Q1:B), what should it cover?\nChoices:\n- A: Diagnostics and the fail check only. \"Create Wave 1 issues only\" logs each deferred non-Wave-1 issue id together with the dependency edges and auto-serialize overlaps that put it in a later wave. The step fails when `gh issue create` returns no issue number. Any change to `compute_waves` or to the decomposition retry waits until a later failure's logs name the cause. (RECOMMENDED)\n- B: Option A, plus extending the author-enumeration retry (`orchestrate.yml:995-1016`) to reject non-empty `dependency_edges` when the project description says the issues are independent.\n- C: Option A, plus excluding shared `changelog.d/` / `agents.d/` fragment paths from the auto-serialize overlap check in `scripts/orchestrate_lib.py` `compute_waves`.\n**Note:** Q2 does not apply if Q1:C is chosen. B and C each guess at a cause that the evidence has not confirmed.",
+  "fingerprint": "f0f57b09cc4cf4d4c9521782ca1d7f2f7099e77e4178d89578531c6e4ea101fb",
+  "lineage": {
+    "issue_number": 8241,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40642330925",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40642330925",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261028062133_28afc6c40d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8241,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40642330925"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8241 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-28T06:21:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
