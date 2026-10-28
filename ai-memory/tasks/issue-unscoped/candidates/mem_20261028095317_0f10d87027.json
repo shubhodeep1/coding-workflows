@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/8248-heal-intake-linked-runs.md:1 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The fragment marker `<!-- agents: section=\"Workflow architecture\" -->` targets a section reported as not existing in agents.md.\n  WHY: The reviewers say this fails the fragment contract test and blocks assembly (severity MAJOR from both; confidence 5 vs 4). Note: anthropic_claude-sonnet-5_5 checked and said the finding is wrong, because `agents.md:39` has `## Workflow architecture` and eight other fragments use the same marker.\n- scripts/workflow_failure_heal.py:787-848 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `render_linked_run_timeline` marks `[LONG]` steps using a hardcoded `LINKED_RUN_LONG_STEP_SECS = 600` alongside `stall_window_minutes`.\n  WHY: With a larger stall window, a 700s step is marked `[LONG]` even though it is shorter than the stall window the parent logs name, which misleads the diagnosis (NIT).\n- tests/test_test_and_mark_stable_plan_polling_guard.py:800-810 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `test_wait_review_errors_append_the_watched_run_urls` asserts only the `IMPL_RUN_ID_LATEST` note call, not the `IMPL_RUN_ID_WORKING` one.\n  WHY: Removing the `IMPL_RUN_ID_WORKING` note call would regress the heal evidence path without any test failing (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs.\" The issue names the Clarify, Plan, Implement, and Review waits.\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, Clarify and Plan wait loops\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Clarify timeout at line 1017 and Plan timeouts at lines 1125 and 1316 still emit errors without watched-run URLs, Clarify captures its run id only on the success path at line 990, Plan captures its run id only on success paths at lines 1209 and 1219 (polling lookup at line 1190 reads only status). Severity disagreement: MAJOR from gemini and gpt-6-luna, NIT from minimax. The agents fragment documents this as a deliberate narrowing because of the \"no new API calls\" rule, and anthropic_claude-sonnet-5_5 judged it justified and reported no gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/8248-heal-intake-linked-runs.md:1 | severity=MAJOR | confidence=5\n  PROBLEM: The section heading \"Workflow architecture\" is not a valid heading in agents.md, causing CI failures.\n  WHY: `tests/test_agents_fragment_contract.py` validates that fragments target existing headings, and a non-existent target breaks assembly.\n- scripts/workflow_failure_heal.py:787-848 | severity=NIT | confidence=4\n  PROBLEM: `render_linked_run_timeline` uses a hardcoded `LINKED_RUN_LONG_STEP_SECS = 600` alongside `stall_window_minutes` for `[LONG]` marking.\n  WHY: With a larger stall window, a 700s step is marked `[LONG]` though shorter than the stall window, which misleads the diagnosis.\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs.\" The issue names the Clarify, Plan, Implement, and Review waits.\n  Expected change site: .github/workflows/test-and-mark-stable.yml, Clarify and Plan wait loops.\n  Evidence of absence: The Clarify timeout at line 1017 and Plan timeouts at lines 1125 and 1316 still emit errors without watched-run URLs. Their run IDs are captured only on success paths (Clarify line 990; Plan lines 1209 and 1219). The author deferred this because of the constraint on adding API calls, but the reviewer says the requirement gap remains.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/8248-heal-intake-linked-runs.md:1 | severity=MAJOR | confidence=4\n  PROBLEM: The fragment targets a `## Workflow architecture` section that does not exist in `agents.md`.\n  WHY: `assemble_agents.py` refuses the fragment and `tests/test_agents_fragment_contract.py::test_instructions_point_at_fragments` fails, so the new docs never reach `agents.md`.\n- tests/test_test_and_mark_stable_plan_polling_guard.py:800-810 | severity=NIT | confidence=3\n  PROBLEM: `test_wait_review_errors_append_the_watched_run_urls` does not assert that the `IMPL_RUN_ID_WORKING` note call stays present.\n  WHY: A future edit that drops it would silently regress the heal evidence path.\n- TASK_GAP | severity=NIT | confidence=3\n  Requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs.\" The issue names the Clarify, Plan, Implement, and Review waits.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, Clarify and Plan wait loops (around lines 1017, 1125, 1316).\n  Evidence of absence: The Clarify timeout at line 1017 and Plan timeouts at lines 1125 and 1316 still emit `::error::` lines without watched-run URLs. The agents fragment records this as a documented narrowing, because `capture_run_id \"Plan\"` runs only on success branches (around lines 1209 and 1219) and a new run lookup is forbidden by \"no new API calls\".\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"When a scoped run id is first seen, and in every stall / timeout `::error::` line, print the watched run URLs.\" The issue identifies the Clarify, Plan, Implement, and Review waits.\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, Clarify and Plan wait loops.\n  Evidence of absence: The PR adds watched-run URL handling to the Implement wait and the Review wait script, but not the Clarify or Plan waits. Their timeout errors at lines 1017 and 1316 still omit watched URLs. Clarify captures its run id only on the success path at line 990, and Plan only on success paths at lines 1209 and 1219 (polling lookup at line 1190 reads only status).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "30f27ecdacff81932844f2b5a5488ea0b4774486332e0fccfc8f4e98ed467e89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8256,
+    "run_id": "40664733772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40664733772",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028095317_0f10d87027",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8256,
+    "run_id": "40664733772"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T09:53:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
