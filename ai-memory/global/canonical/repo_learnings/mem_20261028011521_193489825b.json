@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.89,
+  "details": "When editing a GitHub Actions workflow or its supporting scripts, check for a corresponding test under `tests/` that asserts the workflow contract. Update or add that coverage alongside the implementation so changes to workflow structure and behavior remain verifiable.",
+  "fingerprint": "25c0903a5fe6c4075d9a6205711834ed9b72118476f06869c93184acac6ea077",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40613569766",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40613569766",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8217",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8219",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8220",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8225",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8229",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8221",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8224",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8226",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8227",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8230"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261028011521_193489825b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow changes in this repository are commonly guarded by contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-28T01:15:21Z",
+    "promoted_at": "2026-10-28T01:16:55Z",
+    "superseded_at": null
+  }
+}
