@@ -1232,7 +1232,8 @@ jobs:
           for wg1_id in "${wg1_ids[@]}"; do
             wg1_stem="/tmp/wiring_part1_shard_${wg1_id}"
             echo "::group::wiring guard part 1 shard ${wg1_id}"
-            cat "${wg1_stem}.log" || true
+            # Prefix every line so log text cannot act as a workflow command.
+            sed 's/^/| /' "${wg1_stem}.log" || true
             echo "::endgroup::"
             # A missing or non-numeric exit code counts as a failure.
             wg1_rc="$(cat "${wg1_stem}.rc" 2>/dev/null || echo 1)"

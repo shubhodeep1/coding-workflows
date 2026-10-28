@@ -5,8 +5,8 @@
 
 | The numbers that matter | Value |
 | --- | --- |
-| Sandbox run of 32 modules that could run there, serial | 29.5s |
-| Same 32 modules, sharded (same 52 failed / 380 passed / 30 skipped) | 13.0s |
+| Sandbox run of the modules that could run there, serial | 29.5s |
+| Same modules, sharded (same 52 failed / 380 passed / 30 skipped) | 13.0s |
 | Local shards | 4 |
 | `timeout-minutes`, job names, step names, `CI / lint` | unchanged |
 
@@ -14,4 +14,4 @@ What this means for operators: nothing to do. If the job still runs near 15 minu
 
 ### For contributors
 
-The run's step timings could not be read, so the step was picked by timing step bodies in the implement sandbox. These timings are relative weights only. The sandbox has no PyYAML, so most of the job's other steps stopped early there, and 7 of the 40 modules could not run (the ci.yml comment above the step lists them). The step was split in place, not moved. Earlier moves (#8072, #8091, #8118, #8208) each pushed another job toward its timeout. The split follows #7387 and #8150. The heal step's unsharded tail measured about 16s and stays serial. A failing shard's last 40 log lines are printed with a `| ` prefix outside the collapsed log groups. `tests/test_ci_poll_test_sharding.py` pins the module list, the partition and the failure handling.
+The run's step timings could not be read, so the step was picked by timing step bodies in the implement sandbox. These timings are relative weights only and vary between sandbox runs (the ci.yml comment records a separate serial run of the 33 modules at about 31s). The sandbox has no PyYAML, so most of the job's other steps stopped early there, and 7 of the 40 modules could not run (the ci.yml comment above the step lists them). The step was split in place, not moved. Earlier moves (#8072, #8091, #8118, #8208) each pushed another job toward its timeout. The split follows #7387 and #8150. The heal step's unsharded tail measured about 16s and stays serial. Every shard log line is printed with a `| ` prefix, inside the collapsed log groups and in the repeated last 40 lines of a failing shard. `tests/test_ci_poll_test_sharding.py` pins the module list, the partition and the failure handling.
