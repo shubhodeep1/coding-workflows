@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #8246: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, job `tests-heal-plan-and-validation` (the step leaves it) and the receiving job\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The PR shards \"Regression tests wired by the CI wiring guard (part 1)\" in place at .github/workflows/ci.yml:1133-1256 (\"Sharded in place, not moved\" at :1116-1120) and no step is moved to another job. This was approved as AD-2 (REFRAME) in the PR description, and job name, step name, `timeout-minutes` and required job names are unchanged. Severity NIT: a documented deviation, not an unmet deliverable.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: Issue #8246 says \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, job `tests-heal-plan-and-validation` (the step leaves it) and the receiving job.\n  Evidence of absence: The PR does not move a step. It shards \"Regression tests wired by the CI wiring guard (part 1)\" in place. This deviation was approved as AD-2 (REFRAME) in the PR description. The other constraints are met. SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #8246)\n  Expected change site: .github/workflows/ci.yml, the slow step(s) of `tests-heal-plan-and-validation` and the receiving job with the most headroom.\n  Evidence of absence: The step is sharded in place at .github/workflows/ci.yml:1133-1256 (\"Sharded in place, not moved\" at :1116-1120). The PR description's AD-2 records an approved REFRAME, and all four constraints are preserved. SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a0c78e5cd756ebcb6c04926fb5ac6d8a3842214419b91df152a88cfaf7934334",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8251,
+    "run_id": "40640794442",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40640794442",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028061815_5e7a7f580f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8251,
+    "run_id": "40640794442"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T06:18:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
