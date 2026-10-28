@@ -708,6 +708,19 @@ def test_implement_step_lookup_falls_back_to_latest_run_when_none_in_progress() 
 	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, terminal_timeout="2")
 	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
 	assert _jobs_lookup_run_ids(calls) == {"778"}, calls
+	assert not any("&page=2&" in path for path in _run_pages_requested(calls)), calls
+
+
+def test_implement_step_lookup_finds_in_progress_run_on_later_page() -> None:
+	# Review of PR for #8241: the counter stops at the first matching page, so
+	# a pending peer on a full page 1 must not hide the in_progress run on page 2.
+	pending = _run(778, name="Internal: AI Implement", conclusion=None, status="pending", created_at="2026-09-28T03:55:00Z")
+	working = _run(777, name="Internal: AI Implement", conclusion=None, status="in_progress", created_at="2026-09-28T03:50:56Z")
+	pages = [[pending] + _noise_page(1000, 99), [working]]
+	rc, outputs, calls, log = _run_phase_step("wait-implement", pages, terminal=True, terminal_timeout="2")
+	assert rc == 1 and outputs.get("status") == "timeout", (outputs, log)
+	assert _jobs_lookup_run_ids(calls) == {"777"}, calls
+	assert "1 total, 1 active, latest: pending" in log, log
 
 
 def test_implement_activity_state_tracks_working_run() -> None:
