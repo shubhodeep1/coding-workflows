@@ -28,29 +28,7 @@ WORKFLOW_ENV_VALUE = "${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}"
 LOCAL_TEXT = "# local agents\n\n## Local A\nLOCAL_BODY_A\n\n## Local B\nLOCAL_BODY_B\n"
 CANONICAL_TEXT = "# canonical agents\n\nintro\n## Canon One\nCANON_BODY_ONE\n\n## Canon Two\nCANON_BODY_TWO\n"
 
-# Only the tests, so tests/test_static_context_agents_index_clarify_plan.py can
-# import them without shadowing its own helpers (it runs them in CI).
-__all__ = [
-	"test_agents_index_phase_is_unchanged_by_the_canonical_inputs",
-	"test_canonical_index_failure_keeps_the_local_index",
-	"test_consumer_index_mode_indexes_both_files_with_the_sandbox_path",
-	"test_consumer_without_a_mount_keeps_the_canonical_file_inline",
-	"test_implement_inline_mode_byte_identical_to_base",
-	"test_implement_step_passes_the_switch_and_the_mount",
-	"test_index_failures_everywhere_give_the_inline_output",
-	"test_inline_mode_matches_the_pre_index_layout",
-	"test_invalid_sandbox_path_keeps_the_canonical_file_inline",
-	"test_isolation_helper_advertises_the_static_context_marker",
-	"test_local_index_failure_with_a_canonical_index_inlines_only_the_local_file",
-	"test_self_repo_index_mode_indexes_the_local_file",
-	"test_step_exports_nothing_in_the_self_repo",
-	"test_step_forces_inline_on_the_heal_route",
-	"test_step_keeps_the_canonical_file_inline_with_an_older_helper",
-	"test_step_does_not_mount_in_inline_mode",
-	"test_step_mounts_the_canonical_file_when_the_helper_supports_it",
-	"test_symlinked_canonical_file_is_not_indexed",
-	"test_triage_keeps_the_canonical_file_inline",
-]
+# .github/workflows/ci.yml runs this file directly; no other test module imports it.
 
 
 def _safe_env(**extra: str) -> dict[str, str]:
