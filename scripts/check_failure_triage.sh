@@ -1740,8 +1740,14 @@ PY
 	} > "${DIAG_FILE}"
 fi
 
-# Issue #8265: classify the raw diagnosis before neutralisation edits it.
-triage_upstream_classify
+# Issue #8265: classify the raw diagnosis before neutralisation edits it. The
+# upstream repository itself runs nothing new (no helper, no route file).
+if [ "${REPO,,}" = "${UPSTREAM_REPOSITORY,,}" ]; then
+	rm -f "${UPSTREAM_ROUTE_FILE}"
+	log "upstream_route outcome=file reason=self_repo pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY:-check}"
+else
+	triage_upstream_classify
+fi
 
 # CI-log text and model quotations are untrusted even inside a code fence.
 # Do not let them supply routing keys or markers to resolve_integration_ref.sh,

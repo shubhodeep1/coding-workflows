@@ -3220,7 +3220,8 @@ class CheckFailureTriageUpstreamRoutingTests(unittest.TestCase):
 		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
 		result = _run_upstream_route(diagnosis=diagnosis, repository="shubhodeep1/coding-workflows")
 		self.assert_filed_as_today(result, "self_repo")
-		self.assertEqual(result["route"]["statuses"], {})
+		# The classify helper does not run here, so no route file is written.
+		self.assertIsNone(result["route"])
 
 	def test_workflow_wires_the_route_step_between_diagnose_and_post(self) -> None:
 		job = _workflow()["jobs"]["triage"]

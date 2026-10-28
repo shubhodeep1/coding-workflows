@@ -207,7 +207,8 @@ jobs:
     needs: derive_check_name_key
     permissions:
       contents: read
-      # Only the Claude pool credential step uses OIDC; both callers grant it.
+      # OIDC: the Claude pool credential step and the "Route upstream-managed
+      # check failure" step (its heal report identity, #8265); both callers grant it.
       id-token: write
     # Cost gate: enabled by default; a consumer opts OUT via
     # CHECK_FAILURE_TRIAGE_ENABLED=false. Only genuine failure conclusions on a
@@ -563,8 +564,9 @@ jobs:
           done
           upstream_digests="${RUNNER_TEMP}/check-triage-managed-digests.json"
           : > "${upstream_digests}"
-          if [ "${GITHUB_REPOSITORY}" != "${wf_source}" ] &&
-             [ "${CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED,,}" != "false" ] &&
+          upstream_routing_switch="${CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED:-true}"
+          if [ "${GITHUB_REPOSITORY:-}" != "${wf_source}" ] &&
+             [ "${upstream_routing_switch,,}" != "false" ] &&
              [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] &&
              [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" = "${SCRIPT_REF}" ] &&
              [ -f "${trusted_dir}/scripts/build_sync_manifest.py" ]; then
