@@ -269,8 +269,10 @@ Phase 3
    `pre_assembled_static.txt` carries the index of `SUPPORT_AGENTS_FILE`
    (the verified support copy, D4) instead of the file itself. The rendered
    file goes under `RUNTIME_DIR` and is mounted read-only by
-   `review_untrusted_sandbox.sh` for the editor, judges and consolidator;
-   the prompt names that path and says the checkout's `agents.md` is PR data.
+   `review_untrusted_sandbox.sh` for the editor, judges and consolidator at
+   the constant path `/support/static-context/agents.rendered.md` (Approach
+   step 1). The prompt names only that constant path, never the
+   `RUNTIME_DIR` host path, and says the checkout's `agents.md` is PR data.
    Add the helper and `assemble_agents.py` (which review does not stage
    today) to `REQUIRED_BOOTSTRAP_SCRIPTS` in
    `scripts/stage_workflow_support.sh` and `REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS`
