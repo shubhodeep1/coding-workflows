@@ -1,0 +1,26 @@
+{
+  "discovered_at": "2026-10-28T17:27:53Z",
+  "issue_number": 8265,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/build_sync_manifest.py:1-1; cited_path=scripts/security_audit.sh; files_touched=.github/workflows/check_failure_triage.yml, agents.d/8265-check-triage-upstream-managed-routing.md, changelog.d/8265-check-triage-upstream-managed-routing.md, prompts/_templates/mode-check-failure-triage.txt, prompts/mode-check-failure-triage.txt, scripts/build_sync_manifest.py, scripts/check_failure_triage.sh, scripts/workflow_failure_heal.py, scripts/workflow_failure_heal_intake.sh, tests/test_build_sync_manifest.py, tests/test_check_failure_triage_workflow_security.py, tests/test_workflow_failure_heal.py, tests/test_workflow_failure_heal_synced_security.py.",
+  "phase": "review_autofix",
+  "pr_number": 8267,
+  "record_id": "lesson_20261028172753_6c07c68678",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/security_audit.sh",
+    "scripts/build_sync_manifest.py",
+    ".github/workflows/check_failure_triage.yml",
+    "agents.d/8265-check-triage-upstream-managed-routing.md",
+    "changelog.d/8265-check-triage-upstream-managed-routing.md",
+    "prompts/_templates/mode-check-failure-triage.txt",
+    "prompts/mode-check-failure-triage.txt",
+    "scripts/check_failure_triage.sh",
+    "scripts/workflow_failure_heal.py",
+    "scripts/workflow_failure_heal_intake.sh",
+    "tests/test_build_sync_manifest.py",
+    "tests/test_check_failure_triage_workflow_security.py",
+    "tests/test_workflow_failure_heal.py",
+    "tests/test_workflow_failure_heal_synced_security.py"
+  ]
+}
