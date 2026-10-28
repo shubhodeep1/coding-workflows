@@ -49,6 +49,10 @@
 # `::` / `##[` prefixed) and the index is capped at 300 items and 32 KiB. No
 # agents file means empty output and exit 0. Like `readme`, it needs neither
 # unattended_system_instructions.md nor ai_pipeline.md.
+# `agents-index <out> agents.md|AGENTS.md` (issue #8269) indexes that file
+# instead of picking agents.md first; a missing, symlinked or non-regular file
+# writes empty output with one warning and exits 0. Any other third value, or
+# a third argument for another phase, exits 2.
 #
 # STATIC_CONTEXT_AGENTS_MODE (default index): unset, empty or `index` (any
 # letter case) selects the index, `inline` the full file, anything else inline
@@ -83,14 +87,32 @@
 
 set -euo pipefail
 
-if [ "$#" -ne 2 ]; then
+static_context_usage() {
 	echo "Usage: $0 <phase> <output-file>" >&2
+	echo "       $0 agents-index <output-file> [agents.md|AGENTS.md]" >&2
 	echo "  phase: clarify | plan | implement | readme | agents-index" >&2
 	exit 2
+}
+
+if [ "$#" -ne 2 ] && { [ "$#" -ne 3 ] || [ "${1:-}" != agents-index ]; }; then
+	static_context_usage
 fi
 
 phase="$1"
 output="$2"
+# Optional third argument of the agents-index phase (issue #8269): the agents
+# file to index, so a caller that reads AGENTS.md first indexes that file.
+static_context_agents_index_file_arg=""
+if [ "$#" -eq 3 ]; then
+	case "$3" in
+		agents.md|AGENTS.md)
+			static_context_agents_index_file_arg="$3"
+			;;
+		*)
+			static_context_usage
+			;;
+	esac
+fi
 
 if [ -L "${output}" ] || { [ -e "${output}" ] && [ ! -f "${output}" ]; }; then
 	echo "::error::Static context output is not a regular file; refusing to assemble the prompt." >&2
@@ -503,6 +525,13 @@ emit_agents_index() {
 			return 0
 		fi
 		agents_index_args=(--canonical "$2" "$3")
+	elif [ -n "${static_context_agents_index_file_arg}" ]; then
+		agents_index_file="${static_context_agents_index_file_arg}"
+		if [ -L "${agents_index_file}" ] || [ ! -f "${agents_index_file}" ]; then
+			echo "::warning::Static context agents index omitted; ${agents_index_file} is missing, a symbolic link or not a regular file." >&2
+			return 0
+		fi
+		agents_index_args=("${agents_index_file}" "${PWD}")
 	else
 		agents_index_file="$(_static_context_local_agents_file)" || agents_index_file=""
 		if [ -z "${agents_index_file}" ]; then

@@ -288,6 +288,8 @@ def test_orchestrator_static_context_guards_symlinks() -> None:
 				(root / name).symlink_to(secret)
 			workflow_env = _safe_env()
 			workflow_env["RUNNER_TEMP"] = str(root)
+			# The full-file assertions below need inline mode (issue #8269).
+			workflow_env["STATIC_CONTEXT_AGENTS_MODE"] = "inline"
 			result = subprocess.run(
 				["bash", "-c", step_run], cwd=root, env=workflow_env,
 				capture_output=True, text=True, check=False,

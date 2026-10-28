@@ -381,6 +381,78 @@ def test_unknown_phase_lists_agents_index() -> None:
 		assert "agents-index" in result.stderr
 
 
+def _run_named(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["bash", "scripts/build_static_context.sh", *args],
+		cwd=root, env=_safe_env(), capture_output=True, text=True, check=False,
+	)
+
+
+def test_agents_index_named_file_overrides_precedence() -> None:
+	# Issue #8269: callers that read AGENTS.md first pass it explicitly.
+	with tempfile.TemporaryDirectory() as tmp:
+		root = _repo(tmp)
+		(root / "agents.md").write_text("## Lower\n", encoding="utf-8")
+		(root / "AGENTS.md").write_text("\n## Upper\n", encoding="utf-8")
+		names = {entry.name for entry in root.iterdir()}
+		if "AGENTS.md" not in names or "agents.md" not in names:
+			pytest.skip("case-insensitive filesystem")
+		result = _run_named(root, "agents-index", "out.txt", "AGENTS.md")
+		assert result.returncode == 0, result.stderr
+		text = (root / "out.txt").read_text(encoding="utf-8")
+		assert "The full AGENTS.md is not inlined" in text
+		assert _item_lines(text) == ["- L2: Upper"]
+		result = _run_named(root, "agents-index", "out.txt", "agents.md")
+		assert result.returncode == 0, result.stderr
+		assert _item_lines((root / "out.txt").read_text(encoding="utf-8")) == ["- L1: Lower"]
+		# Two arguments keep the old choice: agents.md first.
+		before = (root / "out.txt").read_bytes()
+		result = _run_named(root, "agents-index", "out.txt")
+		assert result.returncode == 0, result.stderr
+		assert (root / "out.txt").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+	"args",
+	[
+		("agents-index", "out.txt", "README.md"),
+		("agents-index", "out.txt", "../agents.md"),
+		("agents-index", "out.txt", "agents.md", "extra"),
+		("readme", "out.txt", "agents.md"),
+	],
+)
+def test_agents_index_rejects_bad_third_argument(args: tuple[str, ...]) -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = _repo(tmp)
+		(root / "agents.md").write_text("## One\n", encoding="utf-8")
+		result = _run_named(root, *args)
+		assert result.returncode == 2
+		assert "agents-index <output-file> [agents.md|AGENTS.md]" in result.stderr
+		assert not (root / "out.txt").exists()
+
+
+def test_agents_index_named_symlink_or_missing_file_is_empty() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = _repo(tmp)
+		git_dir = root / ".git"
+		git_dir.mkdir()
+		(git_dir / "config").write_text("## x-access-token:SENTINEL\n", encoding="utf-8")
+		(root / "agents.md").write_text("## Regular\n", encoding="utf-8")
+		result = _run_named(root, "agents-index", "out.txt", "AGENTS.md")
+		assert result.returncode == 0, result.stderr
+		assert (root / "out.txt").read_text(encoding="utf-8") == ""
+		assert result.stderr.count("::warning::") == 1
+		names = {entry.name for entry in root.iterdir()}
+		if "AGENTS.md" in names:
+			pytest.skip("case-insensitive filesystem")
+		(root / "AGENTS.md").symlink_to(git_dir / "config")
+		result = _run_named(root, "agents-index", "out.txt", "AGENTS.md")
+		assert result.returncode == 0, result.stderr
+		assert (root / "out.txt").read_text(encoding="utf-8") == ""
+		assert "SENTINEL" not in result.stdout + result.stderr
+		assert "::warning::Static context agents index omitted; AGENTS.md" in result.stderr
+
+
 def _existing_phase_fixture(root: Path) -> str:
 	(root / "unattended_system_instructions.md").write_text("system rules\n", encoding="utf-8")
 	(root / "ai_pipeline.md").write_text(

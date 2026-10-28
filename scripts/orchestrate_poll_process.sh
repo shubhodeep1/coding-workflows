@@ -1430,10 +1430,42 @@ write_state_snapshot_tracker_export() {
 		}' > "${out_file}" 2>/dev/null || true
 }
 
+# Print `index` or `inline` from STATIC_CONTEXT_AGENTS_MODE (issue #8269),
+# with the rules of _static_context_agents_mode in build_static_context.sh:
+# unset, empty or `index` (any letter case) mean index, `inline` means inline,
+# anything else inline with one warning that never prints the value.
+_judge_static_agents_mode() {
+  local judge_static_agents_mode_value
+  judge_static_agents_mode_value="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  case "${judge_static_agents_mode_value}" in
+    ""|index)
+      echo index
+      ;;
+    inline)
+      echo inline
+      ;;
+    *)
+      echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+      echo inline
+      ;;
+  esac
+  return 0
+}
+
+# assemble_judge_static_context OUT [inline]
+# The optional second argument `inline` always inlines the agents file. The
+# review-blocked and integration-conflict judges pass it (issue #8269): their
+# sandboxes snapshot a PR head or a merge worktree, not the tree the index is
+# built from.
 assemble_judge_static_context() {
   local out_file="$1"
+  local judge_static_override="${2:-}"
   local missing=""
   local judge_readme_context=""
+  local judge_static_agents_requested="" judge_static_agents_effective=""
+  local judge_static_agents_fallback="" judge_static_agents_absent=false
+  local judge_static_agents_index_tmp="" judge_static_agents_indexed=false
+  local judge_static_size_line="" judge_static_size_bytes=""
 
   if [ ! -s unattended_system_instructions.md ]; then
     missing="unattended_system_instructions.md"
@@ -1464,7 +1496,33 @@ assemble_judge_static_context() {
     elif [ -f agents.md ]; then
       judge_agents_file="agents.md"
     fi
-    if [ -n "${judge_agents_file}" ]; then
+    if [ "${judge_static_override}" = inline ]; then
+      judge_static_agents_requested=inline
+    else
+      judge_static_agents_requested="$(_judge_static_agents_mode)"
+    fi
+    judge_static_agents_effective="${judge_static_agents_requested}"
+    if [ -z "${judge_agents_file}" ]; then
+      judge_static_agents_absent=true
+    elif [ "${judge_static_agents_requested}" = index ]; then
+      if judge_static_agents_index_tmp="$(mktemp "${RUNTIME_DIR:-/tmp}/judge-agents-index.XXXXXX" 2>/dev/null)"; then
+        if bash scripts/build_static_context.sh agents-index "${judge_static_agents_index_tmp}" "${judge_agents_file}" && [ -s "${judge_static_agents_index_tmp}" ]; then
+          cat "${judge_static_agents_index_tmp}"
+          echo
+          judge_static_agents_indexed=true
+        else
+          judge_static_agents_fallback=index_unavailable
+        fi
+        rm -f "${judge_static_agents_index_tmp}"
+      else
+        judge_static_agents_fallback=tmp_unavailable
+      fi
+      if [ "${judge_static_agents_indexed}" != true ]; then
+        judge_static_agents_effective=inline
+        echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+      fi
+    fi
+    if [ -n "${judge_agents_file}" ] && [ "${judge_static_agents_indexed}" != true ]; then
       echo "=== AGENTS.MD ==="
       # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
       if [ -d agents.d ] && [ ! -L agents.d ] && judge_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${judge_agents_file}" 2>/dev/null)"; then
@@ -1482,6 +1540,21 @@ assemble_judge_static_context() {
     fi
   } > "${out_file}"
   rm -f "${judge_readme_context}"
+  judge_static_size_bytes="$(wc -c < "${out_file}" 2>/dev/null | tr -d '[:space:]')"
+  case "${judge_static_size_bytes}" in
+    ''|*[!0-9]*) judge_static_size_bytes=0 ;;
+  esac
+  judge_static_size_line="STATIC_CONTEXT_SIZE phase=judge mode=${judge_static_agents_effective} bytes=${judge_static_size_bytes}"
+  if [ "${judge_static_override}" = inline ]; then
+    judge_static_size_line="${judge_static_size_line} override=inline"
+  fi
+  if [ -n "${judge_static_agents_fallback}" ]; then
+    judge_static_size_line="${judge_static_size_line} fallback=inline reason=${judge_static_agents_fallback}"
+  fi
+  if [ "${judge_static_agents_absent}" = true ]; then
+    judge_static_size_line="${judge_static_size_line} agents=absent"
+  fi
+  echo "${judge_static_size_line}" >&2
 }
 
 # ---------------------------------------------------------------
@@ -10727,7 +10800,7 @@ invoke_judge_for_integration_conflict() {
   output_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_output.XXXXXX")"
   judge_static_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_static.XXXXXX")"
 
-  if ! assemble_judge_static_context "${judge_static_file}"; then
+  if ! assemble_judge_static_context "${judge_static_file}" inline; then
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
     _integration_judge_remove_worktree "${judge_wt}"
     rm -rf -- "${baseline_dir}"
@@ -28839,13 +28912,16 @@ ${FOLLOWUP_BLOCK_REASON}"
       RB_JUDGE_PROMPT_FILE="${RUNTIME_DIR}/rb_judge_prompt_${rb_issue}.txt"
       RB_JUDGE_OUTPUT_FILE="${RUNTIME_DIR}/rb_judge_output_${rb_issue}.txt"
 
-      if [ ! -s "${RUNTIME_DIR}/judge_static.txt" ]; then
-        assemble_judge_static_context "${RUNTIME_DIR}/judge_static.txt"
+      # The review-blocked judge keeps its own, always-inline static file
+      # (issue #8269): its sandbox snapshots the PR head, so it must not be
+      # pointed at an agents file the PR controls.
+      if [ ! -s "${RUNTIME_DIR}/judge_static_rb.txt" ]; then
+        assemble_judge_static_context "${RUNTIME_DIR}/judge_static_rb.txt" inline
       fi
-      RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${RUNTIME_DIR}/judge_static.txt")"
+      RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${RUNTIME_DIR}/judge_static_rb.txt")"
 
       {
-        cat "${RUNTIME_DIR}/judge_static.txt"
+        cat "${RUNTIME_DIR}/judge_static_rb.txt"
         echo
         echo "=== REVIEW-BLOCKED JUDGE TASK ==="
         echo
