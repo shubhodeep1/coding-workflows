@@ -178,7 +178,13 @@ This cuts the static prefix from about 750 KB (about 190k tokens) to under
    as `${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}`, and each script
    also defaults it to `index` (§8), so `inline` reaches every phase.
 4. Consumer implement stages the canonical file into the sandbox with
-   `--include` and indexes it under its own heading.
+   `--include` and indexes it under its own heading. Like the rendered file,
+   it is mounted at a constant in-sandbox path,
+   `/support/static-context/agents_canonical.md` (the same in-sandbox-target
+   mount or fixed copy under `/support/` as step 1), never at its
+   `${RUNTIME_DIR}/agents_canonical.md` host path, and the index names only
+   that constant path. If it cannot be mounted there, consumer implement
+   stays `inline`.
 5. Prompt text that says everything is already loaded is updated
    (`clarify.yml:1466`, `run_plan_codex.sh:16`,
    `prompts/mode-validate-generate.txt:15` and its hand-maintained source
@@ -218,7 +224,9 @@ Phase 1
    instruction in place of `emit_agents_md`, falling back to `inline` on
    any error.
 3. `implement.yml:1770-1777`: stage the canonical file into the sandbox
-   (`--include`) for consumer runs, and index it under its own heading. Mount
+   for consumer runs at `/support/static-context/agents_canonical.md` (not
+   its run-specific host path, see Approach step 4), and index it under its
+   own heading. Mount
    `agents.rendered.md` read-only in the clarify, plan and implement
    sandboxes (`clarify_isolated_run.sh` gets the new read-only file mount).
    `scripts/implement_diagnose_post_codex_failure.sh` copies
@@ -242,8 +250,12 @@ Phase 2
    `AI_ENGINE_INCLUDE_PATHS`); a phase that cannot mount it stays `inline`.
    Pass `STATIC_CONTEXT_AGENTS_MODE` through `env:` in `orchestrate.yml`,
    `orchestrate_clarify_respond.yml`, `orchestrate_poll.yml`, `validate.yml`
-   and `workflow-failure-heal-intake.yml` (the intake step that runs
-   `scripts/workflow_failure_heal_intake.sh`, about line 306). The reporter
+   and `workflow-failure-heal-intake.yml`. In that workflow two steps reach
+   `scripts/workflow_failure_heal_intake.sh`: the intake step (about line
+   306) and "Run heal-scope recovery scan" (about line 494), whose
+   `workflow_failure_heal_recovery_scan.sh` runs the intake script itself
+   (`bash "${INTAKE_SCRIPT}"`, about line 394). Pass the variable to both
+   steps (or at job level for both jobs). The reporter
    `workflow_failure_heal.yml` only sends a `repository_dispatch` and never
    runs the intake script, so it needs no change. Add the helper to the
    staged-support lists of `orchestrate.yml`, `orchestrate_clarify_respond.yml`,
@@ -333,11 +345,14 @@ Phase 4
 - Render-source test: the helper never renders with a checkout as
   `--repo-root`, and an `agents.d/` fragment added in the review checkout
   does not appear in the review index or rendered file.
-- Rollback test: every workflow whose scripts read
-  `STATIC_CONTEXT_AGENTS_MODE` passes it through `env:`.
+- Rollback test: every workflow step whose scripts read
+  `STATIC_CONTEXT_AGENTS_MODE`, directly or through a script they run (for
+  example the heal-scope recovery scan, which runs the heal intake), passes
+  it through `env:`, checked per step rather than per workflow.
 - Cache-stability test: the index text is byte-identical for two runs with
   different `RUNTIME_DIR` values, and names only
-  `/support/static-context/agents.rendered.md`.
+  `/support/static-context/agents.rendered.md` (plus
+  `/support/static-context/agents_canonical.md` in consumer implement).
 - Diagnose test: with the implement prefix in `index` mode, the diagnose
   sandbox can read the rendered file or gets an inline prefix.
 - After each phase merges, compare `STATIC_CONTEXT_SIZE` logs and Claude
