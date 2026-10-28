@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:(CI job `tests-heal-plan-and-validation` and `tests-release-and-log-analysis`) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR modifications trigger failures in `tests/test_gh_api_write_guard.py` and `tests/test_pr_watch_guard.py`.\n  WHY: These failures prevent the PR from passing CI; the reviewer reports a regression in how the re-sharded workflow structure is validated against repository-level guards (severity given as MAJOR; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash examined the same failures and found no causal link to this diff).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from `tests-heal-plan-and-validation` to `tests-release-and-log-analysis`\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: Workflow comment at lines 2172\u20132175 and changelog fragment line 11 state that step timings were not measured and steps were chosen by test and subprocess counts, so the diff does not show these are the slowest steps or that the target job has the most headroom (severity disagreement: MAJOR from gemini and luna, NIT from sonnet-5_5 with confidence 2; z-ai_glm-5_3-flash treated it as a deferred item, not a gap)\n- requirement: Write an agents.d fragment instead of editing agents.md for workflow changes (CLAUDE.md \u00a730)\n  expected_change_site: agents.d/\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `test_instructions_point_at_fragments` in `tests/test_ci_poll_test_sharding.py` reportedly fails, indicating the agents fragment documenting the `ci.yml` changes is missing or incorrectly registered (anthropic_claude-sonnet-5_5 considered this gap and dropped it as unsubstantiated)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: `.github/workflows/ci.yml`, choice of steps moved out of `tests-heal-plan-and-validation`.\n  EVIDENCE: The step timings of run 40750326439 are not available in the repository or inlined context; the workflow comment and changelog say the steps were picked by test and subprocess counts, as in earlier budget-watch moves (#7366, #7383, #7677, #8208, #8268). All other requirements are met. Not a code defect. SEVERITY: NIT, ISSUE_CONFIDENCE: 2\n- requirement: write an `agents.d` fragment for workflow changes (consensus gap, raised by one reviewer).\n  expected_change_site: `agents.d/`\n  EVIDENCE: Nothing in the issue requires an agents fragment for a CI step relocation; the cited failing test checks `CLAUDE.md` content, so the gap is not substantiated. Dropped. SEVERITY: NIT, ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:(CI job `tests-heal-plan-and-validation` and `tests-release-and-log-analysis`) | severity=MAJOR | confidence=4\n  PROBLEM: The PR modifications trigger failures in `tests/test_gh_api_write_guard.py` and `tests/test_pr_watch_guard.py`.\n  WHY: These failures prevent the PR from passing CI; the re-sharded jobs reportedly regress how the workflow structure is validated against repository-level guards.\n\nTASK_GAP:\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from `tests-heal-plan-and-validation` to `tests-release-and-log-analysis`.\n  EVIDENCE: The workflow comment at lines 2172\u20132175 and the changelog fragment at line 11 say step timings were not measured; steps were selected by test and subprocess counts. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 5\n- requirement: \"Add to `agents.md`... Write a fragment instead.\" (CLAUDE.md \u00a730) for workflow changes.\n  expected_change_site: agents.d/\n  EVIDENCE: `test_instructions_point_at_fragments` in `tests/test_ci_poll_test_sharding.py` fails, indicating the required agents fragment is missing or incorrectly registered. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` to `tests-release-and-log-analysis`.\n  EVIDENCE: The workflow comment at lines 2172\u20132175 says step timings were not measured and steps were selected by test and subprocess counts, so the diff does not establish they were the slowest or that the destination had the most headroom. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1951fb34d0f80a163fe3a0d2f6d72d26a682abb2ad4113bc70d25f055291640e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8283,
+    "run_id": "40772697168",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40772697168",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028215634_dd9918e2dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8283,
+    "run_id": "40772697168"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T21:56:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
