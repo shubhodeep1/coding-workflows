@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_static_context_agents_index_implement.py:31-53 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The comment at lines 31-32 says tests/test_static_context_agents_index_clarify_plan.py imports these tests and runs them in CI, and the 19-entry `__all__` list at lines 33-53 exists for that import. The last run removed that star import, so the comment is stale and `__all__` is unused.\n  WHY: Nothing fails at runtime because `.github/workflows/ci.yml` line 2543 runs the file directly. A maintainer who trusts the comment could still drop the file from ci.yml and silently lose implement-phase coverage. All four reviewers rated this NIT, mapped here to low, with no disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_static_context_agents_index_implement.py:Lines 31-32, the comment \"# Only the tests, so tests/test_static_context_agents_index_clarify_plan.py can import them without shadowing its own helpers (it runs them in CI).\" above the 19-entry `__all__` list (lines 33-53). | severity=NIT | confidence=4\n  PROBLEM: The last autofix run removed the import this comment describes, `from test_static_context_agents_index_implement import *`, from tests/test_static_context_agents_index_clarify_plan.py. That file now has no `sys` usage, no star import and no `__all__` reference. Its only mention of the implement file is a prose comment at line 155. So the comment is false and `__all__` has nothing left to serve.\n  WHY: Nothing fails at runtime because pytest collects the module directly and `.github/workflows/ci.yml` lists the file at line 2543. A maintainer could still drop line 2543 and lose the implement-phase coverage (mount gating, heal route, triage inline). `tests/test_ci_wires_every_test_file.py` would catch that, which is why this is a NIT. Suggested fix: delete lines 31-53, or reword the comment.\n- HARDENING_SUGGESTION: tests/test_static_context_agents_index_implement.py lines 31-53 | The stale comment and unused `__all__` describe star-import wiring that no longer exists. Suggested fix: remove both, or replace the comment with \"Run directly by .github/workflows/ci.yml.\" (2-23 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_static_context_agents_index_implement.py:lines 31-33 | severity=NIT | confidence=4\n  PROBLEM: The comment above `__all__` is stale and misleading.\n  WHY: It says `tests/test_static_context_agents_index_clarify_plan.py` imports these tests for CI coverage, but the last run removed that import. CI now runs this file explicitly in `ci.yml` (line 2543), so a maintainer who removes it from `ci.yml` would silently lose coverage.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_static_context_agents_index_implement.py:lines 31-53 (the two-line comment directly above `__all__ = [...]` and the 19-entry `__all__` list itself) | severity=NIT | confidence=4\n  PROBLEM: The comment describes a star-import dependency that the last run removed. Nothing star-imports this module anymore and `.github/workflows/ci.yml:2543` runs the file directly, so the hand-curated 19-name `__all__` has no purpose.\n  WHY: Nothing fails at runtime today. The defect is stale documentation plus leftover code that misleads maintainers about how the file is wired into CI.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_static_context_agents_index_implement.py:lines 31-53 (comment at 31-32 above `__all__ = [...]`) | severity=NIT | confidence=4\n  PROBLEM: The comment and the 19-entry hand-kept `__all__` list are stale. The last run removed the star import from tests/test_static_context_agents_index_clarify_plan.py, so nothing imports this module and the comment misdescribes how the file reaches CI.\n  WHY: Nothing fails, because ci.yml:2543 runs this file directly. The risk is documentation drift: a maintainer could drop the file from ci.yml and silently lose implement-phase coverage.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "290e374c5e4da54b59d80725c9275385a1b91c7ef1445c2498f9c72ee2838358",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8255,
+    "run_id": "40774569042",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40774569042",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028220636_dd7438befb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8255,
+    "run_id": "40774569042"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-28T22:06:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
