@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_implement_post_codex_recovery.py:multiple test functions (e.g., test_review_pipeline_integration_chain_module_runs_clean) | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR updates tests/e2e_smoke_canary.txt, and seven tests in tests/test_implement_post_codex_recovery.py fail in the pre-push test gate.\n  WHY: The recovery tests likely depend on the previous canary content (possibly the bait lines), so restoring the file invalidated their assumptions. The reviewer labelled it SEVERITY: BLOCKER, which maps to high here. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) disagree: they call the failures unrelated or inherited from the merge base, and none of them raised a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_implement_post_codex_recovery.py:multiple test functions (e.g., test_review_pipeline_integration_chain_module_runs_clean) | severity=BLOCKER | confidence=4\n  PROBLEM: The PR updates tests/e2e_smoke_canary.txt, and seven tests in tests/test_implement_post_codex_recovery.py fail in the pre-push test gate.\n  WHY: The recovery tests likely depend on the previous canary content (possibly the bait lines), so restoring the file invalidated their assumptions.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2b71c5139ec21656ce11e2374da68edbf332bfd7ff2e54c265113525a0d9b233",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8282,
+    "run_id": "40767118180",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40767118180",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261028212919_53fa7bb3b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8282,
+    "run_id": "40767118180"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-28T21:29:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
