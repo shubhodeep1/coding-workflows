@@ -2956,6 +2956,9 @@ case "${CLASSIFICATION}" in
 				log "target_branch_retarget from=${HEAD_BRANCH} to=${HEAL_CONSUMER_APP_TARGET_BRANCH} reason=pipeline_mirror_branch"
 			fi
 			[ -n "${HEAL_CONSUMER_APP_TARGET_BRANCH}" ] || HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE="default"
+			# The scope guard's skip line (guard off) reads the shared globals.
+			TARGET_BRANCH="${HEAL_CONSUMER_APP_TARGET_BRANCH}"
+			TARGET_BRANCH_SOURCE="${HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE}"
 			_open_issue "${SELF_REPO}" "${HEAL_CONSUMER_APP_TARGET_BRANCH}" || exit 1
 			log "created issue=${NEW_ISSUE_URL} repo=${SELF_REPO} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL} target_branch=${HEAL_CONSUMER_APP_TARGET_BRANCH:-default} target_branch_source=${HEAL_CONSUMER_APP_TARGET_BRANCH_SOURCE}"
 		else
