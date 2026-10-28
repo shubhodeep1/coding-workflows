@@ -46,6 +46,7 @@ __all__ = [
 	"test_step_exports_nothing_in_the_self_repo",
 	"test_step_forces_inline_on_the_heal_route",
 	"test_step_keeps_the_canonical_file_inline_with_an_older_helper",
+	"test_step_does_not_mount_in_inline_mode",
 	"test_step_mounts_the_canonical_file_when_the_helper_supports_it",
 	"test_symlinked_canonical_file_is_not_indexed",
 	"test_triage_keeps_the_canonical_file_inline",
@@ -355,7 +356,7 @@ def test_implement_step_passes_the_switch_and_the_mount() -> None:
 	assert 'echo "CODEX_ISOLATED_STATIC_CONTEXT_FILES=${RUNTIME_DIR}/agents_canonical.md" >> "$GITHUB_ENV"' in run
 
 
-def _run_step(tmp: Path, *, canonical: bool, helper: str | None, heal: bool = False) -> tuple[dict[str, str], str, str]:
+def _run_step(tmp: Path, *, canonical: bool, helper: str | None, heal: bool = False, mode: str = "index") -> tuple[dict[str, str], str, str]:
 	"""Run the step body with a stub builder that records its environment."""
 	(tmp / "scripts").mkdir()
 	(tmp / "scripts" / "build_static_context.sh").write_text(
@@ -376,7 +377,7 @@ def _run_step(tmp: Path, *, canonical: bool, helper: str | None, heal: bool = Fa
 	github_env.write_text("", encoding="utf-8")
 	env = _safe_env(
 		RUNTIME_DIR=str(runtime), GITHUB_ENV=str(github_env), IMPLEMENT_STAGED_SUPPORT_RUN_DIR=str(run_dir),
-		STATIC_CONTEXT_AGENTS_MODE="index",
+		STATIC_CONTEXT_AGENTS_MODE=mode,
 	)
 	if heal:
 		env["HEAL_ROUTE"] = "true"
@@ -398,6 +399,14 @@ def test_step_keeps_the_canonical_file_inline_with_an_older_helper() -> None:
 	with tempfile.TemporaryDirectory() as tmp_name:
 		recorded, github_env, _ = _run_step(Path(tmp_name), canonical=True, helper="#!/bin/bash\n# no marker\n")
 		assert recorded == {"MODE": "index", "SANDBOX": "", "REASON": "helper_unsupported"}
+		assert github_env == ""
+
+
+@pytest.mark.parametrize("mode", ["inline", "INLINE", "junk"])
+def test_step_does_not_mount_in_inline_mode(mode: str) -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		recorded, github_env, _ = _run_step(Path(tmp_name), canonical=True, helper=f"#!/bin/bash\n{MARKER}\n", mode=mode)
+		assert recorded == {"MODE": mode, "SANDBOX": "", "REASON": ""}
 		assert github_env == ""
 
 

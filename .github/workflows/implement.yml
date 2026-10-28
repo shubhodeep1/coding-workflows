@@ -2707,7 +2707,12 @@ jobs:
             export STATIC_CONTEXT_AGENTS_MODE=inline
             echo "STATIC_CONTEXT_AGENTS implement mode=inline reason=heal_route"
           elif [ -f "${RUNTIME_DIR}/agents_canonical.md" ] && [ ! -L "${RUNTIME_DIR}/agents_canonical.md" ]; then
-            if [ -n "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] && grep -qxF '# supports: CODEX_ISOLATED_STATIC_CONTEXT_FILES' "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_isolated_exec.sh" 2>/dev/null; then
+            # Mount only in index mode, so `inline` (or an unrecognised value)
+            # is a complete rollback: no copy into later isolated runs.
+            static_context_mode_lc="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+            if [ -n "${static_context_mode_lc}" ] && [ "${static_context_mode_lc}" != index ]; then
+              :
+            elif [ -n "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] && grep -qxF '# supports: CODEX_ISOLATED_STATIC_CONTEXT_FILES' "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_isolated_exec.sh" 2>/dev/null; then
               export STATIC_CONTEXT_CANONICAL_SANDBOX_PATH=/support/static-context/agents_canonical.md
               echo "CODEX_ISOLATED_STATIC_CONTEXT_FILES=${RUNTIME_DIR}/agents_canonical.md" >> "$GITHUB_ENV"
             else

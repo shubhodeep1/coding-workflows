@@ -623,7 +623,7 @@ while IFS= read -r static_context_src; do
 	esac
 	case "${static_context_seen}" in *" ${static_context_name} "*) fail "static context file rejected" ;; esac
 	static_context_seen="${static_context_seen}${static_context_name} "
-	workspace_py copy-include "${static_context_src}" "${root}/support/static-context/${static_context_name}" >/dev/null 2>&1 || fail "static context file rejected"
+	workspace_py copy-include "${static_context_src}" "${root}/support/static-context/${static_context_name}" >/dev/null || fail "static context file rejected"
 	static_context_count=$((static_context_count + 1))
 done <<< "${CODEX_ISOLATED_STATIC_CONTEXT_FILES:-}"
 [ "${static_context_count}" -eq 0 ] || echo "CODEX_ISOLATION static_context files=${static_context_count}" >&2
