@@ -2103,6 +2103,69 @@ if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
 The judge chose **${RB_ACTION}**, but this is a consumer-updater pull request. Only the update_workflows.yml verify job may change or merge it, so no action was taken." >/dev/null 2>&1 || true
   exit 0
 fi
+# BEGIN rb-judge orchestrator integration hold (#8232)
+# Orchestrator integration PRs (head `orchestrator/project-<N>`): the
+# orchestrator's finalize_integration_merge_if_needed owns the final merge and
+# merges only a head that passed runtime validation. The judge holds every
+# merge-type action (`merge`, `merge_with_followup`, final-attempt `fix`) and
+# `close_and_reissue`; a non-final `fix` still pushes its fix commit. Detection
+# mirrors review_enable_auto_merge.sh (`_orch_is_integration_pr`), including
+# the canonical fallback for an empty or invalid pattern. Incident:
+# tele-funtoken-msg-scoring#4861 / PR #4867 merged by the judge two autofix
+# commits after the last validated head.
+rb_judge_head_ref_is_orchestrator_integration()
+{
+  local _rbj_ref="${1:-}"
+  local _rbj_pattern="${ORCH_INTEGRATION_BRANCH_PATTERN-^orchestrator/project-}"
+  local _rbj_rc=0
+  [ -n "${_rbj_ref}" ] || return 1
+  if [ -n "${_rbj_pattern}" ]; then
+    if printf '%s\n' "${_rbj_ref}" | grep -Eq -- "${_rbj_pattern}"; then
+      return 0
+    else
+      _rbj_rc=$?
+      if [ "${_rbj_rc}" -gt 1 ]; then
+        echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (grep exit ${_rbj_rc}); falling back to canonical '^orchestrator/project-([0-9]+)$' integration-PR hold for this run."
+      fi
+    fi
+  else
+    echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is empty; falling back to canonical '^orchestrator/project-([0-9]+)$' integration-PR hold for this run."
+  fi
+  if [[ "${_rbj_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+    return 0
+  fi
+  return 1
+}
+RB_ORCH_INTEGRATION_HOLD_ACTION="false"
+if [ "${RB_MERGE_ACTION}" = "true" ] || [ "${RB_ACTION}" = "close_and_reissue" ]; then
+  RB_ORCH_INTEGRATION_HOLD_ACTION="true"
+fi
+if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
+  && [ "${RB_ORCH_INTEGRATION_HOLD_ACTION}" = "true" ] \
+  && rb_judge_head_ref_is_orchestrator_integration "${POST_REVIEW_HEAD_REF:-}"; then
+  # ai-review/head-gate success only after the security merge gate passes,
+  # as on every other judge path; the orchestrator's required-checks read
+  # (pr_checks_lib.sh) can include this status. The gate itself skips
+  # orchestrator integration PRs, so it normally returns 0 at no cost.
+  if [ "${RB_MERGE_ACTION}" = "true" ] && [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+    && rb_security_merge_gate; then
+    review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved; orchestrator owns the final merge" || true
+  fi
+  echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=skip reason=orchestrator_integration_pr judge_action=${RB_ACTION}"
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=orchestrator_integration_hold" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=orchestrator_integration_pr" >> "$GITHUB_OUTPUT"
+  RB_ORCH_HOLD_FINAL_FIX_NOTE=""
+  if [ "${RB_ACTION}" = "fix" ]; then
+    RB_ORCH_HOLD_FINAL_FIX_NOTE=" Judge fix retries are exhausted, so the final-attempt fix counts as a merge; no fix commit was created."
+  fi
+  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+    -f body="## Review-Blocked Judge — action held for the orchestrator final merge
+
+The judge chose **${RB_ACTION}**, but this is an orchestrator integration pull request.${RB_ORCH_HOLD_FINAL_FIX_NOTE} The judge does not merge or close it. The orchestrator merges this PR (finalize_integration_merge_if_needed) once the current integration head passes runtime validation." >/dev/null 2>&1 || true
+  exit 0
+fi
+# END rb-judge orchestrator integration hold (#8232)
 if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
   RB_SECURITY_FINAL_FIX_NOTE=""
   if [ "${RB_ACTION}" = "fix" ]; then
