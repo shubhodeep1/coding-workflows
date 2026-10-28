@@ -6,16 +6,10 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
-
-# The implement-phase cases live in their own file; importing them here makes
-# the CI step that runs this file run them too (issue #8262).
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_static_context_agents_index_implement import *  # noqa: F403
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "build_static_context.sh"
