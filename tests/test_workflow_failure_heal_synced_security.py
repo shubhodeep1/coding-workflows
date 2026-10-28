@@ -685,7 +685,7 @@ def test_synced_check_intake_opens_one_issue_then_records_an_occurrence() -> Non
 	assert "issues_created" not in state2
 	comments = state2["comments_posted"]
 	assert len(comments) == 1 and comments[0]["path"] == f"repos/{SELF_REPO}/issues/902/comments"
-	assert CONSUMER_B in comments[0]["body"] and "#699" in comments[0]["body"]
+	assert f"`{CONSUMER_B}` PR 699" in comments[0]["body"] and "#699" not in comments[0]["body"]
 
 
 @pytest.mark.parametrize(

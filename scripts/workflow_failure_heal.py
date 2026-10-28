@@ -6246,7 +6246,8 @@ def compose_synced_check_issue(
 		"",
 		*_synced_check_rows(payload, sources),
 		f"- **Consumer repository:** `{repo}`",
-		f"- **Pull request:** #{int(payload['pr_number'])} in `{repo}`",
+		# No bare #N: GitHub would resolve it against this repository (#8265).
+		f"- **Pull request:** `{repo}` PR {int(payload['pr_number'])}",
 		f"- **Failing check:** `{payload['check_name']}`",
 		f"- **Failing check run:** {_synced_check_run_links(payload)}",
 		f"- **Release SHA (wrapper pin):** `{release}`",
@@ -6279,7 +6280,7 @@ def compose_synced_check_occurrence(*, payload: dict[str, Any], intake_run_url: 
 		"Another consumer check failed because of these synced files:",
 		"",
 		f"- **Consumer repository:** `{payload['source_repo']}`",
-		f"- **Pull request:** #{int(payload['pr_number'])}",
+		f"- **Pull request:** `{payload['source_repo']}` PR {int(payload['pr_number'])}",
 		f"- **Failing check:** `{payload['check_name']}`",
 		f"- **Failing check run:** {_synced_check_run_links(payload)}",
 		f"- **Release SHA (wrapper pin):** `{payload.get('wrapper_sha') or ''}`",

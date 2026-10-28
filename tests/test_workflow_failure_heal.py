@@ -9527,7 +9527,8 @@ def test_synced_check_issue_and_occurrence_carry_no_free_text() -> None:
 	assert "regression test" in body
 	occurrence = heal.compose_synced_check_occurrence(payload=payload, intake_run_url="https://example.invalid/run")
 	assert occurrence.startswith("<!-- workflow-failure-heal:occurrence -->")
-	assert "#688" in occurrence
+	assert f"`{CONSUMER_REPO}` PR 688" in occurrence and f"`{CONSUMER_REPO}` PR 688" in body
+	assert "#688" not in occurrence and "#688" not in body
 	assert heal.check_synced_check_managed_paths(payload["paths"], {_SYNCED_CHECK_WRAPPER: ["x"]}) is None
 	assert heal.check_synced_check_managed_paths(payload["paths"], {"other": ["x"]}) == "unmanaged_path"
 	assert heal.check_synced_check_managed_paths(payload["paths"], {}) == "release_unavailable"

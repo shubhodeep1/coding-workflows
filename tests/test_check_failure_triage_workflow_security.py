@@ -2998,6 +2998,7 @@ def _run_upstream_route(
 	repository: str = "owner/repo",
 	stage: str = "split",
 	wrapper_sha: str = UPSTREAM_PIN,
+	workflow_heal_enabled: str | None = None,
 ) -> dict:
 	"""Run diagnose then route (stage="split", as the workflow does) or the
 	single "all" stage of a direct caller. Returns logs, calls and outputs."""
@@ -3063,6 +3064,8 @@ exit 0
 			env.pop(name, None)
 		if switch is not None:
 			env["CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED"] = switch
+		if workflow_heal_enabled is not None:
+			env["WORKFLOW_HEAL_ENABLED"] = workflow_heal_enabled
 		output_path = root / "output"
 		env.update({
 			"CHECK_TRIAGE_TRUSTED_SUPPORT_DIR": str(trusted),
@@ -3188,6 +3191,17 @@ class CheckFailureTriageUpstreamRoutingTests(unittest.TestCase):
 		all_stage = _run_upstream_route(diagnosis=diagnosis, dispatch_rc=1, stage="all")
 		self.assertEqual(len(self._issue_creates(all_stage)), 1)
 
+	def test_workflow_heal_opt_out_stops_the_upstream_report(self) -> None:
+		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
+		result = _run_upstream_route(diagnosis=diagnosis, workflow_heal_enabled="false")
+		self.assertEqual(self._dispatches(result), [])
+		self.assertIn("upstream_route outcome=fail_open reason=workflow_heal_disabled", result["logs"])
+
+	def test_ci_log_fallback_diagnosis_never_routes(self) -> None:
+		# An empty model answer makes the script embed CI-log text; a block in
+		# that untrusted text must not steer routing.
+		self.assert_filed_as_today(_run_upstream_route(diagnosis=""), "fallback_diagnosis")
+
 	def test_unpinned_support_fails_open(self) -> None:
 		diagnosis = "## Summary\nx\n" + _upstream_block([UPSTREAM_WRAPPER_PATH])
 		result = _run_upstream_route(diagnosis=diagnosis, wrapper_sha="")
@@ -3216,7 +3230,9 @@ class CheckFailureTriageUpstreamRoutingTests(unittest.TestCase):
 		self.assertLess(route_index, names.index("Post check-failure triage issue"))
 		route = _step(job, step_id="upstream_route")
 		self.assertTrue(route["continue-on-error"])
-		self.assertEqual(set(route["env"]), {"GH_TOKEN", "TG_BOT_SECRET", "CHECK_TRIAGE_STAGE"})
+		self.assertEqual(set(route["env"]), {"GH_TOKEN", "TG_BOT_SECRET", "CHECK_TRIAGE_STAGE", "WORKFLOW_HEAL_ENABLED"})
+		self.assertEqual(route["env"]["WORKFLOW_HEAL_ENABLED"], "${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}")
+		self.assertIn("github.repository != 'shubhodeep1/coding-workflows'", route["if"])
 		self.assertEqual(route["env"]["CHECK_TRIAGE_STAGE"], "route")
 		self.assertIn("steps.upstream_route.outputs.routed != 'true'", _step(job, name="Post check-failure triage issue")["if"])
 		self.assertNotIn("GH_TOKEN", _step(job, step_id="diagnose_triage")["env"])

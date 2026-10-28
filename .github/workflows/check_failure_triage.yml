@@ -662,12 +662,14 @@ jobs:
       # `routed` unset, so the post step below files the issue as before.
       - name: Route upstream-managed check failure
         id: upstream_route
-        if: ${{ steps.diagnose_triage.outputs.ready == 'true' }}
+        if: ${{ steps.diagnose_triage.outputs.ready == 'true' && github.repository != 'shubhodeep1/coding-workflows' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           CHECK_TRIAGE_STAGE: route
+          # The consumer's heal opt-out also stops the upstream report.
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"

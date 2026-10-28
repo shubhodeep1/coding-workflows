@@ -361,6 +361,8 @@ UPSTREAM_DIGESTS_FILE="${CHECK_TRIAGE_UPSTREAM_MANAGED_DIGESTS_FILE:-}"
 UPSTREAM_WRAPPER_SHA="${CHECK_TRIAGE_WRAPPER_SHA:-}"
 UPSTREAM_ROUTE_FILE="${RUNTIME_DIR}/upstream_route.json"
 UPSTREAM_HEAL_PY="${TRUSTED_SUPPORT_DIR}/scripts/workflow_failure_heal.py"
+# Set when DIAG_FILE holds the CI-log fallback body: untrusted log text never routes.
+UPSTREAM_DIAGNOSIS_FALLBACK="false"
 
 # Classify the raw diagnosis (before neutralisation). Writes the decision to
 # UPSTREAM_ROUTE_FILE; never fails the run.
@@ -371,7 +373,9 @@ triage_upstream_classify()
 	if [ -n "${UPSTREAM_DIGESTS_FILE}" ] && [ -f "${UPSTREAM_DIGESTS_FILE}" ] && [ ! -L "${UPSTREAM_DIGESTS_FILE}" ]; then
 		route_digests="${UPSTREAM_DIGESTS_FILE}"
 	fi
-	if [ ! -f "${UPSTREAM_HEAL_PY}" ] || [ -L "${UPSTREAM_HEAL_PY}" ]; then
+	if [ "${UPSTREAM_DIAGNOSIS_FALLBACK}" = "true" ]; then
+		printf '{"decision":"file","reason":"fallback_diagnosis"}\n' > "${UPSTREAM_ROUTE_FILE}"
+	elif [ ! -f "${UPSTREAM_HEAL_PY}" ] || [ -L "${UPSTREAM_HEAL_PY}" ]; then
 		printf '{"decision":"file","reason":"helper_missing"}\n' > "${UPSTREAM_ROUTE_FILE}"
 	elif ! [[ "${HEAD_SHA,,}" =~ ^[0-9a-f]{40}$ ]] && [ "${UPSTREAM_ROUTING_ENABLED}" = "true" ] && [ "${REPO,,}" != "${UPSTREAM_REPOSITORY,,}" ]; then
 		printf '{"decision":"file","reason":"head_sha_unavailable"}\n' > "${UPSTREAM_ROUTE_FILE}"
@@ -1709,6 +1713,7 @@ fi
 
 # Fallback body if the model produced nothing usable.
 if [ ! -s "${DIAG_FILE}" ]; then
+	UPSTREAM_DIAGNOSIS_FALLBACK="true"
 	{
 		echo "## Summary"
 		echo
