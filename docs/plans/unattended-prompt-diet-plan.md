@@ -146,13 +146,21 @@ This cuts the static prefix from about 750 KB (about 190k tokens) to under
    through `assemble_agents.py render` as
    `${RUNTIME_DIR}/static-context/agents.rendered.md`, outside the repository
    tree, so no commit step, conflict resolver or `files_touched` scope guard
-   can see it. Each phase mounts that file read-only into its sandbox at a
-   fixed path (`codex_isolated_exec.sh --include`, the review sandbox's
-   support mount, or a new read-only file mount in `clarify_isolated_run.sh`,
-   whose `/source` copy is a whitelist and would drop it). It emits an index of
+   can see it. Each phase mounts that file read-only into its sandbox at one
+   constant, run-independent path, `/support/static-context/agents.rendered.md`
+   (the same `/support/` root the Claude engine already uses for its
+   settings, guard and instructions). `RUNTIME_DIR` embeds the run ID, and
+   `codex_isolated_exec.sh --include` today mounts at the same absolute host
+   path (`codex_isolated_exec.sh:37-38`), so the include path needs a mount
+   that takes an in-sandbox target (or a fixed copy under `/support/`); the
+   review sandbox's support mount and a new read-only file mount in
+   `clarify_isolated_run.sh` (whose `/source` copy is a whitelist and would
+   drop it) use the same constant path. The index names only that constant
+   path, never a host path, so the static prefix stays byte-identical across
+   runs and the provider prefix cache keeps working. It emits an index of
    every `##`/`###` heading and every bold-lead or first-level bullet in the
-   6 sections over 30 KB, with line ranges, and names the in-sandbox path.
-   Target index size is 15 KB or less.
+   6 sections over 30 KB, with line ranges. Target index size is 15 KB or
+   less.
 2. The prefix then carries the index plus one instruction: read the listed
    line ranges of `agents.rendered.md` (and grep it) before relying on
    repo-architecture facts.
@@ -234,11 +242,14 @@ Phase 2
    `AI_ENGINE_INCLUDE_PATHS`); a phase that cannot mount it stays `inline`.
    Pass `STATIC_CONTEXT_AGENTS_MODE` through `env:` in `orchestrate.yml`,
    `orchestrate_clarify_respond.yml`, `orchestrate_poll.yml`, `validate.yml`
-   and `workflow_failure_heal.yml` (or the intake's workflow). Add the helper to the staged-support lists
-   of `orchestrate.yml`, `orchestrate_clarify_respond.yml`,
+   and `workflow-failure-heal-intake.yml` (the intake step that runs
+   `scripts/workflow_failure_heal_intake.sh`, about line 306). The reporter
+   `workflow_failure_heal.yml` only sends a `repository_dispatch` and never
+   runs the intake script, so it needs no change. Add the helper to the
+   staged-support lists of `orchestrate.yml`, `orchestrate_clarify_respond.yml`,
    `orchestrate_poll.yml` and `validate.yml` (its `required_scripts`
-   manifest), and to `workflow_failure_heal.yml`'s staging if the intake runs
-   from there. Update `prompts/mode-validate-generate.txt:15` and
+   manifest); the intake workflow runs `scripts/` from its trusted checkout
+   and stages nothing, so the helper only has to exist in that checkout. Update `prompts/mode-validate-generate.txt:15` and
    `prompts/_templates/mode-validate-generate.txt:7-9`.
 
 Phase 3
@@ -287,8 +298,7 @@ Phase 4
 - `scripts/implement_diagnose_post_codex_failure.sh` (mount for the reused
   implement prefix), `scripts/write_opencode_config.sh` (read grant for the
   rendered file)
-- `.github/workflows/workflow_failure_heal.yml` (or the intake's workflow;
-  `env:` pass-through)
+- `.github/workflows/workflow-failure-heal-intake.yml` (`env:` pass-through)
 - `scripts/orchestrate_poll_process.sh`, `scripts/validate_process.sh`,
   `scripts/workflow_failure_heal_intake.sh`,
   `scripts/review_apply_fixes.sh`, `scripts/review_rb_judge.sh`,
@@ -325,6 +335,9 @@ Phase 4
   does not appear in the review index or rendered file.
 - Rollback test: every workflow whose scripts read
   `STATIC_CONTEXT_AGENTS_MODE` passes it through `env:`.
+- Cache-stability test: the index text is byte-identical for two runs with
+  different `RUNTIME_DIR` values, and names only
+  `/support/static-context/agents.rendered.md`.
 - Diagnose test: with the implement prefix in `index` mode, the diagnose
   sandbox can read the rendered file or gets an inline prefix.
 - After each phase merges, compare `STATIC_CONTEXT_SIZE` logs and Claude
