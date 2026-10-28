@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.81,
+  "details": "Changes to polling, release gates, capacity waits, and workflow step scripts are paired with focused tests that assert their contracts. When modifying orchestration behavior, update the relevant workflow and script checks together rather than relying only on end-to-end execution.",
+  "fingerprint": "484b9b085935b7f4ecc4b723471a50b9b8b118fe59a62f9c425189f26e2b8f71",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40752760153",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40752760153",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8244",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8249",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8260",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8262",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8265",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8258",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8259",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8261",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8263",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8267"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261028193216_d53c204f14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Workflow orchestration safeguards are enforced through explicit contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-28T19:32:16Z",
+    "promoted_at": "2026-10-28T19:35:01Z",
+    "superseded_at": null
+  }
+}
