@@ -3016,7 +3016,11 @@ jobs:
               fi
               if [ "${heal_cf_route}" != "false" ]; then
                 heal_cf_json=""
-                if [ "${heal_cf_route}" = "unknown" ]; then
+                heal_cf_flag_norm="$(printf '%s' "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | xargs)"
+                if [ "${heal_cf_route}" = "unknown" ] && [ "${heal_cf_flag_norm}" = "false" ]; then
+                  # The rollback switch also releases an unknown-route hold.
+                  heal_cf_json='{"decision":"approve","result":"missing","reason":"gate_disabled","line":"","unmatched_jobs":[]}'
+                elif [ "${heal_cf_route}" = "unknown" ]; then
                   heal_cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[]}'
                 elif [ -f scripts/partial_delivery.py ] && heal_cf_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/partial_delivery.py heal-counterfactual \
                     --plan-file "${CODEX_OUTPUT_FILE:-}" --gate-flag "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" 2>/dev/null)" \

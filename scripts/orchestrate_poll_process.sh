@@ -18129,7 +18129,11 @@ _plan_heal_counterfactual_check()
       | last
       | ((.id // .databaseId // "") | tostring)' 2>/dev/null || true)"
   [[ "${HEAL_CF_GATE_PLAN_COMMENT}" =~ ^[0-9]+$ ]] || HEAL_CF_GATE_PLAN_COMMENT="unknown"
-  if [ "${route}" = "unknown" ]; then
+  if [ "${route}" = "unknown" ] \
+    && [ "$(printf '%s' "${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | xargs)" = "false" ]; then
+    # The rollback switch also releases an unknown-route hold.
+    cf_json='{"decision":"approve","result":"missing","reason":"gate_disabled","line":"","unmatched_jobs":[]}'
+  elif [ "${route}" = "unknown" ]; then
     cf_json='{"decision":"hold","result":"missing","reason":"heal_route_unknown","line":"","unmatched_jobs":[]}'
   elif [ -f "${partial_py}" ] \
     && cf_json="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${partial_py}" heal-counterfactual --plan-file "${plan_file}" \

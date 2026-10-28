@@ -55,6 +55,10 @@ PR_SECTION_HEADING = "### Deferred scope (not delivered by this PR)"
 # of an unfenced line; a mention inside prose or a code fence does not count.
 HEAL_CF_LINE_RE = re.compile(r"^[ \t]*HEAL_COUNTERFACTUAL:[ \t]*(.*?)[ \t]*$")
 HEAL_CF_VALUE_RE = re.compile(r"^(PASS|PARTIAL|FAIL|UNVERIFIED)(?:[ \t]*(:)[ \t]*(.*))?$")
+# The line counts only inside a "## Counterfactual check" section (to the next
+# heading of the same or a shallower level).
+HEAL_CF_HEADING_RE = re.compile(r"^(#{2,6})[ \t]+counterfactual[ \t]+check[ \t]*:?[ \t]*$", re.IGNORECASE)
+HEAL_CF_ANY_HEADING_RE = re.compile(r"^(#{1,6})(?:[ \t]|$)")
 HEAL_CF_MAX_JOBS = 20
 HEAL_CF_MAX_JOB_CHARS = 200
 HEAL_CF_MAX_LINE_CHARS = 300
@@ -211,16 +215,33 @@ def _heal_counterfactual_display(text: str) -> str:
 
 def _evaluate_heal_counterfactual(text: str, lines: list[str]) -> dict:
 	found: list[str] = []
+	in_section: list[bool] = []
+	section_level = 0
 	for line in _unfenced_lines(lines):
+		heading = HEAL_CF_ANY_HEADING_RE.match(line)
+		if heading:
+			level = len(heading.group(1))
+			cf_heading = HEAL_CF_HEADING_RE.match(line)
+			if cf_heading:
+				section_level = len(cf_heading.group(1))
+			elif section_level and level <= section_level:
+				section_level = 0
+			continue
 		match = HEAL_CF_LINE_RE.match(line)
 		if match:
 			found.append(match.group(1))
+			in_section.append(bool(section_level))
 	outcome = {"result": "missing", "reason": "no_line", "line": "", "jobs": [], "unmatched_jobs": []}
 	if not found:
 		return outcome
 	outcome["line"] = _heal_counterfactual_display("HEAL_COUNTERFACTUAL: " + found[0])
 	if len(found) > 1:
 		outcome["reason"] = "duplicate_line"
+		return outcome
+	if not in_section[0]:
+		# The line must end the plan's "## Counterfactual check" section; a
+		# marker elsewhere (or with no such section) does not count.
+		outcome["reason"] = "outside_counterfactual_section"
 		return outcome
 	value_match = HEAL_CF_VALUE_RE.match(found[0])
 	if value_match is None:
@@ -251,7 +272,9 @@ def _evaluate_heal_counterfactual(text: str, lines: list[str]) -> dict:
 		outcome.update(result="FAIL", reason="deferred_scope_missing")
 		return outcome
 	items = [item.casefold() for item in deferred["items"]]
-	unmatched = [name for name in names if not any(sanitize_item(name).casefold() in item for item in items)]
+	# Whole-token match: "build" is not deferred by a bullet naming "build-image".
+	unmatched = [name for name in names if not any(
+		re.search(r"(?<![\w-])" + re.escape(sanitize_item(name).casefold()) + r"(?![\w-])", item) for item in items)]
 	if unmatched:
 		outcome.update(result="FAIL", reason="partial_jobs_not_deferred",
 			unmatched_jobs=[_heal_counterfactual_display(name) for name in unmatched])

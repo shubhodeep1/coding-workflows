@@ -144,6 +144,24 @@ def test_partial_holds_for_an_invalid_job_list() -> None:
 		assert (result["decision"], result["result"], result["reason"]) == ("hold", "FAIL", "partial_job_list_invalid"), (line, result)
 
 
+def test_line_outside_the_counterfactual_section_holds() -> None:
+	# Review finding: the marker counts only inside "## Counterfactual check".
+	for text in ("## Risks\n\nHEAL_COUNTERFACTUAL: PASS\n",
+		"## Counterfactual check\n\n- walked it.\n\n## Risks\n\nHEAL_COUNTERFACTUAL: PASS\n"):
+		result = _check(text)
+		assert (result["decision"], result["reason"]) == ("hold", "outside_counterfactual_section"), (text, result)
+	nested = "## Counterfactual check\n\n### job-a\n\nwalked.\n\nHEAL_COUNTERFACTUAL: PASS\n"
+	assert _check(nested)["decision"] == "approve"
+
+
+def test_partial_job_names_match_whole_tokens_only() -> None:
+	text = _plan("HEAL_COUNTERFACTUAL: PARTIAL: build", deferred=["The build-image job still times out"])
+	result = _check(text)
+	assert (result["decision"], result["reason"]) == ("hold", "partial_jobs_not_deferred"), result
+	assert result["unmatched_jobs"] == ["build"]
+	assert _check(_plan("HEAL_COUNTERFACTUAL: PARTIAL: build", deferred=["The build job still fails"]))["decision"] == "approve"
+
+
 def test_gate_flag_handling() -> None:
 	fail_plan = _plan("HEAL_COUNTERFACTUAL: FAIL: no")
 	off = _check(fail_plan, "false")
@@ -407,6 +425,20 @@ def test_plan_step_heal_route_env_gates_an_unlabelled_issue() -> None:
 	run = _run_step(_ORDINARY_ISSUE, _ORDINARY_PLAN, heal_route="true")
 	assert "gate=heal_counterfactual outcome=hold result=missing reason=no_line issue=123" in run["stdout"]
 	assert run["approvals"] == []
+
+
+def test_plan_step_gate_off_releases_an_unknown_route() -> None:
+	if _skip_without_jq():
+		return
+	# A non-string issue body makes heal-route fail, so the route is unknown.
+	broken = dict(_ORDINARY_ISSUE, body=123)
+	held = _run_step(broken, _ORDINARY_PLAN)
+	if "reason=heal_route_unknown" not in held["stdout"]:
+		return
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" in held["output"]
+	off = _run_step(broken, _ORDINARY_PLAN, flag="FALSE")
+	assert "reason=heal_route_unknown" not in off["stdout"]
+	assert "auto_approve_hold_reason=heal_counterfactual_hold" not in off["output"]
 
 
 def test_plan_step_leaves_non_heal_issues_alone() -> None:

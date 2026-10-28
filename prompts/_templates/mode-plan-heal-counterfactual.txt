@@ -1,9 +1,9 @@
 # tier: DEFAULT
-=== HEAL COUNTERFACTUAL CHECK (workflow-heal plans only) ===
-
 Role: workflow-heal planner. Goal: before the plan is approved, show from the
 recorded failure whether the planned change would have turned the observed
 failing run green.
+
+=== HEAL COUNTERFACTUAL CHECK (workflow-heal plans only) ===
 
 This issue is a workflow-failure heal. The heal evidence above records the
 failing run. In addition to every section the planning task asks for, the
