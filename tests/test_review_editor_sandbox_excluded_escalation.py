@@ -70,7 +70,8 @@ PR_8250_SUMMARY = _summary(
 )
 
 
-def _run_step(tmp_path: Path, summary: str, *, committed: str = "", heal_py: Path | None = HEAL_PY, head: str = HEAD) -> tuple[subprocess.CompletedProcess[str], str, str]:
+# The commit step writes "- none" when it committed nothing (review_commit_changes.sh).
+def _run_step(tmp_path: Path, summary: str, *, committed: str | None = "- none\n", heal_py: Path | None = HEAL_PY, head: str = HEAD) -> tuple[subprocess.CompletedProcess[str], str, str]:
 	support_dir = tmp_path / "support"
 	support_dir.mkdir(exist_ok=True)
 	(support_dir / "gh_helpers.sh").write_text(FAKE_GH, encoding="utf-8")
@@ -79,7 +80,8 @@ def _run_step(tmp_path: Path, summary: str, *, committed: str = "", heal_py: Pat
 	summary_file = tmp_path / "editor_summary.txt"
 	summary_file.write_text(summary, encoding="utf-8")
 	committed_file = tmp_path / "committed_files.txt"
-	committed_file.write_text(committed, encoding="utf-8")
+	if committed is not None:
+		committed_file.write_text(committed, encoding="utf-8")
 	github_env = tmp_path / "github_env"
 	github_env.write_text("", encoding="utf-8")
 	body_file = tmp_path / "posted_body.txt"
@@ -146,6 +148,8 @@ def test_not_edited_run_with_sandbox_excluded_bullet_ends_with_marker(tmp_path: 
 		(_summary(ignored="- README.md nit — out of scope (stylistic)\n- tests/x.py — already satisfied"), ""),
 		# Something was committed even though the editor said not-edited.
 		(_summary(ignored="- .claude/docs/a.md — sandbox-excluded path"), "- scripts/x.py\n"),
+		# No committed-files evidence at all: unknown, so no marker.
+		(_summary(ignored="- .claude/docs/a.md — sandbox-excluded path"), None),
 		# The reason appears only under PR comment audit.
 		(_summary(comment_audit="- entry 1 by bot — .claude/docs/a.md — ignored — sandbox-excluded path"), ""),
 		# The reason is mentioned mid-bullet, not as the bullet's reason.
@@ -160,12 +164,21 @@ def test_no_marker_outside_the_sandbox_excluded_not_edited_case(tmp_path: Path, 
 	assert "AUTOFIX_FAILURE_REASON" not in github_env
 
 
+@pytest.mark.parametrize("committed", ["", "- none\n", "- commit skipped (branch is not writable from this workflow)\n"])
+def test_placeholder_committed_files_count_as_nothing_committed(tmp_path: Path, committed: str) -> None:
+	summary = _summary(ignored="- .claude/docs/a.md — sandbox-excluded path")
+	result, body, _ = _run_step(tmp_path, summary, committed=committed)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "review-autofix-failure:v1" in body
+	assert _escalation_lines(result.stdout) == [f"AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head={HEAD} findings=1 outcome=marker"]
+
+
 def test_missing_helper_logs_marker_unavailable_and_still_posts(tmp_path: Path) -> None:
 	summary = _summary(ignored="- .claude/docs/a.md — sandbox-excluded path")
 	result, body, _ = _run_step(tmp_path, summary, heal_py=tmp_path / "absent_helper.py")
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert body.startswith("AI autofix editor summary") and "review-autofix-failure:v1" not in body
-	assert _escalation_lines(result.stdout) == [f"AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head={HEAD} findings=1 outcome=marker_unavailable"]
+	assert _escalation_lines(result.stdout) == [f"AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head={HEAD} findings=1 outcome=marker_unavailable reason=helper_missing"]
 
 
 def test_invalid_head_logs_unknown_and_writes_no_marker(tmp_path: Path) -> None:
@@ -173,7 +186,7 @@ def test_invalid_head_logs_unknown_and_writes_no_marker(tmp_path: Path) -> None:
 	result, body, _ = _run_step(tmp_path, summary, head="not-a-sha")
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "review-autofix-failure:v1" not in body
-	assert _escalation_lines(result.stdout) == ["AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head=unknown findings=1 outcome=marker_unavailable"]
+	assert _escalation_lines(result.stdout) == ["AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=8250 head=unknown findings=1 outcome=marker_unavailable reason=no_marker"]
 
 
 def test_pr_8250_shaped_summary_trips_the_cap_on_the_next_dispatch(tmp_path: Path) -> None:

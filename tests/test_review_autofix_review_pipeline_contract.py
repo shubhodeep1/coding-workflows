@@ -9329,9 +9329,12 @@ def test_review_isolation_admits_only_twinned_claude_docs() -> None:
 		(host / "workflow-templates/.claude/docs").mkdir(parents=True)
 		(host / "workflow-templates/.claude/docs/x.md").write_text("live before\n")
 		(host / "workflow-templates/.claude/docs/y.md").write_text("PR-only twin\n")
+		# z.md is twinned on both sides but has no live copy: never admitted.
+		(host / "workflow-templates/.claude/docs/z.md").write_text("template only\n")
 		trusted = root / "verified" / ".codex-workflow-src" / "workflow-templates/.claude/docs"
 		trusted.mkdir(parents=True)
 		(trusted / "x.md").write_text("trusted template\n")
+		(trusted / "z.md").write_text("trusted template\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
 		subprocess.run(["git", "add", ".claude", "workflow-templates"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
@@ -9359,12 +9362,17 @@ def test_review_isolation_admits_only_twinned_claude_docs() -> None:
 		(source / ".claude/docs/x.md").write_text("live after\n")
 		(source / "workflow-templates/.claude/docs/x.md").write_text("live after\n")
 		(source / ".claude/docs/new.md").write_text("new instructions\n")
+		(source / ".claude/docs/z.md").write_text("created live copy\n")
 		moved = run("transfer")
 		assert moved.returncode == 0, moved.stderr
 		assert (host / ".claude/docs/x.md").read_text() == "live after\n"
 		assert (host / "workflow-templates/.claude/docs/x.md").read_text() == "live after\n"
 		assert not (host / ".claude/docs/new.md").exists()
+		assert not (host / ".claude/docs/z.md").exists()
 		assert (host / ".claude/docs/y.md").read_text() == "untwinned\n"
+		# Heal scope (strict enumeration, no admitted inventory) still refuses .claude/docs/.
+		with pytest.raises(ValueError, match="out of heal scope|unsafe workspace directory"):
+			list(module.enumerate_workspace(source, None, None, strict=True))
 		# A forged nested docs entry in the frozen inventory fails closed.
 		inventory_path = manifest.with_name(manifest.name + ".admitted_commands.json")
 		inventory_path.write_text(json.dumps([".claude/docs/a/b.md"]))

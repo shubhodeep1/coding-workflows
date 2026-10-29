@@ -192,8 +192,17 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 # on this step's existing comment (no extra API call). Only the integer count
 # is logged, never summary text. Fail-open: no helper or no marker leaves the
 # run as it was, and the step's exit status is unchanged.
+# "Nothing committed" needs positive evidence: the commit step writes "- none"
+# or a "- commit skipped (...)" marker line when it committed nothing, and one
+# "- <path>" line per committed file otherwise. An unset or missing file is
+# unknown, so no marker is written (fail closed toward not capping).
 sandbox_excluded_marker_suffix=""
-if [ "${editor_summary_is_real}" = "1" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev/null}" ]; then
+sandbox_excluded_nothing_committed=0
+if [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -f "${COMMITTED_FILES_FILE}" ] && [ -r "${COMMITTED_FILES_FILE}" ] \
+  && ! grep -q -v -E '^[[:space:]]*$|^- (none|commit skipped)([[:space:]]|$)' "${COMMITTED_FILES_FILE}"; then
+  sandbox_excluded_nothing_committed=1
+fi
+if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_committed}" = "1" ]; then
   sandbox_excluded_findings="$(tr -d '\r' < "${EDITOR_SUMMARY_FILE}" | awk '
     BEGIN { section = ""; status = ""; count = 0; trail = "[] \t.\"\047`)*]+$" }
     /^(Changes made|Change status|Already satisfied \(suggested but already present\)|Ignored suggestions \(with short reason\)|Reviewer files processed|Review file issue audit|PR comment audit|Regression fingerprint|Runtime failure path):[ \t]*$/ {
@@ -220,7 +229,9 @@ if [ "${editor_summary_is_real}" = "1" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev
   esac
   if [ "${sandbox_excluded_findings}" -gt 0 ]; then
     sandbox_excluded_outcome="marker_unavailable"
+    sandbox_excluded_reason=" reason=helper_missing"
     if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
+      sandbox_excluded_reason=" reason=no_marker"
       sandbox_excluded_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
         --failure-reason review_editor_sandbox_path_excluded \
         --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
@@ -229,13 +240,14 @@ if [ "${editor_summary_is_real}" = "1" ] && [ ! -s "${COMMITTED_FILES_FILE:-/dev
       if [ -n "${sandbox_excluded_marker_line}" ]; then
         sandbox_excluded_marker_suffix=$'\n\n'"${sandbox_excluded_marker_line}"
         sandbox_excluded_outcome="marker"
+        sandbox_excluded_reason=""
       fi
     fi
     sandbox_excluded_head="$(printf '%s' "${AUTOFIX_FAILURE_HEAD_SHA:-}" | tr 'A-F' 'a-f')"
     [[ "${sandbox_excluded_head}" =~ ^[0-9a-f]{40}$ ]] || sandbox_excluded_head="unknown"
     sandbox_excluded_pr="${PR_NUMBER:-}"
     [[ "${sandbox_excluded_pr}" =~ ^[0-9]+$ ]] || sandbox_excluded_pr="unknown"
-    echo "AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=${sandbox_excluded_pr} head=${sandbox_excluded_head} findings=${sandbox_excluded_findings} outcome=${sandbox_excluded_outcome}"
+    echo "AUTOFIX_SANDBOX_EXCLUDED_ESCALATION pr=${sandbox_excluded_pr} head=${sandbox_excluded_head} findings=${sandbox_excluded_findings} outcome=${sandbox_excluded_outcome}${sandbox_excluded_reason}"
   fi
 fi
 

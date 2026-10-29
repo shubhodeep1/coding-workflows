@@ -378,10 +378,16 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 	# The PR worktree can add twins before snapshot; only names present in the
 	# verified workflow-support checkout may authorize a command for this run.
 	trusted_checkout = os.environ.get("GITHUB_WORKSPACE")
-	commands = ((template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src") &
-		template_command_inventory(host)) |
-		(template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src", twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/") &
-		template_command_inventory(host, twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/"))) if trusted_checkout else frozenset()
+	commands = frozenset()
+	if trusted_checkout:
+		commands = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src") &
+			template_command_inventory(host))
+		docs_names = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src", twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/") &
+			template_command_inventory(host, twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/"))
+		# A docs name is admitted only while its live copy already exists as a
+		# regular file on the host, so the editor can edit an existing
+		# reference file but never create a new one (#8321).
+		commands |= frozenset(name for name in docs_names if (host / name).is_file() and not (host / name).is_symlink())
 	baseline = {}
 	total = 0
 	oversized = 0
