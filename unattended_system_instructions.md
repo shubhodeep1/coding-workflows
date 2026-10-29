@@ -419,7 +419,9 @@ semantics.
 
 ## §16. Output Contract
 
-Always return a terminal result. Never block on questions. The result must include:
+Always return a terminal result. Never block on questions. Unless the role
+prompt fixes a machine-readable output format (see below), the result must
+include:
 
 - Actions taken (or `BLOCKED: <reason>`).
 - Assumptions made due to ambiguity.
@@ -431,6 +433,14 @@ Always return a terminal result. Never block on questions. The result must inclu
   logs) are exempt.
 - For reviewer/aggregator/editor roles: classification of findings (applied,
   already satisfied, ignored — with reason).
+
+**A machine-readable format in the role prompt wins.** When the role prompt
+fixes the reply to a format a script parses, for example "Output one JSON
+array and nothing else", reply with exactly that and nothing before or after
+it. Leave out the actions, assumptions and missing-context notes above, and
+any headings or summary, unless the format has a field for them. The parser
+rejects a reply with extra text, so the whole run fails: a security audit
+that replied `[]` and then a summary was rejected as `malformed_output`.
 
 <verification_loop>
 Before finalizing any rollout that produces file changes:
@@ -706,3 +716,32 @@ broke the stable release gate (run 35903885958).
   documents the `review_autofix.yml` pattern: `review_autofix_step_<slug>.sh`
   under `scripts/`, the resolving wrapper that sources it, the
   `REQUIRED_BOOTSTRAP_SCRIPTS` entry, and the test registry.
+
+---
+
+## §25. agents.md Fragments
+
+Never add text to `agents.md` (or `AGENTS.md` in a consumer repo) directly,
+even when a plan, issue, or review finding says "document this in agents.md".
+Concurrent pull requests, and long-running orchestrator integration branches,
+collide on the same few sections of that file. Incident: #6902's final PR
+#6905 conflicted on two direct additions to the same section, and the
+integration self-heal gave up.
+
+- Write one fragment at `agents.d/<issue-or-pr>-<slug>.md`. Each block starts
+  with `<!-- agents: section="<exact ## heading>" -->`, and its text is
+  appended to the end of that section.
+- A new log prefix goes under
+  `<!-- agents: section="Stable log prefixes (contractual)" -->` as the
+  `` - `PREFIX` `` registry bullet plus the `LOG_PREFIX.name=PREFIX` line.
+- Add ` new` inside the marker only to create a section that does not exist
+  yet; an unknown heading without it fails CI. Never target
+  `## Repo-tree (auto-generated)`.
+- Edit the agents file directly only to correct or remove existing text.
+- A scope (`files_touched`, `ai:scope:`) that covers `agents.md` or
+  `AGENTS.md` covers its top-level `agents.d/*.md` fragments.
+- Automation folds fragments into the agents file at release or sync time.
+  Do not fold them yourself.
+
+In coding-workflows, `scripts/check_agents_md_direct_edits.py` fails a pull
+request's CI when it adds to the agents file directly.

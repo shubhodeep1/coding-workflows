@@ -37,7 +37,12 @@ _tg_chat_id()
 # ---------------------------------------------------------------
 # Alert level support
 # Levels: DEBUG < WARNING < ERROR < CRITICAL < SILENT
-# ALERT_MSG_LEVEL env var controls minimum level sent (default: DEBUG).
+# ALERT_MSG_LEVEL env var controls minimum level sent (default: WARNING).
+# Level convention: DEBUG means the pipeline is already handling the
+# event (a dispatch, retry, re-issue, recovery step or success ping);
+# WARNING and above mean a human has to act. With the default WARNING
+# threshold only events that need a person reach Telegram; set
+# ALERT_MSG_LEVEL=DEBUG to receive the full stream again.
 # New alerts default to CRITICAL until explicitly recategorised.
 # Setting ALERT_MSG_LEVEL=SILENT suppresses all existing helper-based
 # sends because no existing call site emits at SILENT — every caller
@@ -78,7 +83,7 @@ _tg_level_icon()
 _tg_should_send()
 {
 	local msg_level="$1"
-	local threshold="${ALERT_MSG_LEVEL:-DEBUG}"
+	local threshold="${ALERT_MSG_LEVEL:-WARNING}"
 	local msg_num threshold_num
 	msg_num=$(_tg_level_num "${msg_level}")
 	threshold_num=$(_tg_level_num "${threshold}")
@@ -129,6 +134,44 @@ tg_send_msg()
 }
 
 # ---------------------------------------------------------------
+# tg_send_report_msg — Send a scheduled report the operator asked for
+# (e.g. the daily Claude pool usage message), echo the message_id.
+# Unlike tg_send_msg it adds no level prefix and ignores the
+# ALERT_MSG_LEVEL threshold, except that ALERT_MSG_LEVEL=SILENT still
+# suppresses it. The caller supplies its own label (e.g. "📊 ").
+# Usage: msg_id=$(tg_send_report_msg "📊 Daily report")
+# ---------------------------------------------------------------
+tg_send_report_msg()
+{
+	local msg="$1"
+	if [ "$(printf '%s' "${ALERT_MSG_LEVEL:-}" | tr '[:lower:]' '[:upper:]')" = "SILENT" ]; then
+		return 0
+	fi
+	local chat_id
+	chat_id="$(_tg_chat_id)"
+	if [ -z "${TG_BOT_SECRET:-}" ] || [ -z "${chat_id}" ]; then
+		return 0
+	fi
+	local resp
+	resp=$(curl -s --max-time 30 -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+		-d "chat_id=${chat_id}" \
+		-d "disable_web_page_preview=true" \
+		--data-urlencode "text=${msg}" 2>/dev/null) || {
+		echo "::warning::Telegram send failed" >&2
+		return 0
+	}
+	local msg_id
+	if ! msg_id=$(printf '%s' "${resp}" | jq -r '.result.message_id // empty' 2>/dev/null); then
+		echo "::warning::Telegram response could not be parsed" >&2
+		msg_id=""
+	elif [ -z "${msg_id}" ]; then
+		# Telegram's own error text (never contains the bot token).
+		echo "::warning::Telegram returned no message id: $(printf '%s' "${resp}" | jq -r '.description // "unknown"' 2>/dev/null | tr -cd '[:print:]' | cut -c1-200)" >&2
+	fi
+	printf '%s' "${msg_id:-}"
+}
+
+# ---------------------------------------------------------------
 # tg_delete_msg — Delete a single Telegram message by ID.
 # Usage: tg_delete_msg 12345
 # ---------------------------------------------------------------
@@ -143,6 +186,35 @@ tg_delete_msg()
 	curl -s -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/deleteMessage" \
 		-d "chat_id=${chat_id}" \
 		-d "message_id=${msg_id}" >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------
+# _tg_newest_comments_json — Print the issue's newest page of comments
+# (up to 100), oldest first within the page.
+# The issue-comments endpoint has no `direction` parameter: the former
+# `?per_page=30&direction=desc` returned the OLDEST 30 comments, so on a
+# busy tracking issue the marker was never found and every message posted
+# a new one (447 `tg_cleanup` comments on tele-funtoken-msg-scoring#3928).
+# API calls: 2 (the issue read for its comment count, then the last page).
+# The existing comments read could not be reused: it never returned the
+# newest page. Fails (status 1) when either read fails; callers then
+# create a new marker as before.
+# Usage: _tg_newest_comments_json 42
+# ---------------------------------------------------------------
+_tg_newest_comments_json()
+{
+	local issue_num="$1" api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues" issue_json total last_page
+	issue_json=$(curl_gh_api -s \
+		-H "Authorization: token ${GH_TOKEN}" \
+		-H "Accept: application/vnd.github.v3+json" \
+		"${api_base}/${issue_num}") || return 1
+	total=$(printf '%s' "${issue_json}" | jq -r '.comments // empty' 2>/dev/null) || return 1
+	[[ "${total}" =~ ^[0-9]+$ ]] || return 1
+	last_page=$(( total > 0 ? (total + 99) / 100 : 1 ))
+	curl_gh_api -s \
+		-H "Authorization: token ${GH_TOKEN}" \
+		-H "Accept: application/vnd.github.v3+json" \
+		"${api_base}/${issue_num}/comments?per_page=100&page=${last_page}"
 }
 
 # ---------------------------------------------------------------
@@ -164,12 +236,9 @@ tg_store_msg_id()
 
 	local api_base="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues"
 
-	# Look for an existing tracking comment (scan last 30 comments)
+	# Look for an existing tracking comment among the newest 100 comments
 	local comments_json
-	comments_json=$(curl_gh_api -s \
-		-H "Authorization: token ${GH_TOKEN}" \
-		-H "Accept: application/vnd.github.v3+json" \
-		"${api_base}/${issue_num}/comments?per_page=30&direction=desc") || {
+	comments_json=$(_tg_newest_comments_json "${issue_num}") || {
 		echo "::warning::Failed to fetch existing tracking comments for issue #${issue_num}; creating a new tracking comment" >&2
 		# Fallback: create a new tracking comment
 		curl -s -X POST \
@@ -182,9 +251,9 @@ tg_store_msg_id()
 
 	local tracking_id tracking_body
 	tracking_id=$(printf '%s' "${comments_json}" | jq -r \
-		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | first | .id // empty' 2>/dev/null)
+		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | last | .id // empty' 2>/dev/null)
 	tracking_body=$(printf '%s' "${comments_json}" | jq -r \
-		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | first | .body // empty' 2>/dev/null)
+		'[.[] | select(.body | test("<!-- tg_cleanup:"))] | last | .body // empty' 2>/dev/null)
 
 	if [ -n "${tracking_id}" ] && [ -n "${tracking_body}" ]; then
 		# Append to existing tracking comment
@@ -238,10 +307,7 @@ tg_store_phase_msg_id()
 	local marker="<!-- tg_phase:${phase}:"
 
 	local comments_json
-	comments_json=$(curl_gh_api -s \
-		-H "Authorization: token ${GH_TOKEN}" \
-		-H "Accept: application/vnd.github.v3+json" \
-		"${api_base}/${issue_num}/comments?per_page=30&direction=desc") || {
+	comments_json=$(_tg_newest_comments_json "${issue_num}") || {
 		echo "::warning::Failed to fetch existing phase tracking comments for issue #${issue_num} phase=${phase}; creating a new tracking comment" >&2
 		curl -s -X POST \
 			-H "Authorization: token ${GH_TOKEN}" \
@@ -254,10 +320,10 @@ tg_store_phase_msg_id()
 	local tracking_id tracking_body
 	tracking_id=$(printf '%s' "${comments_json}" | jq -r \
 		--arg m "${marker}" \
-		'[.[] | select(.body | contains($m))] | first | .id // empty' 2>/dev/null)
+		'[.[] | select(.body | contains($m))] | last | .id // empty' 2>/dev/null)
 	tracking_body=$(printf '%s' "${comments_json}" | jq -r \
 		--arg m "${marker}" \
-		'[.[] | select(.body | contains($m))] | first | .body // empty' 2>/dev/null)
+		'[.[] | select(.body | contains($m))] | last | .body // empty' 2>/dev/null)
 
 	if [ -n "${tracking_id}" ] && [ -n "${tracking_body}" ]; then
 		local new_body

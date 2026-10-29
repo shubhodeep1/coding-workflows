@@ -255,6 +255,29 @@ if [ -f "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ]; then
   # shellcheck disable=SC1091
   source "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" 2>/dev/null || true
 fi
+# Merge-base freshness gate (operator decision Q35: A). Fail-closed stub when
+# the library did not load: freshness cannot be verified, so the merge defers
+# (outcome=unknown, no branch update) like any other unverifiable freshness.
+if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
+  _pr_base_fresh_for_merge()
+  {
+    PR_BASE_FRESHNESS_OUTCOME="unknown"
+    PR_BASE_FRESHNESS_LAST_REASON="library_unavailable"
+    echo "::warning::MERGE_BASE_FRESHNESS pr=${1:-unknown} outcome=unknown reason=library_unavailable action=defer (pr_checks_lib.sh unavailable)"
+    return 1
+  }
+fi
+# Required-checks wait before `gh pr merge --auto`: an unprotected base has
+# no required status checks, so auto-merge would land the PR at once.
+# Fail closed when the library did not load (nothing verifies CI then).
+if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
+  _pr_wait_for_required_checks()
+  {
+    PR_CHECKS_WAIT_OUTCOME="unavailable"
+    echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
+    return 1
+  }
+fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
   # sourced. Large-diff truncation can still fall back to a raw byte prefix,
@@ -936,7 +959,7 @@ _resilient_phase_swap()
 	if ! _rps_cur="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
 		echo "::warning::_resilient_phase_swap: GET labels failed for #${_rps_issue} — falling back to POST add." >&2
-		gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 			-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
 			|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
 		return 1
@@ -960,7 +983,7 @@ _resilient_phase_swap()
 		return 0
 	fi
 	if [ "${_rps_target}" != "ai:merged" ] && [ "${_rps_target}" != "ai:closed" ]; then
-		if ! gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+		if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 			-f "labels[]=${_rps_target}" >/dev/null 2>&1; then
 			echo "::warning::_resilient_phase_swap: POST add failed for #${_rps_issue}." >&2
 			return 1
@@ -994,7 +1017,7 @@ _resilient_phase_swap()
 		return 0
 	fi
 	echo "::warning::_resilient_phase_swap: PUT failed for #${_rps_issue} — falling back to POST add." >&2
-	gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
+	GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/issues/${_rps_issue}/labels" \
 		-f "labels[]=${_rps_target}" >/dev/null 2>&1 \
 		|| echo "::warning::_resilient_phase_swap: POST fallback also failed for #${_rps_issue}." >&2
 }
@@ -1062,7 +1085,25 @@ if [ -n "${_pr_state}" ] && [ "${_pr_state}" != "open" ] && [ "${_pr_merged}" !=
   fi
   exit 0
 fi
-unset _pr_state _pr_merged
+# A draft PR is not judged: the judge runs only once the PR is ready for
+# review (issue #7653). Dispatched review runs cannot see draft state (the
+# wrappers send pr_is_draft=false on workflow_dispatch), and the
+# orchestrator's conflict heal dispatches them on its draft integration PRs
+# during the security pass. Their review / conflict work still runs; only
+# the judge waits. Marking the PR ready fires pull_request.ready_for_review,
+# which always starts a fresh review and brings the judge back. Reuses the
+# read above (no extra API call); only a JSON boolean true counts as a
+# draft, and an unreadable payload is treated as not a draft.
+_pr_draft="$(printf '%s\n' "${_pr_meta}" | jq -r '.draft == true' 2>/dev/null || echo "false")"
+if [ "${_pr_state}" = "open" ] && [ "${_pr_draft}" = "true" ]; then
+  echo "RB_JUDGE_DRAFT_SKIP pr=${PR_NUMBER} outcome=skip reason=draft_pr"
+  echo "PR #${PR_NUMBER} is a draft — skipping review-blocked judge until it is ready for review."
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=draft_pr" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+unset _pr_state _pr_merged _pr_draft
 
 ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
 ensure_label_exists "ai:closed" "${REPOSITORY}"
@@ -1271,16 +1312,34 @@ PRELOADED_PR_META="$(jq -c '{
   base_ref: (.base_ref // .base.ref // .baseRefName // ""),
   head_sha: (.head_sha // .head.sha // .headSha // "")
 }' "${PR_META_FILE}" 2>/dev/null || echo '{}')"
+# BEGIN rb judge context assembly (#7658)
+# Comment JSON reaches jq through --slurpfile, never argv (MAX_ARG_STRLEN,
+# 131,072 bytes per argument). A context that still fails to assemble is
+# logged once as RB_JUDGE_CONTEXT_EMPTY so an empty-context verdict is visible.
+RB_JUDGE_CONTEXT_RC=0
+RB_JUDGE_CONTEXT_EMPTY_REASON=""
+PR_CONTEXT_JSON=""
 if type gh_pr_with_all_comments >/dev/null 2>&1; then
-  PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
+  PR_CONTEXT_JSON="$(gh_pr_with_all_comments "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}")" || RB_JUDGE_CONTEXT_RC=$?
 elif type _gh_pr_with_all_comments_rest >/dev/null 2>&1; then
-  PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}" || echo '{}')"
+  PR_CONTEXT_JSON="$(_gh_pr_with_all_comments_rest "${REPOSITORY%%/*}" "${REPOSITORY##*/}" "${PR_NUMBER}" "${PRELOADED_PR_META}")" || RB_JUDGE_CONTEXT_RC=$?
 else
   printf '%s\n' "::warning::rate_limit_audit_fallback helper=gh_pr_with_all_comments mode=legacy_rest_hydration reason=helper_unavailable owner=${REPOSITORY%%/*} repo=${REPOSITORY##*/} pr=${PR_NUMBER}" >&2
   PR_ISSUE_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, body: .body, created_at: .created_at}] | sort_by((.created_at // ""), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
   PR_REVIEW_COMMENTS="$(gh_retry gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments" 2>/dev/null | jq -cs 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null || echo '[]')"
-  PR_CONTEXT_JSON="$(jq -cn --argjson meta "${PRELOADED_PR_META}" --argjson comments "${PR_ISSUE_COMMENTS}" --argjson review_comments "${PR_REVIEW_COMMENTS}" '{meta: $meta, comments: $comments, review_comments: $review_comments}' 2>/dev/null || echo '{}')"
+  PR_CONTEXT_JSON="$(jq -cn --slurpfile meta <(printf '%s' "${PRELOADED_PR_META}") --slurpfile comments <(printf '%s' "${PR_ISSUE_COMMENTS}") --slurpfile review_comments <(printf '%s' "${PR_REVIEW_COMMENTS}") '{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}' 2>/dev/null)" || RB_JUDGE_CONTEXT_RC=$?
 fi
+if [ "${RB_JUDGE_CONTEXT_RC}" -ne 0 ] || [ -z "${PR_CONTEXT_JSON}" ]; then
+  RB_JUDGE_CONTEXT_EMPTY_REASON="assembly_failed"
+elif ! printf '%s' "${PR_CONTEXT_JSON}" | jq -e 'type == "object" and (.comments | type == "array") and (.review_comments | type == "array")' >/dev/null 2>&1; then
+  RB_JUDGE_CONTEXT_EMPTY_REASON="invalid_shape"
+fi
+if [ -n "${RB_JUDGE_CONTEXT_EMPTY_REASON}" ]; then
+  PR_CONTEXT_JSON='{}'
+  printf '%s\n' "::warning::RB_JUDGE_CONTEXT_EMPTY pr=${PR_NUMBER} reason=${RB_JUDGE_CONTEXT_EMPTY_REASON}" >&2
+fi
+unset RB_JUDGE_CONTEXT_RC RB_JUDGE_CONTEXT_EMPTY_REASON
+# END rb judge context assembly (#7658)
 PR_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.comments // []' 2>/dev/null || echo "[]")"
 PR_REVIEW_COMMENTS="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.review_comments // []' 2>/dev/null || echo "[]")"
 PR_META_JSON="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -c '.meta // {}' 2>/dev/null || echo "{}")"
@@ -1294,6 +1353,17 @@ if [ -z "${POST_REVIEW_HEAD_SHA}" ]; then
 fi
 if [ -z "${POST_REVIEW_HEAD_REF}" ]; then
   POST_REVIEW_HEAD_REF="${TARGET_BRANCH:-}"
+fi
+# Forward-merge fallback PRs (head `auto/forward-merge-stable-*`, opened by
+# forward-merge-stable-to-main.yml) must land as a real merge commit so
+# stable's commits stay in main's ancestry. A squash strips that ancestry and
+# promote-main-to-stable.yml's pre-flight ancestry check then refuses the next
+# promote. review_enable_auto_merge.sh routes these PRs to `--merge` for the
+# same reason; every other PR keeps `--squash`.
+RB_MERGE_METHOD_FLAG="--squash"
+if [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/forward-merge-stable- ]]; then
+  RB_MERGE_METHOD_FLAG="--merge"
+  echo "RB_JUDGE_MERGE_METHOD pr=${PR_NUMBER:-unknown} method=merge reason=forward_merge_fallback head_ref=${POST_REVIEW_HEAD_REF}"
 fi
 # The checked-out commit is the code snapshot the judge can inspect. Live PR
 # metadata may advance after checkout, so it is not merge authorization.
@@ -1326,7 +1396,10 @@ RB_JUDGE_PR_META_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_meta.json"
 RB_JUDGE_PR_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_comments.json"
 RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE="${RUNTIME_DIR}/rb_judge_pr_review_comments.json"
 RB_JUDGE_SEMBLE_PREFETCH=""
-trap '_cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
+# #7659: the merge-error temp dir (set by rb_judge_merge_err_open) is also
+# removed here, so an abnormal exit between open and close leaves nothing.
+RB_MERGE_ERR_DIR=""
+trap 'case "${RB_MERGE_ERR_DIR:-}" in */rb-merge-err.*) rm -rf -- "${RB_MERGE_ERR_DIR}" 2>/dev/null || true ;; esac; _cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -1625,6 +1698,14 @@ for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do
   : > "${JUDGE_STDERR_FILE}"
   rb_judge_claude_rc=0
   review_rb_claude_run read "${RB_JUDGE_PROMPT}" "${RB_JUDGE_OUTPUT}" "${JUDGE_STDERR_FILE}" "${level}" || rb_judge_claude_rc=$?
+  if [ "${rb_judge_claude_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no OpenCode fallback; the run fails
+    # as claude_capacity, a pause the identical-failure cap skips.
+    echo "AI_ENGINE_CAPACITY_WAIT role=RB_JUDGE outcome=deferred" >&2
+    if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
+    rm -f "${judge_stall_status_file}"
+    exit 1
+  fi
   if [ "${rb_judge_claude_rc}" -ne 75 ]; then
     rc="${rb_judge_claude_rc}"
   else
@@ -1859,6 +1940,14 @@ _guard_pr_merged="$(printf '%s\n' "${_guard_pr_meta}" | jq -r '(.merged_at != nu
 if [ "${_guard_pr_merged}" = "true" ]; then
   PR_ALREADY_MERGED="true"
 fi
+# BUG-001 (analysis/workflow-optimization-2026-09-18.md): keep the live
+# head SHA from the same response (no extra API call) so the judge never
+# acts on a head it did not evaluate. Lowercased and validated as 40 hex;
+# anything else counts as unreadable.
+RB_LIVE_HEAD_SHA="$(printf '%s\n' "${_guard_pr_meta}" | jq -r '.head.sha // empty' 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+if ! [[ "${RB_LIVE_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+  RB_LIVE_HEAD_SHA=""
+fi
 unset _guard_pr_meta _guard_pr_merged
 
 if [ "${PR_ALREADY_MERGED:-false}" = "true" ] && [ "${RB_ACTION}" != "merge" ] && [ "${RB_ACTION}" != "merge_with_followup" ]; then
@@ -1879,12 +1968,60 @@ Leaving the linked issue in ai:review-blocked for operator review. Rerun the jud
   exit 0
 fi
 
+# BUG-001 (analysis/workflow-optimization-2026-09-18.md): bind every
+# action to the head the judge evaluated (RB_JUDGED_HEAD_SHA, embedded in
+# the judge prompt). A push during the judge call must not let the `fix`
+# no-change path post the head-gate success status / ai:ready-to-merge for
+# an unjudged head, nor let close_and_reissue act on it. A moved head skips
+# every action (stale_head) before any comment, label, status or close.
+# An unreadable live head refuses fix and close_and_reissue fail-closed
+# (head_unverified); merge actions keep their behaviour because their
+# `gh pr merge --match-head-commit "${RB_JUDGED_HEAD_SHA}"` already binds
+# them. judge_handled stays false so the review-blocked fallback fires.
+# RB_JUDGED_HEAD_SHA is the local checkout HEAD, which can sit ahead of the
+# live head when this run committed locally (editor or [ai-merge-resolve])
+# and the push is deferred to "Push all pending commits" after the judge.
+# That case is exempt only when the live head is still the head this run
+# checked out (INITIAL_HEAD_SHA, exported via GITHUB_ENV by "Checkout PR
+# head branch") and an ancestor of the judged head. Ancestry alone cannot
+# tell it from a force-push back to an older commit during the judge call,
+# so any other differing live head (or an unset INITIAL_HEAD_SHA) is stale.
+if [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
+  RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA:-}"
+  RB_JUDGED_HEAD_SHA_LC="${RB_JUDGED_HEAD_SHA_LC,,}"
+  RB_INITIAL_HEAD_SHA_LC="${INITIAL_HEAD_SHA:-}"
+  RB_INITIAL_HEAD_SHA_LC="${RB_INITIAL_HEAD_SHA_LC,,}"
+  if [ -n "${RB_LIVE_HEAD_SHA}" ] && [ "${RB_LIVE_HEAD_SHA}" != "${RB_JUDGED_HEAD_SHA_LC}" ] \
+    && ! { [[ "${RB_JUDGED_HEAD_SHA_LC}" =~ ^[0-9a-f]{40}$ ]] \
+      && [ "${RB_LIVE_HEAD_SHA}" = "${RB_INITIAL_HEAD_SHA_LC}" ] \
+      && git merge-base --is-ancestor "${RB_LIVE_HEAD_SHA}" "${RB_JUDGED_HEAD_SHA_LC}" >/dev/null 2>&1; }; then
+    echo "RB_JUDGE_STALE_HEAD pr=${PR_NUMBER} judged_head=${RB_JUDGED_HEAD_SHA:-unknown} live_head=${RB_LIVE_HEAD_SHA} action=${RB_ACTION}"
+    echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+    echo "judge_skip_reason=stale_head" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
+  if [ -z "${RB_LIVE_HEAD_SHA}" ] && { [ "${RB_ACTION}" = "fix" ] || [ "${RB_ACTION}" = "close_and_reissue" ]; }; then
+    echo "::warning::Review-blocked judge: could not read the live head of PR #${PR_NUMBER}; refusing ${RB_ACTION} (judge_skip_reason=head_unverified)."
+    echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+    echo "judge_skip_reason=head_unverified" >> "$GITHUB_OUTPUT"
+    exit 0
+  fi
+fi
+
 RB_SECURITY_ORIGINAL_ACTION=""
 RB_SECURITY_FORCED_FIX="false"
 RB_SECURITY_SEVERITY_DECISION="$(rb_security_severity_block "${RB_ACTION}" "${IS_FINAL}")"
 case "${RB_SECURITY_SEVERITY_DECISION}" in
   allow) ;;
   convert_fix)
+    # BUG-001: a merge converted to fix loses its --match-head-commit
+    # binding, so it needs the same unreadable-head refusal as a judge fix.
+    if [ -z "${RB_LIVE_HEAD_SHA}" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
+      echo "::warning::Review-blocked judge: could not read the live head of PR #${PR_NUMBER}; refusing security-converted fix of ${RB_ACTION} (judge_skip_reason=head_unverified)."
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=head_unverified" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
     RB_SECURITY_ORIGINAL_ACTION="${RB_ACTION}"
     RB_ACTION="fix"
     RB_SECURITY_FORCED_FIX="true"
@@ -1949,6 +2086,86 @@ case "${RB_ACTION}" in
   merge|merge_with_followup) RB_MERGE_ACTION="true" ;;
   fix) [ "${IS_FINAL}" = "true" ] && RB_MERGE_ACTION="true" ;;
 esac
+# Consumer-updater PRs (update_workflows.yml pull-request delivery, #7004):
+# only that workflow's verify job may merge them, after its PR-tree check.
+# Every judge action is held, not only merges: a `fix` commit would land an
+# unverified head under the verify job's auto-merge enrollment, and
+# `close_and_reissue` would make the updater skip the release as closed_by_human.
+if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
+  && [[ "${POST_REVIEW_HEAD_REF:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+  echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge judge_action=${RB_ACTION}"
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=updater_verify_hold" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=updater_pr_verify_job_owns_merge" >> "$GITHUB_OUTPUT"
+  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+    -f body="## Review-Blocked Judge — action held for the updater verify job
+
+The judge chose **${RB_ACTION}**, but this is a consumer-updater pull request. Only the update_workflows.yml verify job may change or merge it, so no action was taken." >/dev/null 2>&1 || true
+  exit 0
+fi
+# BEGIN rb-judge orchestrator integration hold (#8232)
+# Orchestrator integration PRs (head `orchestrator/project-<N>`): the
+# orchestrator's finalize_integration_merge_if_needed owns the final merge and
+# merges only a head that passed runtime validation. The judge holds every
+# merge-type action (`merge`, `merge_with_followup`, final-attempt `fix`) and
+# `close_and_reissue`; a non-final `fix` still pushes its fix commit. Detection
+# mirrors review_enable_auto_merge.sh (`_orch_is_integration_pr`), including
+# the canonical fallback for an empty or invalid pattern. Incident:
+# tele-funtoken-msg-scoring#4861 / PR #4867 merged by the judge two autofix
+# commits after the last validated head.
+rb_judge_head_ref_is_orchestrator_integration()
+{
+  local _rbj_ref="${1:-}"
+  local _rbj_pattern="${ORCH_INTEGRATION_BRANCH_PATTERN-^orchestrator/project-}"
+  local _rbj_rc=0
+  [ -n "${_rbj_ref}" ] || return 1
+  if [ -n "${_rbj_pattern}" ]; then
+    if printf '%s\n' "${_rbj_ref}" | grep -Eq -- "${_rbj_pattern}"; then
+      return 0
+    else
+      _rbj_rc=$?
+      if [ "${_rbj_rc}" -gt 1 ]; then
+        echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (grep exit ${_rbj_rc}); falling back to canonical '^orchestrator/project-([0-9]+)$' integration-PR hold for this run."
+      fi
+    fi
+  else
+    echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is empty; falling back to canonical '^orchestrator/project-([0-9]+)$' integration-PR hold for this run."
+  fi
+  if [[ "${_rbj_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+    return 0
+  fi
+  return 1
+}
+RB_ORCH_INTEGRATION_HOLD_ACTION="false"
+if [ "${RB_MERGE_ACTION}" = "true" ] || [ "${RB_ACTION}" = "close_and_reissue" ]; then
+  RB_ORCH_INTEGRATION_HOLD_ACTION="true"
+fi
+if [ "${PR_ALREADY_MERGED:-false}" != "true" ] \
+  && [ "${RB_ORCH_INTEGRATION_HOLD_ACTION}" = "true" ] \
+  && rb_judge_head_ref_is_orchestrator_integration "${POST_REVIEW_HEAD_REF:-}"; then
+  # ai-review/head-gate success only after the security merge gate passes,
+  # as on every other judge path; the orchestrator's required-checks read
+  # (pr_checks_lib.sh) can include this status. The gate itself skips
+  # orchestrator integration PRs, so it normally returns 0 at no cost.
+  if [ "${RB_MERGE_ACTION}" = "true" ] && [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+    && rb_security_merge_gate; then
+    review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved; orchestrator owns the final merge" || true
+  fi
+  echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=skip reason=orchestrator_integration_pr judge_action=${RB_ACTION}"
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=orchestrator_integration_hold" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=orchestrator_integration_pr" >> "$GITHUB_OUTPUT"
+  RB_ORCH_HOLD_FINAL_FIX_NOTE=""
+  if [ "${RB_ACTION}" = "fix" ]; then
+    RB_ORCH_HOLD_FINAL_FIX_NOTE=" Judge fix retries are exhausted, so the final-attempt fix counts as a merge; no fix commit was created."
+  fi
+  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+    -f body="## Review-Blocked Judge — action held for the orchestrator final merge
+
+The judge chose **${RB_ACTION}**, but this is an orchestrator integration pull request.${RB_ORCH_HOLD_FINAL_FIX_NOTE} The judge does not merge or close it. The orchestrator merges this PR (finalize_integration_merge_if_needed) once the current integration head passes runtime validation." >/dev/null 2>&1 || true
+  exit 0
+fi
+# END rb-judge orchestrator integration hold (#8232)
 if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
   RB_SECURITY_FINAL_FIX_NOTE=""
   if [ "${RB_ACTION}" = "fix" ]; then
@@ -1965,6 +2182,86 @@ The judge chose **${RB_ACTION}**. ${RB_SECURITY_FINAL_FIX_NOTE}This PR's single-
   exit 0
 fi
 
+# BEGIN rb-judge merge error capture (#7659)
+# The judge's merge commands used to send stderr to /dev/null, so a failed
+# merge logged no reason (draft PR, branch protection, merge queue,
+# permissions, 422, moved head). These helpers keep each attempt's stderr in
+# a private temp directory, print one bounded single-line
+# RB_JUDGE_MERGE_ERROR line on failure and remove the directory again. The
+# merge commands themselves, their order and head binding are unchanged.
+# When mktemp fails both files stay /dev/null (the previous behaviour) and
+# nothing extra is printed. Every function returns 0 (set -euo pipefail).
+rb_judge_merge_err_open() {
+  RB_MERGE_ERR_DIR=""
+  RB_MERGE_ERR_AUTO_FILE="/dev/null"
+  RB_MERGE_ERR_DIRECT_FILE="/dev/null"
+  RB_MERGE_ERROR_TEXT=""
+  local _rb_merge_err_tmp=""
+  _rb_merge_err_tmp="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/rb-merge-err.XXXXXX" 2>/dev/null)" || _rb_merge_err_tmp=""
+  if [ -n "${_rb_merge_err_tmp}" ] && [ -d "${_rb_merge_err_tmp}" ] && [ ! -L "${_rb_merge_err_tmp}" ]; then
+    chmod 700 "${_rb_merge_err_tmp}" 2>/dev/null || true
+    if : > "${_rb_merge_err_tmp}/auto" 2>/dev/null && : > "${_rb_merge_err_tmp}/direct" 2>/dev/null; then
+      RB_MERGE_ERR_DIR="${_rb_merge_err_tmp}"
+      RB_MERGE_ERR_AUTO_FILE="${_rb_merge_err_tmp}/auto"
+      RB_MERGE_ERR_DIRECT_FILE="${_rb_merge_err_tmp}/direct"
+    else
+      rm -rf -- "${_rb_merge_err_tmp}" 2>/dev/null || true
+    fi
+  fi
+  return 0
+}
+
+# Prints at most 240 printable characters of one attempt's stderr on one
+# line: non-printable bytes (CR/LF included) become spaces, token-shaped
+# strings are redacted before the cut.
+rb_judge_merge_err_sanitize() {
+  head -c 65536 -- "$1" 2>/dev/null \
+    | LC_ALL=C tr -c '[:print:]' ' ' \
+    | LC_ALL=C sed -E 's/gh[pousr]_[A-Za-z0-9]{16,}/[redacted]/g; s/github_pat_[A-Za-z0-9_]{16,}/[redacted]/g; s/ +/ /g; s/^ //; s/ $//' \
+    | LC_ALL=C cut -c1-240
+  return 0
+}
+
+rb_judge_merge_err_report() {
+  local _rb_merge_err_path="${1:-unknown}" _rb_merge_err_label="" _rb_merge_err_file="" _rb_merge_err_part="" _rb_merge_err_text=""
+  RB_MERGE_ERROR_TEXT=""
+  if [ -z "${RB_MERGE_ERR_DIR:-}" ]; then
+    return 0
+  fi
+  for _rb_merge_err_label in auto direct; do
+    _rb_merge_err_file="${RB_MERGE_ERR_DIR}/${_rb_merge_err_label}"
+    if [ ! -f "${_rb_merge_err_file}" ] || [ -L "${_rb_merge_err_file}" ]; then
+      continue
+    fi
+    _rb_merge_err_part="$(rb_judge_merge_err_sanitize "${_rb_merge_err_file}")" || _rb_merge_err_part=""
+    if [ -z "${_rb_merge_err_part}" ]; then
+      continue
+    fi
+    if [ -n "${_rb_merge_err_text}" ]; then
+      _rb_merge_err_text="${_rb_merge_err_text}; "
+    fi
+    _rb_merge_err_text="${_rb_merge_err_text}${_rb_merge_err_label}: ${_rb_merge_err_part}"
+  done
+  if [ -z "${_rb_merge_err_text}" ]; then
+    _rb_merge_err_text="none"
+  fi
+  RB_MERGE_ERROR_TEXT="${_rb_merge_err_text:0:500}"
+  echo "RB_JUDGE_MERGE_ERROR pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_merge_err_path} error=${RB_MERGE_ERROR_TEXT}"
+  return 0
+}
+
+rb_judge_merge_err_close() {
+  case "${RB_MERGE_ERR_DIR:-}" in
+    */rb-merge-err.*) rm -rf -- "${RB_MERGE_ERR_DIR}" 2>/dev/null || true ;;
+  esac
+  RB_MERGE_ERR_DIR=""
+  RB_MERGE_ERR_AUTO_FILE="/dev/null"
+  RB_MERGE_ERR_DIRECT_FILE="/dev/null"
+  RB_MERGE_ERROR_TEXT=""
+  return 0
+}
+# END rb-judge merge error capture (#7659)
+
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
@@ -1979,6 +2276,7 @@ case "${RB_ACTION}" in
       exit 0
     fi
     RB_MERGE_READY_LABEL_ALLOWED="false"
+    RB_MERGE_STATUS=""
 
     # Attempt merge.
     #
@@ -2029,25 +2327,65 @@ case "${RB_ACTION}" in
         # reaching the `|| true` fallthrough. Rate-limit alerts still
         # fire through every other gh_retry-wrapped call in this
         # script.
-        review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-        if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
-          RB_MERGE_READY_LABEL_ALLOWED="true"
+        # Gates first: the head-gate success status is posted only for a
+        # merge request that actually follows it, right before it.
+        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+            echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
+            RB_MERGE_STATUS="deferred_base_moved"
+          else
+            echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
+            RB_MERGE_STATUS="mergeability_pending"
+          fi
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
+          RB_MERGE_STATUS="checks_not_ready"
+          [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
+        elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
+          && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          # The wait can take minutes and --match-head-commit binds only the
+          # head: re-check that the base did not move under this PR meanwhile.
+          if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+            echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
+            RB_MERGE_STATUS="deferred_base_moved"
+          else
+            echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
+            RB_MERGE_STATUS="mergeability_pending"
+          fi
         else
-          echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+          rb_judge_merge_err_open
+          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+            rb_judge_merge_err_close
+            RB_MERGE_READY_LABEL_ALLOWED="true"
+            RB_MERGE_STATUS="merge_requested"
+          else
+            rb_judge_merge_err_report merge
+            echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
+            rb_judge_merge_err_close
+            RB_MERGE_STATUS="merge_failed"
+          fi
         fi
       else
         review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
         RB_MERGE_READY_LABEL_ALLOWED="true"
+        RB_MERGE_STATUS="manual_merge_required"
       fi
     elif [ "${PR_ALREADY_MERGED:-false}" = "true" ]; then
       RB_MERGE_READY_LABEL_ALLOWED="true"
+      RB_MERGE_STATUS="already_merged"
       echo "PR #${PR_NUMBER} is already merged; advancing linked issues without another merge request."
     elif [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "false" ]; then
       echo "::warning::PR #${PR_NUMBER} has merge conflicts (mergeable=false); judge cannot merge as-is."
       echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=false, merge conflicts present."
+      RB_MERGE_STATUS="merge_conflict"
+    elif [ "${PR_STATE}" = "open" ]; then
+      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null}, cannot merge yet (mergeability still computing)."
+      RB_MERGE_STATUS="mergeability_pending"
     else
-      echo "PR #${PR_NUMBER} state=${PR_STATE} mergeable=${PR_MERGEABLE:-null}, cannot merge yet (mergeability still computing or PR not open)."
+      echo "PR #${PR_NUMBER} state=${PR_STATE:-unknown} mergeable=${PR_MERGEABLE:-null}, cannot merge (PR not open)."
+      RB_MERGE_STATUS="not_open"
     fi
 
     if [ "${RB_MERGE_READY_LABEL_ALLOWED}" = "true" ]; then
@@ -2060,6 +2398,7 @@ case "${RB_ACTION}" in
 
     echo "judge_handled=true" >> "$GITHUB_OUTPUT"
     echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+    echo "judge_merge_status=${RB_MERGE_STATUS:-unknown}" >> "$GITHUB_OUTPUT"
     ;;
 
   fix)
@@ -2073,24 +2412,61 @@ case "${RB_ACTION}" in
         exit 0
       fi
       RB_MERGE_READY_LABEL_ALLOWED="false"
+      RB_MERGE_STATUS=""
 
       # GitHub's REST /pulls/{N} returns .state as one of `open` or
       # `closed`; drop the unreachable `merged` alt.
       PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Best-effort merge — see note above re: gh_retry.
-        review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-        if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
-          || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
-          RB_MERGE_READY_LABEL_ALLOWED="true"
+        # Gates first: the head-gate success status is posted only for a
+        # merge request that actually follows it, right before it.
+        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+            echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
+            RB_MERGE_STATUS="deferred_base_moved"
+          else
+            echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
+            RB_MERGE_STATUS="mergeability_pending"
+          fi
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
+          RB_MERGE_STATUS="checks_not_ready"
+          [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "failed" ] && RB_MERGE_STATUS="checks_failed"
+        elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
+          && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          # The wait can take minutes and --match-head-commit binds only the
+          # head: re-check that the base did not move under this PR meanwhile.
+          if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+            echo "::warning::Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
+            RB_MERGE_STATUS="deferred_base_moved"
+          else
+            echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
+            RB_MERGE_STATUS="mergeability_pending"
+          fi
         else
-          echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
+          rb_judge_merge_err_open
+          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
+          if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
+            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+            rb_judge_merge_err_close
+            RB_MERGE_READY_LABEL_ALLOWED="true"
+            RB_MERGE_STATUS="merge_requested"
+          else
+            rb_judge_merge_err_report terminal
+            echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
+            rb_judge_merge_err_close
+            RB_MERGE_STATUS="merge_failed"
+          fi
         fi
       elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
         if [ "${PR_STATE}" = "open" ]; then
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
         fi
         RB_MERGE_READY_LABEL_ALLOWED="true"
+        RB_MERGE_STATUS="manual_merge_required"
+      else
+        RB_MERGE_STATUS="not_open"
       fi
 
       if [ "${RB_MERGE_READY_LABEL_ALLOWED}" = "true" ]; then
@@ -2103,6 +2479,7 @@ case "${RB_ACTION}" in
 
       echo "judge_handled=true" >> "$GITHUB_OUTPUT"
       echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+      echo "judge_merge_status=${RB_MERGE_STATUS:-unknown}" >> "$GITHUB_OUTPUT"
     else
       echo "Judge is applying fixes to PR #${PR_NUMBER}..."
 
@@ -2180,6 +2557,12 @@ __EDIT_DISCIPLINE__
       : > "${RB_FIX_OUTPUT}"
       rb_fix_claude_rc=0
       review_rb_claude_run write "${RB_FIX_PROMPT}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" "${JUDGE_EFFECTIVE_REASONING_EFFORT}" || rb_fix_claude_rc=$?
+      if [ "${rb_fix_claude_rc}" -eq 80 ]; then
+        # Claude capacity wait (issue #7370): no OpenCode fallback, no commit.
+        echo "AI_ENGINE_CAPACITY_WAIT role=RB_JUDGE outcome=deferred" >&2
+        if [ -n "${GITHUB_ENV:-}" ]; then echo "AUTOFIX_FAILURE_REASON=claude_capacity" >> "${GITHUB_ENV}" || true; fi
+        exit 1
+      fi
       if [ "${rb_fix_claude_rc}" -ne 75 ]; then
         rb_fix_rc="${rb_fix_claude_rc}"
       elif ! WORKSPACE_PATH="${rb_fix_workspace_path}" review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"; then
@@ -2254,8 +2637,21 @@ __EDIT_DISCIPLINE__
       elif codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
         echo "::warning::Review-blocked fix OpenCode was killed by codex stall guard; skipping commit/merge and falling back to manual intervention."
       elif [ -n "$(git status --porcelain)" ]; then
-        git config user.name "codex-bot"
-        git config user.email "codex@users.noreply.github.com"
+        # The commit author names the engine of the fix pass: claude-bot
+        # when it ran on Claude (review_rb_claude_run returns 75 when the
+        # role is not on Claude or Claude handed off to OpenCode), codex-bot
+        # otherwise. Both emails are on the reserved .invalid domain so
+        # GitHub links the commit to no account.
+        if [ "${rb_fix_claude_rc}" -ne 75 ]; then
+          rb_fix_commit_engine=claude
+          git config user.name "claude-bot"
+          git config user.email "claude-bot@users.noreply.invalid"
+        else
+          rb_fix_commit_engine=codex
+          git config user.name "codex-bot"
+          git config user.email "codex-bot@users.noreply.invalid"
+        fi
+        echo "AI_COMMIT_IDENTITY role=RB_JUDGE engine=${rb_fix_commit_engine} name=$(git config user.name)"
 
         # Clean up workflow-fetched artifacts before committing.
         #
@@ -2366,6 +2762,7 @@ ${RB_FIX_DESC}"
           done <<< "${ISSUE_NUMBERS}"
           echo "judge_handled=true" >> "$GITHUB_OUTPUT"
           echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+          echo "judge_merge_status=ready_to_merge" >> "$GITHUB_OUTPUT"
         fi
       else
         if [ "${RB_SECURITY_MODE:-false}" = "true" ] && { ! [[ "${RB_SECURITY_BLOCKING_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${RB_SECURITY_BLOCKING_COUNT}" -gt 0 ]; }; then
@@ -2388,6 +2785,7 @@ ${RB_FIX_DESC}"
         done <<< "${ISSUE_NUMBERS}"
         echo "judge_handled=true" >> "$GITHUB_OUTPUT"
         echo "judge_action=merge" >> "$GITHUB_OUTPUT"
+        echo "judge_merge_status=ready_to_merge" >> "$GITHUB_OUTPUT"
       fi
     fi
     ;;
@@ -2489,7 +2887,8 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
       #     operator merged the PR and reran the judge to create the
       #     follow-up; or a concurrent workflow merged it).
       #   - PR_STATE="open" + PR_MERGEABLE="true" + ENABLE_AUTO_MERGE=
-      #     "true" + `gh pr merge --squash` (sync, NO --auto) returned
+      #     "true" + `gh pr merge` with RB_MERGE_METHOD_FLAG (sync, NO
+      #     --auto; `--squash`, or `--merge` for forward-merge PRs) returned
       #     0: required checks were all green and the PR is now
       #     atomically merged.
       # Set to "false" otherwise — including the protected-branch case
@@ -2559,14 +2958,26 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
             else
-              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped/cancelled (non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped (a cancelled required check blocks; re-run it; non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
               echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
+            && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then
+            # Merge-base freshness gate (Q35: A): the base moved under files
+            # this PR touches; the update's synchronize run re-validates.
+            if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+              echo "::warning::PR #${PR_NUMBER} base moved under files it touches — branch update requested; merge_with_followup deferred. Leaving linked issues in ai:review-blocked."
+              echo "judge_skip_reason=base_moved_overlap" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::PR #${PR_NUMBER} base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}) — merge_with_followup deferred, no branch update requested. Leaving linked issues in ai:review-blocked."
+              echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation
             # happens only against a definitively-merged base. With the
-            # check-runs gate above, `gh pr merge --squash` is now only
+            # check-runs gate above, `gh pr merge` (RB_MERGE_METHOD_FLAG:
+            # `--squash`, or `--merge` for forward-merge PRs) is now only
             # attempted when ALL check-runs have settled, so the merge
             # success (return 0) reliably implies the PR landed against
             # validated code.
@@ -2583,13 +2994,17 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # check above guarantees we never
             # fall back to an unbound merge: the check-runs gate
             # requires RB_JUDGED_HEAD_SHA, so reaching here means it's set.
+            rb_judge_merge_err_open
             _match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")
             review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>/dev/null; then
+            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" "${_match_head_arg[@]}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; then
+              rb_judge_merge_err_close
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"
             else
-              echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
+              rb_judge_merge_err_report sync
+              echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
+              rb_judge_merge_err_close
               echo "judge_skip_reason=sync_merge_failed" >> "$GITHUB_OUTPUT"
             fi
           else
@@ -2759,6 +3174,7 @@ print(m.group(1) if m else "")
     ;;
 
   close_and_reissue)
+    RB_REISSUE_CREATED="false"
     normalize_rb_reissue_mode() {
       case "${1:-}" in
         spot-fix|redo)
@@ -2859,8 +3275,16 @@ print(m.group(1) if m else "")
           RB_EFFECTIVE_REISSUE_MODE="redo"
           RB_SPOT_FIX_REASON="feature_flag_disabled"
         else
-          RB_HEAD_SHA="$(gh_retry gh pr view "${PR_NUMBER}" --repo "${REPOSITORY}" --json headRefOid --jq '.headRefOid' 2>/dev/null || true)"
-          RB_HEAD_SHA="$(printf '%s' "${RB_HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
+          # BUG-001: the baseline is the head the judge evaluated, not a
+          # live re-read that may have moved during the judge call.
+          RB_HEAD_SHA="$(printf '%s' "${RB_JUDGED_HEAD_SHA:-}" | tr '[:upper:]' '[:lower:]')"
+          # A live head that differs here passed the stale-head guard only as
+          # this run's checked-out head behind an unpushed local commit, which
+          # the closed PR never carried; implement.yml ignores a baseline that
+          # differs from the closed PR's headRefOid, so use the live head.
+          if [ -n "${RB_LIVE_HEAD_SHA:-}" ] && [ "${RB_LIVE_HEAD_SHA}" != "${RB_HEAD_SHA}" ]; then
+            RB_HEAD_SHA="${RB_LIVE_HEAD_SHA}"
+          fi
           if ! [[ "${RB_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
             RB_EFFECTIVE_REISSUE_MODE="redo"
             RB_SPOT_FIX_REASON="head_ref_unavailable"
@@ -3227,12 +3651,16 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
         echo "Propagating ai:orchestrator-managed from parent issue #${FIRST_ISSUE} to review-blocked reissue."
       fi
 
-      NEW_URL="$(gh_retry gh issue create \
+      if NEW_URL="$(gh_retry gh issue create \
         --repo "${REPOSITORY}" \
         --title "${NEW_ISSUE_TITLE}" \
         --body "${FULL_NEW_BODY}" \
-        ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})"
-      echo "Created replacement issue: ${NEW_URL}"
+        ${RB_PROPAGATE_LABELS[@]+"${RB_PROPAGATE_LABELS[@]}"})" && [ -n "${NEW_URL}" ]; then
+        echo "Created replacement issue: ${NEW_URL}"
+        RB_REISSUE_CREATED="true"
+      else
+        echo "::error::Failed to create replacement issue for closed PR #${PR_NUMBER}; remaining work needs a tracking issue."
+      fi
     else
       if [ "${RB_REQUESTED_REISSUE_MODE}" = "spot-fix" ]; then
         RB_EFFECTIVE_REISSUE_MODE="redo"
@@ -3246,6 +3674,7 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
 
     echo "judge_handled=true" >> "$GITHUB_OUTPUT"
     echo "judge_action=close_and_reissue" >> "$GITHUB_OUTPUT"
+    echo "judge_reissue_created=${RB_REISSUE_CREATED:-false}" >> "$GITHUB_OUTPUT"
     ;;
 
   *)

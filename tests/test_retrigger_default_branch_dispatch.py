@@ -448,6 +448,90 @@ def test_peer_check_counts_pending_and_rejects_wrong_default_branch_or_wrapper()
 	assert proc.returncode == 0, (proc.stdout, proc.stderr)
 
 
+def test_peer_check_accepts_a_null_head_branch_dispatch_run() -> None:
+	"""Issue #6629 (Q2): GitHub can report a null head_branch on a real
+	default-branch dispatch (#4928); a branch-copy spoof never does."""
+	for head_branch in (None, ""):
+		run = _pr_named(116, "in_progress", None, PUSH_EPOCH)
+		run["head_branch"] = head_branch
+		proc, _ = _run_probe(PEER, [], [run], PR, BRANCH, CURRENT_RUN)
+		assert proc.returncode == 0, (head_branch, proc.stdout, proc.stderr)
+		assert "peer_run=116" in proc.stdout
+
+
+def test_peer_check_rejects_spoofed_dispatch_runs() -> None:
+	"""Issue #6629: (a) a non-default branch, (b) a title on the wrong wrapper
+	path, (c) another event: none of them is a peer."""
+	spoofs = []
+	branch_copy = _pr_named(117, "in_progress", None, PUSH_EPOCH)
+	branch_copy["head_branch"] = "attacker/branch"
+	spoofs.append(branch_copy)
+	wrong_path = _pr_named(118, "in_progress", None, PUSH_EPOCH)
+	wrong_path["path"] = ".github/workflows/review_autofix.yml"
+	spoofs.append(wrong_path)
+	swapped = _pr_named(119, "in_progress", None, PUSH_EPOCH, wrapper="ai-review.yml")
+	swapped["display_title"] = f"Internal: AI Review & Autofix [pr:{PR}]"
+	spoofs.append(swapped)
+	other_event = _pr_named(120, "in_progress", None, PUSH_EPOCH)
+	other_event["event"] = "pull_request"
+	spoofs.append(other_event)
+	proc, _ = _run_probe(PEER, [], spoofs, PR, BRANCH, CURRENT_RUN)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+
+
+_DEFAULT_BRANCH_MEMO_RUNNER = r"""
+source "__HELPERS__"
+gh_retry() { "$@"; }
+gh() {
+	printf '%s\n' "$*" >> "${GH_CALLS}"
+	case " $* " in
+		*" repos/owner/repo --jq .default_branch "*)
+			[ "${REPO_META_FAIL:-0}" = "1" ] && return 1
+			printf 'main\n'
+			;;
+		*) return 1 ;;
+	esac
+}
+_autofix_review_default_branch_prime
+_autofix_review_default_branch_prime
+first=0; second=0
+out="$(_autofix_pr_named_review_runs 12)" || first=$?
+out="$(_autofix_pr_named_review_runs 12)" || second=$?
+echo "state=${_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE} branch=${_AUTOFIX_REVIEW_DEFAULT_BRANCH} first=${first} second=${second}"
+"""
+
+
+def _run_default_branch_memo(repo_fail: bool) -> tuple[subprocess.CompletedProcess, list[str]]:
+	with tempfile.TemporaryDirectory() as tmp:
+		calls = Path(tmp) / "calls.txt"
+		calls.write_text("", encoding="utf-8")
+		env = dict(os.environ)
+		env.update({
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GH_CALLS": str(calls),
+			"REPO_META_FAIL": "1" if repo_fail else "0",
+			"TMPDIR": tmp,
+		})
+		script = _DEFAULT_BRANCH_MEMO_RUNNER.replace("__HELPERS__", str(GH_HELPERS))
+		proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env)
+		reads = [line for line in calls.read_text(encoding="utf-8").splitlines() if line.endswith("repos/owner/repo --jq .default_branch")]
+		return proc, reads
+
+
+def test_default_branch_is_read_once_per_shell() -> None:
+	"""Issue #6629: the peer check and the retry-budget check run in one step
+	shell; the default branch is read once there, not once per lookup."""
+	proc, reads = _run_default_branch_memo(repo_fail=False)
+	assert "state=ok branch=main" in proc.stdout, (proc.stdout, proc.stderr)
+	assert len(reads) == 1, reads
+
+
+def test_failed_default_branch_read_is_memoized_and_fails_closed() -> None:
+	proc, reads = _run_default_branch_memo(repo_fail=True)
+	assert "state=failed branch= first=1 second=1" in proc.stdout, (proc.stdout, proc.stderr)
+	assert len(reads) == 1, reads
+
+
 def test_peer_check_reads_all_wrapper_pages() -> None:
 	older_runs = [_pr_named(1000 + idx, "completed", "success", PUSH_EPOCH, pr="1") for idx in range(100)]
 	proc, calls = _run_probe(PEER, [], older_runs + [_pr_named(2000, "queued", None, PUSH_EPOCH)], PR, BRANCH, CURRENT_RUN)
@@ -805,3 +889,108 @@ def test_budget_unnamed_check_skips_pull_request_runs() -> None:
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 	assert "reason=unnamed_dispatch_run" not in proc.stderr
 	assert "event=pull_request" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# Functional: continuation dispatch peer check
+# ---------------------------------------------------------------------------
+
+INTERNAL_CALLER = "shubhodeep1/coding-workflows/.github/workflows/internal-review.yml@refs/heads/main"
+CONTINUATION_ENV = {
+	"DID_COMMIT": "true",
+	"CONFLICT_RESOLVED": "false",
+	"LEDGER_ONLY_COMMIT": "false",
+	"AUTOFIX_CONTINUATION_SETTLE_SECS": "1",
+	"AUTOFIX_RETRIGGER_PEER_WAIT_SECS": "0",
+}
+
+
+def _peer_stub(found: bool) -> str:
+	return 'autofix_retrigger_has_inflight_peer() { printf "%s\\n" "PEER_ARGS $*"; return ' + ("0" if found else "1") + "; }\n"
+
+
+def _run_continuation(*, peer: bool | None, extra: dict | None = None, continuation: bool = True) -> tuple[subprocess.CompletedProcess, list[str]]:
+	env = dict(CONTINUATION_ENV) if continuation else {"AUTOFIX_RETRIGGER_PEER_WAIT_SECS": "0"}
+	if peer is not None:
+		env["HARNESS_PRELUDE"] = _peer_stub(peer)
+	env.update(extra or {})
+	proc, calls, _ = _run_script(POST_COMMIT_SCRIPT, caller_ref=INTERNAL_CALLER, succeed_on="internal-review.yml", extra_env=env)
+	return proc, calls
+
+
+def test_continuation_skips_when_sync_peer_inflight_by_default() -> None:
+	proc, calls = _run_continuation(peer=True)
+	assert proc.returncode == 0, proc.stderr
+	assert _workflows(calls) == []
+	assert (
+		f"AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight pr={PR} current_run={CURRENT_RUN} "
+		"source=post_commit_retrigger continuation=true"
+	) in proc.stdout.splitlines()
+	assert "AUTOFIX_PEER_CHECK_BYPASSED" not in proc.stdout
+	assert f"PEER_ARGS {PR} {BRANCH} {CURRENT_RUN}" in proc.stdout.splitlines()
+	assert "DISPATCHED=" not in proc.stdout
+
+
+def test_continuation_dispatches_when_no_peer_by_default() -> None:
+	proc, calls = _run_continuation(peer=False)
+	assert proc.returncode == 0, proc.stderr
+	assert _workflows(calls) == ["internal-review.yml"]
+	assert "PEER_ARGS " in proc.stdout
+	assert "AUTOFIX_CONTINUATION_DISPATCH_ISSUED" in proc.stdout
+	assert (
+		f"AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr={PR} current_run={CURRENT_RUN} "
+		"source=post_commit_retrigger continuation=true"
+	) in proc.stdout.splitlines()
+	assert "AUTOFIX_PEER_CHECK_BYPASSED" not in proc.stdout
+	assert "DISPATCHED=true" in proc.stdout
+
+
+def test_continuation_dispatches_when_peer_check_unavailable() -> None:
+	proc, calls = _run_continuation(peer=None)
+	assert proc.returncode == 0, proc.stderr
+	assert _workflows(calls) == ["internal-review.yml"]
+	assert "AUTOFIX_CONTINUATION_DISPATCH_ISSUED" in proc.stdout
+	assert "DISPATCHED=true" in proc.stdout
+
+
+def test_continuation_bypasses_peer_check_when_skip_self_triggered() -> None:
+	proc, calls = _run_continuation(peer=True, extra={"AUTOFIX_SKIP_SELF_TRIGGERED": "true"})
+	assert proc.returncode == 0, proc.stderr
+	assert _workflows(calls) == ["internal-review.yml"]
+	assert (
+		f"AUTOFIX_PEER_CHECK_BYPASSED pr={PR} current_run={CURRENT_RUN} reason=continuation_dispatch "
+		"source=post_commit_retrigger"
+	) in proc.stdout.splitlines()
+	assert "PEER_ARGS" not in proc.stdout
+	assert "AUTOFIX_DISPATCH_SKIPPED" not in proc.stdout
+
+
+def test_continuation_runs_peer_check_for_non_true_skip_self_values() -> None:
+	# Mirrors the gate's exact comparison: only the literal `true` bypasses.
+	for value in ("false", "", "TRUE", "yes"):
+		proc, calls = _run_continuation(peer=True, extra={"AUTOFIX_SKIP_SELF_TRIGGERED": value})
+		assert _workflows(calls) == [], (value, calls)
+		assert "continuation=true" in proc.stdout, value
+		assert "AUTOFIX_PEER_CHECK_BYPASSED" not in proc.stdout, value
+
+
+def test_non_continuation_peer_dedup_unchanged() -> None:
+	proc, calls = _run_continuation(peer=True, continuation=False)
+	assert proc.returncode == 0, proc.stderr
+	assert _workflows(calls) == []
+	assert (
+		f"AUTOFIX_DISPATCH_SKIPPED reason=sync_event_inflight pr={PR} current_run={CURRENT_RUN} "
+		"source=post_commit_retrigger"
+	) in proc.stdout.splitlines()
+	assert "continuation=true" not in proc.stdout
+	assert "AUTOFIX_PEER_CHECK_BYPASSED" not in proc.stdout
+
+	proc, calls = _run_continuation(peer=False, continuation=False)
+	assert proc.returncode == 0, proc.stderr
+	assert _workflows(calls) == ["internal-review.yml"]
+	assert (
+		f"AUTOFIX_DISPATCH_ISSUED reason=no_peer_detected pr={PR} current_run={CURRENT_RUN} "
+		"source=post_commit_retrigger"
+	) in proc.stdout.splitlines()
+	assert "continuation=" not in proc.stdout
+	assert "AUTOFIX_CONTINUATION_DISPATCH_ISSUED" not in proc.stdout

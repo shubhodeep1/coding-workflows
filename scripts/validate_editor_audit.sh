@@ -50,7 +50,7 @@
 #       malformed/unparseable. The editor claimed disposition counts
 #       that don't add up to the total, or emitted a line that the
 #       validator cannot safely interpret.
-#   3 — usage error (missing/unreadable summary file).
+#   3 — usage error (missing/unreadable summary file; also when awk cannot read it).
 #
 # Warning lines emitted to stderr match the legacy inline block in
 # review_autofix.yml byte-for-byte so existing cross-workflow grep
@@ -64,18 +64,23 @@ validate_editor_audit_arithmetic()
 	local summary_file="${1:-}"
 	local reviewers_successful="${2:-}"
 
-	if [ -z "${summary_file}" ] || [ ! -f "${summary_file}" ]; then
+	if [ -z "${summary_file}" ] || [ ! -f "${summary_file}" ] || [ ! -r "${summary_file}" ]; then
 		echo "::warning::validate_editor_audit_arithmetic: summary file '${summary_file}' missing or unreadable." >&2
 		return 3
 	fi
 
 	local audit_section
+	local audit_awk_rc=0
 	audit_section="$(awk '
 		/^[[:space:]]*Review file issue audit:/ { in_s=1; next }
 		in_s && /^[[:space:]]*PR comment audit:/ { exit }
 		in_s && /^[[:space:]]*[A-Za-z][A-Za-z ()-]*:[[:space:]]*$/ { exit }
 		in_s { print }
-	' "${summary_file}")"
+	' "${summary_file}")" || audit_awk_rc=$?
+	if [ "${audit_awk_rc}" -ne 0 ]; then
+		echo "::warning::validate_editor_audit_arithmetic: summary file '${summary_file}' missing or unreadable." >&2
+		return 3
+	fi
 
 	local real_audit
 	real_audit="$(printf '%s\n' "${audit_section}" \

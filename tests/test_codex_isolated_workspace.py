@@ -269,13 +269,24 @@ def test_export_oversized_all_still_rejects_explicit_cap_breach(repo, tmp_path, 
 	assert not dest.exists()
 
 
-def test_export_oversized_all_still_refuses_explicit_filtered_file(repo, tmp_path):
+def test_export_oversized_all_records_explicit_filtered_file_as_not_inspected(repo, tmp_path):
+	# fun-token-multi-chain#579: a project diff that touches a committed
+	# `.env.example` must not stall the audit; the file stays out of the
+	# export and is reported as not inspected.
 	scope = tmp_path / "scope.txt"
-	scope.write_text(".env\n")
+	scope.write_text(".env\ndeploy.pem\n")
 	dest = tmp_path / "export"
-	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, "all", check=False)
-	assert proc.returncode == 1 and "scoped file excluded by read-only filter" in proc.stderr
-	assert not dest.exists()
+	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, "all")
+	assert "filtered_scoped=2" in proc.stderr
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert manifest["filtered_scoped"] == [
+		{"path": ".env", "reason": "credential_filter"},
+		{"path": "deploy.pem", "reason": "credential_filter"},
+	]
+	assert manifest["filtered_scoped_count"] == 2
+	assert [item["path"] for item in manifest["scoped"]] == ["big.bin"]
+	exported = "".join(part.read_text(errors="replace") for part in dest.rglob("part-*.txt"))
+	assert "SECRET=1" not in exported and "BEGIN" not in exported
 
 
 def test_export_oversized_rejects_invalid_scope_mode(repo, tmp_path):
@@ -287,16 +298,29 @@ def test_export_oversized_rejects_invalid_scope_mode(repo, tmp_path):
 	assert not dest.exists()
 
 
-@pytest.mark.parametrize("filtered_name,hide", [("secret.json", None), ("CLAUDE.md", "CLAUDE.md")])
-def test_export_oversized_refuses_filtered_scoped_file(repo, tmp_path, filtered_name, hide):
+@pytest.mark.parametrize("filtered_name,hide,reason", [("secret.json", None, "credential_filter"), ("CLAUDE.md", "CLAUDE.md", "hidden"), (".env.example", None, "credential_filter")])
+def test_export_oversized_skips_and_records_filtered_scoped_file(repo, tmp_path, filtered_name, hide, reason):
 	(repo / filtered_name).write_bytes(b"x" * (2 * 1024 * 1024 + 1))
 	git(repo, "add", filtered_name)
 	scope = tmp_path / "scope.txt"
 	scope.write_text(f"{filtered_name}\n")
 	dest = tmp_path / "export"
-	proc = run("export-oversized", repo, scope, dest, 16777216, 67108864, check=False, hide=hide)
-	assert proc.returncode == 1 and "scoped file excluded by read-only filter" in proc.stderr
-	assert not dest.exists()
+	run("export-oversized", repo, scope, dest, 16777216, 67108864, hide=hide)
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert manifest["filtered_scoped"] == [{"path": filtered_name, "reason": reason}]
+	assert manifest["filtered_scoped_count"] == 1
+	assert manifest["scoped"] == []
+	assert not list(dest.rglob("part-*.txt"))
+
+
+def test_export_oversized_ignores_deleted_filtered_scoped_file(repo, tmp_path):
+	(repo / ".env").unlink()  # Still in the index, gone from the work tree.
+	scope = tmp_path / "scope.txt"
+	scope.write_text(".env\n")
+	dest = tmp_path / "export"
+	run("export-oversized", repo, scope, dest, 16777216, 67108864)
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert manifest["filtered_scoped"] == [] and manifest["filtered_scoped_count"] == 0
 
 
 @pytest.mark.parametrize("excluded_name", ["large-link.txt", "setuid.txt"])
@@ -404,6 +428,113 @@ def test_stage_deps_allowlists_node_manifests(repo, tmp_path, lock, mode):
 	run("stage-deps", work, other_stage)
 	assert (other_stage / ".codex-deps" / "node").read_text().strip() == "present"
 	assert "package.json" not in tree(other_stage)
+
+
+def _node_project(root, rel, lock="package-lock.json"):
+	project = root / rel
+	project.mkdir(parents=True, exist_ok=True)
+	(project / "package.json").write_text('{"name":"p"}')
+	if lock:
+		(project / lock).write_text("lock\n")
+	(project / "index.js").write_text("source, never staged\n")
+	return project
+
+
+def test_stage_deps_stages_nested_node_projects_with_a_lockfile(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	_node_project(work, "cloudflare/worker")
+	_node_project(work, "apps/web", lock="pnpm-lock.yaml")
+	_node_project(work, "fixtures/no-lock", lock=None)
+	_node_project(work, ".hidden/app")
+	_node_project(work, "a/b/c/d/too-deep")
+	present = _node_project(work, "has/modules")
+	(present / "node_modules").mkdir()
+	_node_project(work, "secrets/app")
+	(work / "linked").symlink_to(work / "cloudflare")
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	listed = json.loads((stage / ".codex-deps" / "nested.json").read_text())
+	assert listed == [
+		{"index": 0, "path": "apps/web", "mode": "pnpm"},
+		{"index": 1, "path": "cloudflare/worker", "mode": "npm-ci"},
+	]
+	assert sorted(p.name for p in (stage / ".codex-deps" / "nested" / "1").iterdir()) == ["mode", "package-lock.json", "package.json"]
+	assert not any(p.name == "index.js" for p in stage.rglob("*"))
+	assert "stage-deps nested_node=2 nested_over_limit=0" in proc.stderr
+	assert "nested_skipped=present" in proc.stderr
+
+
+def test_stage_deps_caps_nested_projects_and_writes_no_list_without_any(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	empty_stage = tmp_path / "empty-stage"
+	run("stage-deps", work, empty_stage)
+	assert not (empty_stage / ".codex-deps" / "nested.json").exists()
+	for index in range(8):
+		_node_project(work, f"pkgs/p{index}")
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	assert len(json.loads((stage / ".codex-deps" / "nested.json").read_text())) == 6
+	assert "nested_node=6 nested_over_limit=2" in proc.stderr
+
+
+def test_handoff_nested_deps_moves_only_into_listed_safe_projects(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	_node_project(work, "cloudflare/worker")
+	_node_project(work, "present")
+	(work / "present" / "node_modules").mkdir()
+	(work / "real").mkdir()
+	(work / "link").symlink_to(work / "real", target_is_directory=True)
+	(work / "real" / "package.json").write_text("{}")
+	stage = tmp_path / "stage"
+	entries = [
+		{"index": 0, "path": "cloudflare/worker"},
+		{"index": 1, "path": "present"},
+		{"index": 2, "path": "../escape"},
+		{"index": 3, "path": "link"},
+		{"index": "4", "path": "missing"},
+		{"index": 5, "path": ".git"},
+	]
+	for entry in entries:
+		modules = stage / ".codex-deps" / "nested" / str(entry["index"]) / "node_modules"
+		modules.mkdir(parents=True)
+		(modules / "marker").write_text("x")
+	listing = tmp_path / "list.json"
+	listing.write_text(json.dumps(entries))
+	proc = run("handoff-nested-deps", stage, work, listing)
+	assert (work / "cloudflare" / "worker" / "node_modules" / "marker").is_file()
+	assert list((work / "present" / "node_modules").iterdir()) == []
+	assert not (tmp_path / "escape").exists() and not (work / "real" / "node_modules").exists()
+	assert not (work / "missing").exists()
+	assert "handoff-nested-deps moved=1" in proc.stderr
+	assert "skipped=1 reason=present" in proc.stderr and "skipped=2 reason=unsafe_path" in proc.stderr
+	assert "skipped=3 reason=missing_project" in proc.stderr, proc.stderr
+	assert "skipped=entry reason=malformed" in proc.stderr and "skipped=5 reason=unsafe_path" in proc.stderr
+	missing_list = run("handoff-nested-deps", stage, work, tmp_path / "absent.json")
+	assert "handoff-nested-deps moved=0" in missing_list.stderr
+
+
+def test_handoff_nested_deps_never_follows_a_swapped_stage_directory(tmp_path):
+	# The install container can write the stage: a nested/<n> directory it
+	# replaced with a symlink to a directory outside the stage is not followed.
+	work = tmp_path / "work"
+	work.mkdir()
+	_node_project(work, "swapped")
+	_node_project(work, "not-installed")
+	outside = tmp_path / "outside"
+	(outside / "node_modules").mkdir(parents=True)
+	nested = tmp_path / "stage" / ".codex-deps" / "nested"
+	nested.mkdir(parents=True)
+	(nested / "0").symlink_to(outside, target_is_directory=True)
+	listing = tmp_path / "list.json"
+	listing.write_text(json.dumps([{"index": 0, "path": "swapped"}, {"index": 1, "path": "not-installed"}]))
+	proc = run("handoff-nested-deps", tmp_path / "stage", work, listing)
+	assert (outside / "node_modules").is_dir() and not (work / "swapped" / "node_modules").exists()
+	assert "skipped=0 reason=unsafe_source" in proc.stderr
+	assert "skipped=1 reason=install_missing" in proc.stderr
+	assert "handoff-nested-deps moved=0" in proc.stderr
 
 
 @pytest.mark.parametrize("bad_kind", ["symlink", "oversized"])
@@ -788,3 +919,70 @@ def test_invalid_hidden_path_is_refused(repo, tmp_path, value):
 	proc = run("snapshot-readonly", repo, tmp_path / "ro", check=False, hide=value)
 	assert proc.returncode == 1
 	assert "invalid hidden path" in proc.stderr
+
+
+def test_seed_git_adds_the_filtered_default_branch_as_isolated_base(repo, tmp_path):
+	"""fun-token-multi-chain#639: the agent can read the default branch offline."""
+	git(repo, "branch", "base-tip")
+	(repo / "src" / "app.py").write_text("print('changed on the project branch')\n")
+	(repo / "src" / "new.py").write_text("NEW = 1\n")
+	git(repo, "add", "src/app.py", "src/new.py")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "project change")
+	dest = tmp_path / "copy"
+	run("snapshot-readonly", repo, dest)
+	proc = run("seed-git", repo, dest, "base-tip")
+	assert "seed-git outcome=ok base=present" in proc.stderr
+	assert git(dest, "show", "isolated-base:src/app.py") == "print('app')\n"
+	assert git(dest, "show", "HEAD:src/app.py") == "print('changed on the project branch')\n"
+	assert git(dest, "rev-parse", "HEAD^").strip() == git(dest, "rev-parse", "isolated-base").strip()
+	assert git(dest, "diff", "--name-only", "isolated-base", "HEAD").split() == ["src/app.py", "src/new.py"]
+	assert git(dest, "status", "--porcelain") == ""
+	assert git(dest, "rev-parse", "--abbrev-ref", "HEAD").strip() == "isolated"
+	for hidden in (".env", "deploy.pem", "big.bin"):
+		assert subprocess.run(["git", "show", f"isolated-base:{hidden}"], cwd=dest, capture_output=True).returncode != 0
+	config = (dest / ".git" / "config").read_text()
+	assert TOKEN not in config and "remote" not in config
+
+
+def test_seed_git_base_never_exposes_a_credential_only_present_on_the_base(repo, tmp_path):
+	(repo / "client_secret.json").write_text("credential value\n")
+	git(repo, "add", "client_secret.json")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base with a credential")
+	git(repo, "branch", "base-tip")
+	git(repo, "rm", "-q", "client_secret.json")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "drop it")
+	dest = tmp_path / "copy"
+	run("snapshot-readonly", repo, dest)
+	run("seed-git", repo, dest, "base-tip")
+	assert subprocess.run(["git", "show", "isolated-base:client_secret.json"], cwd=dest, capture_output=True).returncode != 0
+	objects = subprocess.run(["git", "cat-file", "--batch-all-objects", "--batch"], cwd=dest, capture_output=True).stdout
+	assert b"credential value" not in objects
+
+
+@pytest.mark.parametrize("base_ref", ["no-such-ref", "", "--output=/tmp/x"])
+def test_seed_git_without_a_resolvable_base_keeps_a_single_commit(repo, tmp_path, base_ref):
+	dest = tmp_path / "copy"
+	run("snapshot-readonly", repo, dest)
+	proc = run("seed-git", repo, dest, base_ref)
+	expected = "base=none" if base_ref == "" else "base=unresolved"
+	assert f"seed-git outcome=ok {expected}" in proc.stderr
+	assert subprocess.run(["git", "rev-parse", "--verify", "HEAD^"], cwd=dest, capture_output=True).returncode != 0
+	assert git(dest, "branch", "--list", "isolated-base") == ""
+	assert git(dest, "show", "HEAD:src/app.py") == "print('app')\n"
+
+
+def test_isolated_runner_and_implement_step_pass_the_default_branch_base():
+	exec_script = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text()
+	assert 'workspace_py seed-git "${workdir}" "${root}/work" "${CODEX_ISOLATED_GIT_BASE_REF:-}" || true' in exec_script
+	implement = (REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text()
+	assert "IMPLEMENT_ISOLATED_BASE_BRANCH: ${{ github.event.repository.default_branch }}" in implement
+	assert '"+refs/heads/${IMPLEMENT_ISOLATED_BASE_BRANCH}:refs/codex-isolated/base"' in implement
+	assert implement.index("export CODEX_ISOLATED_GIT_BASE_REF") < implement.index('prepare --workdir "$(pwd)" --deps')
+	prompt = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text()
+	assert "git show isolated-base:<path>" in prompt
+	# The inline heredoc is the prompt implement.yml actually sends.
+	inline = implement[implement.index('mode-implement-inline.txt"\n'):]
+	inline = inline[: inline.index("\n          EOF\n")]
+	assert "git show isolated-base:<path>" in inline
+	assert "`git diff HEAD` shows the edits from this run that you have not" in inline
+	assert "`git log isolated-base..HEAD`." in inline

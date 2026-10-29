@@ -5,8 +5,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -27,7 +31,8 @@ OPENCODE_REVIEWER_EVENTS_FIXTURE = (
 
 
 def _read(path: Path) -> str:
-	return path.read_text(encoding="utf-8")
+	# Moved review_autofix.yml step bodies (scripts/review_autofix_step_*.sh) inlined again.
+	return expanded_review_autofix_text() if path == WORKFLOW else path.read_text(encoding="utf-8")
 
 
 def _stage_helper_text() -> str:
@@ -158,7 +163,7 @@ def _materialize_opencode_reviewer_text(log_text: str) -> tuple[subprocess.Compl
 
 
 def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> None:
-	workflow = _read(WORKFLOW)
+	workflow = expanded_review_autofix_text()
 	stage_step_block = _step_block(workflow, "Stage workflow support files")
 	stage_helper = _stage_helper_text()
 	init_block = _step_block(workflow, "Initialize runtime workspace")
@@ -205,7 +210,8 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	assert (
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
-		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl"'
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
+		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh"'
 	) in stage_helper
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
@@ -272,7 +278,7 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 
 
 def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() -> None:
-	workflow = _read(WORKFLOW)
+	workflow = expanded_review_autofix_text()
 	uv_block = _step_block(workflow, "Setup uv for Semble")
 	install_block = _step_block(workflow, "Install semble")
 	index_block = _step_block(workflow, "Build semble index")
@@ -320,7 +326,7 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 
 
 def test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_serena() -> None:
-	workflow = _read(WORKFLOW)
+	workflow = expanded_review_autofix_text()
 	reviewers = _read(REVIEWERS)
 	assemble_start = reviewers.index("assemble_reviewer_prompt()")
 	assemble_end = reviewers.index("# Assemble the default", assemble_start)
@@ -341,7 +347,7 @@ def test_reviewer_prompt_assembles_semble_context_in_dynamic_section_without_ser
 
 
 def test_reviewer_checklist_prompt_contract_and_gate() -> None:
-	workflow = _read(WORKFLOW)
+	workflow = expanded_review_autofix_text()
 	checklist = _read(REVIEWER_CHECKLIST_PROMPT)
 	reviewers = _read(REVIEWERS)
 	stage_helper = _stage_helper_text()
@@ -621,6 +627,54 @@ def test_targeted_semble_overflow_is_opt_in_in_all_reusable_workflows() -> None:
 		assert "TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false" in _read(script_path)
 
 
+def test_pipefail_truncation_sites_use_non_pipe_forms() -> None:
+	"""Capped output must not pipe into head (SIGPIPE aborts under pipefail)."""
+	plan = (REPO_ROOT / ".github" / "workflows" / "plan.yml").read_text(encoding="utf-8")
+	assert 'cat "${PLAN_COMMENT_FILE}" | head -c 10000' not in plan
+	assert plan.count('DETAILS="$(head -c 10000 "${PLAN_COMMENT_FILE}")"') == 2
+	prepare = CONFLICT_PREPARE.read_text(encoding="utf-8")
+	assert '"${FP_VIOLATED_FILES_LIST}" | head -n 100' not in prepare
+	assert 'head -n 100 <<<"${FP_VIOLATED_FILES_LIST}"' in prepare
+	assert '"${INTEGRATION_TRACKING_BODY}" | head -c 4000' not in prepare
+	assert "head -c 4000 < <(printf '%s' \"${INTEGRATION_TRACKING_BODY}\")" in prepare
+	apply_fixes = APPLY_FIXES.read_text(encoding="utf-8")
+	assert '"${_claimed_changes}" | head -10' not in apply_fixes
+	assert 'head -n 10 <<<"${_claimed_changes}"' in apply_fixes
+	intake = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
+	assert '"${PIPELINE_OWNERSHIP_OUTPUT}" | head -n 1' not in intake
+	assert 'PIPELINE_OWNERSHIP="$(head -n 1 <<<"${PIPELINE_OWNERSHIP_OUTPUT}")"' in intake
+
+	def run(script: str, value: str) -> subprocess.CompletedProcess:
+		# The value goes in on stdin: one argv string is capped at 128 KiB.
+		prelude = "set -euo pipefail\nIFS= read -r -d '' v || true\nset -- \"$v\"\n"
+		return subprocess.run(
+			["bash", "-c", prelude + script],
+			input=value.encode(),
+			capture_output=True,
+			check=False,
+		)
+
+	old_lines = "printf '%s\\n' \"$1\" | head -n 100"
+	new_lines = 'head -n 100 <<<"$1"'
+	old_bytes = "printf '%s' \"$1\" | head -c 4000"
+	new_bytes = "head -c 4000 < <(printf '%s' \"$1\")"
+	short_inputs = ["", "a", "x" * 3999, "y" * 4000, "z" * 4001, "a\nb\nc", "l\n" * 99]
+	for value in short_inputs:
+		assert run(new_lines, value).stdout == run(old_lines, value).stdout
+		assert run(new_bytes, value).stdout == run(old_bytes, value).stdout
+	big_lines = "".join(f"line-{i}\n" for i in range(40000))
+	result = run(new_lines, big_lines)
+	assert result.returncode == 0
+	assert result.stdout.decode() == "".join(f"line-{i}\n" for i in range(100))
+	big_bytes = "q" * (256 * 1024)
+	result = run(new_bytes, big_bytes)
+	assert result.returncode == 0
+	assert result.stdout == b"q" * 4000
+	result = run('head -n 1 <<<"$1"', big_lines)
+	assert result.returncode == 0
+	assert result.stdout == b"line-0\n"
+
+
 def main() -> int:
 	test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena()
 	test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps()
@@ -633,6 +687,7 @@ def main() -> int:
 	test_commit_changes_drops_bootstrap_owned_serena_runtime_tree_before_staging()
 	test_commit_changes_withheld_partial_finalize_discards_local_edits_and_exits_cleanly()
 	test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append()
+	test_pipefail_truncation_sites_use_non_pipe_forms()
 	print("OK: review_autofix Semble contract assertions hold")
 	return 0
 

@@ -20,7 +20,7 @@ function main()
 	if (result.status !== 0) {
 		console.log(`CLAUDE_POOL available=false reason=script_failed exit=${result.status}`);
 		if (process.env.GITHUB_OUTPUT) {
-			fs.appendFileSync(process.env.GITHUB_OUTPUT, "available=false\nreason=script_failed\naccounts=0\n");
+			fs.appendFileSync(process.env.GITHUB_OUTPUT, "available=false\nreason=script_failed\naccounts=0\nprobes=[]\n");
 		}
 	}
 	process.exitCode = 0;

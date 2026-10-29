@@ -1,6 +1,5 @@
-# IMPORTANT: This file is managed by coding-workflows and may be overwritten
-# automatically when upstream templates change. To opt out of auto-updates,
-# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
 name: AI Orchestrate Poller
 on:
   schedule:
@@ -19,4 +18,9 @@ jobs:
     # workflow via caller-repo vars (LEDGER_SUBSTATES_ENABLED and the
     # STATE_SNAPSHOT_* toggles), so the wrapper interface stays unchanged.
     uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@stable
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

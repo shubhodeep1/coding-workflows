@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 import yaml
@@ -192,6 +193,44 @@ def test_validation_hooks_use_verified_helper():
 	assert 'if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then' in staging
 	assert 'require_remote="true"' in staging
 	assert 'allow_main_fallback="false"' in staging
+
+
+def _validate_support_ref(repository: str, workflow_ref: str) -> str:
+	"""Run the ref-selection lines of "Fetch workflow support files"."""
+	assert shutil.which("jq"), "jq is required to run the support-ref selection"
+	steps = _load(REUSABLE)["jobs"]["validate"]["steps"]
+	fetch = next(step for step in steps if step["name"] == "Fetch workflow support files")["run"]
+	selection = fetch[:fetch.index("helper_stage_root=")]
+	env = {
+		**os.environ,
+		"GITHUB_REPOSITORY": repository,
+		"VALIDATE_WORKFLOW_JOB_JSON": json.dumps({"workflow_ref": workflow_ref}),
+	}
+	result = subprocess.run(["bash", "-c", selection + 'printf "%s" "${helper_ref}"'], env=env, capture_output=True, text=True, check=True)
+	# The step logs a VALIDATE_SUPPORT_REF line first; the ref is printed last.
+	return result.stdout.rsplit("\n", 1)[-1]
+
+
+def test_validation_support_follows_the_consumer_pin():
+	"""Q49: binance-blessings#249 pinned validate.yml to an old commit but
+	staged support scripts from stable. A consumer's 40-hex pin is now the
+	support commit; tags, branches and look-alike refs keep stable."""
+	pin = "de7fef2fce27d8e45ff8451eeba7fb980f13ee66"
+	reusable = "shubhodeep1/coding-workflows/.github/workflows/validate.yml"
+	consumer = "shubhodeep1/binance-blessings"
+	assert _validate_support_ref(consumer, f"{reusable}@{pin}") == pin
+	assert _validate_support_ref(consumer, f"{reusable}@refs/tags/stable") == "stable"
+	assert _validate_support_ref(consumer, "") == "stable"
+	# Another repository's or another workflow's pin is not this workflow's.
+	assert _validate_support_ref(consumer, f"evil/coding-workflows/.github/workflows/validate.yml@{pin}") == "stable"
+	assert _validate_support_ref(consumer, f"shubhodeep1/coding-workflows/.github/workflows/plan.yml@{pin}") == "stable"
+	# This repository keeps staging from main.
+	assert _validate_support_ref("shubhodeep1/coding-workflows", f"{reusable}@{pin}") == "main"
+	steps = _load(REUSABLE)["jobs"]["validate"]["steps"]
+	fetch_step = next(step for step in steps if step["name"] == "Fetch workflow support files")
+	assert fetch_step["env"]["VALIDATE_WORKFLOW_JOB_JSON"] == "${{ toJSON(job) }}"
+	assert 'fetch --quiet --no-tags --depth 1 "https://github.com/${wf_source}" "${helper_ref}"' in fetch_step["run"]
+	assert 'Validation support checkout is not the pinned commit' in fetch_step["run"]
 
 
 def test_explicit_target_checkout_rejects_moved_head(tmp_path: Path):

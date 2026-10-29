@@ -122,3 +122,87 @@ def test_identifiers_are_verified_and_persisted(cloudflare_steps: str) -> None:
 	assert "verify it resolves with one read call" in cloudflare_steps
 	assert "**add it to that table**" in cloudflare_steps
 	assert "commit/push it together with the activation-log bookkeeping" in cloudflare_steps
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))
+def test_activation_log_slug_handles_prs_in_other_repositories(command: Path) -> None:
+	text = command.read_text(encoding="utf-8")
+	section = text.split("\n## Activation Log\n", 1)[1].split("\n## ", 1)[0]
+	section = " ".join(section.split())
+	for required in (
+		"`pr-<repo>-<N>`",
+		"pr-mongo-explorer-37",
+		"`pr-<N>`",
+		"Look up before creating",
+		"`- Reference:` line names that PR",
+		"Resume a `pr-<repo>-<N>.md` log only when its `- Reference:` line names that PR",
+		"resume `pr-<N>.md` only when its `- Reference:` line does not name a PR in another repository",
+		"A bare `#N`, or a URL for",
+		"is not ambiguous",
+		"owner/repo#N for a PR in another repository",
+		"Never rename or move an existing log",
+		"`issue-<N>`",
+		"`plan-<basename-without-extension>`",
+		"`feature-<kebab-case>`",
+	):
+		assert required in section, (command, required)
+	assert "PR → `pr-<N>` ·" not in section
+	step_one = " ".join(text.split("1. **Parse `$ARGUMENTS`", 1)[1].split("\n2. ", 1)[0].split())
+	assert "including the lookup in [Activation Log](#activation-log)" in step_one
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))
+def test_verified_steps_are_ticked_in_the_human_steps_issue(command: Path) -> None:
+	text = command.read_text(encoding="utf-8")
+	section = text.split("\n## Human-Steps Issue\n", 1)[1].split("\n## ", 1)[0]
+	section = " ".join(section.split())
+	for required in (
+		"`ai:operator-step`",
+		"`<!-- ai:operator-step:v1 -->`",
+		"`<!-- ai:operator-step:entry key=<key> -->`",
+		"`<!-- ai:needs-human:v1 -->`, is a different issue",
+		"`github-actions[bot]`, or an OWNER, MEMBER or COLLABORATOR of the repository",
+		"highest-id entry comment written by the pipeline account",
+		"ignore comments by anyone else",
+		"Read every page of the tracker's comments, as the pipeline does, before choosing the highest-id entry comment",
+		"list the key's comments again (every page)",
+		"first line, trimmed, is exactly `<!-- ai:operator-step:v1 -->`",
+		"Count a comment as an entry comment only when its first line, trimmed, is exactly",
+		"an external PR's entries are in that repository's own tracker",
+		"re-read that key's authoritative comment",
+		"If more than one qualifies, take the lowest issue number",
+		"has nothing to edit: leave it and say so once",
+		"if a higher-id comment by the pipeline account arrived meanwhile, make the same tick in it",
+		"still matches the block you mapped while planning",
+		"but only when the step's block there is the same as the one you verified",
+		"Leave every other byte of the comment unchanged",
+		"`mcp__github__update_issue_comment`",
+		"Never tick a step that was not verified",
+		"never tick steps this run does not cover",
+		"never edit the tracker body",
+		"A failed edit never blocks the runbook",
+		"Reconcile on resume",
+	):
+		assert required in section, (command, required)
+	assert ("of `shubhodeep1/coding-workflows`" if command == COMMANDS[0] else "of `THIS_REPO`") in section
+	flat = " ".join(text.split())
+	assert "- Human-steps issue: <tracker URL>" in text
+	assert flat.count("(#human-steps-issue)") >= 5
+	assert "Keep the human-steps issue in step with the log." in text.split("## Rules", 1)[1]
+	assert "`mcp__github__update_issue_comment`" in text.split("## Tool Access", 1)[1].split("## Rules", 1)[0]
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=("live", "template"))
+def test_mac_setup_steps_are_skipped_unless_output_needs_them(command: Path) -> None:
+	text = " ".join(command.read_text(encoding="utf-8").split())
+	assert "fresh MacBook" not in text
+	assert "Prerequisite bootstrap" not in text
+	assert "Assume a clean machine" not in text
+	assert "- [ ] Prereqs:" not in text
+	procedure = text.split("## Procedure", 1)[1].split("## Interaction Protocol", 1)[0]
+	assert "**No Mac setup steps by default:**" in procedure
+	assert "only when pasted output shows it is needed" in procedure
+	assert "**Local clone only when a step needs it:**" in procedure
+	assert "Right before the first step that needs the latest repo files locally" in procedure
+	assert "`git pull --ff-only`" in procedure
+	assert "**Assume my Mac is set up.**" in text.split("## Rules", 1)[1]

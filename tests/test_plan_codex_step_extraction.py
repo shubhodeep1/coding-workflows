@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,11 +19,36 @@ PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
+# Issue #7657 added the 11-line item-12 `## Deferred scope` rule to the
+# inline prompt (230 -> 241 lines); the pins below include it.
+# Issue #7724 added the 4-line "notes must not name another path" rule to
+# item 1 `## Files likely to change` (241 -> 245 lines).
+# Issue #7772 added the 11-line "Default-branch reference" rule about the
+# `isolated-base` sandbox branch (245 -> 256 lines).
+# PR #7908 reworded the two-line Claude web-search sentence to defer to the
+# system note's `WebSearch` tool (256 lines, 16_693 -> 16_738 bytes).
+# Issue #8260 replaced the 3-line "already loaded" IMPORTANT paragraph with a
+# 6-line one that allows reading indexed agents.md sections (256 -> 259 lines,
+# 16_738 -> 16_978 bytes).
+# Issue #8339 added the one-line "no prose paragraphs, no placeholder path"
+# rule to item 1 (259 -> 260 lines, 16_978 -> 17_144 bytes).
+# Issue #8327 added a "bullets only" sentence to rule 12 (`## Deferred scope`):
+# a note inside the section made it unreadable (259 -> 263 lines,
+# 16_978 -> 17_307 bytes). Its review then dropped the inaccurate "sub-heading
+# makes it unreadable" clause: a heading ends the section (263 -> 264 lines,
+# 17_307 -> 17_390 bytes). The rule was then cut to two lines to keep
+# prompts/mode-plan.txt within its 250-line budget (264 -> 260 lines,
+# 17_390 -> 17_142 bytes).
+# PR #8335 added the 9-line rule that implement only writes files and that a
+# plan whose work an open PR already delivers emits a PLAN_SELF_CHECK BLOCKER
+# (tele-funtoken-msg-scoring#4992; 260 -> 269 lines, 17_142 -> 17_830 bytes).
+# Merging #8339 and #8327 keeps both additions (260 -> 261 lines,
+# 17_142 -> 17_308 bytes); with #8335 the prompt is 270 lines, 17_996 bytes.
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"e485baf382cf22d27a9d0e14778cfad7a9a39470871b3fde550b79c237aa6d68"
+	"61a2d67cf6b6f0a3b7183068b690a8afc7ca9f33780fcfabedc5fbe14c829fc6"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 13_451
-PRE_EXTRACTION_PROMPT_LINES = 213
+PRE_EXTRACTION_PROMPT_BYTES = 17_996
+PRE_EXTRACTION_PROMPT_LINES = 270
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
@@ -45,7 +72,8 @@ def _inline_prompt(runner_text: str) -> str:
 def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	step = _workflow_step(workflow_text, "Run Codex planning")
-	stage_step = _workflow_step(workflow_text, "Stage workflow support files")
+	# Called for its built-in assertion that the staging step still exists.
+	_workflow_step(workflow_text, "Stage workflow support files")
 
 	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in workflow_text
 	assert 'install -m 0644 "${src}" scripts/claude_settings.json.tmpl' in workflow_text
@@ -99,6 +127,41 @@ def test_extracted_prompt_matches_pre_extraction_bytes() -> None:
 	assert runner_text.count("repos/${GITHUB_REPOSITORY}/issues/comments/") == 2
 
 
+def test_plan_prompts_keep_paths_out_of_files_section_notes() -> None:
+	# Issue #7724: a note "(one added `scripts/` bullet)" in the Files section
+	# made the plan approval gate hold on the bare directory `scripts/`.
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import files_touched_scope_guard as guard  # noqa: E402
+
+	rule = "the note must not name another path\n   or a directory such as `scripts/`"
+	for prompt in (PLAN_RUNNER, REPO_ROOT / "prompts" / "mode-plan.txt",
+			REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		assert rule in prompt.read_text(encoding="utf-8"), prompt
+	held = "## Files likely to change\n- `docs/INVENTORY.md` (one added `scripts/` bullet)\n\n## Next\n"
+	compliant = "## Files likely to change\n- `docs/INVENTORY.md` (new)\n- `scripts/x.sh` (new)\n\n## Next\n"
+	assert "scripts/" in guard.extract_plan_automation_paths(held)
+	assert guard.extract_plan_automation_paths(compliant) == ["scripts/x.sh"]
+
+
+def test_plan_prompts_keep_prose_and_placeholders_out_of_files_section() -> None:
+	# Issue #8339: a prose paragraph in the Files section mentioned a bare
+	# `scripts/<helper>` string; the gate read it as the directory `scripts/`
+	# and held the plan with path_not_granted.
+	sys.path.insert(0, str(REPO_ROOT / "scripts"))
+	import files_touched_scope_guard as guard  # noqa: E402
+
+	rule = ("Keep the section to those bullets: no prose paragraphs, and no placeholder path such as "
+		"`scripts/<helper>`, which the gate reads as the bare directory `scripts/`.")
+	for prompt in (PLAN_RUNNER, REPO_ROOT / "prompts" / "mode-plan.txt",
+			REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		assert rule in prompt.read_text(encoding="utf-8"), prompt
+	held = ("## Files likely to change\n- `scripts/x.sh`\n\n"
+		"Each test changes only if it pins a bare `scripts/<helper>` string.\n\n## Next\n")
+	compliant = "## Files likely to change\n- `scripts/x.sh`\n\n## Next\nIt pins `scripts/<helper>`.\n"
+	assert guard.extract_plan_automation_paths(held) == ["scripts/x.sh", "scripts/"]
+	assert guard.extract_plan_automation_paths(compliant) == ["scripts/x.sh"]
+
+
 def _write_executable(path: Path, content: str) -> None:
 	path.write_text(content, encoding="utf-8")
 	path.chmod(0o755)
@@ -108,6 +171,7 @@ def _run_runner(
 	scenario: str,
 	engine: str = "",
 	claude_scenario: str = "",
+	planning_ref_mismatch: str | None = None,
 ) -> tuple[
 	subprocess.CompletedProcess[str], Path, tempfile.TemporaryDirectory[str]
 ]:
@@ -186,6 +250,29 @@ case "${MOCK_CODEX_SCENARIO}" in
   exhaust)
     exit 9
     ;;
+  ref_mismatch_then_plan)
+    if [ "${attempt}" -eq 1 ]; then
+      printf 'Checked git: branch isolated.\nBLOCKED: integration branch mismatch\n'
+    else
+      printf 'plan after retry\n'
+    fi
+    ;;
+  ref_mismatch_always)
+    printf 'BLOCKED: Integration branch mismatch.\n'
+    ;;
+  ref_mismatch_embellished_then_plan)
+    if [ "${attempt}" -eq 1 ]; then
+      printf 'BLOCKED: integration branch mismatch (workspace is on isolated, expected orchestrator/project-7126)\n'
+    else
+      printf 'plan after retry\n'
+    fi
+    ;;
+  ref_mismatch_other_reason)
+    printf 'BLOCKED: integration branch mismatches are not the issue here\n'
+    ;;
+  ref_mismatch_fenced)
+    printf '```text\nBLOCKED: integration branch mismatch\n```\nfenced example plan\n'
+    ;;
   *)
     exit 64
     ;;
@@ -250,6 +337,12 @@ esac
 		}
 	)
 	environment.pop("PLAN_ENGINE", None)
+	environment.pop("PLANNING_REF_MISMATCH", None)
+	environment.pop("PLAN_ISOLATED_BASE_BRANCH", None)
+	environment.pop("PLAN_ISOLATED_BASE_ENABLED", None)
+	environment.pop("CODEX_ISOLATED_GIT_BASE_REF", None)
+	if planning_ref_mismatch is not None:
+		environment["PLANNING_REF_MISMATCH"] = planning_ref_mismatch
 	if engine:
 		environment["PLAN_ENGINE"] = engine
 	for key in ("BASH_ENV", "ENV"):
@@ -353,6 +446,90 @@ def test_retry_exhaustion_preserves_failure_exit() -> None:
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == ""
 
 
+def test_ref_mismatch_block_contradicting_the_workflow_is_retried() -> None:
+	# Issue #7172: the planner checked git inside its sandbox (a snapshot on
+	# branch `isolated`) and answered BLOCKED although the workflow computed
+	# PLANNING_REF_MISMATCH=false. The runner retries with a note instead of
+	# handing a false block to plan.yml.
+	result, root, _temporary_directory = _run_runner(
+		"ref_mismatch_then_plan", planning_ref_mismatch="false"
+	)
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY attempt=1 outcome=retry planning_ref_mismatch=false" in result.stdout
+	assert "Codex planning succeeded on attempt 2 (1 lines of output)." in result.stdout
+	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "plan after retry\n"
+	assert _read_lines(runtime_dir / "sleep.log") == ["10"]
+	assert "=== RETRY NOTE ===" not in (runtime_dir / "prompt-1.txt").read_text(encoding="utf-8")
+	retry_prompt = (runtime_dir / "prompt-2.txt").read_text(encoding="utf-8")
+	assert retry_prompt.count("=== RETRY NOTE ===") == 1
+	assert "Integration branch mismatch: false" in retry_prompt
+	# The note also carries the line above; this pins the original context.
+	assert "DYNAMIC PLANNING CONTEXT" in retry_prompt
+
+
+def test_ref_mismatch_block_is_kept_after_the_last_attempt() -> None:
+	result, root, _temporary_directory = _run_runner(
+		"ref_mismatch_always", planning_ref_mismatch="false"
+	)
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert "outcome=retry" in result.stdout
+	assert "PLAN_REF_MISMATCH_RETRY attempt=3 outcome=kept planning_ref_mismatch=false" in result.stdout
+	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == (
+		"BLOCKED: Integration branch mismatch.\n"
+	)
+	assert len(_read_lines(runtime_dir / "codex-args.log")) == 3
+	# The note is added once, not once per retry.
+	assert (runtime_dir / "prompt-3.txt").read_text(encoding="utf-8").count("=== RETRY NOTE ===") == 1
+
+
+def test_ref_mismatch_block_stands_when_the_workflow_found_a_mismatch() -> None:
+	for value in ("true", "unknown", None):
+		result, root, _temporary_directory = _run_runner(
+			"ref_mismatch_then_plan", planning_ref_mismatch=value
+		)
+		runtime_dir = root / "runtime"
+
+		assert result.returncode == 0, (value, result.stderr)
+		assert "PLAN_REF_MISMATCH_RETRY" not in result.stdout, value
+		assert "Codex planning succeeded on attempt 1" in result.stdout, value
+		assert "BLOCKED: integration branch mismatch" in (runtime_dir / "codex_output.txt").read_text(encoding="utf-8")
+
+
+def test_embellished_ref_mismatch_block_is_retried() -> None:
+	result, root, _temporary_directory = _run_runner(
+		"ref_mismatch_embellished_then_plan", planning_ref_mismatch="false"
+	)
+	runtime_dir = root / "runtime"
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY attempt=1 outcome=retry planning_ref_mismatch=false" in result.stdout
+	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "plan after retry\n"
+
+
+def test_longer_word_after_the_phrase_is_not_retried() -> None:
+	result, _root, _temporary_directory = _run_runner(
+		"ref_mismatch_other_reason", planning_ref_mismatch="false"
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY" not in result.stdout
+	assert "Codex planning succeeded on attempt 1" in result.stdout
+
+
+def test_fenced_ref_mismatch_example_is_not_retried() -> None:
+	result, root, _temporary_directory = _run_runner(
+		"ref_mismatch_fenced", planning_ref_mismatch="false"
+	)
+
+	assert result.returncode == 0, result.stderr
+	assert "PLAN_REF_MISMATCH_RETRY" not in result.stdout
+	assert "Codex planning succeeded on attempt 1" in result.stdout
+
+
 CODEX_ARGS = (
 	"--ask-for-approval never -c model_verbosity=low "
 	"-c include_apply_patch_tool=true exec --skip-git-repo-check "
@@ -367,7 +544,8 @@ def test_claude_engine_runs_claude_run_and_not_codex() -> None:
 	runtime_dir = root / "runtime"
 
 	assert result.returncode == 0, result.stderr
-	assert "Codex planning attempt 1/3 (engine claude)..." in result.stdout
+	assert "Claude planning attempt 1/3..." in result.stdout
+	assert "Codex planning" not in result.stdout
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "claude plan output\n"
 	assert _read_lines(runtime_dir / "claude-run.log") == [
 		f"PLAN|{runtime_dir / 'codex_prompt.txt'}|{runtime_dir / 'codex_output.txt'}|{root}|primary/model|high"
@@ -383,6 +561,9 @@ def test_claude_unavailable_falls_back_to_the_unchanged_codex_call() -> None:
 
 	assert result.returncode == 0, result.stderr
 	assert "AI_ENGINE_FALLBACK role=PLAN reason=no_credential" in result.stderr
+	# The attempt starts on Claude; once it falls back the log names Codex.
+	assert "Claude planning attempt 1/3..." in result.stdout
+	assert "Codex planning succeeded on attempt 1 (1 lines of output)." in result.stdout
 	assert len(_read_lines(runtime_dir / "claude-run.log")) == 1
 	assert _read_lines(runtime_dir / "codex-args.log") == [CODEX_ARGS]
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == "primary plan output\n"
@@ -394,7 +575,7 @@ def test_a_claude_crash_retries_on_claude_and_never_reaches_codex() -> None:
 	runtime_dir = root / "runtime"
 
 	assert result.returncode == 1
-	assert "Codex exited with code 1 on attempt 1." in result.stdout
+	assert "Claude exited with code 1 on attempt 1." in result.stdout
 	assert len(_read_lines(runtime_dir / "claude-run.log")) == 3
 	assert not (runtime_dir / "codex-args.log").exists()
 
@@ -413,6 +594,405 @@ def test_codex_engine_runs_the_unchanged_codex_call() -> None:
 		'exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" '
 		'2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?'
 	) in runner
+
+
+POOL_TOKEN_ACTION_DIR = REPO_ROOT / ".github" / "actions" / "claude-pool-token"
+PIN_STEP_NAME = "Pin claude-pool-token action module type"
+PIN_STEP_IF = "env.SKIP_PLAN != 'true' && env.CHECK_TRIAGE_BRANCH_GUARD_BLOCKED != 'true'"
+STAGED_ACTION_REL = Path(".codex-workflow-src") / ".github" / "actions" / "claude-pool-token"
+CLARIFY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
+# Issue #7516: every clarify step after "Resolve integration ref" also skips on
+# the label_missing hold.
+CLARIFY_PIN_STEP_IF = "steps.refctx.outputs.label_missing_hold != 'true' && (steps.ai_engine.outputs.engine == 'claude')"
+
+
+def _step_run_body(step: str) -> str:
+	body = step.split("        run: |\n", 1)[1]
+	return "".join(
+		line[10:] if line.startswith("          ") else line.lstrip(" ")
+		for line in body.splitlines(keepends=True)
+	)
+
+
+def _pin_step_body() -> str:
+	return _step_run_body(_workflow_step(PLAN_WORKFLOW.read_text(encoding="utf-8"), PIN_STEP_NAME))
+
+
+def _pool_token_action_files() -> tuple[str, str]:
+	text = (POOL_TOKEN_ACTION_DIR / "action.yml").read_text(encoding="utf-8")
+	try:
+		import yaml  # type: ignore[import-untyped]
+
+		runs = yaml.safe_load(text)["runs"]
+		return str(runs["main"]), str(runs["post"])
+	except ImportError:
+		main_match = re.search(r"^\s+main:\s*(\S+)\s*$", text, re.MULTILINE)
+		post_match = re.search(r"^\s+post:\s*(\S+)\s*$", text, re.MULTILINE)
+		assert main_match and post_match
+		return main_match.group(1), post_match.group(1)
+
+
+def _clean_env(**extra: str) -> dict[str, str]:
+	environment = {
+		key: value
+		for key, value in os.environ.items()
+		if not key.startswith("GIT_") and key not in ("BASH_ENV", "ENV", "NODE_OPTIONS")
+	}
+	environment.update(extra)
+	return environment
+
+
+def _run_pin(root: Path, body: str | None = None) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["bash", "-c", _pin_step_body() if body is None else body],
+		cwd=root, env=_clean_env(), capture_output=True, text=True, check=False,
+	)
+
+
+def _stage_action(root: Path, with_pin: bool) -> Path:
+	action_dir = root / STAGED_ACTION_REL
+	action_dir.mkdir(parents=True)
+	main_file, post_file = _pool_token_action_files()
+	for name in ("action.yml", main_file, post_file):
+		shutil.copyfile(POOL_TOKEN_ACTION_DIR / name, action_dir / name)
+	scripts_dir = root / ".codex-workflow-src" / "scripts"
+	scripts_dir.mkdir(parents=True)
+	_write_executable(scripts_dir / "claude_pool_token.sh", "#!/usr/bin/env bash\nexit 1\n")
+	(root / "package.json").write_text('{"type":"module"}\n', encoding="utf-8")
+	if with_pin:
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "CLAUDE_POOL_MODULE_PIN outcome=written" in result.stdout
+	return action_dir
+
+
+def _run_node(action_dir: Path, script: str, root: Path, output: Path) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["node", script],
+		cwd=action_dir,
+		env=_clean_env(
+			GITHUB_OUTPUT=str(output),
+			GITHUB_WORKSPACE=str(root),
+			RUNNER_TEMP=str(root / "runner-temp"),
+			INPUT_CONFIG_PATH="",
+			INPUT_PROBE="false",
+		),
+		capture_output=True, text=True, check=False, timeout=60,
+	)
+
+
+def test_pool_token_action_pin_step_wiring() -> None:
+	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
+	step = _workflow_step(workflow_text, PIN_STEP_NAME)
+	assert f"        if: {PIN_STEP_IF}\n" in step
+	assert "        continue-on-error: true\n" in step
+	body = _pin_step_body()
+	assert "${{" not in body
+	assert "set -C" in body
+	assert '".codex-workflow-src/.github/actions/claude-pool-token"' in body
+	order = [
+		workflow_text.index("      - name: Check-triage target-branch guard\n"),
+		workflow_text.index(f"      - name: {PIN_STEP_NAME}\n"),
+		workflow_text.index("      - name: Capture pre-Codex plan write-guard snapshot\n"),
+		workflow_text.index("      - name: Resolve Claude credential\n"),
+	]
+	assert order == sorted(order)
+	credential = _workflow_step(workflow_text, "Resolve Claude credential")
+	assert "uses: ./.codex-workflow-src/.github/actions/claude-pool-token\n" in credential
+	assert "        continue-on-error: true\n" in credential
+	assert "steps.ai_engine.outputs.engine == 'claude'" in credential
+
+
+def test_pool_token_action_loads_under_esm_parent_after_pin() -> None:
+	if shutil.which("node") is None:
+		print("skip: node is not on PATH")
+		return
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=True)
+		output = root / "github_output"
+		output.write_text("", encoding="utf-8")
+		main_file, post_file = _pool_token_action_files()
+		for script in (main_file, post_file):
+			result = _run_node(action_dir, script, root, output)
+			assert result.returncode == 0, (script, result.stderr)
+			assert "ReferenceError" not in result.stderr, (script, result.stderr)
+			assert "require is not defined" not in result.stderr, (script, result.stderr)
+		written = output.read_text(encoding="utf-8")
+		assert "available=false" in written
+		assert "reason=script_failed" in written
+		assert (action_dir / "package.json").read_text(encoding="utf-8") == '{"type":"commonjs"}\n'
+
+
+def test_pool_token_action_crashes_under_esm_parent_without_pin() -> None:
+	# Reproduces the reported failure (digital_pa#145 at 7feb4ef553b2): with
+	# the consumer's "type": "module" package.json and no pin, main.js never
+	# reaches its own available=false fallback.
+	main_file, _post_file = _pool_token_action_files()
+	if shutil.which("node") is None or not main_file.endswith(".js"):
+		print("skip: node missing or the action no longer ships .js entry points")
+		return
+	# _stage_action copies only action.yml and the entry points, so the
+	# staged copy never has the action's own package.json.
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=False)
+		output = root / "github_output"
+		output.write_text("", encoding="utf-8")
+		result = _run_node(action_dir, main_file, root, output)
+		assert result.returncode != 0
+		assert "require is not defined" in result.stderr
+		assert "available=" not in output.read_text(encoding="utf-8")
+
+
+def test_pool_token_action_pin_step_keeps_existing_package_json() -> None:
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=False)
+		pkg = action_dir / "package.json"
+		pkg.write_text('{"type":"commonjs","name":"upstream"}\n', encoding="utf-8")
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "CLAUDE_POOL_MODULE_PIN outcome=skip reason=present" in result.stdout
+		assert pkg.read_text(encoding="utf-8") == '{"type":"commonjs","name":"upstream"}\n'
+
+		pkg.unlink()
+		dangling = root / "elsewhere.json"
+		pkg.symlink_to(dangling)
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "reason=present" in result.stdout
+		assert pkg.is_symlink() and not dangling.exists()
+
+		target = root / "other-dir"
+		target.mkdir()
+		shutil.rmtree(action_dir)
+		action_dir.symlink_to(target, target_is_directory=True)
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "reason=action_dir_unavailable" in result.stdout
+		assert not (target / "package.json").exists()
+
+		action_dir.unlink()
+		result = _run_pin(root)
+		assert result.returncode == 0, result.stderr
+		assert "reason=action_dir_unavailable" in result.stdout
+
+
+def test_pool_token_action_pin_does_not_change_write_guard_paths() -> None:
+	if shutil.which("git") is None:
+		print("skip: git is not on PATH")
+		return
+	snapshot_body = _step_run_body(
+		_workflow_step(PLAN_WORKFLOW.read_text(encoding="utf-8"), "Capture pre-Codex plan write-guard snapshot")
+	)
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp) / "ws"
+		root.mkdir()
+		_stage_action(root, with_pin=False)
+		for repo in (root, root / ".codex-workflow-src"):
+			subprocess.run(["git", "init", "-q", str(repo)], env=_clean_env(), check=True)
+
+		def _paths(name: str) -> list[str]:
+			out = Path(tmp) / name
+			subprocess.run(
+				["bash", "-c", snapshot_body], cwd=root, check=True, capture_output=True,
+				env=_clean_env(PRE_PLAN_WRITE_GUARD_PATHS_FILE=str(out)),
+			)
+			return [line.split("\t", 1)[0] for line in out.read_text(encoding="utf-8").splitlines()]
+
+		before = _paths("before.tsv")
+		pin = _run_pin(root)
+		assert pin.returncode == 0, pin.stderr
+		after = _paths("after.tsv")
+		assert before == after
+		assert ".codex-workflow-src/" in after
+
+
+def _clarify_pin_step_body() -> str:
+	return _step_run_body(_workflow_step(CLARIFY_WORKFLOW.read_text(encoding="utf-8"), PIN_STEP_NAME))
+
+
+def test_clarify_pool_token_action_pin_step_wiring() -> None:
+	# Heal #7476: clarify runs the same pin as plan (#7434) before the action.
+	workflow_text = CLARIFY_WORKFLOW.read_text(encoding="utf-8")
+	step = _workflow_step(workflow_text, PIN_STEP_NAME)
+	assert f"        if: {CLARIFY_PIN_STEP_IF}\n" in step
+	assert "        continue-on-error: true\n" in step
+	assert "${{" not in _clarify_pin_step_body()
+	order = [
+		workflow_text.index("      - name: Resolve AI engine\n"),
+		workflow_text.index("      - name: Install Claude Code CLI\n"),
+		workflow_text.index(f"      - name: {PIN_STEP_NAME}\n"),
+		workflow_text.index("      - name: Resolve Claude credential\n"),
+	]
+	assert order == sorted(order)
+	assert workflow_text.count(f"      - name: {PIN_STEP_NAME}\n") == 1
+	credential = _workflow_step(workflow_text, "Resolve Claude credential")
+	assert "uses: ./.codex-workflow-src/.github/actions/claude-pool-token\n" in credential
+	assert "        continue-on-error: true\n" in credential
+	assert f"        if: {CLARIFY_PIN_STEP_IF}\n" in credential
+
+
+def test_clarify_pool_token_action_pin_body_matches_plan() -> None:
+	assert _clarify_pin_step_body() == _pin_step_body()
+
+
+def test_clarify_pool_token_action_loads_under_esm_parent_after_pin() -> None:
+	if shutil.which("node") is None:
+		print("skip: node is not on PATH")
+		return
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=False)
+		pin = _run_pin(root, _clarify_pin_step_body())
+		assert pin.returncode == 0, pin.stderr
+		assert (
+			"CLAUDE_POOL_MODULE_PIN outcome=written" in pin.stdout
+			or "CLAUDE_POOL_MODULE_PIN outcome=skip reason=present" in pin.stdout
+		), pin.stdout
+		output = root / "github_output"
+		output.write_text("", encoding="utf-8")
+		main_file, post_file = _pool_token_action_files()
+		for script in (main_file, post_file):
+			result = _run_node(action_dir, script, root, output)
+			assert result.returncode == 0, (script, result.stderr)
+			assert "require is not defined" not in result.stderr, (script, result.stderr)
+		assert "available=false" in output.read_text(encoding="utf-8")
+
+
+def test_clarify_pool_token_action_pin_keeps_existing_package_json() -> None:
+	body = _clarify_pin_step_body()
+	with tempfile.TemporaryDirectory(prefix="pool-token-esm-") as tmp:
+		root = Path(tmp)
+		action_dir = _stage_action(root, with_pin=False)
+		pkg = action_dir / "package.json"
+		pkg.write_text('{"type":"commonjs","name":"upstream"}\n', encoding="utf-8")
+		result = _run_pin(root, body)
+		assert result.returncode == 0, result.stderr
+		assert "CLAUDE_POOL_MODULE_PIN outcome=skip reason=present" in result.stdout
+		assert pkg.read_text(encoding="utf-8") == '{"type":"commonjs","name":"upstream"}\n'
+
+		target = root / "other-dir"
+		target.mkdir()
+		shutil.rmtree(action_dir)
+		action_dir.symlink_to(target, target_is_directory=True)
+		result = _run_pin(root, body)
+		assert result.returncode == 0, result.stderr
+		assert "reason=action_dir_unavailable" in result.stdout
+		assert not (target / "package.json").exists()
+
+
+ISOLATED_BASE_BEGIN = "# BEGIN plan isolated base (#7772)\n"
+ISOLATED_BASE_END = "# END plan isolated base (#7772)\n"
+
+
+def _isolated_base_block() -> str:
+	runner_text = PLAN_RUNNER.read_text(encoding="utf-8")
+	start = runner_text.index(ISOLATED_BASE_BEGIN)
+	end = runner_text.index(ISOLATED_BASE_END, start) + len(ISOLATED_BASE_END)
+	return runner_text[start:end]
+
+
+def _run_isolated_base(
+	branch: str | None,
+	enabled: str | None = None,
+	fetch_rc: int = 0,
+	inherited_ref: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str, list[str]]:
+	real_git = shutil.which("git")
+	assert real_git, "git is required for check-ref-format"
+	with tempfile.TemporaryDirectory(prefix="plan-isolated-base-") as tmp:
+		root = Path(tmp)
+		bin_dir = root / "bin"
+		bin_dir.mkdir()
+		fetch_log = root / "fetch.log"
+		_write_executable(
+			bin_dir / "git",
+			f"""#!/usr/bin/env bash
+if [ "$1" = fetch ]; then
+  printf '%s\\n' "$*" >> "{fetch_log}"
+  exit "${{STUB_GIT_FETCH_RC:-0}}"
+fi
+exec "{real_git}" "$@"
+""",
+		)
+		block = root / "block.sh"
+		block.write_text(_isolated_base_block(), encoding="utf-8")
+		env = _clean_env(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", STUB_GIT_FETCH_RC=str(fetch_rc))
+		for key in ("PLAN_ISOLATED_BASE_BRANCH", "PLAN_ISOLATED_BASE_ENABLED", "CODEX_ISOLATED_GIT_BASE_REF"):
+			env.pop(key, None)
+		if branch is not None:
+			env["PLAN_ISOLATED_BASE_BRANCH"] = branch
+		if enabled is not None:
+			env["PLAN_ISOLATED_BASE_ENABLED"] = enabled
+		if inherited_ref is not None:
+			env["CODEX_ISOLATED_GIT_BASE_REF"] = inherited_ref
+		result = subprocess.run(
+			["bash", "-c", f'set -euo pipefail; source "{block}"; plan_prepare_isolated_base; printf "REF=%s\\n" "${{CODEX_ISOLATED_GIT_BASE_REF-}}"'],
+			cwd=root, env=env, capture_output=True, text=True, check=False,
+		)
+		fetches = fetch_log.read_text(encoding="utf-8").splitlines() if fetch_log.exists() else []
+		ref_lines = [line for line in result.stdout.splitlines() if line.startswith("REF=")]
+		return result, ref_lines[-1] if ref_lines else "", fetches
+
+
+def test_isolated_base_fetch_success_exports_ref() -> None:
+	result, ref, fetches = _run_isolated_base("main")
+	assert result.returncode == 0, result.stderr
+	assert ref == "REF=refs/codex-isolated/base"
+	assert "CODEX_ISOLATION base_branch=main outcome=fetched role=plan" in result.stdout
+	assert fetches == ["fetch --no-tags --depth=1 origin +refs/heads/main:refs/codex-isolated/base"]
+
+
+def test_isolated_base_fetch_failure_warns_and_leaves_unset() -> None:
+	result, ref, fetches = _run_isolated_base("main", fetch_rc=1, inherited_ref="refs/stale")
+	assert result.returncode == 0, result.stderr
+	assert ref == "REF="
+	assert "::warning::CODEX_ISOLATION base_branch=main outcome=fetch_failed role=plan" in result.stdout
+	assert len(fetches) == 1
+
+
+def test_isolated_base_disabled_skips() -> None:
+	result, ref, fetches = _run_isolated_base("main", enabled="false")
+	assert result.returncode == 0, result.stderr
+	assert ref == "REF="
+	assert fetches == []
+	assert "::notice::CODEX_ISOLATION base_branch=unset_or_invalid outcome=skipped role=plan" in result.stdout
+
+
+def test_isolated_base_invalid_branch_skips() -> None:
+	for branch in ("a..b", "", None, "-x", "a b"):
+		result, ref, fetches = _run_isolated_base(branch)
+		assert result.returncode == 0, (branch, result.stderr)
+		assert ref == "REF=", branch
+		assert fetches == [], branch
+		assert "outcome=skipped role=plan" in result.stdout, branch
+
+
+def test_plan_workflow_step_carries_isolated_base_env() -> None:
+	step = _workflow_step(PLAN_WORKFLOW.read_text(encoding="utf-8"), "Run Codex planning")
+	assert "          PLAN_ISOLATED_BASE_BRANCH: ${{ github.event.repository.default_branch }}\n" in step
+	assert "          PLAN_ISOLATED_BASE_ENABLED: ${{ vars.PLAN_ISOLATED_BASE_ENABLED || 'true' }}\n" in step
+
+
+def test_isolated_base_runs_before_the_first_sandbox_call() -> None:
+	runner_text = PLAN_RUNNER.read_text(encoding="utf-8")
+	call = runner_text.index(ISOLATED_BASE_END + "plan_prepare_isolated_base\n")
+	assert call < runner_text.index("claude_run PLAN")
+	assert call < runner_text.index('bash "${CODEX_ISOLATED_EXEC}" run --mode read-only')
+
+
+def test_plan_prompts_mention_isolated_base() -> None:
+	assert "git show\n  isolated-base:<path>" in _inline_prompt(PLAN_RUNNER.read_text(encoding="utf-8"))
+	paragraphs = []
+	for prompt in (REPO_ROOT / "prompts" / "mode-plan.txt", REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		text = prompt.read_text(encoding="utf-8")
+		start = text.index("Default-branch reference:")
+		end = text.index("Output contract — produce a plan covering", start)
+		paragraphs.append(text[start:end])
+		assert "Never plan" in text[start:end]
+	assert paragraphs[0] == paragraphs[1]
 
 
 def main() -> int:

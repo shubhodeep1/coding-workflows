@@ -43,9 +43,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -421,8 +425,10 @@ def _run_close_and_reissue(
 	reissue_preserve_baseline_enabled: str = "false",
 	repo_files: dict[str, str] | None = None,
 	pr_view_head_ref_oid: str | None = None,
+	judged_head_sha: str | None = None,
 	precreate_baseline_branch: bool = False,
 	enable_xpg_echo: bool = False,
+	issue_create_should_fail: bool = False,
 	extra_env: dict[str, str] | None = None,
 	api_responses: dict[str, object] | None = None,
 	path_prefix: str | None = None,
@@ -436,7 +442,11 @@ def _run_close_and_reissue(
 	``api_responses`` seeds the mock ``gh api`` substring-matched
 	responses (for example ``{"pulls/42/files": [...]}``);
 	``path_prefix`` is a directory put on ``PATH`` ahead of the mock
-	``gh`` (for example a ``git`` shim that makes one lookup fail)."""
+	``gh`` (for example a ``git`` shim that makes one lookup fail).
+	``judged_head_sha`` sets ``RB_JUDGED_HEAD_SHA`` (the head the judge
+	evaluated, which the spot-fix baseline uses); ``None`` uses the
+	resolved head and ``"__REPO_HEAD__"`` the bootstrapped repo head
+	(an ``extra_env`` value of ``"__REPO_HEAD__"`` resolves the same way)."""
 	branch = _extract_close_and_reissue_branch()
 
 	with tempfile.TemporaryDirectory(prefix="test_review_rb_judge_") as td:
@@ -449,7 +459,10 @@ def _run_close_and_reissue(
 		gh_state_file = runtime_dir / "gh_state.json"
 		_install_mock_gh(bin_dir, gh_state_file)
 		mock_state: dict[str, object] = {}
+		if issue_create_should_fail:
+			mock_state["issue_create_should_fail"] = True
 		run_cwd = tmp_path
+		resolved_judged_head = ""
 		repo_head_before = ""
 		repo_branch_before = ""
 		if repo_files is not None:
@@ -458,11 +471,17 @@ def _run_close_and_reissue(
 			if resolved_head_ref_oid == "__UPPER_REPO_HEAD__":
 				resolved_head_ref_oid = repo_head_before.upper()
 			mock_state["pr_view_head_ref_oid"] = resolved_head_ref_oid
+			resolved_judged_head = resolved_head_ref_oid
 			if precreate_baseline_branch:
 				expected_baseline_branch = f"ai/reissue-baseline/pr-42-{repo_head_before[:12]}-777-1"
 				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)
 		elif pr_view_head_ref_oid is not None:
 			mock_state["pr_view_head_ref_oid"] = pr_view_head_ref_oid
+			resolved_judged_head = pr_view_head_ref_oid
+		if judged_head_sha == "__REPO_HEAD__":
+			resolved_judged_head = repo_head_before
+		elif judged_head_sha is not None:
+			resolved_judged_head = judged_head_sha
 		if api_responses:
 			mock_state["api_responses"] = dict(api_responses)
 		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
@@ -509,9 +528,10 @@ def _run_close_and_reissue(
 			"REISSUE_PRESERVE_BASELINE_ENABLED": reissue_preserve_baseline_enabled,
 			"GITHUB_RUN_ID": "777",
 			"GITHUB_RUN_ATTEMPT": "1",
+			"RB_JUDGED_HEAD_SHA": resolved_judged_head,
 		}
 		if extra_env:
-			env.update({str(k): str(v) for k, v in extra_env.items()})
+			env.update({str(k): (repo_head_before if v == "__REPO_HEAD__" else str(v)) for k, v in extra_env.items()})
 		run_env = _sanitized_git_env(env)
 
 		proc = subprocess.run(
@@ -609,6 +629,16 @@ def test_empty_parent_label_set_does_not_propagate() -> None:
 	)
 
 
+def test_close_and_reissue_create_failure_reports_missing_replacement() -> None:
+	state = _run_close_and_reissue([], issue_create_should_fail=True)
+	assert len(state.get("pr_close_args", [])) == 1
+	assert len(state.get("issue_create_args", [])) == 1
+	assert "Failed to create replacement issue for closed PR #42" in state["_stdout"]
+	assert state["_github_output"].splitlines() == [
+		"judge_handled=true", "judge_action=close_and_reissue", "judge_reissue_created=false",
+	]
+
+
 def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
 	prompt = _rb_judge_prompt_text()
 
@@ -674,6 +704,10 @@ def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_c
 		},
 	)
 
+	assert not state.get("pr_view_args"), (
+		"spot-fix baseline must use RB_JUDGED_HEAD_SHA, not a live `gh pr view` re-read: "
+		f"{state.get('pr_view_args')}"
+	)
 	creates = state.get("issue_create_args", [])
 	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
 	body = creates[0][creates[0].index("--body") + 1]
@@ -1316,7 +1350,7 @@ def test_close_and_reissue_redo_ignores_new_output_paths() -> None:
 
 
 def test_reissue_new_outputs_log_prefix_is_registered() -> None:
-	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	agents_text = _agents_text_with_fragments()
 	assert "- `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`" in agents_text
 	assert "LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS" in agents_text
 
@@ -2100,6 +2134,12 @@ def _build_merge_with_followup_harness(
 	# helper in scripts/pr_checks_lib.sh; source it so the branch can call it
 	# (gh_retry/_safe_gh_jq are defined above, used by the helper at call time).
 	pr_checks_lib_path = (REPO_ROOT / "scripts" / "pr_checks_lib.sh").as_posix()
+	# The sync merge calls the #7659 merge-error helpers, which live outside
+	# the case arm; copy their definitions in from the real script.
+	script_text = _rb_judge_text()
+	helpers_begin = script_text.index("# BEGIN rb-judge merge error capture (#7659)")
+	helpers_end = script_text.index("# END rb-judge merge error capture (#7659)", helpers_begin)
+	merge_err_helpers = script_text[helpers_begin:helpers_end]
 	return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -2110,7 +2150,7 @@ _safe_gh_jq() {{ gh api "$@"; }}
 sleep() {{ :; }}
 review_head_gate_post_status() {{ :; }}
 source "{pr_checks_lib_path}"
-
+{merge_err_helpers}
 GITHUB_OUTPUT="{github_output}"
 
 case "${{RB_ACTION}}" in
@@ -2135,7 +2175,9 @@ def _run_merge_with_followup(
 	enable_xpg_echo: bool = False,
 	first_issue_body: str = "",
 	first_issue_lineage_body: str | None = None,
-	pr_base_ref: str = "",
+	# A real PR always has a base ref, and the merge-base freshness gate
+	# defers a merge whose base it cannot resolve (#6988).
+	pr_base_ref: str = "main",
 	orch_integration_branch_pattern: str = "^orchestrator/project-",
 ) -> dict:
 	"""Run the merge_with_followup branch with a mocked PR mergeability
@@ -2204,6 +2246,10 @@ def _run_merge_with_followup(
 			"api_responses": {
 				"pulls/42": pr_response,
 				f"commits/{pr_head_sha}/check-runs": check_runs_response,
+				# Merge-base freshness gate (pr_checks_lib): the base has not
+				# moved past this head. An unverifiable base now defers the
+				# merge (#6988), so the gate needs a real answer here.
+				f"compare/{pr_head_sha}...": {"ahead_by": 0, "files": []},
 			},
 		}
 		if issue_create_should_fail:

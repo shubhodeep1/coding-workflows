@@ -64,7 +64,7 @@ read_anchor_context()
 	local file_path="$1"
 	local line_spec="$2"
 	local fallback_current_code="$3"
-	local line_start line_end anchor_line ext range_start range_end
+	local line_start anchor_line ext range_start range_end
 	if [ -z "${file_path}" ]; then
 		printf '%s\n' ""
 		return
@@ -79,18 +79,11 @@ read_anchor_context()
 	fi
 	if [[ "${line_spec}" =~ ^([0-9]+)(-([0-9]+))?$ ]]; then
 		line_start="${BASH_REMATCH[1]}"
-		if [ -n "${BASH_REMATCH[3]:-}" ]; then
-			line_end="${BASH_REMATCH[3]}"
-		else
-			line_end="${BASH_REMATCH[1]}"
-		fi
 	else
 		line_start=""
-		line_end=""
 	fi
 	if [ -z "${line_start}" ]; then
 		line_start=1
-		line_end=1
 	fi
 	anchor_line="${line_start}"
 	if [ "${anchor_line}" -lt 1 ]; then
@@ -863,7 +856,6 @@ declare -A CURRENT_FILE=()
 declare -A CURRENT_LINES=()
 declare -A CURRENT_LENS=()
 declare -A CURRENT_SEVERITY=()
-declare -A CURRENT_FLOOR=()
 declare -A CURRENT_CLASSIFICATION=()
 declare -A CURRENT_BLOCK_ID=()
 declare -A CURRENT_PRESENT=()
@@ -914,7 +906,6 @@ if [ -s "${current_with_ids_file}" ]; then
 		CURRENT_LINES["${issue_id}"]="${lines}"
 		CURRENT_LENS["${issue_id}"]="${lens}"
 		CURRENT_SEVERITY["${issue_id}"]="${severity}"
-		CURRENT_FLOOR["${issue_id}"]="${floor_cat}"
 		CURRENT_CLASSIFICATION["${issue_id}"]="${classification}"
 		CURRENT_BLOCK_ID["${issue_id}"]="${block_id}"
 	done < "${current_with_ids_file}"

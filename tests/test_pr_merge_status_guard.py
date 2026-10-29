@@ -9,6 +9,7 @@ Covers the three pieces that can silently detach the mechanism:
 
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import json
 import os
@@ -21,12 +22,23 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+_DRIFT_SPEC = importlib.util.spec_from_file_location(
+	"claude_template_drift", Path(__file__).resolve().parent / "claude_template_drift.py"
+)
+assert _DRIFT_SPEC is not None and _DRIFT_SPEC.loader is not None
+claude_template_drift = importlib.util.module_from_spec(_DRIFT_SPEC)
+_DRIFT_SPEC.loader.exec_module(claude_template_drift)
 GUARD_PATH = REPO_ROOT / ".claude" / "hooks" / "pr_merge_status_guard.py"
 TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "pr_merge_status_guard.py"
 SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
+# Full §21 text moved out of CLAUDE.md to keep the always-loaded file small.
+CLAUDE_MD_S21_REFERENCE = REPO_ROOT / ".claude" / "docs" / "s21-merged-pr-commit-guard.md"
+TEMPLATE_CLAUDE_MD_S21_REFERENCE = REPO_ROOT / "workflow-templates" / ".claude" / "docs" / "s21-merged-pr-commit-guard.md"
 _WORKER_ACCOUNT_ID = "a" * 32
 _OTHER_WORKER_ACCOUNT_ID = "b" * 32
 _WORKER_URL = f"https://api.cloudflare.com/client/v4/accounts/{_WORKER_ACCOUNT_ID}/workers/scripts/name"
@@ -1471,6 +1483,11 @@ def test_push_to_unverified_repository_requires_confirmation(merged_branch_repo,
 	"git --config-env=remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
 	"git --config-env remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
 	"git -c user.name=bot push origin HEAD:feature/x",
+	# #6336/#6639 exploit shape: inline remote + --repo with the default branch as positional.
+	"git -c remote.main.url=https://github.com/other/repo -c push.default=current push --repo=origin main",
+	"git -c push.default=current push --repo=origin main",
+	"git -cremote.main.url=https://github.com/other/repo push --repo origin main",
+	"git --config-env=remote.main.url=REMOTE_URL push --repo=origin main",
 ])
 def test_per_command_config_push_asks_without_using_origin_prs(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1707,10 +1724,14 @@ def test_absolute_chdir_inside_shell_control_checks_selected_repo(merged_branch_
 
 
 def test_non_env_uncertain_configured_commit_keeps_warning_only_behavior(merged_branch_repo, monkeypatch, capsys) -> None:
-	# A `git -c` commit whose directory is unknown only because of shell control
-	# flow is never blocked on the session checkout alone (code 0, no message),
-	# but author decision Q30 = A makes it ask: per-command configuration may
-	# select another checkout (core.worktree), so the hook cannot vouch for it.
+	"""Per-command config on an unresolved commit asks (author decision Q30 = A).
+
+	The name predates that decision and is kept per CLAUDE.md §6. A `git -c`
+	commit whose directory is unknown only because of shell control flow is
+	never blocked on the session checkout alone (code 0, no message), but it
+	asks: per-command configuration may select another checkout
+	(core.worktree), so the hook cannot vouch for it.
+	"""
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
@@ -1718,6 +1739,7 @@ def test_non_env_uncertain_configured_commit_keeps_warning_only_behavior(merged_
 	assert code == 0 and message == ""
 	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not resolve git commit directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 	assert "per-command Git configuration may select another checkout" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
@@ -1816,12 +1838,97 @@ def test_deletion_and_tag_only_pushes_to_other_repository_ask(merged_branch_repo
 
 @pytest.mark.parametrize("remote", ["origin"])
 def test_deletion_on_origin_does_not_check_merged_pr(merged_branch_repo, monkeypatch, capsys, remote: str) -> None:
+	# A deletion still skips the PR lookup, but since #7220 it always asks.
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("deletions must not check PR history"))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": f"git push {remote} :feature/x"}})
 	assert code == 0 and message == ""
-	assert "permissionDecision" not in capsys.readouterr().out
+	decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "ask"
+	assert "git push deletes remote branches: `:feature/x`" in decision["permissionDecisionReason"]
+
+
+def _claude_push_repo(merged_branch_repo, monkeypatch, *branches: str) -> Path:
+	"""The merged-branch fixture plus local branches; no branch has a PR."""
+	repo, _ = merged_branch_repo
+	for name in ("claude/x", *branches):
+		_git(repo, "branch", name, "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [])
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	return repo
+
+
+def _push_decision(repo: Path, command: str, capsys) -> dict | None:
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == "", message
+	out = capsys.readouterr().out
+	if "permissionDecision" not in out:
+		return None
+	return json.loads(out)["hookSpecificOutput"]
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin claude/x +main",
+	"git push origin claude/x claude/x:main",
+	"git push origin +claude/x:refs/heads/main",
+	"git push --force-with-lease origin claude/x +main",
+	"git push origin main",
+])
+def test_push_to_the_default_branch_asks(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	# #7220: the settings.json wildcard allow rules for claude/* also match a
+	# second or `+` refspec; the hook asks on the parsed default-branch destination.
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch)
+	decision = _push_decision(repo, command, capsys)
+	assert decision and decision["permissionDecision"] == "ask", command
+	assert "git push writes to the default branch: `main` is the default branch" in decision["permissionDecisionReason"]
+
+
+def test_push_to_a_non_main_default_branch_asks(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch, "trunk")
+	_git(repo, "update-ref", "refs/remotes/origin/trunk", _git(repo, "rev-parse", "main"))
+	_git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk")
+	decision = _push_decision(repo, "git push origin claude/x +trunk", capsys)
+	assert decision and "`trunk` is the default branch" in decision["permissionDecisionReason"]
+	# `main` is an ordinary branch in this repository: no default-branch ask.
+	assert _push_decision(repo, "git push origin claude/x main", capsys) is None
+
+
+@pytest.mark.parametrize(("command", "named"), [
+	("git push origin :claude/old", "`:claude/old`"),
+	("git push origin claude/x :claude/old", "`:claude/old`"),
+	("git push origin --delete claude/old", "--delete of `claude/old`"),
+	("git push -d origin claude/old", "--delete of `claude/old`"),
+	("git push --prune origin claude/x", "--prune of remote branches without a local counterpart"),
+])
+def test_branch_deletion_asks(merged_branch_repo, monkeypatch, capsys, command: str, named: str) -> None:
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch)
+	decision = _push_decision(repo, command, capsys)
+	assert decision and decision["permissionDecision"] == "ask", command
+	assert f"git push deletes remote branches: {named}" in decision["permissionDecisionReason"]
+
+
+def test_plain_claude_branch_pushes_still_pass(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch)
+	for command in (
+		"git push origin claude/x",
+		"git push -u origin claude/x",
+		"git push --force-with-lease origin claude/x",
+		"git push --no-prune origin claude/x",
+	):
+		assert _push_decision(repo, command, capsys) is None, command
+
+
+def test_unresolved_default_branch_asks_for_every_non_claude_destination(merged_branch_repo, monkeypatch, capsys) -> None:
+	# AD-2 on #7220: neither origin/HEAD nor `ls-remote --symref` resolved.
+	repo = _claude_push_repo(merged_branch_repo, monkeypatch, "feature-y", "develop")
+	monkeypatch.setattr(guard, "default_branch", lambda cwd: "")
+	for command, branch in (("git push origin feature-y", "feature-y"), ("git push origin claude/x +develop", "develop")):
+		decision = _push_decision(repo, command, capsys)
+		assert decision and decision["permissionDecision"] == "ask", command
+		assert f"could not resolve the default branch, so `{branch}` may be it" in decision["permissionDecisionReason"]
+	assert _push_decision(repo, "git push origin claude/x", capsys) is None
 
 
 @pytest.mark.parametrize("args", [":feature/x", "--delete feature/x", "--tags"])
@@ -2293,12 +2400,60 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 	assert any("session-start.sh" in command for command in commands)
 
 
+def _bash_rule_patterns(rules: list[str]) -> list[str]:
+	return [rule[len("Bash(") : -1] for rule in rules if rule.startswith("Bash(") and rule.endswith(")")]
+
+
+def _matches_any(command: str, patterns: list[str]) -> bool:
+	# Claude Code's `*` matches any text, spaces and `:` included; fnmatchcase
+	# models that for these bracket-free patterns.
+	return any(fnmatch.fnmatchcase(command, pattern) for pattern in patterns)
+
+
+@pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
+def test_claude_branch_push_rules_allow_plain_forms_and_ask_on_default_branch_or_delete(
+	path: Path,
+) -> None:
+	"""CLAUDE.md §21.E — plain claude/* pushes run unprompted; deletes and main/master writes ask."""
+	settings = json.loads(path.read_text(encoding="utf-8"))
+	allow = _bash_rule_patterns(settings["permissions"]["allow"])
+	ask = _bash_rule_patterns(settings["permissions"].get("ask", []))
+	for command in (
+		"git push -u origin claude/fix-x",
+		"git push origin claude/fix-x",
+		"git push --force-with-lease origin claude/fix-x",
+		"git push --force-with-lease=claude/fix-x:0123abcd origin claude/fix-x",
+	):
+		assert _matches_any(command, allow), command
+		assert not _matches_any(command, ask), command
+	# The trailing `*` of a claude/* allow rule also matches these; an ask
+	# rule must catch every one so no allow rule carries them silently.
+	for command in (
+		"git push origin claude/fix-x:main",
+		"git push origin claude/fix-x:master",
+		"git push --force-with-lease origin claude/fix-x:refs/heads/main",
+		"git push --force-with-lease origin claude/fix-x main",
+		"git push origin claude/fix-x master --verbose",
+		"git push origin claude/fix-x --delete",
+		"git push origin claude/fix-x -d",
+		"git push -u origin claude/fix-x -d other",
+		"git push origin claude/fix-x --prune",
+	):
+		assert _matches_any(command, allow), command
+		assert _matches_any(command, ask), command
+
+
 def test_template_copies_are_identical() -> None:
 	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
-	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
-	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
-		encoding="utf-8"
-	)
+	# On PR CI only, a template the PR changed (or whose drift its base already
+	# has) waits for the post-merge live-copy sync; CLAUDE.md stays strict.
+	pending = claude_template_drift.pending_template_paths(REPO_ROOT)
+	if "hooks/pr_merge_status_guard.py" not in pending:
+		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
+	if "settings.json" not in pending:
+		assert claude_template_drift.settings_match_template(
+			TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8"), SETTINGS_PATH.read_text(encoding="utf-8")
+		)
 	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
 
@@ -2316,11 +2471,14 @@ def test_review_editor_can_transfer_guard_without_opening_other_claude_hooks() -
 
 def test_claude_md_documents_the_guard() -> None:
 	text = CLAUDE_MD.read_text(encoding="utf-8")
+	reference = CLAUDE_MD_S21_REFERENCE.read_text(encoding="utf-8")
+	assert TEMPLATE_CLAUDE_MD_S21_REFERENCE.read_text(encoding="utf-8") == reference
 	assert "## §21. Merged-PR Commit Guard (MANDATORY)" in text
 	assert ".claude/hooks/pr_merge_status_guard.py" in text
+	assert ".claude/docs/s21-merged-pr-commit-guard.md" in text
 	assert "CLAUDE_PR_MERGE_GUARD=off" in text
-	assert "The guard is skipped entirely" not in text
-	assert "The API-write\nconfirmation safeguard remains active in both cases." in text
+	assert "The guard is skipped entirely" not in text + reference
+	assert "The API-write\nconfirmation safeguard remains active in both cases." in reference
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -2710,7 +2868,7 @@ def test_guard_is_wired_for_the_mcp_push_tools(path: Path) -> None:
 
 
 def test_claude_md_documents_the_history_fallback() -> None:
-	text = CLAUDE_MD.read_text(encoding="utf-8")
+	text = CLAUDE_MD.read_text(encoding="utf-8") + CLAUDE_MD_S21_REFERENCE.read_text(encoding="utf-8")
 	assert "mcp__github__push_files" in text
 	assert "first-parent" in text
 	assert "git history" in text
@@ -3132,3 +3290,293 @@ def test_mcp_push_never_reads_the_cache(monkeypatch, tmp_path: Path) -> None:
 	assert fresh_state_guard.evaluate(payload) == (0, "")
 	assert calls == ["feature/x"]
 	assert cache_writes == [("o/r", "feature/x", pull_requests)]
+
+
+# ──────────────────────────────────────────────────────────────────
+# #6038: command prefixes, subshells and cd that changes how it resolves
+# ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("command", [
+	"time -p git push origin HEAD:feature/x",
+	"time git commit -m x",
+	"/usr/bin/time -o out.txt git push origin HEAD:feature/x",
+	"command git push origin HEAD:feature/x",
+	"command -p git commit -m x",
+	"nice -n 5 git push origin HEAD:feature/x",
+	"nice -5 git push origin HEAD:feature/x",
+	"nice --adjustment=5 git commit -m x",
+	"ionice -c 2 -n 7 git push origin HEAD:feature/x",
+	"exec git push origin HEAD:feature/x",
+	"exec -a name git commit -m x",
+	"nohup git push origin HEAD:feature/x",
+	"setsid -f git push origin HEAD:feature/x",
+	"timeout 30 git push origin HEAD:feature/x",
+	"timeout -s KILL 1.5m git push origin HEAD:feature/x",
+	"time nice env FOO=1 git commit -m x",
+	"nohup env -C /tmp git push origin HEAD:feature/x",
+	"(git push origin HEAD:feature/x)",
+	"( git push origin HEAD:feature/x )",
+	"sudo git push origin HEAD:feature/x",
+	"sudo -u bot git commit -m x",
+	"xargs git push origin",
+	"stdbuf -oL git push origin HEAD:feature/x",
+	"sudo sh -c 'git push origin HEAD:feature/x'",
+	"ssh host 'cd repo && git commit -m x'",
+	"find . -name x -exec git commit -m x ;",
+	"time --bogus git push origin HEAD:feature/x",
+])
+def test_prefixed_git_writes_are_detected(command: str) -> None:
+	assert guard.git_subcommands(command) & guard.GUARDED_SUBCOMMANDS, command
+
+
+@pytest.mark.parametrize("command", [
+	"command -v git",
+	"command -V git",
+	"time git status",
+	"nice -n 5 git status",
+	"timeout 30 git fetch origin main",
+	'echo "git push"',
+	"echo git push origin feature/x",
+	"printf '%s\\n' git push",
+	"grep -rn git push scripts/",
+	"sudo apt-get install git",
+	"gh pr create --title t --body 'run git push later'",
+	"nice -n 5 make",
+])
+def test_prefixed_non_writes_are_ignored(command: str) -> None:
+	assert not (guard.git_subcommands(command) & guard.GUARDED_SUBCOMMANDS), command
+
+
+@pytest.mark.parametrize("command", [
+	"command -v git",
+	"time git status",
+	"nice -n 5 git status",
+	"echo git push origin feature/x",
+	'echo "git push"',
+])
+def test_prefixed_non_writes_do_not_prompt(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None, proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"time -p git push origin HEAD:feature/x",
+	"command git push origin HEAD:feature/x",
+	"nice -n 5 git push origin HEAD:feature/x",
+	"exec git push origin HEAD:feature/x",
+	"nohup git push origin HEAD:feature/x",
+	"timeout 30 git push origin HEAD:feature/x",
+	"(git push origin HEAD:feature/x)",
+	"( git push origin HEAD:feature/x )",
+	"time -p git commit -m next",
+	"export CDPATH={parent}; cd {name} && git push origin HEAD:feature/x",
+	"CDPATH={parent}; cd {name} && git push origin HEAD:feature/x",
+	"enable -n cd; cd {worktree}; git push origin HEAD:feature/x",
+	"cd() {{ :; }}; cd {worktree} && git push origin HEAD:feature/x",
+	"function cd {{ :; }}; cd {worktree} && git push origin HEAD:feature/x",
+	"eval 'cd() {{ :; }}'; cd {worktree} && git push origin HEAD:feature/x",
+	"{{ git push origin HEAD:feature/x; }}",
+	"eval git push origin HEAD:feature/x",
+	"case x in x) git push origin HEAD:feature/x ;; esac",
+])
+def test_stranded_checkout_is_judged_behind_prefixes_and_redefined_cd(merged_branch_repo, command: str) -> None:
+	"""Scenario A: the session checkout sits on merged `feature/x`; a clean
+	worktree sits on `main`. Before #6038 each of these passed silently."""
+	repo, stub_bin = merged_branch_repo
+	worktree = repo.parent / "clean"
+	_git(repo, "worktree", "add", "-b", "clean", str(worktree), "main")
+	formatted = command.format(parent=worktree.parent, name=worktree.name, worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 2, formatted + "\n" + proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+@pytest.mark.parametrize("command", [
+	"cd {worktree} && time -p git push origin HEAD:feature/x",
+	"cd {worktree} && command git push origin HEAD:feature/x",
+	"X=1 cd {worktree} && git push origin HEAD:feature/x",
+	"builtin cd {worktree} && git push origin HEAD:feature/x",
+	"command cd {worktree} && git push origin HEAD:feature/x",
+	# Bash's `time` reserved word and `command -p` run cd in the current shell.
+	"time cd {worktree} && git push origin HEAD:feature/x",
+	"time -p cd {worktree} && git push origin HEAD:feature/x",
+	"time -p -- cd {worktree}; git push origin HEAD:feature/x",
+	"time cd -- {worktree} && git push origin HEAD:feature/x",
+	"command -p cd {worktree} && git push origin HEAD:feature/x",
+	"X=1 command -p cd {worktree} && git push origin HEAD:feature/x",
+	"cd {worktree} && bash -c 'git push origin HEAD:feature/x'",
+])
+def test_worktree_push_is_judged_behind_prefixes(merged_branch_repo, command: str) -> None:
+	"""Scenario B: the session checkout is clean on `main`; the worktree sits
+	on the merged head."""
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "feature/x")
+	_git(repo, "checkout", "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	formatted = command.format(worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 2, formatted + "\n" + proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+@pytest.mark.parametrize("command", [
+	"CDPATH={parent} cd {name} && git push origin HEAD:feature/x",
+	"export CDPATH={parent}; cd {name} && git push origin HEAD:feature/x",
+	"enable -n cd; cd {worktree} && git push origin HEAD:feature/x",
+	"sudo git push origin HEAD:feature/x",
+	"stdbuf -oL git push origin HEAD:feature/x",
+	"sudo sh -c 'git push origin HEAD:feature/x'",
+	"time --bogus git push origin HEAD:feature/x",
+	# A prefixed pushd/popd/eval/source changes the directory like the bare
+	# form, which already asks; before this they passed silently (#6038).
+	"time pushd {worktree} && git push origin HEAD:feature/x",
+	"builtin pushd {worktree} && git push origin HEAD:feature/x",
+	"command pushd {worktree} && git push origin HEAD:feature/x",
+	"X=1 pushd {worktree} && git push origin HEAD:feature/x",
+	"time eval 'cd {worktree}'; git push origin HEAD:feature/x",
+	"builtin eval 'cd {worktree}'; git push origin HEAD:feature/x",
+	"command eval 'cd {worktree}'; git push origin HEAD:feature/x",
+	"X=1 eval 'cd {worktree}'; git push origin HEAD:feature/x",
+	"time source /dev/null; git push origin HEAD:feature/x",
+	"builtin source /dev/null; git push origin HEAD:feature/x",
+	"command . /dev/null; git push origin HEAD:feature/x",
+	"builtin enable -n cd; cd {worktree}; git push origin HEAD:feature/x",
+	"command export CDPATH={parent}; cd {name} && git push origin HEAD:feature/x",
+	# A subshell resets directory tracking, so the cd before it is not trusted.
+	"cd {worktree} && ( git push origin HEAD:feature/x )",
+	"cd {worktree} && (git push origin HEAD:feature/x)",
+	"env git push origin HEAD:feature/x",
+])
+def test_unknown_directory_or_prefix_asks_instead_of_passing(merged_branch_repo, command: str) -> None:
+	"""Scenario B again: where the cd lands, or where a prefix runs Git, is
+	unknown, and the clean session checkout alone cannot authorize the push."""
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "feature/x")
+	_git(repo, "checkout", "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	formatted = command.format(parent=worktree.parent, name=worktree.name, worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 0, formatted + "\n" + proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None, formatted + "\n" + proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"cd {worktree} && git push origin HEAD~1:feature/x",
+	"git -C {worktree} push origin HEAD~1:feature/x",
+])
+def test_ancestry_suffix_in_refspec_is_resolved_in_worktree(merged_branch_repo, command: str) -> None:
+	"""Scenario B with one commit on top of the merged head in the worktree:
+	`HEAD~1` is git revision syntax, not tilde expansion, and names the merged
+	head, so the push re-publishes merged history (#6038)."""
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "feature/x")
+	_git(repo, "checkout", "main")
+	(worktree / "extra.txt").write_text("extra\n", encoding="utf-8")
+	_git(worktree, "add", "-A")
+	_git(worktree, "commit", "-m", "extra")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	formatted = command.format(worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 2, formatted + "\n" + proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+@pytest.mark.parametrize("command", [
+	"time cd {worktree} && git push origin HEAD:feature/open",
+	"command -p cd {worktree} && git push origin HEAD:feature/open",
+	"command -v cd; git push origin HEAD:feature/open",
+	"time eval 'git push origin HEAD:feature/open'",
+	"time pushd {worktree} | cat; git push origin HEAD:feature/open",
+])
+def test_prefixed_builtins_keep_open_branch_pushes_allowed(merged_branch_repo, command: str) -> None:
+	"""Scenario B: recognising prefixed cd/pushd/eval must not prompt for a
+	push whose judged checkout and destination are both fine."""
+	repo, stub_bin = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	worktree = repo.parent / "other"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "feature/x")
+	_git(repo, "checkout", "main")
+	_worktree_pr_stub(stub_bin, merged_sha)
+	formatted = command.format(worktree=worktree)
+	proc = _run_hook(repo, stub_bin, formatted)
+	assert proc.returncode == 0, formatted + "\n" + proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None, formatted + "\n" + proc.stdout
+
+
+@pytest.mark.parametrize(("tokens", "expected"), [
+	(["cd", "dir"], (["cd", "dir"], False)),
+	(["time", "-p", "cd", "dir"], (["cd", "dir"], False)),
+	(["time", "-p", "--", "cd", "dir"], (["cd", "dir"], False)),
+	(["command", "-p", "pushd", "dir"], (["pushd", "dir"], False)),
+	(["builtin", "command", "eval", "x"], (["eval", "x"], False)),
+	(["CDPATH=/srv", "time", "cd", "dir"], (["cd", "dir"], True)),
+	(["command", "-v", "cd"], None),
+	(["time", "-x", "cd", "dir"], None),
+])
+def test_shell_builtin_view(tokens: list[str], expected) -> None:
+	assert guard._shell_builtin_view(tokens) == expected
+
+
+def test_cdpath_set_before_a_shell_wrapper_reaches_its_cd(monkeypatch) -> None:
+	monkeypatch.delenv("CDPATH", raising=False)
+	invocations = guard._guarded_git_invocations(
+		"export CDPATH=/srv; bash -c 'cd repo && git push origin HEAD:feature/x'", "/tmp"
+	)
+	assert [invocation.subcommand for invocation in invocations] == ["push"]
+	assert invocations[0].warning, invocations
+
+
+# --- Auto mode: shape-only push doubts deny instead of asking -----------------
+
+@pytest.mark.parametrize("command", [
+	# The branch only exists once the command has run, so its tip cannot be resolved yet.
+	"git checkout -q -b claude/new-log && git push -u origin claude/new-log 2>&1 | tail -1",
+	'git push origin "$SOURCE:feature/x"',
+	"git push origin HEAD:$DEST",
+])
+def test_auto_mode_denies_a_push_whose_only_doubt_is_its_shell_shape(monkeypatch, merged_branch_repo, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("an unresolved push must not be looked up"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "permission_mode": "auto",
+		"tool_input": {"command": command}})
+	assert code == 2
+	assert "Auto mode: nothing ran" in message and "git push -u origin <branch>" in message
+	assert "could not resolve git push" in message
+	out = capsys.readouterr().out
+	assert '"permissionDecision": "ask"' not in out
+
+
+@pytest.mark.parametrize("mode", [None, "default", "acceptEdits", "plan", "Auto"])
+def test_shape_only_push_doubt_still_asks_outside_auto_mode(monkeypatch, merged_branch_repo, capsys, mode) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("an unresolved push must not be looked up"))
+	payload = {"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git checkout -b claude/new-log && git push -u origin claude/new-log"}}
+	if mode is not None:
+		payload["permission_mode"] = mode
+	assert guard.evaluate(payload) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_auto_mode_still_asks_when_a_shape_doubt_comes_with_a_branch_deletion(monkeypatch, merged_branch_repo, capsys) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
+	code, _ = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "permission_mode": "auto",
+		"tool_input": {"command": 'git push origin "$SOURCE:feature/x" :old-branch'}})
+	assert code == 0
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "deletes remote branches" in response["hookSpecificOutput"]["permissionDecisionReason"]

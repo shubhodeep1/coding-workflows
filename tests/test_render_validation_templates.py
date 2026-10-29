@@ -80,6 +80,20 @@ def _run_renderer(
 	)
 
 
+def _run_family_marker(script: Path) -> subprocess.CompletedProcess[str]:
+	# Execute the rendered marker script and let callers assert on its TAP
+	# output rather than its source text, so the check holds whether the
+	# template uses `echo` or `printf` (issue #6843, PR #6569 CI failure).
+	return subprocess.run(
+		["bash", str(script)],
+		cwd=str(script.parent),
+		text=True,
+		capture_output=True,
+		timeout=60,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+
+
 def _snapshot_directory(root: Path) -> tuple[list[str], str]:
 	files = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
 	hasher = hashlib.sha256()
@@ -113,6 +127,7 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 
 		expected_files = [
 			"Dockerfile.app",
+			"Dockerfile.app.dockerignore",
 			"_lib/tap_helpers.sh",
 			"docker-compose.test.yml",
 			"tests/00_canary.sh",
@@ -144,8 +159,10 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 		assert "--host-header" in http_smoke_text
 		assert "TEST_HOST_HEADER" in http_smoke_text
 
-		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-mongo-flask family for demo-project" in family_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - python-mongo-flask family for demo-project" in marker.stdout.splitlines(), marker.stdout
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
@@ -166,10 +183,14 @@ def test_renderer_canary_tools_escaped_for_shell_safety() -> None:
 		_write_yaml(manifest_path, payload)
 
 		result = _run_renderer(manifest_path, output_root)
-		assert result.returncode == 0, result.stderr
-		canary_text = (output_root / "tests" / "00_canary.sh").read_text(encoding="utf-8")
-		assert "'tool$(echo pwn)'" in canary_text
-		assert "'tool'\"'\"'quote'" in canary_text
+		# Shell-active canary tool names are rejected before rendering
+		# (enforce_shell_safe_manifest) rather than rendered quoted; the inline
+		# CANARY_TOOLS default in the node/python-mongo-repo-checks canaries
+		# must stay a literal word list for validation_lint.py.
+		assert result.returncode != 0
+		assert "Manifest safety check failed: /slots/canary_tools/0" in result.stderr
+		assert "pwn" not in result.stderr
+		assert not (output_root / "tests" / "00_canary.sh").exists()
 
 
 def test_renderer_rejects_invalid_string_port() -> None:
@@ -345,8 +366,10 @@ def test_renderer_family_dispatch_routing() -> None:
 		assert '. "${ROOT_DIR}/_lib/graceful_shutdown.sh"' in hardhat_test_text
 		assert "npx hardhat test --network localhost" in hardhat_test_text
 
-		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "node-hardhat-solidity family for demo-project" in family_marker_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - node-hardhat-solidity family for demo-project" in marker.stdout.splitlines(), marker.stdout
 		assert not (output_root / "tests" / "10_http_smoke.sh").exists()
 
 		lint_result = subprocess.run(
@@ -387,10 +410,12 @@ def test_renderer_node_runtime_family_dispatch_routing() -> None:
 		assert not (output_root / "tests" / "20_rpc_probe.sh").exists()
 		assert not (output_root / "tests" / "30_hardhat_test.sh").exists()
 
-		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		env_text = (output_root / "validate.env").read_text(encoding="utf-8")
 		repo_checks_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
-		assert "node-runtime family for demo-project" in family_marker_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - node-runtime family for demo-project" in marker.stdout.splitlines(), marker.stdout
 		# node-runtime renders raw (unquoted) JSON arrays so the in-container
 		# JSON.parse in 40_repo_checks.sh succeeds (regression: run 27939731907).
 		assert 'CUSTOM_TESTS_JSON=[' in env_text
@@ -457,8 +482,10 @@ def test_renderer_repo_checks_family_dispatch_routing() -> None:
 		assert "SKIP_TESTS_JSON" in repo_checks_text
 		assert "json.loads(payload)" in repo_checks_text
 
-		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-mongo-repo-checks family for demo-project" in family_marker_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - python-mongo-repo-checks family for demo-project" in marker.stdout.splitlines(), marker.stdout
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
@@ -486,6 +513,39 @@ def test_renderer_deterministic_output_for_same_manifest() -> None:
 		files_b, hash_b = _snapshot_directory(out_b)
 		assert files_a == files_b
 		assert hash_a == hash_b
+
+
+def test_every_family_renders_empty_dockerfile_specific_ignore() -> None:
+	# Each family builds Dockerfile.app from the repo root with `COPY . /workspace`.
+	# The rendered Dockerfile.app.dockerignore makes BuildKit skip the consumer's
+	# root .dockerignore (fun-token-multi-chain#579), and must exclude nothing.
+	families = sorted(
+		path.name for path in TEMPLATES_ROOT.iterdir()
+		if path.is_dir() and path.name != "_shared" and (path / "Dockerfile.app.j2").is_file()
+	)
+	assert families, "no harness families with Dockerfile.app.j2 found"
+	for family in families:
+		with tempfile.TemporaryDirectory(prefix="render-validation-") as td:
+			temp_root = Path(td)
+			manifest_path = temp_root / "validate.yml"
+			output_root = temp_root / "out"
+			payload = _manifest_payload(family)
+			if family == "node-hardhat-solidity":
+				payload["entry"] = "hardhat.config.ts"
+				payload["slots"]["canary_tools"] = ["node", "npm", "npx", "forge"]
+			_write_yaml(manifest_path, payload)
+
+			result = _run_renderer(manifest_path, output_root)
+			assert result.returncode == 0, f"{family}: renderer failed: {result.stderr}"
+			assert (output_root / "Dockerfile.app").is_file(), family
+			ignore_path = output_root / "Dockerfile.app.dockerignore"
+			assert ignore_path.is_file(), f"{family}: Dockerfile.app.dockerignore missing"
+			patterns = [
+				line.strip()
+				for line in ignore_path.read_text(encoding="utf-8").splitlines()
+				if line.strip() and not line.strip().startswith("#")
+			]
+			assert patterns == [], f"{family}: harness dockerignore must exclude nothing: {patterns}"
 
 
 def test_renderer_output_root_basename_only_affects_expected_files() -> None:

@@ -181,7 +181,9 @@ def test_every_later_step_waits_for_the_gate() -> None:
 	text = RESPOND.read_text(encoding="utf-8")
 	assert "outputs.is_orchestrator ==" not in text
 	for name, step in _steps().items():
-		if name == "Check orchestrator metadata":
+		# The retry-helper bootstrap (issue #6634) precedes the gate step,
+		# which itself calls gh_api_retry, so it cannot wait for the gate.
+		if name in ("Check orchestrator metadata", "Bootstrap GitHub API retry helper"):
 			continue
 		condition = str(step.get("if", ""))
 		assert "steps.check_orchestrator.outputs.respond == 'true'" in condition or "steps.check_orchestrator.outputs.mode == 'standalone'" in condition or "steps.ai_engine.outputs.engine == 'claude'" in condition, name
@@ -421,6 +423,17 @@ def test_worker_prompt_carries_placeholder_and_no_intent_rules(prompt: Path) -> 
 	# answered: its body is exactly the example the no-intent rule names.
 	assert "No-intent rule:" in text and '"Make it better."' in text
 	assert "ESCALATE every question that asks what the work should be" in text
+
+
+@pytest.mark.parametrize("prompt", RESPOND_PROMPTS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_worker_prompt_limits_steps_to_file_changes(prompt: Path) -> None:
+	# tele-funtoken-msg-scoring#4992: a decision whose steps were "post a
+	# tracking comment and wait for open PR #4991" reached implement, which
+	# can only change files, and ended in a BLOCKED run.
+	text = prompt.read_text(encoding="utf-8")
+	assert "Pipeline-capability rule:" in text
+	assert "Never write execution steps that post comments, close\n  issues, or check or wait for another pull request." in text
+	assert "The planner then holds the issue on the blocked path until that\n  pull request merges" in text
 
 
 def test_release_gate_fixture_still_matches_the_no_intent_example() -> None:

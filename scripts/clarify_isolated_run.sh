@@ -12,8 +12,8 @@ log_file="${3:?log file required}"
 engine="${4:-codex}"
 engine_role="${5:-CLARIFY}"
 case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
-[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
-[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE|CHECK_TRIAGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE|CHECK_TRIAGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
 support="scripts"
 if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
 	if [[ "${CLARIFY_ISOLATION_SUPPORT_DIR}" != /* ]] || [ ! -d "${CLARIFY_ISOLATION_SUPPORT_DIR}" ]; then
@@ -38,6 +38,50 @@ else
 fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 1; }
 [ -f "${support}/clarify_sandbox/Dockerfile" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/write_codex_config.sh" ] && [ -f "${support}/codex_model_catalog.json" ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
+# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh);
+# without the helper, build locally as before. Arguments: docker build args.
+clarify_image_build()
+{
+	local clarify_prebuilt_ref="" clarify_prebuilt_secs="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-60}"
+	# Try the prebuilt image first: it does not need the Dockerfile's FROM
+	# image, so slow or unreachable mirrors must not delay it (#7215 review).
+	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+		[[ "${clarify_prebuilt_secs}" =~ ^[1-9][0-9]{0,3}$ ]] || clarify_prebuilt_secs=60
+		clarify_prebuilt_ref="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" ref --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox" 2>/dev/null)" || {
+			clarify_prebuilt_ref=""
+			# `ref` exits 1 on purpose when the registry is off, or invalid (which
+			# sandbox_image.sh treats as off with its own warning); not a failure.
+			local clarify_registry="${SANDBOX_IMAGE_REGISTRY:-}"
+			if [ "${clarify_registry}" != off ] && { [ -z "${clarify_registry}" ] || [[ "${clarify_registry}" =~ ^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$ ]]; }; then
+				echo "SANDBOX_IMAGE family=clarify outcome=ref_failed" >&2
+			fi
+		}
+		if [ -n "${clarify_prebuilt_ref}" ] && env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=10s "${clarify_prebuilt_secs}s" docker pull -q "${clarify_prebuilt_ref}" >/dev/null 2>&1; then
+			# sandbox_image.sh build re-pulls and checks the input label; on a
+			# label mismatch or a failed re-pull it builds locally without the
+			# pre-seed. If that fails, fall through to pre-seed and build again.
+			local clarify_prebuilt_id=""
+			if clarify_prebuilt_id="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" build --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")" && [ -n "${clarify_prebuilt_id}" ]; then
+				printf '%s\n' "${clarify_prebuilt_id}"
+				return
+			fi
+		fi
+	fi
+	# A local build follows: seed the Dockerfile's FROM image from a Docker
+	# Official Images mirror first, so the build (no --pull) avoids Docker
+	# Hub's anonymous-pull 429 (#6985, #7215). Best effort; stdout is the
+	# image ID, so log to stderr.
+	if [ -f "${support}/clarify_base_image_preseed.sh" ] && [ ! -L "${support}/clarify_base_image_preseed.sh" ]; then
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/clarify_base_image_preseed.sh" "${support}/clarify_sandbox/Dockerfile" >&2 || true
+	else
+		echo "CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=helper_missing" >&2
+	fi
+	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" build --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"
+	else
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"
+	fi
+}
 # The source root is read as data only; host Python never imports from it.
 source_root="${CLARIFY_SOURCE_ROOT:-${PWD}}"
 omit_agent_instructions="${CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS:-false}"
@@ -79,7 +123,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 dest = pathlib.Path(sys.argv[2])
 omit_agent_instructions = sys.argv[3] == "true"
-roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d"}
+roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d", "agents.d"}
 root_files = {"README.md", "agents.md", "AGENTS.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
 agent_instruction_names = {"agents.md", "agents.override.md", "claude.md", "claude.local.md"}
 suffixes = {".py", ".sh", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql"}
@@ -96,7 +140,8 @@ def copy(path):
             or (path not in root_files and parts[0] not in roots and parts[:2] not in ((".github", "workflows"), (".github", "actions")))
             or (path not in root_files and pathlib.PurePosixPath(path).suffix.lower() not in suffixes and parts[-1] != "Dockerfile")):
         return
-    if omit_agent_instructions and parts[-1].lower() in agent_instruction_names:
+    # agents.d/ fragments (CLAUDE.md §30) are agents.md content waiting to be folded.
+    if omit_agent_instructions and (parts[-1].lower() in agent_instruction_names or parts[0] == "agents.d"):
         omitted += 1
         return
     node = root
@@ -154,11 +199,33 @@ fi
 # Claude engine branch: the same isolation, with the Claude Code CLI inside
 # the container and scripts/claude_anthropic_relay.py on the host. The real
 # OAuth token stays in the host relay; the container sees a placeholder.
-# Exit 75 means Claude is unavailable and the caller runs the codex path (D1).
+# Exit 75 means Claude is out of capacity and the caller runs the codex path;
+# exit 76 means Claude is unavailable for any other reason and the caller must
+# fail closed (AI_ENGINE_FALLBACK_POLICY=capacity, the default; plan item 3e,
+# D1). AI_ENGINE_FALLBACK_POLICY=always keeps exit 75 for every reason.
+# Exit 80 means wait: Claude is out of capacity and
+# CLAUDE_POOL_CAPACITY_WAIT_ENABLED is true (off by default, issue #7251); the
+# caller must not run codex.
 if [ "${engine}" = claude ]; then
 	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	# Mirror ai_engine_fallback's record so the job's report step sees it.
+	unsourced_fallback_record()
+	{
+		local rec_role rec_policy=capacity rec_action=refused rec_file="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
+		rec_role="$(printf '%s' "$1" | tr -c 'A-Z0-9_' '_' | cut -c1-40)"
+		[[ "${rec_role}" =~ ^[A-Z] ]] || rec_role="UNKNOWN"
+		[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && { rec_policy=always; rec_action=codex; }
+		[ -L "${rec_file}" ] || printf 'v1\t%s\t%s\t%s\tnon_capacity\t%s\t%s\n' "$(date -u +%s)" "${rec_role}" "$2" "${rec_action}" "${rec_policy}" >> "${rec_file}" 2>/dev/null || true
+	}
 	for required in ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
-		[ -f "${engine_dir}/${required}" ] || { echo "AI_ENGINE_FALLBACK role=${engine_role} reason=support_missing" >&2; exit 75; }
+		if [ ! -f "${engine_dir}/${required}" ]; then
+			# ai_engine.sh cannot be sourced: decide the policy inline.
+			echo "AI_ENGINE_FALLBACK role=${engine_role} reason=support_missing" >&2
+			unsourced_fallback_record "${engine_role}" support_missing
+			[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && exit 75
+			echo "::error::AI_ENGINE_FALLBACK_REFUSED role=${engine_role} reason=support_missing" >&2
+			exit 76
+		fi
 	done
 	# shellcheck source=ai_engine.sh
 	source "${engine_dir}/ai_engine.sh"
@@ -166,21 +233,33 @@ if [ "${engine}" = claude ]; then
 	claude_effort="$(ai_engine_effort "${engine_role}" "${MODEL_REASONING_EFFORT}")"
 	claude_version="$(ai_engine_cli_version)"
 	probe_model="$(_ai_engine_py config --key probe_model)"
-	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit 75; }
-	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${engine_role}" instructions_missing; exit 75; }
-	_ai_engine_py settings --checkout /source --out "${run_root}/claude-settings.json" --profile read --guard-hook /guard.py || { ai_engine_fallback "${engine_role}" policy_unavailable; exit 75; }
+	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${engine_role}" instructions_missing; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	# Provider-side web search (claude_engine.json `web_search`, default on);
+	# a failed read leaves it off and the relay refuses the tool as before.
+	clarify_web_search="$(_ai_engine_py config --key web_search 2>/dev/null || echo false)"
+	clarify_claude_tools="Read,Grep,Glob"
+	clarify_settings_args=(settings --checkout /source --out "${run_root}/claude-settings.json" --profile read --guard-hook /guard.py)
+	clarify_relay_args=()
+	if [ "${clarify_web_search}" = true ]; then
+		clarify_claude_tools+=",WebSearch"
+		clarify_settings_args+=(--web-search)
+		clarify_relay_args+=(--allow-web-search)
+	fi
+	_ai_engine_py "${clarify_settings_args[@]}" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	chmod 0644 "${run_root}/claude-settings.json"
 	mapfile -t claude_accounts < <(ai_engine_accounts)
-	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" no_credential; exit 75; }
-	if ! image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")"; then
+	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" "$(ai_engine_no_account_reason)"; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	if ! image="$(clarify_image_build --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}")"; then
 		ai_engine_fallback "${engine_role}" image_build_failed
-		exit 75
+		exit "${AI_ENGINE_FALLBACK_EXIT}"
 	fi
-	[ -n "${image}" ] || { ai_engine_fallback "${engine_role}" image_build_failed; exit 75; }
+	[ -n "${image}" ] || { ai_engine_fallback "${engine_role}" image_build_failed; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	all_usage_limit=true
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
-			python3 -I -B "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" &
+			python3 -I -B "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" ${clarify_relay_args[@]+"${clarify_relay_args[@]}"} &
 		broker_pid=$!
 		for _ in $(seq 1 50); do
 			[ -S "${run_root}/socket/provider.sock" ] && break
@@ -190,6 +269,7 @@ if [ "${engine}" = claude ]; then
 		if [ ! -S "${run_root}/socket/provider.sock" ]; then
 			echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=crashed reason=relay_unavailable" >&2
 			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+			all_usage_limit=false
 			continue
 		fi
 		run_rc=0
@@ -211,6 +291,7 @@ if [ "${engine}" = claude ]; then
 			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder \
 			--env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 --env DISABLE_AUTOUPDATER=1 \
 			--env "CLAUDE_MODEL=${claude_model}" --env "CLAUDE_EFFORT=${claude_effort}" \
+			--env "CLAUDE_TOOLS=${clarify_claude_tools}" \
 			--env "CLARIFY_ISOLATION_TIMEOUT_SECS=${isolation_timeout}" \
 			--workdir /source "${image}" /bin/bash -c '
 				set -euo pipefail
@@ -225,7 +306,7 @@ if [ "${engine}" = claude ]; then
 						--setting-sources "" --settings /settings.json \
 						--strict-mcp-config --disable-slash-commands \
 						--exclude-dynamic-system-prompt-sections \
-						--tools Read,Grep,Glob --permission-mode dontAsk \
+						--tools "${CLAUDE_TOOLS}" --permission-mode dontAsk \
 						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
 				else
 					claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
@@ -233,7 +314,7 @@ if [ "${engine}" = claude ]; then
 						--setting-sources "" --settings /settings.json \
 						--strict-mcp-config --disable-slash-commands \
 						--exclude-dynamic-system-prompt-sections \
-						--tools Read,Grep,Glob --permission-mode dontAsk \
+						--tools "${CLAUDE_TOOLS}" --permission-mode dontAsk \
 						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
 				fi
 			' || run_rc=$?
@@ -248,7 +329,11 @@ if [ "${engine}" = claude ]; then
 				install -m 0600 "${run_root}/results/output" "${output_file}"
 				exit 0
 				;;
-			usage_limit|auth_failed)
+			usage_limit)
+				continue
+				;;
+			auth_failed)
+				all_usage_limit=false
 				continue
 				;;
 			*)
@@ -256,13 +341,18 @@ if [ "${engine}" = claude ]; then
 				;;
 		esac
 	done
-	ai_engine_fallback "${engine_role}" all_accounts_failed
-	exit 75
+	# Every account at its usage limit is the capacity reason (D1).
+	if [ "${all_usage_limit}" = true ]; then
+		ai_engine_fallback "${engine_role}" all_usage_limit
+	else
+		ai_engine_fallback "${engine_role}" all_accounts_failed
+	fi
+	exit "${AI_ENGINE_FALLBACK_EXIT}"
 fi
 
 # Nothing from the privileged checkout, HOME or runtime workspace is mounted.
 # The Docker build context contains only the pinned Dockerfile.
-image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")"
+image="$(clarify_image_build --build-arg "CODEX_VERSION=${version}")"
 [ -n "${image}" ] || { echo '::error::Clarify image build failed' >&2; exit 1; }
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${MODEL_EDITOR}" PYTHONDONTWRITEBYTECODE=1 \
 	python3 -I -B "${support}/clarify_openrouter_broker.py" broker "${run_root}/socket/provider.sock" &

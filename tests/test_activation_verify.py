@@ -82,7 +82,13 @@ if endpoint.endswith("/comments?per_page=100") and method == "GET":
 if endpoint.endswith("/files?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_FILES") == "1":
 		sys.exit(1)
-	done(json.dumps([[{"filename": "README.md"}]]))
+	done(json.dumps([[{"filename": name} for name in json.loads(os.environ.get("FAKE_GH_FILES", '["README.md"]'))]]))
+if endpoint.startswith("repos/o/r/pulls?state=open"):
+	if os.environ.get("FAKE_GH_FAIL_OPEN_PRS") == "1":
+		sys.exit(1)
+	if os.environ.get("FAKE_GH_OPEN_PRS_RAW") is not None:
+		done(os.environ["FAKE_GH_OPEN_PRS_RAW"])
+	done(json.dumps(state.get("open_prs", [])))
 if endpoint.startswith("search/issues?"):
 	if os.environ.get("FAKE_GH_FAIL_SEARCH") == "1":
 		sys.exit(1)
@@ -142,11 +148,11 @@ def _setup(tmp_path: Path, **state) -> tuple[dict, Path]:
 	return env, state_file
 
 
-def _verify(tmp_path: Path, verdict: dict | str, linked: dict | None = None, env_extra: dict | None = None, mode: str = "pr", fix_search: dict | None = None):
+def _verify(tmp_path: Path, verdict: dict | str, linked: dict | None = None, env_extra: dict | None = None, mode: str = "pr", fix_search: dict | None = None, open_prs: list | None = None):
 	target = tmp_path / "target"
 	target.mkdir(exist_ok=True)
 	env, state_file = _setup(tmp_path, linked=linked or {"number": 7, "title": "t", "body": "spec", "author_association": "OWNER"},
-		fix_search=fix_search or {"total_count": 0, "items": []})
+		fix_search=fix_search or {"total_count": 0, "items": []}, open_prs=open_prs or [])
 	env.update(
 		REPOSITORY="o/r",
 		PR_NUMBER="42",
@@ -515,6 +521,55 @@ def test_status_workflow_wiring() -> None:
 	assert "activation_verify.sh\" pr" in steps["Verify activation"]["run"]
 
 
+@pytest.mark.parametrize(("head_ref", "label"), [
+	("auto/update-workflows-9e9338339cb3", "auto/update-workflows-"),
+	("ai-sync/stable", "ai-sync/stable"),
+])
+def test_consumer_workflow_sync_pr_is_not_verified(tmp_path: Path, head_ref: str, label: str) -> None:
+	# The updater's own same-repository PRs only refresh upstream-managed wrappers.
+	result, state = _verify(tmp_path, DORMANT, env_extra={"PR_HEAD_REF": head_ref, "PR_HEAD_REPOSITORY": "o/r"})
+	assert result.returncode == 0
+	assert f"ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=workflow_sync_pr sync_branch={label}\n" in result.stdout
+	# Skipped before any GitHub call: no linked-issue read, files read, comment or issue.
+	assert state["calls"] == [] and state["comments"] == [] and state["created"] == []
+
+
+@pytest.mark.parametrize(("head_ref", "head_repository"), [
+	("auto/update-workflows-9e9338339cb3", "attacker/r"),
+	("auto/update-workflows-9e9338339cb3", ""),
+	("ai-sync/stable", "attacker/r"),
+	("ai-sync/stable-2", "o/r"),
+	("auto/update-workflows", "o/r"),
+	("feature/auto/update-workflows-9e9338339cb3", "o/r"),
+	("claude/some-fix", "o/r"),
+	("", "o/r"),
+])
+def test_only_the_updaters_own_branches_skip_verification(tmp_path: Path, head_ref: str, head_repository: str) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs on push.", "gaps": []},
+		env_extra={"PR_HEAD_REF": head_ref, "PR_HEAD_REPOSITORY": head_repository})
+	assert "reason=workflow_sync_pr" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+
+
+def test_sync_pr_skip_does_not_apply_to_project_mode(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "cron", "summary": "Running.", "gaps": []}, mode="project",
+		env_extra={"TRACKING_NUM": "5", "PROJECT_TITLE": "p", "PROJECT_BODY": "b", "FINAL_PR": "", "PROJECT_FILES_JSON": '["a.txt"]',
+			"PR_HEAD_REF": "ai-sync/stable", "PR_HEAD_REPOSITORY": "o/r"})
+	assert "reason=workflow_sync_pr" not in result.stdout
+	assert state["comments"][-1]["endpoint"] == "repos/o/r/issues/5/comments"
+
+
+def test_status_workflow_skips_consumer_workflow_sync_prs() -> None:
+	workflow = yaml.safe_load(STATUS.read_text(encoding="utf-8"))
+	job = workflow["jobs"]["activation-verify"]
+	skip = ("!(github.event.pull_request.head.repo.full_name == github.repository && "
+		"(startsWith(github.event.pull_request.head.ref, 'auto/update-workflows-') || github.event.pull_request.head.ref == 'ai-sync/stable'))")
+	assert skip in job["if"]
+	verify_env = next(step for step in job["steps"] if step["name"] == "Verify activation")["env"]
+	assert verify_env["PR_HEAD_REF"] == "${{ github.event.pull_request.head.ref }}"
+	assert verify_env["PR_HEAD_REPOSITORY"] == "${{ github.event.pull_request.head.repo.full_name || '' }}"
+
+
 def test_poller_runs_it_on_every_completion_path() -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	lines = text.splitlines()
@@ -566,3 +621,327 @@ def test_model_text_never_starts_a_comment_line(tmp_path: Path) -> None:
 	_, state = _verify(tmp_path, injected)
 	body = state["comments"][-1]["body"]
 	assert not any(line.lstrip().startswith("/") for line in body.splitlines()), body
+
+
+LIVE = {"verdict": "LIVE", "trigger": "push", "summary": "Runs on push.", "gaps": []}
+
+
+def _git_commit_all(target: Path) -> None:
+	subprocess.run(["git", "init", str(target)], check=True, capture_output=True)
+	subprocess.run(["git", "-C", str(target), "add", "-A"], check=True, capture_output=True)
+	subprocess.run(["git", "-C", str(target), "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+		"commit", "-m", "links"], check=True, capture_output=True)
+
+
+def _context(tmp_path: Path) -> dict:
+	return json.loads((tmp_path / "rt" / "activation_context.json").read_text(encoding="utf-8"))
+
+
+def test_tracked_symlinks_reach_model_context(tmp_path: Path) -> None:
+	# The read-only model sandbox omits symlinks, so the host lists them.
+	target = tmp_path / "target"
+	(target / "workflow-templates").mkdir(parents=True)
+	(target / "CLAUDE.md").write_text("rules\n", encoding="utf-8")
+	os.symlink("../CLAUDE.md", target / "workflow-templates" / "CLAUDE.md")
+	_git_commit_all(target)
+	result, state = _verify(tmp_path, LIVE)
+	assert "outcome=posted" in result.stdout
+	context = _context(tmp_path)
+	assert context["tracked_symlinks"] == [
+		{"path": "workflow-templates/CLAUDE.md", "target": "../CLAUDE.md", "target_exists": True}
+	]
+	assert context["tracked_symlinks_truncated"] is False
+	assert context["changed_files"] == ["README.md"]
+	assert state["comments"]
+
+
+def test_tracked_symlinks_fail_open_without_git(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, LIVE)
+	assert "outcome=posted" in result.stdout
+	assert "ACTIVATION_VERIFY tracked_symlinks unavailable reason=git_failed" in result.stderr
+	context = _context(tmp_path)
+	assert context["tracked_symlinks"] == [] and context["tracked_symlinks_truncated"] is False
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+
+
+def test_tracked_symlinks_cap_and_filters(tmp_path: Path) -> None:
+	target = tmp_path / "target"
+	target.mkdir()
+	(target / "CLAUDE.md").write_text("rules\n", encoding="utf-8")
+	os.symlink("bad\ntarget", target / "aa-bad")
+	for n in range(201):
+		os.symlink("CLAUDE.md", target / f"link-{n:03d}")
+	_git_commit_all(target)
+	_verify(tmp_path, LIVE)
+	context = _context(tmp_path)
+	links = context["tracked_symlinks"]
+	assert len(links) == 200 and context["tracked_symlinks_truncated"] is True
+	assert links[0] == {"path": "link-000", "target": "CLAUDE.md", "target_exists": True}
+	assert all("\n" not in link["target"] and link["path"] != "aa-bad" for link in links)
+
+
+def test_prompt_tells_model_snapshot_omits_symlinks() -> None:
+	runtime = (ROOT / "prompts" / "mode-activation-verify.txt").read_text(encoding="utf-8")
+	template = (ROOT / "prompts" / "_templates" / "mode-activation-verify.txt").read_text(encoding="utf-8")
+	for text in (runtime, template):
+		assert "tracked_symlinks" in text and "Never report a listed path" in text
+	assert runtime.split("</compaction-rules>\n", 1)[1] == template.split("\n", 1)[1]
+
+
+def test_tracked_symlinks_flag_dangling_targets(tmp_path: Path) -> None:
+	target = tmp_path / "target"
+	(target / "docs").mkdir(parents=True)
+	(target / "docs" / "guide.md").write_text("guide\n", encoding="utf-8")
+	os.symlink("docs", target / "dir-link")
+	os.symlink("missing.md", target / "dangling")
+	os.symlink("../outside.md", target / "escape")
+	_git_commit_all(target)
+	_verify(tmp_path, LIVE)
+	exists = {link["path"]: link["target_exists"] for link in _context(tmp_path)["tracked_symlinks"]}
+	assert exists == {"dangling": False, "dir-link": True, "escape": False}
+
+
+# --- operator-step drain (plan item 4d) ---------------------------------------
+
+
+def test_prompt_never_classifies_release_or_consumer_sync_as_operator_steps() -> None:
+	rule = ("Never list promoting `main`, tagging `stable`, or the consumer sync (`AI Update Workflows` / daily wrapper sync) "
+		"as a gap of either kind; the pipeline performs them.")
+	for prompt in (ROOT / "prompts" / "mode-activation-verify.txt", ROOT / "prompts" / "_templates" / "mode-activation-verify.txt"):
+		text = prompt.read_text(encoding="utf-8")
+		assert "tag a release" not in text, prompt
+		assert "a release action a person must perform" not in text, prompt
+		assert rule in text, prompt
+		assert "The nightly promote cycle (tagging `stable`, promoting `main`) and the consumer sync" in text, prompt
+		# The verdict output contract is unchanged.
+		assert '"verdict": "LIVE" | "DORMANT",' in text and '"kind": "code" | "operator",' in text, prompt
+
+
+def test_operator_entry_records_the_merge_commit(tmp_path: Path) -> None:
+	merge_sha = "c" * 40
+	result, state = _verify(tmp_path, DORMANT, env_extra={"MERGE_SHA": merge_sha})
+	assert result.returncode == 0
+	entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
+	assert entry["body"].split("\n")[1] == f"<!-- ai:operator-step:source-sha={merge_sha} -->"
+
+
+def test_operator_entry_without_a_valid_merge_commit_has_no_source_line(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"MERGE_SHA": "not-a-sha"})
+	assert result.returncode == 0
+	entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
+	assert "source-sha" not in entry["body"]
+
+
+# Plans and raw design drops wait for an explicit order (consumer
+# tele-funtoken-msg-scoring#4726): exempt-only merges file nothing.
+GAME_GLOBS = "docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/**"
+
+
+@pytest.mark.parametrize(("files", "globs"), [
+	(["docs/plans/onboard-a.md", "docs/plans/sub/onboard-b.md"], None),
+	(["docs/plans/fixup.md"], ""),
+	(["ft.games/templates/Game-pages/boxing/index.html", "ft.games/templates/Game-pages/boxing/assets/a.png"], GAME_GLOBS),
+	(["docs/game-sources/boxing.js", "docs/plans/boxing-phase-4.md"], GAME_GLOBS),
+])
+def test_exempt_only_pr_is_skipped_without_model_comment_or_fix_issue(tmp_path: Path, files: list, globs: str | None) -> None:
+	env_extra = {"FAKE_GH_FILES": json.dumps(files)}
+	if globs is not None:
+		env_extra["ACTIVATION_VERIFY_EXEMPT_GLOBS"] = globs
+	result, state = _verify(tmp_path, DORMANT, env_extra=env_extra)
+	assert result.returncode == 0
+	assert f"ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=exempt_paths exempt_files={len(files)}\n" in result.stdout
+	assert state["comments"] == [] and state["created"] == []
+	assert not any(call[1].startswith("search/") for call in state["calls"] if len(call) > 1)
+	assert not (tmp_path / "rt" / "activation_prompt.txt").exists()
+
+
+def test_custom_globs_replace_the_default(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []},
+		env_extra={"FAKE_GH_FILES": '["docs/plans/a.md"]', "ACTIVATION_VERIFY_EXEMPT_GLOBS": "docs/game-sources/**"})
+	assert "reason=exempt_paths" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+
+
+@pytest.mark.parametrize("files", [
+	["docs/plans"],
+	["docs/plans.md"],
+	["src/docs/plans/a.md"],
+	["ft.games/templates/Game-pages-old/a.html"],
+])
+def test_near_miss_paths_are_not_exempt(tmp_path: Path, files: list) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []},
+		env_extra={"FAKE_GH_FILES": json.dumps(files), "ACTIVATION_VERIFY_EXEMPT_GLOBS": GAME_GLOBS})
+	assert "reason=exempt_paths" not in result.stdout
+	assert _context(tmp_path)["changed_files"] == files
+	assert "exempt_changed_files" not in _context(tmp_path)
+
+
+def test_mixed_pr_is_verified_on_its_other_files_only(tmp_path: Path) -> None:
+	files = ["docs/plans/boxing.md", "ft.games/templates/Game-pages/boxing/index.html", "src/games/boxing.ts"]
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FILES": json.dumps(files), "ACTIVATION_VERIFY_EXEMPT_GLOBS": GAME_GLOBS})
+	assert "reason=exempt_paths" not in result.stdout
+	context = _context(tmp_path)
+	assert context["changed_files"] == ["src/games/boxing.ts"]
+	assert context["exempt_changed_files"] == ["docs/plans/boxing.md", "ft.games/templates/Game-pages/boxing/index.html"]
+	assert "exempt_changed_files" in (tmp_path / "rt" / "activation_prompt.txt").read_text(encoding="utf-8")
+	# The verdict and the code-gap fix issue still follow, as for any code merge.
+	assert state["created"][0]["body"].startswith("<!-- ai:activation-fix:v1 source=pr-42 -->")
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
+
+
+def test_non_exempt_pr_is_verified_unchanged(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FILES": '["src/app.ts", "README.md"]'})
+	assert "ACTIVATION_VERIFY mode=pr item=42 verdict=DORMANT code_gaps=1 operator_gaps=1 outcome=posted" in result.stdout
+	context = _context(tmp_path)
+	assert context["changed_files"] == ["src/app.ts", "README.md"]
+	assert "exempt_changed_files" not in context
+	assert state["created"][0]["title"] == "Activation gaps after PR #42"
+
+
+def test_skip_label_skips_before_any_github_call(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"PR_LABELS": '["ai:implementing", "ai:skip-activation-verify"]'})
+	assert result.returncode == 0
+	assert "ACTIVATION_VERIFY mode=pr item=42 outcome=skip reason=skip_label\n" in result.stdout
+	assert state["calls"] == [] and state["comments"] == [] and state["created"] == []
+
+
+@pytest.mark.parametrize("labels", ['["ai:skip-activation-verify-x"]', '"ai:skip-activation-verify"', "not json", "[]", ""])
+def test_other_or_malformed_labels_do_not_skip(tmp_path: Path, labels: str) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []}, env_extra={"PR_LABELS": labels})
+	assert "reason=skip_label" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+
+
+def test_exempt_rules_do_not_apply_to_project_mode(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "cron", "summary": "Running.", "gaps": []}, mode="project",
+		env_extra={"TRACKING_NUM": "5", "PROJECT_TITLE": "p", "PROJECT_BODY": "b", "FINAL_PR": "", "PROJECT_FILES_JSON": '["docs/plans/a.md"]',
+			"PR_LABELS": '["ai:skip-activation-verify"]'})
+	assert "reason=exempt_paths" not in result.stdout and "reason=skip_label" not in result.stdout
+	assert state["comments"][-1]["endpoint"] == "repos/o/r/issues/5/comments"
+
+
+def test_status_workflow_wires_exempt_globs_and_skip_label() -> None:
+	workflow = yaml.safe_load(STATUS.read_text(encoding="utf-8"))
+	job = workflow["jobs"]["activation-verify"]
+	assert "!contains(github.event.pull_request.labels.*.name, 'ai:skip-activation-verify')" in job["if"]
+	verify_env = next(step for step in job["steps"] if step["name"] == "Verify activation")["env"]
+	assert verify_env["PR_LABELS"] == "${{ toJSON(github.event.pull_request.labels.*.name) }}"
+	assert verify_env["ACTIVATION_VERIFY_EXEMPT_GLOBS"] == "${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**' }}"
+	contract = json.loads((ROOT / ".github/ai/label_contract.v1.json").read_text(encoding="utf-8"))
+	assert "ai:skip-activation-verify" in contract["labels"]
+
+
+def test_prompt_never_turns_exempt_files_into_gaps() -> None:
+	for rel in ("prompts/mode-activation-verify.txt", "prompts/_templates/mode-activation-verify.txt"):
+		prompt = (ROOT / rel).read_text(encoding="utf-8")
+		assert "`exempt_changed_files`" in prompt, rel
+		assert "never report a gap asking to implement, build or ship them" in prompt, rel
+
+
+# --- Code gaps an open pull request already fixes (tele-funtoken-msg-scoring#4992) ---
+
+OPEN_PR_91 = {"number": 91, "title": "Add the NIGHTLY_REPORT_ENABLED row to README", "head": {"ref": "claude/readme-row", "repo": {"full_name": "o/r"}}, "draft": False, "body": "Adds the row.", "author_association": "OWNER", "user": {"login": "owner"}}
+
+
+def _tagged(open_pr: object) -> dict:
+	tagged = json.loads(json.dumps(DORMANT))
+	tagged["gaps"][0]["open_pr"] = open_pr
+	return tagged
+
+
+def _fix_issues(state: dict) -> list:
+	return [created for created in state["created"] if created.get("title", "").startswith("Activation gaps after")]
+
+
+def test_open_prs_reach_model_context(tmp_path: Path) -> None:
+	long_body = dict(OPEN_PR_91, body="x" * 4000, title="t" * 400)
+	result, _ = _verify(tmp_path, LIVE, open_prs=[long_body, {"title": "no number"}])
+	assert "outcome=posted" in result.stdout
+	listed = _context(tmp_path)["open_pull_requests"]
+	assert listed == [{"number": 91, "title": "t" * 200, "head": "claude/readme-row", "draft": False, "body": "x" * 1500}]
+
+
+def test_gap_fixed_by_an_open_pr_opens_no_fix_issue(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, _tagged(91), open_prs=[OPEN_PR_91])
+	assert result.returncode == 0
+	assert _fix_issues(state) == []
+	assert not any(call[1].startswith("search/issues?") for call in state["calls"] if len(call) > 1)
+	assert "ACTIVATION_VERIFY mode=pr item=42 op=in_flight_gaps count=1 prs=91 outcome=left_to_open_prs" in result.stdout
+	verdict_comment = state["comments"][-1]
+	assert "- [code] README lacks the new variable (fix in progress in open PR #91)" in verdict_comment["body"]
+	assert verdict_comment["body"].endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
+	# The operator step is still recorded.
+	assert any(created.get("title") == "Operator steps waiting" for created in state["created"])
+
+
+@pytest.mark.parametrize("open_pr", [999, "91", 91.0, True, None])
+def test_open_pr_tag_outside_the_list_is_ignored(tmp_path: Path, open_pr: object) -> None:
+	result, state = _verify(tmp_path, _tagged(open_pr), open_prs=[OPEN_PR_91])
+	assert "op=in_flight_gaps" not in result.stdout
+	fix_issue = _fix_issues(state)[0]
+	assert "README lacks the new variable" in fix_issue["body"]
+	assert "fix in progress" not in state["comments"][-1]["body"]
+
+
+def test_open_pr_tag_on_an_operator_gap_is_ignored(tmp_path: Path) -> None:
+	tagged = json.loads(json.dumps(DORMANT))
+	tagged["gaps"][1]["open_pr"] = 91
+	_, state = _verify(tmp_path, tagged, open_prs=[OPEN_PR_91])
+	assert "fix in progress" not in state["comments"][-1]["body"]
+	assert len(_fix_issues(state)) == 1
+
+
+def test_only_untagged_code_gaps_go_into_the_fix_issue(tmp_path: Path) -> None:
+	mixed = json.loads(json.dumps(DORMANT))
+	mixed["gaps"][0]["open_pr"] = 91
+	mixed["gaps"].append({"kind": "code", "title": "Workflow input misnamed", "evidence": "nightly.yml:3", "fix": "Rename the input"})
+	result, state = _verify(tmp_path, mixed, open_prs=[OPEN_PR_91])
+	fix_issue = _fix_issues(state)[0]
+	assert "Workflow input misnamed" in fix_issue["body"]
+	assert "README lacks the new variable" not in fix_issue["body"]
+	assert "op=in_flight_gaps count=1 prs=91" in result.stdout
+	assert "code_gaps=2 operator_gaps=1 outcome=posted" in result.stdout
+
+
+@pytest.mark.parametrize("override", [
+	{"author_association": "NONE", "user": {"login": "outsider"}},
+	{"head": {"ref": "claude/readme-row", "repo": {"full_name": "fork/r"}}},
+	{"head": {"ref": "claude/readme-row", "repo": None}},
+])
+def test_untrusted_or_fork_open_prs_are_not_listed(tmp_path: Path, override: dict) -> None:
+	untrusted = dict(OPEN_PR_91, **override)
+	_, state = _verify(tmp_path, _tagged(91), open_prs=[untrusted])
+	assert _context(tmp_path)["open_pull_requests"] == []
+	assert len(_fix_issues(state)) == 1
+	assert "fix in progress" not in state["comments"][-1]["body"]
+
+
+def test_bot_authored_open_pr_is_listed(tmp_path: Path) -> None:
+	bot_pr = dict(OPEN_PR_91, author_association="NONE", user={"login": "github-actions[bot]"})
+	_verify(tmp_path, LIVE, open_prs=[bot_pr])
+	assert [item["number"] for item in _context(tmp_path)["open_pull_requests"]] == [91]
+
+
+def test_open_pr_lookup_failure_fails_open(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, _tagged(91), open_prs=[OPEN_PR_91], env_extra={"FAKE_GH_FAIL_OPEN_PRS": "1"})
+	assert "ACTIVATION_VERIFY open_pull_requests unavailable reason=lookup_failed" in result.stderr
+	assert _context(tmp_path)["open_pull_requests"] == []
+	assert len(_fix_issues(state)) == 1
+	assert "fix in progress" not in state["comments"][-1]["body"]
+
+
+def test_open_pr_response_that_does_not_parse_fails_open(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, _tagged(91), open_prs=[OPEN_PR_91], env_extra={"FAKE_GH_OPEN_PRS_RAW": '{"message": "not a list"}'})
+	assert "ACTIVATION_VERIFY open_pull_requests unavailable reason=parse_failed" in result.stderr
+	assert "reason=lookup_failed" not in result.stderr
+	assert _context(tmp_path)["open_pull_requests"] == []
+	assert len(_fix_issues(state)) == 1
+	assert "fix in progress" not in state["comments"][-1]["body"]
+
+
+def test_prompt_explains_open_pr_tagging() -> None:
+	for rel in ("prompts/mode-activation-verify.txt", "prompts/_templates/mode-activation-verify.txt"):
+		prompt = (ROOT / rel).read_text(encoding="utf-8")
+		assert "`open_pull_requests` lists this repository's open, unmerged pull requests" in prompt, rel
+		assert '"open_pr": <optional, code gaps only:' in prompt, rel
+		assert "when unsure, leave it out" in prompt, rel

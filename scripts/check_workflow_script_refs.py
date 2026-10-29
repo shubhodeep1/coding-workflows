@@ -27,17 +27,13 @@ import re
 import sys
 from typing import Iterable
 
-# Scripts that workflows reference but which are intentionally NOT present in
-# this repo's scripts/ on main.  These are staged optionally (fail-open) from
-# the branch under processing when that branch carries them, so a missing file
-# on main is expected and must not be reported as a hallucinated reference.
-#
-#   render_prompt.py — Python backend for the render_prompt.sh shim adopted by
-#     branches that took the issue #3043 refactor.  main ships a self-contained
-#     bash render_prompt.sh that needs no backend, so render_prompt.py does not
-#     exist on main; the staging steps reference it only to copy it when a
-#     shim-adopting branch actually provides it.
-OPTIONAL_REFS = frozenset({"render_prompt.py"})
+# References a workflow may name although the file is absent from the checked
+# tree.  Intentionally empty: every workflow and staging reference, including
+# render_prompt.py (the backend of render_prompt.sh / assemble_prompt.sh, which
+# review support staging requires), must resolve to a file under scripts/.
+# Add an entry only together with a written reason why that reference can
+# legitimately be absent, for example a helper that exists on one branch only.
+OPTIONAL_REFS: frozenset[str] = frozenset()
 EXTRA_REF_HOLDER_FILES = (pathlib.Path("scripts") / "stage_workflow_support.sh",)
 
 EXPLICIT_REF = re.compile(r"scripts/([a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md|tmpl))")

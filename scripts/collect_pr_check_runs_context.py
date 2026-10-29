@@ -30,6 +30,8 @@ DEFAULT_LOG_TAIL_BYTES = 16384
 MAX_LOG_TAIL_BYTES = 131072
 LOG_TAIL_LINES = 200
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale", "startup_failure"}
+# Full commit SHA accepted for PR_CHECK_RUNS_HEAD_SHA_OVERRIDE (#6918).
+_HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 def _required_env(name: str) -> str:
@@ -122,6 +124,23 @@ def _load_head_sha(payload_path: Path) -> str:
 	if head_sha in (None, "", "null"):
 		return ""
 	return str(head_sha)
+
+
+def _resolve_head_sha(payload_path: Path) -> tuple[str, str]:
+	"""Return (head_sha, error) for the check-run query.
+
+	Check-failure triage sets PR_CHECK_RUNS_HEAD_SHA_OVERRIDE to the failing
+	check's SHA so a PR head that advanced after the failure cannot swap a
+	later commit's check runs into the diagnosis (#6918). An invalid override
+	fails closed and never falls back to the PR payload head. Unset or empty
+	keeps the review/autofix behaviour: the PR payload's current head.
+	"""
+	override = os.environ.get("PR_CHECK_RUNS_HEAD_SHA_OVERRIDE", "")
+	if override:
+		if _HEAD_SHA_RE.fullmatch(override):
+			return override.lower(), ""
+		return "", "invalid_override"
+	return _load_head_sha(payload_path), ""
 
 
 def _run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
@@ -387,7 +406,18 @@ def main() -> int:
 			print("CHECK_RUNS_AUTOFIX disabled via CHECK_RUNS_AUTOFIX_ENABLED=false")
 			return 0
 
-		head_sha = _load_head_sha(payload_path)
+		head_sha, head_sha_error = _resolve_head_sha(payload_path)
+		if head_sha_error == "invalid_override":
+			_write_text(
+				out_path,
+				_sentinel_text(
+					head_sha="",
+					collection_status="unavailable",
+					message="Supplied check head SHA is invalid; no check-run context collected.",
+				),
+			)
+			print("::warning::CHECK_RUNS_AUTOFIX head SHA override invalid.")
+			return 0
 		if not head_sha:
 			_write_text(
 				out_path,

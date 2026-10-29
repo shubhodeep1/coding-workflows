@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Validate the output of the AI conflict-resolver step before committing.
 #
-# Enforces three invariants on the resolver's edits:
+# Enforces four invariants on the resolver's edits:
 #
 #   1. Touched-set ⊆ conflicted-set.  The resolver may only modify files
 #      that contained merge conflicts (paths from `git ls-files --unmerged`
@@ -20,6 +20,10 @@
 #      is what would have caught the build_repo_overview.sh /
 #      protected_paths.txt hallucination on PR #912.
 #
+#   4. No conflicted path left behind.  A conflicted path the resolver did
+#      not touch that is still unmerged in the index fails here, named with
+#      its index stages (PR #6844: a modify/delete fragment).
+#
 # Exit code 0 on success.  Exit code 1 with a diagnostic on the first
 # failure — the caller (review_autofix.yml) treats this as a hard error
 # and skips the [ai-merge-resolve] commit.
@@ -28,7 +32,15 @@
 #   check_resolver_diff.sh \
 #     --conflicted-set <path> \
 #     --touched-set    <path> \
-#     [--repo-root     <path>]
+#     [--repo-root     <path>] \
+#     [--extra-allowed-file <repo-relative path>]...
+#
+# --extra-allowed-file (repeatable) adds a path invariant 1 accepts besides
+# the conflicted set: the pre-push gate's affected tests and companions, so
+# its one test-repair turn on a resolution can pass the subset check. Values
+# that are absolute, contain a `..` segment or control characters are ignored
+# with a warning. Invariants 2-4 are unchanged, and invariant 4 still uses the
+# conflicted set only. Without the flag the script behaves as before.
 #
 # All paths are interpreted as relative to --repo-root (default: $PWD).
 # Paths starting with "/" are treated as absolute.
@@ -38,6 +50,7 @@ set -euo pipefail
 CONFLICTED_SET=""
 TOUCHED_SET=""
 REPO_ROOT="${PWD}"
+EXTRA_ALLOWED=()
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -47,8 +60,21 @@ while [ "$#" -gt 0 ]; do
 			TOUCHED_SET="$2"; shift 2 ;;
 		--repo-root)
 			REPO_ROOT="$2"; shift 2 ;;
+		--extra-allowed-file)
+			if [ "$#" -lt 2 ]; then
+				echo "::error::check_resolver_diff.sh: --extra-allowed-file needs a value" >&2
+				exit 2
+			fi
+			extra_path="$2"
+			if [ -z "${extra_path}" ] || [[ "${extra_path}" == /* ]] || [[ "/${extra_path}/" == */../* ]] || \
+				[[ "${extra_path}" =~ [[:cntrl:]] ]]; then
+				echo "::warning::check_resolver_diff.sh: ignoring unsafe --extra-allowed-file value" >&2
+			else
+				EXTRA_ALLOWED+=("${extra_path}")
+			fi
+			shift 2 ;;
 		-h|--help)
-			sed -n '2,30p' "$0"; exit 0 ;;
+			sed -n '2,46p' "$0"; exit 0 ;;
 		*)
 			echo "::error::check_resolver_diff.sh: unknown argument: $1" >&2
 			exit 2 ;;
@@ -101,7 +127,14 @@ echo "check_resolver_diff: touched=${touched_count} conflicted=${conflicted_coun
 # ---------------------------------------------------------------------------
 # `comm -23 a b` prints lines in a not in b.  A non-empty result means the
 # resolver edited paths that did NOT contain merge conflicts.
-out_of_conflict="$(comm -23 "${TOUCHED_SET}" "${CONFLICTED_SET}" || true)"
+if [ "${#EXTRA_ALLOWED[@]}" -gt 0 ]; then
+	allowed_set="$(mktemp)"
+	{ cat "${CONFLICTED_SET}"; printf '%s\n' "${EXTRA_ALLOWED[@]}"; } | sort -u > "${allowed_set}"
+	out_of_conflict="$(comm -23 "${TOUCHED_SET}" "${allowed_set}" || true)"
+	rm -f "${allowed_set}"
+else
+	out_of_conflict="$(comm -23 "${TOUCHED_SET}" "${CONFLICTED_SET}" || true)"
+fi
 if [ -n "${out_of_conflict}" ]; then
 	echo "::error::Conflict resolver edited files outside the conflicted set:" >&2
 	while IFS= read -r path; do
@@ -173,6 +206,34 @@ if [ "${#workflow_files[@]}" -gt 0 ]; then
 			--repo-root "${REPO_ROOT}" \
 			--files "${workflow_files[@]}"; then
 		echo "::error::Modified workflow file references nonexistent script(s). Aborting." >&2
+		exit 1
+	fi
+fi
+
+# ---------------------------------------------------------------------------
+# (4) No conflicted path left behind
+# ---------------------------------------------------------------------------
+# The resolver's commit stages only the paths it touched, so a conflicted
+# path it never touched stays unmerged and the commit is refused later.
+# PR #6844 passed this script ("touched=1 conflicted=2 ... OK") and then
+# failed at the index guard on a modify/delete changelog fragment.  Name
+# such paths here, with their index stages, instead of reporting OK.
+# Outside a merge (no unmerged entries) this check passes.
+if git rev-parse --git-dir >/dev/null 2>&1; then
+	untouched_unmerged=""
+	while IFS= read -r conflicted; do
+		[ -z "${conflicted}" ] && continue
+		if grep -Fxq -- "${conflicted}" "${TOUCHED_SET}"; then
+			continue
+		fi
+		stages="$(git ls-files -u -- "${conflicted}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+		[ -n "${stages}" ] || continue
+		untouched_unmerged="${untouched_unmerged}${conflicted} (index stages: ${stages% })"$'\n'
+	done < "${CONFLICTED_SET}"
+	if [ -n "${untouched_unmerged}" ]; then
+		echo "::error::Conflict resolver left conflicted path(s) untouched; they would stay unmerged and block the [ai-merge-resolve] commit:" >&2
+		printf '%s' "${untouched_unmerged}" | sed '/^$/d; s/^/  - /' >&2
+		echo "::error::Stages 1 2 or 1 3 mean one side deleted the file: keep or delete it explicitly." >&2
 		exit 1
 	fi
 fi

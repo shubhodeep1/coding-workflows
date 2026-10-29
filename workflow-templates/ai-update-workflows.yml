@@ -4,15 +4,42 @@
 # How it works:
 #   - Runs daily (04:00 UTC) and on repository_dispatch from the upstream
 #     coding-workflows repo when a new stable release is tagged.
-#   - Fetches the latest workflow templates from coding-workflows@stable.
-#   - Compares each template against the local wrapper in .github/workflows/.
-#   - If differences are found, overwrites the local wrapper with the upstream
-#     template and commits directly to the default branch.
+#   - Fetches the latest workflow templates from coding-workflows@stable and
+#     verifies the release's signed sync manifest (Sigstore attestation,
+#     release commit and file hashes) before any fetched code runs.
+#   - Compares each template against the local wrapper in .github/workflows/,
+#     renders the changed wrappers with the release commit SHA, and stages
+#     only paths the signed manifest allows.
+#   - Delivers the changes as a pull request from the branch
+#     auto/update-workflows-<release-sha-12> unless the
+#     UPDATER_PR_DELIVERY_ENABLED repository variable is 'false'. A separate
+#     verify job then checks every file the pull request changes against the
+#     attested release manifest and posts the ai-update-workflows/verify
+#     commit status. Auto-merge is enabled only after that check passes, and
+#     only for a release whose manifest verification reported verified=true;
+#     otherwise the pull request waits for a human.
+#   - With UPDATER_PR_DELIVERY_ENABLED set to 'false', the changes are
+#     instead delivered through a pull request from the ai-sync/stable branch
+#     with auto-merge enabled on it (or merged directly when auto-merge is
+#     unavailable). A PR that branch protection blocks stays open for a human
+#     to merge.
 #   - Sends a Telegram alert listing which wrappers were updated.
 #
+# Permissions: contents (push the update branch), pull-requests (open and
+# refresh the pull request) and statuses (the verify job's commit status).
+#
 # Opting out:
-#   Set the ALLOW_WORKFLOW_EDITS repository variable to 'false' to prevent
-#   automatic updates. The workflow will still run but skip all changes.
+#   Managed wrappers cannot be opted out: ai-workflow-integrity.yml rejects
+#   any pull request or push that edits them, and the upstream drift audit
+#   opens a restore pull request for a drifted wrapper. Setting the
+#   ALLOW_WORKFLOW_EDITS repository variable to 'false' only skips the
+#   .claude/, CLAUDE.md, audit-gate, retired-file and changelog/agents asset
+#   steps; wrappers are still updated and the run logs a deprecation warning.
+#   Holding updates: this job runs by default. To hold wrapper updates, set
+#   the AI_WORKFLOW_AUTO_UPDATE_ENABLED repository variable to 'false' (any
+#   letter case); wrappers then stay at their pinned release. Unset, empty
+#   or any other value means the job runs. The gate lives here, so a sync of
+#   this file cannot erase the hold.
 #
 # IMPORTANT: This file is managed by coding-workflows and will be overwritten
 # by the update process. Do not add custom logic here.
@@ -25,9 +52,16 @@ on:
   workflow_dispatch: {}
 permissions:
   contents: write
+  pull-requests: write
+  statuses: write
 jobs:
   update:
+    if: ${{ vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false' }}
     uses: shubhodeep1/coding-workflows/.github/workflows/update_workflows.yml@stable
     with:
       allow_workflow_edits: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' }}
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

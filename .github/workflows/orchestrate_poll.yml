@@ -27,6 +27,11 @@ name: AI Orchestrate Poller (Reusable)
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: orchestrate_poll
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
@@ -66,7 +71,17 @@ jobs:
       # resolution or judge evaluation).
       group: ai-orchestrate-poll-${{ github.repository }}
       cancel-in-progress: false
+    outputs:
+      # Daily Claude pool usage report (claude_pool_daily_usage job): due when
+      # this tick is in the slot and the day's cache marker was not found.
+      claude_pool_daily_due: ${{ steps.pool_daily_seen.outcome == 'success' && steps.pool_daily_seen.outputs.cache-hit != 'true' && 'true' || 'false' }}
+      claude_pool_daily_date: ${{ steps.pool_daily_slot.outputs.date }}
 
+    env:
+      AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+      # The poller resumes its own judges on a later tick (issue #7370), so
+      # a capacity wait records the tracker only, never an item to re-run.
+      CLAUDE_CAPACITY_WAIT_ITEM_KIND: none
     steps:
       - name: Create runtime workspace
         run: |
@@ -101,13 +116,46 @@ jobs:
           echo "GH_PAT_BUDGET phase=start workflow=orchestrate_poll job=poll remaining=${remaining} reset=${reset} used_in_job=unknown"
 
       - name: Resolve workflow support ref for gh retry
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_poll\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_poll\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source for gh retry
@@ -122,7 +170,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback for gh retry
-        if: ${{ steps.checkout_pre_support_source.outcome == 'failure' }}
+        if: ${{ steps.checkout_pre_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -139,9 +187,15 @@ jobs:
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot for gh retry
-        if: ${{ env.SCRIPT_REF != 'main' }}
+        if: ${{ env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -194,6 +248,9 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+          MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
+          MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
+          MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
           MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
           MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
         run: |
@@ -212,10 +269,33 @@ jobs:
         id: find_tracking
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          # Claude capacity wait (issue #7370): one listing of open
+          # ai:provider-outage trackers, before any early exit. No other poll
+          # call reads this label (provider_outage.py sweep runs only in
+          # review_autofix_sweep.yml). capacity_wait=true makes this tick skip
+          # the pool probe outside the hourly window (its Claude roles wait
+          # with CLAUDE_POOL_REASON=all_gated) and run the hourly resume pass
+          # inside it. A failed read fails open: capacity_wait=false. Only a
+          # tracker by a repository-associated author (the GH_PAT account that
+          # opens it) counts, so an outsider's issue cannot pause the probes.
+          capacity_wait=false
+          if outage_trackers="$(gh_retry gh api "repos/${{ github.repository }}/issues?labels=ai:provider-outage&state=open&per_page=100" 2>/dev/null)" \
+            && printf '%s' "${outage_trackers}" > "${RUNTIME_DIR}/provider_outage_trackers.json" \
+            && printf '%s' "${outage_trackers}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            if printf '%s' "${outage_trackers}" | jq -e 'any(.[]; (.pull_request | not) and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity ")))' >/dev/null 2>&1; then
+              capacity_wait=true
+            fi
+          else
+            echo "::warning::Claude capacity tracker listing failed; treating capacity_wait as false."
+          fi
+          echo "capacity_wait=${capacity_wait}" >> "$GITHUB_OUTPUT"
+          echo "CLAUDE_CAPACITY_WAIT_TRACKER capacity_wait=${capacity_wait}"
 
           # Find all open issues with the orchestrator tracking label
           TRACKING_ISSUES="$(gh_retry gh issue list \
@@ -233,12 +313,95 @@ jobs:
           if [ "${COUNT}" -eq 0 ]; then
             echo "No active orchestrator projects. Exiting gracefully — cron will start the next cycle."
             echo "has_tracking=false" >> "$GITHUB_OUTPUT"
-            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            # Standalone stall recovery (issue #7284, activation gap from PR
+            # #7044) runs only inside the full poller, so a repository with
+            # no open tracking issue never recovered a stalled standalone
+            # issue. The full poller runs when this probe finds candidates.
+            # Same truthy rule as is_truthy in orchestrate_poll_process.sh.
+            # standalone_recovery (issue #7183) still gates the no-project
+            # toolchain steps and "Run standalone stall recovery without
+            # active projects", which runs when the probe below leaves
+            # has_work=false.
+            case "$(printf '%s' "${ENABLE_STANDALONE_STALL_RECOVERY:-true}" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) standalone_recovery=true ;;
+              *) standalone_recovery=false ;;
+            esac
+            echo "Standalone stall recovery without active projects: standalone_recovery=${standalone_recovery}"
+            echo "standalone_recovery=${standalone_recovery}" >> "$GITHUB_OUTPUT"
+            if [ "${standalone_recovery}" != "true" ]; then
+              echo "STANDALONE_STALL_PROBE outcome=skip reason=disabled"
+              echo "has_work=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # §14 audit: this step's only other call is the tracking-label
+            # issue listing above, which cannot see standalone issues. The
+            # poller's batched helpers (_fetch_standalone_marker_issues_graphql,
+            # _fetch_candidate_issue_details_graphql / _candidate_details_json)
+            # run only inside the full poller, after this decision is made.
+            # This is one aliased GraphQL call, made only on ticks with no
+            # open tracking issue; it reads integer counts only. The labels
+            # are the poller's pipeline_labels, one per alias so no
+            # multi-label filter semantics are assumed; the searches use the
+            # same query strings as _fetch_standalone_marker_issues_graphql.
+            # Fail open: a failed or malformed probe runs the full poller.
+            probe_owner="${GITHUB_REPOSITORY%%/*}"
+            probe_name="${GITHUB_REPOSITORY#*/}"
+            probe_q_state="repo:${GITHUB_REPOSITORY} is:issue is:open \"AI_STANDALONE_STALL_STATE_V1\" in:comments"
+            probe_q_clarify="repo:${GITHUB_REPOSITORY} is:issue is:open \"ai:clarification-questions\" in:comments"
+            # shellcheck disable=SC2016
+            probe_query='query($owner: String!, $name: String!, $q_state: String!, $q_clarify: String!) {
+            repository(owner: $owner, name: $name) {
+              l0: issues(states: OPEN, labels: ["ai:clarification"], first: 1) { totalCount }
+              l1: issues(states: OPEN, labels: ["ai:planning"], first: 1) { totalCount }
+              l2: issues(states: OPEN, labels: ["ai:awaiting-approval"], first: 1) { totalCount }
+              l3: issues(states: OPEN, labels: ["ai:implementing"], first: 1) { totalCount }
+              l4: issues(states: OPEN, labels: ["ai:done"], first: 1) { totalCount }
+              l5: issues(states: OPEN, labels: ["ai:ready-to-merge"], first: 1) { totalCount }
+              l6: issues(states: OPEN, labels: ["ai:review-blocked"], first: 1) { totalCount }
+            }
+            state: search(query: $q_state, type: ISSUE, first: 1) { issueCount }
+            clarify: search(query: $q_clarify, type: ISSUE, first: 1) { issueCount }
+          }'
+            probe_resp=""
+            if ! probe_resp="$(gh_retry gh api graphql \
+                -f owner="${probe_owner}" \
+                -f name="${probe_name}" \
+                -f q_state="${probe_q_state}" \
+                -f q_clarify="${probe_q_clarify}" \
+                -f query="${probe_query}" 2>/dev/null)"; then
+              echo "::warning::Standalone stall recovery probe failed; running the full poller so recovery is not skipped."
+              echo "STANDALONE_STALL_PROBE outcome=probe_failed reason=graphql_failed"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            probe_counts=""
+            if ! probe_counts="$(printf '%s' "${probe_resp}" | jq -er '
+                def n: if type == "number" and . >= 0 and . == floor then . else error("bad") end;
+                .data as $d
+                | [$d.repository.l0.totalCount, $d.repository.l1.totalCount, $d.repository.l2.totalCount,
+                   $d.repository.l3.totalCount, $d.repository.l4.totalCount, $d.repository.l5.totalCount,
+                   $d.repository.l6.totalCount] as $labels
+                | [($labels | map(n) | add), ($d.state.issueCount | n), ($d.clarify.issueCount | n)]
+                | @tsv' 2>/dev/null)"; then
+              echo "::warning::Standalone stall recovery probe returned an unexpected response; running the full poller so recovery is not skipped."
+              echo "STANDALONE_STALL_PROBE outcome=probe_failed reason=malformed"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            read -r probe_labeled probe_state probe_clarify <<< "${probe_counts}"
+            if [ $((probe_labeled + probe_state + probe_clarify)) -gt 0 ]; then
+              echo "STANDALONE_STALL_PROBE outcome=candidates labeled=${probe_labeled} state_marker=${probe_state} clarify_marker=${probe_clarify}"
+              echo "has_work=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "STANDALONE_STALL_PROBE outcome=none labeled=${probe_labeled} state_marker=${probe_state} clarify_marker=${probe_clarify}"
+              echo "has_work=false" >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
 
           echo "has_tracking=true" >> "$GITHUB_OUTPUT"
           echo "has_work=true" >> "$GITHUB_OUTPUT"
+          echo "standalone_recovery=false" >> "$GITHUB_OUTPUT"
 
           # If every active tracking issue is the test-and-mark-stable
           # smoke fixture, suppress per-phase Telegram alerts; the gate
@@ -271,34 +434,36 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Setup Node.js
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: Setup Python
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install Codex CLI
-        if: steps.find_tracking.outputs.has_work == 'true'
-        # Intentionally use the released action ref as the rollout boundary.
-        # Consumers pick this up when test-and-mark-stable retags @stable.
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
+        # Pinned by commit (tele-funtoken-msg-scoring#4566); bump it in the PR
+        # that changes the action.
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
+      # Idle ticks also install it while standalone stall recovery and its
+      # stall judge are on, because that judge can run on OpenCode (#7174).
       - name: Install OpenCode CLI for isolated review-blocked judge
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: steps.find_tracking.outputs.has_work == 'true' || (vars.ENABLE_STANDALONE_STALL_RECOVERY != 'false' && vars.ENABLE_STALL_JUDGE != 'false')
         continue-on-error: true
-        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
+        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f
         with:
           opencode_version: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
 
       - name: Install OS-level core tools
-        if: steps.find_tracking.outputs.has_work == 'true'
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         shell: bash
         run: |
           set -euo pipefail
@@ -332,7 +497,9 @@ jobs:
           echo "PYTHONDONTWRITEBYTECODE=1" >> "$GITHUB_ENV"
 
       - name: Validate required environment variables
-        if: steps.find_tracking.outputs.has_work == 'true'
+        id: validate_env
+        if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
+        continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -345,13 +512,46 @@ jobs:
 
       - name: Resolve workflow support ref
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_poll\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_poll\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -366,7 +566,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -384,9 +584,15 @@ jobs:
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
+        if: ${{ env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -397,6 +603,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        id: stage_support
         continue-on-error: ${{ steps.find_tracking.outputs.has_work != 'true' }}
         run: |
           set -euo pipefail
@@ -404,7 +611,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py workflow_failure_heal.py; do
+          for f in gh_helpers.sh pr_dependency.py partial_delivery.py pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py workflow_failure_heal.py files_touched_scope_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -417,12 +624,12 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
-          # render_prompt.py is the optional Python backend for the
-          # render_prompt.sh shim adopted by branches that took the issue
-          # #3043 refactor.  main ships a self-contained bash render_prompt.sh
-          # that needs no backend, so the file is absent on main and must be
-          # staged only when the branch under processing actually carries it.
-          # Absence is expected (non-shim branches, incl. main) and must not
+          # render_prompt.py is the Python backend of the render_prompt.sh
+          # shim (issue #3043 refactor). main ships both, the shim needs the
+          # backend, and check_workflow_script_refs.py fails CI if it goes
+          # missing. Some older refs still bundle a self-contained bash
+          # render_prompt.sh with no backend, so absence on the ref under
+          # processing (and on main's copy) only skips staging and must not
           # fail the bootstrap; presence stages it beside the shim so the
           # shim resolves ${SCRIPT_DIR}/render_prompt.py.
           for f in render_prompt.py; do
@@ -432,6 +639,54 @@ jobs:
             fi
             if [ ! -f "${src}" ]; then
               echo "::notice::Optional render_prompt.py backend unavailable on ${SCRIPT_REF}; render_prompt.sh shim (if present) resolves it elsewhere or the bundled bash renderer is used."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
+          # Issue #6680 stall-recovery helpers sourced by the poller. Optional:
+          # when absent, the poller's fail-closed stubs keep the resolver path.
+          for f in orchestrate_stall_retired_conflict.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; retired-conflict re-issue stays off."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
+          # Standalone stall recovery runs the check-triage resolution gate
+          # (issue #7095) when an ai:check-triage fix PR merged into the
+          # triaged PR's branch instead of the default branch. Optional: when
+          # absent, the issue stays open and unlabelled (STALL_CHECK_TRIAGE_GATE
+          # outcome=skip reason=support_missing).
+          for f in check_triage_resolution.py; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; the stall-recovery check-triage close gate stays off."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
+          # Issue #7177: the noop-suspicious recovery sweep's force-merge gate B
+          # sources this audit helper. Optional: when absent, gate B fails closed.
+          for f in validate_editor_audit.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional support script ${f} is unavailable on ${SCRIPT_REF}; the no-op force-merge fallback stays closed."
               continue
             fi
             install -m 0755 "${src}" "scripts/${f}"
@@ -522,7 +777,7 @@ jobs:
             install -m 0644 "${src}" "prompts/${security_prompt}"
           done
 
-          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-judge-security-pass-exhaustion.txt _templates/mode-orchestrate-poll-judge.txt _templates/mode-security-audit.txt references/security-money-lens.txt; do
+          for prompt_assembly_asset in _identity_recall.txt _prelude_common.txt _prelude_semble.txt _prelude_output_contract.txt _templates/mode-judge.txt _templates/mode-judge-review-blocked.txt _templates/mode-judge-stall-recovery.txt _templates/mode-judge-security-pass-exhaustion.txt _templates/mode-orchestrate-poll-judge.txt _templates/mode-security-audit.txt references/security-money-lens.txt references/output-contract.txt contracts/mode-security-audit.yml; do
             asset_src=".codex-workflow-src/prompts/${prompt_assembly_asset}"
             if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/prompts/${prompt_assembly_asset}" ]; then
               asset_src=".codex-workflow-src-main/prompts/${prompt_assembly_asset}"
@@ -550,15 +805,16 @@ jobs:
             mkdir -p "$(dirname -- "${activation_asset}")"
             install -m 0644 "${asset_src}" "${activation_asset}"
           done
-          # Unblock scan (replace-claude-sessions plan Phase 7). Optional: a
-          # missing file only skips the scan, never the poll.
-          for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py; do
+          # Unblock scan (replace-claude-sessions plan Phase 7) and the orphan
+          # fix-up close that rides its tick (orphan_fixup_close.py). Optional:
+          # a missing file only skips that step, never the poll.
+          for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py scripts/orphan_fixup_close.py; do
             asset_src=".codex-workflow-src/${unblock_asset}"
             if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/${unblock_asset}" ]; then
               asset_src=".codex-workflow-src-main/${unblock_asset}"
             fi
             if [ ! -f "${asset_src}" ]; then
-              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the unblock scan is skipped."
+              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the step that needs it is skipped."
               continue
             fi
             install -m 0644 "${asset_src}" "${unblock_asset}"
@@ -644,8 +900,22 @@ jobs:
       - name: Replay failed trusted reclarify commands
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           RECLARIFY_REQUEUE_SWEEP_ONLY: "true"
+          # Unrouted-reply detection on blocked issues (issue #6630); the
+          # poller script carries the same defaults.
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          RECLARIFY_UNROUTED_DETECT_ENABLED: ${{ vars.RECLARIFY_UNROUTED_DETECT_ENABLED || 'true' }}
+          RECLARIFY_UNROUTED_GRACE_MINUTES: ${{ vars.RECLARIFY_UNROUTED_GRACE_MINUTES || '15' }}
+          RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           # Consumers pinned to older support commits may not have this
@@ -745,12 +1015,18 @@ jobs:
       # Claude engine (replace-claude-sessions plan Phase 5c): the orchestrator
       # judges resolve their engine per tracking issue inside the poller
       # (scripts/orchestrate_poll_process.sh poller_claude_judge). The CLI
-      # and the account pool are fetched only when a tick has work and at
-      # least one judge role resolves to Claude, or an active project label
-      # selects Claude. The per-project judge still resolves its own labels.
+      # and the account pool are fetched only when at least one judge role
+      # resolves to Claude, or an active project label selects Claude. The
+      # step runs on every tick: on a tick with no tracking issue the
+      # tracking checks see an empty list and only the standalone check
+      # below can select Claude, for the idle-tick standalone recovery step
+      # (#7174). The per-project judge still resolves its own labels.
+      # A standalone stall judge (run_standalone_stall_recovery) resolves
+      # STALL_JUDGE from its own issue's labels, not the tracking labels, so
+      # when no tracking issue selected Claude the step also checks the
+      # STALL_JUDGE default and open non-tracking `ai:engine-claude` issues.
       - name: Resolve AI engine
         id: ai_engine
-        if: steps.find_tracking.outputs.has_work == 'true'
         env:
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
@@ -759,8 +1035,12 @@ jobs:
           AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
           AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           AI_ENGINE_LABELS: ""
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
+          ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
         run: |
           set -euo pipefail
           any_claude=false
@@ -770,7 +1050,7 @@ jobs:
           if [ -f scripts/ai_engine.sh ] && jq -e 'any(.[]; all(.labels[]?; .name != "ai:codex"))' "${RUNTIME_DIR}/tracking_issues.json" >/dev/null; then
             # shellcheck source=/dev/null
             if source scripts/ai_engine.sh; then
-              for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do
+              for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT ACTIVATION_VERIFY; do
                 if [ "$(ai_engine_for_role "${role}" || echo codex)" = "claude" ]; then
                   any_claude=true
                 fi
@@ -779,10 +1059,100 @@ jobs:
               echo "::warning::Failed to source scripts/ai_engine.sh; continuing with codex defaults." >&2
             fi
           fi
+          decided_by=none
+          if [ "${any_claude}" = "true" ]; then
+            decided_by=tracking
+          fi
+          # Standalone stall judges (same truthy test as is_truthy in
+          # scripts/orchestrate_poll_process.sh) pick their engine from the
+          # standalone issue's own labels.
+          standalone_flag_truthy() {
+            case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if [ "${any_claude}" != "true" ] \
+            && standalone_flag_truthy "${ENABLE_STANDALONE_STALL_RECOVERY:-true}" \
+            && standalone_flag_truthy "${ENABLE_STALL_JUDGE:-true}"; then
+            if ! declare -F ai_engine_for_role >/dev/null 2>&1 && [ -f scripts/ai_engine.sh ]; then
+              # shellcheck source=/dev/null
+              source scripts/ai_engine.sh || echo "::warning::Failed to source scripts/ai_engine.sh for the standalone stall judge check." >&2
+            fi
+            if declare -F ai_engine_for_role >/dev/null 2>&1 \
+              && [ "$(AI_ENGINE_LABELS='[]' ai_engine_for_role STALL_JUDGE || echo codex)" = "claude" ]; then
+              any_claude=true
+              decided_by=standalone_default
+            else
+              # §14 audit: find_tracking's listing is AND-scoped to
+              # ai:orchestrator-tracking, and the poller's batched
+              # _fetch_candidate_issue_details_graphql / _candidate_details_json
+              # cache is built later inside "Process each tracking issue",
+              # after the pool must already exist. This read runs only when
+              # neither the tracking labels nor the STALL_JUDGE default chose
+              # Claude, so the default configuration makes no extra call.
+              # Fail open: a failed read keeps any_claude=false and the
+              # judge falls back to the sandboxed OpenCode path.
+              # --limit 1000 matches run_standalone_stall_recovery's
+              # per-label scan. A listing that fills the cap may omit an
+              # eligible issue that recovery still selects, so it fetches
+              # the pool rather than risk a judge without credentials.
+              source scripts/gh_helpers.sh 2>/dev/null || true
+              type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+              standalone_claude_issues=""
+              if standalone_claude_issues="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --label "ai:engine-claude" --state open --json number,labels --limit 1000 2>/dev/null)"; then
+                if printf '%s' "${standalone_claude_issues}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                  if printf '%s' "${standalone_claude_issues}" | jq -e 'length >= 1000' >/dev/null 2>&1; then
+                    any_claude=true
+                    decided_by=standalone_listing_capped
+                  elif printf '%s' "${standalone_claude_issues}" | jq -e 'any(.[]; any(.labels[]?; .name=="ai:engine-claude") and (any(.labels[]?; .name=="ai:codex")|not) and (any(.labels[]?; .name=="ai:orchestrator-tracking")|not))' >/dev/null 2>&1; then
+                    any_claude=true
+                    decided_by=standalone_label
+                  fi
+                else
+                  echo "::warning::Standalone ai:engine-claude issue listing was not a JSON array; skipping the Claude credential fetch for standalone stall judges." >&2
+                fi
+              else
+                echo "::warning::Could not list open ai:engine-claude issues; skipping the Claude credential fetch for standalone stall judges." >&2
+              fi
+            fi
+          fi
+          echo "Claude credential preflight: any_claude=${any_claude} decided_by=${decided_by}"
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
+      # Claude capacity wait (issue #7370): while a capacity tracker is open
+      # the pool is probed only in the hourly window, where the resume pass
+      # runs; between windows the poller's Claude roles wait without a probe.
+      - name: Compute Claude pool hourly window
+        id: pool_window
+        env:
+          CLAUDE_POOL_HEALTH_WINDOW_MINUTES: ${{ vars.CLAUDE_POOL_HEALTH_WINDOW_MINUTES || '5' }}
+        run: |
+          window="${CLAUDE_POOL_HEALTH_WINDOW_MINUTES:-5}"
+          [[ "${window}" =~ ^[0-9]+$ ]] || window=5
+          minute=$((10#$(date -u +%M)))
+          in_window=false
+          [ "${minute}" -ge "${window}" ] || in_window=true
+          # Scheduled ticks can arrive 25-60 minutes apart and rarely land in
+          # the first minutes of the hour, so the window also opens once an
+          # hour has passed since the last capacity-resume pass (the
+          # ai:claude-capacity-wait-probe:v1 marker on the trusted capacity
+          # tracker find_tracking already listed; no extra API call). A
+          # missing or unreadable marker opens it, which fails open toward a
+          # probe.
+          trackers_file="${RUNTIME_DIR:-}/provider_outage_trackers.json"
+          if [ "${in_window}" != true ] && [ -f "${trackers_file}" ]; then
+            last_probe="$(jq -r 'first(.[]? | select((.pull_request | not) and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))) | (((.body // "") | capture("<!-- ai:claude-capacity-wait-probe:v1 at=(?<at>[0-9TZ:-]{1,40}) -->") | .at) // "")) // empty' "${trackers_file}" 2>/dev/null || true)"
+            last_epoch="$(date -u -d "${last_probe:-invalid}" +%s 2>/dev/null || echo 0)"
+            [[ "${last_epoch}" =~ ^[0-9]+$ ]] || last_epoch=0
+            if [ $(( $(date -u +%s) - last_epoch )) -ge 3300 ]; then
+              in_window=true
+            fi
+          fi
+          echo "in_window=${in_window}" >> "$GITHUB_OUTPUT"
+
       - name: Install Claude Code CLI
-        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        if: (steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude
         with:
@@ -790,20 +1160,106 @@ jobs:
 
       - name: Resolve Claude credential
         id: claude_pool
-        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        if: (steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
+      # Hourly Telegram DEBUG for gated-only pool accounts, WARNING for rejected
+      # tokens or failed probes; silent while every account is below the gate
+      # and no token or probe failed (#6951).
+      # Hourly Claude capacity-resume pass (issue #7370): resumes the work
+      # recorded on the open capacity tracker once an account is usable,
+      # then closes the tracker; while the pool is still gated it only lists
+      # the waiting items for the pool-health alert.
+      - name: Resume Claude capacity waits
+        id: capacity_resume
+        if: steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          CLAUDE_POOL_AVAILABLE: ${{ steps.claude_pool.outputs.available || 'false' }}
+          PROVIDER_OUTAGE_REVIEW_WORKFLOW: ${{ endsWith(github.repository, '/coding-workflows') && 'internal-review.yml' || 'ai-review.yml' }}
+          PROVIDER_OUTAGE_RESUME_MAX_DISPATCH: ${{ vars.PROVIDER_OUTAGE_RESUME_MAX_DISPATCH || '50' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'false' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: |
+          set -uo pipefail
+          helper=".codex-workflow-src/scripts/provider_outage.py"
+          if [ ! -f "${helper}" ] || [ -L "${helper}" ]; then
+            echo "::warning::PROVIDER_OUTAGE op=capacity_resume outcome=skip reason=helper_missing"
+            exit 0
+          fi
+          alert_file="$(mktemp)"
+          items_file="$(mktemp)"
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${helper}" capacity-resume --repo "${REPOSITORY}" \
+            --pool-available "${CLAUDE_POOL_AVAILABLE}" --alert-out "${alert_file}" --items-out "${items_file}" || true
+          if [ -s "${items_file}" ] && jq -e '(.count | type) == "number"' "${items_file}" >/dev/null 2>&1; then
+            echo "items_json=$(jq -c . "${items_file}")" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -s "${alert_file}" ] && [ -f .codex-workflow-src/scripts/tg_helpers.sh ]; then
+            # shellcheck disable=SC1091
+            source .codex-workflow-src/scripts/tg_helpers.sh
+            # DEBUG: the "capacity back" notice reports work the pass already
+            # resumed; nobody has to act (agents.md "Telegram alert levels").
+            tg_send_msg "$(cat "${alert_file}")" "DEBUG" >/dev/null 2>&1 || true
+          fi
+          rm -f -- "${alert_file}" "${items_file}"
+
+      - name: Alert on Claude pool accounts at the usage gate
+        if: (steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')
+        continue-on-error: true
+        env:
+          CLAUDE_CAPACITY_WAIT_ITEMS: ${{ steps.capacity_resume.outputs.items_json || '' }}
+          CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}
+          CLAUDE_POOL_HEALTH_ALERT_ENABLED: ${{ vars.CLAUDE_POOL_HEALTH_ALERT_ENABLED || 'true' }}
+          CLAUDE_POOL_HEALTH_WINDOW_MINUTES: ${{ vars.CLAUDE_POOL_HEALTH_WINDOW_MINUTES || '5' }}
+          CLAUDE_ENGINE_CONFIG: .codex-workflow-src/.github/ai/claude_engine.json
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: bash .codex-workflow-src/scripts/claude_pool_health_alert.sh
+
+      # Daily Claude pool usage report: decides whether the
+      # claude_pool_daily_usage job below runs on this tick. coding-workflows
+      # only (the pool is shared by every consumer repo), from
+      # CLAUDE_POOL_DAILY_USAGE_HOUR_UTC (default 0 = 08:00 SGT), once per UTC
+      # day: the job saves an actions/cache marker for the day after sending.
+      - name: Check Claude pool daily usage slot
+        id: pool_daily_slot
+        if: github.repository == 'shubhodeep1/coding-workflows'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_DAILY_USAGE_ENABLED: ${{ vars.CLAUDE_POOL_DAILY_USAGE_ENABLED || 'true' }}
+          CLAUDE_POOL_DAILY_USAGE_HOUR_UTC: ${{ vars.CLAUDE_POOL_DAILY_USAGE_HOUR_UTC || '0' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: bash .codex-workflow-src/scripts/claude_pool_daily_usage.sh slot
+
+      - name: Look up today's Claude pool daily usage marker
+        id: pool_daily_seen
+        if: steps.pool_daily_slot.outputs.in_slot == 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .claude-pool-daily-usage/sent
+          key: claude-pool-daily-usage-v1-${{ steps.pool_daily_slot.outputs.date }}
+          lookup-only: true
+
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}
           UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
@@ -811,11 +1267,16 @@ jobs:
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
           ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}
           # The security audit falls back to codex when every account is over the gate.
-          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || (steps.find_tracking.outputs.capacity_wait == 'true' && 'all_gated') || '' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
+          SECURITY_AUDIT_LINE_OWNERSHIP: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP || 'project' }}
+          SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW || '40' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          # Audit a clean worktree of the audited head (scripts/orchestrate_poll_process.sh
+          # security_pass_prepare_audit_worktree); false audits the poller checkout in place.
+          SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}
           # Claude engine (plan Phase 5c): the judges' engine, per tracking
           # issue (scripts/ai_engine.sh; CLAUDE_FIXER_ENABLED=false keeps
           # RB_JUDGE on codex).
@@ -826,26 +1287,52 @@ jobs:
           AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
           AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
+          PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
+          NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
+          ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
+          ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
+          ORPHAN_FIXUP_CLOSE_MAX_PER_TICK: ${{ vars.ORPHAN_FIXUP_CLOSE_MAX_PER_TICK || '5' }}
+          ORPHAN_FIXUP_CLOSE_GRACE_MINUTES: ${{ vars.ORPHAN_FIXUP_CLOSE_GRACE_MINUTES || '60' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
           UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
+          UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS: ${{ vars.UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS || '24' }}
           MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
           MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
           SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE: ${{ vars.SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE || 'true' }}
+          # One-shot re-dispatch of projects parked by a stale integration-branch
+          # validation wrapper pin (issue #7138).
+          VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED: ${{ vars.VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED || 'true' }}
+          VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}
+          VALIDATION_HARNESS_HOLD_MAX_DAYS: ${{ vars.VALIDATION_HARNESS_HOLD_MAX_DAYS || '14' }}
+          VALIDATION_HARNESS_MAX_RESUMES_PER_FP: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES_PER_FP || '2' }}
+          VALIDATION_HARNESS_MAX_RESUMES: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES || '4' }}
+          VALIDATION_HARNESS_ROUTE_LOGIN: ${{ vars.VALIDATION_HARNESS_ROUTE_LOGIN || '' }}
           STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
+          # Issue #7657: the close sweep leaves a bound partial-delivery PR's issue open.
+          PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
           MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
           VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
           COMPREHENSIVE_RELEASE_WORKFLOW_FILE: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_FILE || 'promote-main-to-stable.yml' }}
           COMPREHENSIVE_RELEASE_WORKFLOW_REF: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_REF || 'main' }}
           COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS: ${{ vars.COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS || '21600' }}
+          PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}
           COMPREHENSIVE_CYCLE_BOT_LOGINS: ${{ vars.COMPREHENSIVE_CYCLE_BOT_LOGINS || 'github-actions[bot]' }}
           COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
           COMPREHENSIVE_VERIFICATION_RETRY_MAX: ${{ vars.COMPREHENSIVE_VERIFICATION_RETRY_MAX || '24' }}
@@ -858,11 +1345,16 @@ jobs:
           # both the per-PR review side AND the orchestrator-poller side.
           ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
           ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}
+          ORCH_STATE_PRUNE_ENABLED: ${{ vars.ORCH_STATE_PRUNE_ENABLED || 'true' }}
+          ORCH_STATE_PRUNE_MAX_DELETES: ${{ vars.ORCH_STATE_PRUNE_MAX_DELETES || '50' }}
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
           RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          # Merge-base freshness gate (scripts/pr_checks_lib.sh, Q35: A).
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           # Freshness window (minutes) the in-flight / zombie guards use for
           # review-family runs (AI Review / Internal Review / Review Autofix),
           # which can legitimately run past the generic stall threshold (up to
@@ -878,6 +1370,13 @@ jobs:
           STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
           STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
           MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
+          # Standalone conflict sweep: page once per PR head after this many
+          # automatic resolution attempts (0 disables the alert).
+          STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          # Standalone conflict / no-op sweeps page for real standalone PRs even
+          # when every tracking issue is a smoke fixture (find_tracking's SILENT
+          # override, issue #7177), so read vars, not env.
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           # Phase-specific override for ai:done — defaults to a high cap (99)
           # that effectively avoids `skip` in normal operation windows, though
           # `skip` can still occur if the cap is eventually reached.  This
@@ -893,6 +1392,11 @@ jobs:
           ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}
           ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          # Issue #6680 kill switch for closing and re-issuing a PR whose only
+          # host-only conflicts are retired files the base no longer has.
+          STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
+          # PR #7709: stall recovery's check-triage resolution gate; false turns it off.
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
           CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'false' }}
           CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
           CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
@@ -911,8 +1415,11 @@ jobs:
           # restores the legacy every-failed-verdict accounting.
           RECOVERY_COUNT_DISTINCT_FINDINGS: ${{ vars.RECOVERY_COUNT_DISTINCT_FINDINGS || 'false' }}
           MAX_VALIDATION_RECOVERY_ATTEMPTS: ${{ vars.MAX_VALIDATION_RECOVERY_ATTEMPTS || '2' }}
+          MAX_VALIDATION_DISPATCHES_PER_CYCLE: ${{ vars.MAX_VALIDATION_DISPATCHES_PER_CYCLE || '3' }}
           MAX_VALIDATION_FIX_BATCH_CYCLES: ${{ vars.MAX_VALIDATION_FIX_BATCH_CYCLES || '30' }}
           BRANCH_REBUILD_ENABLED: ${{ vars.BRANCH_REBUILD_ENABLED || 'false' }}
+          INTEGRATION_CONFLICT_PARK_ENABLED: ${{ vars.INTEGRATION_CONFLICT_PARK_ENABLED || 'true' }}
+          INTEGRATION_CONFLICT_PARK_GATE_CAP: ${{ vars.INTEGRATION_CONFLICT_PARK_GATE_CAP || vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
           BRANCH_REBUILD_THRESHOLD_HOURS: ${{ vars.BRANCH_REBUILD_THRESHOLD_HOURS || '24' }}
           BRANCH_REBUILD_COOLDOWN_HOURS: ${{ vars.BRANCH_REBUILD_COOLDOWN_HOURS || '48' }}
           # Integration-backpressure size-aware margin (see scripts/orchestrate_poll_process.sh
@@ -951,37 +1458,416 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
           PYTHONDONTWRITEBYTECODE: "1"
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
-        run: bash scripts/orchestrate_poll_process.sh
+        run: |
+          set -euo pipefail
+          bash scripts/orchestrate_poll_process.sh
 
-      - name: Release staged-support latches without active projects
-        if: steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows'
+      # Cron ticks with no open tracking issue skip the full poller above, so
+      # this is the only place standalone stall recovery (including the
+      # automation-path plan-hold recheck) runs on those ticks (#7174). Its
+      # has_work gate is the complement of "Process each tracking issue", so
+      # exactly one of the two runs per tick. The env is the full poller
+      # step's env plus the sweep flag (tests/test_orchestrate_poll_workflow_contract.py
+      # checks the two stay equal); ENABLE_STANDALONE_STALL_RECOVERY=false
+      # turns it off. continue-on-error keeps a recovery failure from skipping
+      # the latch-release and unblock-scan sweeps that follow on idle ticks.
+      - name: Run standalone stall recovery without active projects
+        # validate_env and stage_support are continue-on-error on idle ticks;
+        # a missing key or a staging failure skips recovery (issue #7183).
+        # validate_env is skipped when ENABLE_STANDALONE_STALL_RECOVERY is off.
+        if: steps.find_tracking.outputs.has_work != 'true' && steps.validate_env.outcome == 'success' && steps.stage_support.outcome == 'success'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
-          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
-          STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
-        run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
-
-      - name: Run unblock scan without active projects
-        if: steps.find_tracking.outputs.has_work != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
+          UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}
+          UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
+          RUNTIME_BLOCKER_CHECK_ENABLED: ${{ vars.RUNTIME_BLOCKER_CHECK_ENABLED || 'true' }}
+          ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
+          ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || (steps.find_tracking.outputs.capacity_wait == 'true' && 'all_gated') || '' }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
+          SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
+          SECURITY_AUDIT_LINE_OWNERSHIP: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP || 'project' }}
+          SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW || '40' }}
+          SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED: ${{ vars.SECURITY_PASS_AUDIT_CLEAN_WORKTREE_ENABLED || 'true' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
+          AI_ENGINE_STALL_JUDGE: ${{ vars.AI_ENGINE_STALL_JUDGE || '' }}
+          AI_ENGINE_INTEGRATION_JUDGE: ${{ vars.AI_ENGINE_INTEGRATION_JUDGE || '' }}
+          AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
+          AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
+          CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
+          ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}
+          ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
+          PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
+          NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
+          ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
+          ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
+          ORPHAN_FIXUP_CLOSE_MAX_PER_TICK: ${{ vars.ORPHAN_FIXUP_CLOSE_MAX_PER_TICK || '5' }}
+          ORPHAN_FIXUP_CLOSE_GRACE_MINUTES: ${{ vars.ORPHAN_FIXUP_CLOSE_GRACE_MINUTES || '60' }}
           UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
           UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
           UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
           UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
+          UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS: ${{ vars.UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS || '24' }}
+          MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
+          MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
+          SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
+          SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE: ${{ vars.SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE || 'true' }}
+          VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED: ${{ vars.VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED || 'true' }}
+          VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}
+          VALIDATION_HARNESS_HOLD_MAX_DAYS: ${{ vars.VALIDATION_HARNESS_HOLD_MAX_DAYS || '14' }}
+          VALIDATION_HARNESS_MAX_RESUMES_PER_FP: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES_PER_FP || '2' }}
+          VALIDATION_HARNESS_MAX_RESUMES: ${{ vars.VALIDATION_HARNESS_MAX_RESUMES || '4' }}
+          VALIDATION_HARNESS_ROUTE_LOGIN: ${{ vars.VALIDATION_HARNESS_ROUTE_LOGIN || '' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
+          # Issue #7657: the close sweep leaves a bound partial-delivery PR's issue open.
+          PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+          MAX_VALIDATE_CYCLES: ${{ vars.MAX_VALIDATE_CYCLES || '3' }}
+          VALIDATE_WORKFLOW_NAME: ${{ vars.VALIDATE_WORKFLOW_NAME || 'ai-validate.yml' }}
+          APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_FILE: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_FILE || 'promote-main-to-stable.yml' }}
+          COMPREHENSIVE_RELEASE_WORKFLOW_REF: ${{ vars.COMPREHENSIVE_RELEASE_WORKFLOW_REF || 'main' }}
+          COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS: ${{ vars.COMPREHENSIVE_PROMOTION_HOLD_MAX_SECS || '21600' }}
+          PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}
+          COMPREHENSIVE_CYCLE_BOT_LOGINS: ${{ vars.COMPREHENSIVE_CYCLE_BOT_LOGINS || 'github-actions[bot]' }}
+          COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
+          COMPREHENSIVE_VERIFICATION_RETRY_MAX: ${{ vars.COMPREHENSIVE_VERIFICATION_RETRY_MAX || '24' }}
+          MAX_JUDGE_CYCLES: ${{ vars.MAX_JUDGE_CYCLES || '25' }}
+          ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
+          ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}
+          ORCH_STATE_PRUNE_ENABLED: ${{ vars.ORCH_STATE_PRUNE_ENABLED || 'true' }}
+          ORCH_STATE_PRUNE_MAX_DELETES: ${{ vars.ORCH_STATE_PRUNE_MAX_DELETES || '50' }}
+          ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
+          MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
+          RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
+          JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
+          STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
+          REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
+          STALL_THRESHOLD_NO_LABELS_MINUTES: ${{ vars.STALL_THRESHOLD_NO_LABELS_MINUTES || '' }}
+          STALL_THRESHOLD_CLARIFICATION_MINUTES: ${{ vars.STALL_THRESHOLD_CLARIFICATION_MINUTES || '' }}
+          STALL_THRESHOLD_PLANNING_MINUTES: ${{ vars.STALL_THRESHOLD_PLANNING_MINUTES || '' }}
+          STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES: ${{ vars.STALL_THRESHOLD_AWAITING_APPROVAL_MINUTES || '' }}
+          STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
+          STALL_THRESHOLD_DONE_MINUTES: ${{ vars.STALL_THRESHOLD_DONE_MINUTES || '' }}
+          STALL_THRESHOLD_READY_TO_MERGE_MINUTES: ${{ vars.STALL_THRESHOLD_READY_TO_MERGE_MINUTES || '' }}
+          MAX_STALL_RECOVERIES_PER_ISSUE: ${{ vars.MAX_STALL_RECOVERIES_PER_ISSUE || '5' }}
+          STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          MAX_STALL_RECOVERIES_DONE: ${{ vars.MAX_STALL_RECOVERIES_DONE || '99' }}
+          STALL_JUDGE_TRIGGER_COUNT: ${{ vars.STALL_JUDGE_TRIGGER_COUNT || '2' }}
+          ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
+          ENABLE_STALL_HUMAN_TERMINALIZATION: ${{ vars.ENABLE_STALL_HUMAN_TERMINALIZATION || 'false' }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
+          ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
+          # PR #7709: stall recovery's check-triage resolution gate; false turns it off.
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
+          CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'false' }}
+          CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}
+          CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
+          MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
+          JUDGE_REPEAT_FINGERPRINT_MAX: ${{ vars.JUDGE_REPEAT_FINGERPRINT_MAX || '2' }}
+          JUDGE_OUTPUT_FAILURE_MAX: ${{ vars.JUDGE_OUTPUT_FAILURE_MAX || '3' }}
+          JUDGE_PR_DIFF_MAX_BYTES: ${{ vars.JUDGE_PR_DIFF_MAX_BYTES || '65536' }}
+          JUDGE_PR_DIFFS_TOTAL_MAX_BYTES: ${{ vars.JUDGE_PR_DIFFS_TOTAL_MAX_BYTES || '524288' }}
+          RECOVERY_COUNT_DISTINCT_FINDINGS: ${{ vars.RECOVERY_COUNT_DISTINCT_FINDINGS || 'false' }}
+          MAX_VALIDATION_RECOVERY_ATTEMPTS: ${{ vars.MAX_VALIDATION_RECOVERY_ATTEMPTS || '2' }}
+          MAX_VALIDATION_DISPATCHES_PER_CYCLE: ${{ vars.MAX_VALIDATION_DISPATCHES_PER_CYCLE || '3' }}
+          MAX_VALIDATION_FIX_BATCH_CYCLES: ${{ vars.MAX_VALIDATION_FIX_BATCH_CYCLES || '30' }}
+          BRANCH_REBUILD_ENABLED: ${{ vars.BRANCH_REBUILD_ENABLED || 'false' }}
+          INTEGRATION_CONFLICT_PARK_ENABLED: ${{ vars.INTEGRATION_CONFLICT_PARK_ENABLED || 'true' }}
+          INTEGRATION_CONFLICT_PARK_GATE_CAP: ${{ vars.INTEGRATION_CONFLICT_PARK_GATE_CAP || vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
+          BRANCH_REBUILD_THRESHOLD_HOURS: ${{ vars.BRANCH_REBUILD_THRESHOLD_HOURS || '24' }}
+          BRANCH_REBUILD_COOLDOWN_HOURS: ${{ vars.BRANCH_REBUILD_COOLDOWN_HOURS || '48' }}
+          ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN: ${{ vars.ORCH_INTEGRATION_BACKPRESSURE_PROJECT_MARGIN || '20' }}
+          ORCH_INTEGRATION_STALE_ALERT_HOURS: ${{ vars.ORCH_INTEGRATION_STALE_ALERT_HOURS || '0' }}
+          MODEL_CONFLICT_RESOLVER: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          STANDALONE_RECOVERY_SWEEP_ONLY: "true"
+        run: |
+          set -euo pipefail
+          # Consumers pinned to older support commits may not have this
+          # sweep-only mode yet; never launch the full poller from here.
+          if ! grep -qF 'if _is_truthy "${STANDALONE_RECOVERY_SWEEP_ONLY:-false}"; then' scripts/orchestrate_poll_process.sh; then
+            echo '::warning::Standalone recovery sweep support is not yet staged.'
+            exit 0
+          fi
+          bash scripts/orchestrate_poll_process.sh
+
+      - name: Release staged-support latches without active projects
+        if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' && github.repository == 'shubhodeep1/coding-workflows' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
+          # Issue #7657: the close sweep leaves a bound partial-delivery PR's issue open.
+          PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
+          STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
+        run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
+
+      - name: Run unblock scan without active projects
+        if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
+          ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
+          ORPHAN_FIXUP_CLOSE_DRY_RUN: ${{ vars.ORPHAN_FIXUP_CLOSE_DRY_RUN || 'false' }}
+          ORPHAN_FIXUP_CLOSE_MAX_PER_TICK: ${{ vars.ORPHAN_FIXUP_CLOSE_MAX_PER_TICK || '5' }}
+          ORPHAN_FIXUP_CLOSE_GRACE_MINUTES: ${{ vars.ORPHAN_FIXUP_CLOSE_GRACE_MINUTES || '60' }}
+          UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
+          UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
+          UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
+          UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
+          UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS: ${{ vars.UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS || '24' }}
           UNBLOCK_SCAN_SWEEP_ONLY: "true"
+          AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          PLAN_FILES_TOUCHED_GATE_ENABLED: ${{ vars.PLAN_FILES_TOUCHED_GATE_ENABLED || 'true' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: bash scripts/orchestrate_poll_process.sh
 
+      # Standalone PR conflict and noop-suspicious recovery sweeps (issue
+      # #7177). With a tracking issue they run inline at the end of "Process
+      # each tracking issue"; without one this step runs only those sweeps.
+      - name: Run standalone PR sweeps without active projects
+        if: steps.find_tracking.outputs.has_work != 'true'
+        # Staging is continue-on-error on idle ticks; a sweep failure must not
+        # skip the worktree registry GC that follows.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          STANDALONE_PR_SWEEP_ONLY: "true"
+          STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
+          REVIEW_RUN_MAX_RUNTIME_MINUTES: ${{ vars.REVIEW_RUN_MAX_RUNTIME_MINUTES || '250' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
+          ORCH_PR_AUTOFIX_FLOW_ENABLED: ${{ vars.ORCH_PR_AUTOFIX_FLOW_ENABLED || 'true' }}
+          # Conflict dispatches forward this to review; keep a repository's
+          # opt-out on idle ticks too.
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          # Staging is continue-on-error on these ticks, and a poller from an
+          # older support commit would ignore the flag and run every post-loop
+          # sweep; never launch the full poller from here.
+          if [ ! -f scripts/orchestrate_poll_process.sh ] \
+            || ! grep -q 'STANDALONE_PR_SWEEP_ONLY' scripts/orchestrate_poll_process.sh; then
+            echo '::warning::Standalone PR sweep-only support is not yet staged.'
+            exit 0
+          fi
+          bash scripts/orchestrate_poll_process.sh
+
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
+
+      # Daily consumer health check (scripts/consumer_health_check.sh), this
+      # repository only. The cache entry keyed on the UTC date records that
+      # today's check succeeded, so later ticks skip it without an API call;
+      # a delayed or failed tick leaves no entry and the next tick retries.
+      - name: Pick today's consumer health check key
+        id: consumer_health_date
+        if: github.repository == 'shubhodeep1/coding-workflows'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/consumer-health-day"
+          day="$(date -u +%F)"
+          printf '%s\n' "${day}" > "${RUNNER_TEMP}/consumer-health-day/day.txt"
+          echo "day=${day}" >> "${GITHUB_OUTPUT}"
+
+      - name: Look up today's consumer health check
+        id: consumer_health_day
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != ''
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/consumer-health-day
+          key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
+          lookup-only: true
+
+      # A run that keeps failing pages once a day: the script writes
+      # failure_alerted=true after its WARNING, and this entry suppresses the
+      # page on later retry ticks of the same day.
+      - name: Look up today's consumer health failure alert
+        id: consumer_health_alerted
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health_day.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/consumer-health-day
+          key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
+          lookup-only: true
+
+      - name: Run daily consumer health check
+        id: consumer_health
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health_day.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          CONSUMER_HEALTH_CHECK_ENABLED: ${{ vars.CONSUMER_HEALTH_CHECK_ENABLED || 'true' }}
+          CONSUMER_HEALTH_POLLER_SILENT_HOURS: ${{ vars.CONSUMER_HEALTH_POLLER_SILENT_HOURS || '6' }}
+          CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT: ${{ vars.CONSUMER_HEALTH_TRACKING_COMMENT_LIMIT || '2000' }}
+          CONSUMER_HEALTH_FAILURE_ALERTED: ${{ steps.consumer_health_alerted.outputs.cache-hit == 'true' && 'true' || 'false' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          # "Stage workflow support files" removes .codex-workflow-src-main
+          # earlier in this job, so the verified support checkout is the only source.
+          src=".codex-workflow-src"
+          for f in consumer_health_check.sh consumer_health_check.py; do
+            if [ ! -f "${src}/scripts/${f}" ]; then
+              echo "::warning::Consumer health check support file ${f} is missing; the check is skipped."
+              exit 1
+            fi
+            install -m 0755 "${src}/scripts/${f}" "scripts/${f}"
+          done
+          templates="${RUNNER_TEMP}/consumer-health-templates.txt"
+          find "${src}/workflow-templates" -maxdepth 1 -type f -name '*.yml' -printf '%f\n' | sort > "${templates}"
+          CONSUMER_HEALTH_CONSUMERS_FILE="${src}/.github/ai/consumer_repos.json" \
+            CONSUMER_HEALTH_TEMPLATES_FILE="${templates}" \
+            bash scripts/consumer_health_check.sh
+
+      - name: Record today's consumer health check
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/consumer-health-day
+          key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
+
+      - name: Record today's consumer health failure alert
+        if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outputs.failure_alerted == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/consumer-health-day
+          key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
+
+      # Q99: GitHub runs the */5 cron every 25-60 minutes, so a project that
+      # could take its next step now (a merged wave, a new phase) waited for
+      # the next cron run. When this tick moved a project forward
+      # (scripts/orchestrate_poll_process.sh record_poll_progress_if_advanced),
+      # dispatch the caller workflow once more. The poll job's concurrency
+      # group keeps at most one pending run, so this queues one run behind
+      # this one. The 300-second force-tick cooldown per tracking issue stops
+      # a chain from polling faster than the cron's nominal */5 cadence.
+      - name: Queue a follow-up poll after progress
+        if: success() && steps.find_tracking.outputs.has_work == 'true'
+        # Best effort: the tick's work is already persisted, and cron remains the fallback.
+        continue-on-error: true
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Honour the memory kill switch inside the force-tick helper's cooldown ledger.
+          AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
+          POLL_FOLLOW_UP_ON_PROGRESS_ENABLED: ${{ vars.POLL_FOLLOW_UP_ON_PROGRESS_ENABLED || 'true' }}
+          POLL_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          FORCE_TICK_COOLDOWN_SECONDS: '300'
+        run: |
+          set -euo pipefail
+          progress_file="${RUNTIME_DIR}/poll_progress_tracking_issues"
+          if [ ! -s "${progress_file}" ]; then
+            echo "POLL_FOLLOW_UP outcome=skip reason=no_progress"
+            exit 0
+          fi
+          case "$(printf '%s' "${POLL_FOLLOW_UP_ON_PROGRESS_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+            ''|true) ;;
+            false)
+              echo "POLL_FOLLOW_UP outcome=skip reason=disabled"
+              exit 0
+              ;;
+            *)
+              echo "::warning::POLL_FOLLOW_UP_ON_PROGRESS_ENABLED has an unrecognised value; no follow-up poll is queued. Use true or false."
+              echo "POLL_FOLLOW_UP outcome=skip reason=invalid_switch"
+              exit 0
+              ;;
+          esac
+          # The 300-second cooldown lives in the AI-memory ledger; with memory
+          # off the helper would dispatch without it, so skip (cron remains).
+          case "$(printf '%s' "${AI_MEMORY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+            1|true|yes|on) ;;
+            *)
+              echo "POLL_FOLLOW_UP outcome=skip reason=cooldown_unavailable"
+              exit 0
+              ;;
+          esac
+          tracking_issue="$(head -n 1 "${progress_file}")"
+          if ! [[ "${tracking_issue}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "POLL_FOLLOW_UP outcome=skip reason=invalid_tracking_issue"
+            exit 0
+          fi
+          helper=".codex-workflow-src/scripts/orchestrate_force_tick.sh"
+          if [ ! -f "${helper}" ]; then
+            echo "::warning::orchestrate_force_tick.sh unavailable; no follow-up poll is queued, cron remains the fallback."
+            echo "POLL_FOLLOW_UP outcome=skip reason=helper_missing"
+            exit 0
+          fi
+          # The poll wrapper's file name differs per repository
+          # (internal-orchestrate-poll.yml here, ai-orchestrate-poll.yml in
+          # consumer repos); github.workflow_ref names the caller.
+          caller_path="${POLL_CALLER_WORKFLOW_REF%%@*}"
+          caller_file="${caller_path##*/}"
+          if ! [[ "${caller_file}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
+            caller_file="internal-orchestrate-poll.yml"
+          fi
+          echo "POLL_FOLLOW_UP outcome=request tracking_issue=${tracking_issue} workflow=${caller_file}"
+          ORCHESTRATE_POLL_WORKFLOW_FILE="${caller_file}" bash "${helper}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tracking-issue "${tracking_issue}" \
+            --reason "poll-progress" \
+            --source-workflow "orchestrate_poll" \
+            --run-id "${GITHUB_RUN_ID}"
 
       - name: Build state snapshot
         if: ${{ always() && env.STATE_SNAPSHOT_ARTIFACT_ENABLED != 'false' }}
@@ -1044,7 +1930,7 @@ jobs:
 
           git init --quiet "${PUBLISH_DIR}"
           git -C "${PUBLISH_DIR}" config user.name "codex-bot"
-          git -C "${PUBLISH_DIR}" config user.email "codex@users.noreply.github.com"
+          git -C "${PUBLISH_DIR}" config user.email "codex-bot@users.noreply.invalid"
           git -C "${PUBLISH_DIR}" remote add origin "$(git remote get-url origin)"
 
           if git -C "${PUBLISH_DIR}" fetch --quiet --depth=1 origin "${BRANCH_NAME}"; then
@@ -1148,7 +2034,7 @@ jobs:
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
         run: |
@@ -1207,3 +2093,100 @@ jobs:
           else
             echo 'GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown'
           fi
+      # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
+      # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
+      # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
+      # the copy in the trusted support checkout, never a PR-head script.
+      - name: Report refused AI engine fallbacks
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+        run: |
+          fallback_support_dir="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          fallback_report="${fallback_support_dir}/scripts/ai_engine_fallback_report.sh"
+          if [ -n "${fallback_support_dir}" ] && [ -f "${fallback_report}" ] && [ ! -L "${fallback_report}" ]; then
+            REPORT_WRAPPER_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${fallback_support_dir}" rev-parse HEAD 2>/dev/null || true)" \
+              bash "${fallback_report}" || true
+          else
+            echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi
+
+  # Daily Claude pool usage report: one Telegram message with every pool
+  # account's 5-hour and 7-day usage. Runs in shubhodeep1/coding-workflows only,
+  # on the first poll tick at or after CLAUDE_POOL_DAILY_USAGE_HOUR_UTC whose
+  # day has no cache marker yet (the poll job's claude_pool_daily_due output).
+  # Its own job, so probing the pool here never changes the poll job's Claude
+  # credential or capacity-wait state. The broker accepts it because it is a
+  # job of orchestrate_poll.yml.
+  claude_pool_daily_usage:
+    needs: poll
+    if: ${{ !cancelled() && needs.poll.outputs.claude_pool_daily_due == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      # A queued poll run can finish before this job saves the day's marker;
+      # one report job at a time, and each re-checks the marker below.
+      group: claude-pool-daily-usage-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout coding-workflows
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Re-check today's Claude pool daily usage marker
+        id: pool_daily_recheck
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .claude-pool-daily-usage/sent
+          key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
+          lookup-only: true
+
+      - name: Install Claude Code CLI
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Probe the Claude pool
+        id: claude_pool
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Send Claude pool daily usage report
+        id: pool_daily_send
+        if: steps.pool_daily_recheck.outcome == 'success' && steps.pool_daily_recheck.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_PROBES: ${{ steps.claude_pool.outputs.probes || '[]' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || 'not_probed' }}
+          CLAUDE_ENGINE_CONFIG: .github/ai/claude_engine.json
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: bash scripts/claude_pool_daily_usage.sh send
+
+      - name: Write today's Claude pool daily usage marker
+        if: steps.pool_daily_send.outputs.sent == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p .claude-pool-daily-usage
+          date -u +%Y-%m-%dT%H:%M:%SZ > .claude-pool-daily-usage/sent
+
+      - name: Save today's Claude pool daily usage marker
+        if: steps.pool_daily_send.outputs.sent == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .claude-pool-daily-usage/sent
+          key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}

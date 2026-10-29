@@ -293,6 +293,22 @@ def test_release_source_jobs_do_not_interpolate_ref_expressions() -> None:
 		assert detect_env.get("DISPATCH_REF") == "${{ github.ref }}"
 
 
+def test_workflow_log_analysis_run_steps_do_not_interpolate_ref_expressions() -> None:
+	jobs = _workflow("workflow-log-analysis.yml").get("jobs")
+	assert isinstance(jobs, dict)
+	checked = 0
+	for job_id, job in jobs.items():
+		if not isinstance(job, dict):
+			continue
+		for step in job.get("steps", []):
+			if isinstance(step, dict) and isinstance(step.get("run"), str):
+				checked += 1
+				assert not REF_EXPRESSION.search(step["run"]), (
+					f"workflow-log-analysis.yml:{job_id}:{step.get('name')} interpolates a ref into shell source"
+				)
+	assert checked > 0
+
+
 def test_release_source_ref_check_is_exact_and_literal() -> None:
 	with TemporaryDirectory(prefix="release-ref-contract-") as temp_dir:
 		temp_path = Path(temp_dir)
@@ -464,6 +480,52 @@ def test_heal_evidence_is_fenced_and_editors_are_isolated() -> None:
 	evidence = (REPO_ROOT / "scripts/workflow_failure_heal_evidence.sh").read_text(encoding="utf-8")
 	assert "=== BEGIN UNTRUSTED WORKFLOW FAILURE EVIDENCE ===" in evidence
 	assert "=== END UNTRUSTED WORKFLOW FAILURE EVIDENCE ===" in evidence
+
+
+SECRET_IN_REMOTE_URL = re.compile(r"x-access-token:\s*\$\{\{\s*secrets\.")
+SECRET_IN_URL_AUTHORITY = re.compile(r"://[^ \t]*\$\{\{\s*secrets\.")
+ENV_BOUND_PUSH_URL = 'x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}'
+
+
+def test_workflows_do_not_interpolate_secrets_into_remote_urls() -> None:
+	"""A secret written into run: text lands in the generated step script; bind it through env."""
+	paths = sorted(WORKFLOW_DIR.glob("*.yml")) + sorted((REPO_ROOT / "workflow-templates").glob("*.yml"))
+	assert paths
+	offenders = []
+	for path in paths:
+		for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+			if SECRET_IN_REMOTE_URL.search(line) or SECRET_IN_URL_AUTHORITY.search(line):
+				offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
+	assert not offenders, f"secrets interpolated into remote URLs: {offenders}"
+	implement_push = _step("implement.yml", "implement", "Push branch")
+	assert ENV_BOUND_PUSH_URL in str(implement_push.get("run"))
+	implement_push_env = implement_push.get("env")
+	assert isinstance(implement_push_env, dict)
+	assert implement_push_env.get("GH_TOKEN") == "${{ secrets.GH_PAT }}"
+	review_push = _step("review_autofix.yml", "codex-agent", "Push all pending commits")
+	assert ENV_BOUND_PUSH_URL in str(review_push.get("run"))
+	review_push_env = review_push.get("env")
+	assert isinstance(review_push_env, dict)
+	assert review_push_env.get("GH_TOKEN") == "${{ secrets.GH_PAT }}"
+
+
+FREE_DISK_SPACE_PINNED_REF = re.compile(r"^jlumbroso/free-disk-space@[0-9a-f]{40}$")
+FREE_DISK_SPACE_PINNED_SHA = "54081f138730dfa15788a46383842cd2f914a1be"
+
+
+def test_review_autofix_free_disk_space_is_sha_pinned() -> None:
+	"""The action runs in a job that later holds GH_PAT; a movable tag must not be used (SEC-001, #7357)."""
+	step = _step("review_autofix.yml", "codex-agent", "Free disk space")
+	uses = step.get("uses")
+	assert isinstance(uses, str)
+	assert FREE_DISK_SPACE_PINNED_REF.match(uses), uses
+	assert uses == f"jlumbroso/free-disk-space@{FREE_DISK_SPACE_PINNED_SHA}"
+	text = (WORKFLOW_DIR / "review_autofix.yml").read_text(encoding="utf-8")
+	references = [line for line in text.splitlines() if "jlumbroso/free-disk-space@" in line]
+	assert references
+	for line in references:
+		assert re.search(r"jlumbroso/free-disk-space@[0-9a-f]{40}\b", line), line
+		assert line.rstrip().endswith("# v1.3.1"), line
 
 
 def run_all_contract_tests() -> None:

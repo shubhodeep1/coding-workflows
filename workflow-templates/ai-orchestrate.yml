@@ -1,6 +1,5 @@
-# IMPORTANT: This file is managed by coding-workflows and may be overwritten
-# automatically when upstream templates change. To opt out of auto-updates,
-# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
 name: AI Orchestrate
 on:
   workflow_dispatch:
@@ -16,6 +15,11 @@ on:
         required: false
         type: string
         default: ""
+      tracking_comment:
+        description: Optional comment posted on the tracking issue after creation (the plan stage's split marker).
+        required: false
+        type: string
+        default: ""
 permissions:
   contents: write
   issues: write
@@ -28,4 +32,10 @@ jobs:
     with:
       project_description: ${{ inputs.project_description }}
       engine: ${{ inputs.engine }}
-    secrets: inherit
+      tracking_comment: ${{ inputs.tracking_comment }}
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

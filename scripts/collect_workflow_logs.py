@@ -46,6 +46,7 @@ except ModuleNotFoundError:
 try:
     from cost_audit import (
         BREAK_GLASS_RE,
+        CODEX_TOKENS_HEADER_RE,
         CONTEXT_BUDGET_WARN_RE,
         OPENROUTER_RE,
         aggregate_run_cost_telemetry,
@@ -55,6 +56,7 @@ try:
 except ModuleNotFoundError:
     from scripts.cost_audit import (
         BREAK_GLASS_RE,
+        CODEX_TOKENS_HEADER_RE,
         CONTEXT_BUDGET_WARN_RE,
         OPENROUTER_RE,
         aggregate_run_cost_telemetry,
@@ -90,6 +92,7 @@ STRUCTURED_COST_TELEMETRY_PATTERNS = (
     OPENROUTER_RE,
     BREAK_GLASS_RE,
     CONTEXT_BUDGET_WARN_RE,
+    CODEX_TOKENS_HEADER_RE,
 )
 DIAGNOSTIC_FAILURE_CONCLUSIONS = frozenset({"failure", "startup_failure"})
 PAT_BUDGET_WORKFLOWS = {
@@ -109,6 +112,15 @@ PAT_BUDGET_LINE = re.compile(
     r"remaining=(?:[0-9]+|unknown) reset=(?:[0-9]+|unknown) used_in_job=([0-9]+|unknown)$"
 )
 PAT_BUDGET_MAX_RUN_ARCHIVES = 1500
+# Review/autofix run summary (scripts/review_autofix_step_iteration_summary.sh).
+# Anchored so echoed script text (structured_summary_line='...') never matches;
+# the optional prefix is the GitHub Actions log timestamp.
+REVIEW_AUTOFIX_RUN_SUMMARY_PREFIX = "REVIEW_AUTOFIX_RUN_SUMMARY_V1 "
+REVIEW_AUTOFIX_RUN_SUMMARY_LINE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z )?REVIEW_AUTOFIX_RUN_SUMMARY_V1 (\{.*\})$"
+)
+ROOT_FAILURE_CLASS_RE = re.compile(r"[a-z0-9_]{1,64}")
+ROOT_FAILURE_CLASS_CONCLUSIONS = frozenset({"failure", "cancelled"})
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -296,6 +308,11 @@ def _run_snapshot_for_cache(run: dict[str, Any]) -> dict[str, Any]:
         "created_at",
         "run_started_at",
         "updated_at",
+        # Origin fields (issue #6637): kept so the HTTP 304 snapshot path can
+        # still classify fork-origin runs. head_repository stays the raw
+        # API object, the shape _run_origin_trust reads.
+        "event",
+        "head_repository",
     )
     snapshot = {key: run.get(key) for key in keys}
     snapshot["_workflow_family"] = run.get("_workflow_family")
@@ -801,6 +818,7 @@ def _ensure_run_diagnostics(run: dict[str, Any]) -> dict[str, Any]:
         "failure",
         "not_selected",
         "cached",
+        "excluded_untrusted_origin",
     }:
         run["log_download_status"] = "not_selected"
     if not isinstance(run.get("observed_job_conclusions"), list):
@@ -825,6 +843,86 @@ def _ensure_run_diagnostics(run: dict[str, Any]) -> dict[str, Any]:
         run["diagnostic_failure_reason"] = _bound_diagnostic_reason_parts(normalized_parts)
     run["workflow_validation_annotations_status"] = WORKFLOW_VALIDATION_ANNOTATIONS_STATUS
     return run
+
+
+def _run_head_repository_name(run_payload: dict[str, Any]) -> str | None:
+    head_repository = run_payload.get("head_repository")
+    if isinstance(head_repository, dict):
+        full_name = head_repository.get("full_name")
+        if isinstance(full_name, str) and full_name.strip():
+            return full_name.strip()
+    return None
+
+
+def _run_origin_trust(run_payload: dict[str, Any], repository: str) -> str:
+    """Classify a raw API run payload as trusted, fork or origin_unknown.
+
+    Issue #6637: a fork PR controls the text in its CI logs and its own
+    workflow's job/step names. Such text must never reach the log-analysis
+    model. Runs without origin data whose event is a pull_request variant (or
+    missing, e.g. older cache snapshots) fail closed as origin_unknown.
+    """
+    head_name = _run_head_repository_name(run_payload)
+    if head_name is not None:
+        if head_name.lower() != str(repository or "").strip().lower():
+            return "fork"
+        return "trusted"
+    event = run_payload.get("event")
+    event_text = str(event).strip() if event is not None else ""
+    if not event_text or event_text.startswith("pull_request"):
+        return "origin_unknown"
+    return "trusted"
+
+
+# Fixed family vocabulary from normalize_workflow_family. A family outside it
+# is derived from the workflow file stem, which a fork PR can choose.
+_FIXED_WORKFLOW_FAMILIES = frozenset({
+    "orchestrate_clarify_respond", "orchestrate_poll", "issue_pr_status", "cancel_on_pr_close",
+    "memory_maintenance", "review_autofix", "validate", "clarify", "plan", "implement",
+    "orchestrate", "ci", "workflow_log_analysis", "other",
+})
+
+
+def _apply_untrusted_origin_exclusion(row: dict[str, Any]) -> bool:
+    """Strip log-derived and fork-controlled text from an untrusted-origin row.
+
+    Run metadata (conclusion, status, retries, durations, timestamps, job
+    conclusions) is kept so report totals stay unchanged. The workflow name,
+    workflow path and head-repository name are cleared too: a fork PR's own
+    workflow file sets the first two and the fork owner names the third.
+    Returns True when the row was excluded.
+    """
+    if row.get("origin_trust", "trusted") == "trusted":
+        return False
+    row["log_download_status"] = "excluded_untrusted_origin"
+    for key in ("log_excerpts", "cost_telemetry", "log_summary", "log_summary_meta", "full_logs"):
+        row.pop(key, None)
+    row["failure_point"] = {"job_name": None, "step_name": None}
+    row["workflow_name"] = None
+    row["workflow_path"] = None
+    row["head_repository"] = None
+    row["root_failure_class"] = None
+    row["symptom_step"] = None
+    if row.get("workflow_family") not in _FIXED_WORKFLOW_FAMILIES:
+        row["workflow_family"] = "other"
+    _set_diagnostic_failure_reason(row, "logs", None)
+    return True
+
+
+def _stamp_run_origin(row: dict[str, Any], run_payload: dict[str, Any], repository: str) -> None:
+    """Stamp origin fields from the live run payload and exclude untrusted rows."""
+    row["event"] = run_payload.get("event")
+    row["head_repository"] = _run_head_repository_name(run_payload)
+    row["origin_trust"] = _run_origin_trust(run_payload, repository)
+    if _apply_untrusted_origin_exclusion(row):
+        # Only repository, run id and reason: no log text, workflow name or
+        # head-repository name, which a fork author controls (the row has
+        # those fields cleared by _apply_untrusted_origin_exclusion too).
+        print(
+            f"WORKFLOW_LOG_FORK_EXCLUDED repository={_sanitize_diagnostic_text(repository)} "
+            f"run_id={_to_int(row.get('run_id'), 0)} reason={row['origin_trust']}",
+            file=sys.stderr,
+        )
 
 
 def _sanitize_missing_log_archive_detail(detail: str) -> str:
@@ -924,6 +1022,26 @@ def _fetch_run_log_archive(
         return payload
 
 
+# A failed job none of whose steps reached one of these conclusions failed
+# while queued or before a runner picked it up (only skipped/null steps).
+PRE_RUNNER_FAILURE_STEP_NAME = "pre_runner_failure"
+_PRE_RUNNER_STEP_CONCLUSIONS = frozenset(
+    {"success", "failure", "cancelled", "neutral", "timed_out", "action_required", "startup_failure"}
+)
+
+
+def _job_never_ran_a_step(job: dict[str, Any]) -> bool:
+    steps = job.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return True
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("conclusion") or "").lower() in _PRE_RUNNER_STEP_CONCLUSIONS:
+            return False
+    return True
+
+
 def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
     for job in jobs:
         for step in job.get("steps") or []:
@@ -937,7 +1055,7 @@ def extract_failure_point(jobs: list[dict[str, Any]]) -> dict[str, str | None]:
         if (job.get("conclusion") or "").lower() == "failure":
             return {
                 "job_name": job.get("name"),
-                "step_name": None,
+                "step_name": PRE_RUNNER_FAILURE_STEP_NAME if _job_never_ran_a_step(job) else None,
             }
 
     return {
@@ -1033,6 +1151,11 @@ def compute_run_metrics(
         "updated_at": run.get("updated_at"),
         "duration_seconds": duration_seconds,
         "failure_point": failure_point,
+        # Additive: the structured root cause comes from the run's own logs
+        # (_apply_root_failure_class_from_full_logs); symptom_step mirrors
+        # failure_point.step_name, which stays unchanged.
+        "root_failure_class": None,
+        "symptom_step": failure_point.get("step_name"),
         "jobs_fetch_status": jobs_fetch_status
         or ("success" if normalized_conclusion in {"failure", "cancelled"} else "not_required"),
         "log_download_status": "not_selected",
@@ -1042,6 +1165,10 @@ def compute_run_metrics(
     }
     if diagnostic_failure_reason is not None:
         _set_diagnostic_failure_reason(row, "jobs", diagnostic_failure_reason)
+    row["event"] = run.get("event")
+    row["head_repository"] = _run_head_repository_name(run)
+    row["origin_trust"] = _run_origin_trust(run, repository)
+    _apply_untrusted_origin_exclusion(row)
     return row
 
 
@@ -1139,10 +1266,18 @@ def _run_identity(run: dict[str, Any]) -> tuple[str, int]:
 
 
 def _eligible_runs_for_log_selection(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Issue #6637: untrusted-origin runs (fork PRs, unknown PR origin) never
+    # feed log download, excerpts, or the categorized export. Rows without an
+    # origin stamp are treated as trusted; every production row is stamped
+    # in main().
     return [
         run
         for run in runs
-        if isinstance(run, dict) and bool(run.get("repository")) and _to_int(run.get("run_id"), 0) > 0
+        if isinstance(run, dict)
+        and bool(run.get("repository"))
+        and _to_int(run.get("run_id"), 0) > 0
+        and run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
     ]
 
 
@@ -1514,6 +1649,63 @@ def _apply_cost_telemetry_from_full_logs(run: dict[str, Any], full_logs: list[di
     run["cost_telemetry"] = telemetry
 
 
+def _root_failure_class_from_value(value: Any) -> str | None:
+    """Return value only when it is a valid root failure class, else None."""
+    if isinstance(value, str) and ROOT_FAILURE_CLASS_RE.fullmatch(value):
+        return value
+    return None
+
+
+def _root_failure_class_from_full_logs(full_logs: Any) -> str | None:
+    """Parse finalize_reason from the last REVIEW_AUTOFIX_RUN_SUMMARY_V1 line.
+
+    Fails open: any missing, malformed or out-of-shape summary yields None.
+    """
+    try:
+        if not isinstance(full_logs, list):
+            return None
+        last_payload: str | None = None
+        for step in full_logs:
+            if not isinstance(step, dict):
+                continue
+            content = step.get("content")
+            if not isinstance(content, str) or REVIEW_AUTOFIX_RUN_SUMMARY_PREFIX not in content:
+                continue
+            for line in content.splitlines():
+                match = REVIEW_AUTOFIX_RUN_SUMMARY_LINE.fullmatch(line.rstrip())
+                if match is not None:
+                    last_payload = match.group(1)
+        if last_payload is None:
+            return None
+        parsed = json.loads(last_payload)
+        if not isinstance(parsed, dict):
+            return None
+        return _root_failure_class_from_value(parsed.get("finalize_reason"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _symptom_step_from_row(row: dict[str, Any]) -> Any:
+    failure_point = row.get("failure_point")
+    if isinstance(failure_point, dict):
+        return failure_point.get("step_name")
+    return None
+
+
+def _apply_root_failure_class_from_full_logs(run: dict[str, Any], full_logs: list[dict[str, str]]) -> None:
+    root_failure_class = None
+    if (
+        run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
+        and (run.get("conclusion") or "").lower() in ROOT_FAILURE_CLASS_CONCLUSIONS
+    ):
+        root_failure_class = _root_failure_class_from_full_logs(full_logs)
+    run["root_failure_class"] = root_failure_class
+    run["symptom_step"] = (
+        _symptom_step_from_row(run) if run.get("origin_trust", "trusted") == "trusted" else None
+    )
+
+
 def _sanitize_path_component(value: str, fallback: str) -> str:
     candidate = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
     candidate = candidate.strip("._-")
@@ -1547,6 +1739,9 @@ def build_pat_budget_report(
     eligible = [
         run for run in runs
         if _to_int(run.get("run_id"), 0) > 0
+        # Issue #6637: never fetch a fork-origin or unknown-origin run's archive.
+        and run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
         and any(
             re.search(r"(?:^|/)\.github/workflows/" + re.escape(filename) + r"(?:@.*)?$", str(run.get("workflow_path") or ""))
             for filename in PAT_BUDGET_WORKFLOWS
@@ -1694,6 +1889,7 @@ def export_categorized_logs(
             full_logs_by_identity[identity] = full_logs
             if full_logs:
                 _apply_cost_telemetry_from_full_logs(run, full_logs)
+                _apply_root_failure_class_from_full_logs(run, full_logs)
         except Exception as exc:  # noqa: BLE001
             _apply_log_download_exception(run, exc)
             _append_log_error(errors, repository, run_id, exc)
@@ -1876,7 +2072,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 used_cached_runs = bool(run_meta.get("not_modified"))
                 if used_cached_runs:
-                    if cached_runs_snapshot:
+                    # Issue #6637: snapshots cached before the origin fields
+                    # were added lack "event"; reusing them would mark every
+                    # trusted run origin_unknown for as long as the ETag
+                    # matches. Refetch once without the ETag instead.
+                    if cached_runs_snapshot and all("event" in item for item in cached_runs_snapshot):
                         runs = [dict(item) for item in cached_runs_snapshot]
                     else:
                         runs, capped, run_meta = list_runs_for_repo(
@@ -1930,11 +2130,24 @@ def main(argv: list[str] | None = None) -> int:
                 row_copy = _ensure_run_diagnostics(dict(reused_row))
                 if (run.get("conclusion") or "").lower() in {"failure", "cancelled"}:
                     row_copy["jobs_fetch_status"] = "cached"
+                # Legacy cached rows lack the additive fields; re-validate a
+                # cached class so a tampered cache value can only become None.
+                row_copy["root_failure_class"] = _root_failure_class_from_value(
+                    row_copy.get("root_failure_class")
+                )
+                row_copy["symptom_step"] = _symptom_step_from_row(row_copy)
+                # Re-stamp origin from the live run, never from the cached row,
+                # so a fork row cached before #6637 cannot re-emit its excerpts.
+                _stamp_run_origin(row_copy, run, repo)
                 cached_log_data_available = (
                     _cached_log_excerpts(row_copy) is not None
                     and _cached_cost_telemetry(row_copy) is not None
                 )
-                if cached_log_data_available:
+                if row_copy.get("origin_trust") != "trusted":
+                    # Excluded: _stamp_run_origin already stripped the log data
+                    # and set log_download_status=excluded_untrusted_origin.
+                    pass
+                elif cached_log_data_available:
                     row_copy["log_download_status"] = "cached"
                     _set_diagnostic_failure_reason(row_copy, "logs", None)
                 elif row_copy.get("log_download_status") not in {
@@ -1989,6 +2202,7 @@ def main(argv: list[str] | None = None) -> int:
                 jobs_fetch_status=jobs_fetch_status,
                 diagnostic_failure_reason=jobs_failure_reason,
             )
+            _stamp_run_origin(row, run, repo)
             run_rows.append(row)
             collected_rows_for_repo.append(dict(row))
 
@@ -2033,8 +2247,12 @@ def main(argv: list[str] | None = None) -> int:
                 cached_excerpts = _cached_log_excerpts(cached_row)
                 cached_cost_telemetry = _cached_cost_telemetry(cached_row)
                 if cached_excerpts is not None and cached_cost_telemetry is not None:
+                    cached_root_failure_class = _root_failure_class_from_value(
+                        cached_row.get("root_failure_class") if isinstance(cached_row, dict) else None
+                    )
                     run["log_excerpts"] = cached_excerpts
                     run["cost_telemetry"] = cached_cost_telemetry
+                    run["root_failure_class"] = cached_root_failure_class
                     run["log_download_status"] = "cached"
                     _set_diagnostic_failure_reason(run, "logs", None)
                     identity = (repository, run_id)
@@ -2042,6 +2260,7 @@ def main(argv: list[str] | None = None) -> int:
                     if canonical is not None:
                         canonical["log_excerpts"] = cached_excerpts
                         canonical["cost_telemetry"] = cached_cost_telemetry
+                        canonical["root_failure_class"] = cached_root_failure_class
                         canonical["log_download_status"] = "cached"
                         _set_diagnostic_failure_reason(canonical, "logs", None)
                     continue
@@ -2052,6 +2271,7 @@ def main(argv: list[str] | None = None) -> int:
             log_excerpts = build_log_excerpts_from_full_logs(full_logs) if full_logs else []
             if full_logs:
                 _apply_cost_telemetry_from_full_logs(run, full_logs)
+                _apply_root_failure_class_from_full_logs(run, full_logs)
                 run["log_excerpts"] = log_excerpts
             else:
                 run.pop("log_excerpts", None)
@@ -2068,6 +2288,8 @@ def main(argv: list[str] | None = None) -> int:
                     canonical.pop("cost_telemetry", None)
                 if "cost_telemetry" in run:
                     canonical["cost_telemetry"] = dict(run["cost_telemetry"])
+                if "root_failure_class" in run:
+                    canonical["root_failure_class"] = run["root_failure_class"]
 
             if isinstance(repo_cache, dict) and run["log_download_status"] == "success":
                 logs_seen_set = _touch_seen_set(_normalize_seen_set(repo_cache.get("logs_seen_set")), run_id)
@@ -2082,6 +2304,7 @@ def main(argv: list[str] | None = None) -> int:
                         merged_row["log_excerpts"] = log_excerpts
                         if "cost_telemetry" in run:
                             merged_row["cost_telemetry"] = dict(run["cost_telemetry"])
+                        merged_row["root_failure_class"] = run.get("root_failure_class")
                         updated_rows.append(merged_row)
                         replaced = True
                     else:

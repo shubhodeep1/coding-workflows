@@ -19,9 +19,11 @@ Subcommands:
   export-oversized HOST SCOPE_FILE DEST MAX_FILE_BYTES MAX_TOTAL_BYTES [SCOPE_MODE]
       Export scoped files omitted by snapshot-readonly as bounded chunks,
       using its same credential and hidden-path filters. Filtered files are
-      never exported; scoped filtered files reject the audit. The default
-      explicit mode lists unscoped oversized files for coverage; all mode
-      exports every eligible oversized tracked file.
+      never exported; scoped filtered files are listed in the manifest's
+      `filtered_scoped` (reason `credential_filter` or `hidden`) so the audit
+      reports them as not inspected. The default explicit mode lists unscoped
+      oversized files for coverage; all mode exports every eligible oversized
+      tracked file.
 
   snapshot-workspace HOST DEST MANIFEST
       Copy HOST except credential-looking paths and `.git` into DEST, keeping
@@ -39,7 +41,21 @@ Subcommands:
        Stage allowlisted Node manifests and filtered Python requirement lists
        from the credential-filtered WORK copy. Only STAGE (not WORK) is
        mounted in the network-isolated dependency container, alongside the
-       allowlisted registry proxy.
+       allowlisted registry proxy. Besides the root manifests, up to
+       MAX_NESTED_NODE_PROJECTS subdirectory Node projects (a package.json
+       plus a lockfile, at most MAX_NESTED_NODE_DEPTH levels down, outside
+       hidden directories and node_modules) are staged one per
+       `.codex-deps/nested/<n>/` and listed in `.codex-deps/nested.json`
+       (tele-funtoken-msg-scoring#4770: the Worker in
+       cloudflare/funtoken-competition-worker/ got no dependencies).
+
+  handoff-nested-deps STAGE WORK LIST
+      After the dependency phase: move each `.codex-deps/nested/<n>/node_modules`
+      the install produced into WORK at the project path LIST names (LIST is
+      a copy of `nested.json` taken before the install container ran). A path
+      that is not a safe directory with a package.json, or that already has
+      node_modules, is skipped. prep-finalize then records each moved
+      directory as a prep root, so it is never copied back to the host.
 
   transfer HOST DEST MANIFEST
       Apply the agent's changes in DEST to HOST (answer Q5 A): changed or new
@@ -48,10 +64,16 @@ Subcommands:
       any host path that no longer matches the manifest rejects the whole
       transfer before the first host write.
 
-  seed-git HOST DEST
+  seed-git HOST DEST [BASE_REF]
       Best effort: create a credential-free git repository in DEST whose
       HEAD contains only allowed blobs from HOST's HEAD tree. Filtered
       paths and their objects are not available through git show.
+      With BASE_REF (a ref or commit in HOST, normally the default branch
+      fetched by the caller), the same filter builds a second commit from
+      it: branch `isolated-base`, and the parent of HEAD. The agent can then
+      read the default branch's files offline (`git show isolated-base:PATH`,
+      `git diff isolated-base`) without any remote (fun-token-multi-chain#639).
+      An unresolvable BASE_REF is logged and left out.
 
   copy-include SRC TARGET
       Copy a trusted runtime file or directory SRC (regular files only, no
@@ -91,6 +113,9 @@ MAX_TRANSFER_TOTAL = 2 * 1024 * 1024 * 1024
 MAX_INCLUDE_TOTAL = 256 * 1024 * 1024
 MAX_DEPS_MANIFEST_BYTES = 64 * 1024 * 1024
 MAX_DEPS_REQUIREMENTS = 5000
+MAX_NESTED_NODE_PROJECTS = 6
+MAX_NESTED_NODE_DEPTH = 4
+NESTED_NODE_LOCKS = (("package-lock.json", "npm-ci"), ("yarn.lock", "yarn"), ("pnpm-lock.yaml", "pnpm"))
 CHUNK = 1024 * 1024
 BINARY_SNIFF_BYTES = 8192
 
@@ -323,6 +348,12 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 	scoped = []
 	unscoped = []
 	unscoped_text_capped = []
+	# Scoped files the credential / hidden-path filter keeps out of every
+	# isolated view. They can never be inspected, so rejecting them would
+	# block every audit whose diff touches one (a committed `.env.example`
+	# stalled fun-token-multi-chain#579's security pass on every poll).
+	# They are recorded instead and reported as not inspected.
+	filtered_scoped = []
 	explicit_candidates = []
 	extra_candidates = []
 	total = 0
@@ -335,7 +366,8 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 				except (FileNotFoundError, NotADirectoryError):
 					pass  # A deleted file has no contents to audit.
 				else:
-					raise Rejected(f"scoped file excluded by read-only filter (path={name})")
+					filtered_reason = "hidden" if name in HIDDEN_NAMES else "credential_filter"
+					filtered_scoped.append({"path": name, "reason": filtered_reason})
 			continue
 		try:
 			node = walk_no_follow(host, name)
@@ -434,8 +466,10 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 		"unscoped_oversized_count": len(unscoped),
 		"unscoped_text_capped": unscoped_text_capped[:50],
 		"unscoped_text_capped_count": len(unscoped_text_capped),
+		"filtered_scoped": filtered_scoped[:50],
+		"filtered_scoped_count": len(filtered_scoped),
 	}), encoding="utf-8")
-	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)} text_capped={len(unscoped_text_capped)} mode={scope_mode}")
+	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)} text_capped={len(unscoped_text_capped)} filtered_scoped={len(filtered_scoped)} mode={scope_mode}")
 
 
 def load_manifest(manifest):
@@ -680,6 +714,139 @@ def deps_filter(lines, project_name="", max_entries=MAX_DEPS_REQUIREMENTS):
 	return accepted
 
 
+def find_nested_node_projects(work):
+	"""Subdirectory Node projects with a lockfile, in sorted walk order.
+
+	Returns (paths, over_limit): the relative POSIX paths of at most
+	MAX_NESTED_NODE_PROJECTS directories below WORK (never WORK itself), at
+	most MAX_NESTED_NODE_DEPTH levels down, that hold a package.json and one of
+	NESTED_NODE_LOCKS, plus how many more qualified past the limit. Symlinks
+	are never followed; hidden directories, node_modules, credential-looking
+	paths and projects that already have node_modules are skipped. Reads
+	directory names only, never file content.
+	"""
+	found = []
+	over_limit = 0
+	for directory, dirs, files in os.walk(work, followlinks=False):
+		here = Path(directory)
+		rel = here.relative_to(work)
+		depth = len(rel.parts)
+		dirs[:] = sorted(
+			name for name in dirs
+			if depth < MAX_NESTED_NODE_DEPTH and not name.startswith(".") and name != "node_modules"
+			and not (here / name).is_symlink() and readonly_allowed((rel / name).as_posix())
+		)
+		if depth == 0 or "package.json" not in files or not any(lock in files for lock, _ in NESTED_NODE_LOCKS):
+			continue
+		name = rel.as_posix()
+		if not readonly_allowed(name):
+			continue
+		if (here / "node_modules").exists() or (here / "node_modules").is_symlink():
+			log(f"stage-deps nested_skipped=present depth={depth}")
+			continue
+		if len(found) >= MAX_NESTED_NODE_PROJECTS:
+			over_limit += 1
+			continue
+		found.append(name)
+	return found, over_limit
+
+
+def stage_nested_node(work, stage):
+	"""Stage each nested Node project's package.json and lockfile, nothing else."""
+	meta = stage / ".codex-deps"
+	projects, over_limit = find_nested_node_projects(work)
+	listed = []
+	for path in projects:
+		package = deps_manifest(work, f"{path}/package.json")
+		if package is None:
+			log("stage-deps nested_skipped=manifest")
+			continue
+		lock_name, lock_data, mode = "", None, ""
+		for name, selected_mode in NESTED_NODE_LOCKS:
+			lock_data = deps_manifest(work, f"{path}/{name}")
+			if lock_data is not None:
+				lock_name, mode = name, selected_mode
+				break
+		if lock_data is None:
+			log("stage-deps nested_skipped=manifest")
+			continue
+		target = meta / "nested" / str(len(listed))
+		target.mkdir(parents=True)
+		(target / "package.json").write_bytes(package)
+		(target / lock_name).write_bytes(lock_data)
+		(target / "mode").write_text(mode + "\n", encoding="ascii")
+		listed.append({"index": len(listed), "path": path, "mode": mode})
+	if listed:
+		(meta / "nested.json").write_text(json.dumps(listed), encoding="utf-8")
+	log(f"stage-deps nested_node={len(listed)} nested_over_limit={over_limit}")
+
+
+def handoff_nested_deps(stage, work, listing):
+	"""Move nested node_modules from STAGE into WORK at the listed project paths.
+
+	LISTING is the host-side copy of `nested.json` (the install container can
+	write STAGE, so its copy is not trusted). Every path is re-checked here.
+	"""
+	try:
+		entries = json.loads(Path(listing).read_text(encoding="utf-8"))
+	except FileNotFoundError:
+		entries = []
+	except (OSError, ValueError):
+		log("handoff-nested-deps skipped=list reason=malformed")
+		entries = []
+	if not isinstance(entries, list):
+		raise Rejected("nested dependency list is not a list")
+	moved = 0
+	for entry in entries[:MAX_NESTED_NODE_PROJECTS]:
+		if not isinstance(entry, dict) or type(entry.get("index")) is not int or not isinstance(entry.get("path"), str):
+			log("handoff-nested-deps skipped=entry reason=malformed")
+			continue
+		index, path = entry["index"], entry["path"]
+		# The install container can write every stage directory, so no parent
+		# of the source may be a symlink (walk_no_follow lstat-checks them).
+		try:
+			source = walk_no_follow(stage, f".codex-deps/nested/{index}/node_modules")
+		except FileNotFoundError:
+			log(f"handoff-nested-deps skipped={index} reason=install_missing")
+			continue
+		except (NotADirectoryError, Rejected):
+			log(f"handoff-nested-deps skipped={index} reason=unsafe_source")
+			continue
+		if source.is_symlink():
+			log(f"handoff-nested-deps skipped={index} reason=unsafe_source")
+			continue
+		if not source.is_dir():
+			log(f"handoff-nested-deps skipped={index} reason=install_missing")
+			continue
+		parts = PurePosixPath(path).parts
+		if not readonly_allowed(path) or not parts or len(parts) > MAX_NESTED_NODE_DEPTH \
+			or PurePosixPath(path).is_absolute() \
+			or any(part.startswith(".") or part == "node_modules" for part in parts):
+			log(f"handoff-nested-deps skipped={index} reason=unsafe_path")
+			continue
+		try:
+			project = walk_no_follow(work, path)
+			project_info = project.lstat()
+			package_info = (project / "package.json").lstat()
+		except (FileNotFoundError, NotADirectoryError, Rejected):
+			log(f"handoff-nested-deps skipped={index} reason=missing_project")
+			continue
+		if not stat.S_ISDIR(project_info.st_mode) or not stat.S_ISREG(package_info.st_mode):
+			log(f"handoff-nested-deps skipped={index} reason=missing_project")
+			continue
+		target = project / "node_modules"
+		if target.exists() or target.is_symlink():
+			log(f"handoff-nested-deps skipped={index} reason=present")
+			continue
+		try:
+			os.rename(source, target)
+		except OSError as exc:
+			log(f"handoff-nested-deps skipped={index} reason=rename_failed errno={exc.errno}")
+			continue
+		moved += 1
+	log(f"handoff-nested-deps moved={moved}")
+
+
 def stage_deps(work, stage):
 	"""Stage fixed filenames only; neither parse nor execute source code."""
 	meta = stage / ".codex-deps"
@@ -745,6 +912,7 @@ def stage_deps(work, stage):
 		and isinstance(project["tool"].get("pytest"), dict) and "ini_options" in project["tool"]["pytest"]):
 		(meta / "want-pytest").touch()
 	log(f"stage-deps node={node_mode} python={python_mode}")
+	stage_nested_node(work, stage)
 
 
 def host_matches(host_path, expected):
@@ -905,7 +1073,55 @@ def remove_node(path):
 		path.unlink()
 
 
-def seed_git(host, dest):
+def seed_git_tree_entries(treeish, host, dest, env, *, readonly_limit_only=False):
+	"""Return (index entries, blob ids) for the allowed blobs of TREEISH in HOST.
+
+	Applies the read-only snapshot filter (readonly_allowed) and the size
+	limits, so a filtered path never becomes readable through `git show`.
+	With readonly_limit_only every blob is held to MAX_READONLY_FILE; the
+	larger workspace limit applies only to HEAD files present in DEST.
+	"""
+	ls_tree = subprocess.run(GIT_SAFE + ["ls-tree", "-rz", "--full-tree", treeish], cwd=host, env=env, check=True, capture_output=True).stdout
+	index_entries = []
+	blob_ids = set()
+	eligible = []
+	for record in ls_tree.split(b"\0"):
+		if not record:
+			continue
+		meta, path = record.split(b"\t", 1)
+		mode, kind, oid = meta.split(b" ")
+		name = path.decode("utf-8")
+		if kind != b"blob" or mode not in (b"100644", b"100755") or not readonly_allowed(name):
+			continue
+		eligible.append((mode, oid, path, name))
+	blob_sizes = {}
+	if eligible:
+		blob_input = b"\n".join(sorted({oid for _mode, oid, _path, _name in eligible})) + b"\n"
+		blob_metadata = subprocess.run(GIT_SAFE + ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], cwd=host, env=env, input=blob_input, check=True, capture_output=True).stdout
+		for line in blob_metadata.splitlines():
+			object_id, object_type, object_size = line.split()
+			if object_type != b"blob":
+				raise Rejected("non-blob in synthetic Git tree")
+			blob_sizes[object_id] = int(object_size)
+	readonly_total = 0
+	for mode, oid, path, name in eligible:
+		if readonly_limit_only:
+			limit = MAX_READONLY_FILE
+		else:
+			limit = MAX_READONLY_FILE if (dest / name).is_dir() or not (dest / name).exists() else MAX_WORKSPACE_FILE
+		if blob_sizes[oid] > limit:
+			continue
+		index_entries.append(mode + b" " + oid + b"\t" + path + b"\0")
+		blob_ids.add(oid)
+		if readonly_limit_only:
+			# Same totals as snapshot-readonly; the caller drops the tree.
+			readonly_total += blob_sizes[oid]
+			if len(index_entries) > MAX_READONLY_FILES or readonly_total > MAX_READONLY_TOTAL:
+				raise Rejected("tree exceeds read-only snapshot limits")
+	return index_entries, blob_ids
+
+
+def seed_git(host, dest, base_ref=""):
 	home = Path(tempfile.mkdtemp(prefix="codex-isolated-git-"))
 	try:
 		env = git_env(home)
@@ -917,37 +1133,32 @@ def seed_git(host, dest):
 		if not tree or not all(c in "0123456789abcdef" for c in tree):
 			log("seed-git outcome=skipped reason=bad_tree")
 			return
+		base_commit = ""
+		base_state = "none"
+		if base_ref:
+			try:
+				base_commit = subprocess.run(
+					GIT_SAFE + ["rev-parse", "--verify", "--end-of-options", f"{base_ref}^{{commit}}"],
+					cwd=host, env=env, check=True, capture_output=True, text=True,
+				).stdout.strip()
+			except (OSError, subprocess.CalledProcessError):
+				base_commit = ""
+			if not base_commit or not all(c in "0123456789abcdef" for c in base_commit):
+				base_commit = ""
+				base_state = "unresolved"
 		# HEAD may contain tracked credentials excluded from the snapshot.
 		# Construct a fresh index/tree from allowed blobs only, rather than
 		# packing HEAD (which would make filtered files readable via git show).
-		ls_tree = subprocess.run(GIT_SAFE + ["ls-tree", "-rz", "--full-tree", "HEAD"], cwd=host, env=env, check=True, capture_output=True).stdout
-		index_entries = []
-		blob_ids = set()
-		eligible = []
-		for record in ls_tree.split(b"\0"):
-			if not record:
-				continue
-			meta, path = record.split(b"\t", 1)
-			mode, kind, oid = meta.split(b" ")
-			name = path.decode("utf-8")
-			if kind != b"blob" or mode not in (b"100644", b"100755") or not readonly_allowed(name):
-				continue
-			eligible.append((mode, oid, path, name))
-		blob_sizes = {}
-		if eligible:
-			blob_input = b"\n".join(sorted({oid for _mode, oid, _path, _name in eligible})) + b"\n"
-			blob_metadata = subprocess.run(GIT_SAFE + ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], cwd=host, env=env, input=blob_input, check=True, capture_output=True).stdout
-			for line in blob_metadata.splitlines():
-				object_id, object_type, object_size = line.split()
-				if object_type != b"blob":
-					raise Rejected("non-blob in synthetic Git tree")
-				blob_sizes[object_id] = int(object_size)
-		for mode, oid, path, name in eligible:
-			limit = MAX_READONLY_FILE if (dest / name).is_dir() or not (dest / name).exists() else MAX_WORKSPACE_FILE
-			if blob_sizes[oid] > limit:
-				continue
-			index_entries.append(mode + b" " + oid + b"\t" + path + b"\0")
-			blob_ids.add(oid)
+		index_entries, blob_ids = seed_git_tree_entries("HEAD", host, dest, env)
+		base_index_entries = []
+		if base_commit:
+			# The base is optional: any failure leaves it out, never HEAD.
+			try:
+				base_index_entries, base_blob_ids = seed_git_tree_entries(base_commit, host, dest, env, readonly_limit_only=True)
+				blob_ids |= base_blob_ids
+			except (OSError, subprocess.CalledProcessError, Rejected, ValueError) as exc:
+				log(f"seed-git base_skipped reason={type(exc).__name__}")
+				base_commit, base_index_entries, base_state = "", [], "unresolved"
 		pack = home / "objects.pack"
 		with open(pack, "wb") as sink:
 			objects = b"\n".join(sorted(blob_ids)) + b"\n" if blob_ids else b""
@@ -966,13 +1177,28 @@ def seed_git(host, dest):
 		subprocess.run(["git", "init", "-q", str(dest)], env=local, check=True, capture_output=True)
 		with open(pack, "rb") as source:
 			subprocess.run(["git", "unpack-objects", "-q"], env=local, stdin=source, check=True, capture_output=True)
+		head_parents = []
+		if base_commit:
+			# The base tree is built in a scratch index outside DEST, so the
+			# agent's index only ever holds HEAD's filtered tree.
+			base_local = dict(local, GIT_INDEX_FILE=str(home / "base.index"))
+			try:
+				subprocess.run(["git", "update-index", "-z", "--index-info"], env=base_local, input=b"".join(base_index_entries), check=True, capture_output=True)
+				base_tree = subprocess.run(["git", "write-tree"], env=base_local, check=True, capture_output=True, text=True).stdout.strip()
+				base_synthetic = subprocess.run(["git", "commit-tree", base_tree, "-m", "isolated base (default branch)"], env=local, check=True, capture_output=True, text=True).stdout.strip()
+				subprocess.run(["git", "update-ref", "refs/heads/isolated-base", base_synthetic], env=local, check=True, capture_output=True)
+				head_parents = ["-p", base_synthetic]
+				base_state = "present"
+			except (OSError, subprocess.CalledProcessError) as exc:
+				log(f"seed-git base_skipped reason={type(exc).__name__}")
+				base_state = "unresolved"
 		subprocess.run(["git", "update-index", "-z", "--index-info"], env=local, input=b"".join(index_entries), check=True, capture_output=True)
 		filtered_tree = subprocess.run(["git", "write-tree"], env=local, check=True, capture_output=True, text=True).stdout.strip()
-		commit = subprocess.run(["git", "commit-tree", filtered_tree, "-m", "isolated snapshot"], env=local, check=True, capture_output=True, text=True).stdout.strip()
+		commit = subprocess.run(["git", "commit-tree", filtered_tree, *head_parents, "-m", "isolated snapshot"], env=local, check=True, capture_output=True, text=True).stdout.strip()
 		subprocess.run(["git", "update-ref", "refs/heads/isolated", commit], env=local, check=True, capture_output=True)
 		subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/isolated"], env=local, check=True, capture_output=True)
 		subprocess.run(["git", "read-tree", filtered_tree], env=local, check=True, capture_output=True)
-		log("seed-git outcome=ok")
+		log(f"seed-git outcome=ok base={base_state}")
 	except (OSError, subprocess.CalledProcessError) as exc:
 		log(f"seed-git outcome=skipped reason={type(exc).__name__}")
 		remove_node(dest / ".git")
@@ -1018,14 +1244,18 @@ def copy_include(source, target):
 
 def main():
 	command = sys.argv[1] if len(sys.argv) > 1 else ""
-	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "stage-deps": 2, "transfer": 3, "seed-git": 2, "copy-include": 2}
+	arity = {"snapshot-readonly": 2, "export-oversized": 5, "snapshot-workspace": 3, "prep-finalize": 3, "stage-deps": 2, "handoff-nested-deps": 3, "transfer": 3, "seed-git": 2, "copy-include": 2}
 	if command not in arity or (len(sys.argv) != arity[command] + 2
-		and not (command == "export-oversized" and len(sys.argv) == 8)):
-		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|stage-deps|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
+		and not (command == "export-oversized" and len(sys.argv) == 8)
+		and not (command == "seed-git" and len(sys.argv) == 5)):
+		print("usage: codex_isolated_workspace.py <snapshot-readonly|export-oversized|snapshot-workspace|prep-finalize|stage-deps|handoff-nested-deps|transfer|seed-git|copy-include> ARGS", file=sys.stderr)
 		raise SystemExit(2)
 	args = [Path(value) for value in sys.argv[2:]]
 	if command == "export-oversized" and len(args) == 6:
 		args[-1] = str(args[-1])
+	if command == "seed-git" and len(args) == 3:
+		# BASE_REF is a git ref, not a path; an empty value means none.
+		args[-1] = sys.argv[4]
 	global HIDDEN_NAMES
 	try:
 		HIDDEN_NAMES = hidden_names()
@@ -1039,6 +1269,8 @@ def main():
 			prep_finalize(*args)
 		elif command == "stage-deps":
 			stage_deps(*args)
+		elif command == "handoff-nested-deps":
+			handoff_nested_deps(*args)
 		elif command == "transfer":
 			transfer(*args)
 		elif command == "seed-git":

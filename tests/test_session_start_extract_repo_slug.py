@@ -187,6 +187,41 @@ printf '%s' "${SESSION_START_TEST_ANON_STATUS:-000}"
         return result.stdout
 
 
+def _settings_sync_pending() -> bool:
+    """True when tests/claude_template_drift.py tolerates settings.json drift."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "claude_template_drift", Path(__file__).resolve().parent / "claude_template_drift.py"
+    )
+    if spec is None or spec.loader is None:
+        return False
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return "settings.json" in module.pending_template_paths(REPO_ROOT)
+
+
+def _settings_match_template() -> bool:
+    """True when the live settings are the template plus only the live-only rules.
+
+    The live copy carries one operator-approved rule the template does not
+    (tests/claude_template_drift.py LIVE_ONLY_ALLOW_RULES); any other
+    difference is a mismatch.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "claude_template_drift", Path(__file__).resolve().parent / "claude_template_drift.py"
+    )
+    if spec is None or spec.loader is None:
+        return False
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.settings_match_template(
+        TEMPLATE_SETTINGS.read_text(encoding="utf-8"), SETTINGS.read_text(encoding="utf-8")
+    )
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -199,13 +234,16 @@ def main() -> int:
             f"propagate stale behaviour."
         )
 
-    # settings.json must also be byte-identical — it registers the SessionStart
+    # settings.json must also match (apart from the live-only allow rules) — it registers the SessionStart
     # hook in consumer repos and is mirrored by the same claude_sync step.
-    if SETTINGS.read_bytes() != TEMPLATE_SETTINGS.read_bytes():
+    # On PR CI only, a settings change the PR made (or drift its base already
+    # has) waits for the post-merge live-copy sync; main pushes and the
+    # release gates leave CLAUDE_PARITY_PR_BASE_SHA unset and stay strict.
+    if not _settings_match_template() and not _settings_sync_pending():
         failures.append(
-            f"{TEMPLATE_SETTINGS.relative_to(REPO_ROOT)} must be byte-identical to "
-            f"{SETTINGS.relative_to(REPO_ROOT)}; consumer auto-sync would otherwise "
-            f"propagate stale SessionStart registration."
+            f"{TEMPLATE_SETTINGS.relative_to(REPO_ROOT)} must match "
+            f"{SETTINGS.relative_to(REPO_ROOT)} apart from the live-only allow rules; consumer "
+            f"auto-sync would otherwise propagate stale SessionStart registration."
         )
 
     for hook in (HOOK, TEMPLATE_HOOK):

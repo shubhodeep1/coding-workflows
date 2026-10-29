@@ -4,6 +4,7 @@ import subprocess
 import sys
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -345,6 +346,35 @@ def test_evidence_redacts_credentials_and_cannot_close_its_fence(tmp_path: Path)
 	assert not list(tmp_path.glob("heal-evidence.*"))
 
 
+def test_evidence_accepts_a_body_edited_only_by_the_pipeline(tmp_path: Path) -> None:
+	# #7444: the plan gate's grant edits the body; the evidence collector must
+	# accept the same pipeline-only edit history the implement preflight accepts.
+	if not shutil.which("jq"):
+		pytest.skip("jq is required by the evidence collector")
+	live = _heal_live_issue(_SCOPE_MARKER)
+	issue = live["data"]["repository"]["issue"]
+	issue["lastEditedAt"] = "2026-10-15T00:00:00Z"
+	issue["userContentEdits"] = {"totalCount": 1, "pageInfo": {"hasNextPage": False},
+		"nodes": [{"editor": {"login": "pipeline"}, "deletedAt": None, "diff": issue["body"]}]}
+	state = {"login": "pipeline", "live": live, "jobs": [{"id": 9001, "name": "implement", "conclusion": "failure"}], "logs": {"9001": "##[error]boom\n"}}
+	out = tmp_path / "evidence.md"
+	base_env = _fake_gh_env(tmp_path, state)
+	base_env.update(GITHUB_REPOSITORY="owner/repo", ISSUE_NUMBER="42", RUNNER_TEMP=str(tmp_path), HEAL_EVIDENCE_FILE=str(out), WORKFLOW_HEAL_PY=str(ROOT / "scripts/workflow_failure_heal.py"))
+	result = subprocess.run(["bash", str(ROOT / "scripts/workflow_failure_heal_evidence.sh")], env=base_env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=written" in result.stdout and "boom" in out.read_text()
+	issue["userContentEdits"]["nodes"][0]["editor"]["login"] = "maintainer"
+	(tmp_path / "gh-state.json").write_text(json.dumps(state))
+	result = subprocess.run(["bash", str(ROOT / "scripts/workflow_failure_heal_evidence.sh")], env=base_env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "scope_unverified" in out.read_text()
+	issue["userContentEdits"]["nodes"][0]["editor"]["login"] = "pipeline"
+	(tmp_path / "gh-state.json").write_text(json.dumps(state))
+	result = subprocess.run(["bash", str(ROOT / "scripts/workflow_failure_heal_evidence.sh")], env=dict(base_env, HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED="false"), capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "scope_unverified" in out.read_text()
+
+
 def test_preflight_scope_ignores_files_touched_in_issue_and_evidence(tmp_path: Path) -> None:
 	if not shutil.which("jq"):
 		pytest.skip("jq is required by the heal preflight")
@@ -370,7 +400,7 @@ def test_preflight_scope_ignores_files_touched_in_issue_and_evidence(tmp_path: P
 		assert "HEAL_SCOPE_REFUSED" not in result.stdout
 		assert "HEAL_ROUTE=true" in env_file.read_text()
 		scope = (tmp_path / "heal-scope-77.txt").read_text().split()
-		assert scope == ["scripts/fix.py", "tests/**", "changelog.d/*.md"]
+		assert scope == ["scripts/fix.py", "tests/**", "changelog.d/*.md", "agents.d/42-*.md"]
 		# The evidence carries the injected files_touched text; the scope does not.
 		assert "files_touched:" in (tmp_path / "heal_evidence.md").read_text()
 	finally:
@@ -473,6 +503,47 @@ def test_heal_transfer_rejects_editor_controlled_helpers_and_git_hooks(tmp_path:
 		assert (host / "scripts/fix.py").read_text() == "old\n"
 
 
+def test_heal_transfer_admits_only_the_issues_own_agents_fragment(tmp_path: Path) -> None:
+	# implement_heal_preflight.sh adds agents.d/<N>-*.md to the scope (#8064).
+	scope = ["scripts/fix.py", "tests/**", "changelog.d/*.md", "agents.d/42-*.md"]
+	host, copy, manifest = _scoped_snapshot(tmp_path)
+	(copy / "agents.d").mkdir()
+	(copy / "agents.d/42-fix.md").write_text("note\n")
+	workspace.transfer(host, copy, manifest, scope)
+	assert (host / "agents.d/42-fix.md").read_text() == "note\n"
+	other = tmp_path / "other"
+	other.mkdir()
+	host, copy, manifest = _scoped_snapshot(other)
+	(copy / "agents.d").mkdir()
+	(copy / "agents.d/43-fix.md").write_text("note\n")
+	with pytest.raises(ValueError, match="out of heal scope"):
+		workspace.transfer(host, copy, manifest, scope)
+	assert not (host / "agents.d").exists()
+
+
+@pytest.mark.parametrize("entry,accepted", [
+	("agents.d/42-*.md", True),
+	("agents.d/*.md", False),
+	("agents.d/042-*.md", False),
+	("agents.d/42-*", False),
+	("scripts/*.py", False),
+])
+def test_heal_transfer_cli_scope_entry_shapes(tmp_path: Path, entry: str, accepted: bool) -> None:
+	host, copy, manifest = _scoped_snapshot(tmp_path)
+	scope = tmp_path / "scope.txt"
+	scope.write_text(f"scripts/fix.py\ntests/**\nchangelog.d/*.md\n{entry}\n")
+	(copy / "scripts/fix.py").write_text("new\n")
+	result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/review_untrusted_workspace.py"), "transfer", str(host), str(copy), str(manifest), "--scope-file", str(scope)],
+		capture_output=True, text=True, check=False, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+	if accepted:
+		assert result.returncode == 0, result.stderr
+		assert (host / "scripts/fix.py").read_text() == "new\n"
+	else:
+		assert result.returncode != 0
+		assert "reason=out_of_heal_scope" in result.stderr
+		assert (host / "scripts/fix.py").read_text() == "old\n"
+
+
 def test_heal_host_steps_never_run_editor_writable_helpers() -> None:
 	runner = (ROOT / "scripts/heal_isolated_implement.sh").read_text()
 	commit = (ROOT / "scripts/implement_commit_changes.sh").read_text()
@@ -552,3 +623,332 @@ def test_intake_freezes_heal_scope_inputs_before_diagnosis() -> None:
 	open_issue = open_issue[:open_issue.index("\n}\n")]
 	assert '"${SCOPE_INPUTS_FROZEN}" > "${RUNTIME_DIR}/scope_inputs.json"' in open_issue
 	assert "*.verified" not in open_issue and "DIAG_FILE" not in open_issue.split("compose-issue")[0]
+
+
+# Issue #6982 (run 38017269081): the heal sandbox image had no PyYAML, so
+# every edited workflow file "failed" the validator's `import yaml`, the
+# repair loop could never fix it, and two attempts were discarded as
+# reason=syntax with no file named in the log.
+
+def _validator_repo(tmp_path: Path, files: dict[str, str]) -> Path:
+	repo = tmp_path / "repo"
+	repo.mkdir(parents=True)
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "keep.txt").write_text("x\n")
+	subprocess.run(["git", "add", "--all"], cwd=repo, check=True)
+	subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "init"], cwd=repo, check=True)
+	for rel, text in files.items():
+		(repo / rel).parent.mkdir(parents=True, exist_ok=True)
+		(repo / rel).write_text(text)
+	return repo
+
+
+def _run_validator(repo: Path, tmp_path: Path, *, yaml_available: bool) -> subprocess.CompletedProcess:
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	env.pop("RUNTIME_DIR", None)
+	env.pop("CAPTURE_FILE", None)
+	if not yaml_available:
+		shadow = tmp_path / "no-yaml"
+		shadow.mkdir(exist_ok=True)
+		(shadow / "yaml.py").write_text("raise ImportError('PyYAML is not installed')\n")
+		env["PYTHONPATH"] = str(shadow)
+	return subprocess.run(["bash", str(ROOT / "scripts/validate_changed_files_syntax.sh")], cwd=repo, env=env, capture_output=True, text=True, check=False)
+
+
+def test_validator_reports_a_missing_yaml_checker_as_unavailable(tmp_path: Path) -> None:
+	pytest.importorskip("yaml")
+	repo = _validator_repo(tmp_path, {".github/workflows/review_autofix.yml": "name: ok\non: push\n"})
+	result = _run_validator(repo, tmp_path, yaml_available=False)
+	assert result.returncode == 3, result.stdout + result.stderr
+	assert "VALIDATE_CHANGED_FILES_SYNTAX outcome=validator_unavailable checker=yaml unchecked=1" in result.stdout
+	assert "::error file=.github/workflows/review_autofix.yml::YAML checker unavailable" in result.stdout
+	assert "YAML syntax error" not in result.stdout
+
+
+def test_validator_real_syntax_error_wins_over_an_unavailable_checker(tmp_path: Path) -> None:
+	repo = _validator_repo(tmp_path, {"a.yml": "name: ok\n", "broken.py": "def x(:\n"})
+	result = _run_validator(repo, tmp_path, yaml_available=False)
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "::error file=broken.py::Syntax error in broken.py" in result.stdout
+
+
+def test_validator_with_yaml_still_checks_yaml(tmp_path: Path) -> None:
+	pytest.importorskip("yaml")
+	good = _run_validator(_validator_repo(tmp_path / "good", {"a.yml": "name: ok\n"}), tmp_path / "good", yaml_available=True)
+	assert good.returncode == 0, good.stdout + good.stderr
+	bad = _run_validator(_validator_repo(tmp_path / "bad", {"a.yml": "name: [unclosed\n"}), tmp_path / "bad", yaml_available=True)
+	assert bad.returncode == 1
+	assert "::error file=a.yml::YAML syntax error in a.yml" in bad.stdout
+
+
+def test_heal_sandbox_image_ships_the_yaml_checker() -> None:
+	dockerfile = (ROOT / "scripts/clarify_sandbox/Dockerfile").read_text()
+	assert re.search(r"apt-get install -y --no-install-recommends [^\n]*\bpython3-yaml\b", dockerfile)
+
+
+@pytest.mark.parametrize("validator_rc,expected", [(3, "reason=validator_unavailable rc=3"), (1, "reason=syntax")])
+def test_heal_runner_names_validator_findings_and_never_repairs_a_missing_checker(tmp_path: Path, validator_rc: int, expected: str) -> None:
+	host = tmp_path / "host"
+	host.mkdir()
+	(host / ".github/workflows").mkdir(parents=True)
+	(host / ".github/workflows/review_autofix.yml").write_text("name: old\n")
+	subprocess.run(["git", "init", "-q", str(host)], check=True)
+	subprocess.run(["git", "add", "--all"], cwd=host, check=True)
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("review_untrusted_workspace.py", "files_touched_scope_guard.py"):
+		shutil.copy(ROOT / "scripts" / name, support / name)
+	(support / "validate_changed_files_syntax.sh").write_text("#!/bin/bash\nexit 0\n")
+	(support / "clarify_openrouter_broker.py").write_text(
+		"import socket,sys,time\ns=socket.socket(socket.AF_UNIX)\ns.bind(sys.argv[2])\ns.listen(1)\ntime.sleep(30)\n"
+	)
+	trusted = tmp_path / ".codex-workflow-src/scripts/clarify_sandbox"
+	trusted.mkdir(parents=True)
+	(trusted / "Dockerfile").write_text("FROM scratch\n")
+	prompt_dir = tmp_path / ".codex-workflow-src/prompts"
+	prompt_dir.mkdir()
+	(prompt_dir / "mode-implement-repair-syntax.txt").write_text("Repair syntax.\n")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	commands = tmp_path / "docker-commands"
+	docker = bin_dir / "docker"
+	docker.write_text("""#!/bin/bash
+printf '%s\\n' "$*" >> "__COMMANDS__"
+case "$1" in
+  build) echo fake-image ;;
+  run)
+    if [[ "$*" == *"/validator.sh"* ]]; then
+      echo "::error file=.github/workflows/review_autofix.yml::YAML checker unavailable (python3 cannot import yaml)"
+      echo "::stop-commands::injected"
+      exit __RC__
+    fi
+    for arg in "$@"; do
+      case "$arg" in
+        type=bind,src=*,dst=/results) dest="${arg#type=bind,src=}"; printf 'out\\n' > "${dest%%,dst=*}/output" ;;
+        type=bind,src=*,dst=/source) dest="${arg#type=bind,src=}"; printf 'name: new\\n' > "${dest%%,dst=*}/.github/workflows/review_autofix.yml" ;;
+      esac
+    done
+    ;;
+  ps|rm) ;;
+  *) exit 1 ;;
+esac
+""".replace("__COMMANDS__", str(commands)).replace("__RC__", str(validator_rc)))
+	docker.chmod(0o755)
+	prompt = tmp_path / "prompt"
+	prompt.write_text("Edit the workflow")
+	scope = tmp_path / "scope"
+	scope.write_text(".github/workflows/review_autofix.yml\ntests/**\nchangelog.d/*.md\n")
+	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", OPENROUTER_API_KEY="fake-model-key", HEAL_SCOPE_FILE=str(scope),
+		HEAL_TRUSTED_SUPPORT_DIR=str(support), RUNNER_TEMP=str(tmp_path), GITHUB_WORKSPACE=str(tmp_path), WORKSPACE_PATH=str(host),
+		PYTHONDONTWRITEBYTECODE="1", MAX_POST_CODEX_REPAIR_ATTEMPTS="1")
+	result = subprocess.run(["bash", str(ROOT / "scripts/heal_isolated_implement.sh"), str(prompt), str(tmp_path / "output")], env=env, capture_output=True, text=True, check=False)
+	assert result.returncode != 0
+	assert expected in result.stderr, result.stderr
+	assert "HEAL_ISOLATED_EDITOR validation: ::error file=.github/workflows/review_autofix.yml::YAML checker unavailable" in result.stderr
+	# Only ::error lines are surfaced, and never at the start of a log line.
+	assert "stop-commands" not in result.stderr
+	assert not any(line.startswith("::") for line in result.stderr.splitlines())
+	validator_runs = sum(1 for line in commands.read_text().splitlines() if line.startswith("run ") and "/validator.sh" in line)
+	assert validator_runs == (1 if validator_rc == 3 else 2), validator_runs
+	assert (host / ".github/workflows/review_autofix.yml").read_text() == "name: old\n"
+
+
+# --- pre-push affected-test gate (issue #8201, plan P4) --------------------------------
+
+_GATE_FAKE_DOCKER = r'''#!/bin/bash
+[ -z "${GH_PAT:-}" ] && [ -z "${GH_TOKEN:-}" ] || exit 19
+case "$1" in
+  build) echo fake-image ;;
+  run)
+    results="" source_dir="" prompt=""
+    for arg in "$@"; do
+      case "$arg" in
+        type=bind,src=*,dst=/results) results="${arg#type=bind,src=}"; results="${results%%,dst=*}" ;;
+        type=bind,src=*,dst=/source) source_dir="${arg#type=bind,src=}"; source_dir="${source_dir%%,dst=*}" ;;
+        type=bind,src=*,dst=/prompt,readonly) prompt="${arg#type=bind,src=}"; prompt="${prompt%%,dst=*}" ;;
+      esac
+    done
+    if [[ "$*" == *"dst=/gate/prepush_affected_tests.py"* ]]; then
+      echo gate >> "__LOG__"
+      cat "${source_dir}/scripts/fix.py" > "__LOG__.gate_saw"
+      cp "__RESULT__" "${results}/result.json"
+      exit 0
+    fi
+    if [[ "$*" == *"/validator.sh"* ]]; then
+      echo validator >> "__LOG__"
+      if [ -e "__LOG__.syntax_fail" ] && [ "$(grep -c '^editor' "__LOG__")" -ge 2 ]; then exit 1; fi
+      if [ -e "__LOG__.validator_down" ] && [ "$(grep -c '^editor' "__LOG__")" -ge 2 ]; then exit 3; fi
+      exit 0
+    fi
+    echo editor >> "__LOG__"
+    n="$(grep -c '^editor' "__LOG__")"
+    cp "${prompt}" "__LOG__.prompt${n}"
+    printf 'result %s\n' "${n}" > "${results}/output"
+    if [ "${n}" = 1 ]; then
+      printf 'new\n' > "${source_dir}/scripts/fix.py"
+    else
+      mkdir -p "${source_dir}/tests"
+      printf 'repaired\n' > "${source_dir}/tests/test_fix.py"
+    fi
+    ;;
+  ps|rm) ;;
+  *) exit 1 ;;
+esac
+'''
+
+
+def _gate_heal_run(tmp_path: Path, status: str = "fail", mode: str = "", syntax_fail_after_repair: bool = False,
+		with_step: bool = True, validator_down_after_repair: bool = False, gate_budget: str = "", job_start_age: int = 0) -> dict:
+	host = tmp_path / "host"
+	(host / "scripts").mkdir(parents=True)
+	(host / "tests").mkdir()
+	(host / "scripts/fix.py").write_text("old\n")
+	(host / "tests/test_fix.py").write_text("old test\n")
+	git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	for cmd in (["init", "-q"], ["add", "--all"], ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "base"]):
+		subprocess.run(["git", *cmd], cwd=host, check=True, env=git_env)
+	support = tmp_path / "support" / "scripts"
+	support.mkdir(parents=True)
+	(tmp_path / "support" / "prompts").mkdir()
+	for name in ("review_untrusted_workspace.py", "files_touched_scope_guard.py", "prepush_test_gate_run.sh"):
+		shutil.copy(ROOT / "scripts" / name, support / name)
+	if with_step:
+		shutil.copy(ROOT / "scripts/review_autofix_step_prepush_test_gate.sh", support / "review_autofix_step_prepush_test_gate.sh")
+	shutil.copy(ROOT / "workflow-templates/.claude/hooks/prepush_affected_tests.py", support / "prepush_affected_tests.py")
+	shutil.copy(ROOT / "prompts/mode-implement-repair-tests.txt", tmp_path / "support" / "prompts" / "mode-implement-repair-tests.txt")
+	(support / "validate_changed_files_syntax.sh").write_text("#!/bin/bash\nexit 0\n")
+	(support / "clarify_openrouter_broker.py").write_text(
+		"import socket,sys,time\ns=socket.socket(socket.AF_UNIX)\ns.bind(sys.argv[2])\ns.listen(1)\ntime.sleep(30)\n"
+	)
+	trusted = tmp_path / ".codex-workflow-src/scripts/clarify_sandbox"
+	trusted.mkdir(parents=True)
+	(trusted / "Dockerfile").write_text("FROM scratch\n")
+	gate_result = tmp_path / "gate-result.json"
+	failures = [{"test": "tests/test_fix.py", "file": "tests/test_fix.py", "names": ["test_fix"], "tail": "::error::boom\nAssertionError\n"}] if status == "fail" else []
+	gate_result.write_text(json.dumps({"schema": "prepush_test_gate.v1", "status": status, "ran": ["tests/test_fix.py"],
+		"failures": failures, "inherited": [], "unverified": [], "changed_assertions": [], "selected": 1, "elapsed_secs": 1}))
+	log = tmp_path / "docker-log"
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	docker.write_text(_GATE_FAKE_DOCKER.replace("__LOG__", str(log)).replace("__RESULT__", str(gate_result)))
+	docker.chmod(0o755)
+	prompt = tmp_path / "prompt"
+	prompt.write_text("Edit the file")
+	scope = tmp_path / "scope"
+	scope.write_text("scripts/fix.py\ntests/**\nchangelog.d/*.md\n")
+	output = tmp_path / "output"
+	env = {k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PREPUSH_", "SUPPORT_", "RUNTIME_DIR"))}
+	env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", GH_PAT="fake-private-pat", GH_TOKEN="fake-private-pat",
+		OPENROUTER_API_KEY="fake-model-key", HEAL_SCOPE_FILE=str(scope), HEAL_TRUSTED_SUPPORT_DIR=str(support),
+		RUNNER_TEMP=str(tmp_path), GITHUB_WORKSPACE=str(tmp_path), WORKSPACE_PATH=str(host), PYTHONDONTWRITEBYTECODE="1")
+	if mode:
+		env["PREPUSH_TEST_GATE_MODE"] = mode
+	if gate_budget:
+		env["HEAL_PREPUSH_GATE_BUDGET_SECS"] = gate_budget
+	env.pop("JOB_START_EPOCH", None)
+	if job_start_age:
+		env["JOB_START_EPOCH"] = str(int(time.time()) - job_start_age)
+	if syntax_fail_after_repair:
+		# The heal script runs docker under env -i: signal through a file.
+		Path(str(log) + ".syntax_fail").write_text("1")
+	if validator_down_after_repair:
+		Path(str(log) + ".validator_down").write_text("1")
+	result = subprocess.run(["bash", str(ROOT / "scripts/heal_isolated_implement.sh"), str(prompt), str(output)],
+		env=env, capture_output=True, text=True, check=False, timeout=300)
+	lines = log.read_text().splitlines() if log.exists() else []
+	worktrees = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=host, capture_output=True, text=True, env=git_env).stdout
+	return {
+		"rc": result.returncode, "stderr": result.stderr, "host": host, "lines": lines, "log": log, "worktrees": worktrees,
+	}
+
+
+def test_heal_gate_failure_runs_one_repair_turn_then_validates_and_transfers(tmp_path: Path) -> None:
+	run = _gate_heal_run(tmp_path)
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"] == ["editor", "validator", "gate", "editor", "validator"]
+	# The gate ran on a trusted worktree that already held the snapshot's edit.
+	assert Path(str(run["log"]) + ".gate_saw").read_text() == "new\n"
+	repair_prompt = Path(str(run["log"]) + ".prompt2").read_text()
+	assert "=== CAPTURED TEST FAILURES (UNTRUSTED) ===" in repair_prompt
+	assert not any(line.startswith("::") for line in repair_prompt.splitlines())
+	allow = repair_prompt.split("=== EFFECTIVE REPAIR ALLOW-LIST ===", 1)[1].split("===", 1)[0]
+	assert "scripts/fix.py" in allow.split()
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+	assert (run["host"] / "tests/test_fix.py").read_text() == "repaired\n"
+	assert "HEAL_ISOLATED_EDITOR phase=prepush_gate outcome=repaired failures=1 repair=ran" in run["stderr"]
+	# The gate worktree is removed again.
+	assert run["worktrees"].count("worktree ") == 1
+
+
+def test_heal_gate_repair_with_broken_syntax_restores_the_pre_repair_snapshot(tmp_path: Path) -> None:
+	run = _gate_heal_run(tmp_path, syntax_fail_after_repair=True)
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"].count("editor") == 2
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+	assert (run["host"] / "tests/test_fix.py").read_text() == "old test\n"
+	assert "phase=prepush_gate outcome=repair_reverted reason=syntax" in run["stderr"]
+
+
+def test_heal_gate_validator_failure_after_repair_still_transfers_the_pre_repair_snapshot(tmp_path: Path) -> None:
+	run = _gate_heal_run(tmp_path, validator_down_after_repair=True)
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"].count("editor") == 2
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+	assert (run["host"] / "tests/test_fix.py").read_text() == "old test\n"
+	assert "phase=prepush_gate outcome=repair_reverted reason=validator_unavailable" in run["stderr"]
+
+
+@pytest.mark.parametrize("status", ["pass", "unverified"])
+def test_heal_gate_without_pr_caused_failures_adds_no_turn(tmp_path: Path, status: str) -> None:
+	run = _gate_heal_run(tmp_path, status=status)
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"] == ["editor", "validator", "gate"]
+	assert (run["host"] / "tests/test_fix.py").read_text() == "old test\n"
+
+
+@pytest.mark.parametrize("kwargs", [{"mode": "off"}, {"with_step": False}])
+def test_heal_gate_off_or_absent_adds_no_gate_or_turn(tmp_path: Path, kwargs: dict) -> None:
+	run = _gate_heal_run(tmp_path, **kwargs)
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"] == ["editor", "validator"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+
+
+def test_heal_gate_never_hands_the_editor_snapshot_to_the_wrapper() -> None:
+	runner = (ROOT / "scripts/heal_isolated_implement.sh").read_text()
+	body = runner[runner.index("heal_prepush_test_gate()"):runner.index("heal_prepush_test_gate || true")]
+	assert '--worktree "${root}/gate-tree"' in body
+	assert '--worktree "${root}/source"' not in body
+	assert "worktree add --detach" in body and "core.hooksPath=/dev/null" in body
+	assert "worktree remove --force" in runner and "worktree prune" in runner
+	assert runner.index("heal_prepush_test_gate || true") < runner.index('transfer "${WORKSPACE_PATH:-${PWD}}" "${root}/source"')
+
+
+def test_heal_gate_is_skipped_when_the_step_budget_is_spent(tmp_path: Path) -> None:
+	run = _gate_heal_run(tmp_path, gate_budget="700")
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"] == ["editor", "validator"]
+	assert (run["host"] / "scripts/fix.py").read_text() == "new\n"
+	assert "phase=prepush_gate outcome=skipped reason=step_budget" in run["stderr"]
+
+
+def test_heal_gate_repair_is_bounded_by_the_step_budget() -> None:
+	runner = (ROOT / "scripts/heal_isolated_implement.sh").read_text()
+	body = runner[runner.index("heal_prepush_test_gate()"):runner.index("heal_prepush_test_gate || true")]
+	assert 'HEAL_PREPUSH_GATE_BUDGET_SECS:-9000' in body
+	assert 'local wall="${wall}" repair_wall=$(( gate_budget - $(heal_gate_elapsed) - 630 ))' in body
+	assert body.index("repair_wall") < body.index('run_editor "${root}/repair-prompt-tests"')
+	# The codex fallback after a Claude exit 75 gets only what is left of the turn.
+	assert body.index('heal_repair_deadline=$(( SECONDS + wall ))') < body.index('run_editor "${root}/repair-prompt-tests"')
+	run_editor = runner[runner.index("run_editor()\n{"):runner.index('run_editor "${prompt}"')]
+	assert run_editor.index("repair_left=$(( heal_repair_deadline - SECONDS ))") < run_editor.index("docker run")
+
+
+def test_heal_gate_budget_counts_from_the_job_start(tmp_path: Path) -> None:
+	# JOB_START_EPOCH (exported by implement.yml) anchors the budget, so a
+	# heal retry late in the job does not get a fresh 9000 s.
+	run = _gate_heal_run(tmp_path, job_start_age=8500)
+	assert run["rc"] == 0, run["stderr"]
+	assert run["lines"] == ["editor", "validator"]
+	assert "phase=prepush_gate outcome=skipped reason=step_budget" in run["stderr"]

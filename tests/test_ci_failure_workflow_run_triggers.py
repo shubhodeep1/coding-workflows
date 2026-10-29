@@ -21,6 +21,7 @@ INTERNAL = REPO_ROOT / ".github" / "workflows" / "internal-check-failure-triage.
 CONSUMER = REPO_ROOT / "workflow-templates" / "ai-check-failure-triage.yml"
 INTAKE = REPO_ROOT / ".github" / "workflows" / "workflow-failure-heal-intake.yml"
 TRIAGE_SCRIPT = REPO_ROOT / "scripts" / "check_failure_triage.sh"
+CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 
 def _load(path: Path) -> dict:
@@ -85,7 +86,7 @@ def test_internal_wrapper_listens_to_ci_and_keeps_check_run() -> None:
 	assert data["jobs"]["triage"]["if"].startswith("github.event_name == 'check_run' &&")
 
 
-@pytest.mark.parametrize("path, ref", [(INTERNAL, "main"), (CONSUMER, "stable")])
+@pytest.mark.parametrize("path, ref", [(INTERNAL, "promote-candidate"), (CONSUMER, "stable")])
 def test_workflow_run_job_triages_one_failed_pull_request_run(path: Path, ref: str) -> None:
 	job = _load(path)["jobs"]["triage-workflow-run"]
 	assert job["uses"] == f"shubhodeep1/coding-workflows/.github/workflows/check_failure_triage.yml@{ref}"
@@ -154,3 +155,18 @@ def test_heal_intake_takes_ci_only_for_pushes_to_the_default_branch() -> None:
 	# The release workflows keep their branch-agnostic behaviour.
 	assert _evaluate(condition, "workflow_run", _run_event("Promote main to stable", event="schedule", branch="main", prs=0))
 	assert _evaluate(condition, "workflow_dispatch", {})
+	# CI pushes to an orchestrator integration branch (Q45) are not healed.
+	assert not _evaluate(condition, "workflow_run", _run_event("CI", event="push", branch="orchestrator/project-6664", prs=0))
+
+
+def test_ci_runs_on_orchestrator_integration_prs_and_pushes() -> None:
+	"""Q45 / issue #7283: pull-request CI runs for every base, so sub-issue
+	PRs into `orchestrator/project-*` and fix PRs routed to a failing PR's
+	head branch get CI before they merge. Pushes to main, stable and the
+	integration branches give triage's base gate a result."""
+	on = _on(_load(CI))
+	assert on["pull_request"]["branches"] == ["**"], on["pull_request"]
+	assert on["push"]["branches"] == ["main", "stable", "orchestrator/project-*"], on["push"]
+	# The base gate reads the newest completed CI push run on the PR's base.
+	script = TRIAGE_SCRIPT.read_text(encoding="utf-8")
+	assert "runs?branch=${BASE_REF}&event=push&per_page=1" in script

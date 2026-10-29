@@ -117,6 +117,21 @@ if [ "${CAN_PUSH:-false}" != "true" ]; then
   exit 0
 fi
 
+# Consumer-updater PRs (update_workflows.yml pull-request delivery, #7004):
+# only the updater writes their branch and only its verify job may merge them.
+# An editor commit would land an unverified head under that job's auto-merge.
+if [[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]]; then
+  echo "AUTOFIX_COMMIT_SKIPPED pr=${PR_NUMBER:-unknown} reason=updater_pr_verify_job_owns_branch"
+  # Discard the withheld edits and tell the editor-changes-lost detector they
+  # were withheld on purpose (otherwise every run is reported as lost edits).
+  git reset --hard HEAD >/dev/null 2>&1 || true
+  git clean -ffd -e .ai -e .serena -e scripts -e prompts -e .github/ai -e .github/scripts \
+    -e .github/prompts -e .codex-workflow-src -e .codex-workflow-src-main >/dev/null 2>&1 || true
+  echo "AUTOFIX_UPDATER_COMMIT_WITHHELD=true" >> "$GITHUB_ENV"
+  echo "- commit skipped (consumer-updater branch; only the updater writes it)" > "${COMMITTED_FILES_FILE}"
+  exit 0
+fi
+
 if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ] && [ "${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-true}" != "true" ]; then
   withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-validation_tail_incomplete}"
   echo "Partial finalize findings-only fallback: discarding local edits before commit (${withheld_reason})."
@@ -233,6 +248,14 @@ if [ -s "${NEW_FILES_BEFORE_COMMIT_FILE}" ]; then
             echo "Preserving editor-created changelog fragment: ${created_file}"
             continue
           fi ;;
+        agents.d/*.md)
+          if [[ "${created_file#agents.d/}" != */* ]]; then
+            # Same for agents.d/ fragments (CLAUDE.md §30): the editor
+            # documents agents.md through a top-level fragment, and nothing
+            # in the pipeline machinery writes into agents.d/.
+            echo "Preserving editor-created agents.md fragment: ${created_file}"
+            continue
+          fi ;;
       esac
       removal_reason=""
       # Pipeline-owned paths: the workflow writes these into the worktree
@@ -308,8 +331,19 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
   unset _artifact
 fi
 
-git config user.name "codex-bot"
-git config user.email "codex@users.noreply.github.com"
+# The commit author names the engine that wrote the edits: claude-bot when
+# the editor ran on Claude (and did not fall back to OpenCode), codex-bot
+# otherwise. Both emails are on the reserved .invalid domain so GitHub links
+# the commit to no account.
+if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ] \
+  && [ "${REVIEW_EDITOR_ENGINE_FELL_BACK:-false}" != "true" ]; then
+  git config user.name "claude-bot"
+  git config user.email "claude-bot@users.noreply.invalid"
+else
+  git config user.name "codex-bot"
+  git config user.email "codex-bot@users.noreply.invalid"
+fi
+echo "AI_COMMIT_IDENTITY role=REVIEW_EDITOR engine=${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex} fell_back=${REVIEW_EDITOR_ENGINE_FELL_BACK:-false} name=$(git config user.name)"
 git rm -r --cached node_modules 2>/dev/null || true
 
 # Diagnostic: working tree state immediately before the

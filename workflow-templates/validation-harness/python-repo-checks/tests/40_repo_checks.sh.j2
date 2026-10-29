@@ -6,7 +6,8 @@ source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
 COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
 APP_SERVICE="${APP_SERVICE:-app}"
-REPO_CHECK_ENTRY="${REPO_CHECK_ENTRY:-{{ manifest.get('entry', 'scripts/run_validation_repo_checks.sh') }}}"
+_default_repo_check_entry={{ manifest.get('entry', 'scripts/run_validation_repo_checks.sh') | shell_quote }}
+REPO_CHECK_ENTRY="${REPO_CHECK_ENTRY:-${_default_repo_check_entry}}"
 
 echo "1..1"
 

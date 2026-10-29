@@ -10,6 +10,10 @@ import subprocess
 import tempfile
 
 import yaml
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -74,6 +78,10 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 		root = Path(workdir)
 		meta_path = root / "issue.json"
 		output_path = root / "output"
+		host_python_dir = root / "host_python"
+		host_python_dir.mkdir()
+		(host_python_dir / "security_dependency.py").write_bytes((REPO_ROOT / "scripts" / "security_dependency.py").read_bytes())
+		(host_python_dir / "pr_dependency.py").write_bytes((REPO_ROOT / "scripts" / "pr_dependency.py").read_bytes())
 		cases = [
 			("issues", "opened", "User", "OWNER", "maintainer", False, "open", False, False),
 			("issues", "opened", "User", "MEMBER", "maintainer", True, "open", True, True),
@@ -100,11 +108,19 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 			env.update({
 				"ISSUE_META_FILE": str(meta_path),
 				"GITHUB_OUTPUT": str(output_path),
+				"CLARIFY_HOST_PYTHON_DIR": str(host_python_dir),
 				"EVENT_NAME": event_name,
 				"EVENT_ACTION": event_action,
 				"COMMENT_BODY": "/reclarify" if event_name == "issue_comment" else "",
+				# The job predicate admits ordinary /reclarify comments only from
+				# these associations; the route fails closed without one (#7328).
+				"COMMENT_AUTHOR_ASSOCIATION": "OWNER" if event_name == "issue_comment" else "",
 				"RUN_ID": "1",
 				"ISSUE_NUMBER": "123",
+				# The Actions runner always exports GITHUB_REPOSITORY and the step
+				# reads it under `set -u` (issue #7251 dependency wait, #7257);
+				# set it explicitly so the test does not depend on the ambient env.
+				"GITHUB_REPOSITORY": "o/r",
 				# The step env sets it from vars.AI_ISSUE_IMPLEMENTER (empty when unset).
 				"AI_ISSUE_IMPLEMENTER": "",
 			})
@@ -206,7 +222,7 @@ def test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fa
 	assert 'ISSUE_PAYLOAD_FILE="${EARLY_CACHE_DIR}/issue_payload.json"' in metadata_block
 	assert 'TRACKING_PAYLOAD_FILE="${EARLY_CACHE_DIR}/tracking_issue_payload.json"' in metadata_block
 	assert 'printf \'%s\' "${ISSUE_PAYLOAD}" > "${ISSUE_PAYLOAD_FILE}"' in metadata_block
-	assert 'if TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then' in metadata_block
+	assert 'if TRACKING_PAYLOAD="$(gh_api_retry --optional "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then' in metadata_block
 	assert 'printf \'%s\' "${TRACKING_PAYLOAD}" > "${TRACKING_PAYLOAD_FILE}"' in metadata_block
 	assert 'TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null || echo "")"' not in metadata_block
 
@@ -223,7 +239,7 @@ def test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fa
 
 
 def test_agents_and_ci_register_phase_gate_contract() -> None:
-	agents_text = _read(AGENTS_MD)
+	agents_text = _agents_text_with_fragments()
 	assert "- `AI_PHASE_GATE_V1`" in agents_text
 
 	ci_text = _read(CI_WF)

@@ -321,7 +321,7 @@ if [ -n "${self_heal_codex_path}" ] && head -c 4096 "${self_heal_codex_path}" 2>
 	self_heal_codex_cmd=(codex)
 fi
 
-run_self_heal_codex()
+run_self_heal_codex_direct()
 {
 	local stderr_tmp="$1"
 	local stall_status_file=""
@@ -354,6 +354,36 @@ run_self_heal_codex()
 	else
 		"${self_heal_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
 	fi
+}
+
+# Engine selection for the self-heal agent (role VALIDATE_SELF_HEAL): Claude
+# by default through the trusted engine root validate.yml stages from the
+# verified support clone (CLAUDE_ENGINE_SUPPORT_DIR, default
+# ${RUNNER_TEMP}/claude-engine-support), the unchanged codex launch in
+# run_self_heal_codex_direct otherwise (AI_ENGINE_VALIDATE_SELF_HEAL=codex,
+# the ai:codex label, Claude unavailable, or no trusted root). ai_engine.sh is
+# never sourced from the checkout. The Claude run is read-only; it writes
+# SELF_HEAL_OUTPUT_FILE, and SELF_HEAL_STALL_STATE stays empty.
+run_self_heal_codex()
+{
+	local stderr_tmp="$1"
+	local engine_root="${CLAUDE_ENGINE_SUPPORT_DIR:-${RUNNER_TEMP:-/tmp}/claude-engine-support}"
+	local engine_script="${engine_root}/scripts/ai_engine.sh"
+	local rc=0
+
+	SELF_HEAL_STALL_STATE=""
+	# shellcheck source=/dev/null
+	if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ] || ! source "${engine_script}"; then
+		echo "AI_ENGINE_FALLBACK role=VALIDATE_SELF_HEAL reason=engine_support_missing" >&2
+		run_self_heal_codex_direct "${stderr_tmp}"
+		return $?
+	fi
+	# claude_run_selected runs the codex fallback in this shell ("$@"), so the
+	# function run_self_heal_codex_direct must stay defined in this script.
+	AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
+		claude_run_selected VALIDATE_SELF_HEAL "${SELF_HEAL_PROMPT_FILE}" "${SELF_HEAL_OUTPUT_FILE}" "${PWD}" -- \
+		run_self_heal_codex_direct "${stderr_tmp}" 2>> "${stderr_tmp}" || rc=$?
+	return "${rc}"
 }
 
 # Ensure the patches ledger exists.
@@ -426,7 +456,17 @@ for _llm_attempt in 1 2; do
 	emit_self_heal_substate "LaunchingAgentProcess" "${_llm_attempt}"
 	emit_self_heal_substate "InitializingSession" "${_llm_attempt}"
 	emit_self_heal_substate "StreamingTurn" "${_llm_attempt}"
-	if run_self_heal_codex "${_self_heal_stderr_tmp}"; then
+	_self_heal_run_rc=0
+	run_self_heal_codex "${_self_heal_stderr_tmp}" || _self_heal_run_rc=$?
+	if [ "${_self_heal_run_rc}" -eq 80 ]; then
+		# Claude capacity wait (issue #7370): no codex, no retry; the caller
+		# exits 80 so validate.yml records a wait instead of a verdict.
+		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
+		rm -f "${_self_heal_stderr_tmp}"
+		echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE_SELF_HEAL outcome=deferred stage=validate" >&2
+		exit 80
+	fi
+	if [ "${_self_heal_run_rc}" -eq 0 ]; then
 		emit_self_heal_substate "Finishing" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
 		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
 		case "${SELF_HEAL_STALL_STATE}" in

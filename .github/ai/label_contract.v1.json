@@ -101,6 +101,10 @@
       "color": "e11d48",
       "description": "Escalated for human intervention; autonomous stall recovery is paused"
     },
+    "ai:claude-capacity-wait": {
+      "color": "fbca04",
+      "description": "Claude pool at capacity; work is waiting for the hourly resume pass"
+    },
     "ai:blocked": {
       "color": "b60205",
       "description": "Orchestrator auto-answer loop blocked pending human intervention"
@@ -145,6 +149,10 @@
       "color": "b60205",
       "description": "Implementation blocked: staged files fell outside files_touched scope; human review required"
     },
+    "ai:split-to-project": {
+      "color": "a2eeef",
+      "description": "Plan too large for one grant; handed to an orchestrator project, closed when the project completes"
+    },
     "ai:closed": {
       "color": "6a737d",
       "description": "Linked PR closed without merge"
@@ -172,6 +180,10 @@
     "ai:review-skipped": {
       "color": "c2e0c6",
       "description": "Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
+    },
+    "ai:skip-activation-verify": {
+      "color": "c2e0c6",
+      "description": "Activation verification skips this merged PR (no verdict, no fix issue)"
     },
     "ai:merge-queued": {
       "color": "c5def5",
@@ -216,6 +228,14 @@
     "ai:operator-step": {
       "color": "fbca04",
       "description": "Steps only a person can take; the pipeline continues and gated work stays off until they are done"
+    },
+    "ai:provider-outage": {
+      "color": "b60205",
+      "description": "Model provider outage tracker (automation); the review sweep resumes and closes it on recovery"
+    },
+    "ai:scheduled-validation-failed": {
+      "color": "b60205",
+      "description": "Weekly scheduled validation of the default branch is failing (automation); closes when a later scheduled run passes"
     },
     "ai:unblock-closed": {
       "color": "5c5c5c",

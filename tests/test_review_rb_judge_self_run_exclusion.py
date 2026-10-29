@@ -57,9 +57,14 @@ import re
 import shlex
 import subprocess
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -86,7 +91,8 @@ def _pr_checks_lib_text() -> str:
 
 
 def _review_autofix_text() -> str:
-	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	# Step bodies moved to scripts/review_autofix_step_*.sh are inlined again.
+	return expanded_review_autofix_text()
 
 
 def _rb_judge_local_sanitize_fallback_block() -> str:
@@ -179,14 +185,15 @@ def test_script_excludes_self_in_both_jq_branches() -> None:
 	legacy (block-on-any) filter and the required-set filter. Dropping the
 	predicate from either would leave a path where the gate self-deadlocks."""
 	src = _pr_checks_lib_text()
-	# Legacy "*" branch: AND _is_pending with the negated self-check
-	# (paginated array + legacy single-object shapes => >=2 occurrences).
+	# Legacy "*" branch: AND _is_pending with the negated self-check.
+	# Both check-runs shapes (paginated array + legacy single object) are
+	# normalised into one $runs list (#7127), so one select covers both.
 	legacy = "select(_is_pending and (_is_self_check_run | not))"
 	legacy_occurrences = src.count(legacy)
-	assert legacy_occurrences >= 2, (
+	assert legacy_occurrences >= 1, (
 		f"scripts/pr_checks_lib.sh's legacy filter must apply the self-run "
-		f"exclusion in both shapes. Found {legacy_occurrences} occurrence(s) "
-		f"of `{legacy}`; expected at least 2."
+		f"exclusion. Found {legacy_occurrences} occurrence(s) "
+		f"of `{legacy}`; expected at least 1."
 	)
 	# Required-set branch: the select must AND the required-failure test
 	# with the negated self-check.
@@ -500,15 +507,42 @@ def test_workflow_merge_conflict_comment_is_branch_agnostic() -> None:
 # hosted in scripts/pr_checks_lib.sh's "*" branch). The text-shape tests
 # above are the change-detection guard against drift; keep this copy in
 # sync with scripts/pr_checks_lib.sh when the live filter changes.
+# PR_CHECKS_JQ_SUPERSEDE_DEFS from scripts/pr_checks_lib.sh, run with
+# --arg ci none --arg bound __unbound__ (name-only supersession).
 JQ_FILTER = '''
+def _run_id: [(.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)(/|$)") | .id] | first;
+def _bound_ci_run: ($bound != "__unbound__") and (_run_id as $rid | ($rid != null) and (($bound | split(",") | index($rid)) != null));
+def _newer_than($r): [(.id // 0), (.started_at // "")] > [($r.id // 0), ($r.started_at // "")];
+def _mark_superseded:
+	group_by(.name // "")
+	| map(
+		if ($ci != "" and $ci != "none" and $ci != "__invalid__" and ((.[0].name // "") == $ci)) then
+			. as $grp
+			| map(
+				. as $r
+				| ($r | _run_id) as $rrid
+				| ($r | _bound_ci_run) as $rb
+				| . + {_superseded: ([$grp[] | select(_newer_than($r) and (((_run_id) as $nid | ($nid != null and $nid == $rrid)) or ($rb and _bound_ci_run)))] | length > 0)}
+			)
+		else
+			max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})
+		end
+	)
+	| add // [];
 def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and .conclusion != "cancelled");
-if (type == "array") then
-  [.[]? | (.check_runs // [])[] | select(_is_pending and (_is_self_check_run | not))] | length
-elif (type == "object" and (.check_runs | type == "array")) then
-  [.check_runs[] | select(_is_pending and (_is_self_check_run | not))] | length
+def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
+(
+  if (type == "array") then
+    [.[]? | (.check_runs // [])[]]
+  elif (type == "object" and (.check_runs | type == "array")) then
+    .check_runs
+  else
+    null
+  end
+) as $runs |
+if ($runs == null) then empty
 else
-  empty
+  [$runs | _mark_superseded | .[] | select(_is_pending and (_is_self_check_run | not))] | length
 end
 '''
 
@@ -517,7 +551,7 @@ def _run_jq(payload: object, self_run: str) -> str:
 	if shutil.which("jq") is None:
 		raise unittest.SkipTest("jq binary not available in test environment")
 	result = subprocess.run(
-		["jq", "-r", "--arg", "self_run", self_run, JQ_FILTER],
+		["jq", "-r", "--arg", "self_run", self_run, "--arg", "ci", "none", "--arg", "bound", "__unbound__", JQ_FILTER],
 		input=json.dumps(payload),
 		capture_output=True,
 		text=True,

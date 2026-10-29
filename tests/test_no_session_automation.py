@@ -5,7 +5,9 @@ After the session-based Claude automation was retired, no workflow, script,
 hook, command or setting may start, wake, schedule, claim for or archive a
 claude.ai session again. The plan's check is a grep over
 `.github/ scripts/ .claude/ workflow-templates/` that may only hit the
-retired-files manifest and the label contract's `retired_labels` list. This
+retired-files manifest and the label contract's `retired_labels` list, plus
+one operator-approved line in the live `.claude/settings.json` (see
+LIVE_SETTINGS_EXEMPT_LINE). This
 test runs that grep so a codex autofix or a later change that re-adds the
 machinery fails CI.
 """
@@ -25,6 +27,13 @@ PATTERN = re.compile(
 )
 RETIRED_FILES_MANIFEST = Path("workflow-templates/retired_files.txt")
 LABEL_CONTRACT = Path(".github/ai/label_contract.v1.json")
+# The one exemption the operator approved on 2026-10-26: coding-workflows' own
+# live settings let the operator's daily activation routine (a scheduled task in
+# the operator's account, not repository automation) open sessions without the
+# Auto-mode check. Only this exact line in this one file is exempt; the
+# template copy that ships to consumers, and every other line, stay scanned.
+LIVE_SETTINGS = Path(".claude/settings.json")
+LIVE_SETTINGS_EXEMPT_LINE = '"mcp__claude-code-remote__create_session"'
 
 
 def _scanned_files() -> list[Path]:
@@ -52,6 +61,8 @@ def _hits() -> list[str]:
 				continue
 			if rel == LABEL_CONTRACT and line.strip().strip(",").strip('"') in retired_labels:
 				continue
+			if rel == LIVE_SETTINGS and line.strip().rstrip(",") == LIVE_SETTINGS_EXEMPT_LINE:
+				continue
 			hits.append(f"{rel}:{number}: {line.strip()[:160]}")
 	return hits
 
@@ -70,6 +81,17 @@ def test_detector_catches_a_reintroduced_call():
 	assert PATTERN.search("mcp__claude-code-remote__send_later")
 	assert PATTERN.search("python3 .claude/scripts/check_in_status.py --hand-back")
 	assert not PATTERN.search("python3 scripts/security_pass_skip.py --repo o/r --issue 1")
+
+
+def test_live_settings_exemption_stays_narrow():
+	# The exempt rule is in the live copy only, appears once, and no other
+	# session-automation text in the live settings is exempt.
+	live = (REPO_ROOT / LIVE_SETTINGS).read_text(encoding="utf-8")
+	template = (REPO_ROOT / "workflow-templates" / LIVE_SETTINGS).read_text(encoding="utf-8")
+	assert live.count("create_session") == 1
+	assert not PATTERN.search(template)
+	flagged = [line for line in live.splitlines() if PATTERN.search(line)]
+	assert [line.strip().rstrip(",") for line in flagged] == [LIVE_SETTINGS_EXEMPT_LINE]
 
 
 def main() -> int:

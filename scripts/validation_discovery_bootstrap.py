@@ -15,6 +15,12 @@ runtime fallback (`validate_process.sh`) which performs the same task
 inside each consumer's own CI. The shell path remains the last-resort
 fallback when a consumer has no committed `.ai/validate.yml` and the
 daily refresh runner has not yet opened a discovery PR.
+
+The agent runs on the engine of role `VALIDATION_REFRESH` (Claude by default,
+codex on `AI_ENGINE_VALIDATION_REFRESH=codex` or when Claude is unavailable):
+the Claude path goes through `claude_run_selected` from the trusted engine
+root (`CLAUDE_ENGINE_SUPPORT_DIR`); the codex path is the unchanged
+`codex exec` command line. Both run in the credential-free isolated container.
 """
 
 from __future__ import annotations
@@ -22,7 +28,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +56,17 @@ _EXPECTED_TOP_LEVEL_KEY_RE = re.compile(
 	re.IGNORECASE,
 )
 _FENCED_BLOCK_RE = re.compile(r"```(?:yaml|yml)?\n(.*?)```", flags=re.DOTALL | re.IGNORECASE)
+
+# Git author name of every commit the discovery runner pushes. The
+# superseded-PR sweep only closes PRs whose commits all carry this name.
+# (The commit email changed over time, so the sweep matches on the name.)
+DISCOVERY_COMMIT_AUTHOR_NAME = "codex-bot"
+
+# Title prefix of a seed PR (`build_pr_branch_name` + the runner's title).
+SEED_PR_TITLE_PREFIX = "chore(validation): seed .ai/validate.yml"
+
+# Upper bound on open PRs read per consumer by the superseded-PR sweep.
+DISCOVERY_PR_LIST_LIMIT = 100
 
 
 def _wrapped_command_failure(exc: BaseException) -> bool:
@@ -123,6 +143,32 @@ class DisagreementResult:
 	# Q7:A — only `type` field mismatch triggers a "discovery-disagrees" PR;
 	# other granular differences (slots, optional keys) are intentionally
 	# ignored to keep PR noise low.
+
+
+@dataclass(frozen=True)
+class OpenDiscoveryPr:
+	"""One open discovery PR on a consumer repo, as `gh pr list` reports it."""
+
+	number: int
+	url: str
+	head_branch: str
+	title: str
+	# True when every commit on the PR was written by the discovery runner
+	# (author name `DISCOVERY_COMMIT_AUTHOR_NAME`). A PR with any other commit
+	# may hold a person's edits and is never closed automatically.
+	bot_only: bool
+
+
+@dataclass(frozen=True)
+class DiscoverySupersedeOutcome:
+	"""What the superseded-PR sweep did with one obsolete discovery PR."""
+
+	number: int
+	url: str
+	head_branch: str
+	reason: str  # superseded_by_newer_pr | manifest_already_committed | proposed_type_already_committed
+	outcome: str  # closed | kept_human_commits | dry_run | close_failed
+	detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -261,6 +307,45 @@ def validate_discovered_manifest_yaml(
 # Trusted helper next to this module; never resolved from the clone.
 CODEX_ISOLATED_EXEC = Path(__file__).resolve().parent / "codex_isolated_exec.sh"
 
+# Engine role of the discovery agent (.github/ai/claude_engine.json).
+DISCOVERY_ENGINE_ROLE = "VALIDATION_REFRESH"
+
+
+def _claude_engine_support_root() -> Path:
+	"""Trusted engine root staged by validation-refresh.yml (never the clone)."""
+	configured = os.environ.get("CLAUDE_ENGINE_SUPPORT_DIR", "")
+	if configured:
+		return Path(configured)
+	return Path(os.environ.get("RUNNER_TEMP", "") or "/tmp") / "claude-engine-support"
+
+
+def _claude_engine_script() -> Path | None:
+	script = _claude_engine_support_root() / "scripts" / "ai_engine.sh"
+	if script.is_symlink() or not script.is_file():
+		return None
+	return script
+
+
+def resolve_discovery_engine() -> str:
+	"""`claude` or `codex` for the discovery role; any problem means codex."""
+	script = _claude_engine_script()
+	if script is None:
+		print(f"AI_ENGINE_FALLBACK role={DISCOVERY_ENGINE_ROLE} reason=engine_support_missing", file=sys.stderr)
+		return "codex"
+	try:
+		proc = subprocess.run(
+			["bash", "-c", f'source "$0"; ai_engine_for_role {DISCOVERY_ENGINE_ROLE}', str(script)],
+			text=True,
+			capture_output=True,
+			check=False,
+			timeout=60,
+		)
+	except (OSError, subprocess.SubprocessError):
+		return "codex"
+	if proc.stderr:
+		sys.stderr.write(proc.stderr)
+	return "claude" if proc.returncode == 0 and proc.stdout.strip() == "claude" else "codex"
+
 
 def discover_manifest_via_codex(
 	*,
@@ -274,6 +359,7 @@ def discover_manifest_via_codex(
 	per_call_timeout_secs: int | None = None,
 	retry_backoff_base_secs: float = 5.0,
 	sleep_fn: Callable[[float], None] = time.sleep,
+	engine_resolver: Callable[[], str] | None = None,
 ) -> DiscoveryResult:
 	"""Invoke `codex exec` against a consumer clone and validate output.
 
@@ -300,6 +386,13 @@ def discover_manifest_via_codex(
 
 	executor = executor or CommandExecutor()
 	prompt_text = prompt_path.read_text(encoding="utf-8")
+	# Engine of role VALIDATION_REFRESH. On codex the executor command is the
+	# unchanged `codex exec` line; on Claude the same command is the fallback
+	# claude_run_selected runs when Claude is unavailable (exit 75).
+	engine = (engine_resolver or resolve_discovery_engine)()
+	engine_script = _claude_engine_script() if engine == "claude" else None
+	if engine_script is None:
+		engine = "codex"
 
 	last_failure: str | None = None
 	for attempt in range(1, attempts + 1):
@@ -331,6 +424,8 @@ def discover_manifest_via_codex(
 			"--sandbox",
 			"danger-full-access",
 		]
+		claude_io_dir: Path | None = None
+		claude_out_path: Path | None = None
 		try:
 			run_kwargs: dict[str, Any] = {
 				"cwd": clone_dir,
@@ -338,11 +433,48 @@ def discover_manifest_via_codex(
 				"input_text": prompt_text,
 				"env_overrides": {"CODEX_DISABLE_TELEMETRY": "1"},
 			}
+			if engine == "claude" and engine_script is not None:
+				# Prompt and output live in a private directory outside the
+				# clone; the Claude run is read-only (AI_ENGINE_READ_ONLY).
+				claude_io_dir = Path(tempfile.mkdtemp(prefix="validation-discovery-engine-"))
+				claude_prompt_path = claude_io_dir / "prompt.txt"
+				claude_out_path = claude_io_dir / "output.txt"
+				claude_prompt_path.write_text(prompt_text, encoding="utf-8")
+				command = [
+					"bash",
+					"-c",
+					'source "$0"; claude_run_selected "$@"',
+					str(engine_script),
+					DISCOVERY_ENGINE_ROLE,
+					str(claude_prompt_path),
+					str(claude_out_path),
+					str(clone_dir),
+					"--codex-stdio",
+					"--",
+					*command,
+				]
+				run_kwargs["input_text"] = None
+				run_kwargs["env_overrides"] = {
+					"CODEX_DISABLE_TELEMETRY": "1",
+					"AI_ENGINE_MODEL_HINT": model,
+					"AI_ENGINE_EFFORT_HINT": reasoning_effort,
+					"AI_ENGINE_READ_ONLY": "true",
+				}
 			# Cap each codex attempt when the caller supplies a per-call
 			# budget; when None, defer to the executor's own default timeout.
 			if per_call_timeout_secs is not None:
 				run_kwargs["timeout"] = per_call_timeout_secs
-			proc = executor.run(command, **run_kwargs)
+			try:
+				proc = executor.run(command, **run_kwargs)
+				if claude_out_path is not None:
+					# Claude (or its codex fallback) writes the output file.
+					try:
+						proc.stdout = claude_out_path.read_text(encoding="utf-8", errors="replace")
+					except OSError:
+						proc.stdout = ""
+			finally:
+				if claude_io_dir is not None:
+					shutil.rmtree(claude_io_dir, ignore_errors=True)
 		except Exception as exc:
 			if isinstance(exc, subprocess.TimeoutExpired) or (
 				_wrapped_command_failure(exc) and _command_exception_returncode(exc) == 124
@@ -620,12 +752,12 @@ def open_or_update_discovery_pr(
 				entry_path.chmod(entry_path.stat().st_mode | 0o111)
 
 		executor.run(
-			["git", "config", "user.name", "codex-bot"],
+			["git", "config", "user.name", DISCOVERY_COMMIT_AUTHOR_NAME],
 			cwd=consumer_clone_dir,
 			check=True,
 		)
 		executor.run(
-			["git", "config", "user.email", "codex@users.noreply.github.com"],
+			["git", "config", "user.email", "codex-bot@users.noreply.invalid"],
 			cwd=consumer_clone_dir,
 			check=True,
 		)
@@ -779,6 +911,317 @@ def open_or_update_discovery_pr(
 	)
 
 
+def manifest_type_from_yaml(manifest_yaml_text: str | None) -> str | None:
+	"""Return the top-level `type` of a `.ai/validate.yml` text, or None.
+
+	None when the text is empty, unparseable, or PyYAML is unavailable.
+	"""
+
+	if not manifest_yaml_text:
+		return None
+	return classify_disagreement(
+		committed_yaml_text=manifest_yaml_text,
+		discovered_yaml_text="",
+	).committed_type
+
+
+def _is_bot_only_discovery_pr(commits: Any) -> bool:
+	"""True when every commit on the PR has `DISCOVERY_COMMIT_AUTHOR_NAME` as author.
+
+	Unknown or empty commit data counts as not bot-only, so a PR is only
+	closed on positive evidence that no person committed to it.
+	"""
+
+	if not isinstance(commits, list) or not commits:
+		return False
+	for commit in commits:
+		if not isinstance(commit, dict):
+			return False
+		authors = commit.get("authors")
+		if not isinstance(authors, list) or not authors:
+			return False
+		for author in authors:
+			if not isinstance(author, dict) or author.get("name") != DISCOVERY_COMMIT_AUTHOR_NAME:
+				return False
+	return True
+
+
+def list_open_discovery_prs(
+	*,
+	consumer_slug: str,
+	base_branch: str,
+	pr_branch_prefix: str,
+	executor: CommandExecutor | None = None,
+) -> tuple[list[OpenDiscoveryPr], str | None]:
+	"""List the open discovery PRs on one consumer repo.
+
+	Input: the consumer slug, its default branch, and the discovery branch
+	prefix. Output: `(prs, error)`; `prs` holds every open PR against
+	`base_branch` whose head branch starts with `<prefix>/`, and `error` is
+	set (with `prs` empty) when the lookup failed.
+
+	API cost: one `gh pr list` call per consumer (§15). The caller passes
+	the returned list on to `close_superseded_discovery_prs` for both of its
+	uses in a cycle, so the sweep never lists twice. Fails open: a failed
+	lookup returns an error string and the caller skips the sweep.
+	"""
+
+	executor = executor or CommandExecutor()
+	try:
+		proc = executor.run(
+			[
+				"gh",
+				"pr",
+				"list",
+				"--repo",
+				consumer_slug,
+				"--base",
+				base_branch,
+				"--state",
+				"open",
+				"--limit",
+				str(DISCOVERY_PR_LIST_LIMIT),
+				"--json",
+				"number,url,headRefName,title,commits",
+			],
+			check=True,
+		)
+	except Exception as exc:
+		if not _known_executor_failure(exc):
+			raise
+		returncode = _command_exception_returncode(exc)
+		error_text = (_command_exception_text(exc).strip() or str(exc))[:300]
+		rc_text = "unknown" if returncode is None else str(returncode)
+		return [], f"gh_pr_list_failed(rc={rc_text}): {error_text}"
+
+	try:
+		payload = json.loads((proc.stdout or "").strip() or "[]")
+	except json.JSONDecodeError:
+		return [], "gh_pr_list_unparseable"
+	if not isinstance(payload, list):
+		return [], "gh_pr_list_unparseable"
+
+	if len(payload) >= DISCOVERY_PR_LIST_LIMIT:
+		# The limit applies before the prefix filter, so older discovery PRs
+		# may be missing from this listing. Say so instead of missing them silently.
+		print(
+			"VALIDATION_DISCOVERY_SUPERSEDED "
+			f"repository={consumer_slug} outcome=list_truncated limit={DISCOVERY_PR_LIST_LIMIT}"
+		)
+
+	branch_prefix = _slugify_for_branch_prefix(pr_branch_prefix) + "/"
+	prs: list[OpenDiscoveryPr] = []
+	for item in payload:
+		if not isinstance(item, dict):
+			continue
+		number = item.get("number")
+		url = item.get("url")
+		head_branch = item.get("headRefName")
+		if not isinstance(number, int) or not isinstance(url, str) or not isinstance(head_branch, str):
+			continue
+		if not head_branch.startswith(branch_prefix):
+			continue
+		title = item.get("title")
+		prs.append(
+			OpenDiscoveryPr(
+				number=number,
+				url=url,
+				head_branch=head_branch,
+				title=title if isinstance(title, str) else "",
+				bot_only=_is_bot_only_discovery_pr(item.get("commits")),
+			)
+		)
+	return prs, None
+
+
+def _discovery_pr_type_slug(*, head_branch: str, pr_branch_prefix: str) -> str | None:
+	"""Return the `<type>` leaf of `<prefix>/<sha>/<type>`, or None."""
+
+	branch_prefix = _slugify_for_branch_prefix(pr_branch_prefix) + "/"
+	if not head_branch.startswith(branch_prefix):
+		return None
+	parts = head_branch[len(branch_prefix):].split("/")
+	if len(parts) != 2 or not parts[1]:
+		return None
+	return parts[1]
+
+
+def close_superseded_discovery_prs(
+	*,
+	consumer_slug: str,
+	base_branch: str,
+	pr_branch_prefix: str,
+	open_prs: list[OpenDiscoveryPr],
+	committed_type: str | None,
+	manifest_committed: bool,
+	replacement_branch: str | None = None,
+	replacement_url: str | None = None,
+	dry_run: bool = False,
+	executor: CommandExecutor | None = None,
+) -> list[DiscoverySupersedeOutcome]:
+	"""Close open discovery PRs that can no longer be merged usefully.
+
+	A PR from `open_prs` is obsolete when:
+	- `replacement_branch` is set and the PR is on another branch: a newer
+		discovery PR replaces it (`superseded_by_newer_pr`);
+	- the default branch already has `.ai/validate.yml` and the PR is a seed
+		PR, which can only conflict now (`manifest_already_committed`);
+	- the default branch's manifest already has the `type` the PR proposes
+		(`proposed_type_already_committed`).
+
+	An obsolete PR is closed with `gh pr close --comment` (its branch is
+	kept). It is left open, as `kept_human_commits`, when any commit on it
+	was not written by the runner (checked in the listing and again right
+	before the close), and as `dry_run` in dry-run mode.
+
+	API cost: one `gh pr view --json commits` re-check plus one `gh pr close`
+	per PR to be closed (the caller passes the list from
+	`list_open_discovery_prs`). Fails open: a failed re-check or close is
+	reported as `close_failed` and the sweep goes on.
+	"""
+
+	executor = executor or CommandExecutor()
+	committed_type_slug = _slugify_for_branch_leaf(committed_type) if committed_type else None
+	outcomes: list[DiscoverySupersedeOutcome] = []
+
+	for pr in open_prs:
+		if replacement_branch is not None:
+			if pr.head_branch == replacement_branch:
+				continue
+			reason = "superseded_by_newer_pr"
+			why = f"a newer discovery PR replaces this one: {replacement_url or replacement_branch}"
+		elif manifest_committed and pr.title.startswith(SEED_PR_TITLE_PREFIX):
+			reason = "manifest_already_committed"
+			why = (
+				f"`.ai/validate.yml` is already committed on `{base_branch}`, "
+				"so this seed PR can only conflict now"
+			)
+		elif (
+			manifest_committed
+			and committed_type_slug is not None
+			and _discovery_pr_type_slug(head_branch=pr.head_branch, pr_branch_prefix=pr_branch_prefix)
+			== committed_type_slug
+		):
+			reason = "proposed_type_already_committed"
+			why = (
+				f"`.ai/validate.yml` on `{base_branch}` already has `type: {committed_type}`, "
+				"the type this PR proposes"
+			)
+		else:
+			continue
+
+		if not pr.bot_only:
+			outcomes.append(
+				DiscoverySupersedeOutcome(
+					number=pr.number,
+					url=pr.url,
+					head_branch=pr.head_branch,
+					reason=reason,
+					outcome="kept_human_commits",
+				)
+			)
+			continue
+		if dry_run:
+			outcomes.append(
+				DiscoverySupersedeOutcome(
+					number=pr.number,
+					url=pr.url,
+					head_branch=pr.head_branch,
+					reason=reason,
+					outcome="dry_run",
+				)
+			)
+			continue
+
+		# Re-read the commits right before closing: the listing can be minutes
+		# old (the post-open pass runs after the discovery model), and a person
+		# may have pushed since. A failed or unparseable re-read closes nothing.
+		recheck_detail: str | None = None
+		try:
+			view = executor.run(
+				["gh", "pr", "view", str(pr.number), "--repo", consumer_slug, "--json", "commits"],
+				check=True,
+			)
+			view_payload = json.loads((view.stdout or "").strip() or "{}")
+			if not isinstance(view_payload, dict):
+				recheck_detail = "recheck_unparseable"
+		except json.JSONDecodeError:
+			recheck_detail = "recheck_unparseable"
+		except Exception as exc:
+			if not _known_executor_failure(exc):
+				raise
+			recheck_detail = "recheck_failed: " + (_command_exception_text(exc).strip() or str(exc))[:280]
+		if recheck_detail is not None:
+			outcomes.append(
+				DiscoverySupersedeOutcome(
+					number=pr.number,
+					url=pr.url,
+					head_branch=pr.head_branch,
+					reason=reason,
+					outcome="close_failed",
+					detail=recheck_detail,
+				)
+			)
+			continue
+		if not _is_bot_only_discovery_pr(view_payload.get("commits")):
+			outcomes.append(
+				DiscoverySupersedeOutcome(
+					number=pr.number,
+					url=pr.url,
+					head_branch=pr.head_branch,
+					reason=reason,
+					outcome="kept_human_commits",
+				)
+			)
+			continue
+
+		comment = (
+			"Closed by the validation discovery runner: "
+			f"{why}.\n\n"
+			"Only PRs that hold nothing but the runner's own commits are closed this "
+			"way. The branch is kept, so the PR can be reopened if it is still needed.\n\n"
+			f"<!-- validation-discovery-superseded:v1 reason={reason} -->"
+		)
+		try:
+			executor.run(
+				[
+					"gh",
+					"pr",
+					"close",
+					str(pr.number),
+					"--repo",
+					consumer_slug,
+					"--comment",
+					comment,
+				],
+				check=True,
+			)
+		except Exception as exc:
+			if not _known_executor_failure(exc):
+				raise
+			outcomes.append(
+				DiscoverySupersedeOutcome(
+					number=pr.number,
+					url=pr.url,
+					head_branch=pr.head_branch,
+					reason=reason,
+					outcome="close_failed",
+					detail=(_command_exception_text(exc).strip() or str(exc))[:300],
+				)
+			)
+			continue
+		outcomes.append(
+			DiscoverySupersedeOutcome(
+				number=pr.number,
+				url=pr.url,
+				head_branch=pr.head_branch,
+				reason=reason,
+				outcome="closed",
+			)
+		)
+	return outcomes
+
+
 def _is_missing_pr_label_error(*, error_text: str, label: str | None) -> bool:
 	if not label:
 		return False
@@ -835,9 +1278,10 @@ def build_pr_rationale_markdown(
 		"- If discovery picked the wrong family, edit the manifest and merge — do not delete the PR.",
 		"  The 7-day dedup window will keep the runner from proposing the same thing again.",
 		"",
-		"_Refs: workflow-templates daily validation refresh runner. This PR will be",
-		"superseded automatically if discovery later reveals a different `type` at a",
-		"newer head SHA._",
+		"_Refs: workflow-templates daily validation refresh runner. The runner closes",
+		"this PR automatically when a newer discovery PR replaces it, or once the",
+		"default branch already has a `.ai/validate.yml` that makes it obsolete. A PR",
+		"with any commit not made by the runner is never closed automatically._",
 	]
 	return "\n".join(body_lines)
 
@@ -865,3 +1309,6 @@ class DiscoveryRunContext:
 	# Default mirrors VALIDATION_DISCOVERY_BUDGET_SECS in the workflow.
 	discovery_budget_secs: int = 2100
 	supported_families: tuple[str, ...] = field(default_factory=lambda: SUPPORTED_FAMILIES)
+	# Close obsolete discovery PRs each cycle (VALIDATION_DISCOVERY_CLOSE_SUPERSEDED).
+	# Default mirrors the workflow default.
+	close_superseded: bool = True

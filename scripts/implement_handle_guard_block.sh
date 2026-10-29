@@ -3,6 +3,68 @@
 # shellcheck disable=SC2153 # DCB_*, SVB_*, and SSB_* values are workflow environment inputs.
 set -euo pipefail
 
+# Retry the idempotent safety-latch writes and their verification reads on
+# transient GitHub errors through gh_retry. implement.yml stages gh_helpers.sh
+# beside this runtime copy; when it is missing or fails to source, fail open
+# to the raw gh calls below (today's behaviour) and never fail the handler.
+# Comment posts stay single raw attempts so a retry cannot duplicate them.
+GUARD_BLOCK_GH_RETRY_READY=false
+GUARD_BLOCK_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"
+# shellcheck disable=SC1090
+if [ -f "${GUARD_BLOCK_GH_HELPERS_FILE}" ] && source "${GUARD_BLOCK_GH_HELPERS_FILE}" && declare -F gh_retry >/dev/null 2>&1; then
+	GUARD_BLOCK_GH_RETRY_READY=true
+else
+	echo "::warning::implement_handle_guard_block: gh_helpers.sh not available beside the handler (or failed to source); label writes and reads run without retries."
+fi
+
+# Idempotent gh writes only (issue label add/remove).
+guard_block_gh()
+{
+	if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+		gh_retry "$@"
+	else
+		"$@"
+	fi
+}
+
+# Ensure a label exists. One raw create attempt first, so the normal
+# "already exists" case costs no retries (gh_retry does not treat it as
+# permanent); only unexpected failures are retried (gh_retry repeats
+# `gh label create`: it is not on its single-attempt POST-create list).
+# Retry diagnostics go to stderr (the job log). Call only when ready.
+guard_block_ensure_label()
+{
+	local label_name="$1" label_color="$2" label_description="$3" edit_existing="$4" create_err create_rc=0
+	create_err="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/guard-block-label.XXXXXX")" || return 1
+	gh label create "${label_name}" --repo "${GITHUB_REPOSITORY}" \
+		--color "${label_color}" --description "${label_description}" 2>"${create_err}" || create_rc=$?
+	if [ "${create_rc}" -eq 0 ]; then
+		rm -f "${create_err}"
+		return 0
+	fi
+	if grep -qiE 'already[ _-]*exists|already_exists' "${create_err}" 2>/dev/null; then
+		rm -f "${create_err}"
+		if [ "${edit_existing}" = "true" ]; then
+			gh_retry gh label edit "${label_name}" --repo "${GITHUB_REPOSITORY}" \
+				--color "${label_color}" --description "${label_description}" >/dev/null || return 1
+		fi
+		return 0
+	fi
+	# Keep the unexpected first-attempt error in the job log before retrying.
+	echo "::warning::implement_handle_guard_block: gh label create ${label_name} failed (rc=${create_rc}); retrying. stderr: $(head -c 500 "${create_err}" 2>/dev/null | tr '\n' ' ')" >&2
+	rm -f "${create_err}"
+	if gh_retry gh label create "${label_name}" --repo "${GITHUB_REPOSITORY}" \
+		--color "${label_color}" --description "${label_description}" >/dev/null; then
+		return 0
+	fi
+	if [ "${edit_existing}" = "true" ]; then
+		gh_retry gh label edit "${label_name}" --repo "${GITHUB_REPOSITORY}" \
+			--color "${label_color}" --description "${label_description}" >/dev/null || return 1
+		return 0
+	fi
+	return 1
+}
+
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 GUARD_COMMENT_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/implement-guard-comment.XXXXXX")"
 trap 'rm -f "${GUARD_COMMENT_FILE}"' EXIT
@@ -28,18 +90,32 @@ guard_rejection_marker()
 # one or more support-ref copies onto the branch version, so halt this issue
 # rather than send the same deterministic conflict through generic re-issue.
 if [ -n "${SSB_REASON:-}" ]; then
-  gh label create 'ai:needs-human' --repo "${GITHUB_REPOSITORY}" \
-    --color 'e11d48' --description 'Escalated for human intervention; autonomous stall recovery is paused' \
-    2>/dev/null || true
-  gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+  if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+    guard_block_ensure_label 'ai:needs-human' 'e11d48' \
+      'Escalated for human intervention; autonomous stall recovery is paused' false \
+      || true
+  else
+    gh label create 'ai:needs-human' --repo "${GITHUB_REPOSITORY}" \
+      --color 'e11d48' --description 'Escalated for human intervention; autonomous stall recovery is paused' \
+      2>/dev/null || true
+  fi
+  guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
     --add-label 'ai:needs-human' --remove-label 'ai:implementing' 2>/dev/null || \
-  gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-    --add-label 'ai:needs-human' 2>/dev/null || true
+  guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:needs-human' || true
   SSB_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:needs-human\`, but the follow-up label read failed. Future redispatch is not confirmed blocked; re-check the label before redispatching."
   SSB_TG_LATCH_LINE="Could not verify ai:needs-human; the latch state is unknown and must be checked before redispatching."
   # No earlier staged-support call reads issue labels, so this dedicated read
   # verifies that the best-effort writes above actually halted automation.
-  if staged_support_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+  staged_support_latch_read_ok=false
+  if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+    if staged_support_latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name')"; then
+      staged_support_latch_read_ok=true
+    fi
+  elif staged_support_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+    staged_support_latch_read_ok=true
+  fi
+  if [ "${staged_support_latch_read_ok}" = true ]; then
     if grep -qxF 'ai:needs-human' <<< "${staged_support_latched_labels}"; then
       echo "Confirmed ai:needs-human is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
       SSB_LATCH_STATUS_LINE="This issue is confirmed labeled \`ai:needs-human\`; autonomous recovery is paused until a human removes the label."
@@ -126,7 +202,11 @@ if [ -n "${SVB_REASON:-}" ]; then
     SCOPE_TG_TITLE="🚨 CRITICAL: automation-path grant guard blocked implementation"
   fi
   SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'
-  if ! gh label create 'ai:scope-blocked' \
+  if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+    guard_block_ensure_label 'ai:scope-blocked' 'b60205' "${SCOPE_BLOCK_LABEL_DESCRIPTION}" true \
+      || \
+      echo "::warning::Could not ensure the ai:scope-blocked label exists on ${GITHUB_REPOSITORY} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
+  elif ! gh label create 'ai:scope-blocked' \
     --repo "${GITHUB_REPOSITORY}" \
     --color 'b60205' \
     --description "${SCOPE_BLOCK_LABEL_DESCRIPTION}" \
@@ -138,14 +218,22 @@ if [ -n "${SVB_REASON:-}" ]; then
     2>/dev/null; then
     echo "::warning::Could not ensure the ai:scope-blocked label exists on ${GITHUB_REPOSITORY} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
   fi
-  gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+  guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
     --add-label 'ai:scope-blocked' \
     --remove-label 'ai:implementing' 2>/dev/null || \
-  gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-    --add-label 'ai:scope-blocked' 2>/dev/null || true
+  guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+    --add-label 'ai:scope-blocked' || true
   SCOPE_LATCH_STATUS_LINE="The workflow attempted to label this issue \`ai:scope-blocked\`, but the follow-up label read failed. Future redispatch is **not confirmed blocked**; re-check the label manually before redispatch."
   SCOPE_TG_LATCH_LINE="Could not verify ai:scope-blocked latch: gh issue view failed after the write attempt, so redispatch refusal is unknown until a human rechecks the label."
-  if scope_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+  scope_latch_read_ok=false
+  if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+    if scope_latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name')"; then
+      scope_latch_read_ok=true
+    fi
+  elif scope_latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+    scope_latch_read_ok=true
+  fi
+  if [ "${scope_latch_read_ok}" = true ]; then
     if grep -qxF 'ai:scope-blocked' <<< "${scope_latched_labels}"; then
       echo "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
       SCOPE_LATCH_STATUS_LINE="This issue is confirmed labeled \`ai:scope-blocked\`; the \`Validate approval phase\` step will refuse future redispatches of issue #${ISSUE_NUMBER} until a human removes the label."
@@ -272,7 +360,12 @@ fi
 #    The old `2>/dev/null || true` swallowed exactly that failure;
 #    the follow-up read in step (2b) confirms the issue-level latch
 #    when GitHub accepts the verification read.
-if ! gh label create 'ai:destructive-blocked' \
+DESTRUCTIVE_BLOCK_LABEL_DESCRIPTION='Implementation blocked for mass/destructive deletions; this issue ID now waits for human review'
+if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+  guard_block_ensure_label 'ai:destructive-blocked' 'b60205' "${DESTRUCTIVE_BLOCK_LABEL_DESCRIPTION}" true \
+    || \
+    echo "::warning::Could not ensure the ai:destructive-blocked label exists on ${GITHUB_REPOSITORY} — the GH_PAT may lack issues:write. The follow-up read below reports whether the issue itself ended up latched."
+elif ! gh label create 'ai:destructive-blocked' \
   --repo "${GITHUB_REPOSITORY}" \
   --color 'b60205' \
   --description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review' \
@@ -289,11 +382,11 @@ fi
 #    issue is visibly in a halt state rather than a transient
 #    one. Best-effort — if gh is unavailable we still fire the
 #    TG alert below.
-gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
   --add-label 'ai:destructive-blocked' \
   --remove-label 'ai:implementing' 2>/dev/null || \
-gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
-  --add-label 'ai:destructive-blocked' 2>/dev/null || true
+guard_block_gh gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
+  --add-label 'ai:destructive-blocked' || true
 
 # 2b. Verify the latch actually engaged. The best-effort edits
 #     above swallow their errors so the comment + TG alert still
@@ -306,7 +399,15 @@ gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \
 #     warn that the state is unknown instead of falsely claiming
 #     the label is absent. grep reads a here-string (not a
 #     pipeline) so set -o pipefail cannot misfire on -q's early exit.
-if latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+destructive_latch_read_ok=false
+if [ "${GUARD_BLOCK_GH_RETRY_READY}" = "true" ]; then
+  if latched_labels="$(gh_retry gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name')"; then
+    destructive_latch_read_ok=true
+  fi
+elif latched_labels="$(gh issue view "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json labels -q '.labels[].name' 2>/dev/null)"; then
+  destructive_latch_read_ok=true
+fi
+if [ "${destructive_latch_read_ok}" = true ]; then
   if grep -qxF 'ai:destructive-blocked' <<< "${latched_labels}"; then
     echo "Confirmed ai:destructive-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it."
   else

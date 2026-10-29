@@ -353,7 +353,10 @@ def main() -> int:
 		print("AGENTS_MD_MATERIALITY: no changed paths advisory=false materiality=low")
 		return 0
 
-	result["agents_md_changed"] = "agents.md" in changed_paths
+	# CLAUDE.md §30: a top-level agents.d/*.md fragment documents agents.md.
+	result["agents_md_changed"] = "agents.md" in changed_paths or any(
+		fragment_path.startswith("agents.d/") and fragment_path.endswith(".md") and fragment_path.count("/") == 1 for fragment_path in changed_paths
+	)
 
 	matched_rules: list[dict[str, str]] = []
 	seen_matches: set[tuple[str, str, str]] = set()

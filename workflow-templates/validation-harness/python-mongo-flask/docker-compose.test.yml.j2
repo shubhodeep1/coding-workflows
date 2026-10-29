@@ -35,6 +35,15 @@ services:
   mongo:
     init: true
     image: "{{ mongo_image }}"
+    # The image declares VOLUME /data/db and /data/configdb. Without these
+    # tmpfs mounts Docker creates anonymous volumes and copies the image
+    # content into them, xattrs included; the validation sandbox's rootless
+    # daemon cannot set `system.posix_acl_default` there and container
+    # creation fails ("failed to copy xattrs ... invalid argument"). The test
+    # database is throwaway, so memory-backed mounts lose nothing.
+    tmpfs:
+      - /data/db
+      - /data/configdb
     environment:
       MONGO_INITDB_DATABASE: "{{ mongo_db_name }}"
     healthcheck:

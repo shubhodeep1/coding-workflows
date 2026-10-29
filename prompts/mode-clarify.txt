@@ -32,13 +32,21 @@ Rules:
   task depends on, and that content is not in the repository or the issue,
   emit exactly `BLOCKED: <short reason>` instead of `Q<ID>` choices. Public
   3rd-party documentation is NOT a BLOCKED trigger.
-- Web search IS available (the `web_search` tool is enabled by the codex
-  config — `scripts/write_codex_config.sh` defaults `--web-search live`).
-  If external APIs/services are involved, fetch their official public docs
-  via the web tool, verify the source is the official vendor/library or
-  relevant standards publisher, and incorporate the concrete endpoints,
-  signature scheme, and payload shapes. Only ask (rather than fetch) when
-  the docs are private/auth-walled or genuinely unavailable.
+- Web search is available only when this run has a web tool: Codex runs
+  do (the `web_search` tool is enabled by the codex config —
+  `scripts/write_codex_config.sh` defaults `--web-search live`).
+  Claude-engine runs have web search only when their system instructions say the `WebSearch` tool
+  is available, and never web fetch. If external APIs/services are involved and a web
+  tool is available, fetch their official public docs, verify the source
+  is the official vendor/library or relevant standards publisher, and
+  incorporate the concrete endpoints, signature scheme, and payload
+  shapes. Only ask (rather than fetch) when the docs are
+  private/auth-walled or genuinely unavailable.
+- Without a web tool, take external facts (a release tag's commit SHA, a
+  package version, an API endpoint or signature) only from the issue
+  body, its answers, the comment thread or the repository, and never try
+  to look them up. A fact the issue states as verified is used as given;
+  ask for a fact the task depends on that is in none of those places.
 - Do not write code or propose solutions.
 - The responder is an autonomous LLM with repo access plus the GitHub state
   of the PRs, issues, branches and runs the issue references — no database,

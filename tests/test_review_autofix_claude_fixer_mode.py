@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from review_autofix_step_scripts import (  # noqa: E402
 	REPO_ROOT,
 	REVIEW_AUTOFIX_WORKFLOW_PATH,
+	expand_review_autofix_step_scripts,
 	expanded_review_autofix_text,
 )
 
@@ -42,7 +43,8 @@ RETIRED_HANDOFF = f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} ro
 
 
 def _load(path: Path) -> dict:
-	workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+	text = expanded_review_autofix_text() if path == REVIEW_AUTOFIX_WORKFLOW_PATH else path.read_text(encoding="utf-8")
+	workflow = yaml.safe_load(text)
 	if True in workflow:
 		workflow["on"] = workflow.pop(True)
 	return workflow
@@ -76,7 +78,7 @@ def test_wrappers_accept_but_no_longer_pass_the_retired_input():
 
 
 def test_handoff_machinery_is_gone():
-	text = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
+	text = expanded_review_autofix_text()
 	for needle in (
 		"CLAUDE_FIXER_MODE",
 		"CLAUDE_FIXER_VERIFICATION",
@@ -266,6 +268,30 @@ def test_small_diff_claude_pr_takes_the_deterministic_skip():
 			pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2})
 	assert proc.returncode == 0, proc.stderr
 	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "small_diff"
+
+
+def test_freshness_ci_failed_marker_suppresses_the_small_diff_skip():
+	"""Q103: a marked head must reach review, not a skip that never re-dispatches."""
+	marker = f"**CI failed on the updated head.**\n\n<!-- ai:freshness-ci-failed:v1 pr=42 head={HEAD} -->"
+	for comments, expect_skip in (([_c(marker)], "false"), ([_c(marker, author="intruder")], "true")):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref="ai/issue-7", comments=comments, event_name="pull_request",
+				files=[{"filename": "src/app.py", "status": "modified"}],
+				pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2})
+		assert proc.returncode == 0, proc.stderr
+		assert out["deterministic_skip"] == expect_skip, comments
+	assert "reason=freshness_ci_failed pr=42" not in proc.stdout
+
+
+def test_unreadable_marker_comments_keep_the_normal_review():
+	"""Q103: a failed comments read cannot rule out the marker, so no skip."""
+	with tempfile.TemporaryDirectory() as td:
+		proc, out = _run_gate(Path(td), head_ref="ai/issue-7", comments=[], event_name="pull_request",
+			files=[{"filename": "src/app.py", "status": "modified"}],
+			pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2}, comments_fail=True)
+	assert proc.returncode == 0, proc.stderr
+	assert out["deterministic_skip"] == "false"
+	assert "reason=freshness_ci_failed_unverifiable pr=42 candidate=small_diff detail=comments_api_error" in proc.stdout
 
 
 def test_unverified_pr_head_never_enters_deterministic_merge():
@@ -478,11 +504,11 @@ def test_missing_engine_keeps_every_role_on_codex(tmp_path):
 
 def test_sandbox_prepare_follows_both_roles_with_an_opencode_fallback():
 	run = AGENT_STEPS["Install project dependencies (best-effort)"]["run"]
-	assert 'review_untrusted_sandbox.sh" prepare claude; then' in run
+	assert 'review_untrusted_sandbox.sh" prepare claude 2> >(tee -a "${sandbox_prepare_log}" >&2); then' in run
 	assert '[ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]' in run
 	assert 'for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR; do' in run
 	assert 'echo "${resolved}=codex" >> "$GITHUB_ENV"' in run
-	assert run.count('bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare\n') == 2
+	assert run.count('bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare 2> >(tee -a "${sandbox_prepare_log}" >&2)\n') == 2
 
 
 def test_engine_files_ride_the_optional_bootstrap():
@@ -497,7 +523,7 @@ def test_engine_files_ride_the_optional_bootstrap():
 REVIEW_SITES = {
 	"review_apply_fixes.sh": (
 		'if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then',
-		'[ "${editor_claude_rc}" -eq 75 ] || return "${editor_claude_rc}"',
+		'if [ "${editor_claude_rc}" -ne 75 ]; then',
 		'      -- "${editor_opencode_cmd[@]}" < "${prompt_file}" 2>"${stderr_target}"',
 	),
 	"review_consolidate.sh": (
@@ -675,7 +701,7 @@ def test_consolidator_isolation_failures_skip_without_host_writer(tmp_path):
 def _resolver_claude_sections() -> str:
 	text = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
 	functions = ""
-	for name in ("_resolver_disable_opencode_snapshot", "_resolver_fail_closed", "_resolver_fail_closed_for_conflict_paths", "_resolver_sandbox_attempt", "_resolver_sandbox_opencode_attempt"):
+	for name in ("_resolver_disable_opencode_snapshot", "_resolver_fail_closed", "_resolver_fail_closed_for_conflict_paths", "_resolver_sandbox_attempt", "_resolver_sandbox_opencode_attempt", "_resolver_report_rejected_path"):
 		match = re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.M | re.S)
 		assert match, name
 		functions += match.group(0) + "\n"
@@ -704,6 +730,7 @@ def _run_resolver_claude_section(tmp: Path, *, mode: str, engine: str = "claude"
 		'attempt=1\ntmp_output="${RUNTIME_DIR}/output.txt"\n_stall_status_file="${RUNTIME_DIR}/status.txt"\n'
 		'_effective_prompt_file="${RUNTIME_DIR}/prompt.txt"\n_current_reasoning_effort=high\n'
 		'CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/paths.txt"\nCONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=5\n'
+		'RESOLVER_MODEL_PATHS_FILE="${CONFLICTED_PATHS_FILE}"\nRESOLVER_CHECK_PATHS_STDERR_FILE="${RUNTIME_DIR}/check_paths_stderr.txt"\n'
 		'CODEX_STALL_GUARD_HELPER=/not/staged\nCODEX_HEARTBEAT_HELPER=/not/staged\n'
 		'RESOLVER_OPENCODE_CONFIG="${RUNTIME_DIR}/resolver_sandbox_opencode.json"\n'
 		'resolver_opencode_cmd=(bash -c \'echo host >> "$RUNTIME_DIR/host"\')\n_codex_exit=0\n'
@@ -957,7 +984,7 @@ def test_rb_judge_never_runs_opencode_on_host_and_defers_before_retry():
 	assert verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true') < verdict.index('break', verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true')) < verdict.index('sleep 10')
 	assert 'judge_skip_reason=isolation_unavailable' in verdict
 	assert 'rb_fix_claude_rc}" -ne 75 ] &&' not in text
-	step = AGENT_STEPS["Post review-blocked comment on PR (autofix exhaustion)"]["run"]
+	step = expand_review_autofix_step_scripts(AGENT_STEPS["Post review-blocked comment on PR (autofix exhaustion)"]["run"])
 	assert 'isolation_unavailable)' in step
 	assert 'AI review/autofix — judge deferred: isolation unavailable' in step
 
@@ -967,3 +994,169 @@ def test_sandbox_reports_progress_while_claude_streams():
 	assert 'echo "CLAUDE_ENGINE progress role=${claude_role} transcript_bytes=${size}" >&2' in text
 	assert 'wait "${progress_sleep_pid}" || break' in text
 	assert text.count('kill "${progress_pid}"') == 2
+
+
+# ---------------------------------------------------------------------------
+# Commit identity follows the engine that wrote the edits: claude-bot when the
+# editing role ran on Claude, codex-bot otherwise, both on the reserved
+# .invalid domain so GitHub links the commit to no account.
+
+CLAUDE_BOT = ("claude-bot", "claude-bot@users.noreply.invalid")
+CODEX_BOT = ("codex-bot", "codex-bot@users.noreply.invalid")
+
+
+def _identity_block(rel: str, start: str, end: str) -> str:
+	text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+	begin = text.index(start)
+	return text[begin:text.index(end, begin)]
+
+
+def _identity_after(snippet: str, env: dict[str, str] | None = None, prelude: str = "") -> tuple[str, str]:
+	"""Run an identity block in a scratch repo; return (user.name, user.email)."""
+	with tempfile.TemporaryDirectory() as tmp:
+		subprocess.run(["git", "init", "-q", tmp], check=True)
+		script = "set -euo pipefail\n" + prelude + "\n" + snippet + "\nprintf '%s\\n%s\\n' \"$(git config user.name)\" \"$(git config user.email)\"\n"
+		run_env = {k: v for k, v in os.environ.items() if not k.startswith(("AI_ENGINE_", "REVIEW_EDITOR_ENGINE", "CODEX_THREAD_REUSE", "RUNTIME_DIR"))}
+		run_env.update({"HOME": tmp, "GIT_CONFIG_NOSYSTEM": "1", **(env or {})})
+		result = subprocess.run(["bash", "-c", script], cwd=tmp, env=run_env, capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr + result.stdout
+		name, email = result.stdout.strip().splitlines()[-2:]
+		return name, email
+
+
+def test_review_autofix_commit_identity_follows_the_editor_engine():
+	block = _identity_block("scripts/review_commit_changes.sh",
+		"# The commit author names the engine that wrote the edits", "git rm -r --cached node_modules")
+	assert _identity_after(block, {"AI_ENGINE_RESOLVED_REVIEW_EDITOR": "claude"}) == CLAUDE_BOT
+	assert _identity_after(block, {"AI_ENGINE_RESOLVED_REVIEW_EDITOR": "claude", "REVIEW_EDITOR_ENGINE_FELL_BACK": "true"}) == CODEX_BOT
+	assert _identity_after(block, {"AI_ENGINE_RESOLVED_REVIEW_EDITOR": "codex"}) == CODEX_BOT
+	assert _identity_after(block) == CODEX_BOT
+
+
+def test_review_editor_fallback_is_recorded_for_the_commit_step():
+	text = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	fallback = text.index('echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=claude_unavailable action=opencode" >&2')
+	following = text[fallback:text.index("\n  fi\n", fallback)]
+	assert 'echo "REVIEW_EDITOR_ENGINE_FELL_BACK=true" >> "${GITHUB_ENV}"' in following, following
+
+
+def test_implement_commit_identity_needs_both_roles_on_claude_without_fallback(tmp_path):
+	block = _identity_block("scripts/implement_commit_changes.sh",
+		"# The commit author names the engine that wrote the edits", "git rm -r --cached node_modules")
+	states = tmp_path / "codex-thread-reuse" / "states"
+	states.mkdir(parents=True)
+	both = {"AI_ENGINE_RESOLVED_IMPLEMENT": "claude", "AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR": "claude", "RUNTIME_DIR": str(tmp_path)}
+	assert _identity_after(block, both) == CLAUDE_BOT
+	assert _identity_after(block, {**both, "AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR": "codex"}) == CODEX_BOT
+	assert _identity_after(block, {"AI_ENGINE_RESOLVED_IMPLEMENT": "codex", "RUNTIME_DIR": str(tmp_path)}) == CODEX_BOT
+	for marker in ("claude-implement.unavailable", "claude-implement-repair.unavailable"):
+		(states / marker).write_text("")
+		assert _identity_after(block, both) == CODEX_BOT, marker
+		# CODEX_THREAD_REUSE_RUNTIME_DIR wins over RUNTIME_DIR, as in codex_thread_reuse.sh.
+		assert _identity_after(block, {**both, "CODEX_THREAD_REUSE_RUNTIME_DIR": str(tmp_path / "other")}) == CLAUDE_BOT, marker
+		(states / marker).unlink()
+
+
+def test_conflict_resolver_commit_identity_follows_the_last_attempt():
+	text = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	loop = text.index('while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do')
+	assert text[:loop].endswith('resolver_commit_engine="codex"\nattempt=1\n'), "the engine must reset right before the attempt loop"
+	attempt_start = text.index("    resolver_claude_rc=75\n", loop)
+	assert text[attempt_start:].startswith('    resolver_claude_rc=75\n    resolver_commit_engine="codex"\n')
+	claude_call = text.index("_resolver_sandbox_attempt claude || resolver_claude_rc=$?", attempt_start)
+	after_call = text[claude_call:text.index("\n      if ", claude_call)]
+	assert '[ "${resolver_claude_rc}" -eq 75 ] || resolver_commit_engine="claude"' in after_call, after_call
+	block = _identity_block("scripts/review_conflict_resolve.sh",
+		"  # The commit author names the engine of the last resolver attempt", "  git rm -r --cached node_modules")
+	assert _identity_after(block, prelude='resolver_commit_engine="claude"') == CLAUDE_BOT
+	assert _identity_after(block, prelude='resolver_commit_engine="codex"') == CODEX_BOT
+
+
+def test_rb_judge_fix_commit_identity_follows_the_fix_pass_engine():
+	block = _identity_block("scripts/review_rb_judge.sh",
+		"        # The commit author names the engine of the fix pass", "\n\n")
+	assert _identity_after(block, prelude="rb_fix_claude_rc=0") == CLAUDE_BOT
+	assert _identity_after(block, prelude="rb_fix_claude_rc=75") == CODEX_BOT
+
+
+def test_poller_combined_rb_judge_commit_identity_reads_the_recorded_engine(tmp_path):
+	text = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	func = text[text.index("poller_judge_isolated()\n{"):text.index("poller_rb_judge_isolated()")]
+	assert '[ "${judge_role}" != RB_JUDGE ] || printf \'%s\\n\' codex > "${RUNTIME_DIR}/rb_judge_last_engine"' in func
+	fallback = func.index('if [ "${rb_rc}" -eq 75 ] && [ "${rb_engine}" = claude ]; then')
+	assert "rb_used_engine=codex" in func[fallback:func.index("fi\n", fallback)]
+	assert 'printf \'%s\\n\' "${rb_used_engine}" > "${RUNTIME_DIR}/rb_judge_last_engine"' in func
+	block = _identity_block("scripts/orchestrate_poll_process.sh",
+		"                # The commit author names the engine of the judge's fix pass", "                echo \"AI_COMMIT_IDENTITY")
+	block = block.replace('git -C "${RB_COMBINED_WORKDIR}" ', "git ")
+	for recorded, expected in (("claude", CLAUDE_BOT), ("codex", CODEX_BOT), (None, CODEX_BOT)):
+		engine_file = tmp_path / "rb_judge_last_engine"
+		if recorded is None:
+			engine_file.unlink(missing_ok=True)
+		else:
+			engine_file.write_text(recorded + "\n")
+		assert _identity_after(block, {"RUNTIME_DIR": str(tmp_path)}) == expected, recorded
+
+
+def test_no_writer_commits_as_the_github_linked_codex_email():
+	"""codex@users.noreply.github.com links commits to the GitHub account
+	`codex`, which the pipeline does not own. Only matchers may name it now
+	(legacy commits still count as pipeline commits)."""
+	offenders = []
+	for root in ("scripts", ".github/workflows", "workflow-templates"):
+		for path in sorted((REPO_ROOT / root).rglob("*")):
+			if not path.is_file() or path.suffix not in (".sh", ".py", ".yml", ".yaml"):
+				continue
+			for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+				if "codex@users.noreply.github.com" in line and re.search(r"user\.email|GIT_(AUTHOR|COMMITTER)_EMAIL", line):
+					offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}")
+	assert not offenders, offenders
+
+
+def test_review_editor_fallback_flag_resets_only_after_a_claude_success():
+	"""An earlier attempt's OpenCode hand-off must not mark a later
+	Claude-written commit codex-bot, and a failed Claude attempt (which wrote
+	nothing) must not clear the latch left by OpenCode edits."""
+	text = (REPO_ROOT / "scripts" / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	branch = text.index('if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then\n    local editor_claude_rc=0')
+	claude_call = text.index('"${editor_opencode_cmd[@]}" claude < "${prompt_file}"', branch)
+	reset_line = 'if [ "${editor_claude_rc}" -eq 0 ] && [ -n "${GITHUB_ENV:-}" ]; then echo "REVIEW_EDITOR_ENGINE_FELL_BACK=false" >> "${GITHUB_ENV}"'
+	reset = text.index(reset_line, branch)
+	latch = text.index('echo "REVIEW_EDITOR_ENGINE_FELL_BACK=true" >> "${GITHUB_ENV}"', branch)
+	assert claude_call < reset < latch
+	assert text.count('REVIEW_EDITOR_ENGINE_FELL_BACK=false') == 1
+
+
+def test_heal_editor_codex_transfer_leaves_the_fallback_marker(tmp_path):
+	"""The heal route never runs codex_thread_reuse.sh, so a Codex-written
+	snapshot that reaches the host writes the marker implement_commit_changes.sh
+	reads. A Codex attempt that never transferred leaves no marker."""
+	text = (REPO_ROOT / "scripts" / "heal_isolated_implement.sh").read_text(encoding="utf-8")
+	func = text[text.index("heal_mark_claude_unavailable()\n{"):text.index("heal_engine=codex\n")]
+	head = text[:text.index("transfer \"${WORKSPACE_PATH:-${PWD}}\"")]
+	assert head.count("heal_mark_claude_unavailable") == 1, "marker must not be written before the transfer"
+	transfer = text.index("phase=transfer engine=${heal_engine} outcome=failed reason=out_of_heal_scope")
+	tail = text[transfer:]
+	assert 'if [ "${heal_engine}" = codex ] && ! heal_mark_claude_unavailable; then' in tail
+	assert "outcome=marker_write_failed" in tail
+	assert tail.index("heal_mark_claude_unavailable") < tail.index('install -m 0600 "${root}/results/output"')
+	for env, root in (({"RUNTIME_DIR": str(tmp_path / "rt")}, tmp_path / "rt"),
+			({"RUNTIME_DIR": str(tmp_path / "rt2"), "CODEX_THREAD_REUSE_RUNTIME_DIR": str(tmp_path / "reuse")}, tmp_path / "reuse")):
+		run_env = {k: v for k, v in os.environ.items() if k not in ("RUNTIME_DIR", "CODEX_THREAD_REUSE_RUNTIME_DIR")}
+		run_env.update(env)
+		result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + func + "\nheal_mark_claude_unavailable\n"],
+			env=run_env, capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		assert (root / "codex-thread-reuse" / "states" / "claude-implement.unavailable").is_file()
+	# Without a runtime dir it is a no-op, never a failure.
+	run_env = {k: v for k, v in os.environ.items() if k not in ("RUNTIME_DIR", "CODEX_THREAD_REUSE_RUNTIME_DIR")}
+	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + func + "\nheal_mark_claude_unavailable\n"],
+		env=run_env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	# A failed write is reported, so the caller can warn.
+	blocker = tmp_path / "blocked"
+	blocker.write_text("")
+	run_env["RUNTIME_DIR"] = str(blocker)
+	result = subprocess.run(["bash", "-c", func + "\nheal_mark_claude_unavailable\n"],
+		env=run_env, capture_output=True, text=True)
+	assert result.returncode != 0

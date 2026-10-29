@@ -1,6 +1,5 @@
-# IMPORTANT: This file is managed by coding-workflows and may be overwritten
-# automatically when upstream templates change. To opt out of auto-updates,
-# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
 #
 # This workflow is ENABLED BY DEFAULT. When the AI pipeline escalates an issue
 # or pull request for human attention (ai:needs-human or one of the terminal
@@ -20,6 +19,9 @@ permissions:
   contents: read
   issues: read
   pull-requests: read
+  # The reusable reporter requests an OIDC token so the intake can verify
+  # which repository sent the heal report.
+  id-token: write
 jobs:
   report:
     if: >-
@@ -30,4 +32,8 @@ jobs:
       issue_number: ${{ github.event.issue.number || github.event.pull_request.number }}
       label: ${{ github.event.label.name }}
       is_pull_request: ${{ github.event_name == 'pull_request' }}
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

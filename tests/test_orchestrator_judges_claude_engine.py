@@ -322,6 +322,28 @@ def test_all_poller_judges_are_read_only_and_never_use_host_fallback(tmp_path: P
 	assert _read(Path(f"{calls}.claude")) == ""
 
 
+def test_poller_capability_markers_exist_in_the_real_sandbox_helper() -> None:
+	"""Every literal the poller greps in review_untrusted_sandbox.sh must be in the real helper.
+
+	The tests above stage FAKE_RB_SANDBOX, so rewording a marker comment in the
+	real helper passed CI while every WAVE/STALL/INTEGRATION/SECURITY judge
+	deferred as sandbox_helper_outdated in production (#7024 broke project #6664).
+	"""
+	poller = POLLER.read_text(encoding="utf-8")
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	markers = re.findall(r"""grep -F[cq] '([^']+)' "\$\{rb_support_dir\}/review_untrusted_sandbox\.sh\"""", poller)
+	assert len(markers) >= 3, markers
+	missing = [marker for marker in markers if marker not in helper]
+	assert missing == [], f"poller capability markers missing from scripts/review_untrusted_sandbox.sh: {missing}"
+	count_marker = 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then'
+	assert count_marker in markers
+	assert helper.count(count_marker) >= 2
+	assert {
+		"# Arg 9 (read) applies to both engines; read-only roles never transfer edits back.",
+		"# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.",
+	} <= set(markers), markers
+
+
 FAKE_RB_SANDBOX = r"""#!/usr/bin/env bash
 # Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.
 # if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
@@ -484,7 +506,8 @@ def test_poller_rb_prepare_preserves_engine_selection_log(tmp_path: Path) -> Non
 @pytest.mark.parametrize("comment_reply, expected_comment_id", [('{"id":123}', 123), ('{}', None)])
 def test_isolation_deferral_escalates_once_per_head(tmp_path: Path, comment_reply: str, expected_comment_id: int | None) -> None:
 	text = POLLER.read_text(encoding="utf-8")
-	block = text.split('        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then\n', 1)[1].split(
+	# Issue #7370: the counting branch follows the capacity-wait branch as an elif.
+	block = text.split('        elif [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then\n', 1)[1].split(
 		'        echo "::warning::Review-blocked judge failed', 1,
 	)[0]
 	state = tmp_path / "state.json"
@@ -692,7 +715,7 @@ def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 def test_integration_judge_does_not_charge_an_already_active_resolver() -> None:
 	text = POLLER.read_text(encoding="utf-8")
 	invocation = text.split("invoke_judge_for_integration_conflict() {", 1)[1].split("\n}\n", 1)[0]
-	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?', 1)[1]
+	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${resolver_retry_state:-}" || integration_judge_result=$?', 1)[1]
 	assert 'if [ "${integration_dispatch_rc}" -eq 2 ]; then' in invocation
 	assert 'return 3' in invocation.split('if [ "${integration_dispatch_rc}" -eq 2 ]; then', 1)[1].split("\n    fi", 1)[0]
 	assert caller.index('if [ "${integration_judge_result}" -eq 3 ]; then') < caller.index('total_dispatches=$((total_dispatches + 1))')
@@ -700,7 +723,7 @@ def test_integration_judge_does_not_charge_an_already_active_resolver() -> None:
 	program = ('set -euo pipefail\n'
 		'invoke_judge_for_integration_conflict() { return 3; }\n'
 		'check_deferral() {\nlocal final_pr=77 integration_branch=integration default_branch=main integration_judge_result=0\n'
-		'invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?\n'
+		'invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${resolver_retry_state:-}" || integration_judge_result=$?\n'
 		+ deferral + '\nprintf "unexpected accounting\\n"\n}\ncheck_deferral\n')
 	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
@@ -751,7 +774,7 @@ def test_unpublished_integration_guidance_defers_resolver_dispatch() -> None:
 	assert 'post_issue_comment_json "${TRACKING_NUM}" "${integration_comment_body}"' in invocation
 	assert 'if ! printf \'%s\' "${integration_comment_result}" | jq -e' in invocation
 	assert invocation.index('return 4') < invocation.index('_dispatch_review_for_conflicts "${final_pr}"')
-	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?', 1)[1]
+	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" "${resolver_retry_state:-}" || integration_judge_result=$?', 1)[1]
 	assert caller.index('if [ "${integration_judge_result}" -eq 4 ]; then') < caller.index('total_dispatches=$((total_dispatches + 1))')
 
 
@@ -791,7 +814,7 @@ def test_integration_guidance_is_head_and_base_bound_and_untrusted(tmp_path: Pat
 		"commit", "--allow-empty", "-qm", "initial"], env=git_env, check=True)
 	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, env=git_env, text=True).strip()
 	subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head_sha], cwd=tmp_path, env=git_env, check=True)
-	selector = 'INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ' + prepare.split('INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ', 1)[1].split('    _state_payload=', 1)[0]
+	selector = 'INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ' + prepare.split('INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ', 1)[1].split('      _state_json=""', 1)[0]
 	marker = f"<!-- ai:integration-judge-guidance:v1 pr=77 head={head_sha} base={head_sha} -->"
 	comment = "## Integration conflict diagnosis\n\nFinal PR #77: conflict\n\nResolver guidance: preserve both changes\n\n"
 	for suffix, expected in ((marker, True), (marker.replace("pr=77", "pr=78"), False),
@@ -889,22 +912,30 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	steps = _poll_steps()
 	names = [step.get("name") for step in steps]
 	opencode = steps[names.index("Install OpenCode CLI for isolated review-blocked judge")]
-	assert opencode["if"] == "steps.find_tracking.outputs.has_work == 'true'"
+	# Idle ticks need it too for the standalone stall judge (#7174).
+	assert opencode["if"] == (
+		"steps.find_tracking.outputs.has_work == 'true' || "
+		"(vars.ENABLE_STANDALONE_STALL_RECOVERY != 'false' && vars.ENABLE_STALL_JUDGE != 'false')"
+	)
 	assert opencode["continue-on-error"] is True
 	assert opencode["uses"] == (
-		"shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde"
+		"shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f"
 	)
 	assert opencode["with"]["opencode_version"] == "${{ vars.OPENCODE_VERSION || '1.18.23' }}"
 	assert names.index("Install OpenCode CLI for isolated review-blocked judge") < names.index("Process each tracking issue")
+	assert names.index("Install OpenCode CLI for isolated review-blocked judge") < names.index("Run standalone stall recovery without active projects")
 	stage = steps[names.index("Stage workflow support files")]["run"]
 	assert "security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh" in stage
 	resolve = steps[names.index("Resolve AI engine")]
 	assert resolve["id"] == "ai_engine"
+	# Runs on every tick so the idle-tick standalone recovery step (#7174)
+	# gets the same stall-judge engine as the full poller.
+	assert "if" not in resolve
 	assert resolve["env"]["AI_ENGINE_LABELS"] == ""
 	assert '--json number,title,labels' in steps[names.index("Find active tracking issues")]["run"]
 	assert 'any(.[]; any(.labels[]?; .name == "ai:engine-claude") and (any(.labels[]?; .name == "ai:codex") | not))' in resolve["run"]
 	assert 'any(.[]; all(.labels[]?; .name != "ai:codex"))' in resolve["run"]
-	assert "for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do" in resolve["run"]
+	assert "for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT ACTIVATION_VERIFY; do" in resolve["run"]
 	for name, uses in (
 		("Install Claude Code CLI", "./.codex-workflow-src/.github/actions/install-claude"),
 		("Resolve Claude credential", "./.codex-workflow-src/.github/actions/claude-pool-token"),
@@ -912,14 +943,15 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 		step = steps[names.index(name)]
 		assert step["uses"] == uses
 		assert step["continue-on-error"] is True
-		assert step["if"] == "steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'"
+		assert step["if"] == "(steps.ai_engine.outputs.any_claude == 'true' && steps.find_tracking.outputs.capacity_wait != 'true') || (steps.find_tracking.outputs.capacity_wait == 'true' && steps.pool_window.outputs.in_window == 'true')"
 		assert names.index(name) < names.index("Process each tracking issue")
+		assert names.index(name) < names.index("Run standalone stall recovery without active projects")
 	process_env = steps[names.index("Process each tracking issue")]["env"]
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE", "SECURITY_AUDIT"):
 		assert process_env[f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
 	assert process_env["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
 	assert steps[names.index("Resolve Claude credential")]["id"] == "claude_pool"
-	assert process_env["CLAUDE_POOL_REASON"] == "${{ steps.claude_pool.outputs.reason || '' }}"
+	assert process_env["CLAUDE_POOL_REASON"] == "${{ steps.claude_pool.outputs.reason || (steps.find_tracking.outputs.capacity_wait == 'true' && 'all_gated') || '' }}"
 	assert process_env["RB_JUDGE_ISOLATION_MAX_FAILURES"] == "${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}"
 	assert process_env["JUDGE_ISOLATION_MAX_FAILURES"] == "${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}"
 
@@ -929,7 +961,9 @@ def test_poll_preflight_installs_for_label_even_with_global_codex(tmp_path: Path
 	preflight = next(step["run"] for step in steps if step.get("name") == "Resolve AI engine")
 	issue_file = tmp_path / "tracking_issues.json"
 	output_file = tmp_path / "github_output"
-	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "codex", "AI_ENGINE_LABELS": ""}
+	# Tracking-only semantics: the standalone stall-judge check is covered below.
+	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "codex", "AI_ENGINE_LABELS": "",
+		"ENABLE_STANDALONE_STALL_RECOVERY": "false"}
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"):
 		env[f"AI_ENGINE_{role}"] = ""
 	for engine, labels, expected in (
@@ -961,11 +995,116 @@ def test_poll_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path
 	(tmp_path / "scripts").mkdir()
 	(tmp_path / "scripts" / "ai_engine.sh").write_text("return 42\n", encoding="utf-8")
 	output_file = tmp_path / "github_output"
-	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "claude"}
+	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "claude",
+		"ENABLE_STANDALONE_STALL_RECOVERY": "false"}
 	result = subprocess.run(["bash", "-c", preflight], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	assert output_file.read_text(encoding="utf-8").strip() == "any_claude=false"
 	assert "Failed to source scripts/ai_engine.sh; continuing with codex defaults." in result.stderr
+
+
+def test_poll_preflight_covers_standalone_stall_judge_contract() -> None:
+	resolve = next(step for step in _poll_steps() if step.get("name") == "Resolve AI engine")
+	assert resolve["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+	assert resolve["env"]["ENABLE_STANDALONE_STALL_RECOVERY"] == "${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}"
+	assert resolve["env"]["ENABLE_STALL_JUDGE"] == "${{ vars.ENABLE_STALL_JUDGE || 'true' }}"
+	run = resolve["run"]
+	assert "AI_ENGINE_LABELS='[]' ai_engine_for_role STALL_JUDGE" in run
+	assert '--label "ai:engine-claude" --state open --json number,labels --limit 1000' in run
+	assert (
+		'any(.[]; any(.labels[]?; .name=="ai:engine-claude") and (any(.labels[]?; .name=="ai:codex")|not)'
+		' and (any(.labels[]?; .name=="ai:orchestrator-tracking")|not))'
+	) in run
+
+
+def _run_standalone_preflight(
+	tmp_path: Path,
+	*,
+	engine: str,
+	gh_labels: list[str] | None = None,
+	gh_rc: int = 0,
+	gh_count: int = 1,
+	standalone: str = "true",
+	stall_judge: str = "true",
+) -> tuple[subprocess.CompletedProcess[str], str, list[str]]:
+	preflight = next(step["run"] for step in _poll_steps() if step.get("name") == "Resolve AI engine")
+	work = tmp_path / f"work-{len(list(tmp_path.iterdir()))}"
+	(work / "scripts").mkdir(parents=True)
+	(work / "scripts" / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
+	(work / "tracking_issues.json").write_text(json.dumps([{"number": 1, "labels": [{"name": "ai:codex"}]}]), encoding="utf-8")
+	bin_dir = work / "bin"
+	bin_dir.mkdir()
+	gh_calls = work / "gh_calls"
+	listing = json.dumps([{"number": 7 + i, "labels": [{"name": label} for label in (gh_labels or [])]} for i in range(gh_count)])
+	gh = bin_dir / "gh"
+	gh.write_text(
+		"#!/usr/bin/env bash\n"
+		f"printf '%s\\n' \"$*\" >> {str(gh_calls)!r}\n"
+		f"printf '%s' {listing!r}\n"
+		f"exit {gh_rc}\n",
+		encoding="utf-8",
+	)
+	gh.chmod(0o755)
+	output_file = work / "github_output"
+	output_file.write_text("", encoding="utf-8")
+	env = {
+		**os.environ,
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"RUNTIME_DIR": str(work),
+		"GITHUB_OUTPUT": str(output_file),
+		"GITHUB_REPOSITORY": "owner/repo",
+		"CALLS": str(work / "calls"),
+		"FAKE_ENGINE": engine,
+		"AI_ENGINE_LABELS": "",
+		"ENABLE_STANDALONE_STALL_RECOVERY": standalone,
+		"ENABLE_STALL_JUDGE": stall_judge,
+	}
+	for inherited in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(inherited, None)
+	result = subprocess.run(["bash", "-c", preflight], cwd=work, env=env, capture_output=True, text=True, timeout=60, check=False)
+	calls = gh_calls.read_text(encoding="utf-8").splitlines() if gh_calls.exists() else []
+	return result, output_file.read_text(encoding="utf-8").strip(), calls
+
+
+@pytest.mark.parametrize(
+	("kwargs", "expected", "gh_called"),
+	(
+		({"engine": "claude"}, "true", False),
+		({"engine": "codex", "gh_labels": ["ai:engine-claude"]}, "true", True),
+		({"engine": "codex", "gh_labels": ["ai:engine-claude", "ai:codex"]}, "false", True),
+		({"engine": "codex", "gh_labels": ["ai:engine-claude", "ai:orchestrator-tracking"]}, "false", True),
+		({"engine": "claude", "standalone": "false"}, "false", False),
+		({"engine": "claude", "stall_judge": "FALSE"}, "false", False),
+		({"engine": "codex", "gh_labels": ["ai:engine-claude"], "gh_rc": 1}, "false", True),
+		# A listing that fills the 1000 cap may hide an eligible issue: fetch the pool.
+		({"engine": "codex", "gh_labels": ["ai:engine-claude", "ai:codex"], "gh_count": 1000}, "true", True),
+	),
+)
+def test_poll_preflight_fetches_pool_for_standalone_stall_judge(
+	tmp_path: Path, kwargs: dict, expected: str, gh_called: bool
+) -> None:
+	result, output, calls = _run_standalone_preflight(tmp_path, **kwargs)
+	assert result.returncode == 0, result.stderr
+	assert output == f"any_claude={expected}"
+	assert bool(calls) is gh_called
+	if gh_called:
+		assert all('--label ai:engine-claude --state open --json number,labels --limit 1000' in call for call in calls)
+		assert all("--repo owner/repo" in call for call in calls)
+	if kwargs.get("gh_rc"):
+		assert "::warning::Could not list open ai:engine-claude issues" in result.stderr
+
+
+def test_orchestrate_stages_every_required_claude_support_file() -> None:
+	isolated_exec = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text(encoding="utf-8")
+	match = re.search(r"required_support=\(([^)]*claude_anthropic_relay\.py[^)]*)\)", isolated_exec)
+	assert match, "codex_isolated_exec.sh no longer declares its Claude support files"
+	required = set(match.group(1).split()) | {"codex_isolated_exec.sh", "ai_engine.sh", "claude_engine.py"}
+	stage = _orchestrate_steps()["Stage workflow support files"]["run"]
+	loop = re.search(r"for f in ([^;]*); do\n\s*src=\"\.codex-workflow-src/scripts/\$\{f\}\"", stage)
+	assert loop, "Stage workflow support files loop not found"
+	staged = set(loop.group(1).split())
+	assert required <= staged, sorted(required - staged)
+	assert 'echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"' in stage
 
 
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"

@@ -24,7 +24,11 @@ is the right granularity for a "did anyone refactor this away" guard.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -32,7 +36,8 @@ REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.
 
 
 def _workflow_text() -> str:
-	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	# Moved step bodies (scripts/review_autofix_step_*.sh) are inlined again.
+	return expanded_review_autofix_text()
 
 
 def _step_block(step_name: str) -> list[str]:

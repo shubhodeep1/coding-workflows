@@ -24,13 +24,46 @@ jobs:
     steps:
       - name: Resolve workflow support ref
         shell: bash
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/cancel_on_pr_close\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/cancel_on_pr_close\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -45,7 +78,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -63,9 +96,15 @@ jobs:
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
+        if: ${{ env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -222,6 +261,27 @@ jobs:
             unlinked_active_run_count="$(jq '[.workflow_runs[] | select(((.pull_requests // []) | length) == 0)] | length' "${active_runs_file}")"
             if [ "${unlinked_active_run_count}" -gt 0 ]; then
               echo "::warning::Scheduled close cleanup preserved ${unlinked_active_run_count} active run(s) without pull-request linkage."
+              # List up to 10 of those runs from the same snapshot (no API call).
+              # Only id, workflow path, event, status, head branch and creation
+              # time are printed, never free-text titles; every value is limited
+              # to [A-Za-z0-9._/@:+-], has "::" broken up and is capped at 200
+              # characters. A listing failure only warns (fail open).
+              unlinked_run_listing_jq='
+                def _cpr_neutralize: if test("::") then gsub("::"; ": :") | _cpr_neutralize else . end;
+                def _cpr_safe: (if . == null then "" else tostring end)
+                  | gsub("[^A-Za-z0-9._/@:+-]"; "_") | _cpr_neutralize | .[0:200];
+                [.workflow_runs[] | select(((.pull_requests // []) | length) == 0)] as $unlinked
+                | ($unlinked[0:$unlinked_run_listing_max][]
+                    | "  unlinked run id=\(.id | _cpr_safe) workflow=\((.path // "") | tostring | sub("@.*$"; "") | _cpr_safe) event=\(.event | _cpr_safe) status=\(.status | _cpr_safe) head_branch=\(.head_branch | _cpr_safe) created_at=\(.created_at | _cpr_safe)"),
+                  (if ($unlinked | length) > $unlinked_run_listing_max
+                    then "  ... \(($unlinked | length) - $unlinked_run_listing_max) more unlinked active run(s) not listed."
+                    else empty end)
+              '
+              if ! unlinked_run_listing="$(jq -r --argjson unlinked_run_listing_max 10 "${unlinked_run_listing_jq}" "${active_runs_file}" 2>/dev/null)"; then
+                echo "::warning::Scheduled close cleanup could not list the unlinked active run details."
+              elif [ -n "${unlinked_run_listing}" ]; then
+                printf '%s\n' "${unlinked_run_listing}"
+              fi
             fi
             jq -r '
               .workflow_runs[]
@@ -338,6 +398,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+          MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
+          MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
+          MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
           MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
           MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           GITHUB_REPOSITORY: ${{ github.repository }}

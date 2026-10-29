@@ -7,7 +7,8 @@ per-token usage table. Checks the pool layout scripts/ai_engine.sh reads,
 the least-used ordering, every available=false reason, masking, and the
 post-step cleanup. Also asserts that no coding-workflows workflow or
 template references the CLAUDE_POOL_TOKEN_* secrets, which live only in
-shubhodeep1/claude-workers.
+shubhodeep1/claude-workers. The action also runs as CommonJS under a
+consumer whose root package.json sets "type": "module".
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import http.server
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import threading
@@ -129,6 +131,10 @@ def env(tmp_path: Path):
 	server.server_close()
 
 
+def outputs_text(env: dict) -> str:
+	return Path(env["env"]["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
+
+
 def _run(env: dict, **extra: str) -> tuple[subprocess.CompletedProcess, dict[str, str]]:
 	values = dict(env["env"], **extra)
 	for key in [k for k, v in values.items() if v is None]:
@@ -150,7 +156,13 @@ def _without_masks(text: str) -> str:
 def test_selected_pool_is_ordered_least_used_first(env: dict) -> None:
 	result, outputs = _run(env, GH_TOKEN="probe-must-not-see", GITHUB_TOKEN="probe-must-not-see")
 	assert result.returncode == 0, result.stderr
+	probes = json.loads(outputs.pop("probes"))
 	assert outputs == {"available": "true", "reason": "selected", "accounts": "2", "pool_dir": str(env["pool"])}
+	# The `probes` output carries the readings (for the hourly near-cap alert) and never a token.
+	assert [(p["account"], p["five_hour"], p["seven_day"], p["status"], p["error"]) for p in probes] == [
+		("ALPHA", 0.5, 0.3, "allowed", None), ("BETA", 0.2, 0.1, "allowed", None),
+	]
+	assert "tok-alpha" not in outputs_text(env) and "tok-beta" not in outputs_text(env)
 	pool = env["pool"]
 	assert (pool / "order").read_text(encoding="utf-8") == "BETA\nALPHA\n"
 	assert (pool / "tokens" / "ALPHA").read_text(encoding="utf-8") == "tok-alpha"
@@ -197,6 +209,8 @@ def test_all_gated_is_unavailable_and_removes_the_pool(env: dict) -> None:
 	result, outputs = _run(env, FAKE_PROBE_TABLE=json.dumps(table))
 	assert (outputs["available"], outputs["reason"]) == ("false", "all_gated")
 	assert not env["pool"].exists()
+	# The readings survive the pool removal, so the near-cap alert can still name the accounts.
+	assert [(p["account"], p["five_hour"], p["seven_day"]) for p in json.loads(outputs["probes"])] == [("ALPHA", 0.95, 0.1), ("BETA", 0.2, 0.99)]
 
 
 def test_probe_false_keeps_the_broker_order(env: dict) -> None:
@@ -210,6 +224,8 @@ def test_probe_false_keeps_the_broker_order(env: dict) -> None:
 	[
 		(403, {"error": "repo_not_allowed"}, "broker_refused_repo_not_allowed"),
 		(403, {"error": "Weird Reason!"}, "broker_refused_unknown"),
+		(403, {"error": "workflow_ref_not_allowed"}, "broker_refused_workflow_ref_not_allowed"),
+		(403, {"error": "workflow_sha_unverifiable"}, "broker_refused_workflow_sha_unverifiable"),
 		(503, {"error": "pool_empty"}, "broker_unavailable_503"),
 		(200, {"accounts": "nope"}, "broker_response_invalid"),
 		(200, {"accounts": [{"name": "bad name", "token": "x"}]}, "no_accounts"),
@@ -335,6 +351,47 @@ def test_action_post_refuses_a_dangerous_directory(env: dict, tmp_path: Path) ->
 	assert keep.exists()
 
 
+def test_action_package_json_pins_commonjs() -> None:
+	assert json.loads((ACTION_DIR / "package.json").read_text(encoding="utf-8")) == {"type": "commonjs"}
+
+
+def test_action_runs_as_commonjs_under_a_module_type_consumer(tmp_path: Path) -> None:
+	"""A consumer root package.json with "type": "module" must not turn main.js / post.js into ES modules."""
+	consumer = tmp_path / "consumer"
+	action = consumer / ".codex-workflow-src" / ".github" / "actions" / "claude-pool-token"
+	action.mkdir(parents=True)
+	(consumer / "package.json").write_text(json.dumps({"type": "module"}), encoding="utf-8")
+	for name in ("main.js", "post.js", "package.json"):
+		shutil.copy2(ACTION_DIR / name, action / name)
+	runner_temp = tmp_path / "runner-temp"
+	runner_temp.mkdir()
+	values = {
+		"PATH": os.environ["PATH"],
+		"HOME": str(tmp_path),
+		"RUNNER_TEMP": str(runner_temp),
+		"GITHUB_OUTPUT": str(tmp_path / "out"),
+	}
+	# scripts/claude_pool_token.sh is absent here, so main.js's own fallback must run.
+	main = subprocess.run(["node", str(action / "main.js")], capture_output=True, text=True, env=values, timeout=60, check=False)
+	assert main.returncode == 0, main.stderr
+	assert "require is not defined" not in main.stderr
+	assert "CLAUDE_POOL available=false reason=script_failed" in main.stdout
+	pool = runner_temp / "claude-pool"
+	pool.mkdir()
+	(pool / "order").write_text("A\n", encoding="utf-8")
+	post = subprocess.run(["node", str(action / "post.js")], capture_output=True, text=True, env=values, timeout=60, check=False)
+	assert post.returncode == 0, post.stderr
+	assert "require is not defined" not in post.stderr
+	assert "CLAUDE_POOL cleanup removed=true" in post.stdout
+	assert not pool.exists()
+	# Negative control: without the marker the consumer's "type": "module" applies and the
+	# CommonJS code fails (the ReferenceError text is Node's; match on ReferenceError if it changes).
+	(action / "package.json").unlink()
+	broken = subprocess.run(["node", str(action / "main.js")], capture_output=True, text=True, env=values, timeout=60, check=False)
+	assert broken.returncode != 0
+	assert "require is not defined" in broken.stderr
+
+
 def test_action_metadata() -> None:
 	text = (ACTION_DIR / "action.yml").read_text(encoding="utf-8")
 	assert "using: node24" in text
@@ -350,3 +407,17 @@ def test_no_workflow_or_template_references_pool_secrets() -> None:
 				if pattern.search(path.read_text(encoding="utf-8", errors="replace")):
 					offenders.append(str(path.relative_to(REPO_ROOT)))
 	assert offenders == []
+
+
+def test_broker_workflow_allowlist_matches_pool_action_users() -> None:
+	"""The broker's exact workflow allowlist equals the workflows that fetch the pool (#6636)."""
+	source = (REPO_ROOT / "tools" / "claude-pool-broker" / "src" / "index.ts").read_text(encoding="utf-8")
+	match = re.search(r"ALLOWED_WORKFLOW_FILES[^=]*=\s*Object\.freeze\(\[(.*?)\]\)", source, re.S)
+	assert match, "ALLOWED_WORKFLOW_FILES not found in the broker source"
+	allowed = set(re.findall(r'"([^"]+)"', match.group(1)))
+	users = {
+		path.name
+		for path in (REPO_ROOT / ".github" / "workflows").glob("*.yml")
+		if ".github/actions/claude-pool-token" in path.read_text(encoding="utf-8", errors="replace")
+	}
+	assert allowed == users

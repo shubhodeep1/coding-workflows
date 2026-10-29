@@ -22,6 +22,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # helper (scripts/codex_isolated_exec.sh, read-only snapshot of the clone).
 ISOLATED_CODEX_PREFIX = ("bash", str(REPO_ROOT / "scripts" / "codex_isolated_exec.sh"), "run", "--mode", "read-only")
 MODULE_PATH = REPO_ROOT / "scripts" / "validation_refresh_runner.py"
+# The consumer self-test runs only through the harness sandbox (separate
+# user, rootless Docker): provision once per runner, then selfcheck + run.
+SANDBOX_SCRIPT = str(REPO_ROOT / "scripts" / "validation_harness_sandbox.sh")
+SANDBOX_PROVISION_PREFIX = ("bash", SANDBOX_SCRIPT, "provision")
+SANDBOX_SELF_TEST_PREFIX = ("bash", SANDBOX_SCRIPT, "checked-run")
 
 spec = importlib.util.spec_from_file_location("validation_refresh_runner", MODULE_PATH)
 assert spec is not None and spec.loader is not None
@@ -44,6 +49,7 @@ class FakeExecutor:
 	def __init__(self, calls: list[PlannedCall]) -> None:
 		self._calls = calls
 		self.seen: list[tuple[list[str], Path | None, bool, dict[str, str] | None]] = []
+		self.timeouts: list[tuple[list[str], int]] = []
 
 	def run(
 		self,
@@ -56,6 +62,7 @@ class FakeExecutor:
 		timeout: int = 300,
 	) -> subprocess.CompletedProcess[str]:
 		self.seen.append((list(command), cwd, check, env_overrides))
+		self.timeouts.append((list(command), timeout))
 		assert self._calls, f"unexpected command: {command}"
 		plan = self._calls.pop(0)
 		assert check == plan.check, f"expected check={plan.check}, got check={check} for {command}"
@@ -184,8 +191,10 @@ def test_process_repository_green_drift_records_no_push_diagnostic() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
+				PlannedCall(("git", "ls-files", "--", "validation"), stdout="validation/tests/00_canary.sh\n", check=False),
 			]
 		)
 
@@ -212,6 +221,88 @@ def test_process_repository_green_drift_records_no_push_diagnostic() -> None:
 		executor.assert_consumed()
 
 
+_GRAPHQL_FLAKE = "GraphQL: Something went wrong while executing your query on 2026-10-12T13:31:47Z."
+
+
+def _without_sleep(test: Callable[[list[float]], None]) -> None:
+	sleeps: list[float] = []
+	original = refresh_runner.time.sleep
+	refresh_runner.time.sleep = sleeps.append  # type: ignore[assignment]
+	try:
+		test(sleeps)
+	finally:
+		refresh_runner.time.sleep = original  # type: ignore[assignment]
+
+
+def test_process_repository_retries_a_transient_clone_failure() -> None:
+	def run(sleeps: list[float]) -> None:
+		with tempfile.TemporaryDirectory(prefix="validation-refresh-clone-retry-") as td:
+			workspace = Path(td) / "work"
+			workspace.mkdir(parents=True, exist_ok=True)
+			repository = "octo/demo-repo"
+			repo_dir = workspace / "octo__demo-repo"
+			branch = "ai/validation-refresh"
+
+			def on_failed_clone(_command: list[str], _cwd: Path | None) -> None:
+				# A failed clone can leave a partial directory behind.
+				repo_dir.mkdir(parents=True, exist_ok=True)
+				(repo_dir / "partial").write_text("x", encoding="utf-8")
+
+			def on_clone(_command: list[str], _cwd: Path | None) -> None:
+				assert not (repo_dir / "partial").exists()
+				_write_manifest(repo_dir)
+
+			executor = FakeExecutor(
+				[
+					PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+					PlannedCall(("gh", "repo", "clone"), returncode=1, stderr=_GRAPHQL_FLAKE, callback=on_failed_clone),
+					PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+					PlannedCall(("git", "fetch", "origin", "main")),
+					PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+					PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+					PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+					PlannedCall(SANDBOX_PROVISION_PREFIX),
+					PlannedCall(SANDBOX_SELF_TEST_PREFIX),
+					PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
+					PlannedCall(("git", "ls-files", "--", "validation"), stdout="validation/tests/00_canary.sh\n", check=False),
+				]
+			)
+
+			result = _make_runner(executor, branch).process_repository(repository, workspace)
+
+			assert result.outcome == "green", result
+			assert not any(d.startswith("checkout_failed") for d in result.diagnostics)
+			assert sleeps == [refresh_runner.CLONE_RETRY_DELAYS_SECS[0]]
+			executor.assert_consumed()
+
+	_without_sleep(run)
+
+
+def test_process_repository_reports_error_when_every_clone_attempt_fails() -> None:
+	def run(sleeps: list[float]) -> None:
+		with tempfile.TemporaryDirectory(prefix="validation-refresh-clone-fail-") as td:
+			workspace = Path(td) / "work"
+			workspace.mkdir(parents=True, exist_ok=True)
+			branch = "ai/validation-refresh"
+			executor = FakeExecutor(
+				[PlannedCall(("gh", "repo", "view"), stdout="main\n")]
+				+ [
+					PlannedCall(("gh", "repo", "clone"), returncode=1, stderr=_GRAPHQL_FLAKE)
+					for _ in range(refresh_runner.CLONE_ATTEMPTS)
+				]
+			)
+
+			result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+
+			assert result.outcome == "error", result
+			assert any(d.startswith("checkout_failed(exit=1)") for d in result.diagnostics), result.diagnostics
+			assert sleeps == list(refresh_runner.CLONE_RETRY_DELAYS_SECS)
+			assert refresh_runner.summarize_results([result])["totals"]["error"] == 1
+			executor.assert_consumed()
+
+	_without_sleep(run)
+
+
 def test_process_repository_red_pipeline_failure_with_drift_records_no_push() -> None:
 	with tempfile.TemporaryDirectory(prefix="validation-refresh-red-") as td:
 		workspace = Path(td) / "work"
@@ -236,6 +327,7 @@ def test_process_repository_red_pipeline_failure_with_drift_records_no_push() ->
 					stderr="lint failed",
 				),
 				PlannedCall(("git", "status"), stdout=" M validation/tests/00_canary.sh\n"),
+				PlannedCall(("git", "ls-files", "--", "validation"), stdout="validation/tests/00_canary.sh\n", check=False),
 			]
 		)
 
@@ -278,11 +370,13 @@ def test_process_repository_pipeline_failure_no_drift_is_red_not_error() -> None
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
 				PlannedCall(
-					("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh")),
+					SANDBOX_SELF_TEST_PREFIX,
 					returncode=1,
 					stderr="self test failed",
 				),
+				PlannedCall(("bash", SANDBOX_SCRIPT, "cleanup"), check=False),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -320,7 +414,8 @@ def test_process_repository_no_changes_skips_pr_operations() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -355,7 +450,8 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -366,15 +462,84 @@ def test_process_repository_pipeline_unsets_github_tokens() -> None:
 		pipeline_commands = {
 			str(REPO_ROOT / "scripts" / "render_validation_templates.py"),
 			str(REPO_ROOT / "scripts" / "validation_lint.py"),
-			str(REPO_ROOT / "scripts" / "validate_driver.sh"),
 		}
 		expected_log_dir = repo_dir.parent / f"{repo_dir.name}__validation_logs"
+		saw_self_test = False
 		for command, _cwd, _check, env_overrides in executor.seen:
-			if any(item in command for item in pipeline_commands):
+			if any(item in command for item in pipeline_commands) or tuple(command[:3]) in (
+				SANDBOX_PROVISION_PREFIX,
+				SANDBOX_SELF_TEST_PREFIX,
+			):
+				# Every pipeline subprocess gets each control-plane
+				# credential blanked (#7351).
+				assert env_overrides is not None
+				for name in refresh_runner.REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES:
+					assert env_overrides.get(name) == "", (name, command)
+			if any(item in command for item in pipeline_commands) or tuple(command[:3]) == SANDBOX_PROVISION_PREFIX:
+				assert env_overrides is not None
+				assert env_overrides.get("LOG_DIR") == str(expected_log_dir)
+			if tuple(command[:3]) == SANDBOX_SELF_TEST_PREFIX:
+				saw_self_test = True
+				# selfcheck targets this (credential-holding) process.
+				assert command[3] == str(os.getpid())
+				assert command[4] == str(REPO_ROOT / "scripts" / "validate_driver.sh")
 				assert env_overrides is not None
 				assert env_overrides.get("GH_TOKEN") == ""
 				assert env_overrides.get("GITHUB_TOKEN") == ""
-				assert env_overrides.get("LOG_DIR") == str(expected_log_dir)
+				# The driver logs inside the sandbox copy; the helper copies
+				# them back outside the clone so drift detection is unchanged.
+				assert env_overrides.get("LOG_DIR") == "validation/logs"
+				assert env_overrides.get("VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST") == str(expected_log_dir)
+		assert saw_self_test
+		# The driver is never launched directly on the host.
+		assert all(command[:2] != ["bash", str(REPO_ROOT / "scripts" / "validate_driver.sh")] for command, *_ in executor.seen)
+		executor.assert_consumed()
+
+
+def test_refresh_pipeline_credential_names_cover_control_plane_secrets() -> None:
+	names = set(refresh_runner.REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES)
+	for required in (
+		"GH_TOKEN",
+		"GITHUB_TOKEN",
+		"GH_PAT",
+		"OPENROUTER_API_KEY",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+		"ACTIONS_ID_TOKEN_REQUEST_URL",
+	):
+		assert required in names, required
+
+
+def test_process_repository_cleanup_after_self_test_failure_blanks_credentials() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-cleanup-env-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX, returncode=1, stderr="boom"),
+				PlannedCall(("bash", SANDBOX_SCRIPT, "cleanup"), check=False),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+
+		_make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+
+		cleanup_calls = [env for cmd, _cwd, _check, env in executor.seen if cmd[:3] == ["bash", SANDBOX_SCRIPT, "cleanup"]]
+		assert len(cleanup_calls) == 1
+		for name in refresh_runner.REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES:
+			assert cleanup_calls[0] is not None and cleanup_calls[0].get(name) == "", name
 		executor.assert_consumed()
 
 
@@ -404,8 +569,10 @@ def test_process_repository_bootstraps_manifest_for_manifestless_repo() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=bootstrapped_untracked_status),
+				PlannedCall(("git", "ls-files", "--", "validation"), stdout="", check=False),
 			]
 		)
 
@@ -464,8 +631,10 @@ slots:
 
 
 def _enabled_discovery_ctx(
-	*, dry_run: bool = False
+	*, dry_run: bool = False, close_superseded: bool = False
 ) -> "refresh_runner.discovery_module.DiscoveryRunContext":
+	# The superseded-PR sweep is off by default here so the flow tests keep
+	# their exact command sequences; the sweep tests turn it on.
 	return refresh_runner.discovery_module.DiscoveryRunContext(
 		source_root=REPO_ROOT,
 		prompt_path=REPO_ROOT / "prompts" / "mode-validate-discover.txt",
@@ -482,6 +651,7 @@ def _enabled_discovery_ctx(
 		dedup_days=7,
 		enabled=True,
 		dry_run=dry_run,
+		close_superseded=close_superseded,
 	)
 
 
@@ -546,7 +716,8 @@ def test_discovery_dispatch_skips_when_dedup_hits() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -603,7 +774,8 @@ def test_discovery_dispatch_opens_seed_pr_when_manifest_missing() -> None:
 				# Drift monitoring pipeline (no manifest committed → bootstrap):
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -648,7 +820,8 @@ def test_discovery_dispatch_reports_agree_when_types_match() -> None:
 				# No PR — agree path skips push and gh pr create.
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -664,6 +837,15 @@ def test_discovery_dispatch_reports_agree_when_types_match() -> None:
 		assert recorded["committed_type"] == "node-runtime"
 		assert recorded["discovered_type"] == "node-runtime"
 		assert recorded["pr_url"] is None
+		# Discovery keeps OPENROUTER_API_KEY for its host broker (#7351).
+		codex_envs = [
+			env
+			for cmd, _cwd, _check, env in executor.seen
+			if tuple(cmd[: len(ISOLATED_CODEX_PREFIX)]) == ISOLATED_CODEX_PREFIX
+		]
+		assert codex_envs
+		for env in codex_envs:
+			assert env is None or env.get("OPENROUTER_API_KEY", "unset") != ""
 		# No codex retry, no push.
 		assert sum(1 for cmd, _cwd, _check, _env in executor.seen if tuple(cmd[:len(ISOLATED_CODEX_PREFIX)]) == ISOLATED_CODEX_PREFIX) == 1
 		assert all(cmd[:3] != ["git", "push", "-u"] for cmd, _cwd, _check, _env in executor.seen)
@@ -708,7 +890,8 @@ def test_discovery_dispatch_opens_disagree_pr_on_type_mismatch() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -752,7 +935,8 @@ def test_discovery_dispatch_records_dry_run_outcome_without_codex() -> None:
 				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -795,7 +979,8 @@ def test_discovery_dispatch_records_failed_when_codex_exhausts() -> None:
 				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
 				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
-				PlannedCall(("bash", str(REPO_ROOT / "scripts" / "validate_driver.sh"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
 				PlannedCall(("git", "status"), stdout=""),
 			]
 		)
@@ -848,7 +1033,7 @@ def test_dispatch_discovery_skips_codex_when_budget_exhausted() -> None:
 		assert result.discovery_outcome == "skipped_budget"
 		assert result.discovery_pr_url is None
 		assert any("discovery_budget_exhausted" in d for d in result.discovery_diagnostics)
-		assert stub.dedup_calls == []  # gate short-circuits before the dedup check
+		assert stub.dedup_calls == ["octo/demo-repo"]  # dedup runs first, misses, then the budget gate skips
 		assert stub.appended == []  # ...and before any memory write
 		executor.assert_consumed()  # no codex/git/gh calls were issued
 
@@ -1023,6 +1208,654 @@ def test_main_emits_summary_line_before_json_for_empty_repo_set() -> None:
 			"skipped": 0,
 			"error": 0,
 		}
+
+
+# ---------------------------------------------------------------------------
+# Self-test failure diagnostics, self-test timeout, drift diagnostics
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _patched_env(**values: str | None):
+	saved = {key: os.environ.get(key) for key in values}
+	try:
+		for key, value in values.items():
+			if value is None:
+				os.environ.pop(key, None)
+			else:
+				os.environ[key] = value
+		yield
+	finally:
+		for key, value in saved.items():
+			if value is None:
+				os.environ.pop(key, None)
+			else:
+				os.environ[key] = value
+
+
+_SANDBOX_OK_STDERR = (
+	"VALIDATION_HARNESS_SANDBOX phase=selfcheck outcome=ok reason=none\n"
+	"VALIDATION_HARNESS_SANDBOX phase=run outcome=ok reason=staged\n"
+)
+
+
+def _driver_json(**overrides: object) -> str:
+	payload: dict[str, object] = {
+		"result": "fail",
+		"phase": "startup",
+		"total_tests": 1,
+		"passed_tests": 0,
+		"failed_tests": 1,
+		"failures": [
+			{
+				"test": "app_starts",
+				"error": "service app exited with code 1",
+				"log_tail": "line one\nnpm ERR! missing script: start\nline three",
+			}
+		],
+		"duration_seconds": 12,
+	}
+	payload.update(overrides)
+	return json.dumps(payload)
+
+
+def _self_test_failure(*, stdout: str = "", stderr: str = "", returncode: int = 1) -> "refresh_runner.CommandFailure":
+	return refresh_runner.CommandFailure(
+		command=("bash", SANDBOX_SCRIPT, "checked-run"),
+		cwd=None,
+		returncode=returncode,
+		stdout=stdout,
+		stderr=stderr,
+	)
+
+
+def test_format_command_failure_skips_sandbox_ok_lines_and_surfaces_driver_result() -> None:
+	stderr = _SANDBOX_OK_STDERR + "docker: something broke\nsecond real line\nthird real line\nfourth line\n"
+	stdout = "starting\n" + _driver_json() + "\n"
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stdout=stdout, stderr=stderr))
+
+	assert message.startswith("self_test_failed(exit=1): docker: something broke | second real line | third real line")
+	assert "VALIDATION_HARNESS_SANDBOX phase=selfcheck outcome=ok" not in message
+	assert "fourth line" not in message
+	assert "phase=startup" in message
+	assert "test=app_starts" in message
+	assert "error=service app exited with code 1" in message
+	assert "log_tail=line one // npm ERR! missing script: start // line three" in message
+
+
+def test_format_command_failure_keeps_sandbox_failure_lines() -> None:
+	stderr = _SANDBOX_OK_STDERR + "VALIDATION_HARNESS_SANDBOX phase=selfcheck outcome=fail reason=pid_namespace_shared\n"
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stderr=stderr, returncode=3))
+
+	assert message == (
+		"self_test_failed(exit=3): "
+		"VALIDATION_HARNESS_SANDBOX phase=selfcheck outcome=fail reason=pid_namespace_shared"
+	)
+
+
+def test_format_command_failure_only_ok_lines_and_no_json_reports_no_output() -> None:
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stderr=_SANDBOX_OK_STDERR))
+
+	assert message == "self_test_failed(exit=1): no_output"
+
+
+def test_format_command_failure_handles_missing_or_invalid_driver_json() -> None:
+	for stdout in ("", "not json at all\n{broken\n", "[1, 2, 3]\n", '{"phase": 5, "failures": "nope"}\n', '{"failures": [3]}\n'):
+		message = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stdout=stdout, stderr=_SANDBOX_OK_STDERR + "real failure\n")
+		)
+		assert message.startswith("self_test_failed(exit=1): real failure"), (stdout, message)
+		assert "test=" not in message and "log_tail=" not in message, (stdout, message)
+
+
+def test_format_command_failure_takes_last_json_line_and_ignores_trailing_garbage() -> None:
+	stdout = _driver_json(phase="preflight") + "\n" + _driver_json(phase="health") + "\ntrailing noise\n"
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stdout=stdout))
+
+	assert "phase=health" in message
+	assert "phase=preflight" not in message
+
+
+def test_format_command_failure_tails_compose_log_when_present() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-compose-") as td:
+		compose_log = Path(td) / "compose.log"
+		compose_log.write_text("".join(f"app | line {index}\n" for index in range(100)), encoding="utf-8")
+		message = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stderr="boom\n"), compose_log_path=compose_log
+		)
+		assert "compose_log_tail=" in message
+		assert "app | line 99" in message
+		assert "app | line 80" in message
+		assert "app | line 79" not in message  # only the last 20 lines
+		assert "app | line 0 " not in message
+
+		missing = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stderr="boom\n"), compose_log_path=Path(td) / "absent.log"
+		)
+		assert missing == "self_test_failed(exit=1): boom"
+
+		link = Path(td) / "link.log"
+		link.symlink_to(compose_log)
+		linked = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stderr="boom\n"), compose_log_path=link
+		)
+		assert "compose_log_tail" not in linked
+
+
+def test_format_command_failure_only_reads_the_end_of_a_large_compose_log() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-compose-big-") as td:
+		compose_log = Path(td) / "compose.log"
+		compose_log.write_text("HEAD-MARKER\n" + ("x" * 80 + "\n") * 5000 + "TAIL-MARKER\n", encoding="utf-8")
+		message = refresh_runner._format_command_failure(
+			"self_test", _self_test_failure(stderr="boom\n"), compose_log_path=compose_log
+		)
+		assert "TAIL-MARKER" in message
+		assert "HEAD-MARKER" not in message
+		assert len(message) <= refresh_runner.FAILURE_DETAIL_MAX_CHARS + 100
+
+
+def test_format_command_failure_bounds_total_size() -> None:
+	huge_tail = "\n".join("y" * 400 for _ in range(200))
+	stdout = _driver_json(failures=[{"test": "t" * 2000, "error": "e" * 2000, "log_tail": huge_tail}])
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stdout=stdout, stderr="s" * 5000))
+
+	prefix = "self_test_failed(exit=1): "
+	assert len(message) <= len(prefix) + refresh_runner.FAILURE_DETAIL_MAX_CHARS
+
+
+def test_format_command_failure_neutralises_workflow_commands_and_control_chars() -> None:
+	stderr = (
+		"\x1b[31mred\x1b[0m text\x07\x00 with\x08 controls\r\n"
+		"\x1b]0;window title\x07after-osc\n"
+		"::error::injected\n"
+		"  ::set-env name=EVIL::1\n"
+		"##[add-mask]value\n"
+	)
+	log_tail = "::stop-commands::token\nok line\x1b[2K\n::add-mask::secret"
+	stdout = _driver_json(
+		phase="::warning::phase",
+		failures=[{"test": "::notice::test", "error": "\x1b[1mbold::error\x1b[0m", "log_tail": log_tail}],
+	)
+	message = refresh_runner._format_command_failure("self_test", _self_test_failure(stdout=stdout, stderr=stderr))
+
+	assert "\x1b" not in message and "\x07" not in message and "\x00" not in message and "\x08" not in message
+	assert "\r" not in message and "\n" not in message
+	assert "red text with controls" in message
+	assert "after-osc" in message
+	assert "window title" not in message
+	# No segment of the message starts a workflow command.
+	for segment in message.replace("//", "|").split("|"):
+		stripped = segment.strip()
+		assert not stripped.startswith("::"), segment
+		assert not stripped.startswith("##["), segment
+	for field in ("phase=", "test="):
+		index = message.index(field)
+		assert not message[index + len(field) :].startswith("::")
+	assert "[workflow-command-neutralised] ::error::injected" in message
+	assert "[workflow-command-neutralised] ::set-env name=EVIL::1" not in message  # beyond the 3-line head cap
+
+
+def test_format_command_failure_redacts_credential_values() -> None:
+	secret = "ghp_0123456789abcdefSECRET"
+	with _patched_env(GH_TOKEN=secret, OPENROUTER_API_KEY="short"):
+		message = refresh_runner._format_command_failure(
+			"self_test",
+			_self_test_failure(stdout=_driver_json(failures=[{"test": "t", "error": f"token {secret} leaked", "log_tail": secret}]), stderr=f"using {secret}\n"),
+		)
+	assert secret not in message
+	assert "[redacted]" in message
+
+
+def test_format_command_failure_non_self_test_stage_is_unchanged_in_shape() -> None:
+	failure = refresh_runner.CommandFailure(
+		command=("python3", "validation_lint.py"), cwd=None, returncode=2, stdout="", stderr="first\nsecond\nthird\nfourth\n"
+	)
+	assert refresh_runner._format_command_failure("lint", failure) == "lint_failed(exit=2): first | second | third"
+	only_stdout = refresh_runner.CommandFailure(
+		command=("git", "x"), cwd=None, returncode=1, stdout="from stdout\n", stderr=""
+	)
+	assert refresh_runner._format_command_failure("checkout", only_stdout) == "checkout_failed(exit=1): from stdout"
+	empty = refresh_runner.CommandFailure(command=("git", "x"), cwd=None, returncode=1, stdout="", stderr="")
+	assert refresh_runner._format_command_failure("checkout", empty) == "checkout_failed(exit=1): no_output"
+
+
+def test_format_command_failure_reports_self_test_timeout() -> None:
+	message = refresh_runner._format_command_failure(
+		"self_test", _self_test_failure(stderr=_SANDBOX_OK_STDERR, returncode=124), timeout_secs=900
+	)
+	assert message == "self_test_failed(exit=124): timeout_secs=900"
+
+
+def _run_self_test_failure_pipeline(
+	*, stdout: str, stderr: str, compose_text: str | None
+) -> tuple["refresh_runner.RefreshResult", FakeExecutor]:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-diag-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		log_dir = workspace / "octo__demo-repo__validation_logs"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		def on_self_test(_command: list[str], _cwd: Path | None) -> None:
+			if compose_text is not None:
+				log_dir.mkdir(parents=True, exist_ok=True)
+				(log_dir / "compose.log").write_text(compose_text, encoding="utf-8")
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(
+					SANDBOX_SELF_TEST_PREFIX,
+					returncode=1,
+					stdout=stdout,
+					stderr=stderr,
+					callback=on_self_test,
+				),
+				PlannedCall(("bash", SANDBOX_SCRIPT, "cleanup"), check=False),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+		result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+		executor.assert_consumed()
+		return result, executor
+
+
+def test_process_repository_self_test_failure_diagnostic_surfaces_real_cause() -> None:
+	result, _executor = _run_self_test_failure_pipeline(
+		stdout=_driver_json(),
+		stderr=_SANDBOX_OK_STDERR,
+		compose_text="db | ready\napp | Error: Cannot find module 'express'\n",
+	)
+
+	assert result.outcome == "red"
+	failure_lines = [line for line in result.diagnostics if line.startswith("self_test_failed")]
+	assert len(failure_lines) == 1
+	assert "test=app_starts" in failure_lines[0]
+	assert "error=service app exited with code 1" in failure_lines[0]
+	assert "npm ERR! missing script: start" in failure_lines[0]
+	assert "Cannot find module 'express'" in failure_lines[0]
+	assert "outcome=ok" not in failure_lines[0]
+
+
+def test_process_repository_self_test_failure_without_compose_log_or_json() -> None:
+	result, _executor = _run_self_test_failure_pipeline(stdout="", stderr=_SANDBOX_OK_STDERR + "real\n", compose_text=None)
+
+	assert [line for line in result.diagnostics if line.startswith("self_test_failed")] == [
+		"self_test_failed(exit=1): real"
+	]
+
+
+def _self_test_timeouts(executor: FakeExecutor) -> list[int]:
+	return [timeout for command, timeout in executor.timeouts if tuple(command[:3]) == SANDBOX_SELF_TEST_PREFIX]
+
+
+def test_self_test_timeout_defaults_to_900_and_other_stages_keep_theirs() -> None:
+	with _patched_env(VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS=None):
+		_result, executor = _run_self_test_failure_pipeline(stdout="", stderr="x\n", compose_text=None)
+	assert _self_test_timeouts(executor) == [900]
+	by_command = {tuple(command[:3]): timeout for command, timeout in executor.timeouts}
+	assert by_command[SANDBOX_PROVISION_PREFIX] == 600
+	assert by_command[("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"), "--manifest")] == 300
+
+
+def test_self_test_timeout_is_configurable_and_bad_values_fall_back() -> None:
+	cases = {
+		"1200": 1200,
+		" 45 ": 45,
+		"": 900,
+		"abc": 900,
+		"0": 900,
+		"-5": 900,
+		"1.5": 900,
+		"999999": refresh_runner.SELF_TEST_TIMEOUT_MAX_SECS,
+	}
+	for raw, expected in cases.items():
+		with _patched_env(VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS=raw):
+			assert refresh_runner._self_test_timeout_secs() == expected, raw
+	with _patched_env(VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS="1200"):
+		_result, executor = _run_self_test_failure_pipeline(stdout="", stderr="x\n", compose_text=None)
+	assert _self_test_timeouts(executor) == [1200]
+
+
+def test_self_test_timeout_exit_124_reports_configured_seconds() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-timeout-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX, returncode=124, stderr="timeout_expired"),
+				PlannedCall(("bash", SANDBOX_SCRIPT, "cleanup"), check=False),
+				PlannedCall(("git", "status"), stdout=""),
+			]
+		)
+		with _patched_env(VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS="1500"):
+			result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+		assert "self_test_failed(exit=124): timeout_expired | timeout_secs=1500" in result.diagnostics
+
+
+def test_process_repository_drift_with_nothing_tracked_reports_assets_not_committed() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-uncommitted-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		executor = FakeExecutor(
+			[
+				PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+				PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+				PlannedCall(("git", "fetch", "origin", "main")),
+				PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+				PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+				PlannedCall(SANDBOX_PROVISION_PREFIX),
+				PlannedCall(SANDBOX_SELF_TEST_PREFIX),
+				PlannedCall(("git", "status"), stdout="?? validation/\n"),
+				PlannedCall(("git", "ls-files", "--", "validation"), stdout="", check=False),
+			]
+		)
+		result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+
+		assert result.outcome == "green"
+		assert result.changed is True
+		# The legacy key stays (§6), the new diagnostic is added after it.
+		assert "validation_assets_drifted_no_push" in result.diagnostics
+		assert result.diagnostics[-1].startswith("validation_assets_not_committed:")
+		assert "not drift" in result.diagnostics[-1]
+		executor.assert_consumed()
+
+		stdout = io.StringIO()
+		with contextlib.redirect_stdout(stdout):
+			refresh_runner._emit_repo_result(result)
+		line = stdout.getvalue().strip()
+		assert " drifted=1 " in line
+		assert 'detail="validation_assets_not_committed: ' in line
+
+
+def test_process_repository_drift_with_tracked_assets_has_no_not_committed_diagnostic() -> None:
+	with tempfile.TemporaryDirectory(prefix="validation-refresh-tracked-") as td:
+		workspace = Path(td) / "work"
+		workspace.mkdir(parents=True, exist_ok=True)
+		repo_dir = workspace / "octo__demo-repo"
+		branch = "ai/validation-refresh"
+
+		def on_clone(_command: list[str], _cwd: Path | None) -> None:
+			_write_manifest(repo_dir)
+
+		for ls_files in (
+			PlannedCall(("git", "ls-files", "--", "validation"), stdout="validation/Dockerfile\n", check=False),
+			# A failed lookup is not evidence of "nothing tracked".
+			PlannedCall(("git", "ls-files", "--", "validation"), returncode=128, check=False),
+		):
+			executor = FakeExecutor(
+				[
+					PlannedCall(("gh", "repo", "view"), stdout="main\n"),
+					PlannedCall(("gh", "repo", "clone"), callback=on_clone),
+					PlannedCall(("git", "fetch", "origin", "main")),
+					PlannedCall(("git", "checkout", "-B", branch, "origin/main")),
+					PlannedCall(("python3", str(REPO_ROOT / "scripts" / "render_validation_templates.py"))),
+					PlannedCall(("python3", str(REPO_ROOT / "scripts" / "validation_lint.py"))),
+					PlannedCall(SANDBOX_PROVISION_PREFIX),
+					PlannedCall(SANDBOX_SELF_TEST_PREFIX),
+					PlannedCall(("git", "status"), stdout=" M validation/Dockerfile\n"),
+					ls_files,
+				]
+			)
+			result = _make_runner(executor, branch).process_repository("octo/demo-repo", workspace)
+			assert result.diagnostics[-1] == "validation_assets_drifted_no_push"
+			# The local index read is bounded to 30 s, not the 300 s default.
+			ls_files_timeouts = [t for c, t in executor.timeouts if tuple(c[:3]) == ("git", "ls-files", "--")]
+			assert ls_files_timeouts == [30]
+			assert not any(line.startswith("validation_assets_not_committed") for line in result.diagnostics)
+			executor.assert_consumed()
+
+
+def test_dispatch_discovery_dedup_check_runs_before_budget_gate() -> None:
+	# A repo with a recent successful discovery is `skipped_dedup` even when
+	# the aggregate budget is already exhausted (it used to report
+	# `skipped_budget`, hiding that the repo needed no discovery anyway).
+	with tempfile.TemporaryDirectory(prefix="discovery-dedup-first-") as td, _StubMemory(
+		dedup_returns=True
+	) as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		branch = "ai/validation-refresh"
+		executor = FakeExecutor([])
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx())
+		runner._discovery_deadline = time.monotonic() - 1.0  # budget exhausted
+		result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch=branch)
+		runner._dispatch_discovery(
+			result=result,
+			repo_dir=repo_dir,
+			repository="octo/demo-repo",
+			default_branch="main",
+		)
+		assert result.discovery_outcome == "skipped_dedup"
+		assert result.discovery_diagnostics == ["dedup_window_active"]
+		assert stub.dedup_calls == ["octo/demo-repo"]
+		assert stub.appended == []
+		executor.assert_consumed()
+
+
+SWEEP_SEED_TITLE = "chore(validation): seed .ai/validate.yml (type: node-runtime)"
+SWEEP_BOT_COMMITS = [{"oid": "a1", "authors": [{"name": "codex-bot", "email": "codex@users.noreply.github.com"}]}]
+SWEEP_BOT_VIEW_JSON = json.dumps({"commits": SWEEP_BOT_COMMITS})
+
+
+def _sweep_pr_list_json(entries: list[tuple[int, str]]) -> str:
+	return json.dumps(
+		[
+			{
+				"number": number,
+				"url": f"https://github.com/octo/demo-repo/pull/{number}",
+				"headRefName": branch,
+				"title": SWEEP_SEED_TITLE,
+				"commits": SWEEP_BOT_COMMITS,
+			}
+			for number, branch in entries
+		]
+	)
+
+
+def test_dispatch_discovery_sweep_closes_stale_seed_pr_even_on_dedup_hit() -> None:
+	# btc_sweeper#196: a seed PR stayed open after another seed merged, then
+	# conflicted on `.ai/validate.yml` and stopped review/autofix. The sweep
+	# runs before the dedup gate, so it closes the PR on the next cycle.
+	with tempfile.TemporaryDirectory(prefix="discovery-sweep-dedup-") as td, _StubMemory(
+		dedup_returns=True
+	) as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		(repo_dir / ".ai").mkdir()
+		(repo_dir / ".ai" / "validate.yml").write_text(VALID_NODE_RUNTIME_MANIFEST, encoding="utf-8")
+		branch = "ai/validation-refresh"
+		executor = FakeExecutor(
+			[
+				PlannedCall(
+					("gh", "pr", "list"),
+					stdout=_sweep_pr_list_json([(196, "automation/validate-discovery/38b0e3d9fa3d/node-runtime")]),
+				),
+				PlannedCall(("gh", "pr", "view", "196"), stdout=SWEEP_BOT_VIEW_JSON),
+				PlannedCall(("gh", "pr", "close", "196")),
+			]
+		)
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx(close_superseded=True))
+		result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch=branch)
+		stdout = io.StringIO()
+		with contextlib.redirect_stdout(stdout):
+			runner._dispatch_discovery(
+				result=result,
+				repo_dir=repo_dir,
+				repository="octo/demo-repo",
+				default_branch="main",
+			)
+		assert result.discovery_outcome == "skipped_dedup"
+		assert "superseded_pr: #196 reason=manifest_already_committed outcome=closed" in result.discovery_diagnostics
+		assert (
+			"VALIDATION_DISCOVERY_SUPERSEDED repository=octo/demo-repo pr=196 "
+			"branch=automation/validate-discovery/38b0e3d9fa3d/node-runtime "
+			"reason=manifest_already_committed outcome=closed"
+		) in stdout.getvalue()
+		assert stub.dedup_calls == ["octo/demo-repo"]
+		executor.assert_consumed()
+
+
+def test_dispatch_discovery_sweep_closes_older_pr_after_opening_replacement() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-sweep-replace-") as td, _StubMemory() as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)  # no manifest committed: seed path
+		branch = "ai/validation-refresh"
+		older_branch = "automation/validate-discovery/38b0e3d9fa3d/node-runtime"
+
+		def on_close(command: list[str], _cwd: Path | None) -> None:
+			assert "https://github.com/octo/demo-repo/pull/99" in command[command.index("--comment") + 1]
+
+		executor = FakeExecutor(
+			[
+				# Sweep listing: one older seed PR, not obsolete yet (no manifest, no replacement).
+				PlannedCall(("gh", "pr", "list"), stdout=_sweep_pr_list_json([(196, older_branch)])),
+				PlannedCall(("git", "rev-parse", "HEAD"), stdout="abc123def4567890\n", check=False),
+				PlannedCall(ISOLATED_CODEX_PREFIX, stdout=VALID_NODE_RUNTIME_MANIFEST, check=False),
+				PlannedCall(("gh", "pr", "list"), stdout="[]\n"),  # open_or_update's own branch lookup
+				PlannedCall(("git", "checkout", "-B")),
+				PlannedCall(("git", "config", "user.name")),
+				PlannedCall(("git", "config", "user.email")),
+				PlannedCall(("git", "add")),
+				PlannedCall(("git", "commit")),
+				PlannedCall(("git", "push", "-u", "origin")),
+				PlannedCall(("gh", "pr", "create"), stdout="https://github.com/octo/demo-repo/pull/99\n"),
+				# Second pass reuses the first listing: no new gh pr list.
+				# #196's SHA is an ancestor of this run's HEAD, so it is older.
+				PlannedCall(("git", "merge-base", "--is-ancestor", "38b0e3d9fa3d"), check=False),
+				PlannedCall(("gh", "pr", "view", "196"), stdout=SWEEP_BOT_VIEW_JSON),
+				PlannedCall(("gh", "pr", "close", "196"), callback=on_close),
+			]
+		)
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx(close_superseded=True))
+		result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch=branch)
+		runner._dispatch_discovery(
+			result=result,
+			repo_dir=repo_dir,
+			repository="octo/demo-repo",
+			default_branch="main",
+		)
+		assert result.discovery_outcome == "pr_opened"
+		assert result.discovery_pr_url == "https://github.com/octo/demo-repo/pull/99"
+		assert "superseded_pr: #196 reason=superseded_by_newer_pr outcome=closed" in result.discovery_diagnostics
+		assert len(stub.appended) == 1
+		assert stub.appended[0]["outcome"] == "success_seeded"
+		gh_pr_lists = [cmd for cmd, _cwd, _check, _env in executor.seen if cmd[:3] == ["gh", "pr", "list"]]
+		assert len(gh_pr_lists) == 2  # sweep listing + the existing per-branch lookup
+		executor.assert_consumed()
+
+
+def test_discovery_prs_at_or_before_head_keeps_newer_and_unresolvable_prs() -> None:
+	# A concurrent run may have opened a PR for a newer HEAD; only PRs whose
+	# branch SHA is this run's HEAD or an ancestor of it are passed on to close.
+	prefix = "automation/validate-discovery"
+	replacement = f"{prefix}/abc123def456/node-runtime"
+
+	def _pr(number: int, branch: str) -> "refresh_runner.discovery_module.OpenDiscoveryPr":
+		return refresh_runner.discovery_module.OpenDiscoveryPr(
+			number=number,
+			url=f"https://github.com/octo/demo-repo/pull/{number}",
+			head_branch=branch,
+			title=SWEEP_SEED_TITLE,
+			bot_only=True,
+		)
+
+	executor = FakeExecutor(
+		[
+			PlannedCall(("git", "merge-base", "--is-ancestor", "38b0e3d9fa3d"), check=False),
+			PlannedCall(("git", "merge-base", "--is-ancestor", "fedcba987654"), returncode=1, check=False),
+		]
+	)
+	runner = _make_runner(executor, "ai/validation-refresh", discovery_ctx=_enabled_discovery_ctx(close_superseded=True))
+	result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch="ai/validation-refresh")
+	stdout = io.StringIO()
+	with contextlib.redirect_stdout(stdout):
+		older = runner._discovery_prs_at_or_before_head(
+			result=result,
+			repository="octo/demo-repo",
+			repo_dir=Path("/nonexistent"),
+			consumer_head_sha="abc123def4567890",
+			open_prs=[
+				_pr(196, f"{prefix}/38b0e3d9fa3d/node-runtime"),
+				_pr(300, f"{prefix}/fedcba987654/node-runtime"),
+				_pr(301, f"{prefix}/--upload-pack=x/node-runtime"),
+				_pr(99, replacement),
+			],
+			replacement_branch=replacement,
+		)
+	assert [pr.number for pr in older] == [196]
+	assert "pr=300 branch=automation/validate-discovery/fedcba987654/node-runtime" in stdout.getvalue()
+	assert "pr=301" in stdout.getvalue() and "outcome=kept_not_older" in stdout.getvalue()
+	assert "superseded_pr: #300 reason=superseded_by_newer_pr outcome=kept_not_older" in result.discovery_diagnostics
+	assert "superseded_pr: #301 reason=superseded_by_newer_pr outcome=kept_not_older" in result.discovery_diagnostics
+	executor.assert_consumed()  # no merge-base for the non-hex branch or the replacement
+
+
+def test_dispatch_discovery_sweep_list_failure_does_not_block_discovery() -> None:
+	with tempfile.TemporaryDirectory(prefix="discovery-sweep-fail-") as td, _StubMemory(
+		dedup_returns=True
+	) as stub:
+		repo_dir = Path(td) / "octo__demo-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		branch = "ai/validation-refresh"
+		executor = FakeExecutor(
+			[PlannedCall(("gh", "pr", "list"), returncode=1, stderr="HTTP 502")]
+		)
+		runner = _make_runner(executor, branch, discovery_ctx=_enabled_discovery_ctx(close_superseded=True))
+		result = refresh_runner.RefreshResult(repository="octo/demo-repo", outcome="error", branch=branch)
+		runner._dispatch_discovery(
+			result=result,
+			repo_dir=repo_dir,
+			repository="octo/demo-repo",
+			default_branch="main",
+		)
+		assert result.discovery_outcome == "skipped_dedup"
+		assert any(d.startswith("superseded_sweep_list_failed:") for d in result.discovery_diagnostics)
+		assert stub.dedup_calls == ["octo/demo-repo"]
+		executor.assert_consumed()
+
+
+def test_build_default_discovery_ctx_reads_close_superseded_env() -> None:
+	saved = os.environ.get("VALIDATION_DISCOVERY_CLOSE_SUPERSEDED")
+	try:
+		os.environ.pop("VALIDATION_DISCOVERY_CLOSE_SUPERSEDED", None)
+		assert refresh_runner._build_default_discovery_ctx(REPO_ROOT).close_superseded is True
+		os.environ["VALIDATION_DISCOVERY_CLOSE_SUPERSEDED"] = "false"
+		assert refresh_runner._build_default_discovery_ctx(REPO_ROOT).close_superseded is False
+	finally:
+		if saved is None:
+			os.environ.pop("VALIDATION_DISCOVERY_CLOSE_SUPERSEDED", None)
+		else:
+			os.environ["VALIDATION_DISCOVERY_CLOSE_SUPERSEDED"] = saved
 
 
 # ---------------------------------------------------------------------------

@@ -132,9 +132,11 @@ def test_python_mongo_flask_invariants_regression_guards() -> None:
 
 		import_audit_text = (output_root / "tests" / "_lib" / "import_audit.py").read_text(encoding="utf-8")
 		import_audit_shell = (output_root / "tests" / "20_import_audit.sh").read_text(encoding="utf-8")
-		assert 'COMPOSE_FILE="${COMPOSE_FILE:-out/docker-compose.test.yml}"' in import_audit_shell
+		assert "_default_compose_file=out/docker-compose.test.yml" in import_audit_shell
+		assert 'COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"' in import_audit_shell
 		assert 'APP_SERVICE="${APP_SERVICE:-app}"' in import_audit_shell
-		assert 'CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-/workspace/out/tests/_lib/import_audit.py}"' in import_audit_shell
+		assert "_default_container_import_audit=/workspace/out/tests/_lib/import_audit.py" in import_audit_shell
+		assert 'CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-${_default_container_import_audit}}"' in import_audit_shell
 		assert 'docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c' in import_audit_shell
 		assert '/workspace/validation/tests/_lib/import_audit.py' not in import_audit_shell
 		assert "printf '%s\\n' \"${audit_output}\" | sed 's/^/# /'" in import_audit_shell
@@ -148,7 +150,8 @@ def test_python_mongo_flask_invariants_regression_guards() -> None:
 		shutdown_py = (output_root / "tests" / "_lib" / "graceful_shutdown.py").read_text(encoding="utf-8")
 		assert "SHUTDOWN_TIMEOUT_SECONDS" in shutdown_shell
 		assert "--log-tail-lines" in shutdown_shell
-		assert 'COMPOSE_FILE="${COMPOSE_FILE:-out/docker-compose.test.yml}"' in shutdown_shell
+		assert "_default_compose_file=out/docker-compose.test.yml" in shutdown_shell
+		assert 'COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"' in shutdown_shell
 		assert 'docker compose -f "${COMPOSE_FILE}" exec -T app' in shutdown_shell
 		assert 'compose_file,' in shutdown_py
 		assert '"--compose-file", default="out/docker-compose.test.yml"' in shutdown_py
@@ -180,9 +183,12 @@ def test_python_mongo_flask_compose_dockerfile_tracks_output_root_name() -> None
 		shutdown_shell = (output_root / "tests" / "30_graceful_shutdown.sh").read_text(encoding="utf-8")
 		shutdown_py = (output_root / "tests" / "_lib" / "graceful_shutdown.py").read_text(encoding="utf-8")
 		assert "dockerfile: custom-output/Dockerfile.app" in compose_text
-		assert 'COMPOSE_FILE="${COMPOSE_FILE:-custom-output/docker-compose.test.yml}"' in import_audit_shell
-		assert 'CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-/workspace/custom-output/tests/_lib/import_audit.py}"' in import_audit_shell
-		assert 'COMPOSE_FILE="${COMPOSE_FILE:-custom-output/docker-compose.test.yml}"' in shutdown_shell
+		assert "_default_compose_file=custom-output/docker-compose.test.yml" in import_audit_shell
+		assert 'COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"' in import_audit_shell
+		assert "_default_container_import_audit=/workspace/custom-output/tests/_lib/import_audit.py" in import_audit_shell
+		assert 'CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-${_default_container_import_audit}}"' in import_audit_shell
+		assert "_default_compose_file=custom-output/docker-compose.test.yml" in shutdown_shell
+		assert 'COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"' in shutdown_shell
 		assert '"--compose-file", default="custom-output/docker-compose.test.yml"' in shutdown_py
 
 

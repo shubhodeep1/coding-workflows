@@ -44,6 +44,10 @@ except ModuleNotFoundError:
 
 REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
+# SHA segment of a discovery PR branch (`<prefix>/<sha>/<type>`). Hex only, so
+# a branch name can never reach `git merge-base` as an option.
+_DISCOVERY_BRANCH_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
 # Per-`codex exec` wall-clock cap (seconds) for the discovery dispatch. This
 # is the unit the aggregate discovery budget (VALIDATION_DISCOVERY_BUDGET_SECS)
 # reasons about: a single repo's discovery can consume at most
@@ -51,6 +55,60 @@ REPO_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # starts a repo's discovery while that much budget remains. Matches the
 # CommandExecutor default so the explicit cap and the budget math agree.
 DISCOVERY_CODEX_CALL_TIMEOUT_SECS = 300
+
+# `gh repo clone` attempts per consumer repo, and the waits between them.
+# A clone failure is an `error` outcome, which fails the runner and with it
+# the release smoke (`orphan-workflows-test`). One transient GitHub answer
+# must not do that: release run 38253656098 (2026-10-12) failed because a
+# single clone got "GraphQL: Something went wrong while executing your
+# query". A failure that persists through every attempt still reports
+# `error`.
+CLONE_ATTEMPTS = 3
+CLONE_RETRY_DELAYS_SECS = (5, 15)
+
+# Wall-clock cap (seconds) for the sandboxed consumer self-test of one repo.
+# `CommandExecutor.run` defaults to 300 s, which a large monorepo's
+# `docker compose build` + tests exceeds (bitsafe.io exits 124). Override with
+# VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS; a missing, non-numeric or
+# non-positive value falls back to the default and a larger value is clamped
+# to the maximum. The maximum is half the job's 60-minute `timeout-minutes`,
+# so the runner's own timeout fires (and its exit-124 diagnostic and run
+# summary are written) before GitHub kills the job.
+SELF_TEST_TIMEOUT_ENV = "VALIDATION_REFRESH_SELF_TEST_TIMEOUT_SECONDS"
+SELF_TEST_TIMEOUT_DEFAULT_SECS = 900
+SELF_TEST_TIMEOUT_MAX_SECS = 1800
+
+# Bounds for the failure text a stage puts into its diagnostic. The text is
+# consumer-controlled and ends up in the Actions log, so it is size-limited
+# and sanitised by `_sanitized_failure_lines`.
+FAILURE_DETAIL_HEAD_LINES = 3
+FAILURE_DETAIL_TAIL_LINES = 20
+FAILURE_DETAIL_LINE_MAX_CHARS = 500
+FAILURE_DETAIL_LOG_TAIL_MAX_CHARS = 1800
+FAILURE_DETAIL_COMPOSE_TAIL_MAX_CHARS = 1200
+FAILURE_DETAIL_MAX_CHARS = 4096
+FAILURE_DETAIL_FILE_READ_BYTES = 65536
+
+# Control-plane credentials the refresh process may hold (the workflow step
+# sets GH_TOKEN from GH_PAT and OPENROUTER_API_KEY). Every pipeline
+# subprocess that works on the untrusted consumer clone (render, lint,
+# sandbox provision, checked-run, cleanup) gets these blanked, so they stay
+# in this process. Discovery's isolated Codex launch is not a pipeline
+# subprocess and keeps OPENROUTER_API_KEY for its host-side broker (#7351).
+REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES = (
+	"GH_TOKEN",
+	"GITHUB_TOKEN",
+	"GH_PAT",
+	"OPENROUTER_API_KEY",
+	"TG_BOT_SECRET",
+	"CHECK_TRIAGE_ISSUES_TOKEN",
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"ANTHROPIC_API_KEY",
+	# validation-refresh.yml grants id-token: write; keep the OIDC request
+	# credentials out of the pipeline subprocesses too.
+	"ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+	"ACTIONS_ID_TOKEN_REQUEST_URL",
+)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -81,6 +139,11 @@ def _env_str(name: str, default: str) -> str:
 	if value is None or not value.strip():
 		return default
 	return value.strip()
+
+
+def _self_test_timeout_secs() -> int:
+	configured = _env_int(SELF_TEST_TIMEOUT_ENV, SELF_TEST_TIMEOUT_DEFAULT_SECS)
+	return min(configured, SELF_TEST_TIMEOUT_MAX_SECS)
 
 
 @dataclass(frozen=True)
@@ -215,6 +278,9 @@ class ValidationRefreshRunner:
 		# gate — e.g. direct `process_repository` calls in tests, or a
 		# non-positive configured budget (explicit unbounded opt-out).
 		self._discovery_deadline: float | None = None
+		# The harness sandbox user and its rootless dockerd are provisioned
+		# once per runner; later repositories reuse them.
+		self._harness_sandbox_provisioned = False
 
 	def run_repositories(self, repositories: list[str], workspace_root: Path) -> list[RefreshResult]:
 		# Establish the aggregate discovery deadline for this cycle so the
@@ -342,6 +408,17 @@ class ValidationRefreshRunner:
 		# does NOT push or open a PR — consumer repos render assets on demand
 		# during their own validation flow. The drift is recorded for monitoring.
 		result.diagnostics.append("validation_assets_drifted_no_push")
+		if not self._validation_assets_tracked(repo_dir):
+			# `changed` only means "working tree not clean after render". With
+			# nothing tracked under validation/ the dirty files (rendered output,
+			# or the bootstrapped manifest stubs) are simply untracked, so this is not drift against committed assets. The
+			# line above (and `drifted=1`) is kept for log compatibility;
+			# this last diagnostic is the one `detail=` shows.
+			result.diagnostics.append(
+				"validation_assets_not_committed: no files under validation/ are tracked on the "
+				"default branch, so the dirty tree is uncommitted rendered or bootstrapped files, "
+				"not drift against committed assets"
+			)
 		result.outcome = "green" if pipeline_green else "red"
 		return result
 
@@ -367,6 +444,26 @@ class ValidationRefreshRunner:
 		return "main", "default_branch_lookup_empty_fallback_main"
 
 	def _clone_repository(self, repository: str, repo_dir: Path) -> None:
+		"""Clone with up to CLONE_ATTEMPTS tries; re-raise the last failure.
+
+		Logs VALIDATION_REFRESH_CLONE_RETRY repository=<r> attempt=<n> max=<m>
+		returncode=<rc> delay_secs=<s> before each retry.
+		"""
+		for attempt in range(1, CLONE_ATTEMPTS + 1):
+			try:
+				self._clone_repository_once(repository, repo_dir)
+				return
+			except CommandFailure as exc:
+				if attempt >= CLONE_ATTEMPTS:
+					raise
+				delay = CLONE_RETRY_DELAYS_SECS[min(attempt - 1, len(CLONE_RETRY_DELAYS_SECS) - 1)]
+				print(
+					f"VALIDATION_REFRESH_CLONE_RETRY repository={repository} attempt={attempt} "
+					f"max={CLONE_ATTEMPTS} returncode={exc.returncode} delay_secs={delay}"
+				)
+				time.sleep(delay)
+
+	def _clone_repository_once(self, repository: str, repo_dir: Path) -> None:
 		if repo_dir.exists():
 			try:
 				shutil.rmtree(repo_dir)
@@ -397,11 +494,10 @@ class ValidationRefreshRunner:
 	def _run_refresh_pipeline(self, repo_dir: Path, manifest_path: Path) -> tuple[bool, list[str]]:
 		diagnostics: list[str] = []
 		pipeline_log_dir = repo_dir.parent / f"{repo_dir.name}__validation_logs"
-		pipeline_env_overrides = {
-			"GH_TOKEN": "",
-			"GITHUB_TOKEN": "",
-			"LOG_DIR": str(pipeline_log_dir),
-		}
+		# Blank every control-plane credential for the pipeline subprocesses;
+		# none of them needs one, and they run against the untrusted clone.
+		pipeline_env_overrides = {name: "" for name in REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES}
+		pipeline_env_overrides["LOG_DIR"] = str(pipeline_log_dir)
 
 		render_command = [
 			"python3",
@@ -420,15 +516,45 @@ class ValidationRefreshRunner:
 			str(self.source_root / "scripts" / "validation_lint.py"),
 			str(repo_dir / "validation"),
 		]
+		# Consumer validation tests are untrusted and this process holds
+		# GH_TOKEN / OPENROUTER_API_KEY, which a same-user test could read
+		# from /proc. The self-test therefore runs only through
+		# scripts/validation_harness_sandbox.sh (separate user, rootless
+		# Docker, allowlisted env, selfcheck against this pid). Any sandbox
+		# failure is a self_test failure; there is no host fallback. The
+		# runner-UID helper calls (provision, checked-run, cleanup) also get
+		# the blanked pipeline_env_overrides, so no refresh credential leaves
+		# this process (#7351).
+		sandbox_script = str(self.source_root / "scripts" / "validation_harness_sandbox.sh")
 		self_test_command = [
 			"bash",
+			sandbox_script,
+			"checked-run",
+			str(os.getpid()),
 			str(self.source_root / "scripts" / "validate_driver.sh"),
 		]
+		self_test_timeout_secs = _self_test_timeout_secs()
+		self_test_env_overrides = {
+			**pipeline_env_overrides,
+			# Inside the sandbox copy the driver writes its default
+			# validation/logs; the helper copies them back to the old
+			# out-of-clone location so drift detection is unaffected.
+			"LOG_DIR": "validation/logs",
+			"VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST": str(pipeline_log_dir),
+		}
+
+		# Same manifest shell-safety gate as validate_process.sh's
+		# run_template_validation_harness_renderer: this path renders the
+		# consumer manifest and runs the tests without going through it
+		# (finding validation-manifest-shell-injection-fallback).
+		safety_violations = manifest_shell_safety_violations(manifest_path)
+		if safety_violations:
+			diagnostics.append("manifest_shell_safety_failed: " + "; ".join(safety_violations[:3]))
+			return False, diagnostics
 
 		for stage, command in (
 			("render", render_command),
 			("lint", lint_command),
-			("self_test", self_test_command),
 		):
 			try:
 				self.executor.run(command, cwd=repo_dir, env_overrides=pipeline_env_overrides)
@@ -436,7 +562,64 @@ class ValidationRefreshRunner:
 				diagnostics.append(_format_command_failure(stage, exc))
 				return False, diagnostics
 
+		try:
+			if not self._harness_sandbox_provisioned:
+				self.executor.run(
+					["bash", sandbox_script, "provision"],
+					cwd=repo_dir,
+					env_overrides=pipeline_env_overrides,
+					timeout=600,
+				)
+				self._harness_sandbox_provisioned = True
+			self.executor.run(
+				self_test_command,
+				cwd=repo_dir,
+				env_overrides=self_test_env_overrides,
+				timeout=self_test_timeout_secs,
+			)
+		except CommandFailure as exc:
+			diagnostics.append(
+				_format_command_failure(
+					"self_test",
+					exc,
+					compose_log_path=pipeline_log_dir / "compose.log",
+					timeout_secs=self_test_timeout_secs,
+				)
+			)
+			# A timeout kills only the helper; stop the sandbox user's harness.
+			try:
+				self.executor.run(
+					["bash", sandbox_script, "cleanup"],
+					cwd=repo_dir,
+					check=False,
+					env_overrides=pipeline_env_overrides,
+				)
+			except CommandFailure:
+				pass
+			return False, diagnostics
+
 		return True, diagnostics
+
+	def _validation_assets_tracked(self, repo_dir: Path) -> bool:
+		"""True unless git proves nothing under validation/ is tracked.
+
+		A failed lookup counts as tracked, so the not-committed diagnostic is
+		only emitted on positive evidence.
+		"""
+		try:
+			proc = self.executor.run(
+				["git", "ls-files", "--", "validation"],
+				cwd=repo_dir,
+				check=False,
+				# A local index read; fail fast instead of the 300 s default.
+				timeout=30,
+			)
+		except CommandFailure:
+			# Timeout or missing binary raise even with check=False.
+			return True
+		if proc.returncode != 0:
+			return True
+		return bool((proc.stdout or "").strip())
 
 	def _repository_has_changes(self, repo_dir: Path) -> bool:
 		proc = self.executor.run(
@@ -471,6 +654,29 @@ class ValidationRefreshRunner:
 			print(f"VALIDATION_DISCOVERY_SKIPPED_DISABLED repository={repository}")
 			return
 
+		committed_manifest_text = self._read_committed_manifest_yaml(repo_dir)
+
+		# Close obsolete discovery PRs before the dedup and budget gates, so a
+		# seed PR left open after a manifest landed is closed on the next cycle
+		# instead of after the dedup window (btc_sweeper#196 conflicted with the
+		# seed merged by #235 and blocked review/autofix on a host-only path).
+		remaining_discovery_prs = self._sweep_superseded_discovery_prs(
+			result=result,
+			repository=repository,
+			default_branch=default_branch,
+			committed_manifest_text=committed_manifest_text,
+		)
+
+		# Dedup runs before the budget gate: a repo with a recent successful
+		# discovery is `skipped_dedup` whether or not budget remains, so late repos
+		# no longer report `skipped_budget` for a skip they would have had anyway.
+		# Q5:A dedup — skip when a successful discovery is recorded within window.
+		if _dedup_skip(repository=repository, repo_root=self.source_root, dedup_days=ctx.dedup_days):
+			result.discovery_outcome = "skipped_dedup"
+			result.discovery_diagnostics.append("dedup_window_active")
+			print(f"VALIDATION_DISCOVERY_SKIPPED_DEDUP repository={repository}")
+			return
+
 		# Aggregate wall-clock budget gate (VALIDATION_DISCOVERY_BUDGET_SECS).
 		# Only start this repo's codex discovery while enough budget remains to
 		# cover its worst case (`codex_attempts * DISCOVERY_CODEX_CALL_TIMEOUT_SECS`),
@@ -493,15 +699,7 @@ class ValidationRefreshRunner:
 				)
 				return
 
-		# Q5:A dedup — skip when a successful discovery is recorded within window.
-		if _dedup_skip(repository=repository, repo_root=self.source_root, dedup_days=ctx.dedup_days):
-			result.discovery_outcome = "skipped_dedup"
-			result.discovery_diagnostics.append("dedup_window_active")
-			print(f"VALIDATION_DISCOVERY_SKIPPED_DEDUP repository={repository}")
-			return
-
 		consumer_head_sha = self._read_default_branch_head_sha(repo_dir)
-		committed_manifest_text = self._read_committed_manifest_yaml(repo_dir)
 
 		print(
 			"VALIDATION_DISCOVERY_STARTED "
@@ -591,7 +789,7 @@ class ValidationRefreshRunner:
 							entry_script_text = None
 
 					pr_title = (
-						f"chore(validation): seed .ai/validate.yml (type: {discovered_type or 'unknown'})"
+						f"{discovery_module.SEED_PR_TITLE_PREFIX} (type: {discovered_type or 'unknown'})"
 						if is_seed
 						else f"chore(validation): discovery proposes type change "
 						f"({committed_type or 'unknown'} → {discovered_type or 'unknown'})"
@@ -658,6 +856,34 @@ class ValidationRefreshRunner:
 								"VALIDATION_DISCOVERY_PR_OPENED "
 								f"repository={repository} pr_url={pr_url} kind={'seed' if is_seed else 'disagree'}"
 							)
+						# The opened or reused PR replaces every older discovery
+						# PR on this consumer. Reuses the earlier listing (§15).
+						# Only PRs opened for this run's consumer HEAD or an
+						# ancestor of it count as older: a concurrent run with
+						# another branch_name may already have opened a PR for a
+						# newer HEAD, which this run must not close.
+						older_discovery_prs = (
+							self._discovery_prs_at_or_before_head(
+								result=result,
+								repository=repository,
+								repo_dir=repo_dir,
+								consumer_head_sha=consumer_head_sha,
+								open_prs=remaining_discovery_prs,
+								replacement_branch=pr_branch,
+							)
+							if remaining_discovery_prs
+							else []
+						)
+						if older_discovery_prs:
+							self._sweep_superseded_discovery_prs(
+								result=result,
+								repository=repository,
+								default_branch=default_branch,
+								committed_manifest_text=committed_manifest_text,
+								open_prs=older_discovery_prs,
+								replacement_branch=pr_branch,
+								replacement_url=pr_url,
+							)
 
 		# Record outcome on the ai-memory branch (fail-open). Failed and dry-run
 		# entries are kept for observability; the dedup gate counts only
@@ -675,6 +901,148 @@ class ValidationRefreshRunner:
 			codex_attempts_used=codex_attempts_used or None,
 			failure_reason=failure_reason,
 		)
+
+	def _sweep_superseded_discovery_prs(
+		self,
+		*,
+		result: RefreshResult,
+		repository: str,
+		default_branch: str,
+		committed_manifest_text: str | None,
+		open_prs: "list[discovery_module.OpenDiscoveryPr] | None" = None,
+		replacement_branch: str | None = None,
+		replacement_url: str | None = None,
+	) -> "list[discovery_module.OpenDiscoveryPr] | None":
+		"""Close obsolete discovery PRs on one consumer; never blocks discovery.
+
+		With `open_prs=None` it lists them first (one `gh pr list`); a caller
+		that already holds the list passes it in. Returns the discovery PRs
+		still open afterwards, or None when the sweep is off or the listing
+		failed (the caller then skips its second pass).
+		"""
+
+		ctx = self.discovery_ctx
+		if ctx is None or not ctx.close_superseded:
+			return None
+		try:
+			if open_prs is None:
+				open_prs, list_error = discovery_module.list_open_discovery_prs(
+					consumer_slug=repository,
+					base_branch=default_branch,
+					pr_branch_prefix=ctx.pr_branch_prefix,
+					executor=self.executor,
+				)
+				if list_error:
+					result.discovery_diagnostics.append(f"superseded_sweep_list_failed: {list_error}")
+					print(
+						"VALIDATION_DISCOVERY_SUPERSEDED "
+						f"repository={repository} outcome=list_failed "
+						f"detail={json.dumps(_compact_log_value(list_error))}"
+					)
+					return None
+			outcomes = discovery_module.close_superseded_discovery_prs(
+				consumer_slug=repository,
+				base_branch=default_branch,
+				pr_branch_prefix=ctx.pr_branch_prefix,
+				open_prs=open_prs,
+				committed_type=discovery_module.manifest_type_from_yaml(committed_manifest_text),
+				manifest_committed=committed_manifest_text is not None,
+				replacement_branch=replacement_branch,
+				replacement_url=replacement_url,
+				dry_run=ctx.dry_run,
+				executor=self.executor,
+			)
+		except Exception as exc:  # fail open: the sweep must never block discovery (Q4:A)
+			result.discovery_diagnostics.append(f"superseded_sweep_error: {exc!r}")
+			print(
+				"VALIDATION_DISCOVERY_SUPERSEDED "
+				f"repository={repository} outcome=error "
+				f"detail={json.dumps(_compact_log_value(repr(exc)))}"
+			)
+			return None
+
+		closed_numbers: set[int] = set()
+		for outcome in outcomes:
+			parts = [
+				"VALIDATION_DISCOVERY_SUPERSEDED",
+				f"repository={repository}",
+				f"pr={outcome.number}",
+				f"branch={outcome.head_branch}",
+				f"reason={outcome.reason}",
+				f"outcome={outcome.outcome}",
+			]
+			if replacement_url:
+				parts.append(f"replacement={json.dumps(replacement_url)}")
+			if outcome.detail:
+				parts.append(f"detail={json.dumps(_compact_log_value(outcome.detail))}")
+			print(" ".join(parts))
+			result.discovery_diagnostics.append(
+				f"superseded_pr: #{outcome.number} reason={outcome.reason} outcome={outcome.outcome}"
+			)
+			# A PR kept for human commits stays open but is dropped from the
+			# returned list, so the post-open pass does not re-check it.
+			if outcome.outcome in ("closed", "kept_human_commits"):
+				closed_numbers.add(outcome.number)
+		return [pr for pr in open_prs if pr.number not in closed_numbers]
+
+	def _discovery_prs_at_or_before_head(
+		self,
+		*,
+		result: RefreshResult,
+		repository: str,
+		repo_dir: Path,
+		consumer_head_sha: str | None,
+		open_prs: "list[discovery_module.OpenDiscoveryPr]",
+		replacement_branch: str | None,
+	) -> "list[discovery_module.OpenDiscoveryPr]":
+		"""Return the discovery PRs whose branch SHA is the consumer HEAD or an ancestor of it.
+
+		The branch is `<prefix>/<sha>/<type>`. A PR whose SHA is newer, not in
+		the clone, or not a hex SHA is kept open and logged as `kept_not_older`.
+		The replacement branch itself is dropped. Cost: one local
+		`git merge-base --is-ancestor` per PR, no GitHub API call.
+		"""
+
+		ctx = self.discovery_ctx
+		prefix = (
+			discovery_module._slugify_for_branch_prefix(ctx.pr_branch_prefix) + "/"
+			if ctx is not None
+			else ""
+		)
+		older: "list[discovery_module.OpenDiscoveryPr]" = []
+		for pr in open_prs:
+			if pr.head_branch == replacement_branch:
+				continue
+			parts = (
+				pr.head_branch[len(prefix):].split("/")
+				if prefix and pr.head_branch.startswith(prefix)
+				else []
+			)
+			pr_sha = parts[0] if len(parts) == 2 else ""
+			is_older = False
+			if consumer_head_sha and _DISCOVERY_BRANCH_SHA_RE.match(pr_sha):
+				try:
+					proc = self.executor.run(
+						["git", "merge-base", "--is-ancestor", pr_sha, consumer_head_sha],
+						cwd=repo_dir,
+						check=False,
+						timeout=30,
+					)
+					is_older = proc.returncode == 0
+				except CommandFailure:
+					is_older = False
+			if is_older:
+				older.append(pr)
+				continue
+			print(
+				"VALIDATION_DISCOVERY_SUPERSEDED "
+				f"repository={repository} pr={pr.number} branch={pr.head_branch} "
+				"reason=superseded_by_newer_pr outcome=kept_not_older"
+			)
+			result.discovery_diagnostics.append(
+				f"superseded_pr: #{pr.number} reason=superseded_by_newer_pr outcome=kept_not_older"
+			)
+		return older
 
 	def _read_default_branch_head_sha(self, repo_dir: Path) -> str | None:
 		try:
@@ -912,6 +1280,7 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 	- VALIDATION_DISCOVERY_PR_LABEL           (default: automation:validate-bootstrap)
 	- VALIDATION_DISCOVERY_DRY_RUN            (default: false)
 	- VALIDATION_DISCOVERY_BUDGET_SECS        (default: 2100)
+	- VALIDATION_DISCOVERY_CLOSE_SUPERSEDED   (default: true)
 	"""
 
 	return discovery_module.DiscoveryRunContext(
@@ -933,6 +1302,7 @@ def _build_default_discovery_ctx(source_root: Path) -> "discovery_module.Discove
 		discovery_budget_secs=_env_int("VALIDATION_DISCOVERY_BUDGET_SECS", 2100, minimum=-sys.maxsize),
 		enabled=_env_bool("VALIDATION_DISCOVERY_ENABLED", True),
 		dry_run=_env_bool("VALIDATION_DISCOVERY_DRY_RUN", False),
+		close_superseded=_env_bool("VALIDATION_DISCOVERY_CLOSE_SUPERSEDED", True),
 	)
 
 
@@ -1071,15 +1441,279 @@ def _append_discovery_memory(
 			pass
 
 
-def _format_command_failure(stage: str, failure: CommandFailure) -> str:
-	stderr = (failure.stderr or "").strip()
-	stdout = (failure.stdout or "").strip()
-	if stderr:
-		detail = " | ".join(line.strip() for line in stderr.splitlines()[:3] if line.strip())
-	elif stdout:
-		detail = " | ".join(line.strip() for line in stdout.splitlines()[:3] if line.strip())
-	else:
-		detail = "no_output"
+MANIFEST_SHELL_SAFETY_MAX_BYTES = 2 * 1024 * 1024
+MANIFEST_SHELL_SAFETY_MAX_DEPTH = 32
+# Keep in step with the gate in scripts/validate_process.sh
+# (run_template_validation_harness_renderer).
+MANIFEST_SHELL_SAFETY_EXEMPT_KEYS = frozenset(
+	{"custom_tests", "skip_tests", "env_overrides", "health_check", "services", "port"}
+)
+
+
+def _manifest_shell_safety_pointer(parts: list[Any]) -> str:
+	if not parts:
+		return "$"
+	text = "/" + "/".join(str(part).replace("~", "~0").replace("/", "~1") for part in parts)
+	text = "".join(ch if ch.isprintable() and ch not in "\"'$`\\" else "?" for ch in text)
+	return text if len(text) <= 120 else text[:117] + "..."
+
+
+def _manifest_shell_unsafe_classes(text: str) -> list[str]:
+	found = []
+	if "$" in text:
+		found.append("dollar")
+	if "`" in text:
+		found.append("backtick")
+	if '"' in text or "'" in text:
+		found.append("quote")
+	if "\\" in text:
+		found.append("backslash")
+	if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
+		found.append("control")
+	return found
+
+
+def manifest_shell_safety_violations(manifest_path: Path) -> list[str]:
+	"""Return sanitized violations for shell-unsafe `.ai/validate.yml` values.
+
+	The renderer writes manifest values unescaped into validation test scripts
+	that validate_driver.sh runs with bash, so values outside the exempt keys
+	must not hold quotes, `$`, backticks, backslashes, control characters or
+	non-scalar YAML types. Messages name a sanitized pointer, never the value.
+	Fails closed when the manifest cannot be read or PyYAML is unavailable;
+	parse errors and non-mapping roots are left to the renderer.
+	"""
+	try:
+		import yaml
+	except ImportError:
+		return ["$: PyYAML unavailable; manifest shell-safety check not run"]
+	try:
+		with open(manifest_path, "rb") as handle:
+			raw = handle.read(MANIFEST_SHELL_SAFETY_MAX_BYTES + 1)
+	except OSError as exc:
+		return [f"$: manifest unreadable ({type(exc).__name__})"]
+	if len(raw) > MANIFEST_SHELL_SAFETY_MAX_BYTES:
+		return [f"$: manifest exceeds {MANIFEST_SHELL_SAFETY_MAX_BYTES} bytes"]
+	try:
+		manifest = yaml.safe_load(raw.decode("utf-8"))
+	except (UnicodeDecodeError, yaml.YAMLError):
+		return []
+	except RecursionError:
+		return ["$: manifest nesting too deep"]
+	if not isinstance(manifest, dict):
+		return []
+	stack: list[tuple[list[Any], Any]] = []
+	for key in sorted(manifest, key=str, reverse=True):
+		if key == "slots" or key not in MANIFEST_SHELL_SAFETY_EXEMPT_KEYS:
+			stack.append(([key], manifest[key]))
+	violations: list[str] = []
+	seen_containers: set[int] = set()
+	while stack:
+		parts, value = stack.pop()
+		if isinstance(value, (dict, list)):
+			# Aliases can make a container recursive or shared; check each once.
+			if id(value) in seen_containers:
+				continue
+			seen_containers.add(id(value))
+			if len(parts) > MANIFEST_SHELL_SAFETY_MAX_DEPTH:
+				violations.append(
+					f"{_manifest_shell_safety_pointer(parts)}: nesting exceeds {MANIFEST_SHELL_SAFETY_MAX_DEPTH} levels"
+				)
+				continue
+		if isinstance(value, str):
+			classes = _manifest_shell_unsafe_classes(value)
+			if classes:
+				violations.append(
+					f"{_manifest_shell_safety_pointer(parts)}: contains shell-unsafe character class {','.join(classes)}"
+				)
+		elif isinstance(value, dict):
+			for key in sorted(value, key=str, reverse=True):
+				stack.append((parts + [key], value[key]))
+		elif isinstance(value, list):
+			for index in range(len(value) - 1, -1, -1):
+				stack.append((parts + [index], value[index]))
+		elif value is None or isinstance(value, (bool, int, float)):
+			continue
+		else:
+			violations.append(
+				f"{_manifest_shell_safety_pointer(parts)}: contains unsupported value type {type(value).__name__}"
+			)
+	return violations
+
+
+# Terminal escape sequences (OSC, CSI, two-character) and the C0/C1 control
+# characters other than tab and newline. Carriage returns are turned into
+# newlines before this runs.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-_]")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# The sandbox helper's success lines (`... selfcheck ok`, `... run ok staged`)
+# always lead stderr and would fill the head-line cap. Failure lines
+# (`outcome=fail reason=...`) and the provision probe lines are kept.
+_SANDBOX_OK_LINE_RE = re.compile(r"^VALIDATION_HARNESS_SANDBOX\s+phase=\S+\s+outcome=ok\b")
+
+
+def _credential_values_to_redact() -> list[str]:
+	values = {
+		os.environ.get(name, "").strip() for name in REFRESH_PIPELINE_CREDENTIAL_ENV_NAMES
+	}
+	# Very short values would also redact ordinary words.
+	return sorted((value for value in values if len(value) >= 8), key=len, reverse=True)
+
+
+def _sanitized_failure_lines(text: str | None) -> list[str]:
+	"""Return the non-empty lines of consumer-controlled `text`, made log-safe.
+
+	The text comes from the untrusted consumer clone and is printed into the
+	Actions log, so: terminal escapes and control characters are removed, the
+	value of every refresh credential is redacted, whitespace is collapsed,
+	each line is capped at FAILURE_DETAIL_LINE_MAX_CHARS, and a line that
+	starts with `::` or `##[` (a workflow command such as `::set-env` or
+	`::add-mask::`) is prefixed so the runner no longer parses it.
+	"""
+	if not text:
+		return []
+	cleaned = _ANSI_ESCAPE_RE.sub("", text)
+	cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+	cleaned = _CONTROL_CHARS_RE.sub("", cleaned)
+	for secret in _credential_values_to_redact():
+		cleaned = cleaned.replace(secret, "[redacted]")
+	lines: list[str] = []
+	for raw_line in cleaned.split("\n"):
+		line = " ".join(raw_line.split())
+		if not line:
+			continue
+		if line.startswith("::") or line.startswith("##["):
+			line = "[workflow-command-neutralised] " + line
+		if len(line) > FAILURE_DETAIL_LINE_MAX_CHARS:
+			line = line[: FAILURE_DETAIL_LINE_MAX_CHARS - 3] + "..."
+		lines.append(line)
+	return lines
+
+
+def _tail_lines_text(lines: list[str], *, max_chars: int) -> str:
+	"""Join the last FAILURE_DETAIL_TAIL_LINES of `lines` within `max_chars`.
+
+	The newest lines win when the budget is short.
+	"""
+	picked: list[str] = []
+	used = 0
+	for line in reversed(lines[-FAILURE_DETAIL_TAIL_LINES:]):
+		cost = len(line) + 4
+		if picked and used + cost > max_chars:
+			break
+		picked.append(line)
+		used += cost
+	return " // ".join(reversed(picked))
+
+
+def _read_log_tail(path: Path | None) -> str:
+	"""Read at most FAILURE_DETAIL_FILE_READ_BYTES from the end of a log file.
+
+	Missing, unreadable and symlinked paths give "" (the file was written by
+	the sandbox copy-back, but it is still consumer-influenced).
+	"""
+	if path is None:
+		return ""
+	try:
+		if path.is_symlink() or not path.is_file():
+			return ""
+		with path.open("rb") as handle:
+			size = handle.seek(0, os.SEEK_END)
+			handle.seek(max(0, size - FAILURE_DETAIL_FILE_READ_BYTES))
+			return handle.read().decode("utf-8", errors="replace")
+	except OSError:
+		return ""
+
+
+def _parse_driver_result(stdout: str | None) -> dict[str, Any] | None:
+	"""Return the validation driver's result object from its stdout, if any.
+
+	The driver prints one JSON object (`result`, `phase`, `failures[]` with
+	`test` / `error` / `log_tail`). The last line that parses to an object
+	wins; absent or garbled output gives None.
+	"""
+	if not stdout:
+		return None
+	for raw_line in reversed(stdout.splitlines()):
+		candidate = raw_line.strip()
+		if not candidate.startswith("{") or len(candidate) > 1_000_000:
+			continue
+		try:
+			parsed = json.loads(candidate)
+		except ValueError:
+			continue
+		if isinstance(parsed, dict):
+			return parsed
+	return None
+
+
+def _driver_result_detail_parts(driver: dict[str, Any]) -> list[str]:
+	parts: list[str] = []
+	phase = driver.get("phase")
+	if isinstance(phase, str):
+		phase_lines = _sanitized_failure_lines(phase)
+		if phase_lines:
+			parts.append(f"phase={phase_lines[0]}")
+	failures = driver.get("failures")
+	first = failures[0] if isinstance(failures, list) and failures else None
+	if not isinstance(first, dict):
+		return parts
+	for key in ("test", "error"):
+		value = first.get(key)
+		if isinstance(value, str):
+			value_lines = _sanitized_failure_lines(value)
+			if value_lines:
+				parts.append(f"{key}={' // '.join(value_lines[:FAILURE_DETAIL_HEAD_LINES])}")
+	log_tail = first.get("log_tail")
+	if isinstance(log_tail, str):
+		tail_text = _tail_lines_text(
+			_sanitized_failure_lines(log_tail), max_chars=FAILURE_DETAIL_LOG_TAIL_MAX_CHARS
+		)
+		if tail_text:
+			parts.append(f"log_tail={tail_text}")
+	return parts
+
+
+def _format_command_failure(
+	stage: str,
+	failure: CommandFailure,
+	*,
+	compose_log_path: Path | None = None,
+	timeout_secs: int | None = None,
+) -> str:
+	"""One-line, log-safe description of a failed pipeline stage.
+
+	Head lines come from stderr minus the sandbox helper's success lines,
+	else from stdout. For the `self_test` stage, the driver's result JSON
+	(phase, first failure's test / error / log_tail) and the tail of the
+	copied-back compose log (`compose_log_path`) are appended, because those
+	hold the real cause once the sandbox status lines own stderr.
+	"""
+	head_lines = [
+		line
+		for line in _sanitized_failure_lines(failure.stderr)
+		if not _SANDBOX_OK_LINE_RE.match(line)
+	]
+	driver = _parse_driver_result(failure.stdout) if stage == "self_test" else None
+	if not head_lines and driver is None:
+		head_lines = _sanitized_failure_lines(failure.stdout)
+	parts: list[str] = []
+	if head_lines:
+		parts.append(" | ".join(head_lines[:FAILURE_DETAIL_HEAD_LINES]))
+	if failure.returncode == 124 and timeout_secs is not None:
+		parts.append(f"timeout_secs={timeout_secs}")
+	if stage == "self_test":
+		if driver is not None:
+			parts.extend(_driver_result_detail_parts(driver))
+		compose_text = _tail_lines_text(
+			_sanitized_failure_lines(_read_log_tail(compose_log_path)),
+			max_chars=FAILURE_DETAIL_COMPOSE_TAIL_MAX_CHARS,
+		)
+		if compose_text:
+			parts.append(f"compose_log_tail={compose_text}")
+	detail = " | ".join(parts) if parts else "no_output"
+	if len(detail) > FAILURE_DETAIL_MAX_CHARS:
+		detail = detail[: FAILURE_DETAIL_MAX_CHARS - 3] + "..."
 	return f"{stage}_failed(exit={failure.returncode}): {detail}"
 
 

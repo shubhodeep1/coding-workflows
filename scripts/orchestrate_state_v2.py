@@ -26,6 +26,15 @@ extract
     comment extractor.  --require-latest refuses to fall back to a prior
     manifest when the newest V2 write is incomplete or malformed.
 
+prune-plan
+    Read the same comments array and print which older V2 state comments
+    can be deleted: every V2 comment by --login older than the newest
+    complete chain, except the newest --keep-recent complete chains and
+    the newest complete chain whose status is not one of --keep-not-status
+    (the state integration-failure recovery reads).  Incomplete chains
+    newer than the newest complete one are kept (a write may be in flight).
+    Prints {"delete": [ids oldest first], "chains": n, "kept": n}.
+
 Framing
 -------
 Each chunk is posted as a single GitHub comment whose body looks like:
@@ -227,6 +236,10 @@ def cmd_extract(args: argparse.Namespace) -> int:
 	if not isinstance(comments, list):
 		print("comments json is not a JSON array", file=sys.stderr)
 		return 2
+	skip_statuses = set(args.skip_status or [])
+	if skip_statuses and args.require_latest:
+		print("--skip-status cannot be combined with --require-latest", file=sys.stderr)
+		return 2
 	# GitHub returns comments oldest-first.  Reverse to walk newest-first
 	# so the first complete chain we encounter is the most recent write.
 	# Key by (manifest, total), not manifest alone: the same raw state bytes
@@ -289,6 +302,20 @@ def cmd_extract(args: argparse.Namespace) -> int:
 				active_chain_by_key.pop(chain_key, None)
 				continue
 			digest = hashlib.sha256(decoded).hexdigest()
+			if digest == manifest and skip_statuses:
+				# --skip-status: keep walking older writes past a state whose
+				# top-level "status" is one of the skipped values (or that is
+				# not a JSON object), e.g. the last state before a failure.
+				try:
+					decoded_state = json.loads(decoded)
+				except (ValueError, UnicodeDecodeError):
+					decoded_state = None
+				# A non-string status (list, dict, ...) is unhashable and never a
+				# usable prior status, so it is skipped like a listed one.
+				decoded_status = decoded_state.get("status") if isinstance(decoded_state, dict) else None
+				if not isinstance(decoded_status, str) or decoded_status in skip_statuses:
+					active_chain_by_key.pop(chain_key, None)
+					continue
 			if digest == manifest:
 				# Write raw bytes through the buffer so non-UTF-8
 				# state bytes round-trip unchanged.  In practice the
@@ -303,6 +330,86 @@ def cmd_extract(args: argparse.Namespace) -> int:
 	# No eligible complete chain. General readers may fall back to V1;
 	# --require-latest callers must fail closed instead.
 	return 1
+
+
+V2_COMMENT_PREFIX = "<!-- ORCHESTRATOR_STATE_V2 part="
+
+
+def _complete_v2_chains(entries: list[tuple[int, str]]) -> list[dict[str, Any]]:
+	"""Complete chains newest first, as `cmd_extract` walks them.
+
+	`entries` is (comment_id, body) oldest first. Each chain is
+	{"ids": [...], "status": <top-level status or None>}.
+	"""
+	chains: list[dict[str, Any]] = []
+	active: dict[tuple[str, int], dict[str, Any]] = {}
+	for comment_id, body in reversed(entries):
+		parsed = _try_parse_v2_chunk(body)
+		if parsed is None:
+			continue
+		part, total, manifest, chunk = parsed
+		key = (manifest, total)
+		candidate = active.get(key)
+		if part == total:
+			candidate = {"next_part": total - 1, "parts": {part: chunk}, "ids": [comment_id]}
+			active[key] = candidate
+		elif candidate is None or part != candidate["next_part"]:
+			continue
+		else:
+			candidate["parts"][part] = chunk
+			candidate["ids"].append(comment_id)
+			candidate["next_part"] = part - 1
+		if candidate["next_part"] != 0:
+			continue
+		active.pop(key, None)
+		compact = re.sub(r"\s+", "", "".join(candidate["parts"][n] for n in range(1, total + 1)))
+		try:
+			decoded = base64.b64decode(compact, validate=True)
+		except (binascii.Error, ValueError):
+			continue
+		if hashlib.sha256(decoded).hexdigest() != manifest:
+			continue
+		try:
+			state = json.loads(decoded)
+		except (ValueError, UnicodeDecodeError):
+			state = None
+		status = state.get("status") if isinstance(state, dict) else None
+		chains.append({"ids": candidate["ids"], "status": status if isinstance(status, str) else None})
+	return chains
+
+
+def cmd_prune_plan(args: argparse.Namespace) -> int:
+	try:
+		comments = json.loads(Path(args.comments_json).read_text(encoding="utf-8"))
+	except (OSError, ValueError, UnicodeDecodeError) as e:
+		print(f"comments json unreadable: {e}", file=sys.stderr)
+		return 2
+	if not isinstance(comments, list) or args.keep_recent < 1:
+		print("comments json is not a JSON array, or --keep-recent < 1", file=sys.stderr)
+		return 2
+	entries: list[tuple[int, str]] = []
+	for comment in comments:
+		if not isinstance(comment, dict) or ((comment.get("user") or {}).get("login") or "") != args.login:
+			continue
+		comment_id, body = comment.get("id"), comment.get("body") or ""
+		# Only the poller's own state comments: never a comment that merely quotes a frame.
+		if isinstance(comment_id, int) and not isinstance(comment_id, bool) and comment_id > 0 and body.startswith(V2_COMMENT_PREFIX):
+			entries.append((comment_id, body))
+	chains = _complete_v2_chains(entries)
+	if not chains:
+		print(json.dumps({"delete": [], "chains": 0, "kept": 0}))
+		return 0
+	kept = chains[: args.keep_recent]
+	skip = set(args.keep_not_status or [])
+	if skip:
+		usable = next((chain for chain in chains if chain["status"] is not None and chain["status"] not in skip), None)
+		if usable is not None and usable not in kept:
+			kept.append(usable)
+	kept_ids = {comment_id for chain in kept for comment_id in chain["ids"]}
+	boundary = min(chains[0]["ids"])
+	delete = sorted(comment_id for comment_id, _ in entries if comment_id < boundary and comment_id not in kept_ids)
+	print(json.dumps({"delete": delete, "chains": len(chains), "kept": len(kept)}))
+	return 0
 
 
 def main() -> int:
@@ -322,7 +429,17 @@ def main() -> int:
 	)
 	p_extract.add_argument("--comments-json", required=True)
 	p_extract.add_argument("--require-latest", action="store_true", help="Reject older state if the newest V2 write is incomplete")
+	p_extract.add_argument("--skip-status", action="append", help="Skip states whose top-level status is this value and return the newest older one (repeatable)")
 	p_extract.set_defaults(func=cmd_extract)
+	p_prune = sub.add_parser(
+		"prune-plan",
+		help="List older V2 state comments that can be deleted",
+	)
+	p_prune.add_argument("--comments-json", required=True)
+	p_prune.add_argument("--login", required=True, help="Only this author's state comments are considered")
+	p_prune.add_argument("--keep-recent", type=int, default=1, help="Newest complete chains to keep")
+	p_prune.add_argument("--keep-not-status", action="append", help="Also keep the newest complete chain whose status is not this value (repeatable)")
+	p_prune.set_defaults(func=cmd_prune_plan)
 	args = p.parse_args()
 	return args.func(args)
 

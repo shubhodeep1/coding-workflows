@@ -56,11 +56,42 @@ DEFAULT_WORKFLOWS = [
     "orchestrate_clarify_respond.yml",
 ]
 
-# Multi-line "tokens used\n<digits>" emitted by Codex; we capture the number
-# on the line following "tokens used" (case-insensitive). The single-line
-# variant "tokens used 123,456" is also handled.
+# Codex CLI usage, line-anchored. Two forms count (case-insensitive):
+#   1. a line that is exactly "tokens used", followed by a line that is only
+#      the number ("tokens used\n12,345");
+#   2. a single line "tokens used 12,345" with nothing else on it.
+# Each line may start with an optional UTF-8 BOM, the `<job>\t<step>\t` fields
+# `gh run view --log` adds, ANSI SGR escapes and a GitHub Actions timestamp.
+# The old unanchored pattern also matched "tokens used" inside prompt and
+# diff text echoed into logs, which inflated the collector total to 7.945M
+# Codex tokens (analysis/workflow-optimization-2026-09-22.md).
+_CODEX_USAGE_ANSI_RE_SRC = r"(?:\x1b\[[0-9;]*m)*"
+_CODEX_USAGE_LINE_PREFIX_RE_SRC = (
+    r"^\ufeff?(?:[^\t\n]*\t[^\t\n]*\t)?"
+    + _CODEX_USAGE_ANSI_RE_SRC
+    + r"(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z[ \t]+)?"
+    + _CODEX_USAGE_ANSI_RE_SRC
+)
+_CODEX_USAGE_LINE_END_RE_SRC = r"[ \t]*" + _CODEX_USAGE_ANSI_RE_SRC + r"[ \t]*\r?$"
 CODEX_TOKENS_RE = re.compile(
-    r"tokens\s+used[^0-9\n]*\n?\s*([0-9][0-9,]*)", re.IGNORECASE
+    _CODEX_USAGE_LINE_PREFIX_RE_SRC
+    + r"tokens[ \t]+used"
+    + r"(?:[ \t]*" + _CODEX_USAGE_ANSI_RE_SRC + r"[ \t]*\r?\n"
+    + _CODEX_USAGE_LINE_PREFIX_RE_SRC
+    + r"|[ \t]+)"
+    + r"([0-9][0-9,]*)"
+    + _CODEX_USAGE_LINE_END_RE_SRC,
+    re.IGNORECASE | re.MULTILINE,
+)
+# The "tokens used" header line alone (or the single-line form). The workflow
+# log collector uses it as a structured-line key, so a parent step's copy of
+# a child step's usage header is dropped and its orphaned number line no
+# longer matches CODEX_TOKENS_RE.
+CODEX_TOKENS_HEADER_RE = re.compile(
+    _CODEX_USAGE_LINE_PREFIX_RE_SRC
+    + r"tokens[ \t]+used(?:[ \t]+[0-9][0-9,]*)?"
+    + _CODEX_USAGE_LINE_END_RE_SRC,
+    re.IGNORECASE | re.MULTILINE,
 )
 
 # OpenRouter structured usage line — strict field order matches the producers
@@ -148,9 +179,25 @@ MCP_PROBE_GENERIC_RE = re.compile(
 )
 
 KNOWN_MCP_SERVERS = frozenset({"SEMBLE", "SERENA"})
-BREAK_GLASS_RE = re.compile(r"(?:^|\s)BREAK_GLASS:(?:\s|$)")
+# Line-start anchor for the BREAK_GLASS / CONTEXT_BUDGET_WARN markers: the
+# marker must be the first token of the line, after only an optional UTF-8 BOM,
+# an optional `<job>\t<step>\t` prefix (the two tab-separated fields
+# `gh run view --log` puts on every line, which main() feeds to parse_log) and
+# an optional GitHub Actions log timestamp. Every emitter prints the bare
+# marker at column 0 with a plain printf (the four
+# emit_context_budget_warn_for_prompt functions in review_apply_fixes.sh,
+# review_rb_judge.sh, review_consolidate.sh and review_run_reviewers.sh, via
+# format_context_budget_warn_line; BREAK_GLASS from review_rb_judge.sh), so no
+# other prefix is accepted. Quoted copies inside reports, summaries or stderr
+# tails therefore no longer count as fresh events. Callers match single lines,
+# so no re.MULTILINE is needed.
+_TELEMETRY_LINE_PREFIX_RE_SRC = (
+    r"^\ufeff?(?:[^\t\n]*\t[^\t\n]*\t)?(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+)?"
+)
+BREAK_GLASS_RE = re.compile(_TELEMETRY_LINE_PREFIX_RE_SRC + r"BREAK_GLASS:(?:\s|$)")
 CONTEXT_BUDGET_WARN_RE = re.compile(
-    r"(?:^|\s)CONTEXT_BUDGET_WARN:\s+"
+    _TELEMETRY_LINE_PREFIX_RE_SRC
+    + r"CONTEXT_BUDGET_WARN:\s+"
     r"phase=(?P<phase>\S+)\s+"
     r"prompt_tokens=(?P<prompt_tokens>\d+)\s+"
     r"model_context_window=(?P<model_context_window>\d+)\s+"

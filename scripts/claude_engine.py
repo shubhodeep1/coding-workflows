@@ -19,9 +19,10 @@ stdout, diagnostics to stderr):
     from (``label:<name>``, ``var:AI_ENGINE_<R>``, ``var:AI_ENGINE`` or
     ``default``). Labels come from ``AI_ENGINE_LABELS`` (D2), the variables
     from the environment.
-  * ``settings --checkout DIR --out FILE [--profile P] [--allow-workflow-edits]``
-    — render ``scripts/claude_settings.json.tmpl`` (the P5 permission policy)
-    for one run.
+  * ``settings --checkout DIR --out FILE [--profile P] [--allow-workflow-edits]
+    [--web-search]`` — render ``scripts/claude_settings.json.tmpl`` (the P5
+    permission policy) for one run; ``--web-search`` allows WebSearch in the
+    ``read`` profile.
   * ``trust --workdir DIR [--home H]`` — mark DIR trusted in ``~/.claude.json``
     (spike S10: until then the CLI ignores ``permissions.allow``).
   * ``support-file --name config|template|guard-hook`` — the path of a trusted
@@ -46,6 +47,7 @@ no result); 2 invalid arguments or input.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import math
 import os
@@ -92,11 +94,12 @@ ROLES: tuple[str, ...] = (
 	"MATERIALITY",
 	"SUMMARISER",
 	"BEHAVIOURAL_SMOKE",
+	"PANEL_REVIEWER",
 )
 UTILITY_ROLES: tuple[str, ...] = ("LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE")
 # Roles whose codex call runs `--sandbox read-only` today keep a read-only
 # tool set on Claude; every other role edits its checkout.
-READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "UNBLOCK_JUDGE")
+READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "UNBLOCK_JUDGE", "PANEL_REVIEWER")
 
 LABEL_CODEX = "ai:codex"
 LABEL_ENGINE_CLAUDE = "ai:engine-claude"
@@ -114,10 +117,18 @@ URL_RE = re.compile(
 AUDIENCE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
+# The Claude review-panel slot reviews on Sonnet 5.5; its slug
+# (anthropic/claude-sonnet-5.5) is also the model hint, so this is the
+# fallback when no hint is passed. The review consolidator merges and ranks
+# the panel's findings on Sonnet 5.5 too; its OpenCode model hint
+# (REVIEW_CONSOLIDATOR_MODEL) is not a claude- slug, so this default applies.
+SONNET_DEFAULT_ROLES: tuple[str, ...] = ("PANEL_REVIEWER", "REVIEW_CONSOLIDATOR")
+
+
 def _role_default(role: str) -> dict[str, str]:
 	return {
 		"engine": "codex",
-		"claude_model": "claude-sonnet-5-5" if role in UTILITY_ROLES else "claude-opus-5-5",
+		"claude_model": "claude-sonnet-5-5" if role in UTILITY_ROLES or role in SONNET_DEFAULT_ROLES else "claude-opus-5-5",
 		"profile": "read" if role in READ_ROLES else "write",
 	}
 
@@ -126,12 +137,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
 	"cli_version": "2.1.289",
 	"broker_url": "",
 	"oidc_audience": "coding-workflows-claude-pool",
-	"gate_utilization": 0.9,
+	"gate_utilization": 0.95,
 	"probe_model": "claude-haiku-4-5-20251001",
 	"default_model": "claude-opus-5-5",
 	"utility_model": "claude-sonnet-5-5",
 	"default_effort": "high",
 	"hide_claude_md": False,
+	"web_search": True,
 	"utility_roles": list(UTILITY_ROLES),
 	"role_defaults": {role: _role_default(role) for role in ROLES},
 }
@@ -162,6 +174,11 @@ PROFILE_TOOLS: dict[str, str] = {
 	"write": "Read,Grep,Glob,Bash,Edit,Write",
 	"read": "Read,Grep,Glob",
 }
+# Added to every profile's tool list when the config's `web_search` is on
+# (default). It reaches the web only through the provider's search tool,
+# which the host relay admits with --allow-web-search
+# (scripts/claude_anthropic_relay.py); the container itself keeps no network.
+CLAUDE_WEB_SEARCH_TOOL = "WebSearch"
 PROFILE_MODES: dict[str, str] = {
 	"write": "bypassPermissions",
 	"read": "dontAsk",
@@ -251,6 +268,7 @@ def normalize_config(raw: Any) -> tuple[dict[str, Any], list[str]]:
 		take(key, isinstance(raw.get(key), str) and bool(MODEL_RE.match(raw.get(key, ""))))
 	take("default_effort", raw.get("default_effort") in EFFORTS)
 	take("hide_claude_md", isinstance(raw.get("hide_claude_md"), bool))
+	take("web_search", isinstance(raw.get("web_search"), bool))
 	if "utility_roles" in raw:
 		value = raw["utility_roles"]
 		if isinstance(value, list) and all(item in ROLES for item in value):
@@ -439,8 +457,13 @@ def render_settings(
 	guard_hook: str,
 	profile: str = "write",
 	allow_workflow_edits: bool = False,
+	web_search: bool = False,
 ) -> dict[str, Any]:
 	"""Render the P5 permission policy for one run.
+
+	With ``web_search`` the ``read`` profile's allow list also names
+	CLAUDE_WEB_SEARCH_TOOL, since its ``dontAsk`` mode refuses any tool not
+	allowed; ``write`` runs in ``bypassPermissions`` and needs no rule.
 
 	``checkout`` and ``guard_hook`` must be absolute paths. The template's
 	``__CHECKOUT__`` and ``__GUARD_HOOK__`` placeholders are replaced inside
@@ -479,6 +502,8 @@ def render_settings(
 		deny = [rule for rule in deny if WORKFLOW_DENY_MARKER not in rule]
 	permissions["deny"] = deny
 	permissions["allow"] = list(READ_PROFILE_ALLOW) if profile == "read" else []
+	if web_search and profile == "read":
+		permissions["allow"].append(CLAUDE_WEB_SEARCH_TOOL)
 	env = settings.get("env")
 	if isinstance(env, dict):
 		for key in list(env):
@@ -778,6 +803,148 @@ def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 	return verdict
 
 
+def _format_reset(value: Any) -> str:
+	"""Epoch seconds to ``YYYY-MM-DD HH:MM UTC``; an unknown time is ``unknown``."""
+	seconds = _int_or_none(value)
+	if seconds is None:
+		return "unknown"
+	return datetime.datetime.fromtimestamp(seconds, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _window_summary(probe: dict[str, Any], name: str, label: str, gate: float) -> str | None:
+	utilization = probe.get(name)
+	if utilization is None:
+		return None
+	text = f"{label} {round(float(utilization) * 100)}%"
+	if float(utilization) >= gate:
+		text += f" (resets {_format_reset(probe.get(f'{name}_resets_at'))})"
+	return text
+
+
+def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
+	"""One operator-facing reading of the pool for the hourly near-cap alert (#6951).
+
+	Input: the probe records ``parse_probe`` produced for every account in the
+	pool (the ``probes`` output of ``.github/actions/claude-pool-token``). Output:
+	``alert`` is true when at least one account is gated (a window at or above
+	``gate``, or a ``rejected`` status) or its token was rejected
+	(``auth_failed``), since both shrink the pool until an operator acts;
+	``gated``, ``auth_failed``, ``probe_failed`` and ``usable`` list account
+	names; ``text`` is the message body, one line per affected account with
+	each window's utilization and the reset time of every window at or above
+	the gate. ``text`` is empty when ``alert`` is false. Never raises on a
+	malformed record: a record without a name is reported as ``?``.
+	"""
+	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
+	gated: list[str] = []
+	auth_failed: list[str] = []
+	failed: list[str] = []
+	usable: list[str] = []
+	lines: list[str] = []
+	for probe in ordered:
+		name = str(probe.get("account") or "?")
+		error = probe.get("error")
+		if error == "auth_failed":
+			auth_failed.append(name)
+			lines.append(f"{name}: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_{name}")
+			continue
+		if error:
+			failed.append(name)
+			continue
+		known = _known_peak(probe)
+		rejected = probe.get("status") == "rejected"
+		if not rejected and (known is None or known < gate):
+			usable.append(name)
+			continue
+		gated.append(name)
+		parts = [part for part in (_window_summary(probe, "five_hour", "5h", gate), _window_summary(probe, "seven_day", "7d", gate)) if part]
+		if rejected and (known is None or known < gate):
+			parts.insert(0, f"usage limit reached (resets {_format_reset(probe.get('resets_at'))})")
+		lines.append(f"{name}: {', '.join(parts) if parts else 'at the gate'}")
+	alert = bool(gated or auth_failed)
+	# Earliest time a gated account is usable again (issue #7370): the
+	# capacity-wait section of the alert names it.
+	usable_times = [
+		value for value in (_usable_at(probe, gate) for probe in ordered if str(probe.get("account") or "?") in gated)
+		if _int_or_none(value) is not None
+	]
+	next_usable_at = _format_reset(min(_int_or_none(value) for value in usable_times)) if usable_times else ""
+	text = ""
+	if alert:
+		total = len(ordered)
+		headline = f"Claude pool: {len(gated)} of {total} account(s) at or above the {round(gate * 100)}% usage gate"
+		if auth_failed:
+			headline += f", {len(auth_failed)} with a rejected token"
+		headline += f"; {len(usable)} usable."
+		text = "\n".join([headline, *lines])
+		if failed:
+			text += "\nProbe failed (not counted): " + ", ".join(failed)
+	return {
+		"alert": alert,
+		"accounts": total if alert else len(ordered),
+		"gated": gated,
+		"auth_failed": auth_failed,
+		"probe_failed": failed,
+		"usable": usable,
+		"next_usable_at": next_usable_at,
+		"text": text,
+	}
+
+
+def _usage_percent(probe: dict[str, Any], name: str, label: str, gate: float) -> str:
+	"""``5h 12%`` for one window; ``5h ?`` when the probe had no reading."""
+	return _window_summary(probe, name, label, gate) or f"{label} ?"
+
+
+def pool_usage_report(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
+	"""The once-a-day Claude pool usage message: every account, in one message.
+
+	Input: the probe records ``parse_probe`` produced (the ``probes`` output of
+	``.github/actions/claude-pool-token``). Output: ``accounts``, ``usable``,
+	``gated``, ``auth_failed`` and ``probe_failed`` counts, and ``text``, a
+	headline plus one line per account, sorted by name: both windows'
+	utilization, the reset time of each window at or above ``gate``, a
+	``rejected`` status, a rejected token, or a failed probe. Unlike
+	``pool_health`` it lists every account, below the gate too, and ``text`` is
+	never empty. Never raises on a malformed record: a record without a name is
+	reported as ``?``.
+	"""
+	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
+	counts = {"usable": 0, "gated": 0, "auth_failed": 0, "probe_failed": 0}
+	lines: list[str] = []
+	for probe in ordered:
+		name = str(probe.get("account") or "?")
+		error = probe.get("error")
+		if error == "auth_failed":
+			counts["auth_failed"] += 1
+			lines.append(f"{name}: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_{name}")
+			continue
+		if error:
+			counts["probe_failed"] += 1
+			lines.append(f"{name}: probe failed ({error})")
+			continue
+		parts = [_usage_percent(probe, "five_hour", "5h", gate), _usage_percent(probe, "seven_day", "7d", gate)]
+		known = _known_peak(probe)
+		rejected = probe.get("status") == "rejected"
+		if rejected or (known is not None and known >= gate):
+			counts["gated"] += 1
+			if rejected and (known is None or known < gate):
+				parts.append(f"usage limit reached (resets {_format_reset(probe.get('resets_at'))})")
+		else:
+			counts["usable"] += 1
+		lines.append(f"{name}: {', '.join(parts)}")
+	headline = f"Claude pool daily usage: {len(ordered)} account(s), {counts['usable']} usable"
+	if counts["gated"]:
+		headline += f", {counts['gated']} at or above the {round(gate * 100)}% gate"
+	if counts["auth_failed"]:
+		headline += f", {counts['auth_failed']} with a rejected token"
+	if counts["probe_failed"]:
+		headline += f", {counts['probe_failed']} not probed"
+	if not ordered:
+		headline = "Claude pool daily usage: no probe results"
+	return {"accounts": len(ordered), **counts, "text": "\n".join([headline + ".", *lines])}
+
+
 # --- command line ------------------------------------------------------------
 
 
@@ -839,6 +1006,7 @@ def cmd_settings(args: argparse.Namespace) -> int:
 		guard_hook,
 		profile=args.profile,
 		allow_workflow_edits=args.allow_workflow_edits,
+		web_search=args.web_search,
 	)
 	out = Path(args.out)
 	out.parent.mkdir(parents=True, exist_ok=True)
@@ -940,6 +1108,40 @@ def cmd_choose(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_pool_health(args: argparse.Namespace) -> int:
+	try:
+		probes = json.loads(sys.stdin.read() or "[]")
+	except ValueError as exc:
+		raise EngineError(f"probes are not JSON: {exc}") from exc
+	if not isinstance(probes, list) or not all(isinstance(probe, dict) for probe in probes):
+		raise EngineError("probes must be a JSON list of objects")
+	gate = args.gate
+	if gate is None:
+		config, _ = load_config(Path(args.config) if args.config else None)
+		gate = config["gate_utilization"]
+	if not (0 < gate <= 1):
+		raise EngineError("gate must be in (0, 1]")
+	_print_json(pool_health(probes, gate))
+	return 0
+
+
+def cmd_pool_usage(args: argparse.Namespace) -> int:
+	try:
+		probes = json.loads(sys.stdin.read() or "[]")
+	except ValueError as exc:
+		raise EngineError(f"probes are not JSON: {exc}") from exc
+	if not isinstance(probes, list) or not all(isinstance(probe, dict) for probe in probes):
+		raise EngineError("probes must be a JSON list of objects")
+	gate = args.gate
+	if gate is None:
+		config, _ = load_config(Path(args.config) if args.config else None)
+		gate = config["gate_utilization"]
+	if not (0 < gate <= 1):
+		raise EngineError("gate must be in (0, 1]")
+	_print_json(pool_usage_report(probes, gate))
+	return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -962,6 +1164,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--out", required=True)
 	p.add_argument("--profile", choices=PROFILES, default="write")
 	p.add_argument("--allow-workflow-edits", action="store_true")
+	p.add_argument("--web-search", action="store_true")
 	p.add_argument("--template", default="")
 	p.add_argument("--guard-hook", default="")
 	p.set_defaults(func=cmd_settings)
@@ -998,6 +1201,16 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--gate", type=float, default=None)
 	p.add_argument("--config", default="")
 	p.set_defaults(func=cmd_choose)
+
+	p = sub.add_parser("pool-health")
+	p.add_argument("--gate", type=float, default=None)
+	p.add_argument("--config", default="")
+	p.set_defaults(func=cmd_pool_health)
+
+	p = sub.add_parser("pool-usage")
+	p.add_argument("--gate", type=float, default=None)
+	p.add_argument("--config", default="")
+	p.set_defaults(func=cmd_pool_usage)
 	return parser
 
 

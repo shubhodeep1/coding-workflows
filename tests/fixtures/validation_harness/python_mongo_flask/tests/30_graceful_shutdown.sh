@@ -4,14 +4,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
-APP_PORT="${APP_PORT:-8000}"
-HEALTH_PATH="${HEALTH_PATH:-/health}"
-TEST_HOST_HEADER="${TEST_HOST_HEADER:-app.local.test}"
+_default_app_port=8000
+APP_PORT="${APP_PORT:-${_default_app_port}}"
+_default_health_path=/health
+HEALTH_PATH="${HEALTH_PATH:-${_default_health_path}}"
+_default_test_host_header=app.local.test
+TEST_HOST_HEADER="${TEST_HOST_HEADER:-${_default_test_host_header}}"
 APP_URL="${APP_URL:-http://127.0.0.1:${APP_PORT}${HEALTH_PATH}}"
 SHUTDOWN_TIMEOUT_SECONDS="${SHUTDOWN_TIMEOUT_SECONDS:-30}"
 SHUTDOWN_POLL_SECONDS="${SHUTDOWN_POLL_SECONDS:-1}"
 GRACEFUL_SHUTDOWN_LOG_TAIL_LINES="${GRACEFUL_SHUTDOWN_LOG_TAIL_LINES:-40}"
-COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
+_default_compose_file=validation/docker-compose.test.yml
+COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"
 
 echo "1..1"
 

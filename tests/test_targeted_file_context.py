@@ -123,6 +123,26 @@ Implementation Plan
 	)
 
 
+def test_plan_prompts_ask_for_a_files_heading_followed_by_a_heading() -> None:
+	"""The planner prompts ask for the file list under its own `##` heading
+	and the next item under another `##` heading, so every plan parser
+	(this one, plan.yml's template-owned path guard and the auto-approval
+	gate) ends the list at that heading."""
+	for rel in ("prompts/mode-plan.txt", "prompts/_templates/mode-plan.txt", "scripts/run_plan_codex.sh"):
+		text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+		assert "1. `## Files likely to change` — a markdown section with exactly this heading." in text, rel
+		assert "Put the next item under its own `##`" in text, rel
+	plan = """
+## Files likely to change
+- `scripts/a.sh`
+- `tests/test_a.py`
+
+## Functions/modules to implement
+- Edit `scripts/leaked.sh`.
+"""
+	assert extract_paths_from_plan(plan) == ["scripts/a.sh", "tests/test_a.py"]
+
+
 def test_extract_does_not_treat_path_bullets_as_section_headers() -> None:
 	"""A bullet like `- contracts/Foo.sol` (leading hyphen) must be
 	extracted as a path, not mistaken for a section header.

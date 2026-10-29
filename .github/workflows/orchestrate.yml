@@ -47,6 +47,11 @@ name: AI Orchestrate (Reusable)
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   MODEL_EDITOR: ${{ vars.WORKFLOW_ORCHESTRATE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
   # Defaults to high to match the repo-wide gpt-6-sol reasoning-level
@@ -82,6 +87,7 @@ jobs:
       group: ai-orchestrate-${{ github.repository }}-${{ github.run_id }}
       cancel-in-progress: false
     env:
+      AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
       ORCHESTRATE_POLL_INTERVAL: ${{ vars.ORCHESTRATE_POLL_INTERVAL || '5' }}
 
     steps:
@@ -138,9 +144,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install Codex CLI
-        # Intentionally use the released action ref as the rollout boundary.
-        # Consumers pick this up when test-and-mark-stable retags @stable.
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        # Pinned by commit (tele-funtoken-msg-scoring#4566); bump it in the PR
+        # that changes the action.
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
@@ -189,13 +195,46 @@ jobs:
           fi
 
       - name: Resolve workflow support ref for run-start
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source for run-start
@@ -210,7 +249,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback for run-start
-        if: ${{ steps.checkout_support_source_run_start.outcome == 'failure' }}
+        if: ${{ steps.checkout_support_source_run_start.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -221,7 +260,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source main snapshot for run-start
-        if: ${{ env.SCRIPT_REF != 'main' }}
+        if: ${{ env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -234,6 +273,14 @@ jobs:
       - name: Stage workflow memory support files for run-start
         run: |
           set -euo pipefail
+
+          # A pinned support ref must be exactly the commit the caller pinned
+          # (tele-funtoken-msg-scoring#4566); fail instead of staging, or
+          # letting the next step source, code from anywhere else.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
           if [ ! -d .codex-workflow-src ]; then
             echo "::warning::Support source checkout unavailable before run-start memory event"
@@ -322,13 +369,46 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Resolve workflow support ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -343,7 +423,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -359,9 +439,15 @@ jobs:
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
+        if: ${{ env.SCRIPT_REF == 'stable' }}
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -377,7 +463,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py; do
+          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_state_v2.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -390,12 +476,12 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
-          # render_prompt.py is the optional Python backend for the
-          # render_prompt.sh shim adopted by branches that took the issue
-          # #3043 refactor.  main ships a self-contained bash render_prompt.sh
-          # that needs no backend, so the file is absent on main and must be
-          # staged only when the branch under processing actually carries it.
-          # Absence is expected (non-shim branches, incl. main) and must not
+          # render_prompt.py is the Python backend of the render_prompt.sh
+          # shim (issue #3043 refactor). main ships both, the shim needs the
+          # backend, and check_workflow_script_refs.py fails CI if it goes
+          # missing. Some older refs still bundle a self-contained bash
+          # render_prompt.sh with no backend, so absence on the ref under
+          # processing (and on main's copy) only skips staging and must not
           # fail the bootstrap; presence stages it beside the shim so the
           # shim resolves ${SCRIPT_DIR}/render_prompt.py.
           for f in render_prompt.py; do
@@ -555,6 +641,8 @@ jobs:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Pre-assemble static context
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
 
@@ -568,6 +656,20 @@ jobs:
           fi
           orchestrate_readme_context="$(mktemp "${RUNNER_TEMP}/orchestrate-readme.XXXXXX")"
           bash scripts/build_static_context.sh readme "${orchestrate_readme_context}"
+          # Issue #8269: index the agents file instead of inlining it unless
+          # STATIC_CONTEXT_AGENTS_MODE says inline (same rules as build_static_context.sh).
+          orchestrate_agents_mode="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          case "${orchestrate_agents_mode}" in
+            ""|index) orchestrate_agents_mode=index ;;
+            inline) orchestrate_agents_mode=inline ;;
+            *)
+              echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+              orchestrate_agents_mode=inline
+              ;;
+          esac
+          orchestrate_agents_effective_mode="${orchestrate_agents_mode}"
+          orchestrate_agents_fallback_reason=""
+          orchestrate_agents_absent=false
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
             cat unattended_system_instructions.md
@@ -575,12 +677,52 @@ jobs:
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md
             echo
+            # agents.md keeps precedence; consumer repos that only have
+            # AGENTS.md (the casing update_workflows.yml folds) fall back to it.
+            orchestrate_agents_file=""
             if [ -f agents.md ] && [ ! -L agents.md ]; then
-              echo "=== AGENTS.MD ==="
-              cat agents.md
-              echo
+              orchestrate_agents_file="agents.md"
             elif [ -L agents.md ]; then
               echo "::warning::agents.md is a symbolic link; omitted from the static context." >&2
+            fi
+            if [ -z "${orchestrate_agents_file}" ]; then
+              if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
+                orchestrate_agents_file="AGENTS.md"
+              elif [ -L AGENTS.md ]; then
+                echo "::warning::AGENTS.md is a symbolic link; omitted from the static context." >&2
+              fi
+            fi
+            orchestrate_agents_indexed=false
+            if [ -n "${orchestrate_agents_file}" ] && [ "${orchestrate_agents_mode}" = index ]; then
+              if orchestrate_agents_index_tmp="$(mktemp "${RUNNER_TEMP}/orchestrate-agents-index.XXXXXX" 2>/dev/null)"; then
+                if bash scripts/build_static_context.sh agents-index "${orchestrate_agents_index_tmp}" "${orchestrate_agents_file}" && [ -s "${orchestrate_agents_index_tmp}" ]; then
+                  cat "${orchestrate_agents_index_tmp}"
+                  echo
+                  orchestrate_agents_indexed=true
+                else
+                  orchestrate_agents_fallback_reason=index_unavailable
+                fi
+                rm -f "${orchestrate_agents_index_tmp}"
+              else
+                orchestrate_agents_fallback_reason=tmp_unavailable
+              fi
+              if [ "${orchestrate_agents_indexed}" != true ]; then
+                orchestrate_agents_effective_mode=inline
+                echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+              fi
+            fi
+            if [ -z "${orchestrate_agents_file}" ]; then
+              orchestrate_agents_absent=true
+            fi
+            if [ -n "${orchestrate_agents_file}" ] && [ "${orchestrate_agents_indexed}" != true ]; then
+              echo "=== AGENTS.MD ==="
+              # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+              if [ -d agents.d ] && [ ! -L agents.d ] && orchestrate_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${orchestrate_agents_file}" 2>/dev/null)"; then
+                printf '%s\n' "${orchestrate_agents_render}"
+              else
+                cat "${orchestrate_agents_file}"
+              fi
+              echo
             fi
             cat "${orchestrate_readme_context}"
             if [ -f probably_unnecessary_but_read_if_stuck.md ] && [ ! -L probably_unnecessary_but_read_if_stuck.md ]; then
@@ -596,6 +738,14 @@ jobs:
           STATIC_LINES="$(wc -l < ./pre_assembled_static.txt)"
           STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
+          orchestrate_size_line="STATIC_CONTEXT_SIZE phase=orchestrate mode=${orchestrate_agents_effective_mode} bytes=$(printf '%s' "${STATIC_BYTES}" | tr -d '[:space:]')"
+          if [ -n "${orchestrate_agents_fallback_reason}" ]; then
+            orchestrate_size_line="${orchestrate_size_line} fallback=inline reason=${orchestrate_agents_fallback_reason}"
+          fi
+          if [ "${orchestrate_agents_absent}" = true ]; then
+            orchestrate_size_line="${orchestrate_size_line} agents=absent"
+          fi
+          echo "${orchestrate_size_line}" >&2
 
       - name: Retrieve memory context
         env:
@@ -758,7 +908,10 @@ jobs:
           echo "Decomposer per-attempt timeout: ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s."
 
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex orchestrate attempt ${attempt}/${max_attempts}..."
+            # Name the engine that actually runs, so a Claude run is not logged as Codex.
+            orchestrate_engine_name="Codex"
+            if [ "${ORCHESTRATE_ENGINE}" = "claude" ]; then orchestrate_engine_name="Claude"; fi
+            echo "${orchestrate_engine_name} orchestrate attempt ${attempt}/${max_attempts}..."
             attempt_ok=0
             attempt_started_at="$(date +%s)"
             attempt_worktree_before="$(git status --porcelain=v1 --untracked-files=all)"
@@ -777,14 +930,28 @@ jobs:
             decomposer_rc=75
             if [ "${ORCHESTRATE_ENGINE}" = "claude" ]; then
               decomposer_rc=0
+              # Issue #6642: the decomposer reads an untrusted project description;
+              # it runs with the read profile (no Bash/Edit/Write, read-only
+              # snapshot) and no inherited --include paths. The plan comes back
+              # through the host-captured transcript, as on the codex fallback.
               # shellcheck disable=SC2016 # $1..$3 expand in the inner bash.
               AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT}" \
+                AI_ENGINE_READ_ONLY=true AI_ENGINE_INCLUDE_PATHS= \
                 timeout --signal=TERM --kill-after=30s -- "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" \
                 env -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT -u OPENROUTER_API_KEY \
                 bash -c 'source scripts/ai_engine.sh && claude_run ORCHESTRATE "$1" "$2" "$3"' _ "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" \
                 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || decomposer_rc=$?
+              if [ "${decomposer_rc}" -eq 80 ]; then
+                # Claude capacity wait (issue #7370): no codex. Later steps
+                # skip; the report step records this run (kind run) and the
+                # capacity-resume pass re-runs it.
+                echo "AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred stage=orchestrate"
+                echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                exit 0
+              fi
               if [ "${decomposer_rc}" -eq 75 ]; then
                 ORCHESTRATE_ENGINE="codex"
+                orchestrate_engine_name="Codex"
               fi
             fi
             if [ "${decomposer_rc}" -eq 75 ]; then
@@ -794,12 +961,12 @@ jobs:
             fi
             if [ "${decomposer_rc}" -eq 0 ]; then
               if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "::warning::Codex returned empty output on attempt ${attempt}."
+                echo "::warning::${orchestrate_engine_name} returned empty output on attempt ${attempt}."
                 last_status="empty output"
               else
                 # Try to extract a JSON object from the response.
-                if python3 - "${CODEX_OUTPUT_FILE}" "${DECOMPOSITION_FILE}" <<'PYEOF'
-          import json, re, sys
+                if ORCHESTRATE_ENGINE_NAME="${orchestrate_engine_name}" python3 - "${CODEX_OUTPUT_FILE}" "${DECOMPOSITION_FILE}" <<'PYEOF'
+          import json, os, re, sys
 
           raw = open(sys.argv[1]).read()
           out_path = sys.argv[2]
@@ -842,7 +1009,7 @@ jobs:
                           except json.JSONDecodeError:
                               start = None
           if data is None:
-              print('ERROR: Could not extract valid JSON from Codex output', file=sys.stderr)
+              print('ERROR: Could not extract valid JSON from %s output' % (os.environ.get('ORCHESTRATE_ENGINE_NAME') or 'Codex'), file=sys.stderr)
               print(raw[:2000], file=sys.stderr)
               sys.exit(1)
           json.dump(data, open(out_path, 'w'), indent=2)
@@ -872,7 +1039,7 @@ jobs:
                     EMITTED_DESC="${EMITTED} issue(s)"
                   fi
                   if [ "${EMITTED}" -ge "${EXPECTED_MIN_ISSUES}" ]; then
-                    echo "Codex orchestrate succeeded on attempt ${attempt}: emitted=${EMITTED} >= expected_min=${EXPECTED_MIN_ISSUES}."
+                    echo "${orchestrate_engine_name} orchestrate succeeded on attempt ${attempt}: emitted=${EMITTED} >= expected_min=${EXPECTED_MIN_ISSUES}."
                     attempt_ok=1
                   else
                     echo "::warning::Attempt ${attempt} produced ${EMITTED_DESC}; author enumeration requires >= ${EXPECTED_MIN_ISSUES}. Re-prompting with corrective feedback."
@@ -896,7 +1063,7 @@ jobs:
                     } >> "${CODEX_PROMPT_FILE}"
                   fi
                 else
-                  echo "::warning::Could not extract JSON from Codex output on attempt ${attempt}."
+                  echo "::warning::Could not extract JSON from ${orchestrate_engine_name} output on attempt ${attempt}."
                   last_status="invalid JSON"
                 fi
               fi
@@ -914,24 +1081,24 @@ jobs:
               #     clock: a timer-driven 137 should arrive only after
               #     the configured budget has elapsed.
               if [ "$rc" = "124" ]; then
-                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 124, elapsed ${attempt_elapsed}s)."
-                last_status="codex timeout 124 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+                echo "::warning::${orchestrate_engine_name} decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 124, elapsed ${attempt_elapsed}s)."
+                last_status="${ORCHESTRATE_ENGINE} timeout 124 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
               elif [ "$rc" = "137" ] && [ "${attempt_elapsed}" -ge "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" ]; then
-                echo "::warning::Codex decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 137 after kill-after backstop, elapsed ${attempt_elapsed}s)."
-                last_status="codex timeout 137 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
+                echo "::warning::${orchestrate_engine_name} decomposer attempt ${attempt} killed by per-attempt timer (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s, timeout exit 137 after kill-after backstop, elapsed ${attempt_elapsed}s)."
+                last_status="${ORCHESTRATE_ENGINE} timeout 137 (${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s)"
               else
                 if [ "$rc" = "137" ]; then
-                  echo "::warning::Codex exited with code 137 on attempt ${attempt} before the per-attempt timer budget elapsed (${attempt_elapsed}s < ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s); likely OOM kill or external SIGKILL, not the timeout wrapper."
-                  last_status="codex exit 137 (elapsed ${attempt_elapsed}s < budget ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s; likely OOM/external SIGKILL)"
+                  echo "::warning::${orchestrate_engine_name} exited with code 137 on attempt ${attempt} before the per-attempt timer budget elapsed (${attempt_elapsed}s < ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s); likely OOM kill or external SIGKILL, not the timeout wrapper."
+                  last_status="${ORCHESTRATE_ENGINE} exit 137 (elapsed ${attempt_elapsed}s < budget ${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}s; likely OOM/external SIGKILL)"
                 else
-                  echo "::warning::Codex exited with code $rc on attempt ${attempt}."
-                  last_status="codex exit ${rc}"
+                  echo "::warning::${orchestrate_engine_name} exited with code $rc on attempt ${attempt}."
+                  last_status="${ORCHESTRATE_ENGINE} exit ${rc}"
                 fi
               fi
             fi
             attempt_worktree_after="$(git status --porcelain=v1 --untracked-files=all)"
             if [ "${attempt_worktree_after}" != "${attempt_worktree_before}" ]; then
-              echo "::error::Codex decomposer attempt ${attempt} changed the repository worktree versus the pre-attempt baseline; refusing to continue on partial edits."
+              echo "::error::${orchestrate_engine_name} decomposer attempt ${attempt} changed the repository worktree versus the pre-attempt baseline; refusing to continue on partial edits."
               git status --short
               exit 1
             fi
@@ -943,12 +1110,15 @@ jobs:
               echo "Retrying in ${sleep_secs}s (includes jitter)..."
               sleep "${sleep_secs}"
             else
-              echo "::error::Codex orchestrate failed after ${max_attempts} attempts (last_status=${last_status}, last_emitted=${last_emitted}, expected_min=${EXPECTED_MIN_ISSUES})."
+              echo "::error::${orchestrate_engine_name} orchestrate failed after ${max_attempts} attempts (last_status=${last_status}, last_emitted=${last_emitted}, expected_min=${EXPECTED_MIN_ISSUES})."
               exit 1
             fi
           done
 
       - name: Validate decomposition JSON
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
+        env:
+          PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
         run: |
           set -euo pipefail
 
@@ -960,6 +1130,47 @@ jobs:
           # cycle detection, files_touched normalization).
           python3 scripts/orchestrate_lib.py validate --input-file "${DECOMPOSITION_FILE}"
           echo "Decomposition validated successfully."
+
+          # Pre-push affected-test gate, phase P2 (issue #8189): append the
+          # tests and companion registries each issue's planned files affect,
+          # before the partition guard, compute-waves, the tracking body and
+          # pending_issue_defs read files_touched. The gate module comes only
+          # from the trusted support checkout; the repository checkout is
+          # read as data. A missing module or any failure is a no-op.
+          # The decomposition was just written from model output, so a
+          # prepush_augmented_paths key in it can only be model-supplied. Drop
+          # it before augmentation, so the partition guard only ever sees a
+          # marker augment-files-touched wrote in this run, also when the
+          # gate is off, fails or times out (issue #8244).
+          if jq -e 'type == "object" and has("prepush_augmented_paths")' "${DECOMPOSITION_FILE}" >/dev/null 2>&1; then
+            if jq 'del(.prepush_augmented_paths)' "${DECOMPOSITION_FILE}" > "${DECOMPOSITION_FILE}.marker-strip.tmp"; then
+              mv "${DECOMPOSITION_FILE}.marker-strip.tmp" "${DECOMPOSITION_FILE}"
+              echo "PREPUSH_TEST_GATE phase=augment outcome=marker_dropped reason=model_supplied"
+            else
+              rm -f "${DECOMPOSITION_FILE}.marker-strip.tmp"
+              echo "::error::PREPUSH_TEST_GATE phase=augment outcome=failed reason=marker_strip_failed"
+              exit 1
+            fi
+          fi
+          _prepush_gate_mode="$(printf '%s' "${PREPUSH_TEST_GATE_MODE:-repair}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          case "${_prepush_gate_mode}" in
+            off|report|repair) ;;
+            *)
+              echo "PREPUSH_TEST_GATE outcome=mode_invalid"
+              _prepush_gate_mode="repair"
+              ;;
+          esac
+          if [ "${_prepush_gate_mode}" = "off" ]; then
+            echo "PREPUSH_TEST_GATE phase=augment outcome=skipped reason=mode_off"
+          else
+            _prepush_gate_module="${GITHUB_WORKSPACE}/.codex-workflow-src/workflow-templates/.claude/hooks/prepush_affected_tests.py"
+            python3 scripts/orchestrate_lib.py augment-files-touched \
+              --decomposition "${DECOMPOSITION_FILE}" \
+              --repo-root "${GITHUB_WORKSPACE}" \
+              --gate-module "${_prepush_gate_module}" \
+              --write-back \
+              || echo "::warning::PREPUSH_TEST_GATE phase=augment outcome=skipped reason=command_failed"
+          fi
 
           # Fetch the conflict-telemetry JSONL from the ai-memory branch
           # so the partition guard can compute the EFFECTIVE hot-file
@@ -1016,10 +1227,16 @@ jobs:
           fi
           if [ "${PARTITION_OVERLAP_COUNT}" -gt 0 ]; then
             echo "::notice::Partition guard detected ${PARTITION_OVERLAP_COUNT} sibling file-touch overlap(s); auto-serialize will resolve them by injecting dependency_edges."
-            jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | "\(.issue_a)\u2194\(.issue_b) on \(.files | join(\", \"))"] | join("; "))' "${PARTITION_REPORT_FILE}" || true
+            # Plain concatenation: an escaped quote inside a \(...) interpolation
+            # is a jq compile error (issue #8244, run 40609251819).
+            jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | .issue_a + " <-> " + .issue_b + " on " + ((.files // []) | join(", "))] | join("; "))' "${PARTITION_REPORT_FILE}" || true
             jq -r '.planned_serializations[]? | "  Will serialize: \(.winner) -> \(.loser) (over " + (.overlap_type) + " on " + (.files | join(", ")) + ")"' "${PARTITION_REPORT_FILE}" || true
           else
             echo "Partition guard: no sibling file-touch overlaps detected."
+          fi
+          PARTITION_AUGMENTED_IGNORED="$(jq -r '.augmented_only_overlaps_ignored // 0' "${PARTITION_REPORT_FILE}" 2>/dev/null || echo 0)"
+          if [[ "${PARTITION_AUGMENTED_IGNORED}" =~ ^[0-9]+$ ]] && [ "${PARTITION_AUGMENTED_IGNORED}" -gt 0 ]; then
+            echo "Partition guard: ignored ${PARTITION_AUGMENTED_IGNORED} overlap(s) on affected-test paths that no sibling planned."
           fi
 
           # Compute waves with auto-serialize and write the resulting
@@ -1034,6 +1251,7 @@ jobs:
             --write-back
 
       - name: Ensure orchestrator labels exist
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ENGINE_INPUT: ${{ inputs.engine }}
@@ -1062,6 +1280,7 @@ jobs:
           ensure_label_exists "ai:orchestrator-validate-required" "${{ github.repository }}"
 
       - name: Create tracking issue
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         id: tracking_issue
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1140,6 +1359,21 @@ jobs:
               || echo "::warning::Could not close partially bound tracking issue #${TRACKING_ISSUE_NUMBER}; close it by hand so the dispatcher can retry."
             exit 1
           fi
+          # Q152: a project started by a plan split (scripts/plan_split_dispatch.sh)
+          # links itself on the source issue, which stays open until the
+          # poller closes it at completion. Only an open issue carrying
+          # ai:split-to-project is commented on; a failure only warns.
+          _split_source="$(printf '%s' "${TRACKING_COMMENT_INPUT:-}" | sed -n 's/^<!-- ai:plan-split-source:v1 issue=\([1-9][0-9]*\) -->$/\1/p' | head -1)"
+          if [ -n "${_split_source}" ]; then
+            if gh_retry gh api "repos/${{ github.repository }}/issues/${_split_source}" \
+                --jq '.state == "open" and ([.labels[].name] | index("ai:split-to-project") != null)' 2>/dev/null | grep -qx true \
+              && gh_retry gh api "repos/${{ github.repository }}/issues/${_split_source}/comments" \
+                -f body="Tracking issue: #${TRACKING_ISSUE_NUMBER} (${TRACKING_ISSUE_URL}). This issue is closed when that project completes." >/dev/null 2>&1; then
+              echo "PLAN_SPLIT_LINKED source_issue=${_split_source} tracking_issue=${TRACKING_ISSUE_NUMBER}"
+            else
+              echo "::warning::Could not link tracking issue #${TRACKING_ISSUE_NUMBER} on plan-split source issue #${_split_source}."
+            fi
+          fi
           {
             echo "tracking_issue_number=${TRACKING_ISSUE_NUMBER}"
             echo "tracking_issue_url=${TRACKING_ISSUE_URL}"
@@ -1147,6 +1381,7 @@ jobs:
           echo "TRACKING_ISSUE_NUMBER=${TRACKING_ISSUE_NUMBER}" >> "$GITHUB_ENV"
 
       - name: Create integration branch
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         id: integration_branch
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1200,6 +1435,7 @@ jobs:
           echo "INTEGRATION_BRANCH=${INTEGRATION_BRANCH}" >> "$GITHUB_ENV"
 
       - name: Create Wave 1 issues only
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         id: create_issues
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1212,8 +1448,15 @@ jobs:
           # Only create Wave 1 issues now. Later-wave issues are created by the
           # poller when their dependencies are met (deferred creation). This
           # ensures clarify.yml fires on issues.opened at the right time.
+          # Issue #8314: the same Python call also records why each later-wave
+          # issue was deferred (model dependency edge or auto-serialize edge,
+          # with the shared files_touched path or hot file) in
+          # WAVE1_DEFERRALS_FILE. That part fails open and never changes the
+          # Wave 1 selection; stdout stays limited to the Wave 1 IDs.
+          WAVE1_DEFERRALS_FILE="${RUNTIME_DIR}/wave1_deferrals.json"
+          rm -f "${WAVE1_DEFERRALS_FILE}"
           WAVE1_IDS="$(python3 -c "
-          import json, sys
+          import json, os, sys
           sys.path.insert(0, 'scripts')
           from orchestrate_lib import validate_decomposition, compute_waves
 
@@ -1221,9 +1464,52 @@ jobs:
               data = json.load(f)
 
           validate_decomposition(data)
+          # The partition-guard write-back already holds the edges, so the call
+          # below resets partition_serializations; keep the written-back trail.
+          prior_ser = data.get('partition_serializations')
+          prior_ser = list(prior_ser) if isinstance(prior_ser, list) else []
           waves = compute_waves(data)
           for issue in waves[0]:
               print(issue['id'])
+
+          try:
+              ser_by_edge = {}
+              for rec in prior_ser + list(data.get('partition_serializations') or []):
+                  if isinstance(rec, dict):
+                      ser_by_edge.setdefault((rec.get('winner'), rec.get('loser')), rec)
+              # The library keeps one record per edge (hot_file before pair), so
+              # also name every files_touched path the two issues share.
+              touched = {i.get('id'): [p for p in (i.get('files_touched') or []) if isinstance(p, str)] for i in data.get('issues') or [] if isinstance(i, dict)}
+              # Paths the pre-push gate added to both issues never cause an edge
+              # (validate_wave_file_partition drops them, #8244); leave them out.
+              from orchestrate_lib import trusted_prepush_augmented_paths
+              aug = trusted_prepush_augmented_paths(data)
+              deferrals = {}
+              for wave_idx, wave in enumerate(waves):
+                  if wave_idx == 0:
+                      continue
+                  for issue in wave:
+                      iid = issue['id']
+                      reasons = []
+                      for edge in data.get('dependency_edges') or []:
+                          if edge.get('to') != iid:
+                              continue
+                          rec = ser_by_edge.get((edge.get('from'), iid))
+                          if rec is None:
+                              reasons.append({'from': edge.get('from'), 'source': 'model'})
+                          else:
+                              files = list(rec.get('files') or [])
+                              aug_both = aug.get(edge.get('from'), set()) & aug.get(iid, set())
+                              files += [p for p in touched.get(edge.get('from'), []) if p in touched.get(iid, []) and p not in files and p not in aug_both]
+                              reasons.append({'from': edge.get('from'), 'source': 'auto_serialize', 'overlap_type': rec.get('overlap_type'), 'files': files})
+                      if not reasons:
+                          reasons = [{'source': 'unknown'}]
+                      deferrals[iid] = 'wave=%d deferral_reasons=%s' % (wave_idx + 1, json.dumps(reasons, ensure_ascii=True, separators=(',', ':')))
+              with open(os.path.join(os.environ['RUNTIME_DIR'], 'wave1_deferrals.json'), 'w') as out:
+                  json.dump(deferrals, out)
+          except Exception as exc:
+              detail = str(exc).replace(chr(13), ' ').replace(chr(10), ' ')[:200]
+              print('::warning::Wave 1 deferral diagnostics unavailable: %s' % detail, file=sys.stderr)
           ")"
 
           echo "Wave 1 issue IDs: ${WAVE1_IDS}"
@@ -1237,13 +1523,28 @@ jobs:
 
             # Skip issues not in Wave 1
             if ! echo "${WAVE1_IDS}" | grep -qxF "${LOCAL_ID}"; then
-              echo "  Deferring ${LOCAL_ID} (not in Wave 1)"
+              # One greppable line per deferred issue (issue #8314); the
+              # "Deferring <id> (not in Wave 1)" prefix stays unchanged.
+              _wave1_defer_detail="$(jq -r --arg id "${LOCAL_ID}" '.[$id] // empty' "${WAVE1_DEFERRALS_FILE}" 2>"${RUNTIME_DIR}/wave1_deferrals_jq.err")" || {
+                _wave1_defer_detail=""
+                # Keep jq's own error text (one line, 200 chars, '::' broken up).
+                [ ! -s "${WAVE1_DEFERRALS_FILE}" ] || echo "::warning::Wave 1 deferral detail for ${LOCAL_ID} could not be read from wave1_deferrals.json: $(tr -d '\r\n' < "${RUNTIME_DIR}/wave1_deferrals_jq.err" 2>/dev/null | cut -c1-200 | sed 's/::/: :/g')"
+              }
+              echo "  Deferring ${LOCAL_ID} (not in Wave 1): ${_wave1_defer_detail:-deferral_reasons=unavailable}"
               continue
             fi
 
             TITLE="$(jq -r ".issues[${idx}].title" "${DECOMPOSITION_FILE}")"
             BODY="$(jq -r ".issues[${idx}].body" "${DECOMPOSITION_FILE}" | sed 's/\\n/\n/g')"
             PRIORITY="$(jq -r ".issues[${idx}].priority" "${DECOMPOSITION_FILE}")"
+
+            # Advisory "Expected files" section (issue #8189), rendered by the
+            # same helper as the poller's later-wave issues. Not an allowlist.
+            WAVE1_EXPECTED_SECTION="$(jq -c ".issues[${idx}].files_touched // []" "${DECOMPOSITION_FILE}" 2>/dev/null \
+              | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)"
+            if [ -n "${WAVE1_EXPECTED_SECTION}" ]; then
+              BODY="$(printf '%s\n\n%s' "${BODY}" "${WAVE1_EXPECTED_SECTION}")"
+            fi
 
             # Append orchestrator metadata to body
             FULL_BODY="$(cat <<EOF
@@ -1263,13 +1564,21 @@ jobs:
             if [ -n "${PROJECT_ENGINE_LABEL:-}" ]; then
               child_create_args+=(--label "${PROJECT_ENGINE_LABEL}")
             fi
+            _wave1_create_rc=0
             ISSUE_URL="$(gh_retry gh issue create \
               --repo "${{ github.repository }}" \
               --title "${TITLE}" \
               --body "${FULL_BODY}" \
-              "${child_create_args[@]}")"
+              "${child_create_args[@]}")" || _wave1_create_rc=$?
 
-            ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
+            # Issue #8314: a create that fails or returns no issue URL is
+            # reported here, not 90s later by the stable gate's child count.
+            ISSUE_NUM="$(printf '%s\n' "${ISSUE_URL}" | grep -oE '/issues/[0-9]+$' | tail -n1 | grep -oE '[0-9]+$' || true)"
+            if [ "${_wave1_create_rc}" -ne 0 ] || ! [[ "${ISSUE_NUM}" =~ ^[1-9][0-9]*$ ]]; then
+              _wave1_create_out_summary="$(printf '%s' "${ISSUE_URL}" | tr -d '\r\n' | cut -c1-200)"
+              echo "::error::Wave 1 child issue creation for local id ${LOCAL_ID} returned no issue number (gh_retry exit=${_wave1_create_rc}, output='${_wave1_create_out_summary:-<empty>}'); refusing to continue with a missing child (tracking issue #${TRACKING_ISSUE_NUMBER})."
+              exit 1
+            fi
             ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"
             echo "  Created #${ISSUE_NUM}: ${TITLE} (${LOCAL_ID})"
           done
@@ -1290,6 +1599,7 @@ jobs:
           echo "Issue map (Wave 1 only): $(cat "${RUNTIME_DIR}/issue_map.json")"
 
       - name: Build and post initial state
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -1297,6 +1607,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           # Build state using Python helper
           python3 -c "
@@ -1325,20 +1636,40 @@ jobs:
               json.dump(state, f, indent=2)
           "
 
-          # Post state as a hidden comment on the tracking issue for the poller
-          STATE_COMMENT="$(cat <<EOF
-          <!-- ORCHESTRATOR_STATE_V1
-          $(cat "${STATE_FILE}")
-          ORCHESTRATOR_STATE_V1 -->
-          EOF
-          )"
-
-          jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' \
-            | gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
-                --input - >/dev/null
-          echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
+          # Post state for the poller as an ORCHESTRATOR_STATE_V2 chunked-comment
+          # chain, the format the poller's post_state_comment writes and its
+          # reader tries first. The old single V1 comment broke on big projects:
+          # its body went to jq as one argv string, which Linux caps at 128 KiB
+          # ("Argument list too long"), and a body over 65,536 bytes is refused
+          # by GitHub anyway. Tracking issue #8291 (31 issues, 20 waves) failed
+          # here in run 40789524145. Chunks are read from files, never argv.
+          STATE_PACK_DIR="${RUNTIME_DIR}/initial_state_v2"
+          rm -rf "${STATE_PACK_DIR}"
+          STATE_PACK_MANIFEST="$(python3 scripts/orchestrate_state_v2.py pack \
+            --state-file "${STATE_FILE}" \
+            --out-dir "${STATE_PACK_DIR}")"
+          STATE_PACK_TOTAL="$(jq -r '.total' <<< "${STATE_PACK_MANIFEST}")"
+          STATE_PACK_RAW_BYTES="$(jq -r '.raw_bytes' <<< "${STATE_PACK_MANIFEST}")"
+          mapfile -t STATE_PACK_FILES < <(jq -r '.files[]' <<< "${STATE_PACK_MANIFEST}")
+          if ! [[ "${STATE_PACK_TOTAL}" =~ ^[1-9][0-9]*$ ]] || [ "${#STATE_PACK_FILES[@]}" -ne "${STATE_PACK_TOTAL}" ]; then
+            echo "::error::orchestrate_state_v2 pack returned ${#STATE_PACK_FILES[@]} chunk file(s) for declared total=${STATE_PACK_TOTAL} (tracking issue #${TRACKING_ISSUE_NUMBER}); refusing to post a torn state chain."
+            exit 1
+          fi
+          STATE_PACK_PART=0
+          for STATE_PACK_CHUNK in "${STATE_PACK_FILES[@]}"; do
+            STATE_PACK_PART=$((STATE_PACK_PART + 1))
+            jq -Rs '{body: .}' < "${STATE_PACK_CHUNK}" > "${STATE_PACK_CHUNK}.json"
+            if ! gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+              --method POST \
+              --input "${STATE_PACK_CHUNK}.json" >/dev/null; then
+              echo "::error::Failed to post ORCHESTRATOR_STATE_V2 chunk ${STATE_PACK_PART}/${STATE_PACK_TOTAL} to tracking issue #${TRACKING_ISSUE_NUMBER}."
+              exit 1
+            fi
+          done
+          echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER} (ORCHESTRATOR_STATE_V2 parts=${STATE_PACK_PART} raw_bytes=${STATE_PACK_RAW_BYTES})"
 
       - name: Record decomposition candidate
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1369,6 +1700,7 @@ jobs:
             --issue-number "${TRACKING_ISSUE_NUMBER}"
 
       - name: Dispatch Wave 1
+        if: env.CLAUDE_CAPACITY_WAIT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
@@ -1405,7 +1737,7 @@ jobs:
                 --input - >/dev/null
 
       - name: Write run summary
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_ORCHESTRATE || '200000' }}
         run: |
@@ -1418,10 +1750,8 @@ jobs:
             TOKENS="$(grep -A1 'tokens used' "${RUNTIME_DIR}/codex_log.txt" | tail -1 | tr -d '[:space:]' || true)"
           fi
           ISSUE_COUNT="0"
-          WAVE_COUNT="0"
           if [ -f "${DECOMPOSITION_FILE}" ]; then
             ISSUE_COUNT="$(jq '.issues | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
-            WAVE_COUNT="$(jq '.dependency_edges | length' "${DECOMPOSITION_FILE}" 2>/dev/null || echo 0)"
           fi
           {
             echo "## AI Orchestrate Summary"
@@ -1443,7 +1773,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record orchestration run end
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1488,13 +1818,13 @@ jobs:
           memory_record_run_event "${ARGS[@]}"
 
       - name: Notify via Telegram
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TRACKING_ISSUE_NUMBER: ${{ steps.tracking_issue.outputs.tracking_issue_number }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           : "${RUNTIME_DIR:=/tmp/codex-orchestrate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
@@ -1530,3 +1860,66 @@ jobs:
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
           tg_send_tracked "${TRACKING_ISSUE_NUMBER:-0}" "${MSG}" "${LEVEL}"
+      # Q151: a project started by a plan split that failed before its
+      # tracking issue existed never started, so the source issue is released:
+      # a release marker plus label removal let a /reclarify split it again.
+      # A failure after the tracking issue exists releases nothing.
+      - name: Release plan-split source issue
+        if: failure() && steps.tracking_issue.outputs.tracking_issue_number == '' && contains(inputs.tracking_comment, '<!-- ai:plan-split-source:v1 issue=')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_COMMENT_INPUT: ${{ inputs.tracking_comment }}
+        run: |
+          set -uo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          source_issue="$(printf '%s' "${TRACKING_COMMENT_INPUT}" | sed -n 's/^<!-- ai:plan-split-source:v1 issue=\([1-9][0-9]*\) -->$/\1/p' | head -1)"
+          [ -n "${source_issue}" ] || exit 0
+          if ! gh_retry gh api "repos/${{ github.repository }}/issues/${source_issue}" \
+              --jq '.state == "open" and ([.labels[].name] | index("ai:split-to-project") != null)' 2>/dev/null | grep -qx true; then
+            exit 0
+          fi
+          run_url="${GITHUB_SERVER_URL:-https://github.com}/${{ github.repository }}/actions/runs/${GITHUB_RUN_ID:-}"
+          # Marker first (up to 3 attempts; a duplicate is harmless), then the
+          # label: a label removed without a release marker would leave the
+          # split marker blocking every /reclarify, so a failed marker keeps it.
+          release_posted=false
+          for attempt in 1 2 3; do
+            if gh_retry gh api "repos/${{ github.repository }}/issues/${source_issue}/comments" \
+                -f body="<!-- ai:plan-split-released:v1 issue=${source_issue} -->"$'\n'"The orchestrator run that was to implement this plan failed before it created a tracking issue (${run_url}), so no project is running for it. Comment \`/reclarify\` to plan it again; the plan stage may then hand it to a new project." >/dev/null 2>&1; then
+              release_posted=true
+              break
+            fi
+            [ "${attempt}" -lt 3 ] && sleep 2
+          done
+          if [ "${release_posted}" != true ]; then
+            echo "::warning::Could not post the release marker on plan-split source issue #${source_issue}; delete its plan-split comment, remove ai:split-to-project and comment /reclarify."
+          elif gh_retry gh issue edit "${source_issue}" --repo "${{ github.repository }}" --remove-label "ai:split-to-project" >/dev/null 2>&1; then
+            echo "PLAN_SPLIT_RELEASED source_issue=${source_issue}"
+          else
+            echo "::warning::Posted the release marker on plan-split source issue #${source_issue} but could not remove ai:split-to-project; remove the label by hand, then comment /reclarify."
+          fi
+
+      # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
+      # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
+      # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
+      # the copy in the trusted support checkout, never a PR-head script.
+      - name: Report refused AI engine fallbacks
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+        run: |
+          fallback_support_dir="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          fallback_report="${fallback_support_dir}/scripts/ai_engine_fallback_report.sh"
+          if [ -n "${fallback_support_dir}" ] && [ -f "${fallback_report}" ] && [ ! -L "${fallback_report}" ]; then
+            REPORT_WRAPPER_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${fallback_support_dir}" rev-parse HEAD 2>/dev/null || true)" \
+              bash "${fallback_report}" || true
+          else
+            echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi

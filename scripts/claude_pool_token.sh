@@ -27,6 +27,8 @@
 #   CLAUDE_ENGINE_POOL_DIR   pool directory (default $RUNNER_TEMP/claude-pool)
 #   CLAUDE_POOL_PROBE        `false` skips the probes (order = broker order)
 #   CLAUDE_POOL_PROBE_TIMEOUT_SECS   per-probe limit (default 120)
+#   CLAUDE_POOL_REASON_FILE  the outcome token for ai_engine.sh
+#                            (default $RUNNER_TEMP/claude-pool-reason)
 #   ACTIONS_ID_TOKEN_REQUEST_URL / ACTIONS_ID_TOKEN_REQUEST_TOKEN (runner)
 set -uo pipefail
 
@@ -61,6 +63,12 @@ engine_py()
 	PYTHONDONTWRITEBYTECODE=1 python3 "${script_dir}/claude_engine.py" "$@"
 }
 
+# The probe records (account name, window utilizations, reset times, status,
+# error; never a token) for the `probes` output, so orchestrate_poll.yml can
+# raise the hourly near-cap alert (scripts/claude_pool_health_alert.sh) even
+# when every account is gated and the pool directory is removed.
+probes="[]"
+
 finish()
 {
 	local available="$1" reason="$2" count="${3:-0}"
@@ -70,10 +78,21 @@ finish()
 		echo "reason=${reason}"
 		echo "accounts=${count}"
 		echo "pool_dir=${pool_dir}"
+		echo "probes=${probes}"
 	} >> "${output_file}"
 	if [ "${available}" != "true" ] && [ ! -L "${pool_dir}" ]; then
 		rm -rf -- "${pool_dir}"
 	fi
+	# The pool step's outcome for scripts/ai_engine.sh
+	# (ai_engine_no_account_reason): `all_gated` is the capacity reason that
+	# lets a role fall back to codex (plan item 3e, D1). Written on every
+	# outcome so a stale value never survives; a failed write is ignored.
+	local reason_file="${CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason}"
+	(
+		umask 077
+		[ ! -L "${reason_file}" ] || rm -f -- "${reason_file}"
+		printf '%s\n' "${reason}" > "${reason_file}"
+	) 2>/dev/null || true
 	exit 0
 }
 

@@ -8,17 +8,21 @@ and ``ANTHROPIC_BASE_URL=http://127.0.0.1:8765``:
   * ``bridge <socket>`` runs inside the container. It accepts only the dummy
     bearer on loopback, drops it, and forwards the request over the
     bind-mounted Unix socket.
-  * ``broker <socket> <token_file> <model>[,<model>…]`` runs on the host. It
-    alone reads the real OAuth token (from a 0600 file, never from the
-    environment or argv), accepts no client credential, checks the requested
-    model, and forwards to https://api.anthropic.com.
+  * ``broker <socket> <token_file> <model>[,<model>…] [--allow-web-search]``
+    runs on the host. It alone reads the real OAuth token (from a 0600 file,
+    never from the environment or argv), accepts no client credential, checks
+    the requested model, and forwards to https://api.anthropic.com.
 
 Neither side accepts a destination URL from the client. Only POST
 ``/v1/messages`` and ``/v1/messages/count_tokens`` (optionally
 ``?beta=true``) cross the boundary. Request and response headers pass through
 fixed allow lists. Only client-executed tools are allowed: the host broker
-refuses provider-side web, code-execution and MCP connector tools. Never log
-requests, upstream bodies, headers or the token.
+refuses provider-side web, code-execution and MCP connector tools. The one
+exception is ``--allow-web-search``: the provider's web search tool, in
+exactly the shape the pinned Claude Code CLI's WebSearch tool sends
+(WEB_SEARCH_TOOL_TYPE, name ``web_search``, at most WEB_SEARCH_MAX_USES
+searches, optional domain lists). Web fetch, code execution and MCP stay
+refused either way. Never log requests, upstream bodies, headers or the token.
 """
 
 import http.client
@@ -50,6 +54,18 @@ MAX_HEADER_VALUE = 4096
 PROVIDER_EGRESS_TOOL_PREFIXES = ("web_search_", "web_fetch_", "code_execution_")
 PROVIDER_EGRESS_TOOL_TYPES = ("mcp_toolset",)
 PROVIDER_EGRESS_REQUEST_KEYS = ("mcp_servers", "container")
+# The provider-side search the CLI's WebSearch tool sends (CLI 2.1.289:
+# {type, name, allowed_domains?, blocked_domains?, max_uses: 8,
+# search_profile?}). Accepted only when the broker runs with
+# WEB_SEARCH_BROKER_FLAG. A newer tool version stays refused until reviewed.
+WEB_SEARCH_BROKER_FLAG = "--allow-web-search"
+WEB_SEARCH_TOOL_TYPE = "web_search_20250305"
+WEB_SEARCH_TOOL_NAME = "web_search"
+WEB_SEARCH_TOOL_KEYS = frozenset(("type", "name", "allowed_domains", "blocked_domains", "max_uses", "search_profile"))
+WEB_SEARCH_MAX_USES = 8
+WEB_SEARCH_MAX_DOMAINS = 100
+WEB_SEARCH_DOMAIN_RE = re.compile(r"^[A-Za-z0-9*][A-Za-z0-9.*:/_-]{0,252}$")
+WEB_SEARCH_PROFILE_RE = re.compile(r"^[a-z][a-z_]{0,31}$")
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -87,8 +103,36 @@ def with_oauth_beta(value):
 	return ",".join(flags)
 
 
-def request_has_provider_egress(request: dict) -> bool:
-	"""Reject provider-executed tools at the host trust boundary."""
+def _is_allowed_web_search_tool(tool: dict) -> bool:
+	"""True only for the exact provider web search tool shape the CLI sends."""
+	if tool.get("type") != WEB_SEARCH_TOOL_TYPE or tool.get("name") != WEB_SEARCH_TOOL_NAME:
+		return False
+	if not set(tool) <= WEB_SEARCH_TOOL_KEYS:
+		return False
+	# The CLI always sends max_uses; requiring it keeps the bound relay-enforced.
+	max_uses = tool.get("max_uses")
+	if type(max_uses) is not int or not 1 <= max_uses <= WEB_SEARCH_MAX_USES:
+		return False
+	for key in ("allowed_domains", "blocked_domains"):
+		domains = tool.get(key)
+		if domains is None:
+			continue
+		if not isinstance(domains, list) or len(domains) > WEB_SEARCH_MAX_DOMAINS \
+			or not all(isinstance(domain, str) and WEB_SEARCH_DOMAIN_RE.fullmatch(domain) for domain in domains):
+			return False
+	profile = tool.get("search_profile")
+	if profile is not None and not (isinstance(profile, str) and WEB_SEARCH_PROFILE_RE.fullmatch(profile)):
+		return False
+	return True
+
+
+def request_has_provider_egress(request: dict, allow_web_search: bool = False) -> bool:
+	"""Reject provider-executed tools at the host trust boundary.
+
+	With ``allow_web_search`` the provider web search tool passes when it has
+	exactly the shape the CLI sends (``_is_allowed_web_search_tool``); every
+	other provider-executed tool is still refused.
+	"""
 	if any(key in request for key in PROVIDER_EGRESS_REQUEST_KEYS):
 		return True
 	if "tools" not in request:
@@ -101,6 +145,8 @@ def request_has_provider_egress(request: dict) -> bool:
 			return True
 		if "type" in tool:
 			tool_type = tool["type"]
+			if allow_web_search and _is_allowed_web_search_tool(tool):
+				continue
 			# Unknown typed tools may execute on the provider; only custom tools run in the client.
 			if (
 				not isinstance(tool_type, str)
@@ -234,7 +280,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 				return self._reject(400)
 			if not isinstance(request, dict) or request.get("model") not in self.server.models:
 				return self._reject(400)
-			if request_has_provider_egress(request):
+			if request_has_provider_egress(request, getattr(self.server, "allow_web_search", False)):
 				return self._reject(400)
 			headers["anthropic-beta"] = with_oauth_beta(headers.get("anthropic-beta"))
 			headers["authorization"] = "Bearer " + self.server.token
@@ -278,7 +324,7 @@ def main():
 	if len(sys.argv) < 2 or sys.argv[1] not in ("broker", "bridge"):
 		raise SystemExit(2)
 	if sys.argv[1] == "broker":
-		if len(sys.argv) != 5:
+		if len(sys.argv) not in (5, 6) or (len(sys.argv) == 6 and sys.argv[5] != WEB_SEARCH_BROKER_FLAG):
 			raise SystemExit(2)
 		models = tuple(model for model in sys.argv[4].split(",") if model)
 		if not models or not all(MODEL_RE.match(model) for model in models):
@@ -291,6 +337,7 @@ def main():
 		server.mode = "broker"
 		server.token = token
 		server.models = models
+		server.allow_web_search = len(sys.argv) == 6
 		os.chmod(sys.argv[2], 0o600)  # The container uses the host UID to connect.
 	else:
 		if len(sys.argv) != 3:

@@ -99,12 +99,117 @@ review_head_gate_main()
 	fi
 }
 
+# Freshness-update fast path (#7084, Q60: A; hardened by security-pass
+# finding freshness-sync-signed-merge-review-bypass). A merge path that finds
+# the base moved under the PR's files updates the branch, waits for the commit
+# GitHub produced, verifies it, and posts
+#   <!-- ai:merge-base-sync:v1 pr=<n> from=<approved head> sync=<k> base=<base tip> merge=<update commit> -->
+# (scripts/pr_checks_lib.sh). The synchronize run may skip the reviewer panel
+# only for exactly that recorded update commit:
+#   - the newest marker by the workflow's own login for <pr> whose `merge`
+#     equals the head; legacy markers without `base`/`merge` never skip;
+#   - the head commit has exactly two parents, `from` first and `base`
+#     second, and GitHub made it (committer `web-flow`, verified signature);
+#   - the base parent is contained in <base> (`compare/<base parent>...<base>`
+#     is `ahead` or `identical`), so the only new code is already on the base.
+# Any other head, such as a later web conflict-resolver merge on top of a
+# branch reset to the approved head, has a different SHA or base parent and
+# is reviewed normally.
+# Usage: freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file>
+# The comments file is the review gate's existing marker-comment read (an array
+# of {author_login, body}); this adds no comments call. API budget (§15): one
+# `commits/<head>` and one compare read, both only when a bound marker names
+# the head. Exit 0 = skip the reviewers; 1 = review normally. Every outcome
+# logs one REVIEW_HEAD_GATE mode=freshness_sync line.
+review_head_gate_freshness_sync()
+{
+	local fs_repo="${1:-}" fs_pr="${2:-}" fs_head="${3:-}" fs_base="${4:-}" fs_login="${5:-}" fs_comments="${6:-}"
+	local fs_markers fs_marker fs_from fs_sync fs_base_parent fs_commit fs_parent_count fs_first fs_second fs_verified fs_committer fs_status
+	fs_log()
+	{
+		echo "REVIEW_HEAD_GATE mode=freshness_sync pr=${fs_pr:-?} head=${fs_head:-?} outcome=$1 reason=$2${3:+ $3}"
+	}
+	if ! review_head_gate_valid_repo "${fs_repo}" || ! [[ "${fs_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${fs_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${fs_base}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${fs_base}" == *..* ]] \
+		|| [ -z "${fs_login}" ] || [ ! -f "${fs_comments}" ]; then
+		fs_log review invalid_input
+		return 1
+	fi
+	# One line per trusted marker for this PR: "<from> <sync> <base|-> <merge|->".
+	fs_markers="$(jq -r --arg login "${fs_login}" --arg pr "${fs_pr}" '
+		.[]? | select(type == "object" and (.author_login // "") == $login)
+		| (.body // "") | select(type == "string" and startswith("**Branch updated from `"))
+		| capture("<!-- ai:merge-base-sync:v1 pr=(?<pr>[0-9]+) from=(?<from>[0-9a-f]{40}) sync=(?<sync>[0-9]+)( base=(?<base>[0-9a-f]{40}) merge=(?<merge>[0-9a-f]{40}))? -->\\s*$")?
+		| select(.pr == $pr) | "\(.from) \(.sync) \(.base // "-") \(.merge // "-")"' "${fs_comments}" 2>/dev/null || true)"
+	if [ -z "${fs_markers}" ]; then
+		fs_log review no_sync_marker
+		return 1
+	fi
+	fs_marker="$(printf '%s\n' "${fs_markers}" | awk -v head="${fs_head}" '$4 == head { m = $0 } END { if (m != "") print m }')"
+	if [ -z "${fs_marker}" ]; then
+		if printf '%s\n' "${fs_markers}" | awk '$4 != "-" { found = 1 } END { exit found ? 0 : 1 }'; then
+			fs_log review marker_not_for_head
+		else
+			fs_log review unbound_marker
+		fi
+		return 1
+	fi
+	read -r fs_from fs_sync fs_base_parent _ <<< "${fs_marker}"
+	# CI already failed on this head (scripts/review_freshness_ci_failed.sh,
+	# Q103): review it normally so autofix sees the failing checks.
+	if jq -e --arg login "${fs_login}" --arg pr "${fs_pr}" --arg head "${fs_head}" '
+		[ .[]? | select(type == "object" and (.author_login // "") == $login)
+		  | (.body // "") | select(type == "string")
+		  | test("<!-- ai:freshness-ci-failed:v1 pr=" + $pr + " head=" + $head + " -->\\s*$") ] | any' \
+		"${fs_comments}" >/dev/null 2>&1; then
+		fs_log review ci_failed_on_head "from=${fs_from} sync=${fs_sync}"
+		return 1
+	fi
+	if ! fs_commit="$(gh_retry gh api "repos/${fs_repo}/commits/${fs_head}" \
+		--jq '{parents: [.parents[]?.sha], verified: (.commit.verification.verified // false), committer: (.committer.login // "")}' 2>/dev/null)"; then
+		fs_log review commit_read_failed "from=${fs_from} sync=${fs_sync}"
+		return 1
+	fi
+	fs_parent_count="$(printf '%s' "${fs_commit}" | jq -r '.parents | length' 2>/dev/null || echo 0)"
+	fs_first="$(printf '%s' "${fs_commit}" | jq -r '.parents[0] // ""' 2>/dev/null || true)"
+	fs_second="$(printf '%s' "${fs_commit}" | jq -r '.parents[1] // ""' 2>/dev/null || true)"
+	fs_verified="$(printf '%s' "${fs_commit}" | jq -r '.verified' 2>/dev/null || echo false)"
+	fs_committer="$(printf '%s' "${fs_commit}" | jq -r '.committer' 2>/dev/null || true)"
+	if [ "${fs_parent_count}" != "2" ] || [ "${fs_first}" != "${fs_from}" ]; then
+		fs_log review head_is_not_the_update "from=${fs_from} parents=${fs_parent_count} first=${fs_first:-none}"
+		return 1
+	fi
+	if [ "${fs_second}" != "${fs_base_parent}" ]; then
+		fs_log review base_parent_mismatch "from=${fs_from} base=${fs_base_parent} base_parent=${fs_second:-none}"
+		return 1
+	fi
+	if [ "${fs_verified}" != "true" ] || [ "${fs_committer}" != "web-flow" ]; then
+		fs_log review merge_not_made_by_github "from=${fs_from} verified=${fs_verified} committer=${fs_committer:-none}"
+		return 1
+	fi
+	if ! [[ "${fs_second}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! fs_status="$(gh_retry gh api "repos/${fs_repo}/compare/${fs_second}...${fs_base}" --jq '.status // ""' 2>/dev/null)"; then
+		fs_log review base_compare_failed "from=${fs_from} base_parent=${fs_second:-none}"
+		return 1
+	fi
+	case "${fs_status}" in
+		ahead|identical) ;;
+		*)
+			fs_log review base_parent_not_on_base "from=${fs_from} base_parent=${fs_second} status=${fs_status:-none}"
+			return 1
+			;;
+	esac
+	fs_log skip freshness_sync "from=${fs_from} base_parent=${fs_second} sync=${fs_sync} merge=${fs_head}"
+	return 0
+}
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	set -euo pipefail
 	# shellcheck source=/dev/null
 	source "$(dirname -- "${BASH_SOURCE[0]}")/gh_helpers.sh"
 	case "${1:-}" in
 		gate) review_head_gate_main ;;
-		*) echo "Usage: review_head_gate.sh gate" >&2; exit 2 ;;
+		freshness-sync) shift; review_head_gate_freshness_sync "$@" ;;
+		*) echo "Usage: review_head_gate.sh gate | freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file>" >&2; exit 2 ;;
 	esac
 fi

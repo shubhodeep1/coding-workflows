@@ -13,7 +13,12 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument(
 		"--modules",
 		nargs="+",
-		default=["json", "pathlib", "yaml", "jinja2"],
+		# Standard-library modules only: these families render for any Python
+		# consumer, whose dependencies the harness cannot know. The earlier
+		# defaults named the renderer's own modules (yaml, jsonschema, jinja2),
+		# so a consumer without PyYAML failed this audit (binance-blessings#249).
+		# The repository checks import the consumer's own code.
+		default=["argparse", "json", "pathlib", "subprocess"],
 		help="Module names that must import successfully in an isolated subprocess",
 	)
 	return parser

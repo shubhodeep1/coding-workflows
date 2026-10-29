@@ -15,5 +15,5 @@ permissions:
 
 jobs:
   poll:
-    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@main
+    uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_poll.yml@promote-candidate
     secrets: inherit

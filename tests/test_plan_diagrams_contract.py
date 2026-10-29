@@ -8,6 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_PROMPT = REPO_ROOT / "prompts" / "mode-plan.txt"
@@ -69,7 +72,7 @@ def test_plan_workflow_and_contract_export_diagram_flag_with_live_prompt_parity(
 	workflow = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	plan_runner = PLAN_RUNNER.read_text(encoding="utf-8")
 	contract = PLAN_CONTRACT.read_text(encoding="utf-8")
-	agents_md = AGENTS_MD.read_text(encoding="utf-8")
+	agents_md = _agents_text_with_fragments()
 
 	assert "PLAN_DIAGRAMS_OPTIONAL: ${{ vars.PLAN_DIAGRAMS_OPTIONAL || 'true' }}" in workflow
 	assert "11. Diagrams/failure-modes requirement gate (current render: `PLAN_DIAGRAMS_OPTIONAL={{PLAN_DIAGRAMS_OPTIONAL}}`):" in plan_runner

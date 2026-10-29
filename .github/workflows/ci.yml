@@ -2,10 +2,18 @@
 name: CI
 
 "on":
+  # Pull-request CI runs for every base (issue #7283). A fix PR routed to a
+  # failing PR's head branch (CI-triage routing, #6726 / #7042) then gets its
+  # own `CI / lint` before it merges, like a sub-issue PR into
+  # `orchestrator/project-*` (Q45). Push CI stays on main, stable and the
+  # integration branches, so check-failure triage has a base-branch result
+  # to compare a failing PR against (a green base means the failure is the
+  # PR's own and is left to its autofix). Heal intake and budget-watch act
+  # on main pushes only.
   pull_request:
-    branches: [main, stable]
+    branches: ["**"]
   push:
-    branches: [main, stable]
+    branches: [main, stable, "orchestrator/project-*"]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -20,7 +28,14 @@ jobs:
     # Static checks: shell-block guards, YAML lint, drift check, actionlint,
     # Python syntax and ruff, schema/prompt checks, and ShellCheck. About
     # 2 minutes measured (1.4-1.9 in #4707's CI runs); 15 leaves room for a
-    # cold runner.
+    # cold runner. Since #7250 and #7334 it also runs test steps moved from
+    # tests-heal-plan-and-validation, so that figure no longer covers the
+    # whole job: re-measure it before moving more steps here. budget-watch
+    # warns at 75% of the timeout (11m15s for this job).
+    # It took 15m18s of its 15 minutes on main (run 38562929820, budget-watch
+    # issue #7382), so "Regression tests wired by the CI wiring guard
+    # (part 1)" was moved out to tests-release-and-log-analysis, and from there
+    # on to tests-heal-plan-and-validation in #7406.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -212,6 +227,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ci_job_split_contract.py
 
+      - name: CI test wiring guard
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_wires_every_test_file.py
+
       - name: YAML lint
         run: |
           set -euo pipefail
@@ -230,6 +250,33 @@ jobs:
           set -euo pipefail
           make generate-check
 
+      # CLAUDE.md §30: every pending agents.d/ fragment must fold into
+      # agents.md; the release job would otherwise skip it with a warning.
+      - name: agents.d fragment check and tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py check --repo-root .
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_assemble_agents.py tests/test_agents_fragment_contract.py tests/test_check_agents_md_direct_edits.py
+
+      # CLAUDE.md §30 (Q68): a pull request may not add documentation to
+      # agents.md directly. Direct additions are what made orchestrator
+      # integration branches conflict with main there (#6902's final PR).
+      # The merge commit is compared with its first parent (the base tip it
+      # was built on). A project's final PR (head orchestrator/project-*) is
+      # skipped: its sub-issue PRs were checked when they targeted the
+      # integration branch. A forward-merge fallback PR
+      # (auto/forward-merge-stable-*) is skipped too: it carries the release
+      # fold's generated agents.md text. Both skips apply only to a
+      # same-repository head targeting the default branch, so a branch name
+      # alone does not exempt an ordinary PR.
+      - name: agents.md direct-edit check (CLAUDE.md §30)
+        if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && github.base_ref == github.event.repository.default_branch && (startsWith(github.head_ref, 'orchestrator/project-') || startsWith(github.head_ref, 'auto/forward-merge-stable-')))
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=2 origin "${GITHUB_SHA}"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_agents_md_direct_edits.py \
+            --base "$(git rev-parse "${GITHUB_SHA}^1")" --head "${GITHUB_SHA}"
+
       - name: Install actionlint
         env:
           ACTIONLINT_VERSION: "1.7.12"
@@ -243,7 +290,12 @@ jobs:
           # CI (no `bash <(curl ...)` or moving-target `latest` refs).
           cd /tmp
           tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -sSLf -o "${tarball}" \
+          # Bounded retries cover transient 5xx and connection resets (CI run
+          # 35615284953 failed on an HTTP 504 here). `--retry-delay 0` keeps
+          # curl's built-in exponential backoff; the sha256 check below still
+          # guards integrity.
+          curl -sSLf --retry 3 --retry-all-errors --retry-delay 0 \
+            --connect-timeout 20 --max-time 120 -o "${tarball}" \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "${tarball}" actionlint
@@ -365,8 +417,25 @@ jobs:
       - name: ShellCheck static analysis
         run: |
           set -euo pipefail
+          # Issue #6680: ShellCheck 0.9.x (the runner image's copy) always runs
+          # its dataflow analysis, which takes the runner down on
+          # scripts/orchestrate_poll_process.sh. ShellCheck 0.10+ honours that
+          # file's `# shellcheck extended-analysis=false` directive, so pin it.
+          # A failed install keeps the runner's copy with a warning.
+          sc=shellcheck
+          if python3 -m pip install --quiet 'shellcheck-py==0.10.0.1'; then
+            sc_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')" || sc_dir=""
+            if [ -x "${sc_dir}/shellcheck" ]; then
+              sc="${sc_dir}/shellcheck"
+            else
+              echo "::warning::ShellCheck 0.10.0.1 installed but ${sc_dir:-<unknown>}/shellcheck is missing; using $(command -v shellcheck || echo 'no shellcheck')."
+            fi
+          else
+            echo "::warning::Could not install ShellCheck 0.10.0.1; using $(command -v shellcheck || echo 'no shellcheck')."
+          fi
+          "${sc}" --version
           for f in scripts/*.sh .claude/hooks/*.sh workflow-templates/.claude/hooks/*.sh; do
-            shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+            "${sc}" --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
       - name: Script-workflow cross-reference
@@ -378,6 +447,62 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py
+
+      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
+      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
+      # measured about 2 minutes. Step names and bodies are unchanged.
+      # "Regression tests wired by the CI wiring guard (part 1)", moved here
+      # with it, moved on to tests-release-and-log-analysis in #7382 and is in
+      # tests-heal-plan-and-validation since #7406.
+      - name: Implement post-Codex recovery unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
+
+      # Moved from tests-heal-plan-and-validation, which measured 15m04s of
+      # its 20 minutes on main (run 38481381592, issue #7334). Per-step
+      # timings for that run were not available when these steps were
+      # chosen. Step names and bodies are unchanged.
+      - name: Validation self-test unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_status.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_resolve_integration_ref_ci_triage.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_audit_upstream_report.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_integrity.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_resolver_union.py
+
+      - name: Validation bootstrap and family direct-run tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
 
   tests-hooks-and-orchestrator:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -392,13 +517,32 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare template-only PR live copies for parity tests
-        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        if: >-
+          (github.event_name == 'pull_request' && github.base_ref != 'stable') ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/orchestrator/project-'))
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${PR_BASE_SHA}" --after HEAD --keep-committed-security-paths
+          # Live copies are synced only after a push to main, so an
+          # orchestrator integration branch can carry template changes that
+          # earlier sub-issue PRs merged. The sync's drift recovery copies
+          # those too (template committed after its live copy), but only
+          # when --before is a reachable commit: the script skips an empty,
+          # all-zero or unreachable one. A push has no PR base, so it passes
+          # its own before; a branch-creation or force push falls back to
+          # the merge-base with main. Pull-request CI runs for every base
+          # since #7283, so a fix PR routed to a failing PR's ai/issue-* head
+          # is prepared too; only PRs into stable check the committed tree.
+          before="${PR_BASE_SHA:-${PUSH_BEFORE_SHA}}"
+          if [ -z "${before//0/}" ] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            fallback="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+            echo "::warning::Template parity preparation: before=${before:-empty} is not a reachable commit; using merge-base with main (${fallback:-unavailable})."
+            before="${fallback}"
+          fi
+          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${before}" --after HEAD --keep-committed-security-paths
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -442,23 +586,10 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py
 
-      - name: Judge Semble prefetch contract test
+      - name: Telegram alert levels page only when a person must act
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_record_id_format_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_informal_detect.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_repo_root_helper.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_generate_resource_id.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_repo_tree.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_handshake_probe.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_setup_serena_toml.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_alert_levels_human_only.py
 
       - name: Memory maintenance extraction contract tests
         run: |
@@ -466,29 +597,31 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_memory_maintenance_contract_noop.py
 
       - name: Merged-PR commit guard hook tests (CLAUDE.md §21)
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_merge_status_guard.py
 
       - name: Live .claude/ copies match their templates
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py
 
-      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
-        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
-        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
-        # PR per release tick), plus _parse_reset_header's Retry-After
-        # precedence and gh_retry's per-attempt stdout buffering (#5495)
-        # in scripts/gh_helpers.sh.
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_review_merge_train.py \
-            tests/test_gh_helpers_parse_reset_header.py \
-            tests/test_gh_retry_stdout_isolation.py
-
       - name: PR-watch guard hook tests (CLAUDE.md §25)
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
@@ -498,64 +631,49 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_retarget_merged_base.py
 
-      - name: Standalone clarify auto-decide tests (port P3)
+      - name: Clarify sandbox base image pre-seed tests (#6985)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_auto_decisions.py \
-            tests/test_clarify_respond_standalone.py \
-            tests/test_clarify_github_facts.py
-
-      - name: Single-issue security pass tests (port P1)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_single_issue_security_pass.py \
-            tests/test_review_security_hold_sweep.py
-
-      - name: Activation verification tests (port P4)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py
-
-      - name: Unblock judge and scan tests (replace-claude-sessions Phase 7)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py
+          # The fake docker lives in a temp dir, so TMPDIR must allow executables.
+          TMPDIR="${RUNNER_TEMP}" PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
 
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_gh_api_write_guard.py
 
-      - name: Claude engine selection and claude_run tests
+      - name: Pre-push affected-test gate tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
-
-      - name: Isolated agent container tests (codex_isolated_exec.sh)
-        # The real-Docker e2e file skips itself unless CODEX_ISOLATION_DOCKER_E2E=1.
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_codex_agent_isolation_contract.py tests/test_codex_isolated_exec.py tests/test_dependency_registry_proxy.py \
-            tests/test_codex_isolated_workspace.py tests/test_codex_isolated_exec_docker_e2e.py \
-            tests/test_integration_judge_scope_guard.py
+          ruff check --select E,F --ignore E501 workflow-templates/.claude/hooks/prepush_affected_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_prepush_affected_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_prepush_test_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_prepush_test_gate.py
 
       - name: Claude engine decision tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine.py
 
-      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
+      - name: Claude account-pool review-panel slot tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pool_reviewer.py
 
-      - name: Review sandbox Claude role tests (Phase 5c)
+      - name: Workflow-heal editor on the Claude engine tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_claude_roles.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_heal_isolated_claude_editor.py
+
+      - name: Review editor account-pool telemetry tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_pool_telemetry.py
 
       - name: Engine label propagation tests (ai:engine-claude)
         run: |
@@ -577,37 +695,40 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
 
+      - name: CI budget watch tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_budget_watch.py
+
+      - name: Claude pool health alert tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_health_alert.py
+
+      - name: Claude pool daily usage report tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_daily_usage.py
+
       - name: Install Claude CLI action tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_install_claude_action.py
-
-      - name: Set up Node 22 for the claude-pool-broker Worker tests
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-
-      - name: claude-pool-broker Worker tests (vitest)
-        working-directory: tools/claude-pool-broker
-        run: |
-          set -euo pipefail
-          npm ci --no-audit --no-fund
-          npx vitest run
-
-      - name: Session automation retirement guard and retired labels/files tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_no_session_automation.py tests/test_ai_labels_retired.py tests/test_update_workflows_retired_files.py
 
       - name: Security-pass skip rule tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_skip.py
 
+      - name: Security-pass final PR sync tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_final_pr_sync.py
+
       - name: Security dependency hold tests (issue 4934)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py tests/test_pr_dependency.py tests/test_check_triage_resolution.py
 
       - name: Skip-AI marker rule and gate skip notice tests (issue 4985)
         run: |
@@ -629,26 +750,15 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_deploy_activate_command.py
 
-      - name: Orchestrate lib unit tests
+      - name: Safe URL fetch helper and command contract tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_safe_fetch_url.py
 
       - name: Orchestrator completion lessons + lesson retrieval tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_completion_lessons.py
-
-      - name: Integration-ahead-by gate regression tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
 
       - name: PR body auto-close lint unit tests
         # P1 from docs/postmortems/2026-05-18-project-2734-stall.md.
@@ -659,10 +769,137 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_lint_pr_body_auto_close.py
 
-      - name: Check-failure triage workflow security tests
+      # History: the step moved out of this job (15m52s of its 20 minutes, run
+      # 39038112755, budget-watch issue #7575) into orchestrate-poll group 1.
+      # Before that it moved here from tests-release-and-log-analysis (20m16s,
+      # run 39030079651, #7560), and earlier out of this job when it measured
+      # 19.6 of its 20 minutes (2026-10-09). In orchestrate-poll it ran in
+      # group 1 only, because group 0 carried the fast-fail subset and (until
+      # #8080 moved them to group 1) the single-file modules. Budget-watch
+      # issue #7579: group 1 then took 15m13s of its 20 minutes (run
+      # 39047759102), and the step was split in place there, the way the
+      # workflow failure heal step was (#7387):
+      # tests/test_review_merge_train.py runs in 3 local shards (split by test
+      # function, parametrized cases together) and the five small modules run
+      # in one more process beside them, on the runner's 4 cores. Every test
+      # seeds its own temp dirs and fake gh, and each shard is a separate
+      # pytest process. Step
+      # times here are estimates from test counts and earlier changelog
+      # figures, not measurements of run 39047759102. The step seeds its own
+      # git repositories and needs no Node or prepared .claude/ live copies.
+      # Moved back from orchestrate-poll group 1, which took 15m42s of its 20
+      # minutes (run 39526504422, budget-watch issue #7766); sharded since
+      # #7579, so its estimated cost here is about 1.5 to 2 minutes. This job
+      # has no matrix, so the step no longer carries a group guard.
+      - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
+        # Drives scripts/review_merge_train.sh through a fake `gh` and pins
+        # the per-run file-list cache (one GET /pulls/{n}/files per distinct
+        # PR per release tick), plus _parse_reset_header's Retry-After
+        # precedence, gh_retry's per-attempt stdout buffering (#5495) and
+        # the non-retryable HTTP 400/401 classification in
+        # scripts/gh_helpers.sh, and PR comment JSON kept out of jq argv
+        # (#7658).
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+          mt_shards=3
+          mt_module="tests/test_review_merge_train.py"
+          rm -f /tmp/merge_train_collect.log /tmp/merge_train_tests.txt \
+            /tmp/merge_train_shard_*.txt /tmp/merge_train_shard_*.log /tmp/merge_train_shard_*.rc \
+            /tmp/merge_train_rest.log /tmp/merge_train_rest.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${mt_module}" \
+            > /tmp/merge_train_collect.log 2>&1 \
+            || { cat /tmp/merge_train_collect.log; echo "::error::Test collection failed for ${mt_module}."; exit 1; }
+          { grep -F "${mt_module}::" /tmp/merge_train_collect.log || true; } \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/merge_train_tests.txt
+          mt_test_count="$(wc -l < /tmp/merge_train_tests.txt | tr -d '[:space:]')"
+          if ! [ "${mt_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from ${mt_module}."
+            exit 1
+          fi
+          echo "${mt_module}: ${mt_test_count} test functions across ${mt_shards} shards"
+          mt_pids=()
+          for mt_shard in $(seq 0 "$((mt_shards - 1))"); do
+            awk -v n="${mt_shard}" -v total="${mt_shards}" 'NR % total == n' \
+              /tmp/merge_train_tests.txt > "/tmp/merge_train_shard_${mt_shard}.txt"
+            [ -s "/tmp/merge_train_shard_${mt_shard}.txt" ] || continue
+            (
+              mapfile -t mt_shard_tests < "/tmp/merge_train_shard_${mt_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${mt_shard_tests[@]}" > "/tmp/merge_train_shard_${mt_shard}.log" 2>&1
+              echo "$?" > "/tmp/merge_train_shard_${mt_shard}.rc"
+            ) &
+            mt_pids+=("$!")
+          done
+          (
+            set +e
+            PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+              tests/test_gh_helpers_parse_reset_header.py \
+              tests/test_gh_retry_stdout_isolation.py \
+              tests/test_gh_retry_permanent_auth_failures.py \
+              tests/test_gh_api_retry.py \
+              tests/test_gh_api_retry_py.py \
+              tests/test_gh_pr_comments_argv_limit.py > /tmp/merge_train_rest.log 2>&1
+            echo "$?" > /tmp/merge_train_rest.rc
+          ) &
+          mt_pids+=("$!")
+          # Reap every process before judging any, so none is left orphaned.
+          for mt_pid in "${mt_pids[@]}"; do
+            wait "${mt_pid}" || true
+          done
+          mt_ids=()
+          for mt_shard in $(seq 0 "$((mt_shards - 1))"); do
+            [ -s "/tmp/merge_train_shard_${mt_shard}.txt" ] || continue
+            mt_ids+=("${mt_shard}")
+          done
+          mt_ids+=("rest")
+          mt_failed=()
+          for mt_id in "${mt_ids[@]}"; do
+            if [ "${mt_id}" = "rest" ]; then
+              mt_stem="/tmp/merge_train_rest"
+            else
+              mt_stem="/tmp/merge_train_shard_${mt_id}"
+            fi
+            echo "::group::merge-train step shard ${mt_id}"
+            cat "${mt_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            mt_rc="$(cat "${mt_stem}.rc" 2>/dev/null || echo 1)"
+            case "${mt_rc}" in
+              ''|*[!0-9]*) mt_rc=1 ;;
+            esac
+            if [ "${mt_rc}" != "0" ]; then
+              mt_failed+=("${mt_id}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for mt_id in "${mt_failed[@]}"; do
+            if [ "${mt_id}" = "rest" ]; then
+              mt_stem="/tmp/merge_train_rest"
+            else
+              mt_stem="/tmp/merge_train_shard_${mt_id}"
+            fi
+            echo "--- merge-train step shard ${mt_id} failed; last 40 log lines:"
+            { tail -n 40 "${mt_stem}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#mt_failed[@]}" -gt 0 ]; then
+            echo "::error::merge-train step shards failed: ${mt_failed[*]}"
+            exit 1
+          fi
+
+      # Moved from tests-release-and-log-analysis, which took 15m14s of its 20
+      # minutes on main (run 40750326439, budget-watch issue #8278). The pick is
+      # an estimate, not measured. The collector and analyzer coverage gates
+      # stay there because tests/test_ci_inventory_parity_order_contract.py
+      # pins them to the job that runs Inventory parity. Name and body unchanged.
+      - name: Workflow scenario trace renderer coverage gate
+        run: |
+          set -euo pipefail
+          python3 -m coverage erase
+          PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
+          python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
 
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -687,7 +924,75 @@ jobs:
       - name: Workflow failure heal contract and driver tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py
+          # Budget-watch issue #7387: this job took 15m12s of its 20 minutes on
+          # main (run 38584572151), almost all of it in this step. Moving the
+          # step whole did not work: in PR run 38602731355 it needed more than
+          # 7 minutes on top of the 12.8 minutes `tests-promote-stall-and-review`
+          # already used, and that job was cancelled at its timeout. Nearly all
+          # of the step's time is tests/test_workflow_failure_heal.py (297 of
+          # the first command's 397 tests), so that module now runs in local
+          # shards in parallel, the way the orchestrate-poll step runs its
+          # largest module. Each test builds its own temp dirs, and shards are
+          # separate pytest processes, so they share no state. Shards split by
+          # test function (parametrized cases stay together), every collected
+          # function runs exactly once, and a shard with no recorded exit code
+          # counts as failed.
+          heal_shards=4
+          heal_module="tests/test_workflow_failure_heal.py"
+          rm -f /tmp/heal_collect.log /tmp/heal_shard_*.txt /tmp/heal_shard_*.log /tmp/heal_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${heal_module}" \
+            > /tmp/heal_collect.log 2>&1 \
+            || { cat /tmp/heal_collect.log; echo "::error::Test collection failed for ${heal_module}."; exit 1; }
+          { grep -F "${heal_module}::" /tmp/heal_collect.log || true; } \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/heal_tests.txt
+          heal_test_count="$(wc -l < /tmp/heal_tests.txt | tr -d '[:space:]')"
+          if ! [ "${heal_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from ${heal_module}."
+            exit 1
+          fi
+          echo "${heal_module}: ${heal_test_count} test functions across ${heal_shards} shards"
+          heal_shard_pids=()
+          for shard in $(seq 0 "$((heal_shards - 1))"); do
+            awk -v n="${shard}" -v total="${heal_shards}" 'NR % total == n' \
+              /tmp/heal_tests.txt > "/tmp/heal_shard_${shard}.txt"
+            [ -s "/tmp/heal_shard_${shard}.txt" ] || continue
+            (
+              mapfile -t shard_tests < "/tmp/heal_shard_${shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${shard_tests[@]}" > "/tmp/heal_shard_${shard}.log" 2>&1
+              echo "$?" > "/tmp/heal_shard_${shard}.rc"
+            ) &
+            heal_shard_pids+=("$!")
+          done
+          # Reap every shard before judging any, so none is left orphaned.
+          for shard_pid in "${heal_shard_pids[@]}"; do
+            wait "${shard_pid}" || true
+          done
+          heal_failed_shards=()
+          for shard in $(seq 0 "$((heal_shards - 1))"); do
+            [ -s "/tmp/heal_shard_${shard}.txt" ] || continue
+            echo "::group::${heal_module} shard ${shard}"
+            cat "/tmp/heal_shard_${shard}.log" || true
+            echo "::endgroup::"
+            shard_rc="$(cat "/tmp/heal_shard_${shard}.rc" 2>/dev/null || true)"
+            if [ "${shard_rc}" != "0" ]; then
+              heal_failed_shards+=("${shard}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups.
+          for shard in "${heal_failed_shards[@]}"; do
+            echo "--- ${heal_module} shard ${shard} failed; last 40 log lines:"
+            tail -n 40 "/tmp/heal_shard_${shard}.log" || true
+          done
+          if [ "${#heal_failed_shards[@]}" -gt 0 ]; then
+            echo "::error::${heal_module} shards failed: ${heal_failed_shards[*]}"
+            exit 1
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal_non_retryable_backfill.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py tests/test_workflow_failure_heal_scope_tests.py tests/test_workflow_failure_heal_recovery_scan.py tests/test_workflow_failure_heal_synced_security.py tests/test_workflow_failure_heal_queue.py
+          # Model-provider outage classifier, tracker and resume (issue #6633).
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_provider_outage.py tests/test_review_autofix_provider_outage_contract.py tests/test_claude_capacity_wait_call_sites.py
 
       - name: CI failure workflow_run trigger tests
         run: |
@@ -752,43 +1057,6 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_harness_rpc.py
 
-      - name: Validation self-test unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_runner.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_selftest_status.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_nightly_validation_selftest_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_checkout_integration_ref_audit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_drift_audit_job.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_security_audit_prompt_policy.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_consumer_drift.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fingerprint_quarantine.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_state.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_touched_set_symlink_aware.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_consumer_artifact_cleanup_preserves_tracked.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_tiers.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_verify_integration_fingerprints_post_capture_evolution.py
-
-      - name: Validation bootstrap and family direct-run tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_scripts.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_safety_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_hooks.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_cache_maintenance.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_family_node_runtime.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_workflow_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_orchestrator.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py
-
       - name: Validation lint rule unit tests
         run: |
           set -euo pipefail
@@ -796,15 +1064,460 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_healthcheck_test_strings.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_lint_test_script_prologue.py
 
-      - name: Validate process cross-cycle escalation unit tests
+      # Moved from tests-hooks-and-orchestrator, which took 15m09s of its 20
+      # minutes on main (run 38508333607, budget-watch issue #7366). Step
+      # timings were not readable when this was planned; these are the hooks
+      # job's heaviest subprocess-driven steps. None needs git history, the
+      # prepared .claude/ live copies or Node, which only the hooks job has.
+      # Three of those six steps (the Claude-engine judges, the validation
+      # harness sandbox and the check-failure triage security tests) moved on
+      # to tests-release-and-log-analysis after this job took 15m19s of its
+      # 20 minutes on main (run 38564033998, budget-watch issue #7383).
+      # The activation verification step moved on to
+      # tests-release-and-log-analysis in #8279.
+      - name: Tracking issue comment cap tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tracking_comment_cap.py
 
-      - name: Implement post-Codex recovery unit tests
+      - name: Daily consumer health check tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_consumer_health_check.py
+
+      - name: Validation shell-quoting and credential-scrub tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py tests/test_validation_streaming_output.py
+          # Scheduled validation (issue #7553): wrapper schedule, deterministic mode and failure sink.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_scheduled_mode.py tests/test_validate_scheduled_sink.py
+
+      # Moved from tests-release-and-log-analysis, which took 15m33s of its
+      # 20 minutes on main (run 38663329196, budget-watch issue #7406). Step
+      # timings were not readable when this was planned; this step was chosen as
+      # the largest addition (by test-module and subprocess count) since that
+      # job measured about 535-604s. It moved there from static-checks in #7382,
+      # where it also ran on a depth-1 checkout. Step name and body are unchanged.
+      # Sharded in place, not moved (#8246): this job took 15m06s of its 20
+      # minutes on main (run 40626853481). The run's step timings could not be
+      # read, and the recorded history shows no other job with headroom (moves
+      # in #8072, #8091, #8118 and #8208 each reopened budget-watch elsewhere),
+      # so this step splits its test functions across 4 local pytest processes
+      # on the runner's 4 cores, as #7387 and #8150 did. Sandbox timings are
+      # relative weights only: the 33 modules that ran there took about 31s
+      # of pytest time serially (heaviest: review_conflict_resolve_sandbox_only
+      # 8.3s, semble_helpers 4.7s, orchestrate_final_merge_required_checks_gate
+      # 4.2s). Not measurable there (no PyYAML): family_python_mongo_flask,
+      # family_python_repo_checks, render_validation_templates_node_hardhat_
+      # and _node_runtime_regressions, review_pipeline_integration,
+      # validate_process_manifest_shell_safety, workflow_support_ref_follows_pin.
+      # Most of this job's other steps abort early there for the same reason.
+      # The heal step's unsharded tail measured about 16s and stays serial.
+      # Every listed module must contribute at least one test, each collected
+      # function runs exactly once, and a shard without exit code 0 fails.
+      - name: Regression tests wired by the CI wiring guard (part 1)
+        run: |
+          set -euo pipefail
+          wg1_shards=4
+          wg1_modules=(
+            tests/test_ai_memory_cli.py
+            tests/test_branch_rebuild.py
+            tests/test_clarify_sandbox_base_image_preseed.py
+            tests/test_codex_thread_reuse_review.py
+            tests/test_family_python_mongo_flask.py
+            tests/test_family_python_repo_checks.py
+            tests/test_heal_plan_grant_body_edit_fix.py
+            tests/test_implement_heal_preflight.py
+            tests/test_implement_pr_body_tracking_refs.py
+            tests/test_partial_delivery.py
+            tests/test_plan_heal_counterfactual_gate.py
+            tests/test_issue_pr_status_partial_delivery.py
+            tests/test_clarify_partial_delivery_restart.py
+            tests/test_partial_delivery_sweep_guard.py
+            tests/test_orchestrate_final_merge_required_checks_gate.py
+            tests/test_prompt_compaction.py
+            tests/test_render_validation_templates_node_hardhat_regressions.py
+            tests/test_render_validation_templates_node_runtime_regressions.py
+            tests/test_review_autofix_last_run_diff_oscillation_guard.py
+            tests/test_review_commit_new_files_preserved.py
+            tests/test_review_conflict_resolve_sandbox_only.py
+            tests/test_review_freshness_ci_failed.py
+            tests/test_review_head_gate.py
+            tests/test_review_parse_consolidator.py
+            tests/test_review_pipeline_integration.py
+            tests/test_review_rb_judge_reissue_baseline.py
+            tests/test_review_sandbox_hidden_build_dirs.py
+            tests/test_review_sandbox_install_timeout.py
+            tests/test_review_static_context_readme.py
+            tests/test_semble_helpers.py
+            tests/test_validate_driver_credential_scrub.py
+            tests/test_validate_lint_graceful_shutdown_hooks.py
+            tests/test_validate_lint_init_true.py
+            tests/test_validate_preflight_canary_tools_scope.py
+            tests/test_validate_process_manifest_shell_safety.py
+            tests/test_validate_process_render_recovery.py
+            tests/test_validation_import_audit_stdlib.py
+            tests/test_verify_integration_fingerprints_partial_removal.py
+            tests/test_verify_integration_fingerprints_post_capture_reintroduction.py
+            tests/test_workflow_retro_fanout.py
+            tests/test_workflow_support_ref_follows_pin.py
+          )
+          rm -f /tmp/wiring_part1_collect.log /tmp/wiring_part1_modules.txt /tmp/wiring_part1_tests.txt \
+            /tmp/wiring_part1_shard_*.txt /tmp/wiring_part1_shard_*.log /tmp/wiring_part1_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${wg1_modules[@]}" \
+            > /tmp/wiring_part1_collect.log 2>&1 \
+            || { sed 's/^/| /' /tmp/wiring_part1_collect.log; echo "::error::Test collection failed for the wiring guard part 1 modules."; exit 1; }
+          # Keep only IDs whose path (the text before the first "::") is a listed
+          # module, then group parametrized cases under their test function.
+          printf '%s\n' "${wg1_modules[@]}" > /tmp/wiring_part1_modules.txt
+          awk 'NR == FNR { listed[$0] = 1; next } { i = index($0, "::"); if (i > 1 && (substr($0, 1, i - 1) in listed)) print }' \
+            /tmp/wiring_part1_modules.txt /tmp/wiring_part1_collect.log \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/wiring_part1_tests.txt
+          # A listed module that collects nothing would drop out silently.
+          wg1_empty=()
+          for wg1_module in "${wg1_modules[@]}"; do
+            grep -q -F "${wg1_module}::" /tmp/wiring_part1_tests.txt || wg1_empty+=("${wg1_module}")
+          done
+          if [ "${#wg1_empty[@]}" -gt 0 ]; then
+            for wg1_module in "${wg1_empty[@]}"; do
+              echo "::error::No tests collected from ${wg1_module}."
+            done
+            exit 1
+          fi
+          wg1_test_count="$(wc -l < /tmp/wiring_part1_tests.txt | tr -d '[:space:]')"
+          if ! [ "${wg1_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from the wiring guard part 1 modules."
+            exit 1
+          fi
+          echo "wiring guard part 1: ${wg1_test_count} test functions across ${wg1_shards} shards"
+          wg1_pids=()
+          for wg1_shard in $(seq 0 "$((wg1_shards - 1))"); do
+            awk -v n="${wg1_shard}" -v total="${wg1_shards}" 'NR % total == n' \
+              /tmp/wiring_part1_tests.txt > "/tmp/wiring_part1_shard_${wg1_shard}.txt"
+            [ -s "/tmp/wiring_part1_shard_${wg1_shard}.txt" ] || continue
+            (
+              mapfile -t wg1_shard_tests < "/tmp/wiring_part1_shard_${wg1_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${wg1_shard_tests[@]}" > "/tmp/wiring_part1_shard_${wg1_shard}.log" 2>&1
+              echo "$?" > "/tmp/wiring_part1_shard_${wg1_shard}.rc"
+            ) &
+            wg1_pids+=("$!")
+          done
+          # Reap every process before judging any, so none is left orphaned.
+          for wg1_pid in "${wg1_pids[@]}"; do
+            wait "${wg1_pid}" || true
+          done
+          wg1_ids=()
+          for wg1_shard in $(seq 0 "$((wg1_shards - 1))"); do
+            [ -s "/tmp/wiring_part1_shard_${wg1_shard}.txt" ] || continue
+            wg1_ids+=("${wg1_shard}")
+          done
+          wg1_failed=()
+          for wg1_id in "${wg1_ids[@]}"; do
+            wg1_stem="/tmp/wiring_part1_shard_${wg1_id}"
+            echo "::group::wiring guard part 1 shard ${wg1_id}"
+            # Prefix every line so log text cannot act as a workflow command.
+            sed 's/^/| /' "${wg1_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            wg1_rc="$(cat "${wg1_stem}.rc" 2>/dev/null || echo 1)"
+            case "${wg1_rc}" in
+              ''|*[!0-9]*) wg1_rc=1 ;;
+            esac
+            if [ "${wg1_rc}" != "0" ]; then
+              wg1_failed+=("${wg1_id}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for wg1_id in "${wg1_failed[@]}"; do
+            echo "--- wiring guard part 1 shard ${wg1_id} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/wiring_part1_shard_${wg1_id}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#wg1_failed[@]}" -gt 0 ]; then
+            echo "::error::wiring guard part 1 shards failed: ${wg1_failed[*]}"
+            exit 1
+          fi
+
+      # Moved from tests-promote-stall-and-review, which took 15m18s of its
+      # 20 minutes on main (run 39039638823, budget-watch issue #7576). Step
+      # timings were not readable when this was planned; these two were chosen
+      # as that job's most expensive steps by test and subprocess counts
+      # (estimated, not measured). Both need only checkout, Python 3.12 and the
+      # shared pip install, which this job already has. Names and bodies
+      # unchanged.
+      - name: Review autofix review-pipeline plumbing contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_editor_sandbox_excluded_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
+
+      - name: Implement leftover issue-branch replacement tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_stale_branch_check.py
+
+      - name: Shared PR check-runs merge gate (pr_checks_lib) tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_checks_lib_required_filter.py
+
+      - name: Merge-base freshness gate (pr_checks_lib) tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_base_freshness_gate.py
+
+      # Moved from tests-release-and-log-analysis, which took 15m01s of its 20
+      # minutes on main (run 40368173231, budget-watch issue #8208). The run's
+      # step timings could not be read, so these steps were chosen by their
+      # subprocess and test counts; the savings are an estimate. This job has
+      # had no steps moved in since #7690. Names and bodies unchanged.
+      - name: Mark-stable release-tag refspec contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+
+      - name: Release CI gate tests (stubbed gh; both release workflows)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_ci_gate.py
+          # Security finding release-gate-ignores-actions-ci (#6797, Refs
+          # #6532): both stable-tag writers must require a successful
+          # github-actions `lint` check-run from ci.yml on the exact commit
+          # they release. Runs scripts/release_ci_gate.sh against a stub `gh`
+          # for every pass/fail path, then checks that both release jobs call
+          # the gate before any changelog push or tag write.
+          work="$(mktemp -d)"
+          trap 'rm -rf "${work}"' EXIT
+          mkdir -p "${work}/bin" "${work}/fx"
+          cat > "${work}/bin/gh" <<'STUB'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          fx="${RCG_TEST_FIXTURE_DIR:?}"
+          if [ -f "${fx}/fail" ]; then
+            echo "stub gh: forced failure" >&2
+            exit 1
+          fi
+          case "$*" in
+            *actions/workflows/ci.yml/runs*) cat "${fx}/runs.json" ;;
+            *check-runs*)
+              n=0
+              if [ -f "${fx}/counter" ]; then n="$(cat "${fx}/counter")"; fi
+              echo "$((n + 1))" > "${fx}/counter"
+              if [ -f "${fx}/checks.${n}.json" ]; then
+                cat "${fx}/checks.${n}.json"
+              else
+                cat "${fx}/checks.json"
+              fi
+              ;;
+            *) echo "stub gh: unexpected call: $*" >&2; exit 1 ;;
+          esac
+          STUB
+          chmod +x "${work}/bin/gh"
+
+          sha="$(printf 'a%.0s' $(seq 1 40))"
+          other_sha="$(printf 'b%.0s' $(seq 1 40))"
+          RCG_FX="${work}/fx" RCG_SHA="${sha}" RCG_OTHER="${other_sha}" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RCG_FX"])
+          sha = os.environ["RCG_SHA"]
+          other = os.environ["RCG_OTHER"]
+          CI_RUN = {"head_sha": sha, "path": ".github/workflows/ci.yml", "check_suite_id": 100}
+
+
+          def check(run_id=1, status="completed", conclusion="success", head=sha, app="github-actions", suite=100, name="lint"):
+              return {"id": run_id, "name": name, "head_sha": head, "status": status,
+                      "conclusion": conclusion, "app": {"slug": app}, "check_suite": {"id": suite}}
+
+
+          def write(case, runs, checks, extra=None):
+              d = root / case
+              d.mkdir()
+              (d / "runs.json").write_text(json.dumps([{"workflow_runs": runs}]))
+              (d / "checks.json").write_text(checks if isinstance(checks, str) else json.dumps([{"check_runs": checks}]))
+              for name, body in (extra or {}).items():
+                  (d / name).write_text(body)
+
+
+          write("success", [CI_RUN], [check()])
+          write("success_ref_suffix", [dict(CI_RUN, path=".github/workflows/ci.yml@refs/heads/stable")], [check()])
+          write("missing", [], [])
+          write("pending", [CI_RUN], [check(status="in_progress", conclusion=None)])
+          write("cancelled", [CI_RUN], [check(conclusion="cancelled")])
+          write("failure", [CI_RUN], [check(conclusion="failure")])
+          write("timed_out", [CI_RUN], [check(conclusion="timed_out")])
+          write("skipped", [CI_RUN], [check(conclusion="skipped")])
+          write("gh_fail", [CI_RUN], [check()], {"fail": ""})
+          write("malformed_shape", [CI_RUN], json.dumps({"check_runs": [check()]}))
+          write("malformed_json", [CI_RUN], "not json")
+          write("non_actions_app", [CI_RUN], [check(app="evil-app")])
+          write("non_ci_suite", [CI_RUN], [check(suite=999)])
+          write("ci_run_other_sha", [dict(CI_RUN, head_sha=other)], [check()])
+          write("other_workflow", [dict(CI_RUN, path=".github/workflows/lint.yml")], [check()])
+          write("sha_mismatch", [CI_RUN], [check(head=other)])
+          write("newest_cancelled", [CI_RUN], [check(run_id=10), check(run_id=11, conclusion="cancelled")])
+          write("newest_success", [CI_RUN], [check(run_id=10, conclusion="failure"), check(run_id=11)])
+          write("pending_then_success", [CI_RUN], [check()],
+                {"checks.0.json": json.dumps([{"check_runs": [check(status="queued", conclusion=None)]}])})
+          PY
+
+          failures=0
+          run_case() {
+            # $1 case, $2 expected exit code, $3 expected output regex,
+            # remaining args: extra env assignments.
+            local case_name="$1" want_rc="$2" want_re="$3"
+            shift 3
+            local out rc=0
+            out="$(env PATH="${work}/bin:${PATH}" GH_RETRY_MAX_ATTEMPTS=1 \
+              RCG_TEST_FIXTURE_DIR="${work}/fx/${case_name}" \
+              RELEASE_CI_GATE_WAIT_SECS=0 RELEASE_CI_GATE_POLL_SECS=1 "$@" \
+              bash scripts/release_ci_gate.sh "${GATE_REPO:-owner/repo}" "${GATE_SHA:-${sha}}" 2>&1)" || rc=$?
+            # Flatten to one line so a pattern can span several log lines.
+            if [ "${rc}" -ne "${want_rc}" ] || ! grep -Eq "${want_re}" <<<"$(tr '\n' ' ' <<<"${out}")"; then
+              echo "::error::release CI gate case '${case_name}': rc=${rc} (want ${want_rc}), output does not match /${want_re}/"
+              printf '%s\n' "${out}"
+              failures=$((failures + 1))
+            else
+              echo "OK: ${case_name} (rc=${rc})"
+            fi
+          }
+
+          run_case success 0 'RELEASE_CI_GATE .*outcome=pass reason=success check_run_id=1 '
+          run_case success_ref_suffix 0 'outcome=pass reason=success'
+          run_case missing 1 'outcome=fail reason=wait_timeout .*last_state=missing'
+          run_case pending 1 'outcome=fail reason=wait_timeout .*status=in_progress .*last_state=pending'
+          run_case cancelled 1 'outcome=fail reason=conclusion_cancelled'
+          run_case failure 1 'outcome=fail reason=conclusion_failure'
+          run_case timed_out 1 'outcome=fail reason=conclusion_timed_out'
+          run_case skipped 1 'outcome=fail reason=conclusion_skipped'
+          run_case gh_fail 1 'outcome=fail reason=api_unreadable'
+          run_case malformed_shape 1 'outcome=fail reason=api_unreadable'
+          run_case malformed_json 1 'outcome=fail reason=api_unreadable'
+          run_case non_actions_app 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case non_ci_suite 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case ci_run_other_sha 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case other_workflow 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case sha_mismatch 1 'outcome=fail reason=sha_mismatch'
+          run_case newest_cancelled 1 'outcome=fail reason=conclusion_cancelled check_run_id=11 '
+          run_case newest_success 0 'outcome=pass reason=success check_run_id=11 '
+          run_case pending_then_success 0 'outcome=waiting reason=pending.*outcome=pass reason=success' \
+            RELEASE_CI_GATE_WAIT_SECS=5
+          run_case success 0 '::warning::RELEASE_CI_GATE RELEASE_CI_GATE_WAIT_SECS.*outcome=pass' \
+            RELEASE_CI_GATE_WAIT_SECS=abc
+          GATE_SHA="${sha:0:39}" run_case success 2 'outcome=fail reason=invalid_input'
+          GATE_SHA="${other_sha^^}" run_case success 2 'outcome=fail reason=invalid_input'
+          GATE_REPO='owner/repo;id' run_case success 2 'outcome=fail reason=invalid_input'
+          GATE_REPO='../..' run_case success 2 'outcome=fail reason=invalid_input'
+
+          if [ "${failures}" -ne 0 ]; then
+            echo "::error::${failures} release CI gate case(s) failed."
+            exit 1
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          GATE = "Require CI / lint success on the tested commit"
+          # Built at runtime: a literal expression opener here would be
+          # evaluated by GitHub inside this run block.
+          EXPR_OPEN = "$" + "{" + "{"
+          errors = []
+          for wf in (".github/workflows/test-and-mark-stable.yml", ".github/workflows/mark-stable.yml"):
+              doc = yaml.safe_load(Path(wf).read_text(encoding="utf-8"))
+              job = doc["jobs"]["release"]
+              names = [step.get("name") for step in job["steps"]]
+              if GATE not in names:
+                  errors.append(f"{wf}: release job has no '{GATE}' step")
+                  continue
+              gate_index = names.index(GATE)
+              for earlier in ("Record the tested commit",):
+                  if earlier not in names or names.index(earlier) > gate_index:
+                      errors.append(f"{wf}: '{earlier}' must run before the gate")
+              for later in ("Assemble changelog fragments", "Tag version and update stable pointer", "Create GitHub Release"):
+                  if later not in names or names.index(later) < gate_index:
+                      errors.append(f"{wf}: '{later}' must run after the gate")
+              step = job["steps"][gate_index]
+              run = step.get("run", "")
+              if "scripts/release_ci_gate.sh" not in run or '"${RELEASE_TESTED_SHA}"' not in run:
+                  errors.append(f"{wf}: gate must run scripts/release_ci_gate.sh on the RELEASE_TESTED_SHA env value")
+              if EXPR_OPEN in run:
+                  errors.append(f"{wf}: gate run body must not contain workflow expressions; pass values through env")
+              if step.get("if") is not None or step.get("continue-on-error"):
+                  errors.append(f"{wf}: gate step must not be conditional or continue-on-error")
+              if "GH_TOKEN" not in (step.get("env") or {}):
+                  errors.append(f"{wf}: gate step must set GH_TOKEN")
+              perms = job.get("permissions") or {}
+              want = {"contents": "write", "checks": "read", "actions": "read"}
+              if any(perms.get(k) != v for k, v in want.items()):
+                  errors.append(f"{wf}: release job permissions must include {want}, got {perms}")
+          if errors:
+              for line in errors:
+                  print(f"::error::{line}")
+              sys.exit(1)
+          print("OK: both release jobs gate on CI / lint before tagging")
+          PY
+
+      - name: Cancelled CI sweep recovery tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_cancelled_rerun.py
+
+      - name: Conflict-dispatch active-run visibility contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_dispatch_active_run_visibility.py
+          # Issue #4701: default-branch review dispatches and PR-named run lookups.
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_dispatch_default_branch.py
+
+      # Moved from tests-release-and-log-analysis, which took 15m13s of its 20
+      # minutes on main (run 40716905879, budget-watch issue #8268). That run's
+      # step timings were not readable, so these steps were chosen by estimated
+      # cost, not measured. The Node pair came to that job from
+      # tests-hooks-and-orchestrator (#7798) and moves as a pair: the Node setup
+      # runs first and the vitest step keeps its working directory. None of the
+      # four steps needs git history, so this job's default depth-1 checkout is
+      # enough (the source job fetches full history only for
+      # tests/claude_template_drift.py). Names and bodies unchanged.
+      - name: Set up Node 22 for the claude-pool-broker Worker tests
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: claude-pool-broker Worker tests (vitest)
+        working-directory: tools/claude-pool-broker
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx vitest run
+
+      - name: Workflow log analysis contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stage_workflow_log_bundle.py
+
+      - name: Semantic cache unit tests
+        run: |
+          set -euo pipefail
+          python3 -m coverage erase
+          python3 -m coverage run tests/test_semantic_cache.py
+          python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
 
   tests-promote-stall-and-review:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -825,21 +1538,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
-
-      - name: Promote cycle and blocked-verdict unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q \
-            tests/test_promote_main_cycle.py \
-            tests/test_apply_analysis_on_main.py \
-            tests/test_auto_release_stable.py \
-            tests/test_orchestrate_poll_promote_cycle.py \
-            tests/test_implement_blocked_verdict_terminalizes.py
-
-      - name: Implement files_touched scope guard unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_files_touched_scope_guard.py
 
       - name: Stall-recovery PR-lookup unit tests
         run: |
@@ -866,6 +1564,21 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_loop_and_churn_fixes.py
+
+      - name: Stall retired host-only conflict reissue tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stall_retired_conflict_reissue.py
+
+      - name: Stall re-issue keeps ai:check-triage tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stall_reissue_check_triage_label.py
+
+      - name: Stall reissue lineage label tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stall_reissue_lineage_labels.py
 
       - name: Stall-freshness branch-fallback unit tests
         run: |
@@ -924,23 +1637,12 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_detect_editor_changes_lost.py
 
-      - name: Review autofix review-pipeline plumbing contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_editor_audit.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_reviewer_manifest_validation.py
-
       - name: Review autofix step-script contract and workflow file size guard tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_step_scripts_contract.py
 
       - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
         run: |
@@ -956,6 +1658,20 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_security_pass.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_head_binding.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_draft_skip.py
+
+      # Moved from orchestrate-poll (2), which took 19m28s of its 20 minutes on
+      # main (run 39245970945, budget-watch issue #7697). It left this job in
+      # #7677 together with the promote cycle step, which went to
+      # tests-release-and-log-analysis then and came back to this job in
+      # #8278. The module needs no git
+      # history (this job checks out at depth 1). The choice rests on earlier
+      # recorded durations, not measurements. Name and body unchanged.
+      - name: Review-blocked judge label propagation contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
 
       - name: Review consolidator reject-verifier contract test
         run: |
@@ -997,10 +1713,40 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_reasoning_step_down.py
 
+      - name: Review conflict-resolve sandbox-only tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_conflict_resolve_sandbox_only.py
+
       - name: Review conflict manifest union contract test
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_manifest_union_contract.py
+
+      - name: Review conflict guard-hook template merge tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_guard_hook_template_merge.py
+
+      - name: Review conflict .ai asset take-base tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_ai_asset_take_base.py
+
+      - name: Integration conflict park and judge context tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_integration_conflict_park.py
+
+      - name: Review conflict folded-fragment keep test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_folded_fragment_keep.py
+
+      - name: Review criss-cross clean merge and forward-merge dedupe tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_merge_criss_cross.py tests/test_forward_merge_fallback_dedupe.py
 
       - name: Review judge-interim round-trip contract test
         run: |
@@ -1026,6 +1772,14 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_driver_synthesised_filter.py
+          # Issue #7079: the credential-scrub test and the wiring guard that
+          # requires this line land with PR #7012. Until then the file is
+          # absent here and pytest would exit 4, so run it only when present.
+          if [ -f tests/test_validate_driver_credential_scrub.py ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_driver_credential_scrub.py
+          else
+            echo "::notice::tests/test_validate_driver_credential_scrub.py not present on this ref; skipping (lands with PR #7012)."
+          fi
 
       - name: Review apply-fixes smoke deterministic contract test
         run: |
@@ -1033,15 +1787,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_apply_fixes_smoke_deterministic.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_editor_capacity_fallback_contract.py
 
-      - name: Review-blocked judge label propagation contract test
+      - name: Consumer sync PR review-skip tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_rb_judge_label_propagation.py
-
-      - name: Shared PR check-runs merge gate (pr_checks_lib) tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_checks_lib_required_filter.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_workflow_sync_skip.py
 
       - name: Review-blocked judge self-run exclusion regression tests
         run: |
@@ -1056,23 +1805,189 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_summarize_reviewer_consensus_sandbox_pin.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_summarize_reviewer_consensus_prompt.py
 
-      - name: Clarify loop guard unit tests
+      # Moved from tests-release-and-log-analysis, which took 20m16s of its
+      # 20 minutes on main (run 39030079651, budget-watch issue #7560). It
+      # moved there from tests-heal-plan-and-validation in #7383. Step timings
+      # were not readable when this was planned; it was chosen as that job's
+      # most bash-driven step after the merge-train step (estimated, not
+      # measured). It needs no git history, Node or prepared .claude/ live
+      # copies. Name and body unchanged.
+      - name: Check-failure triage workflow security tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_wrapper_predicate_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_backoff.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_git_env_isolation.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_header_prompt_staging.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_answer_recommended_parser.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_codex_step_extraction.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
+
+      # Moved here unchanged from tests-hooks-and-orchestrator (15m01s of its 20
+      # minutes, run 40264887710, budget-watch issue #8179). Step timings were not
+      # readable when this was planned; chosen by test and subprocess counts
+      # (estimated, not measured). None of these needs git history, Node or the
+      # prepared .claude/ live copies. Names and bodies unchanged.
+      - name: Orchestrate lib unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_initial_state_v2.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_follow_up.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
+
+      - name: Judge Semble prefetch contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_judge_semble_prefetch_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_record_id_format_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_informal_detect.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_repo_root_helper.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_generate_resource_id.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_repo_tree.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_semble_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mcp_handshake_probe.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_setup_serena_toml.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_serena_stats_emit.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_template_mode.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_semble_workflow_parity_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_smoke_alert_silencing_contract.py
+
+      - name: Standalone clarify auto-decide tests (port P3)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_auto_decisions.py \
+            tests/test_clarify_respond_standalone.py \
+            tests/test_clarify_github_facts.py \
+            tests/test_clarify_sandbox_base_image_preseed.py
+
+      # Moved from tests-release-and-log-analysis, which took 15m10s of its 20
+      # minutes on main (run 40625105162, budget-watch issue #8245). The run's
+      # step timings could not be read, so these steps were chosen by their
+      # subprocess and test counts; the savings are an estimate, not a
+      # measurement. Names and bodies unchanged.
+      - name: Test-and-mark-stable plan polling guard regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
+
+      - name: Release smoke gate run-lookup regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_smoke_run_lookup.py
+
+      - name: Consumer secrets propagation contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_propagate_consumer_secrets.py
+
+      - name: Review autofix sweep stale-queued guard tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_stale_queued.py
+
+      # Moved from tests-release-and-log-analysis, which took 15m14s of its 20
+      # minutes on main (run 40750326439, budget-watch issue #8278). The pick is
+      # an estimate: only 11 of the job's 25 test steps could run in the
+      # network-isolated implement sandbox, so they were not timed. This step
+      # took 326 s in run 36382913289 and is the job's largest. Name and body
+      # unchanged; the history below is kept.
+      # Moved from orchestrate-poll (2), which took 19m28s of its 20 minutes on
+      # main (run 39245970945, budget-watch issue #7697). This step ran in
+      # tests-release-and-log-analysis together with the review-blocked label
+      # propagation step before #7689; it went back there alone, and that step
+      # went to tests-promote-stall-and-review. The choice rested on earlier
+      # recorded durations, not measurements. Name and body unchanged.
+      # Budget-watch issue #7699: tests-release-and-log-analysis then took
+      # 17m04s of its 20 minutes (run 39257527801). The step had moved three
+      # times (#7677, #7689, #7697) and every other job was estimated at or
+      # above the 15-minute warning line with it added, so it stayed in that
+      # job and was split in place,
+      # the way the merge-train step was (#7579): one collection over the five
+      # modules, then 4 local shards split by test function (parametrized
+      # cases together). Every test seeds its own temp dirs and subprocesses,
+      # and each shard is a separate pytest process. The savings are an
+      # estimate; the step timings of run 39257527801 were not readable.
+      - name: Promote cycle and blocked-verdict unit tests
+        run: |
+          set -euo pipefail
+          pc_shards=4
+          pc_modules=(
+            tests/test_promote_main_cycle.py
+            tests/test_apply_analysis_on_main.py
+            tests/test_auto_release_stable.py
+            tests/test_orchestrate_poll_promote_cycle.py
+            tests/test_implement_blocked_verdict_terminalizes.py
+            tests/test_promote_candidate_follow.py
+          )
+          rm -f /tmp/promote_cycle_collect.log /tmp/promote_cycle_tests.txt \
+            /tmp/promote_cycle_shard_*.txt /tmp/promote_cycle_shard_*.log /tmp/promote_cycle_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${pc_modules[@]}" \
+            > /tmp/promote_cycle_collect.log 2>&1 \
+            || { cat /tmp/promote_cycle_collect.log; echo "::error::Test collection failed for the promote-cycle modules."; exit 1; }
+          : > /tmp/promote_cycle_tests.txt
+          for pc_module in "${pc_modules[@]}"; do
+            pc_module_count="$({ grep -F "${pc_module}::" /tmp/promote_cycle_collect.log || true; } \
+              | sed 's/\[.*$//' | awk '!seen[$0]++' | tee -a /tmp/promote_cycle_tests.txt | wc -l | tr -d '[:space:]')"
+            # A module that drops out of collection must not pass silently.
+            if ! [ "${pc_module_count}" -ge 1 ] 2>/dev/null; then
+              echo "::error::No tests collected from ${pc_module}."
+              exit 1
+            fi
+          done
+          pc_test_count="$(wc -l < /tmp/promote_cycle_tests.txt | tr -d '[:space:]')"
+          if ! [ "${pc_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from the promote-cycle modules."
+            exit 1
+          fi
+          echo "promote-cycle modules: ${pc_test_count} test functions across ${pc_shards} shards"
+          pc_pids=()
+          for pc_shard in $(seq 0 "$((pc_shards - 1))"); do
+            awk -v n="${pc_shard}" -v total="${pc_shards}" 'NR % total == n' \
+              /tmp/promote_cycle_tests.txt > "/tmp/promote_cycle_shard_${pc_shard}.txt"
+            [ -s "/tmp/promote_cycle_shard_${pc_shard}.txt" ] || continue
+            (
+              mapfile -t pc_shard_tests < "/tmp/promote_cycle_shard_${pc_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${pc_shard_tests[@]}" > "/tmp/promote_cycle_shard_${pc_shard}.log" 2>&1
+              echo "$?" > "/tmp/promote_cycle_shard_${pc_shard}.rc"
+            ) &
+            pc_pids+=("$!")
+          done
+          # Reap every process before judging any, so none is left orphaned.
+          for pc_pid in "${pc_pids[@]}"; do
+            wait "${pc_pid}" || true
+          done
+          pc_failed=()
+          for pc_shard in $(seq 0 "$((pc_shards - 1))"); do
+            [ -s "/tmp/promote_cycle_shard_${pc_shard}.txt" ] || continue
+            pc_stem="/tmp/promote_cycle_shard_${pc_shard}"
+            echo "::group::promote-cycle step shard ${pc_shard}"
+            cat "${pc_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            pc_rc="$(cat "${pc_stem}.rc" 2>/dev/null || echo 1)"
+            case "${pc_rc}" in
+              ''|*[!0-9]*) pc_rc=1 ;;
+            esac
+            if [ "${pc_rc}" != "0" ]; then
+              pc_failed+=("${pc_shard}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for pc_shard in "${pc_failed[@]}"; do
+            echo "--- promote-cycle step shard ${pc_shard} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/promote_cycle_shard_${pc_shard}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#pc_failed[@]}" -gt 0 ]; then
+            echo "::error::promote-cycle step shards failed: ${pc_failed[*]}"
+            exit 1
+          fi
 
   tests-release-and-log-analysis:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
@@ -1083,6 +1998,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          # Full history: tests/claude_template_drift.py diffs against the PR
+          # base SHA, which a depth-1 checkout does not contain.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1094,10 +2013,23 @@ jobs:
           set -euo pipefail
           python3 -m pip install yamllint coverage pyyaml jsonschema jinja2 pytest ruff
 
+      - name: Integration-ahead-by gate regression tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_integration_ahead_by_gate.py
+
       - name: Update workflows guardrails contract test
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_guardrails.py
+
+      - name: Signed consumer sync manifest tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_build_sync_manifest.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_sync_manifest_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_manifest_verification.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_update_workflows_pull_request_delivery.py
 
       - name: Audit gate template atomicity contract test
         run: |
@@ -1106,6 +2038,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_audit_gate_identity.py
 
       - name: SessionStart hook repo-slug contract test
+        env:
+          # PR CI only: tolerate template-ahead .claude/ drift the PR caused or
+          # its base already has (tests/claude_template_drift.py). Empty on
+          # pushes, so main stays strict; the release gates never set it.
+          CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
@@ -1147,11 +2084,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_issue_pr_status_payload_fallback_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_phase_transition_contract.py
 
-      - name: Test-and-mark-stable plan polling guard regression tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_plan_polling_guard.py
-
       - name: Test-and-mark-stable review-blocked budget contract tests
         run: |
           set -euo pipefail
@@ -1166,11 +2098,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
-
-      - name: Release smoke gate run-lookup regression tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_smoke_run_lookup.py
 
       - name: Alt-model cleanup PR-selector contract test
         run: |
@@ -1187,15 +2114,16 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_no_git_config_value_dump.py
 
-      - name: Mark-stable release-tag refspec contract test
+      - name: Release notification superseded-run tests (stubbed gh and curl)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_release_notify_superseded.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_release_static_preflight_contract.py
 
-      - name: Consumer secrets propagation contract tests
+      - name: Release validate-job CI gate and tagging switch contract tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_propagate_consumer_secrets.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_validate_ci_gate.py
 
       - name: Soft-error report consolidator unit tests
         run: |
@@ -1222,22 +2150,34 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
 
-      - name: Review autofix sweep stale-queued guard tests
+      # Moved from tests-hooks-and-orchestrator, which took 15m27s of its 20
+      # minutes (run 40752698170, budget-watch issue #8281); picked by estimated
+      # cost because the run's step timings could not be read. This job also
+      # took four steps from tests-heal-plan-and-validation (#8279, below), so
+      # its headroom is an estimate too; budget-watch reports it if it nears
+      # its timeout.
+      - name: Claude engine selection and claude_run tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_stale_queued.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine_utility_roles.py
 
-      - name: Cancelled CI sweep recovery tests
+      - name: Single-issue security pass tests (port P1)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_cancelled_rerun.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_single_issue_security_pass.py \
+            tests/test_review_security_hold_sweep.py
 
-      - name: Conflict-dispatch active-run visibility contract tests
+      - name: Review sandbox Claude role tests (Phase 5c)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_dispatch_active_run_visibility.py
-          # Issue #4701: default-branch review dispatches and PR-named run lookups.
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_dispatch_default_branch.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_claude_roles.py
+
+      - name: Session automation retirement guard and retired labels/files tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_no_session_automation.py tests/test_ai_labels_retired.py tests/test_update_workflows_retired_files.py tests/test_release_manifest.py tests/test_release_manifest_workflow_contract.py tests/test_verify_release_manifest.py tests/test_update_workflows_manifest_verify.py tests/test_update_workflows_pr_delivery.py tests/test_update_workflows_template_gate.py
 
       - name: Workflow log collector coverage gate
         run: |
@@ -1253,39 +2193,73 @@ jobs:
           python3 -m coverage run tests/test_analyze_workflow_logs.py
           python3 -m coverage report --include='scripts/analyze_workflow_logs.py' --fail-under=67
 
-      - name: Workflow scenario trace renderer coverage gate
+      # Moved from tests-heal-plan-and-validation, which took 15m06s of its 20
+      # minutes on main (run 40750326439, budget-watch issue #8279). Step
+      # timings were not readable when this was planned; these steps were
+      # picked by test and subprocess counts, not measured. This job had the
+      # most room: budget-watch issues #8208, #8245 and #8268 each moved four
+      # steps out of it (#8268 was its last issue), and #8268 fixed the collector test whose
+      # step took about 5 minutes here (it now runs in seconds). All four steps
+      # below come from the source job; the last two first reached it from
+      # tests-promote-stall-and-review (#7677), noted above them. None needs
+      # Node or the prepared .claude/ live copies. Names and bodies unchanged.
+      - name: Validate process cross-cycle escalation unit tests
         run: |
           set -euo pipefail
-          python3 -m coverage erase
-          PYTHONDONTWRITEBYTECODE=1 python3 -m coverage run tests/test_render_scenario_trace.py
-          python3 -m coverage report --include='scripts/render_scenario_trace.py' --fail-under=80
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_cross_cycle_escalation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_process_owner_routing.py
 
-      - name: Workflow log analysis contract tests
+      - name: Activation verification tests (port P4)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stage_workflow_log_bundle.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py tests/test_operator_step_issue.py
 
-      - name: Semantic cache unit tests
+      # Moved from tests-promote-stall-and-review, which took 16m06s of its
+      # 20 minutes on main (run 39216253741, budget-watch issue #7677). Step
+      # timings were not readable when this was planned; chosen by estimated
+      # cost (test count, weighted for subprocess use), not measured. None
+      # needs git history, Node or the prepared .claude/ live copies. Names
+      # and bodies unchanged.
+      - name: Clarify loop guard unit tests
         run: |
           set -euo pipefail
-          python3 -m coverage erase
-          python3 -m coverage run tests/test_semantic_cache.py
-          python3 -m coverage report --include='scripts/semantic_cache.py' --fail-under=70
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_wrapper_predicate_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_clarify_loop_guard.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_processed_command_entry.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_push_retry_backoff.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_ai_memory_git_env_isolation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_check_triage_branch_guard.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_header_prompt_staging.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_split_dispatch.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_gh_retry_fallback_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_answer_recommended_parser.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_codex_step_extraction.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_diagrams_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
+
+      - name: Implement files_touched scope guard unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_files_touched_scope_guard.py
 
   orchestrate-poll:
     # tests/test_orchestrate_poll_process.py was the old job's critical path
     # (about 20 minutes on 4 local shards). Each matrix group runs one
-    # quarter of it on CI_POLL_TEST_SHARDS local shards, about 5 minutes
-    # measured (#4707); 20 leaves room for a cold runner, whose shards can
-    # be slower than a warm one's.
+    # fifth of it on CI_POLL_TEST_SHARDS local shards; 20 minutes leaves
+    # room for a cold runner, whose shards can be slower than a warm one's.
+    # The matrix grew from 4 to 5 groups after group 0 took 16m45s of its
+    # 20 minutes (run 40165437476, budget-watch issue #8113). Group 4 runs
+    # its slice and, since #8118, the unblock judge step; every other
+    # group-pinned step keeps its group.
     runs-on: ubuntu-latest
     strategy:
       # Every group reports on its own; `lint` fails if any of them fails.
       fail-fast: false
       matrix:
-        poll-group: [0, 1, 2, 3]
+        poll-group: [0, 1, 2, 3, 4]
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -1413,7 +2387,17 @@ jobs:
             wait "${shard_pid}" || true
           done
 
+          # Each failed shard's failing tests are repeated after the loop (#6888).
+          # The shard logs above sit in collapsed groups, so in run 37907017153 the
+          # job tail showed only the last shard's "33 passed", not shard 1's failure.
           shard_failures=0
+          shard_failure_lines=()
+          # One line per failed shard, printed after the loop (outside every
+          # ::group::) so the failing test names reach the log tail and the
+          # job annotations (#6889). Only names matching [A-Za-z0-9_] are
+          # printed, so test output cannot inject workflow commands here.
+          shard_failure_summaries=()
+          failed_shard_ids=()
           for shard in $(seq 0 "$((shards - 1))"); do
             [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
             # A shard with tests but no log died before its runner started, so
@@ -1421,6 +2405,9 @@ jobs:
             if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
               echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
               shard_failures=$((shard_failures + 1))
+              shard_failure_lines+=("shard ${shard}: no log recorded, its tests did not run")
+              shard_failure_summaries+=("orchestrate-poll shard ${shard} exit none failed tests: no log (tests did not run)")
+              failed_shard_ids+=("${shard}")
               continue
             fi
             echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
@@ -1434,20 +2421,422 @@ jobs:
             esac
             if [ "${shard_rc}" -ne 0 ]; then
               echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
+              # Name the failing tests in annotations (#6885): the per-shard
+              # log above sits inside a ::group:: that triage cannot read.
+              # Match the runner's exact "  FAIL  <name>: ..." prefix, cap at
+              # 20 lines, and escape workflow-command data. Without a FAIL
+              # line (interrupted shard), print the log tail with a prefix so
+              # log text can never start a workflow command.
+              mapfile -t shard_fail_lines < <(grep -a -E '^  FAIL  ' "/tmp/poll_shard_${shard}.log" | head -n 20 || true)
+              if [ "${#shard_fail_lines[@]}" -gt 0 ]; then
+                for shard_fail_line in "${shard_fail_lines[@]}"; do
+                  shard_fail_line="${shard_fail_line//%/%25}"
+                  shard_fail_line="${shard_fail_line//$'\r'/%0D}"
+                  shard_fail_line="${shard_fail_line//$'\n'/%0A}"
+                  echo "::error::orchestrate-poll shard ${shard}: ${shard_fail_line#  }"
+                done
+              else
+                echo "::error::orchestrate-poll shard ${shard} had no FAIL line; last log lines follow"
+                while IFS= read -r shard_tail_line || [ -n "${shard_tail_line}" ]; do
+                  echo "orchestrate-poll shard ${shard} | ${shard_tail_line}"
+                done < <(tail -n 20 "/tmp/poll_shard_${shard}.log" || true)
+              fi
               shard_failures=$((shard_failures + 1))
+              # Prefer the runner's FAIL line (it carries the exception); fall back
+              # to its "complete" fail events; else say no failure was recorded.
+              # Every match is kept so the "... and <k> more" count below is exact.
+              # `-a`: a NUL byte in the log must not turn the matches into grep's
+              # "Binary file ... matches" line.
+              mapfile -t shard_fail_matches < <(grep -a -E '^[[:space:]]*FAIL[[:space:]]' "/tmp/poll_shard_${shard}.log" 2>/dev/null || true)
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                mapfile -t shard_fail_matches < <(grep -a -E '^TEST_CASE_EVENT: .*"event":"complete"' "/tmp/poll_shard_${shard}.log" 2>/dev/null | grep -a -F '"status":"fail"' || true)
+              fi
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                shard_failure_lines+=("shard ${shard}: exit ${shard_rc}, no FAIL line recorded (runner likely died)")
+              else
+                for shard_fail_match in "${shard_fail_matches[@]}"; do
+                  shard_failure_lines+=("shard ${shard}: ${shard_fail_match#"${shard_fail_match%%[![:space:]]*}"}")
+                done
+              fi
+              # `|| true`: under pipefail a grep with no match would abort the
+              # step before the tally below.
+              shard_failed_names="$(grep -a -E '^  FAIL  [A-Za-z0-9_]+:' "/tmp/poll_shard_${shard}.log" \
+                | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | awk '!seen[$0]++' || true)"
+              if [ -z "${shard_failed_names}" ]; then
+                shard_failed_list="no FAIL lines (process failure)"
+              else
+                shard_failed_count="$(printf '%s\n' "${shard_failed_names}" | wc -l | tr -d '[:space:]')"
+                shard_failed_list="$(printf '%s\n' "${shard_failed_names}" | head -n 20 | paste -sd ',' - | sed 's/,/, /g')"
+                if [ "${shard_failed_count}" -gt 20 ]; then
+                  shard_failed_list="${shard_failed_list} (+$((shard_failed_count - 20)) more)"
+                fi
+              fi
+              shard_failure_summaries+=("orchestrate-poll shard ${shard} exit ${shard_rc} failed tests: ${shard_failed_list}")
+              failed_shard_ids+=("${shard}")
             fi
           done
           if [ "${shard_failures}" -ne 0 ]; then
+            # Issue #6946 (triage of PR #6940): each shard log above sits in a
+            # collapsed group, so the log tail showed only the last shard's
+            # passing summary and never the failing test. Repeat each failed
+            # shard's FAIL lines and log tail here, after the last group.
+            # Copied log lines are prefixed so they cannot act as workflow
+            # commands; the annotation carries only [A-Za-z0-9_] test names.
+            echo "orchestrate-poll failed-shard summary (full shard logs are in the groups above):"
+            for failed_shard in "${failed_shard_ids[@]}"; do
+              failed_shard_log="/tmp/poll_shard_${failed_shard}.log"
+              if [ ! -f "${failed_shard_log}" ]; then
+                echo "  shard ${failed_shard}: no log; its tests did not run"
+                continue
+              fi
+              failed_test_names="$({ grep -a -m 10 -E '^  FAIL  [A-Za-z0-9_]+:' "${failed_shard_log}" || true; } \
+                | sed -E 's/^  FAIL  ([A-Za-z0-9_]+):.*/\1/' | tr '\n' ' ')"
+              if [ -n "${failed_test_names// /}" ]; then
+                echo "::error::orchestrate-poll shard ${failed_shard} failing tests: ${failed_test_names% }"
+              fi
+              echo "  shard ${failed_shard}: FAIL lines (first 50):"
+              { grep -a -m 50 -E '^  FAIL  ' "${failed_shard_log}" || true; } | sed 's/^/    | /'
+              echo "  shard ${failed_shard}: last 20 log lines:"
+              tail -n 20 "${failed_shard_log}" | sed 's/^/    | /'
+            done
+            # At most 20 annotations; CR removed, cut to 400 characters, then "%"
+            # escaped so a test message cannot break the annotation syntax.
+            shard_failure_shown=0
+            for shard_failure_line in "${shard_failure_lines[@]}"; do
+              if [ "${shard_failure_shown}" -ge 20 ]; then
+                break
+              fi
+              shard_failure_line="${shard_failure_line//$'\r'/}"
+              shard_failure_line="${shard_failure_line:0:400}"
+              shard_failure_line="${shard_failure_line//\%/%25}"
+              echo "::error::orchestrate-poll failing test: ${shard_failure_line}"
+              shard_failure_shown=$((shard_failure_shown + 1))
+            done
+            if [ "${#shard_failure_lines[@]}" -gt 20 ]; then
+              echo "::error::orchestrate-poll failing test: ... and $(( ${#shard_failure_lines[@]} - 20 )) more (see the shard groups above)"
+            fi
+            for shard_failure_summary in "${shard_failure_summaries[@]}"; do
+              echo "::error::${shard_failure_summary}"
+            done
             echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
             exit 1
           fi
 
-          # The single-file modules are not split; group 0 runs them once.
-          if [ "${poll_group}" -eq 0 ]; then
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
-            PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
+      # Moved from tests-heal-plan-and-validation, which took 15m26s of its 20
+      # minutes on main (run 39230958248, budget-watch issue #7690). That run's
+      # step timings were not readable, so the steps were chosen by timing each
+      # step body of that job in the implement sandbox (relative weights only;
+      # PyYAML was missing there, so yaml-dependent modules errored and the
+      # sharded heal step stopped early):
+      # this step (CI wiring guard part 2) 37.2s, the unblock step 28.2s,
+      # CI wiring guard part 1 25.2s, clarify loop guard 20.0s,
+      # every other step 3s or less. Each test job has recorded about 15
+      # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
+      # #7677), while poll groups record about 5 minutes (#4707). Group 0
+      # carries the fast-fail subset (the single-file modules ran there until
+      # #8080 moved them to group 1) and group 1
+      # then carried the merge-train step (moved out in #7766), so this step
+      # runs in group 2 only, once per CI run. It needs only checkout, Python 3.12 and the shared pip install,
+      # which this job already has. Name and body unchanged.
+      - name: Regression tests wired by the CI wiring guard (part 2)
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_ai_memory_sync_reference_files.py \
+            tests/test_ai_memory_workflow_log_analysis_cache.py \
+            tests/test_assemble_changelog.py \
+            tests/test_branch_rebuild_threshold_decision_log.py \
+            tests/test_changelog_fragment_contract.py \
+            tests/test_check_workflow_script_refs.py \
+            tests/test_ci_actionlint_install_retry.py \
+            tests/test_codex_heartbeat.py \
+            tests/test_codex_isolated_exec_claude_contract.py \
+            tests/test_cost_audit_serena_metrics.py \
+            tests/test_gh_helpers_list_runs_method.py \
+            tests/test_implement_prompt_pinned_sha_contract.py \
+            tests/test_memory_helpers_fail_open_telemetry.py \
+            tests/test_plan_reuse_audit_contract.py \
+            tests/test_plan_template_owned_path_guard.py \
+            tests/test_plan_superseded_merged_pr.py \
+            tests/test_plan_superseded_merged_pr_workflow.py \
+            tests/test_pytest_git_env_isolation.py \
+            tests/test_render_validation_templates.py \
+            tests/test_render_validation_templates_repo_checks.py \
+            tests/test_render_validation_templates_shell_quoting.py \
+            tests/test_retrigger_default_branch_dispatch.py \
+            tests/test_review_autofix_reasoning_schedule.py \
+            tests/test_review_autofix_sweep_merge_queued_skip.py \
+            tests/test_review_commit_changelog_fragment_preserved.py \
+            tests/test_review_conflict_prepare_state_author.py \
+            tests/test_review_floor_rules.py \
+            tests/test_review_host_python_safe_path.py \
+            tests/test_review_issue_ledger.py \
+            tests/test_review_ledger_cache_path_stability.py \
+            tests/test_review_rb_judge_reference_staging.py \
+            tests/test_review_resolve_review_threads.py \
+            tests/test_review_reviewer_attempt_prompt_isolation.py \
+            tests/test_static_context_agents_index.py \
+            tests/test_static_context_agents_index_clarify_plan.py \
+            tests/test_static_context_agents_index_implement.py \
+            tests/test_static_context_agents_index_self_assembled.py \
+            tests/test_static_context_symlink_guard.py \
+            tests/test_summarize_unselected_runs.py \
+            tests/test_test_and_mark_stable_phase7_unconflict.py \
+            tests/test_test_and_mark_stable_live_log_cooldown.py \
+            tests/test_validate_lint_bounded_tail_capture.py \
+            tests/test_validate_lint_external_tool_dependencies.py \
+            tests/test_validate_lint_import_audit_safety.py \
+            tests/test_validate_lint_service_tool_scope.py \
+            tests/test_validate_lint_shell_parity.py \
+            tests/test_validate_process_fixup_labels.py \
+            tests/test_verify_integration_fingerprints_baseline.py \
+            tests/test_workflow_untrusted_input_contract.py
+
+      # Moved from tests-hooks-and-orchestrator, which took 15m06s of its 20
+      # minutes on main (run 39575950300, budget-watch issue #7798). That run's
+      # step timings were not readable, and the implement sandbox could not
+      # time every candidate (PyYAML and network were missing, so the vitest
+      # pair could not run), so these steps are the plan's fallback list, chosen
+      # by estimated cost, not measured. Group 2 is estimated at about 12.5-13
+      # minutes after #7697 moved its promote-cycle step out. These steps need
+      # no git history beyond HEAD (this job checks out at depth 1; every git
+      # use in these modules is a temp repo), Node or the prepared .claude/
+      # live copies, and this job has the same pip set and Python 3.12. They
+      # run in group 2 only, once per CI run. Names and bodies unchanged.
+      - name: Isolated agent container tests (codex_isolated_exec.sh)
+        if: strategy.job-index == 2
+        # The real-Docker e2e file skips itself unless CODEX_ISOLATION_DOCKER_E2E=1.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_codex_agent_isolation_contract.py tests/test_codex_isolated_exec.py tests/test_dependency_registry_proxy.py \
+            tests/test_codex_isolated_workspace.py tests/test_codex_isolated_exec_docker_e2e.py \
+            tests/test_integration_judge_scope_guard.py tests/test_clarify_sandbox_base_image_preseed.py
+
+      - name: Prebuilt sandbox image tests
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_sandbox_image.py
+
+      - name: Review sandbox image build retry tests
+        if: strategy.job-index == 2
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_sandbox_build_retry.py
+
+      # Moved from tests-heal-plan-and-validation, which took 15m26s of its 20
+      # minutes on main (run 39230958248, budget-watch issue #7690). That run's
+      # step timings were not readable, so the steps were chosen by timing each
+      # step body of that job in the implement sandbox (relative weights only;
+      # PyYAML was missing there, so yaml-dependent modules errored and the
+      # sharded heal step stopped early):
+      # CI wiring guard part 2 37.2s, this step (unblock) 28.2s,
+      # CI wiring guard part 1 25.2s, clarify loop guard 20.0s,
+      # every other step 3s or less. Each test job has recorded about 15
+      # minutes or more within weeks (#7366, #7406, #7560, #7575, #7576,
+      # #7677), while poll groups record about 5 minutes (#4707). Group 0
+      # carries the fast-fail subset (the single-file modules ran there until
+      # #8080 moved them to group 1) and group 1
+      # then carried the merge-train step (moved out in #7766), so this step
+      # ran in group 3 only, once per CI run, until #8072 moved it to group 1
+      # (#8091 later moved it on to group 0). It needs only checkout, Python 3.12 and the shared pip install,
+      # which this job already has. Name and body unchanged by that move.
+      # Moved from group 3, which took 15m08s of its 20 minutes on main (run
+      # 40112590944, budget-watch issue #8072); group 1 then carried no moved-in
+      # steps since #7766, so it had the most headroom. Step timings were not
+      # readable from CI and not measurable in the implement sandbox (PyYAML
+      # was missing, so this step and the Claude engine judges step failed at
+      # collection), so the plan's default applied: only this step moved, and
+      # the two #7689 steps below stay in group 3.
+      # Moved from group 1 to group 0: group 1 took 16m09s of its 20 minutes
+      # on main (run 40150026157, budget-watch issue #8091). Step timings were
+      # not readable, so the choice is an estimate from recorded group totals,
+      # not a measurement: group 1 took 16m09s with this step and the
+      # single-file modules, group 0 took 15m09s with the fast-fail subset and
+      # the single-file modules (#8080), so if the two slices cost about the
+      # same, this step costs about one minute more than the fast-fail subset.
+      # The single-file modules cost more (test_run_substate_ledger.py alone
+      # took 139s locally), but group 0 ran 15m09s with them, so they stay in
+      # group 1; group 1 may still finish near the 15-minute budget-watch
+      # threshold. Group 0 keeps the fast-fail subset. This step then ran in
+      # group 0 only, once per CI run, until #8118 moved it on to group 4.
+      # Name and body unchanged by that move.
+      # Moved from group 0 to group 4: orchestrate-poll (0) took 17m01s of its
+      # 20 minutes on main (run 40175309052, budget-watch issue #8118). Group 0
+      # carried its slice, the fast-fail subset (11 test_implementation_failed_*
+      # tests) and this step (#8091); group 4 runs only its slice (#8113), so
+      # it has the most headroom. Step timings were not readable, so the move
+      # is an estimate from group totals, not a measurement; the
+      # analysis/workflow-optimization-2026-10-24-2.md table recorded this
+      # step at 860s in a failing run (40065164413). This step now runs in
+      # group 4 only, once per CI run, and
+      # needs only checkout, Python 3.12 and the shared pip install, which
+      # every matrix group has. Name and body unchanged by that move.
+      # Sharded in place, not moved (#8150): orchestrate-poll (4) took 15m13s
+      # of its 20 minutes on main (run 40198222187). This step had moved three
+      # times (#8072, #8091, #8118) and each group it landed in then reached
+      # about 15 to 17 minutes. Its cost is not measured: those two group
+      # totals (group 0 at 17m01s with slice, fast-fail subset and this step;
+      # group 4 at 15m13s with slice and this step) differ only by the
+      # fast-fail subset, and the one recorded figure is 860s in a failing run
+      # (40065164413), more headroom than any other CI job has. The step keeps
+      # its name, guard and modules, and splits their test functions across 4
+      # local pytest processes on the runner's 4 cores, the way the
+      # merge-train step was split (#7579). Each test seeds its own tmp_path,
+      # and each shard is a separate pytest process.
+      - name: Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)
+        if: strategy.job-index == 4
+        run: |
+          set -euo pipefail
+          ub_shards=4
+          ub_modules=(tests/test_unblock_judge.py tests/test_unblock_scan.py tests/test_orphan_fixup_close.py)
+          rm -f /tmp/unblock_step_collect.log /tmp/unblock_step_tests.txt \
+            /tmp/unblock_step_shard_*.txt /tmp/unblock_step_shard_*.log /tmp/unblock_step_shard_*.rc
+          # Keep the raw collect output so a collection error prints its traceback.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest --collect-only -q -p no:cacheprovider "${ub_modules[@]}" \
+            > /tmp/unblock_step_collect.log 2>&1 \
+            || { cat /tmp/unblock_step_collect.log; echo "::error::Test collection failed for the unblock step modules."; exit 1; }
+          { grep -E '^tests/test_(unblock_judge|unblock_scan|orphan_fixup_close)\.py::' /tmp/unblock_step_collect.log || true; } \
+            | sed 's/\[.*$//' | awk '!seen[$0]++' > /tmp/unblock_step_tests.txt
+          ub_test_count="$(wc -l < /tmp/unblock_step_tests.txt | tr -d '[:space:]')"
+          if ! [ "${ub_test_count}" -ge 1 ] 2>/dev/null; then
+            echo "::error::No tests collected from the unblock step modules."
+            exit 1
           fi
+          echo "unblock step: ${ub_test_count} test functions across ${ub_shards} shards"
+          ub_pids=()
+          for ub_shard in $(seq 0 "$((ub_shards - 1))"); do
+            awk -v n="${ub_shard}" -v total="${ub_shards}" 'NR % total == n' \
+              /tmp/unblock_step_tests.txt > "/tmp/unblock_step_shard_${ub_shard}.txt"
+            [ -s "/tmp/unblock_step_shard_${ub_shard}.txt" ] || continue
+            (
+              mapfile -t ub_shard_tests < "/tmp/unblock_step_shard_${ub_shard}.txt"
+              set +e
+              PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+                "${ub_shard_tests[@]}" > "/tmp/unblock_step_shard_${ub_shard}.log" 2>&1
+              echo "$?" > "/tmp/unblock_step_shard_${ub_shard}.rc"
+            ) &
+            ub_pids+=("$!")
+          done
+          # Reap every process before judging any, so none is left orphaned.
+          for ub_pid in "${ub_pids[@]}"; do
+            wait "${ub_pid}" || true
+          done
+          ub_ids=()
+          for ub_shard in $(seq 0 "$((ub_shards - 1))"); do
+            [ -s "/tmp/unblock_step_shard_${ub_shard}.txt" ] || continue
+            ub_ids+=("${ub_shard}")
+          done
+          ub_failed=()
+          for ub_id in "${ub_ids[@]}"; do
+            ub_stem="/tmp/unblock_step_shard_${ub_id}"
+            echo "::group::unblock step shard ${ub_id}"
+            cat "${ub_stem}.log" || true
+            echo "::endgroup::"
+            # A missing or non-numeric exit code counts as a failure.
+            ub_rc="$(cat "${ub_stem}.rc" 2>/dev/null || echo 1)"
+            case "${ub_rc}" in
+              ''|*[!0-9]*) ub_rc=1 ;;
+            esac
+            if [ "${ub_rc}" != "0" ]; then
+              ub_failed+=("${ub_id}")
+            fi
+          done
+          # Repeat failing shards' tails outside the collapsed groups. Each line
+          # gets a "| " prefix so log text cannot act as a workflow command.
+          for ub_id in "${ub_failed[@]}"; do
+            echo "--- unblock step shard ${ub_id} failed; last 40 log lines:"
+            { tail -n 40 "/tmp/unblock_step_shard_${ub_id}.log" 2>/dev/null || true; } | sed 's/^/| /'
+          done
+          if [ "${#ub_failed[@]}" -gt 0 ]; then
+            echo "::error::unblock step shards failed: ${ub_failed[*]}"
+            exit 1
+          fi
+
+      # Moved out of the group-0 block of "Orchestrate poll process unit tests":
+      # orchestrate-poll (0) took 15m09s of its 20 minutes on main (run
+      # 40122910216, budget-watch issue #8080). Group 0 keeps the fast-fail
+      # subset by design; group 1 had carried only its slice and the unblock
+      # step (#8072), so it had the most headroom. Commands and order
+      # unchanged; they run once per CI run. The unblock step left group 1
+      # for group 0 in #8091.
+      - name: Orchestrate poll single-file module tests
+        if: strategy.job-index == 1
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_state_snapshot.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_run_substate_ledger.py
+
+      # Moved from tests-release-and-log-analysis, which took 17m51s of its 20
+      # minutes on main (run 39230958248, budget-watch issue #7689). Earlier
+      # they moved there from tests-heal-plan-and-validation (#7383: the Claude
+      # engine judges and harness sandbox steps) and from
+      # tests-promote-stall-and-review (#7677: the promote cycle and
+      # review-blocked label steps). Step timings were not readable when this
+      # was planned; these are that job's most subprocess-heavy steps (full
+      # poller runs, bash scripts, temp git repos), chosen by estimated cost,
+      # not measured. Groups 0 and 1 already carry extra steps, so two ran in
+      # group 2 and two run in group 3, each once per CI run. Group 2 then took
+      # 19m28s of its 20 minutes (run 39245970945, budget-watch issue #7697),
+      # so its two steps (promote cycle, review-blocked label propagation)
+      # moved again in #7697: the promote step to tests-release-and-log-analysis
+      # and the label step to tests-promote-stall-and-review. The group-3 steps
+      # below need no git history beyond HEAD (this job checks out at depth 1;
+      # every git use in these modules is a temp repo or a text assertion),
+      # Node or the prepared .claude/ live copies, and this job has the same
+      # pip set and Python 3.12. Names and bodies unchanged.
+      - name: Orchestrator judges on the Claude engine tests (Phase 5c)
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrator_judges_claude_engine.py
+
+      - name: Validation harness sandbox tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
+
+  budget-watch:
+    # Early warning for the two budgets CI has hit without notice (workflow
+    # file size near the §27 guard, a CI job near its timeout-minutes). Runs
+    # only on pushes to main, after the test jobs, and opens one deduplicated
+    # `ai:ci-budget` issue per finding so the pipeline fixes it in time.
+    # Never fails, and is not part of the `lint` aggregate.
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - static-checks
+      - tests-hooks-and-orchestrator
+      - tests-heal-plan-and-validation
+      - tests-promote-stall-and-review
+      - tests-release-and-log-analysis
+      - orchestrate-poll
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Check workflow sizes and CI job durations against their budgets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Issues opened with github.token start no workflow, so the issue
+          # would never reach clarify. The issue-only PAT (Issues: write) is
+          # used for the create call alone; unset, the job token is used.
+          CI_BUDGET_ISSUE_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+          CI_BUDGET_WORKFLOW_WARN_BYTES: ${{ vars.CI_BUDGET_WORKFLOW_WARN_BYTES || '440000' }}
+          CI_BUDGET_JOB_WARN_RATIO: ${{ vars.CI_BUDGET_JOB_WARN_RATIO || '0.75' }}
+        run: |
+          set -uo pipefail
+          python3 -m pip install --quiet pyyaml || true
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci_budget_watch.py || echo "::warning::ci_budget_watch.py exited non-zero; ignoring (warning only)."
 
   lint:
     # Aggregate status: the one check that says whether all of CI passed.

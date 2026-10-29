@@ -16,6 +16,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github/workflows/review_autofix.yml"
+IMPLEMENT_WORKFLOW = REPO_ROOT / ".github/workflows/implement.yml"
 WORKSPACE_HELPER = REPO_ROOT / "scripts/workspace_init.sh"
 STAGING_HELPER = REPO_ROOT / "scripts/stage_workflow_support.sh"
 SCRIPTS = REPO_ROOT / "scripts"
@@ -108,3 +109,25 @@ def test_bootstrap_sibling_imports_survive_safe_path(script: Path, tmp_path: Pat
 	result = subprocess.run([sys.executable, str(script), "--help"], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	assert not sentinel.exists()
+
+
+def test_implement_host_helpers_run_isolated_from_branch_modules() -> None:
+	"""Issue #7159: GH_PAT / GITHUB_ENV steps in implement.yml never import from the branch's scripts/."""
+	lines = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8").splitlines()
+	overlay = [line for line in lines if "load_workflow_overlay.py" in line and "python3" in line]
+	ledger = [line for line in lines if "unblock_ledger.py" in line and "rejection-snapshot" in line and "python3" in line]
+	assert len(overlay) == 1 and len(ledger) == 1
+	assert 'python3 -I -B "${RUNTIME_DIR}/host_python/load_workflow_overlay.py"' in overlay[0]
+	assert 'install -m 0755 "${src}" "${RUNTIME_DIR}/host_python/${f}"' in "\n".join(lines)
+	assert 'if [ "${f}" = load_workflow_overlay.py ]; then' in "\n".join(lines)
+	assert 'python3 -I -B "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/unblock_ledger.py" rejection-snapshot' in ledger[0]
+	text = "\n".join(lines)
+	assert text.index("UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=trusted_helper_unavailable") < text.index(ledger[0])
+
+
+@pytest.mark.parametrize("script_name", ["unblock_ledger.py", "load_workflow_overlay.py", "security_dependency.py", "pr_dependency.py"])
+def test_implement_host_helpers_need_no_sibling_imports(script_name: str, tmp_path: Path) -> None:
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	result = subprocess.run([sys.executable, "-I", "-B", str(SCRIPTS / script_name), "--help"], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr

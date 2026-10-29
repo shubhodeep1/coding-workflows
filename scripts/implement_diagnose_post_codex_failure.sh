@@ -697,6 +697,15 @@ if [ "${AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE:-codex}" = "claude" ]; then
     echo "AI_ENGINE_FALLBACK role=IMPLEMENT_DIAGNOSE reason=support_missing" >&2
   fi
 fi
+if [ "${diagnose_rc}" -eq 80 ]; then
+  # Claude capacity wait (issue #7370): no codex diagnosis and no fix-up
+  # proposals; the implement run is resumed by the capacity-resume pass.
+  echo "AI_ENGINE_CAPACITY_WAIT role=IMPLEMENT_DIAGNOSE outcome=skip reason=claude_capacity_wait" >&2
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}" 2>/dev/null || true
+  fi
+  exit 0
+fi
 if [ "${diagnose_rc}" -eq 75 ]; then
   diagnose_rc=0
   timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s "${diagnose_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \

@@ -16,13 +16,27 @@ Read-only exploration sub-phase:
 - Allowed read-only operations in this sub-phase: grep/glob discovery, targeted file reads, manifest inspection, lockfile detection, and preview-only patch planning.
 - Use the exploration pass to identify likely files, confirm surrounding context, and outline intended non-writing patch shapes.
 - No write-mode tools are allowed during this sub-phase.
-- If the planning context already surfaces `lessons_learned_record.v1`
-  entries for the same files, review up to the 5 most recent before
-  drafting and treat them as soft priors, not gospel.
+- If the planning context already surfaces `lessons_learned_record.v1` entries for the same files,
+  review up to the 5 most recent before drafting and treat them as soft priors, not gospel.
 
 {{REFERENCE_OUTPUT_CONTRACT}}
+Default-branch reference: your git has no remote, so `origin/...` refs do not
+exist. When `git branch --list isolated-base` shows it, that branch is the
+default branch at run start, filtered like your checkout (a missing file may
+only be filtered out). Read it with `git show isolated-base:<path>`, `git diff
+isolated-base -- <path>` or `git ls-tree -r --name-only isolated-base`. When the
+plan restores or keeps production behaviour, cite its paths there. Never plan
+steps that fetch from a remote. When the branch is absent, plan without it.
+
 Output contract — produce a plan covering, in order:
-1. Files likely to change.
+1. `## Files likely to change` — a markdown section with exactly this heading. List one
+   repo-relative path per bullet, each in backticks. Put the next item under its own `##`
+   heading (for example `## Functions/modules to implement`) so the file list ends there.
+   A bullet may add a short note such as `(new)`, but the note must not name another path
+   or a directory such as `scripts/`: the plan approval gate reads every `.github/`,
+   `.claude/`, `scripts/`, `prompts/` and `workflow-templates/` token in this section, and a
+   bare directory holds the plan for a human. Explain why a file changes in a later section.
+   Keep the section to those bullets: no prose paragraphs, and no placeholder path such as `scripts/<helper>`, which the gate reads as the bare directory `scripts/`.
 2. Functions/modules to implement.
 3. Data structures affected.
 4. API/interface changes.
@@ -65,6 +79,18 @@ Output contract — produce a plan covering, in order:
    `State machines:` field is required, not optional. When the current render is
    `false`, do not emit `Data flow:`, `State machines:`, or `Failure modes:`.
 
+12. `## Deferred scope` (issue #7657): when a clarification answer, an `AD-<n>`
+   auto-decision or the chosen `Scope-mode` limits this issue to part of its
+   stated scope (for example "this issue delivers Phase 1 only"), emit a `## Deferred scope` section as
+   its own `##` heading right after `## Files likely to change`, with one `- `
+   bullet per remaining item (at most 20). Each bullet is one plain sentence
+   with no links, issue references or mentions. Never emit an empty section,
+   omit the section when the plan covers the whole issue, and never emit it
+   for an orchestrator-managed child issue. Implement opens the PR with a
+   non-closing reference, so the issue stays open and clarification restarts
+   for these items after the merge. The section holds only those bullets; the next heading ends it.
+   A prose line or note inside it makes the section unreadable, so put any note in another section.
+
 Use the following shared security and money-handling lens when planning any
 affected surface:
 
@@ -106,11 +132,15 @@ Rules:
   contents are not public — AND that input is required to plan the change
   itself (not merely referenced as context the new implementation will
   replace): emit exactly `BLOCKED: <short reason>`. Public 3rd-party
-  documentation URLs are NOT a BLOCKED trigger — fetch them via the web
-  tool (see the web-access rule below) and continue planning. Missing
-  source files on the current ref are NOT external inputs — they are
+  documentation URLs are NOT a BLOCKED trigger — fetch them when a web
+  tool is available (see the web-access rule below) and continue planning.
+  A public fact that already exists (a published release tag's commit SHA,
+  a package version) is NOT a BLOCKED trigger either: without a web tool,
+  ask for it in the Mandatory Question Format as the web-access rule below
+  says. Missing source files on the current ref are NOT external inputs — they are
   codebase state the plan can address; note them under "Risks and edge
   cases" as a conflict and continue planning.
+- Implement only writes repository files and opens one pull request; it cannot post comments, close issues, or check or wait for another pull request, so never plan such steps. When another open, unmerged pull request already delivers this issue's work and no clarification answer chose to build it here anyway, plan neither a duplicate nor wait-only steps: emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged` and end with `STATUS: NOT_CLEAR`. When that work is already on the planning ref, plan no edits: emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement` and end with `STATUS: NOT_CLEAR`.
 - Scope-too-large gate: if the honest estimate exceeds 60 minutes, do NOT
   emit a plan; emit exactly
   `BLOCKED: scope-too-large; estimate=<N> minutes; recommend splitting into sequential sub-issues`.
@@ -132,20 +162,33 @@ Rules:
   Reduction mode as a substitute for the existing scope-too-large gate.
 - Surface the planning ref context (`git rev-parse HEAD` + symbolic branch);
   do not assume `main`.
-- If the checked-out ref mismatches Integration branch metadata, emit
-  exactly `BLOCKED: integration branch mismatch`.
-- Prefer repo-local context first. Web search IS available (the
-  `web_search` tool is enabled by the codex config —
-  `scripts/write_codex_config.sh` defaults `--web-search live`). Use it
-  for public 3rd-party API docs, library reference, RFCs, and similar
-  publicly-readable resources. Do NOT use it for private/auth-walled
-  resources or anything requiring a credential.
-- If external APIs/services are involved, fetch their official public
-  docs via the web tool, verify the source is the official vendor/library
-  or relevant standards publisher, and include concrete endpoint,
-  signature scheme, and payload details in the plan. Only ask (rather
-  than fetch) when the docs are private/auth-walled or genuinely
+- If the `Integration branch mismatch:` line in PLANNING REF CONTEXT reads
+  `true`, emit exactly `BLOCKED: integration branch mismatch`. Decide this
+  from that line only. Your workspace's own git, when it has one, is a
+  filtered read-only snapshot on a local branch named `isolated`, and its
+  commit ID never matches the planning ref; some sandboxes have no git at
+  all. Neither `git branch`, `git rev-parse` nor a "not a git repository"
+  error there is evidence of a mismatch.
+- Prefer repo-local context first. Web search is available only when this
+  run has a web tool: Codex runs do (the `web_search` tool is enabled by
+  the codex config — `scripts/write_codex_config.sh` defaults
+  `--web-search live`). Claude-engine runs have web search only when their
+  system instructions say the `WebSearch` tool is available, and never web fetch. When a web tool is available,
+  use it for public 3rd-party API docs, library reference, RFCs, and
+  similar publicly-readable resources. Do NOT use it for
+  private/auth-walled resources or anything requiring a credential.
+- If external APIs/services are involved and a web tool is available,
+  fetch their official public docs, verify the source is the official
+  vendor/library or relevant standards publisher, and include concrete
+  endpoint, signature scheme, and payload details in the plan. Only ask
+  (rather than fetch) when the docs are private/auth-walled or genuinely
   unavailable.
+- Without a web tool, take external facts (a release tag's commit SHA, a
+  package version, an API endpoint or signature) only from the issue
+  body, its answers, the comment thread or the repository, and never
+  try to look them up. When the issue states such a fact as verified,
+  use it as given. When a fact the plan depends on is in none of those
+  places, ask for it instead of guessing.
 
 Mandatory Question Format (only when emitting clarification questions):
 

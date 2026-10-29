@@ -6,7 +6,9 @@ name: Claude engine smoke
 # nothing to GitHub. One leg per tool profile (write, read):
 #   - offline: settings rendering (P5) and transcript classification;
 #   - without a credential (the broker refused or is unconfigured, every
-#     account is gated): claude_run returns 75 with AI_ENGINE_FALLBACK (D1);
+#     account is gated): claude_run returns 76 with AI_ENGINE_FALLBACK_REFUSED
+#     under the default policy, and 75 under AI_ENGINE_FALLBACK_POLICY=always
+#     (D1, plan item 3e);
 #   - with a credential: the context gate (start-up tokens < 25,000 and a
 #     CLAUDE.md marker the model cannot see), the P5 denials (write leg), and
 #     the relay gate through the sandboxed clarify (read leg) and review
@@ -14,6 +16,15 @@ name: Claude engine smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      cache_layout_probe:
+        description: >-
+          Also run the prompt-cache layout probe (read leg only, about $3.50 of
+          Sonnet pool usage): two calls with the review static context in the
+          user message, then two with it in the system prompt, logging
+          CACHE_LAYOUT_PROBE cache_read/cache_write for each.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,6 +34,11 @@ permissions:
 concurrency:
   group: claude-engine-smoke
   cancel-in-progress: false
+
+env:
+  # The smoke asserts the codex-fallback exit 75 for an all-gated pool, so it
+  # keeps the Claude capacity wait (issue #7370) off.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: 'false'
 
 jobs:
   smoke:
@@ -86,11 +102,19 @@ jobs:
           printf 'Reply with exactly OK.\n' > "${RUNNER_TEMP}/prompt.txt"
           # shellcheck disable=SC1091
           source scripts/ai_engine.sh
+          # Default policy `capacity` (plan item 3e): no_credential is not a
+          # capacity reason, so the fallback is refused with exit 76.
           rc=0
-          claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/out.txt" "${GITHUB_WORKSPACE}" 2> "${RUNNER_TEMP}/fallback.log" || rc=$?
+          AI_ENGINE_FALLBACK_POLICY=capacity claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/out.txt" "${GITHUB_WORKSPACE}" 2> "${RUNNER_TEMP}/fallback.log" || rc=$?
           cat "${RUNNER_TEMP}/fallback.log"
-          test "${rc}" -eq 75
+          test "${rc}" -eq 76
           grep -q "AI_ENGINE_FALLBACK role=${SMOKE_ROLE} reason=no_credential" "${RUNNER_TEMP}/fallback.log"
+          grep -q "AI_ENGINE_FALLBACK_REFUSED role=${SMOKE_ROLE} reason=no_credential" "${RUNNER_TEMP}/fallback.log"
+          # The rollback policy `always` keeps the codex fallback (exit 75).
+          rc=0
+          AI_ENGINE_FALLBACK_POLICY=always claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/out.txt" "${GITHUB_WORKSPACE}" 2> "${RUNNER_TEMP}/fallback-always.log" || rc=$?
+          cat "${RUNNER_TEMP}/fallback-always.log"
+          test "${rc}" -eq 75
           echo "SMOKE fallback ok (available=false)"
 
       - name: Context gate
@@ -139,6 +163,85 @@ jobs:
           assert write and all(denied(c) for c in write), write
           print("SMOKE P5 denials ok")
           '
+
+      - name: Prompt-cache layout probe
+        # Opt-in measurement (input cache_layout_probe). The review roles put
+        # pre_assembled_static.txt (unattended_system_instructions.md plus
+        # agents.md, about 280K tokens) at the top of one stdin user message,
+        # and the CLI caches only at the system-prompt and message-end
+        # breakpoints, so a second call whose message differs only at the end
+        # writes the whole prefix to cache again. This probe makes two calls
+        # per layout on the same role and compares the second call's
+        # cache_read: layout=user_message is today's layout, and
+        # layout=system_prompt moves the static block into the
+        # --system-prompt-file content via SUPPORT_INSTRUCTIONS_FILE. It
+        # reports only; a cache miss does not fail the job.
+        if: steps.credential.outputs.available == 'true' && matrix.profile == 'read' && inputs.cache_layout_probe
+        env:
+          AI_ENGINE_MODEL_HINT: claude-sonnet-5-5
+          AI_ENGINE_EFFORT_HINT: low
+        run: |
+          set -euo pipefail
+          probe_dir="${RUNNER_TEMP}/cache-probe"
+          mkdir -p "${probe_dir}/workdir"
+          static="${probe_dir}/static.txt"
+          {
+            echo "=== UNATTENDED SYSTEM INSTRUCTIONS ==="
+            cat unattended_system_instructions.md
+            echo
+            echo "=== AGENTS.MD ==="
+            cat agents.md
+            echo
+          } > "${static}"
+          echo "CACHE_LAYOUT_PROBE static_bytes=$(wc -c < "${static}")"
+          # shellcheck disable=SC1091
+          source scripts/ai_engine.sh
+          for layout in user_message system_prompt; do
+            for call in 1 2; do
+              prompt="${probe_dir}/prompt-${layout}-${call}.txt"
+              if [ "${layout}" = "user_message" ]; then
+                { cat "${static}"; printf 'Reply with exactly OK. Probe call %s.\n' "${call}"; } > "${prompt}"
+                probe_rc=0
+                claude_run "${SMOKE_ROLE}" "${prompt}" "${probe_dir}/out-${layout}-${call}.txt" "${probe_dir}/workdir" 2> "${probe_dir}/err-${layout}-${call}.txt" || probe_rc=$?
+              else
+                printf 'Reply with exactly OK. Probe call %s.\n' "${call}" > "${prompt}"
+                probe_rc=0
+                SUPPORT_INSTRUCTIONS_FILE="${static}" claude_run "${SMOKE_ROLE}" "${prompt}" "${probe_dir}/out-${layout}-${call}.txt" "${probe_dir}/workdir" 2> "${probe_dir}/err-${layout}-${call}.txt" || probe_rc=$?
+              fi
+              grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${probe_dir}/err-${layout}-${call}.txt" || true
+              python3 - "${probe_dir}/err-${layout}-${call}.txt" "${layout}" "${call}" "${probe_rc}" <<'PY'
+          import json, re, sys
+          path, layout, call, rc = sys.argv[1:5]
+          text = open(path, encoding="utf-8", errors="replace").read()
+          account = (re.findall(r"CLAUDE_POOL run role=\S+ account=(\S+) outcome=success", text) or ["none"])[-1]
+          usage = None
+          for line in text.splitlines():
+              if line.startswith("{") and '"type": "result"' in line:
+                  try:
+                      parsed = json.loads(line)
+                  except ValueError:
+                      continue
+                  if isinstance(parsed, dict):
+                      usage = parsed
+          if usage is None:
+              print(f"CACHE_LAYOUT_PROBE layout={layout} call={call} outcome=no_usage exit_code={rc}")
+              sys.exit(0)
+          u = usage.get("usage")
+          if not isinstance(u, dict):
+              u = {}
+          try:
+              cost = float(usage.get("total_cost_usd") or 0)
+          except (TypeError, ValueError):
+              cost = 0.0
+          print(
+              f"CACHE_LAYOUT_PROBE layout={layout} call={call} outcome=ok account={account} "
+              f"num_turns={usage.get('num_turns')} cache_read={u.get('cache_read_input_tokens', 0)} "
+              f"cache_write={u.get('cache_creation_input_tokens', 0)} input={u.get('input_tokens', 0)} "
+              f"cost_usd={cost:.4f}"
+          )
+          PY
+            done
+          done
 
       - name: Relay gate (clarify sandbox)
         if: steps.credential.outputs.available == 'true' && matrix.profile == 'read'

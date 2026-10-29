@@ -24,6 +24,47 @@ def run_readme(root: Path, env=None):
 	)
 
 
+VARIABLES_POINTER = (
+	"(The variable reference table under this heading is left out of this prompt. "
+	"Read the \"#### Variables\" section of README.md in the repository for a "
+	"variable's default and description.)"
+)
+# Reference trim: everything before "### 2. Create wrapper workflows", with the
+# body of an exact "#### Variables" section (up to the next heading line)
+# replaced by one pointer line.
+AWK_TRIM = (
+	r"/^### 2\. Create wrapper workflows/{exit} "
+	r"skip && !/^#/ {next} "
+	r"{skip=0; print} "
+	r'$0 == "#### Variables" {print pointer; skip=1}'
+)
+
+
+def awk_trim(content: bytes) -> bytes:
+	return subprocess.run(
+		["awk", "-v", "pointer=" + VARIABLES_POINTER, AWK_TRIM],
+		input=content, capture_output=True, check=True,
+	).stdout
+
+
+def run_static_context_readme(root: Path, output: Path):
+	env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV")}
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return subprocess.run(
+		["bash", str(ROOT / "scripts/build_static_context.sh"), "readme", str(output)],
+		cwd=root, env=env, capture_output=True, check=False, timeout=10,
+	)
+
+
+def unframe_static_context_readme(framed: bytes) -> bytes:
+	body = framed.split(b"=== BEGIN UNTRUSTED README.MD (trimmed) ===\n", 1)[1]
+	body = body.split(b"=== END UNTRUSTED README.MD (trimmed) ===\n", 1)[0]
+	prefix = b"UNTRUSTED_DATA: "
+	lines = body.splitlines(keepends=True)
+	assert all(line.startswith(prefix) for line in lines)
+	return b"".join(line[len(prefix):] for line in lines)
+
+
 @pytest.mark.parametrize("content", [
 	b"Before\n\n### 2. Create wrapper workflows\nAfter\n",
 	b"Before\n### 2. Create wrapper workflows extra\nAfter\n",
@@ -32,28 +73,64 @@ def run_readme(root: Path, env=None):
 	b"\n\nBefore\n",
 	b"\xff\n",
 	b"",
+	b"Intro\n#### Variables\n| `A` | x |\nprose\n\n#### Next\nkept\n",
+	b"Intro\n#### Variables\n| `A` | x |\n### 2. Create wrapper workflows\nAfter\n",
+	b"Intro\n#### Variables\n| `A` | x |",
+	b"Intro\n#### Variables\n",
+	b"Intro\n#### Variables reference\n| `A` | x |\n",
+	b"Intro\n#### Variables\n| `A` | x |\n## Next\n#### Variables\n| `B` | y |\n",
 ])
 def test_trim_matches_awk(tmp_path, content):
 	(tmp_path / "README.md").write_bytes(content)
 	result = run_readme(tmp_path)
-	awk = subprocess.run(
-		["awk", r"/^### 2\. Create wrapper workflows/{exit} {print}"],
-		input=content, capture_output=True, check=True,
-	)
 	assert result.returncode == 0, result.stderr
-	assert result.stdout == awk.stdout
+	assert result.stdout == awk_trim(content)
 	assert result.stderr == b""
+	output = tmp_path / "static-readme.txt"
+	static = run_static_context_readme(tmp_path, output)
+	assert static.returncode == 0, static.stderr
+	framed = output.read_bytes()
+	if result.stdout:
+		assert unframe_static_context_readme(framed) == result.stdout
+	else:
+		assert framed == b""
 
 
 def test_real_readme_matches_awk():
 	content = (ROOT / "README.md").read_bytes()
 	result = run_readme(ROOT)
-	awk = subprocess.run(
-		["awk", r"/^### 2\. Create wrapper workflows/{exit} {print}"],
-		input=content, capture_output=True, check=True,
-	)
 	assert result.returncode == 0, result.stderr
-	assert result.stdout == awk.stdout
+	assert result.stdout == awk_trim(content)
+
+
+def test_real_readme_leaves_variables_table_out():
+	result = run_readme(ROOT)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.decode("utf-8").splitlines()
+	assert "#### Variables" in lines
+	assert lines[lines.index("#### Variables") + 1] == VARIABLES_POINTER
+	assert "#### Secrets" in lines
+	assert not any(line.startswith("| Variable |") for line in lines)
+	# Issue #6902: the table alone outgrew the 200,000-byte prompt budget.
+	assert len(result.stdout) + 16 * len(lines) < 100000
+
+
+def test_oversized_variables_table_does_not_reject_readme(tmp_path):
+	table = b"".join(b"| `VAR_%d` | `x` | wf | " % index + b"d" * 200 + b" |\n" for index in range(2000))
+	(tmp_path / "README.md").write_bytes(
+		b"# Repo\n#### Secrets\nsecret docs\n#### Variables\n| Variable | Default |\n|---|---|\n"
+		+ table + b"#### Optional surfaces\nkept\n",
+	)
+	result = run_readme(tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == (
+		b"# Repo\n#### Secrets\nsecret docs\n#### Variables\n"
+		+ VARIABLES_POINTER.encode() + b"\n#### Optional surfaces\nkept\n"
+	)
+	output = tmp_path / "static-readme.txt"
+	static = run_static_context_readme(tmp_path, output)
+	assert static.returncode == 0, static.stderr
+	assert unframe_static_context_readme(output.read_bytes()) == result.stdout
 
 
 def test_missing_readme(tmp_path):
@@ -104,7 +181,7 @@ def test_non_regular_and_oversize_readmes_are_rejected(tmp_path, kind):
 	elif kind == "directory":
 		path.mkdir()
 	else:
-		path.write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+		path.write_bytes(b"x" * (8 * 1024 * 1024 + 1))
 	result = run_readme(tmp_path)
 	assert result.returncode == 3
 	assert result.stdout == b""

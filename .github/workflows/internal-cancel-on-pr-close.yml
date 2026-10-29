@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   cancel:
-    uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@main
+    uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@promote-candidate
     secrets: inherit
 
   heal-pr-reconcile:

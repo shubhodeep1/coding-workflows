@@ -33,6 +33,11 @@ name: AI Orchestrate Clarify Respond (Reusable)
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -41,10 +46,12 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.action == 'created' &&
       github.event.issue.pull_request == null &&
+      !contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source') &&
       (
         (
           github.event.comment.user.type == 'Bot' &&
-          github.event.comment.user.login == 'github-actions[bot]'
+          vars.AI_PIPELINE_APPROVER_LOGIN != '' &&
+          github.event.comment.user.login == vars.AI_PIPELINE_APPROVER_LOGIN
         ) ||
         (
           github.event.comment.user.type == 'User' &&
@@ -58,6 +65,13 @@ jobs:
       group: ai-orchestrate-clarify-respond-${{ github.event.issue.number }}
       cancel-in-progress: true
     env:
+      AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+      # Claude capacity wait (issue #7370): the resume pass re-posts the
+      # questions comment (its first-line marker re-triggers this workflow).
+      CLAUDE_CAPACITY_WAIT_ITEM_KIND: issue
+      CLAUDE_CAPACITY_WAIT_ITEM_NUMBER: ${{ github.event.issue.number }}
+      CLAUDE_CAPACITY_WAIT_STAGE: clarify_respond
+      CLAUDE_CAPACITY_WAIT_SOURCE_COMMENT: ${{ github.event.comment.id || '' }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -72,6 +86,56 @@ jobs:
       MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
 
     steps:
+      - name: Bootstrap GitHub API retry helper
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+        run: |
+          # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
+          # (issue #6634): main in this repo, stable in consumers, never the PR
+          # head or the caller checkout. emit_event.sh is fetched next to it so
+          # the helper never sources a checkout copy. Git transport spends no
+          # REST budget. On failure the steps below fall back to plain gh api.
+          # A consumer run whose job workflow_ref pins a coding-workflows file
+          # to a commit fetches that commit instead, never stable
+          # (tele-funtoken-msg-scoring#4566); a fetch that does not land
+          # exactly on it leaves the helper unset.
+          ghr_ref=stable
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then ghr_ref=main; fi
+          ghr_pin=""
+          ghr_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [ "${ghr_ref}" = "stable" ] && [[ "${ghr_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml@[0-9a-f]{40}$ ]]; then
+            ghr_pin="${ghr_workflow_ref##*@}"
+            ghr_ref="${ghr_pin}"
+          fi
+          ghr_dir="${RUNNER_TEMP}/gh-api-retry-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ghr_auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          for ghr_try in 1 2 3; do
+            rm -rf "${ghr_dir}"
+            mkdir -p "${ghr_dir}"
+            if { if [ -n "${ghr_pin}" ]; then
+                  git init -q "${ghr_dir}/src" 2>/dev/null \
+                    && git -C "${ghr_dir}/src" remote add origin https://github.com/shubhodeep1/coding-workflows \
+                    && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" fetch -q --no-tags --depth 1 --filter=blob:none origin "${ghr_pin}" 2>/dev/null \
+                    && [ "$(git -C "${ghr_dir}/src" rev-parse FETCH_HEAD 2>/dev/null)" = "${ghr_pin}" ] \
+                    && git -C "${ghr_dir}/src" update-ref HEAD FETCH_HEAD
+                else
+                  git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
+                    --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null
+                fi; } \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/gh_helpers.sh > "${ghr_dir}/gh_helpers.sh" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/emit_event.sh > "${ghr_dir}/emit_event.sh" 2>/dev/null; then
+              break
+            fi
+            if [ "${ghr_try}" -lt 3 ]; then sleep $(( ghr_try * 5 )); fi
+          done
+          if grep -q '^gh_api_retry()' "${ghr_dir}/gh_helpers.sh" 2>/dev/null && [ -s "${ghr_dir}/emit_event.sh" ]; then
+            echo "GH_API_RETRY_HELPERS=${ghr_dir}/gh_helpers.sh" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::GH_API_RETRY bootstrap unavailable (ref=${ghr_ref}); steps use plain gh api."
+          fi
+
       - name: Check orchestrator metadata
         id: check_orchestrator
         env:
@@ -89,7 +153,9 @@ jobs:
             echo "ISSUE_PAYLOAD_FILE=${ISSUE_PAYLOAD_FILE}"
             echo "TRACKING_PAYLOAD_FILE=${TRACKING_PAYLOAD_FILE}"
           } >> "$GITHUB_ENV"
-          ISSUE_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+          ISSUE_PAYLOAD="$(gh_api_retry "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}")"
           printf '%s' "${ISSUE_PAYLOAD}" > "${ISSUE_PAYLOAD_FILE}"
           ISSUE_BODY="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.body // ""')"
           ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
@@ -137,7 +203,7 @@ jobs:
           # a single combined pass/fail notification at the end.
           TRACKING_NUM="$(printf '%s' "${ISSUE_BODY}" | sed -n 's/.*Tracking issue: #\([0-9][0-9]*\).*/\1/p' | head -n1)"
           if [ -n "${TRACKING_NUM}" ]; then
-            if TRACKING_PAYLOAD="$(gh api "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then
+            if TRACKING_PAYLOAD="$(gh_api_retry --optional "repos/${{ github.repository }}/issues/${TRACKING_NUM}" 2>/dev/null)"; then
               if [ -n "${TRACKING_PAYLOAD}" ]; then
                 printf '%s' "${TRACKING_PAYLOAD}" > "${TRACKING_PAYLOAD_FILE}"
                 TRACKING_TITLE="$(printf '%s' "${TRACKING_PAYLOAD}" | jq -r '.title // ""' 2>/dev/null || echo "")"
@@ -157,7 +223,9 @@ jobs:
         if: steps.check_orchestrator.outputs.respond == 'true'
         id: refctx
         env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -169,6 +237,14 @@ jobs:
 
           resolver_repo="shubhodeep1/coding-workflows"
           resolver_ref="stable"
+          resolver_ref_pinned=false
+          # A consumer wrapper pinned to a commit runs the resolver from that
+          # commit, never from stable or main (issue tele-funtoken#4566).
+          resolver_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [[ "${resolver_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_clarify_respond\.yml@[0-9a-f]{40}$ ]]; then
+            resolver_ref="${resolver_workflow_ref##*@}"
+            resolver_ref_pinned=true
+          fi
           if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
             resolver_ref="${{ github.sha }}"
           fi
@@ -188,11 +264,38 @@ jobs:
             rm -rf "${resolver_stage_root}"
           }
           trap cleanup_resolver_stage EXIT
+          # Issue #7283: with CI-triage PR-branch routing on, a resolver that cannot
+          # be staged, pinned or found fails the step instead of falling back to the
+          # default branch (the unpinned main fallback clone counts as a pinning
+          # failure). The flag is parsed like ci_triage_routing_enabled in
+          # scripts/resolve_integration_ref.sh. With routing off, the fallbacks below
+          # are unchanged.
+          resolver_ci_triage_routing_on=false
+          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" in
+            [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
+          esac
+          resolver_stage_fail_closed() {
+            if [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+              resolver_pin_log=""
+              if [ "${resolver_ref_pinned}" = "true" ]; then resolver_pin_log=" pinned_ref=${resolver_ref}"; fi
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 ci_triage_routing=on${resolver_pin_log}; refusing to fall back to the default branch."
+            elif [ "${resolver_ref_pinned}" = "true" ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 pinned_ref=${resolver_ref}; refusing to run resolver code from another ref."
+            else
+              return 0
+            fi
+            if [ -s "${resolver_clone_log}" ]; then
+              sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
+            fi
+            exit 1
+          }
 
           if resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
             if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
-               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
+               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}" || \
+               { [ "${resolver_ref_pinned}" = "true" ] && [ "$(git -C "${resolver_stage_primary}" rev-parse HEAD 2>/dev/null || true)" != "${resolver_ref}" ]; }; then
+              resolver_stage_fail_closed pin_failed
               echo "::warning::Failed to stage canonical integration resolver ref ${resolver_ref}; using main fallback."
               if [ -s "${resolver_clone_log}" ]; then
                 sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
@@ -200,7 +303,9 @@ jobs:
             fi
           elif resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_fallback}" 2>>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_fallback}/scripts/resolve_integration_ref.sh"
+            resolver_stage_fail_closed pin_failed
           else
+            resolver_stage_fail_closed stage_failed
             echo "::warning::Failed to stage canonical integration resolver; falling back to default branch."
             if [ -s "${resolver_clone_log}" ]; then
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
@@ -210,19 +315,31 @@ jobs:
           fi
 
           if [ ! -f "${resolver_script}" ]; then
+            resolver_stage_fail_closed script_missing
             echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           chmod +x "${resolver_script}"
-          if integration_branch="$({
+          # Exit 3 means CI-triage PR-branch routing was required but could
+          # not be verified; never fall back to the default branch then.
+          resolver_rc=0
+          integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}"
-          })"; then
+          })" || resolver_rc=$?
+          if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_rc}" -eq 3 ]; then
+            echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
+            exit 1
+          elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+            echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
+            exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
@@ -265,19 +382,52 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.check_orchestrator.outputs.respond == 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
         if: steps.check_orchestrator.outputs.respond == 'true'
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_clarify_respond\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (Q64, as validate.yml in #7123). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/orchestrate_clarify_respond\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -293,7 +443,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: steps.check_orchestrator.outputs.respond == 'true' && steps.checkout_support_source.outcome == 'failure'
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable'
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -310,9 +460,15 @@ jobs:
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot
-        if: steps.check_orchestrator.outputs.respond == 'true' && env.SCRIPT_REF != 'main'
+        if: steps.check_orchestrator.outputs.respond == 'true' && env.SCRIPT_REF == 'stable'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -330,7 +486,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py clarify_data_provision_guard.py; do
+          for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py clarify_data_provision_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -354,12 +510,12 @@ jobs:
           fi
           install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile
 
-          # render_prompt.py is the optional Python backend for the
-          # render_prompt.sh shim adopted by branches that took the issue
-          # #3043 refactor.  main ships a self-contained bash render_prompt.sh
-          # that needs no backend, so the file is absent on main and must be
-          # staged only when the branch under processing actually carries it.
-          # Absence is expected (non-shim branches, incl. main) and must not
+          # render_prompt.py is the Python backend of the render_prompt.sh
+          # shim (issue #3043 refactor). main ships both, the shim needs the
+          # backend, and check_workflow_script_refs.py fails CI if it goes
+          # missing. Some older refs still bundle a self-contained bash
+          # render_prompt.sh with no backend, so absence on the ref under
+          # processing (and on main's copy) only skips staging and must not
           # fail the bootstrap; presence stages it beside the shim so the
           # shim resolves ${SCRIPT_DIR}/render_prompt.py.
           for f in render_prompt.py; do
@@ -703,6 +859,8 @@ jobs:
 
       - name: Pre-assemble static context (cacheable across runs)
         if: steps.check_orchestrator.outputs.respond == 'true'
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
 
@@ -720,6 +878,20 @@ jobs:
           fi
           clarify_respond_readme_context="$(mktemp "${RUNNER_TEMP}/clarify-respond-readme.XXXXXX")"
           bash scripts/build_static_context.sh readme "${clarify_respond_readme_context}"
+          # Issue #8269: index the agents file instead of inlining it unless
+          # STATIC_CONTEXT_AGENTS_MODE says inline (same rules as build_static_context.sh).
+          clarify_respond_agents_mode="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          case "${clarify_respond_agents_mode}" in
+            ""|index) clarify_respond_agents_mode=index ;;
+            inline) clarify_respond_agents_mode=inline ;;
+            *)
+              echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+              clarify_respond_agents_mode=inline
+              ;;
+          esac
+          clarify_respond_agents_effective_mode="${clarify_respond_agents_mode}"
+          clarify_respond_agents_fallback_reason=""
+          clarify_respond_agents_absent=false
 
           # Keep an identical static prefix at the start of every request so
           # provider-side prompt prefix caching can be reused across runs.
@@ -736,13 +908,42 @@ jobs:
             if [ -L agents.md ]; then
               echo "::warning::agents.md is a symbolic link; omitted from the static context." >&2
             fi
+            clarify_respond_agents_file=""
             if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
-              echo "=== AGENTS.MD ==="
-              cat AGENTS.md
-              echo
+              clarify_respond_agents_file="AGENTS.md"
             elif [ -f agents.md ] && [ ! -L agents.md ]; then
+              clarify_respond_agents_file="agents.md"
+            fi
+            clarify_respond_agents_indexed=false
+            if [ -n "${clarify_respond_agents_file}" ] && [ "${clarify_respond_agents_mode}" = index ]; then
+              if clarify_respond_agents_index_tmp="$(mktemp "${RUNNER_TEMP}/clarify-respond-agents-index.XXXXXX" 2>/dev/null)"; then
+                if bash scripts/build_static_context.sh agents-index "${clarify_respond_agents_index_tmp}" "${clarify_respond_agents_file}" && [ -s "${clarify_respond_agents_index_tmp}" ]; then
+                  cat "${clarify_respond_agents_index_tmp}"
+                  echo
+                  clarify_respond_agents_indexed=true
+                else
+                  clarify_respond_agents_fallback_reason=index_unavailable
+                fi
+                rm -f "${clarify_respond_agents_index_tmp}"
+              else
+                clarify_respond_agents_fallback_reason=tmp_unavailable
+              fi
+              if [ "${clarify_respond_agents_indexed}" != true ]; then
+                clarify_respond_agents_effective_mode=inline
+                echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+              fi
+            fi
+            if [ -z "${clarify_respond_agents_file}" ]; then
+              clarify_respond_agents_absent=true
+            fi
+            if [ -n "${clarify_respond_agents_file}" ] && [ "${clarify_respond_agents_indexed}" != true ]; then
               echo "=== AGENTS.MD ==="
-              cat agents.md
+              # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+              if [ -d agents.d ] && [ ! -L agents.d ] && clarify_respond_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${clarify_respond_agents_file}" 2>/dev/null)"; then
+                printf '%s\n' "${clarify_respond_agents_render}"
+              else
+                cat "${clarify_respond_agents_file}"
+              fi
               echo
             fi
             cat "${clarify_respond_readme_context}"
@@ -755,6 +956,14 @@ jobs:
             fi
           } > ./pre_assembled_static.txt
           rm -f "${clarify_respond_readme_context}"
+          clarify_respond_size_line="STATIC_CONTEXT_SIZE phase=clarify_respond mode=${clarify_respond_agents_effective_mode} bytes=$(wc -c < ./pre_assembled_static.txt | tr -d '[:space:]')"
+          if [ -n "${clarify_respond_agents_fallback_reason}" ]; then
+            clarify_respond_size_line="${clarify_respond_size_line} fallback=inline reason=${clarify_respond_agents_fallback_reason}"
+          fi
+          if [ "${clarify_respond_agents_absent}" = true ]; then
+            clarify_respond_size_line="${clarify_respond_size_line} agents=absent"
+          fi
+          echo "${clarify_respond_size_line}" >&2
 
       - name: Retrieve issue memory context
         if: steps.check_orchestrator.outputs.respond == 'true'
@@ -892,17 +1101,28 @@ jobs:
 
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex clarify-respond attempt ${attempt}/${max_attempts} (engine ${CLARIFY_RESPOND_ENGINE})..."
+            # Name the engine that actually runs, so a Claude run is not logged as Codex.
+            clarify_respond_engine_name="Codex"
+            if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then clarify_respond_engine_name="Claude"; fi
+            echo "${clarify_respond_engine_name} clarify-respond attempt ${attempt}/${max_attempts}..."
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             rc=0
             if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
               bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || rc=$?
+              if [ "${rc}" -eq 80 ]; then
+                # Claude capacity wait (issue #7370): no codex, no answer posted;
+                # the report step records the wait for the capacity-resume pass.
+                echo "AI_ENGINE_CAPACITY_WAIT role=CLARIFY_RESPOND outcome=deferred stage=clarify_respond"
+                echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                exit 0
+              fi
               if [ "${rc}" -eq 75 ]; then
                 # Claude unavailable (logged as AI_ENGINE_FALLBACK): this
                 # attempt and the rest run the codex path (plan D1).
                 CLARIFY_RESPOND_ENGINE="codex"
+                clarify_respond_engine_name="Codex"
                 rc=0
               fi
             fi
@@ -911,26 +1131,26 @@ jobs:
             fi
             if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "Codex clarify-respond succeeded on attempt ${attempt}."
+                echo "${clarify_respond_engine_name} clarify-respond succeeded on attempt ${attempt}."
                 break
               fi
-              echo "::warning::Codex returned empty output on attempt ${attempt}."
+              echo "::warning::${clarify_respond_engine_name} returned empty output on attempt ${attempt}."
             else
-              echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+              echo "::warning::${clarify_respond_engine_name} exited with code $rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
               echo "Retrying in ${sleep_secs}s (includes jitter)..."
               sleep "${sleep_secs}"
             else
-              echo "::error::Codex clarify-respond failed after ${max_attempts} attempts."
+              echo "::error::${clarify_respond_engine_name} clarify-respond failed after ${max_attempts} attempts."
               exit 1
             fi
           done
           echo "engine=${CLARIFY_RESPOND_ENGINE}" >> "$GITHUB_OUTPUT"
 
       - name: Self-critique pass for non-letter decisions
-        if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success')
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
@@ -982,6 +1202,13 @@ jobs:
             critic_rc=0
             if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
               bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || critic_rc=$?
+              if [ "${critic_rc}" -eq 80 ]; then
+                # Claude capacity wait (issue #7370): no codex, no answer posted;
+                # the report step records the wait for the capacity-resume pass.
+                echo "AI_ENGINE_CAPACITY_WAIT role=CLARIFY_RESPOND outcome=deferred stage=clarify_respond"
+                echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                exit 0
+              fi
               if [ "${critic_rc}" -eq 75 ]; then
                 CLARIFY_RESPOND_ENGINE="codex"
                 critic_rc=0
@@ -1008,6 +1235,13 @@ jobs:
                 revise_rc=0
                 if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
                   bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || revise_rc=$?
+                  if [ "${revise_rc}" -eq 80 ]; then
+                    # Claude capacity wait (issue #7370): no codex, no answer posted;
+                    # the report step records the wait for the capacity-resume pass.
+                    echo "AI_ENGINE_CAPACITY_WAIT role=CLARIFY_RESPOND outcome=deferred stage=clarify_respond"
+                    echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                    exit 0
+                  fi
                   if [ "${revise_rc}" -eq 75 ]; then
                     CLARIFY_RESPOND_ENGINE="codex"
                     revise_rc=0
@@ -1030,7 +1264,7 @@ jobs:
           fi
 
       - name: Semantic cache store
-        if: always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success')
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -1058,7 +1292,7 @@ jobs:
           fi
 
       - name: Save semantic cache SQLite
-        if: always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success')
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
@@ -1072,12 +1306,12 @@ jobs:
       # paged, which is the alert clarify.yml left to this workflow.
       - name: Standalone RECOMMENDED fallback
         id: standalone_fallback
-        if: steps.check_orchestrator.outputs.mode == 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'failure'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.mode == 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'failure')
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -1108,7 +1342,7 @@ jobs:
           tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
 
       - name: Data-provision guard
-        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true' || steps.standalone_fallback.outputs.ready == 'true')
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true' || steps.standalone_fallback.outputs.ready == 'true'))
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -1142,12 +1376,12 @@ jobs:
       - name: Parse and post answer
         # A standalone worker failure without a RECOMMENDED fallback posts
         # nothing (the fallback step paged a human instead).
-        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true')
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           CLARIFICATION_COMMENT_ID: ${{ github.event.comment.id }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -1160,7 +1394,7 @@ jobs:
       # the PR body. The comment snapshot is the one read above; no extra
       # read. Never fails the run: the answer is already posted.
       - name: Record standalone auto-decisions
-        if: steps.check_orchestrator.outputs.mode == 'standalone' && env.SKIP_AUTO_ANSWER == 'false'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.mode == 'standalone' && env.SKIP_AUTO_ANSWER == 'false')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1207,7 +1441,7 @@ jobs:
           echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decider=$(printf '%s' "${AD_DECIDER}" | tr ' ,' '_') decisions=$(jq -r '.decisions | length' "${AD_DECISIONS_FILE}") ad_total=$(jq -r '.total' "${AD_RENDER_FILE}") setup_total=$(jq -r '.setup_total' "${AD_RENDER_FILE}")"
 
       - name: Reconfigure git auth for memory helper clones
-        if: always() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1226,7 +1460,7 @@ jobs:
         # SKIP_AUTO_ANSWER is false only after the poster posted an answer;
         # it is unset when nothing was posted (a standalone worker failure
         # with no RECOMMENDED fallback).
-        if: steps.check_orchestrator.outputs.respond == 'true' && env.SKIP_AUTO_ANSWER == 'false'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.respond == 'true' && env.SKIP_AUTO_ANSWER == 'false')
         run: |
           set -euo pipefail
 
@@ -1258,7 +1492,7 @@ jobs:
             --source-refs "${ISSUE_URL}"
 
       - name: Write run summary
-        if: always() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND || '80000' }}
         run: |
@@ -1284,7 +1518,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record memory run-end success event
-        if: success() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (success() && steps.check_orchestrator.outputs.respond == 'true')
         run: |
           set -euo pipefail
 
@@ -1311,7 +1545,7 @@ jobs:
             --metadata-json "${METADATA_JSON}"
 
       - name: Record memory run-end failure event
-        if: failure() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && steps.check_orchestrator.outputs.respond == 'true')
         run: |
           set -euo pipefail
 
@@ -1338,7 +1572,7 @@ jobs:
             --metadata-json "${METADATA_JSON}"
 
       - name: Comment on issue failure
-        if: failure() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1350,12 +1584,12 @@ jobs:
             -f body="Orchestrator clarify-respond workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
 
       - name: Telegram failure notification
-        if: failure() && steps.check_orchestrator.outputs.respond == 'true'
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
@@ -1366,7 +1600,9 @@ jobs:
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"
+          # DEBUG: the stall ladder's 60-minute auto-answer is the backstop and
+          # ai:clarify-respond-failed goes to the unblock judge.
+          tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "DEBUG"
 
       - name: Cleanup git auth remote
         if: always() && steps.check_orchestrator.outputs.respond == 'true'
@@ -1374,4 +1610,26 @@ jobs:
           set -euo pipefail
           if [ -d .git ]; then
             git remote set-url origin "${{ github.server_url }}/${{ github.repository }}"
+          fi
+      # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
+      # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
+      # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
+      # the copy in the trusted support checkout, never a PR-head script.
+      - name: Report refused AI engine fallbacks
+        if: always() && steps.check_orchestrator.outputs.respond == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+        run: |
+          fallback_support_dir="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          fallback_report="${fallback_support_dir}/scripts/ai_engine_fallback_report.sh"
+          if [ -n "${fallback_support_dir}" ] && [ -f "${fallback_report}" ] && [ ! -L "${fallback_report}" ]; then
+            REPORT_WRAPPER_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${fallback_support_dir}" rev-parse HEAD 2>/dev/null || true)" \
+              bash "${fallback_report}" || true
+          else
+            echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
           fi

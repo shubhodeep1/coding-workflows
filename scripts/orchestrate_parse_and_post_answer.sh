@@ -211,6 +211,9 @@ if [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
 			echo "- Cycle: ${CYCLE}/${MAX_CYCLES}"
 		} > "${RUNTIME_DIR}/loop_break_comment.md"
 	fi
+	# The escalation section echoes model output; the marker keeps a line it
+	# may start with /reclarify from restarting clarification (issue #6630).
+	printf '\n%s\n' "<!-- ai:clarification-escalation:v1 -->" >> "${RUNTIME_DIR}/loop_break_comment.md"
 
 	LOOP_BREAK_RESPONSE="$(gh_retry gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
 		-f body="$(cat "${RUNTIME_DIR}/loop_break_comment.md")" || true)"

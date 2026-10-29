@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
-TAP_PLAN="${TAP_PLAN:-{{ slots.get('tap_plan', 5) }}}"
+_default_tap_plan={{ slots.get('tap_plan', 5) | shell_quote }}
+TAP_PLAN="${TAP_PLAN:-${_default_tap_plan}}"
 
 if ! [[ "${TAP_PLAN}" =~ ^[0-9]+$ ]] || [ "${TAP_PLAN}" -lt 1 ]; then
 	echo "1..1"

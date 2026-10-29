@@ -9,6 +9,7 @@
 #   gh_retry_to_file     — like gh_retry but captures stdout to a specified file
 #   gh_api_json_to_file  — like gh_retry_to_file but also validates JSON output
 #   curl_gh_api          — run a curl command against GitHub API with retry
+#   gh_api_retry         — classified `gh api` retry, exit 0/1/2/75 (see below)
 #
 # Rate limit detection: on 403/429 "rate limit" responses the helper
 # queries GitHub's GET /rate_limit endpoint (not itself rate-limited)
@@ -171,9 +172,18 @@ _gh_actions_escape()
 #     (gh prints this when --remove-label targets a label that is
 #     not on the issue; retrying just burns API budget.)
 #   * HTTP 404 Not Found             (resource doesn't exist)
+#   * HTTP 400 Bad Request           (malformed request)
+#   * HTTP 401 / "Bad credentials" / "Requires authentication"
+#                                    (invalid or missing token)
 #   * HTTP 422 Unprocessable Entity  (validation / already-exists)
 #   * "Resource not accessible by integration"      (GITHUB_TOKEN scope)
 #   * "Resource not accessible by personal access token" (PAT scope)
+#   * "Commenting is disabled on issues with more than 2500 comments"
+#     (GitHub's per-issue comment cap; it stays until comments are deleted)
+#
+# Generic HTTP 403 is deliberately NOT matched: gh_retry and
+# gh_retry_to_file check permanent failures before rate limits, and
+# secondary rate limits / content-creation throttles also answer 403.
 #
 # Returns 0 (true) if the text indicates such a failure.
 # Conservative on purpose — only matches conditions that retrying
@@ -181,7 +191,7 @@ _gh_actions_escape()
 # ---------------------------------------------------------------
 _is_gh_permanent_failure()
 {
-	printf '%s' "$1" | grep -qiE "['\"][^'\"]+['\"] not found|gh: Not Found|HTTP 404|404 Not Found|status code 404|HTTP 422|Resource not accessible by (integration|personal access token)"
+	printf '%s' "$1" | grep -qiE "['\"][^'\"]+['\"] not found|gh: Not Found|HTTP 404|404 Not Found|status code 404|HTTP 400|HTTP 401|HTTP 422|Bad credentials|Requires authentication|Resource not accessible by (integration|personal access token)|Commenting is disabled on issues with more than [0-9]+ comments"
 }
 
 # ---------------------------------------------------------------
@@ -257,11 +267,42 @@ _parse_reset_header()
 # ---------------------------------------------------------------
 _gh_rate_limit_wait()
 {
-	local _reset_ts
-	_reset_ts=$(gh api -i /rate_limit 2>/dev/null \
-		| grep -i '^x-ratelimit-reset:' | head -1 \
-		| awk '{print $2}' | tr -d '\r') || true
+	# [bucket] (core | graphql | search …, default core): wait for the reset
+	# of the bucket that was limited, read from the /rate_limit body. The
+	# response header describes only the core bucket, so it is the fallback.
+	local _bucket="${1:-core}" _resp _reset_ts=""
+	[[ "${_bucket}" =~ ^[a-z_]+$ ]] || _bucket=core
+	_resp=$(gh api -i /rate_limit 2>/dev/null) || _resp=""
+	if [ -n "${_resp}" ]; then
+		_reset_ts=$(printf '%s\n' "${_resp}" | tr -d '\r' | awk 'f { print } /^$/ { f = 1 }' \
+			| jq -r --arg b "${_bucket}" '.resources[$b].reset // empty' 2>/dev/null | head -1) || _reset_ts=""
+		if [[ "${_reset_ts}" =~ ^[0-9]+$ ]]; then
+			# Exact reset of the limited bucket for gh_rate_limit_breaker_active.
+			_gh_rate_limit_trip_breaker "${_bucket}" "${_reset_ts}"
+		else
+			_reset_ts=""
+		fi
+		if [ -z "${_reset_ts}" ]; then
+			_reset_ts=$(printf '%s\n' "${_resp}" \
+				| grep -i '^x-ratelimit-reset:' | head -1 \
+				| awk '{print $2}' | tr -d '\r') || true
+		fi
+	fi
 	_sleep_until_reset "${_reset_ts}"
+}
+
+# _gh_rate_limit_wait_for <stderr text> <command…> — a secondary limit waits
+# 60 s (gh's stderr carries no retry-after); a primary limit waits for the
+# reset of the command's bucket.
+_gh_rate_limit_wait_for()
+{
+	local _text="$1"; shift
+	if printf '%s' "${_text}" | grep -qiE 'secondary rate|abuse detection'; then
+		echo "::warning::  Secondary rate limit; waiting 60s" >&2
+		sleep 60
+	else
+		_gh_rate_limit_wait "$(_gh_cmd_bucket "$@")"
+	fi
 }
 
 # ---------------------------------------------------------------
@@ -283,7 +324,13 @@ _GH_RATE_LIMIT_BREAKER_FILE="${GH_RATE_LIMIT_BREAKER_FILE:-/tmp/.gh_rate_limit_c
 
 _gh_rate_limit_trip_breaker()
 {
+	# [bucket] [reset_epoch] [low]: with arguments, also append a
+	# "<bucket> <reset_epoch> [low]" line read by gh_rate_limit_breaker_active.
+	# The bare file still means "tripped" for gh_rate_limit_breaker_tripped.
 	touch "${_GH_RATE_LIMIT_BREAKER_FILE}" 2>/dev/null || true
+	if [[ "${1:-}" =~ ^[a-z_]+$ ]] && [[ "${2:-}" =~ ^[0-9]+$ ]]; then
+		printf '%s %s%s\n' "$1" "$2" "${3:+ $3}" >> "${_GH_RATE_LIMIT_BREAKER_FILE}" 2>/dev/null || true
+	fi
 }
 
 # gh_rate_limit_breaker_tripped — returns 0 (true) if a rate
@@ -315,14 +362,16 @@ gh_rate_limit_breaker_tripped()
 # "≤ 1 alert per cooldown window" is preserved even under
 # transient Telegram failures.
 #
-# Alert level: WARNING. The function honours `ALERT_MSG_LEVEL`
-# (the same global threshold `tg_helpers.sh::tg_send_msg` uses);
-# when ALERT_MSG_LEVEL is ERROR or CRITICAL the alert is skipped.
+# Alert level: DEBUG. gh_retry already sleeps until the reset and
+# retries, so the pipeline handles a rate-limit hit on its own and no
+# human action is needed. The function honours `ALERT_MSG_LEVEL` (the
+# same global threshold `tg_helpers.sh::tg_send_msg` uses); any
+# threshold above DEBUG, including the default WARNING, skips it.
 #
 # Env (all optional, function no-ops when creds are missing):
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID (fallback TG_CHAT_ID)
 #   TG_GH_RATELIMIT_ALERT_COOLDOWN_SECS (default 3600)
-#   ALERT_MSG_LEVEL (default DEBUG; suppresses when > WARNING)
+#   ALERT_MSG_LEVEL (default WARNING; suppresses when > DEBUG)
 #   GITHUB_WORKFLOW, GITHUB_SERVER_URL, GITHUB_REPOSITORY,
 #   GITHUB_RUN_ID — used to build a descriptive message.
 #
@@ -344,17 +393,17 @@ _gh_ratelimit_tg_alert()
 	fi
 
 	# Honour the global ALERT_MSG_LEVEL threshold the same way
-	# tg_helpers.sh::tg_send_msg does. This alert is WARNING level,
-	# so when the operator has configured ALERT_MSG_LEVEL=ERROR,
-	# CRITICAL, or SILENT the rate-limit alert is suppressed (no
-	# send, no pin update, cooldown window is not advanced).
+	# tg_helpers.sh::tg_send_msg does. This alert is DEBUG level,
+	# so any threshold above DEBUG (WARNING, the default, or ERROR,
+	# CRITICAL, SILENT) suppresses the rate-limit alert (no send, no
+	# pin update, cooldown window is not advanced).
 	# SILENT (added with the test-and-mark-stable smoke-gate change)
 	# must be in the suppress list explicitly; the permissive default
 	# below would otherwise let SILENT through and the gate would
 	# still see rate-limit pings.
-	case "$(printf '%s' "${ALERT_MSG_LEVEL:-DEBUG}" | tr '[:lower:]' '[:upper:]')" in
-		DEBUG|WARNING) : ;;
-		ERROR|CRITICAL|SILENT) return 0 ;;
+	case "$(printf '%s' "${ALERT_MSG_LEVEL:-WARNING}" | tr '[:lower:]' '[:upper:]')" in
+		DEBUG) : ;;
+		WARNING|ERROR|CRITICAL|SILENT) return 0 ;;
 		*) : ;;  # unknown value → match tg_helpers.sh permissive default
 	esac
 
@@ -447,7 +496,7 @@ _gh_ratelimit_tg_alert()
 		_run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 	fi
 	local _body
-	_body="⚠️ WARNING: GitHub API rate limit hit — workflow=${_workflow} repo=${_repo}"
+	_body="🔍 DEBUG: GitHub API rate limit hit — workflow=${_workflow} repo=${_repo}"
 	if [ -n "${_run_url}" ]; then
 		_body="${_body} run=${_run_url}"
 	fi
@@ -518,6 +567,578 @@ _gh_ratelimit_tg_alert()
 }
 
 # ---------------------------------------------------------------
+# gh_api_retry — rate-limit-aware `gh api` wrapper (issue #5873 / #6634).
+#
+# Usage:
+#   gh_api_retry [--idempotent] [--optional] <gh api args…>
+#
+# Each attempt runs `gh api -i "$@"` (without -i for --paginate, whose
+# headers would interleave with page bodies), splits the status line and
+# headers from the body, and writes ONLY the successful attempt's body
+# (the --jq output when --jq is given) to stdout. A failed attempt's
+# body never reaches stdout.
+#
+# Failure classes (_gh_api_classify; scripts/gh_api_retry.py is the
+# Python twin and shares tests/fixtures/gh_api_retry/classify_cases.json):
+#   primary    403/429 with x-ratelimit-remaining: 0 → wait until
+#              x-ratelimit-reset of the bucket named by x-ratelimit-resource
+#              (else the endpoint's bucket: core / graphql / search)
+#   secondary  numeric retry-after, a "secondary rate limit" / "abuse
+#              detection" message, or a bare 429 → wait retry-after (60 s
+#              when absent)
+#   transient  5xx, 408, or no status (network error) → exponential backoff
+#              (base 2 s, 0-2 s jitter, capped at GH_RETRY_BACKOFF_CAP_SECS)
+#   permanent  every other 4xx, a non-limit 403 → no retry
+#
+# Never sleeps after the last attempt. A rate-limit wait longer than
+# GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS (default 600) gives up at once.
+# A POST create (see _gh_api_args_unsafe_post) makes ONE attempt unless
+# --idempotent (or GH_RETRY_IDEMPOTENT=true) marks it safe to repeat.
+# --optional returns 75 without calling GitHub while the breaker for the
+# endpoint's bucket is active (a recorded limit or low remaining budget).
+#
+# Return codes:
+#   0  success
+#   1  transient failure, attempts exhausted
+#   2  permanent failure                       (GH_API_RETRY_RC_PERMANENT)
+#   75 rate-limited and gave up / optional call skipped
+#                                              (GH_API_RETRY_RC_RATE_LIMITED)
+# When not called inside $(...), GH_API_RETRY_LAST_STATUS and
+# GH_API_RETRY_LAST_KIND describe the last attempt.
+#
+# Log line (stderr): GH_API_RETRY outcome=<retry|gave_up|permanent|skipped>
+#   kind=<…> bucket=<…> status=<NNN|none> attempt=<i>/<n> wait_secs=<s>
+#   endpoint=<escaped>. Response headers, bodies and tokens are never logged.
+#
+# API budget (CLAUDE.md §15): no new calls in steady state; a retry repeats
+# only a failed call, and a --paginate rate limit reads /rate_limit, which
+# does not count against the primary allowance.
+# ---------------------------------------------------------------
+GH_API_RETRY_RC_PERMANENT=2
+GH_API_RETRY_RC_RATE_LIMITED=75
+
+# Flags of `gh api` that consume the following argument as their value.
+_gh_api_flag_takes_value()
+{
+	case "$1" in
+		-X|--method|-f|-F|--field|--raw-field|--input|-H|--header|-q|--jq|-t|--template|--hostname|-p|--preview|--cache) return 0 ;;
+	esac
+	return 1
+}
+
+# _gh_api_endpoint <gh api args…> — first positional argument.
+_gh_api_endpoint()
+{
+	local _a _skip=0
+	for _a in "$@"; do
+		if [ "${_skip}" = "1" ]; then _skip=0; continue; fi
+		if _gh_api_flag_takes_value "${_a}"; then _skip=1; continue; fi
+		case "${_a}" in
+			-*) continue ;;
+		esac
+		printf '%s\n' "${_a}"
+		return 0
+	done
+	return 0
+}
+
+# _gh_api_bucket <gh api args…> — rate-limit resource of the endpoint.
+_gh_api_bucket()
+{
+	local _ep
+	_ep="$(_gh_api_endpoint "$@")"
+	_ep="${_ep#/}"
+	case "${_ep}" in
+		graphql) printf 'graphql\n' ;;
+		search/*) printf 'search\n' ;;
+		*) printf 'core\n' ;;
+	esac
+}
+
+# _gh_cmd_bucket <full command…> — bucket of a gh_retry-style command.
+_gh_cmd_bucket()
+{
+	if [ "${1:-}" = "gh" ] && [ "${2:-}" = "api" ]; then
+		_gh_api_bucket "${@:3}"
+	elif [ "${1:-}" = "_safe_gh_jq" ]; then
+		_gh_api_bucket "${@:2}"
+	else
+		printf 'core\n'
+	fi
+}
+
+# _gh_api_args_unsafe_post <gh api args…>
+# True (0) when the call is a non-idempotent POST create:
+#   * explicit -X POST / -XPOST / --method POST / --method=POST (any case);
+#   * no method and any -f/-F/--field/--raw-field/--input (gh infers POST).
+# An explicit GET/PUT/PATCH/DELETE is safe. The graphql endpoint is a read
+# (retryable) unless its document starts with "mutation": an inline query=,
+# a query=@file, or the .query of an --input JSON file. A document that cannot
+# be read (missing file, stdin "-", invalid JSON) counts as a mutation.
+_gh_api_args_unsafe_post()
+{
+	local _a _next="" _method="" _fields=0 _mutation=0 _val _ep _input="" _has_input=0 _qf _q
+	for _a in "$@"; do
+		_val=""
+		case "${_next}" in
+			method) _method="${_a}"; _next=""; continue ;;
+			field) _fields=1; _val="${_a}"; _next="" ;;
+			input) _fields=1; _has_input=1; _input="${_a}"; _next=""; continue ;;
+			skip) _next=""; continue ;;
+		esac
+		if [ -z "${_val}" ]; then
+			case "${_a}" in
+				-X|--method) _next=method; continue ;;
+				--method=*) _method="${_a#--method=}"; continue ;;
+				-X*) _method="${_a#-X}"; continue ;;
+				-f|-F|--field|--raw-field) _next=field; continue ;;
+				--field=*) _fields=1; _val="${_a#--field=}" ;;
+				--raw-field=*) _fields=1; _val="${_a#--raw-field=}" ;;
+				-f?*|-F?*) _fields=1; _val="${_a#-?}" ;;
+				--input) _next=input; continue ;;
+				--input=*) _fields=1; _has_input=1; _input="${_a#--input=}"; continue ;;
+				*)
+					if _gh_api_flag_takes_value "${_a}"; then _next=skip; fi
+					continue
+					;;
+			esac
+		fi
+		case "${_val}" in
+			query=@*)
+				_qf="${_val#query=@}"
+				if [ "${_qf}" = "-" ] || [ ! -r "${_qf}" ] \
+					|| _gh_graphql_doc_is_mutation "$(head -c 65536 "${_qf}" 2>/dev/null)"; then
+					_mutation=1
+				fi
+				;;
+			query=*)
+				if _gh_graphql_doc_is_mutation "${_val#query=}"; then
+					_mutation=1
+				fi
+				;;
+		esac
+	done
+	_method="$(printf '%s' "${_method}" | tr '[:lower:]' '[:upper:]')"
+	if [ -n "${_method}" ] && [ "${_method}" != "POST" ]; then
+		return 1
+	fi
+	if [ -z "${_method}" ] && [ "${_fields}" != "1" ]; then
+		return 1
+	fi
+	_ep="$(_gh_api_endpoint "$@")"
+	_ep="${_ep#/}"
+	if [ "${_ep}" = "graphql" ]; then
+		if [ "${_has_input}" = "1" ]; then
+			if [ "${_input}" = "-" ] || [ ! -r "${_input}" ] \
+				|| ! _q="$(jq -r 'if type == "object" then (.query // "") else error("not an object") end' "${_input}" 2>/dev/null)" \
+				|| _gh_graphql_doc_is_mutation "${_q}"; then
+				_mutation=1
+			fi
+		fi
+		[ "${_mutation}" = "1" ]
+		return $?
+	fi
+	return 0
+}
+
+# _gh_graphql_doc_is_mutation <document> — true when any operation keyword
+# (at the start of the document or after a closing brace, ignoring whitespace
+# and # comments) is "mutation". A document holding a query and a mutation,
+# where operationName may select the mutation, therefore counts as a mutation.
+# A field named "mutation" after a "}" also matches; that only costs a retry.
+# Commas are insignificant in GraphQL, so "}, mutation" also matches.
+# String literals ("…" and """…""") are skipped before comments are cut, so a
+# "#" inside a string cannot hide a later mutation (scripts/gh_api_retry.py
+# graphql_doc_is_mutation uses the same scan).
+# Pure bash: no pipeline, so callers running under pipefail cannot see a
+# SIGPIPE status.
+_gh_graphql_doc_is_mutation()
+{
+	local _line _out="" _rest _pre _in_block=0
+	local _re='(^|\})[[:space:],]*[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]([^A-Za-z0-9_]|$)'
+	local _str_re='^"([^"\\]|\\.)*"(.*)$'
+	while IFS= read -r _line || [ -n "${_line}" ]; do
+		_rest="${_line}"
+		while [ -n "${_rest}" ]; do
+			if [ "${_in_block}" = "1" ]; then
+				# Inside a block string: find the closing """ (\""" is an escape).
+				_pre="${_rest%%\"\"\"*}"
+				if [ "${_pre}" = "${_rest}" ]; then
+					break
+				fi
+				_rest="${_rest#*\"\"\"}"
+				if [ "${_pre: -1}" != "\\" ]; then
+					_in_block=0
+					_out+=" "
+				fi
+				continue
+			fi
+			_pre="${_rest%%[\"#]*}"
+			_out+="${_pre}"
+			_rest="${_rest:${#_pre}}"
+			[ -n "${_rest}" ] || break
+			if [ "${_rest:0:1}" = "#" ]; then
+				break
+			fi
+			if [ "${_rest:0:3}" = '"""' ]; then
+				_in_block=1
+				_rest="${_rest:3}"
+				continue
+			fi
+			if [[ "${_rest}" =~ ${_str_re} ]]; then
+				_out+=" "
+				_rest="${BASH_REMATCH[2]}"
+			else
+				break
+			fi
+		done
+		_out+=" "
+	done <<< "$1"
+	[[ "${_out}" =~ ${_re} ]]
+}
+
+# _gh_cmd_is_unsafe_post <full command…> — gh_retry-style command check.
+# Covers `gh api …`, `_safe_gh_jq …` and gh's own create subcommands
+# (`gh issue|pr create|comment`, `gh workflow run`, `gh release create`).
+# `gh issue edit --add-label` and other edits stay retryable.
+_gh_cmd_is_unsafe_post()
+{
+	if [ "${1:-}" = "_safe_gh_jq" ]; then
+		_gh_api_args_unsafe_post "${@:2}"
+		return $?
+	fi
+	[ "${1:-}" = "gh" ] || return 1
+	case "${2:-} ${3:-}" in
+		"api "*) _gh_api_args_unsafe_post "${@:3}"; return $? ;;
+		"issue create"|"issue comment"|"pr create"|"pr comment"|"workflow run"|"release create") return 0 ;;
+	esac
+	return 1
+}
+
+# _gh_cmd_log_summary <full command…> — bounded, credential-free summary of
+# a gh_retry-style command for failure diagnostics (issue #8095, SEC-001).
+# Prints the gh subcommand words, the `gh api` endpoint without its query,
+# or a plain issue/PR number, and the names of the flags passed. Flag values
+# (comment bodies, fields, titles, --input files) are never printed. The
+# output is at most 200 characters, uses a restricted character set and has
+# every `::` broken up, so it cannot form a workflow command.
+_gh_cmd_log_summary()
+{
+	local _ghsum_words="" _ghsum_target="" _ghsum_flags="" _ghsum_rest_start=2 _ghsum_api=0
+	local _ghsum_word_re='^[a-z][a-z-]{0,30}$'
+	local _ghsum_num_re='^[0-9]{1,12}$'
+	local _ghsum_cmd_re='^[A-Za-z0-9_.-]{1,40}$'
+	local _ghsum_flag_re='^--?[A-Za-z][A-Za-z0-9-]{0,30}$'
+	local _ghsum_bad='[^A-Za-z0-9._~/{}@:-]'
+	local -a _ghsum_args=("$@")
+	local _ghsum_n="${#_ghsum_args[@]}"
+	if [ "${1:-}" = "gh" ] && [ "${2:-}" = "api" ]; then
+		_ghsum_words="gh api"; _ghsum_api=1; _ghsum_rest_start=2
+	elif [ "${1:-}" = "_safe_gh_jq" ]; then
+		# `gh_retry _safe_gh_jq <endpoint> …` passes the wrapper name first.
+		_ghsum_words="_safe_gh_jq gh api"; _ghsum_api=1; _ghsum_rest_start=1
+	elif [ "${1:-}" = "gh" ]; then
+		_ghsum_words="gh"
+		local _ghsum_i=1 _ghsum_count=0
+		while [ "${_ghsum_i}" -lt "${_ghsum_n}" ] && [ "${_ghsum_count}" -lt 2 ]; do
+			[[ "${_ghsum_args[${_ghsum_i}]}" =~ ${_ghsum_word_re} ]] || break
+			_ghsum_words+=" ${_ghsum_args[${_ghsum_i}]}"
+			_ghsum_i=$(( _ghsum_i + 1 )); _ghsum_count=$(( _ghsum_count + 1 ))
+		done
+		if [ "${_ghsum_i}" -lt "${_ghsum_n}" ] && [[ "${_ghsum_args[${_ghsum_i}]}" =~ ${_ghsum_num_re} ]]; then
+			_ghsum_target="${_ghsum_args[${_ghsum_i}]}"
+			_ghsum_i=$(( _ghsum_i + 1 ))
+		fi
+		_ghsum_rest_start="${_ghsum_i}"
+	elif [ "${_ghsum_n}" -gt 0 ]; then
+		if [[ "${1}" =~ ${_ghsum_cmd_re} ]]; then _ghsum_words="${1}"; else _ghsum_words="<command>"; fi
+		_ghsum_rest_start=1
+	fi
+	if [ "${_ghsum_api}" = "1" ]; then
+		local _ghsum_ep
+		_ghsum_ep="$(_gh_api_endpoint "${_ghsum_args[@]:${_ghsum_rest_start}}")"
+		_ghsum_ep="${_ghsum_ep%%\?*}"
+		_ghsum_ep="${_ghsum_ep%%#*}"
+		_ghsum_ep="${_ghsum_ep//${_ghsum_bad}/_}"
+		_ghsum_target="${_ghsum_ep:0:120}"
+	fi
+	# Flag names only. A flag without an attached value always treats the
+	# next token as its value and skips it, even one that starts with "-",
+	# so a value such as `--project --x` is never logged as a flag name.
+	# Only the known boolean flags listed below leave the next token alone.
+	# Over-skipping only drops information from the log line.
+	local _ghsum_j="${_ghsum_rest_start}" _ghsum_skip=0 _ghsum_force=0 _ghsum_a _ghsum_name _ghsum_attached
+	local _ghsum_pos_seen=0
+	while [ "${_ghsum_j}" -lt "${_ghsum_n}" ]; do
+		_ghsum_a="${_ghsum_args[${_ghsum_j}]}"
+		_ghsum_j=$(( _ghsum_j + 1 ))
+		if [ "${_ghsum_skip}" = "1" ]; then
+			_ghsum_skip=0
+			if [ "${_ghsum_force}" = "1" ]; then _ghsum_force=0; continue; fi
+			case "${_ghsum_a}" in -*) ;; *) continue ;; esac
+		fi
+		[ "${_ghsum_a}" = "--" ] && break
+		case "${_ghsum_a}" in
+			-*) ;;
+			*)
+				# Non-api gh: the first positional counts only as a plain number.
+				if [ "${_ghsum_api}" = "0" ] && [ "${_ghsum_words%% *}" = "gh" ] && [ "${_ghsum_pos_seen}" = "0" ] \
+					&& [ -z "${_ghsum_target}" ] && [[ "${_ghsum_a}" =~ ${_ghsum_num_re} ]]; then
+					_ghsum_target="${_ghsum_a}"
+				fi
+				_ghsum_pos_seen=1
+				continue
+				;;
+		esac
+		_ghsum_name="${_ghsum_a}"; _ghsum_attached=0
+		case "${_ghsum_a}" in
+			--*=*) _ghsum_name="${_ghsum_a%%=*}"; _ghsum_attached=1 ;;
+			--*) ;;
+			-?*)
+				if [ "${#_ghsum_a}" -gt 2 ]; then _ghsum_name="${_ghsum_a:0:2}"; _ghsum_attached=1; fi
+				;;
+		esac
+		if [ "${_ghsum_attached}" != "1" ]; then
+			case "${_ghsum_name}" in
+				--paginate|--slurp|-i|--include|--silent|--verbose|--web|--draft|--fill|--squash|--merge|--rebase|--auto|--admin|--delete-branch|--yes|--disable-auto|--comments) ;;
+				*) _ghsum_skip=1; _ghsum_force=1 ;;
+			esac
+		fi
+		[[ "${_ghsum_name}" =~ ${_ghsum_flag_re} ]] || continue
+		case " ${_ghsum_flags} " in
+			*" ${_ghsum_name} "*) ;;
+			*) _ghsum_flags="${_ghsum_flags:+${_ghsum_flags} }${_ghsum_name}" ;;
+		esac
+	done
+	local _ghsum_out="${_ghsum_words}"
+	if [ -n "${_ghsum_target}" ]; then _ghsum_out="${_ghsum_out:+${_ghsum_out} }${_ghsum_target}"; fi
+	if [ -n "${_ghsum_flags}" ]; then _ghsum_out="${_ghsum_out:+${_ghsum_out} }(flags: ${_ghsum_flags})"; fi
+	while [[ "${_ghsum_out}" == *::* ]]; do
+		_ghsum_out="${_ghsum_out//::/: :}"
+	done
+	printf '%s' "${_ghsum_out:0:200}"
+}
+
+# _gh_api_header <headers_file> <name> — value of the first matching header.
+_gh_api_header()
+{
+	[ -r "$1" ] || return 0
+	grep -i "^$2:" "$1" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*$//' | tr -d '\r' || true
+}
+
+# _gh_api_classify <status> <headers_file> <stderr_file> <body_file>
+# Prints "<kind> <wait_secs> <bucket>": kind is primary|secondary|transient|
+# permanent; wait_secs is -1 when a primary limit carries no reset (the
+# caller then reads /rate_limit) and 0 for permanent/transient; bucket is
+# the x-ratelimit-resource header or "-". GH_API_RETRY_NOW overrides the
+# clock (tests only).
+_gh_api_classify()
+{
+	local _status="$1" _hdr="$2" _err="$3" _body="$4" _text _remaining _reset _retry_after _resource _now _wait
+	_now="${GH_API_RETRY_NOW:-$(date +%s)}"
+	_text="$(cat "${_err}" "${_body}" 2>/dev/null || true)"
+	if ! [[ "${_status}" =~ ^[0-9]{3}$ ]]; then
+		_status="$(grep -oE 'HTTP [0-9]{3}' "${_err}" 2>/dev/null | head -1 | grep -oE '[0-9]{3}' || true)"
+	fi
+	_remaining="$(_gh_api_header "${_hdr}" 'x-ratelimit-remaining')"
+	_reset="$(_gh_api_header "${_hdr}" 'x-ratelimit-reset')"
+	_retry_after="$(_gh_api_header "${_hdr}" 'retry-after')"
+	_resource="$(_gh_api_header "${_hdr}" 'x-ratelimit-resource')"
+	[[ "${_resource}" =~ ^[a-z_]+$ ]] || _resource="-"
+	_wait=-1
+	if [[ "${_reset}" =~ ^[0-9]+$ ]]; then
+		_wait=$(( 10#${_reset} - _now + 1 ))
+		[ "${_wait}" -lt 1 ] && _wait=1
+	fi
+	if [ -z "${_status}" ] || [ "${_status}" = "403" ] || [ "${_status}" = "429" ]; then
+		if [ "${_remaining}" = "0" ] && [ -n "${_status}" ]; then
+			printf 'primary %s %s\n' "${_wait}" "${_resource}"
+			return 0
+		fi
+		if [[ "${_retry_after}" =~ ^[0-9]+$ ]] && [ -n "${_status}" ]; then
+			printf 'secondary %s %s\n' "$(( 10#${_retry_after} ))" "${_resource}"
+			return 0
+		fi
+		if printf '%s' "${_text}" | grep -qiE 'secondary rate|abuse detection'; then
+			printf 'secondary 60 %s\n' "${_resource}"
+			return 0
+		fi
+		if printf '%s' "${_text}" | grep -qiE 'rate limit'; then
+			printf 'primary %s %s\n' "${_wait}" "${_resource}"
+			return 0
+		fi
+		if [ "${_status}" = "429" ]; then
+			printf 'secondary 60 %s\n' "${_resource}"
+			return 0
+		fi
+		if [ "${_status}" = "403" ] || _is_gh_permanent_failure "${_text}"; then
+			printf 'permanent 0 %s\n' "${_resource}"
+			return 0
+		fi
+		printf 'transient 0 %s\n' "${_resource}"
+		return 0
+	fi
+	case "${_status}" in
+		408|5[0-9][0-9]) printf 'transient 0 %s\n' "${_resource}" ;;
+		*) printf 'permanent 0 %s\n' "${_resource}" ;;
+	esac
+}
+
+# _gh_rate_limit_reset_for_bucket <bucket> — reset epoch from /rate_limit.
+_gh_rate_limit_reset_for_bucket()
+{
+	local _b="${1:-core}"
+	[[ "${_b}" =~ ^[a-z_]+$ ]] || _b=core
+	gh api rate_limit --jq ".resources.${_b}.reset // empty" 2>/dev/null | tr -d '[:space:]' || true
+}
+
+# gh_rate_limit_breaker_active [bucket] — true while a breaker line for the
+# bucket (default core) has a reset epoch in the future. The file is not
+# trusted for anything but skipping optional work; malformed lines are ignored.
+gh_rate_limit_breaker_active()
+{
+	local _b="${1:-core}"
+	[ -r "${_GH_RATE_LIMIT_BREAKER_FILE}" ] || return 1
+	awk -v b="${_b}" -v now="$(date +%s)" '
+		$1 == b && $2 ~ /^[0-9]+$/ && ($2 + 0) > (now + 0) { found = 1 }
+		END { exit(found ? 0 : 1) }
+	' "${_GH_RATE_LIMIT_BREAKER_FILE}" 2>/dev/null
+}
+
+_gh_api_retry_log()
+{
+	# $1 outcome $2 kind $3 bucket $4 status $5 attempt $6 max $7 wait $8 endpoint
+	echo "GH_API_RETRY outcome=$1 kind=$2 bucket=$3 status=${4:-none} attempt=$5/$6 wait_secs=$7 endpoint=$(_gh_actions_escape "$8")" >&2
+}
+
+gh_api_retry()
+{
+	local _idem=0 _opt=0
+	while :; do
+		case "${1:-}" in
+			--idempotent) _idem=1; shift ;;
+			--optional) _opt=1; shift ;;
+			*) break ;;
+		esac
+	done
+	[ "${GH_RETRY_IDEMPOTENT:-false}" = "true" ] && _idem=1
+	local _max="${GH_RETRY_MAX_ATTEMPTS:-5}" _max_wait="${GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS:-600}"
+	local _cap="${GH_RETRY_BACKOFF_CAP_SECS:-120}" _low="${GH_API_RETRY_LOW_BUDGET_REMAINING:-100}"
+	[[ "${_max}" =~ ^[1-9][0-9]*$ ]] || _max=5
+	[[ "${_max_wait}" =~ ^[0-9]+$ ]] || _max_wait=600
+	[[ "${_cap}" =~ ^[0-9]+$ ]] || _cap=120
+	[[ "${_low}" =~ ^[0-9]+$ ]] || _low=100
+	local _bucket _endpoint _paginate=0 _a
+	_bucket="$(_gh_api_bucket "$@")"
+	_endpoint="$(_gh_api_endpoint "$@")"
+	for _a in "$@"; do [ "${_a}" = "--paginate" ] && _paginate=1; done
+	if [ "${_idem}" != "1" ] && _gh_api_args_unsafe_post "$@"; then
+		_max=1
+	fi
+	GH_API_RETRY_LAST_STATUS=""
+	GH_API_RETRY_LAST_KIND=""
+	if [ "${_opt}" = "1" ] && gh_rate_limit_breaker_active "${_bucket}"; then
+		GH_API_RETRY_LAST_KIND="skipped"
+		_gh_api_retry_log skipped breaker "${_bucket}" "" 0 "${_max}" 0 "${_endpoint}"
+		return 75
+	fi
+	local _dir
+	if ! _dir=$(mktemp -d "${TMPDIR:-/tmp}/gh_api_retry.XXXXXX" 2>/dev/null); then
+		echo "::error::gh_api_retry: mktemp failed; aborting without running" >&2
+		return 1
+	fi
+	local _attempt=1 _rc _status _kind _wait _hb _lines _now _reset _remaining _class _eff_bucket _copy_rc
+	while [ "${_attempt}" -le "${_max}" ]; do
+		: > "${_dir}/headers"
+		_rc=0
+		if [ "${_paginate}" = "1" ]; then
+			gh api "$@" > "${_dir}/body" 2> "${_dir}/err" || _rc=$?
+		else
+			gh api -i "$@" > "${_dir}/raw" 2> "${_dir}/err" || _rc=$?
+			# Split at the FIRST blank line: status line + headers, then body.
+			_lines="$(awk '{ sub(/\r$/, "") } $0 == "" { print NR; exit }' "${_dir}/raw" 2>/dev/null || true)"
+			if [[ "${_lines}" =~ ^[0-9]+$ ]] && head -1 "${_dir}/raw" | grep -qE '^HTTP/[0-9.]+ [0-9]{3}'; then
+				head -n "${_lines}" "${_dir}/raw" | tr -d '\r' > "${_dir}/headers"
+				tail -n +"$(( _lines + 1 ))" "${_dir}/raw" > "${_dir}/body"
+			else
+				cp "${_dir}/raw" "${_dir}/body"
+			fi
+		fi
+		_status="$(sed -n '1s/^HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' "${_dir}/headers" 2>/dev/null || true)"
+		GH_API_RETRY_LAST_STATUS="${_status}"
+		if [ "${_rc}" -eq 0 ]; then
+			GH_API_RETRY_LAST_KIND="ok"
+			_copy_rc=0
+			cat "${_dir}/body" || _copy_rc=$?
+			_remaining="$(_gh_api_header "${_dir}/headers" 'x-ratelimit-remaining')"
+			_reset="$(_gh_api_header "${_dir}/headers" 'x-ratelimit-reset')"
+			_eff_bucket="$(_gh_api_header "${_dir}/headers" 'x-ratelimit-resource')"
+			[[ "${_eff_bucket}" =~ ^[a-z_]+$ ]] || _eff_bucket="${_bucket}"
+			if [[ "${_remaining}" =~ ^[0-9]+$ ]] && [[ "${_reset}" =~ ^[0-9]+$ ]] && [ "${_remaining}" -lt "${_low}" ]; then
+				_gh_rate_limit_trip_breaker "${_eff_bucket}" "${_reset}" low
+			fi
+			rm -rf "${_dir}"
+			return "${_copy_rc}"
+		fi
+		_class="$(_gh_api_classify "${_status}" "${_dir}/headers" "${_dir}/err" "${_dir}/body")"
+		read -r _kind _wait _hb <<< "${_class}"
+		_eff_bucket="${_bucket}"
+		if [ -n "${_hb}" ] && [ "${_hb}" != "-" ]; then _eff_bucket="${_hb}"; fi
+		GH_API_RETRY_LAST_KIND="${_kind}"
+		if [ -z "${GH_API_RETRY_LAST_STATUS}" ]; then
+			GH_API_RETRY_LAST_STATUS="$(grep -oE 'HTTP [0-9]{3}' "${_dir}/err" 2>/dev/null | head -1 | grep -oE '[0-9]{3}' || true)"
+		fi
+		case "${_kind}" in
+			permanent)
+				_gh_api_retry_log permanent permanent "${_eff_bucket}" "${GH_API_RETRY_LAST_STATUS}" "${_attempt}" "${_max}" 0 "${_endpoint}"
+				cat "${_dir}/err" >&2 2>/dev/null || true
+				rm -rf "${_dir}"
+				return 2
+				;;
+			primary|secondary)
+				_now="$(date +%s)"
+				if ! [[ "${_wait}" =~ ^[0-9]+$ ]]; then
+					_reset="$(_gh_rate_limit_reset_for_bucket "${_eff_bucket}")"
+					if [[ "${_reset}" =~ ^[0-9]+$ ]]; then
+						_wait=$(( _reset - _now + 1 ))
+						[ "${_wait}" -lt 1 ] && _wait=1
+					else
+						_wait=60
+					fi
+				fi
+				_gh_ratelimit_tg_alert
+				_gh_rate_limit_trip_breaker "${_eff_bucket}" "$(( _now + _wait ))"
+				if [ "${_attempt}" -ge "${_max}" ] || [ "${_wait}" -gt "${_max_wait}" ]; then
+					_gh_api_retry_log gave_up "${_kind}" "${_eff_bucket}" "${GH_API_RETRY_LAST_STATUS}" "${_attempt}" "${_max}" "${_wait}" "${_endpoint}"
+					rm -rf "${_dir}"
+					return 75
+				fi
+				_gh_api_retry_log retry "${_kind}" "${_eff_bucket}" "${GH_API_RETRY_LAST_STATUS}" "${_attempt}" "${_max}" "${_wait}" "${_endpoint}"
+				sleep "${_wait}"
+				;;
+			*)
+				if [ "${_attempt}" -ge "${_max}" ]; then
+					_gh_api_retry_log gave_up transient "${_eff_bucket}" "${GH_API_RETRY_LAST_STATUS}" "${_attempt}" "${_max}" 0 "${_endpoint}"
+					if [ "${_max}" = "1" ] && [ "${_idem}" != "1" ]; then
+						echo "::notice::gh_api_retry: single attempt for non-idempotent create: $(_gh_actions_escape "${_endpoint}")" >&2
+					fi
+					cat "${_dir}/err" >&2 2>/dev/null || true
+					rm -rf "${_dir}"
+					return 1
+				fi
+				_wait=$(( 2 * (2 ** (_attempt - 1)) + RANDOM % 3 ))
+				[ "${_wait}" -gt "${_cap}" ] && _wait="${_cap}"
+				_gh_api_retry_log retry transient "${_eff_bucket}" "${GH_API_RETRY_LAST_STATUS}" "${_attempt}" "${_max}" "${_wait}" "${_endpoint}"
+				sleep "${_wait}"
+				;;
+		esac
+		_attempt=$(( _attempt + 1 ))
+	done
+	rm -rf "${_dir}"
+	return 1
+}
+
+# ---------------------------------------------------------------
 # gh_retry — Execute a gh CLI command with automatic retry.
 #
 # Rate-limit errors  → wait until X-RateLimit-Reset, retry (up to max_attempts).
@@ -542,15 +1163,22 @@ _gh_ratelimit_tg_alert()
 # ---------------------------------------------------------------
 gh_retry()
 {
+	# Q2=A (issue #6634): a POST create makes one attempt unless a leading
+	# --idempotent or GH_RETRY_IDEMPOTENT=true marks it safe to repeat.
+	local _ghr_idem="${GH_RETRY_IDEMPOTENT:-false}"
+	if [ "${1:-}" = "--idempotent" ]; then _ghr_idem=true; shift; fi
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
+	if [ "${_ghr_idem}" != "true" ] && _gh_cmd_is_unsafe_post "$@"; then
+		max_attempts=1
+	fi
 	local attempt=1
 	local stderr_file stdout_file
 	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_retry: failed to create stderr temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
 		return 1
 	fi
 	if ! stdout_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_retry: failed to create stdout temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
 		rm -f "${stderr_file}"
 		return 1
 	fi
@@ -573,7 +1201,7 @@ gh_retry()
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
 
 		if _is_gh_permanent_failure "${stderr_content}"; then
-			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
+			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $(_gh_cmd_log_summary "$@")" >&2
 			if [ -n "${stderr_content}" ]; then
 				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 			fi
@@ -584,9 +1212,9 @@ gh_retry()
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
-			_gh_rate_limit_trip_breaker
+			_gh_rate_limit_trip_breaker "$(_gh_cmd_bucket "$@")" "$(( $(date +%s) + 60 ))"
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
-				_gh_rate_limit_wait
+				_gh_rate_limit_wait_for "${stderr_content}" "$@"
 			fi
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
@@ -602,7 +1230,10 @@ gh_retry()
 		attempt=$(( attempt + 1 ))
 	done
 
-	echo "::error::gh command failed after ${max_attempts} attempts: $*" >&2
+	if [ "${max_attempts}" = "1" ] && [ "${_ghr_idem}" != "true" ] && _gh_cmd_is_unsafe_post "$@"; then
+		echo "::notice::gh_retry: single attempt for non-idempotent create: $(_gh_cmd_log_summary "$@")" >&2
+	fi
+	echo "::error::gh command failed after ${max_attempts} attempts: $(_gh_cmd_log_summary "$@")" >&2
 	if [ -s "${stderr_file}" ]; then
 		cat "${stderr_file}" >&2
 	fi
@@ -621,39 +1252,55 @@ gh_retry()
 # ---------------------------------------------------------------
 gh_retry_to_file()
 {
+	# [--idempotent] <outfile> <command…>. Each attempt is buffered; only a
+	# successful attempt's output is written to <outfile>, and after a final
+	# failure <outfile> is truncated, so a failed body never stays in it.
+	local _ghr_idem="${GH_RETRY_IDEMPOTENT:-false}"
+	if [ "${1:-}" = "--idempotent" ]; then _ghr_idem=true; shift; fi
 	local outfile="$1"; shift
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
+	if [ "${_ghr_idem}" != "true" ] && _gh_cmd_is_unsafe_post "$@"; then
+		max_attempts=1
+	fi
 	local attempt=1
-	local stderr_file
+	local stderr_file attempt_file
 	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stderr.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_retry_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_retry_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
+		return 1
+	fi
+	if ! attempt_file=$(mktemp "${TMPDIR:-/tmp}/gh_retry_stdout.XXXXXX" 2>/dev/null); then
+		echo "::error::gh_retry_to_file: failed to create stdout temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
+		rm -f "${stderr_file}"
 		return 1
 	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
-		if "$@" > "${outfile}" 2>"${stderr_file}"; then
-			rm -f "${stderr_file}"
-			return 0
+		if "$@" > "${attempt_file}" 2>"${stderr_file}"; then
+			local _ghr_copy_rc=0
+			cat "${attempt_file}" > "${outfile}" || _ghr_copy_rc=$?
+			rm -f "${stderr_file}" "${attempt_file}"
+			return "${_ghr_copy_rc}"
 		fi
 
 		local stderr_content
 		stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
 
 		if _is_gh_permanent_failure "${stderr_content}"; then
-			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $*" >&2
+			echo "::warning::gh command failed with non-retryable error (attempt ${attempt}/${max_attempts}); not retrying: $(_gh_cmd_log_summary "$@")" >&2
 			if [ -n "${stderr_content}" ]; then
 				echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 			fi
-			rm -f "${stderr_file}"
+			rm -f "${stderr_file}" "${attempt_file}"
+			: > "${outfile}" 2>/dev/null || true
 			return 1
 		fi
 
 		if _is_gh_rate_limit "${stderr_content}"; then
 			echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
-			_gh_rate_limit_trip_breaker
+			_gh_rate_limit_trip_breaker "$(_gh_cmd_bucket "$@")" "$(( $(date +%s) + 60 ))"
 			if [ "${attempt}" -lt "${max_attempts}" ]; then
-				_gh_rate_limit_wait
+				_gh_rate_limit_wait_for "${stderr_content}" "$@"
 			fi
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
@@ -669,11 +1316,12 @@ gh_retry_to_file()
 		attempt=$(( attempt + 1 ))
 	done
 
-	echo "::error::gh command failed after ${max_attempts} attempts: $*" >&2
+	echo "::error::gh command failed after ${max_attempts} attempts: $(_gh_cmd_log_summary "$@")" >&2
 	if [ -s "${stderr_file}" ]; then
 		cat "${stderr_file}" >&2
 	fi
-	rm -f "${stderr_file}"
+	rm -f "${stderr_file}" "${attempt_file}"
+	: > "${outfile}" 2>/dev/null || true
 	return 1
 }
 
@@ -698,7 +1346,7 @@ _safe_gh_jq()
 {
 	local _tmpf
 	if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then
-		echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary gh api "$@")" >&2
 		return 1
 	fi
 	if gh api "$@" > "${_tmpf}"; then
@@ -726,12 +1374,17 @@ _safe_gh_jq()
 # ---------------------------------------------------------------
 gh_api_json_to_file()
 {
+	local _ghr_idem="${GH_RETRY_IDEMPOTENT:-false}"
+	if [ "${1:-}" = "--idempotent" ]; then _ghr_idem=true; shift; fi
 	local outfile="$1"; shift
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
+	if [ "${_ghr_idem}" != "true" ] && _gh_cmd_is_unsafe_post "$@"; then
+		max_attempts=1
+	fi
 	local attempt=1
 	local stderr_file
 	if ! stderr_file=$(mktemp "${TMPDIR:-/tmp}/gh_api_json_stderr.XXXXXX" 2>/dev/null); then
-		echo "::error::gh_api_json_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $*" >&2
+		echo "::error::gh_api_json_to_file: failed to create stderr temp file (mktemp failed); aborting without running: $(_gh_cmd_log_summary "$@")" >&2
 		return 1
 	fi
 
@@ -744,10 +1397,22 @@ gh_api_json_to_file()
 			fi
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::gh api returned invalid JSON (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
-			echo "::group::Raw response (first 50 lines)" >&2
-			head -50 "${outfile}" >&2
-			echo "::endgroup::" >&2
-			sleep "${wait_secs}"
+			# Never print the response itself (issue #8095, SEC-002): it may
+			# hold private API data. Size, hash prefix and category only.
+			local _ghj_bytes _ghj_sha="" _ghj_cat
+			_ghj_bytes="$(wc -c < "${outfile}" 2>/dev/null | tr -d '[:space:]' || true)"
+			[[ "${_ghj_bytes}" =~ ^[0-9]+$ ]] || _ghj_bytes="unknown"
+			if command -v sha256sum >/dev/null 2>&1; then
+				_ghj_sha="$(sha256sum < "${outfile}" 2>/dev/null | cut -c1-12 || true)"
+			elif command -v shasum >/dev/null 2>&1; then
+				_ghj_sha="$(shasum -a 256 < "${outfile}" 2>/dev/null | cut -c1-12 || true)"
+			fi
+			[[ "${_ghj_sha}" =~ ^[0-9a-f]{12}$ ]] || _ghj_sha="unavailable"
+			if [ -s "${outfile}" ]; then _ghj_cat="invalid_json"; else _ghj_cat="empty"; fi
+			echo "::warning::gh api response summary (attempt ${attempt}/${max_attempts}): bytes=${_ghj_bytes} sha256=${_ghj_sha} category=${_ghj_cat}" >&2
+			if [ "${attempt}" -lt "${max_attempts}" ]; then
+				sleep "${wait_secs}"
+			fi
 		else
 			local stderr_content
 			stderr_content=$(cat "${stderr_file}" 2>/dev/null || true)
@@ -755,22 +1420,26 @@ gh_api_json_to_file()
 			if _is_gh_rate_limit "${stderr_content}"; then
 				echo "::warning::GitHub API rate limit hit (attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 				_gh_ratelimit_tg_alert
-				_gh_rate_limit_trip_breaker
-				_gh_rate_limit_wait
+				_gh_rate_limit_trip_breaker "$(_gh_cmd_bucket "$@")" "$(( $(date +%s) + 60 ))"
+				if [ "${attempt}" -lt "${max_attempts}" ]; then
+					_gh_rate_limit_wait_for "${stderr_content}" "$@"
+				fi
 			else
 				local wait_secs=$(( 2 ** (attempt - 1) ))
 				echo "::warning::gh command failed (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
 				if [ -n "${stderr_content}" ]; then
 					echo "::warning::  stderr: $(_gh_actions_escape "${stderr_content}")" >&2
 				fi
-				sleep "${wait_secs}"
+				if [ "${attempt}" -lt "${max_attempts}" ]; then
+					sleep "${wait_secs}"
+				fi
 			fi
 		fi
 
 		attempt=$(( attempt + 1 ))
 	done
 
-	echo "::error::gh api failed to return valid JSON after ${max_attempts} attempts: $*" >&2
+	echo "::error::gh api failed to return valid JSON after ${max_attempts} attempts: $(_gh_cmd_log_summary "$@")" >&2
 	if [ -s "${stderr_file}" ]; then
 		cat "${stderr_file}" >&2
 	fi
@@ -825,14 +1494,18 @@ curl_gh_api()
 		if [ "${http_code}" = "429" ] || { [ "${http_code}" = "403" ] && _is_gh_rate_limit "${body_content}"; }; then
 			echo "::warning::GitHub API rate limit (HTTP ${http_code}, attempt ${attempt}/${max_attempts}), waiting for reset…" >&2
 			_gh_ratelimit_tg_alert
-			_gh_rate_limit_trip_breaker
 			local _reset_ts
 			_reset_ts=$(_parse_reset_header "${header_file}")
-			_sleep_until_reset "${_reset_ts}"
+			_gh_rate_limit_trip_breaker "$(_gh_api_header "${header_file}" 'x-ratelimit-resource')" "${_reset_ts}"
+			if [ "${attempt}" -lt "${max_attempts}" ]; then
+				_sleep_until_reset "${_reset_ts}"
+			fi
 		else
 			local wait_secs=$(( 2 ** (attempt - 1) ))
 			echo "::warning::GitHub API curl failed HTTP ${http_code} (attempt ${attempt}/${max_attempts}), retrying in ${wait_secs}s…" >&2
-			sleep "${wait_secs}"
+			if [ "${attempt}" -lt "${max_attempts}" ]; then
+				sleep "${wait_secs}"
+			fi
 		fi
 
 		attempt=$(( attempt + 1 ))
@@ -889,11 +1562,17 @@ _gh_pr_with_all_comments_rest()
 		| jq -c -s 'add // [] | [.[] | {author: .user.login, path: .path, line: .line, body: .body}] | sort_by((.path // ""), (.line // 0), (.author // ""), (.body // ""))' 2>/dev/null \
 		|| echo '[]')"
 
+	# Pass the JSON through process substitution, never through argv: Linux
+	# caps a single argument at 131,072 bytes (MAX_ARG_STRLEN), and a PR's
+	# issue comments can serialize past that, so `--argjson` made jq exit 126
+	# ("Argument list too long") with no output (issue #7658;
+	# tele-funtoken-msg-scoring PR #3933, run 39131897079). An empty input
+	# degrades to {} / [].
 	jq -cn \
-		--argjson meta "${meta_json}" \
-		--argjson comments "${comments_json}" \
-		--argjson review_comments "${review_comments_json}" \
-		'{meta: $meta, comments: $comments, review_comments: $review_comments}'
+		--slurpfile meta <(printf '%s' "${meta_json}") \
+		--slurpfile comments <(printf '%s' "${comments_json}") \
+		--slurpfile review_comments <(printf '%s' "${review_comments_json}") \
+		'{meta: ($meta[0] // {}), comments: ($comments[0] // []), review_comments: ($review_comments[0] // [])}'
 }
 
 # ---------------------------------------------------------------
@@ -1089,16 +1768,22 @@ _gh_issue_timeline_with_cross_refs_rest()
 			if [[ "${pr_url}" != "${pr_api_prefix}"* ]]; then
 				continue
 			fi
+			# The full PR object (body up to 65,536 characters, escaped) can pass
+			# the 131,072-byte per-argument limit, so jq reads it with
+			# --slurpfile, never from argv (issue #7658).
 			if pr_json="$(gh_retry gh api "${pr_url}" 2>/dev/null)" && printf '%s' "${pr_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
-				pr_lookup_json="$(jq -c --arg url "${pr_url}" --argjson pr "${pr_json}" '. + {($url): {ok: true, number: ($pr.number // null), state: ($pr.state // null), merged_at: ($pr.merged_at // null), merged: (($pr.merged_at != null) or ($pr.merged == true))}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
+				pr_lookup_json="$(jq -c --arg url "${pr_url}" --slurpfile pr <(printf '%s' "${pr_json}") '($pr[0] // {}) as $pr | . + {($url): {ok: true, number: ($pr.number // null), state: ($pr.state // null), merged_at: ($pr.merged_at // null), merged: (($pr.merged_at != null) or ($pr.merged == true))}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
 			else
 				pr_lookup_json="$(jq -c --arg url "${pr_url}" '. + {($url): {ok: false}}' <(printf '%s\n' "${pr_lookup_json}") 2>/dev/null || printf '%s' "${pr_lookup_json}")"
 			fi
 		done <<< "${pr_urls}"
 	fi
 
-	printf '%s' "${timeline_json}" | jq -c --argjson pr_lookup "${pr_lookup_json}" --arg pr_api_prefix "${pr_api_prefix}" '
-		map(
+	# pr_lookup_json grows by one entry per cross-referenced PR with no cap,
+	# so jq reads it with --slurpfile, never from argv (issue #7658).
+	printf '%s' "${timeline_json}" | jq -c --slurpfile pr_lookup <(printf '%s' "${pr_lookup_json}") --arg pr_api_prefix "${pr_api_prefix}" '
+		($pr_lookup[0] // {}) as $pr_lookup
+		| map(
 			if (.event == "cross-referenced") and (.source.issue.pull_request.url? | type == "string") then
 				.source.issue.pull_request.url as $url
 				| if ($url | startswith($pr_api_prefix) | not) then
@@ -1327,6 +2012,38 @@ gh_issue_timeline_with_cross_refs()
 #   (peer) / fail-closed (budget) semantics. Input and output are arrays of
 #   Actions run records; at most 10 pages per wrapper, no partial output.
 # ---------------------------------------------------------------
+# Per-shell memo of the default branch for _autofix_pr_named_review_runs
+# (issue #6629: read it at most once per run). Both callers below run in the
+# step shell, but they call _autofix_pr_named_review_runs inside $(...), so a
+# variable set there would be lost. They call
+# _autofix_review_default_branch_prime in their own shell first. A failed
+# read is memoized too, so the second caller fails the same way without
+# another call. The memo is never initialised from the environment.
+# Input: none (GITHUB_REPOSITORY). Output: none; always returns 0.
+# API calls: one `GET repos/<repo>` per shell and repository.
+_AUTOFIX_REVIEW_DEFAULT_BRANCH=""
+_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE=""
+_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO=""
+_autofix_review_default_branch_prime()
+{
+	local prime_value=""
+	[ -n "${GITHUB_REPOSITORY:-}" ] || return 0
+	if [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO:-}" = "${GITHUB_REPOSITORY}" ] \
+		&& [ -n "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE:-}" ]; then
+		return 0
+	fi
+	prime_value=$(gh_retry gh api -X GET "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null) || prime_value=""
+	_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO="${GITHUB_REPOSITORY}"
+	if [[ "${prime_value}" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${prime_value}" != "null" ]; then
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH="${prime_value}"
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE="ok"
+	else
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH=""
+		_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE="failed"
+	fi
+	return 0
+}
+
 _autofix_pr_named_review_runs()
 {
 	local pr_number="${1:-}"
@@ -1351,9 +2068,22 @@ _autofix_pr_named_review_runs()
 
 	# Neither branch-filtered call can provide the repository's default
 	# branch. Read it once here instead of trusting a caller-supplied ref.
+	# The two callers prime a per-shell memo first (issue #6629: at most one
+	# read per run); without a memo for this repository, read it here.
 	local review_default_branch
-	review_default_branch=$(gh_retry gh api -X GET "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null) || return 1
+	if [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO:-}" = "${GITHUB_REPOSITORY}" ] \
+		&& [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE:-}" = "failed" ]; then
+		return 1
+	elif [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_REPO:-}" = "${GITHUB_REPOSITORY}" ] \
+		&& [ "${_AUTOFIX_REVIEW_DEFAULT_BRANCH_STATE:-}" = "ok" ]; then
+		review_default_branch="${_AUTOFIX_REVIEW_DEFAULT_BRANCH:-}"
+	else
+		review_default_branch=$(gh_retry gh api -X GET "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null) || return 1
+	fi
 	[[ "${review_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+	# A response without .default_branch prints the literal "null", which
+	# passes the regex; fail closed like the poller's resolver (issue #6629).
+	[ "${review_default_branch}" != "null" ] || return 1
 	local review_wrapper review_page review_response review_total review_count review_page_count
 	local review_error_file review_all='[]' review_wrapper_runs
 	review_error_file=$(mktemp "${TMPDIR:-/tmp}/autofix_pr_named_runs.XXXXXX") || return 1
@@ -1403,15 +2133,36 @@ _autofix_pr_named_review_runs()
 			|| { rm -f "${review_error_file}"; return 1; }
 	done
 	rm -f "${review_error_file}"
-	printf '%s' "${review_all}" | jq -c --arg pr "${pr_number}" --arg branch "${review_default_branch}" '
+	printf '%s' "${review_all}" | jq -c --arg pr "${pr_number}" --arg branch "${review_default_branch}" --arg repo "${GITHUB_REPOSITORY}" '
+		# The wrapper path, with an "@<ref>" suffix and a leading
+		# "<this repo>/" prefix removed (same rule as the poller, issue #6629).
+		def review_path:
+			((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) as $p
+			| if ($p | ascii_downcase | startswith(($repo | ascii_downcase) + "/"))
+				then $p[(($repo | length) + 1):]
+				else $p
+				end;
 		[.[]
 		 | select(type == "object")
-		 | select(.event == "workflow_dispatch" and .head_branch == $branch)
-		 | select((.path == ".github/workflows/internal-review.yml" and .display_title == ("Internal: AI Review & Autofix [pr:" + $pr + "]"))
-		     or (.path == ".github/workflows/ai-review.yml" and .display_title == ("AI Review [pr:" + $pr + "]")))
+		 # A null/empty head_branch is accepted (issue #6629, Q2): GitHub can
+		 # report one on a real default-branch dispatch (#4928), while a
+		 # branch-copy spoof always reports its own non-empty branch.
+		 | select(.event == "workflow_dispatch" and (((.head_branch // "") == "") or .head_branch == $branch))
+		 | select((review_path == ".github/workflows/internal-review.yml" and .display_title == ("Internal: AI Review & Autofix [pr:" + $pr + "]"))
+		     or (review_path == ".github/workflows/ai-review.yml" and .display_title == ("AI Review [pr:" + $pr + "]")))
 		 | {id, status, conclusion, created_at, path}]
 	' 2>/dev/null
 }
+
+# One-shot snapshot of the branch `actions/runs` page (MERGE-001).
+# Process-local: the assignments below reset any inherited value when this
+# file is sourced, so the environment can never supply a snapshot. Written
+# only by autofix_retrigger_has_inflight_peer after its response passed the
+# empty and shape checks; read at most once, and then cleared, by the next
+# autofix_changes_lost_head_retry_consumed call in the same shell. The key
+# is "<owner/repo>:<branch>"; neither part can contain ':'.
+_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY=""
+_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON=""
 
 # ---------------------------------------------------------------
 # autofix_retrigger_has_inflight_peer — detect an already-queued or
@@ -1465,9 +2216,17 @@ _autofix_pr_named_review_runs()
 #   1 `gh api GET /repos/{repo}/actions/runs` call per invocation,
 #   wrapped in gh_retry (rate-limit aware), plus 1 PR-named
 #   `?event=workflow_dispatch` call only when the branch lookup found no
-#   peer.  Results are not cached — the two retrigger blocks fire at
-#   most twice per run and the set of in-flight runs is mutable between
-#   those calls.
+#   peer.  The helper itself always makes its live branch call and
+#   clears any earlier snapshot first, because the set of in-flight runs
+#   is mutable between calls.  Once the branch response passes the empty
+#   and shape checks it is kept as a process-local one-shot snapshot
+#   keyed by repository and branch (_AUTOFIX_BRANCH_RUNS_SNAPSHOT_*).
+#   Its only reader is the next autofix_changes_lost_head_retry_consumed
+#   call in the same shell, so the editor-changes-lost step's no-peer
+#   path makes 1 branch `actions/runs` call instead of 2.  A caller that
+#   runs this helper inside `$(...)` loses the snapshot, and the budget
+#   probe then makes its own live call.  The PR-named lookup is never
+#   cached.
 #
 # CLAUDE.md §15 audit:
 #   The prior retrigger path dispatched unconditionally, so there is
@@ -1483,6 +2242,11 @@ autofix_retrigger_has_inflight_peer()
 	local pr_number="${1:-}"
 	local head_branch="${2:-}"
 	local current_run_id="${3:-}"
+
+	# Clear first: a failed or early-returning call must never leave an
+	# older snapshot for the budget probe.
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY=""
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON=""
 
 	if [ -z "${head_branch}" ] || [ -z "${current_run_id}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
 		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch:-?} reason=missing_inputs" >&2
@@ -1516,6 +2280,9 @@ autofix_retrigger_has_inflight_peer()
 		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=jq_error" >&2
 		return 1
 	fi
+	# Validated: keep it for one read by autofix_changes_lost_head_retry_consumed.
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY="${GITHUB_REPOSITORY}:${head_branch}"
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON="${response}"
 
 	# Filter: in-flight (queued or in_progress), not ourselves, and
 	# running one of the review/autofix workflow files. Match by
@@ -1544,6 +2311,7 @@ autofix_retrigger_has_inflight_peer()
 		# Default-branch dispatch runs are invisible to the branch lookup
 		# above (issue #4898); look for one named for this PR. Fail open.
 		local pr_named_runs pr_named_info
+		declare -F _autofix_review_default_branch_prime >/dev/null && _autofix_review_default_branch_prime
 		if pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}") \
 			&& pr_named_info=$(printf '%s' "${pr_named_runs}" | jq -r --arg current "${current_run_id}" '
 				[
@@ -1657,11 +2425,28 @@ autofix_retrigger_has_inflight_peer()
 #   1 — budget available; caller may dispatch one automated retry.
 #
 # API calls:
-#   1 `gh api GET /repos/{repo}/actions/runs` call per invocation,
-#   wrapped in gh_retry (§15: same single branch-scoped list the peer
-#   helper issues; the two probes run back-to-back in one step at most
-#   once per review run), plus 1 PR-named `?event=workflow_dispatch`
-#   call only when the branch lookup counted nothing.
+#   0 branch `gh api GET /repos/{repo}/actions/runs` calls when the
+#   peer helper left a snapshot for the same repository and branch in
+#   this shell (it is consumed and cleared), else 1 live call wrapped in
+#   gh_retry (§15: same single branch-scoped list the peer helper
+#   issues; the two probes run back-to-back in one step at most once per
+#   review run), plus 1 PR-named `?event=workflow_dispatch` call only
+#   when the branch lookup counted nothing.  The snapshot is cleared on
+#   entry whether or not it matches, so a second call or a call for
+#   another branch never reads it.
+#   Race reasoning: this probe counts *completed* runs.  The snapshot is
+#   taken before the peer helper's in-flight filter, its PR-named
+#   `?event=workflow_dispatch` lookup (one or more API calls on the
+#   no-peer path) and its `emit_event`, and then the caller's
+#   `git rev-parse` / `git log` run, so it is typically seconds old, not
+#   milliseconds.  A run that starts and completes inside that window
+#   is not counted, so this probe can allow one more retry than a fresh
+#   call would.  A run in flight at snapshot time already made the peer
+#   probe report a peer, and a live call has its own window too, so the
+#   reuse only widens an existing race by those seconds.  A missing or mismatched
+#   snapshot, or a failed or malformed peer response (never stored),
+#   falls back to the live call; the empty and shape checks run on
+#   whichever response is used, and every fail-closed return is kept.
 #   The branch-filtered call cannot return default-branch runs, so no
 #   existing call could carry the PR-named match.
 # ---------------------------------------------------------------
@@ -1674,6 +2459,12 @@ autofix_changes_lost_head_retry_consumed()
 	# Accepted for caller compatibility and not used (issue #5523).
 	local head_commit_epoch="${5:-}"
 	local run_event_name="${6:-}"
+	# One-shot: take the peer helper's snapshot and clear it whether or
+	# not it matches, so no later call can read it.
+	local branch_runs_snapshot_key="${_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY:-}"
+	local branch_runs_snapshot_json="${_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON:-}"
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_KEY=""
+	_AUTOFIX_BRANCH_RUNS_SNAPSHOT_JSON=""
 
 	if [ -z "${head_branch}" ] || [ -z "${current_run_id}" ] || [ -z "${head_sha}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
 		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch:-?} reason=missing_inputs" >&2
@@ -1681,22 +2472,27 @@ autofix_changes_lost_head_retry_consumed()
 	fi
 
 	local response
-	# -X GET is REQUIRED, not decorative: `gh api` infers POST whenever
-	# any -f/-F parameter is supplied and no method is given, and
-	# POST /repos/{repo}/actions/runs is not a route — it 404s, which
-	# _is_gh_permanent_failure classifies as non-retryable, so the
-	# probe dies instantly with reason=api_error.  Dropping this flag
-	# silently breaks the probe (tele-funtoken-msg-scoring#3763,
-	# review run 32732281452).
-	if ! response=$(gh_retry gh api \
-		-X GET \
-		-H "Accept: application/vnd.github+json" \
-		"/repos/${GITHUB_REPOSITORY}/actions/runs" \
-		-f "branch=${head_branch}" \
-		-f "per_page=30" \
-		2>/dev/null); then
-		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=api_error" >&2
-		return 0
+	if [ -n "${branch_runs_snapshot_json}" ] \
+		&& [ "${branch_runs_snapshot_key}" = "${GITHUB_REPOSITORY}:${head_branch}" ]; then
+		response="${branch_runs_snapshot_json}"
+	else
+		# -X GET is REQUIRED, not decorative: `gh api` infers POST whenever
+		# any -f/-F parameter is supplied and no method is given, and
+		# POST /repos/{repo}/actions/runs is not a route — it 404s, which
+		# _is_gh_permanent_failure classifies as non-retryable, so the
+		# probe dies instantly with reason=api_error.  Dropping this flag
+		# silently breaks the probe (tele-funtoken-msg-scoring#3763,
+		# review run 32732281452).
+		if ! response=$(gh_retry gh api \
+			-X GET \
+			-H "Accept: application/vnd.github+json" \
+			"/repos/${GITHUB_REPOSITORY}/actions/runs" \
+			-f "branch=${head_branch}" \
+			-f "per_page=30" \
+			2>/dev/null); then
+			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=api_error" >&2
+			return 0
+		fi
 	fi
 
 	if [ -z "${response}" ]; then
@@ -1756,6 +2552,7 @@ autofix_changes_lost_head_retry_consumed()
 			return 0
 		fi
 		local pr_named_runs
+		declare -F _autofix_review_default_branch_prime >/dev/null && _autofix_review_default_branch_prime
 		if ! pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}" "" "${push_bound}"); then
 			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=pr_named_api_error" >&2
 			return 0
@@ -2048,6 +2845,14 @@ PY
 #   issue #12
 #   issues/12
 #   Closes: #12
+#   https://github.com/owner/repo/issues/78#issuecomment-1
+#     (any URL/path followed by a `#fragment` points at a comment or
+#     event on the issue, not at the issue as the PR's subject;
+#     #5776 / PR #5649 relabelled an issue `ai:merged` from such a link)
+#   https://github.com/owner/repo/issues/78?view=plain#issuecomment-1
+#     (a `?query` after the number is not a boundary either, so a query
+#     string cannot hide a following `#fragment`; a bare URL with only a
+#     query string is conservatively not counted as a link)
 #
 # Fail-open:
 #   empty text or malformed repository input emits no matches
@@ -2064,7 +2869,7 @@ extract_repo_scoped_issue_refs_from_text()
 
 	_repository_escaped="$(printf '%s' "${_repository}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
 	printf '%s\n' "${_text}" \
-		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
+		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#?]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#?]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
 		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
 		| sort -un || true
 }

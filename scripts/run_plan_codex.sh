@@ -12,9 +12,12 @@ You are executing the PLANNING phase of the AI development pipeline.
 
 Your task is to generate an implementation plan for the GitHub issue.
 
-IMPORTANT: The system instructions, AI pipeline spec, agents.md, and README.md
-are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt or
-any of the individual source files — they are already loaded.
+IMPORTANT: The system instructions, AI pipeline spec, README.md and agents.md
+(either inlined in full, or as an `=== AGENTS.MD INDEX ===` list of sections)
+are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt, the
+system instructions, the pipeline spec or README.md — they are already loaded.
+When an agents.md index is shown, read only the agents.md sections (and the
+agents.d/ fragments it lists) that you need, from the working tree.
 
 The planning context (issue description, clarification Q&A, and comments) is
 provided BELOW at the end of this prompt — do NOT read planning_context.txt
@@ -67,7 +70,14 @@ Your job:
 
 Create a structured implementation plan that includes:
 
-1. Files likely to change
+1. `## Files likely to change` — a markdown section with exactly this heading. List one
+   repo-relative path per bullet, each in backticks. Put the next item under its own `##`
+   heading (for example `## Functions or modules to implement`) so the file list ends there.
+   A bullet may add a short note such as `(new)`, but the note must not name another path
+   or a directory such as `scripts/`: the plan approval gate reads every `.github/`,
+   `.claude/`, `scripts/`, `prompts/` and `workflow-templates/` token in this section, and a
+   bare directory holds the plan for a human. Explain why a file changes in a later section.
+   Keep the section to those bullets: no prose paragraphs, and no placeholder path such as `scripts/<helper>`, which the gate reads as the bare directory `scripts/`.
 2. Functions or modules to implement
 3. Data structures affected
 4. API or interface changes
@@ -108,6 +118,18 @@ Create a structured implementation plan that includes:
    `ai:implementing` → `ai:done` → `ai:ready-to-merge` → `ai:merged`), the
    `State machines:` field is required, not optional. When the current render is
    `false`, do not emit `Data flow:`, `State machines:`, or `Failure modes:`.
+
+12. `## Deferred scope` (issue #7657): when a clarification answer, an `AD-<n>`
+   auto-decision or the chosen `Scope-mode` limits this issue to part of its
+   stated scope (for example "this issue delivers Phase 1 only"), emit a `## Deferred scope` section as
+   its own `##` heading right after `## Files likely to change`, with one `- `
+   bullet per remaining item (at most 20). Each bullet is one plain sentence
+   with no links, issue references or mentions. Never emit an empty section,
+   omit the section when the plan covers the whole issue, and never emit it
+   for an orchestrator-managed child issue. Implement opens the PR with a
+   non-closing reference, so the issue stays open and clarification restarts
+   for these items after the merge. The section holds only those bullets; the next heading ends it.
+   A prose line or note inside it makes the section unreadable, so put any note in another section.
 
 Use the following shared security and money-handling lens when planning any
 affected surface:
@@ -155,11 +177,23 @@ Rules:
   public — AND that input is required to plan the change itself (not merely
   referenced as context the new implementation will replace), do not emit
   Q/Choices; emit exactly `BLOCKED: <short reason>`. Public 3rd-party
-  documentation URLs are NOT a BLOCKED trigger: fetch them via the web tool
-  (see the web-access rule below) and continue planning. Missing source files
+  documentation URLs are NOT a BLOCKED trigger: fetch them when a web tool is
+  available (see the web-access rule below) and continue planning. A public
+  fact that already exists (a published release tag's commit SHA, a package
+  version) is NOT a BLOCKED trigger either: without a web tool, ask for it in
+  the Q<ID>/Choices format as the web-access rule below says. Missing source files
   on the current ref are NOT external inputs — they are codebase state the
   plan can address; note them under "Risks and edge cases" as a conflict (per
   the CONFLICT DETECTION rule above) and continue planning.
+- Implement only writes repository files and opens one pull request; it
+  cannot post comments, close issues, or check or wait for another pull
+  request, so never plan such steps. When another open, unmerged pull
+  request already delivers this issue's work and no clarification answer
+  chose to build it here anyway, plan neither a duplicate nor wait-only
+  steps: emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged`
+  and end with `STATUS: NOT_CLEAR`. When that work is already on the
+  planning ref, plan no edits: emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement`
+  and end with `STATUS: NOT_CLEAR`.
 - Boil the Lake forcing question: if shipping the complete implementation
   costs ≤30 LOC more and ≤10 minutes more than the shortcut, and neither
   option adds a new dependency nor a new external interface, pick the
@@ -174,8 +208,24 @@ Rules:
   Reduction mode as a substitute for the existing scope-too-large gate.
 - Surface the planning ref context (`git rev-parse HEAD` and symbolic branch)
   from the planning context and do not assume `main`.
-- If checked-out ref mismatches Integration branch metadata, emit exactly
-  `BLOCKED: integration branch mismatch`.
+- If the `Integration branch mismatch:` line in PLANNING REF CONTEXT reads
+  `true`, emit exactly `BLOCKED: integration branch mismatch`. Decide this
+  from that line only. Your workspace's own git, when it has one, is a
+  filtered read-only snapshot on a local branch named `isolated`, and its
+  commit ID never matches the planning ref; some sandboxes have no git at
+  all. Neither `git branch`, `git rev-parse` nor a "not a git repository"
+  error there is evidence of a mismatch.
+- Default-branch reference: your workspace's git has no remote and no
+  network, so `origin/...` refs do not exist. When `git branch --list
+  isolated-base` shows that branch, it is the repository's default branch as
+  it was when this run started, filtered like your checkout (credential-like
+  and oversized files are left out). Read it with `git show
+  isolated-base:<path>`, `git diff isolated-base -- <path>` or `git ls-tree -r
+  --name-only isolated-base`; a file missing there may only have been filtered
+  out. When the plan restores or preserves production behaviour, read that
+  behaviour from `isolated-base` and cite its paths there. Never plan steps
+  that fetch from a remote or deepen history. When the branch is absent, plan
+  without it.
 - Before exiting, run a self-check on the plan you are about to emit.
   If the plan is implementation-ready, end with `STATUS: CLEAR` and
   `PLAN_SELF_CHECK: PASS`. If you find non-blocking concerns, emit one
@@ -189,18 +239,25 @@ Rules:
   do NOT guess: return clarification questions in the Q<ID>/Choices format defined in
   prompts/mode-plan.txt ("Mandatory Question Format" section) and state that
   clarification is required before planning.
-- Prefer repo-local context first, but web search IS available (the
-  `web_search` tool is enabled by the codex config — see
-  `scripts/write_codex_config.sh`'s `--web-search live` default). Use it for
-  public 3rd-party API docs, library reference, RFCs, and similar publicly-
-  readable resources. Do NOT use it for private/auth-walled resources or
-  anything that requires a credential.
-- If implementation requires calling external APIs/services, fetch their
-  official public docs via the web tool, verify the source is the official
-  vendor/library or relevant standards publisher, and include concrete
-  endpoint/method/parameter details in the plan so the implementation editor
-  has the contract inlined. If the docs are genuinely unavailable after web
-  search, ask for clarification instead of inventing details.
+- Prefer repo-local context first. Web search is available only when this
+  run has a web tool: Codex runs do (the `web_search` tool is enabled by the
+  codex config — see `scripts/write_codex_config.sh`'s `--web-search live`
+  default). Claude-engine runs have web search only when their system instructions say the `WebSearch` tool
+  is available, and never web fetch. When a web tool is available, use it for public
+  3rd-party API docs, library reference, RFCs, and similar publicly-readable
+  resources. Do NOT use it for private/auth-walled resources or anything
+  that requires a credential.
+- If implementation requires calling external APIs/services and a web tool
+  is available, fetch their official public docs, verify the source is the
+  official vendor/library or relevant standards publisher, and include
+  concrete endpoint/method/parameter details in the plan so the
+  implementation editor has the contract inlined. If the docs are genuinely
+  unavailable, ask for clarification instead of inventing details.
+- Without a web tool, take external facts (a release tag's commit SHA, a
+  package version, an API endpoint or signature) only from the issue body,
+  its answers, the comment thread or the repository, and never try to look
+  them up. A fact the issue states as verified is used as given; ask for a
+  fact the plan depends on that is in none of those places.
 - Pinned-toolchain authority: a repo validator (`npm run typecheck`/`tsc`,
   `eslint`, `vitest`/`jest`, `npm run build`, or any language equivalent) is
   authoritative only on the repo's pinned toolchain — i.e. after the repo's
@@ -245,6 +302,21 @@ EOF
 if [ "${HEAL_ROUTE:-false}" = true ]; then
 	[ -s "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" ] || { echo '::error::Heal evidence bundle missing' >&2; exit 1; }
 	cat "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" >> "${CODEX_PROMPT_FILE}"
+	# Issue #8249: a heal plan must state whether the change would have turned
+	# the observed failing run green (HEAL_COUNTERFACTUAL line). A missing
+	# prompt does not fail planning: the plan then has no line and the plan
+	# auto-approval gate holds it for a human.
+	heal_cf_prompt="prompts/mode-plan-heal-counterfactual.txt"
+	heal_cf_rendered=""
+	if [ -f "${heal_cf_prompt}" ] && [ ! -L "${heal_cf_prompt}" ] \
+		&& heal_cf_rendered="$(bash scripts/render_prompt.sh "${heal_cf_prompt}")" && [ -n "${heal_cf_rendered}" ]; then
+		{
+			echo
+			printf '%s\n' "${heal_cf_rendered}"
+		} >> "${CODEX_PROMPT_FILE}"
+	else
+		echo "::warning::HEAL_COUNTERFACTUAL prompt unavailable; the plan auto-approval gate will hold this heal plan"
+	fi
 fi
 
 # Update progress comment to signal model invocation is starting
@@ -282,9 +354,68 @@ if [ "${PLAN_ENGINE}" = "claude" ]; then
   fi
 fi
 
+# BEGIN plan isolated base (#7772)
+# The planner checks out the integration branch on project items, so without
+# this it cannot read production code (#7548, fun-token-multi-chain#639).
+# Fetch the default branch's tip into a private ref; codex_isolated_exec.sh's
+# seed-git adds it, filtered like the snapshot, as branch `isolated-base`.
+# A failed fetch only leaves that branch out. Defaults live here (section 8):
+# PLAN_ISOLATED_BASE_ENABLED defaults to true (only `false` turns it off) and
+# an empty PLAN_ISOLATED_BASE_BRANCH skips the fetch.
+plan_prepare_isolated_base()
+{
+  local enabled="${PLAN_ISOLATED_BASE_ENABLED:-true}" branch="${PLAN_ISOLATED_BASE_BRANCH:-}"
+  unset CODEX_ISOLATED_GIT_BASE_REF
+  if [ "${enabled}" != "false" ] && [[ "${branch}" =~ ^[A-Za-z0-9._/-]+$ ]] \
+    && git check-ref-format --branch "${branch}" >/dev/null 2>&1; then
+    if git fetch --no-tags --depth=1 origin "+refs/heads/${branch}:refs/codex-isolated/base" >/dev/null 2>&1; then
+      export CODEX_ISOLATED_GIT_BASE_REF="refs/codex-isolated/base"
+      echo "CODEX_ISOLATION base_branch=${branch} outcome=fetched role=plan"
+    else
+      echo "::warning::CODEX_ISOLATION base_branch=${branch} outcome=fetch_failed role=plan; the sandbox git has no isolated-base branch."
+    fi
+  else
+    echo "::notice::CODEX_ISOLATION base_branch=unset_or_invalid outcome=skipped role=plan; the sandbox git has no isolated-base branch."
+  fi
+  return 0
+}
+# END plan isolated base (#7772)
+plan_prepare_isolated_base
+
+# The planner's sandbox git is a filtered snapshot on branch `isolated`
+# (scripts/codex_isolated_workspace.py seed_git), so a model that checks git
+# there sees a "mismatch" that is not real. Issue #7172 sat blocked for a
+# human after one such answer although the workflow had computed
+# PLANNING_REF_MISMATCH=false. Returns 0 when the output's first BLOCKED line
+# (closed fences stripped, as plan.yml's parser does) is that reason while the
+# workflow found no mismatch. The second perl reads to EOF so the first never
+# gets SIGPIPE under pipefail on a large output.
+plan_output_contradicts_ref_context()
+{
+  local output_file="$1" blocked_reason
+  [ "${PLANNING_REF_MISMATCH:-}" = "false" ] || return 1
+  blocked_reason="$(perl -0pe '
+    s{(^|\n)([ \t]*((?:```|~~~))[^\n]*\n.*?\n[ \t]*\3[ \t]*(?=\n|$))}{$1}gms;
+  ' "${output_file}" | perl -ne '
+    if (!$seen && /^\s*BLOCKED:\s*(.*\S)\s*$/i) { print $1; $seen = 1; }
+  ')" || return 1
+  blocked_reason="${blocked_reason,,}"
+  blocked_reason="${blocked_reason%.}"
+  # Also match a reason the model embellished after the phrase, e.g.
+  # "integration branch mismatch (workspace is on isolated)".
+  case "${blocked_reason}" in
+    "integration branch mismatch" | "integration branch mismatch"[!a-z0-9_]*) return 0 ;;
+  esac
+  return 1
+}
+plan_ref_retry_note_added=false
+
 max_attempts=3
 for attempt in $(seq 1 "${max_attempts}"); do
-  echo "Codex planning attempt ${attempt}/${max_attempts} (engine ${PLAN_ENGINE})..."
+  # Name the engine that actually runs, so a Claude run is not logged as Codex.
+  plan_engine_name="Codex"
+  if [ "${PLAN_ENGINE}" = "claude" ]; then plan_engine_name="Claude"; fi
+  echo "${plan_engine_name} planning attempt ${attempt}/${max_attempts}..."
   # Capacity-fallback: on the final attempt switch the editor model
   # to MODEL_EDITOR_FALLBACK (a different OpenRouter/OpenAI per-model
   # TPM bucket) so a sustained saturation of the primary editor model
@@ -303,6 +434,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" "${PLAN_ENGINE}" PLAN || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
       PLAN_ENGINE=codex
+      plan_engine_name="Codex"
       MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" codex PLAN || plan_rc=$?
     fi
   elif [ "${PLAN_ENGINE}" = "claude" ]; then
@@ -310,21 +442,46 @@ for attempt in $(seq 1 "${max_attempts}"); do
       claude_run PLAN "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
       PLAN_ENGINE="codex"
+      plan_engine_name="Codex"
       plan_rc=0
     fi
+  fi
+  if [ "${plan_rc}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): every pool account is gated and the
+    # wait is on. Never run codex; skip the rest of planning so the report
+    # step records the wait and the hourly resume pass replays the command.
+    echo "AI_ENGINE_CAPACITY_WAIT role=PLAN outcome=deferred stage=plan"
+    if [ -n "${GITHUB_ENV:-}" ]; then
+      { echo "SKIP_PLAN=true"; echo "CLAUDE_CAPACITY_WAIT=true"; } >> "${GITHUB_ENV}"
+    fi
+    exit 0
   fi
   if [ "${HEAL_ROUTE:-false}" != true ] && [ "${PLAN_ENGINE}" != "claude" ]; then
     bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
   fi
   if [ "${plan_rc}" -eq 0 ]; then
-    if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+    if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
+      echo "::warning::${plan_engine_name} returned empty output on attempt ${attempt}."
+    elif plan_output_contradicts_ref_context "${CODEX_OUTPUT_FILE}" && [ "${attempt}" -lt "${max_attempts}" ]; then
+      echo "PLAN_REF_MISMATCH_RETRY attempt=${attempt} outcome=retry planning_ref_mismatch=false"
+      echo "::warning::Planner answered 'BLOCKED: integration branch mismatch' on attempt ${attempt}, but the workflow found no mismatch; retrying."
+      if [ "${plan_ref_retry_note_added}" = false ]; then
+        {
+          printf '\n=== RETRY NOTE ===\n'
+          printf '%s\n' "A previous attempt answered \`BLOCKED: integration branch mismatch\`, but PLANNING REF CONTEXT reports \`Integration branch mismatch: false\`: the workflow checked out the integration branch. Git inside your workspace, if any (branch \`isolated\`), is a snapshot, not the planning ref. Plan the issue."
+        } >> "${CODEX_PROMPT_FILE}"
+        plan_ref_retry_note_added=true
+      fi
+    else
+      if plan_output_contradicts_ref_context "${CODEX_OUTPUT_FILE}"; then
+        echo "PLAN_REF_MISMATCH_RETRY attempt=${attempt} outcome=kept planning_ref_mismatch=false"
+      fi
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
-      echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
+      echo "${plan_engine_name} planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
       break
     fi
-    echo "::warning::Codex returned empty output on attempt ${attempt}."
   else
-    echo "::warning::Codex exited with code ${plan_rc} on attempt ${attempt}."
+    echo "::warning::${plan_engine_name} exited with code ${plan_rc} on attempt ${attempt}."
   fi
   if [ "${attempt}" -lt "${max_attempts}" ]; then
     sleep_secs=$((10 * (2 ** (attempt - 1))))
@@ -338,7 +495,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     fi
     sleep "${sleep_secs}"
   else
-    echo "::error::Codex planning failed after ${max_attempts} attempts."
+    echo "::error::${plan_engine_name} planning failed after ${max_attempts} attempts."
     exit 1
   fi
 done

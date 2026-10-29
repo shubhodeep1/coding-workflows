@@ -3205,9 +3205,85 @@ def _resolve_origin_url(repo_root: Path) -> str:
     return url
 
 
+def _memory_single_branch_clone_enabled() -> bool:
+    # Off switch for the single-branch memory clone (#8287 / #8295). Unset,
+    # empty or a parse_bool true word keeps it on; a parse_bool false word
+    # turns it off; any other value also turns it off and warns on stderr
+    # (stdout carries machine-readable JSON).
+    raw = os.environ.get("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED")
+    if raw is None or not raw.strip():
+        return True
+    parsed = parse_bool(raw, default=None)  # type: ignore[arg-type]
+    if parsed is None:
+        shown = "".join(c if c.isprintable() else "?" for c in raw.strip()[:64])
+        print(
+            f"::warning::AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED={shown} "
+            "is not a boolean; single-branch memory clone disabled",
+            file=sys.stderr,
+        )
+        return False
+    return bool(parsed)
+
+
 def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     origin_url = _resolve_origin_url(repo_root)
     temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
+    if not _memory_single_branch_clone_enabled():
+        # Off switch (#8295): skip the single-branch fast path below and run
+        # the pre-#8287 full clone (clone, ls-remote, fetch/checkout).
+        return _full_repo_clone_for_memory_branch(temp_dir, origin_url, memory_branch)
+
+    # Fast path: clone only the memory branch tip. A full clone fetched every
+    # branch plus the whole ai-memory history (260k+ commits) on each write,
+    # 135-209 s per clone, and run 40752760153 hit memory maintenance's
+    # 20-minute job timeout. A write only adds one commit on top of the tip,
+    # and the push-retry fetch + rebase works from a shallow clone because
+    # the old tip stays an ancestor of the new remote tip. The read path and
+    # memory_helpers.sh force-tick already clone this way.
+    probe = _run_git(temp_dir.parent, ["ls-remote", "--heads", origin_url, memory_branch], check=False)
+    # Fallback diagnostics stay off by default: fail-open in-process callers
+    # (the integration fingerprint verifier) require an empty stderr.
+    # AI_MEMORY_CLONE_DIAGNOSTICS=1 turns them on.
+    clone_diagnostics_on = os.environ.get("AI_MEMORY_CLONE_DIAGNOSTICS", "") == "1"
+    if probe.returncode != 0 and clone_diagnostics_on:
+        first_line = (_redact_memory_push_stderr(probe.stderr or "").splitlines() or [""])[0][:200]
+        print(f"ai-memory: memory-branch probe failed (exit {probe.returncode}); using full clone: {first_line}", file=sys.stderr)
+    if probe.returncode == 0 and probe.stdout.strip():
+        fast_clone = _run_git(
+            temp_dir.parent,
+            [
+                "clone",
+                "--no-tags",
+                "--quiet",
+                "--single-branch",
+                "--depth",
+                "1",
+                "--branch",
+                memory_branch,
+                origin_url,
+                str(temp_dir),
+            ],
+            check=False,
+        )
+        if fast_clone.returncode == 0:
+            _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
+            return temp_dir
+        # Fall back to the full clone below, in a fresh empty directory. With
+        # AI_MEMORY_CLONE_DIAGNOSTICS=1, say so on stderr (credentials and URLs
+        # redacted).
+        if clone_diagnostics_on:
+            first_line = (_redact_memory_push_stderr(fast_clone.stderr or "").splitlines() or [""])[0][:200]
+            print(f"ai-memory: shallow memory-branch clone failed (exit {fast_clone.returncode}); falling back to full clone: {first_line}", file=sys.stderr)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
+
+    return _full_repo_clone_for_memory_branch(temp_dir, origin_url, memory_branch)
+
+
+def _full_repo_clone_for_memory_branch(temp_dir: Path, origin_url: str, memory_branch: str) -> Path:
+    # Full clone of the repository into the empty temp_dir. Used when the
+    # single-branch fast path is switched off, when the memory branch does not
+    # exist yet, or when the shallow memory-branch clone fails.
     _run_git(temp_dir.parent, ["clone", "--no-tags", "--quiet", origin_url, str(temp_dir)])
 
     branch_exists = (
@@ -3257,6 +3333,75 @@ def _push_retry_backoff_seconds(attempt: int) -> float:
     return random.uniform(0.0, ceiling)
 
 
+# A push that fails on missing or rejected credentials fails the same way on
+# every attempt, so retrying it only burns runner time: run 35665803378 spent
+# all 16 attempts on `could not read Username` for nine separate writes.
+# Rate-limit / abuse text is temporary and keeps the retry loop.
+_MEMORY_PUSH_AUTH_FAILURE_RE = re.compile(
+    r"could not read username"
+    r"|could not read password"
+    r"|authentication failed"
+    r"|terminal prompts disabled"
+    r"|invalid username or password"
+    r"|permission to \S+ denied"
+    r"|the requested url returned error: 403"
+    r"|returned error: 401",
+    re.IGNORECASE,
+)
+# Checked only for a 403 and only after URLs are removed, so a bare `abuse`
+# (issue #7714: a 403 naming `rate limit` or `abuse` is not permanent) cannot
+# turn a credential failure named in a URL back into 16 retries.
+_MEMORY_PUSH_RATE_LIMIT_RE = re.compile(r"rate[ _-]?limit|abuse", re.IGNORECASE)
+_MEMORY_PUSH_HTTP_403_RE = re.compile(r"returned error: 403", re.IGNORECASE)
+_MEMORY_PUSH_URL_USERINFO_RE = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
+# Whole URLs (scheme, host and path) are dropped too: the origin URL must
+# never appear in the raised message (issue #7714).
+_MEMORY_PUSH_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+")
+# The repository named in `Permission to <repo> denied` is also removed before
+# the rate-limit search, so a repo such as `o/rate-limiter` cannot turn a
+# permanent 403 permission denial back into 16 retries.
+_MEMORY_PUSH_PERMISSION_SPAN_RE = re.compile(r"permission to \S+ denied", re.IGNORECASE)
+
+
+def _is_permanent_memory_push_failure(stderr: str) -> bool:
+    """Return True when a failed memory push is a credential/permission error.
+
+    Such failures are deterministic and must not consume the retry budget.
+    A 403 whose text names a rate limit or abuse is treated as temporary
+    (a secondary-rate-limit 403), so it is never classified as permanent.
+    """
+    text = stderr or ""
+    if not text.strip():
+        return False
+    if not _MEMORY_PUSH_AUTH_FAILURE_RE.search(text):
+        return False
+    # The rate-limit exclusion applies only to a 403, and URLs are removed
+    # before matching, so a repository URL or name containing `rate-limit`
+    # cannot turn a `could not read Username` failure back into 16 retries.
+    if _MEMORY_PUSH_HTTP_403_RE.search(text) and _MEMORY_PUSH_RATE_LIMIT_RE.search(
+        _MEMORY_PUSH_PERMISSION_SPAN_RE.sub(" ", _MEMORY_PUSH_URL_RE.sub(" ", text))
+    ):
+        return False
+    return True
+
+
+def _redact_memory_push_stderr(stderr: str) -> str:
+    """Scrub credential values and URLs (including the origin URL) from git push stderr."""
+    text = stderr or ""
+    for env_name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT"):
+        secret = os.environ.get(env_name, "")
+        if secret:
+            text = text.replace(secret, "***")
+    text = _MEMORY_PUSH_URL_USERINFO_RE.sub(r"\1***@", text)
+    text = _MEMORY_PUSH_URL_RE.sub("<redacted-url>", text)
+    return text.strip()
+
+
+def _memory_persist_elapsed_ms(started: float) -> int:
+    """Milliseconds since a time.monotonic() start, never negative."""
+    return max(0, int((time.monotonic() - started) * 1000))
+
+
 def persist_memory_operation(
     repo_root: Path,
     *,
@@ -3271,8 +3416,13 @@ def persist_memory_operation(
 
     repo_root = repo_root.resolve()
     with _file_lock(f"ai-memory-{repo_root}-{memory_branch}"):
+        # Phase timings (clone_ms / write_ms / push_ms) are additive telemetry
+        # only; they never change control flow, retries or exceptions.
+        clone_started = time.monotonic()
         clone_dir = _clone_for_memory_branch(repo_root, memory_branch)
+        clone_ms = _memory_persist_elapsed_ms(clone_started)
         try:
+            write_started = time.monotonic()
             memory_root = resolve_memory_root_dir(clone_dir, memory_root_relative)
             ensure_memory_layout(memory_root)
 
@@ -3282,21 +3432,27 @@ def persist_memory_operation(
             op_result = operation(clone_dir) or {}
 
             _run_git(clone_dir, ["config", "user.name", "codex-bot"])
-            _run_git(clone_dir, ["config", "user.email", "codex@users.noreply.github.com"])
+            _run_git(clone_dir, ["config", "user.email", "codex-bot@users.noreply.invalid"])
             _run_git(clone_dir, ["add", str(memory_root.relative_to(clone_dir))])
 
             if _run_git(clone_dir, ["diff", "--cached", "--quiet"], check=False).returncode == 0:
+                write_ms = _memory_persist_elapsed_ms(write_started)
                 return {
                     "did_commit": False,
                     "did_push": False,
                     "commit_sha": None,
                     "push_attempts": 0,
                     "operation_result": op_result,
+                    "clone_ms": clone_ms,
+                    "write_ms": write_ms,
+                    "push_ms": 0,
                 }
 
             _run_git(clone_dir, ["commit", "-m", commit_message])
             _run_git(clone_dir, ["rev-parse", "HEAD"])
+            write_ms = _memory_persist_elapsed_ms(write_started)
 
+            push_started = time.monotonic()
             for attempt in range(1, push_retries + 1):
                 push = _run_git(
                     clone_dir,
@@ -3305,13 +3461,28 @@ def persist_memory_operation(
                 )
                 if push.returncode == 0:
                     pushed_commit_sha = _run_git(clone_dir, ["rev-parse", "HEAD"]).stdout.strip()
+                    push_ms = _memory_persist_elapsed_ms(push_started)
                     return {
                         "did_commit": True,
                         "did_push": True,
                         "commit_sha": pushed_commit_sha,
                         "push_attempts": attempt,
                         "operation_result": op_result,
+                        "clone_ms": clone_ms,
+                        "write_ms": write_ms,
+                        "push_ms": push_ms,
                     }
+
+                # Credential/permission failures (run 35665803378: nine writes
+                # x 16 attempts on `could not read Username`) cannot succeed on
+                # a retry: stop now, with no backoff, fetch or rebase. The
+                # message never carries the origin URL or the token.
+                if _is_permanent_memory_push_failure(push.stderr or ""):
+                    raise MemoryGitError(
+                        f"Failed to push memory branch: error_class=auth attempts={attempt} "
+                        f"(permanent credential/permission failure, not retried): "
+                        f"{_redact_memory_push_stderr(push.stderr or '')}"
+                    )
 
                 if attempt >= push_retries:
                     raise MemoryGitError(

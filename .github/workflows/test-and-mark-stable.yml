@@ -322,7 +322,10 @@ jobs:
   resolve-version:
     needs: [source]
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    # The full-history checkout (fetch-depth: 0, for the tag list) took 87s
+    # on 2026-10-15 02:21 and passed 2 minutes at 10:04, cancelling the
+    # release after stable had already moved (run 38717659089).
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
@@ -335,6 +338,40 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           fetch-tags: true
+
+      # Static preflight (analysis/workflow-optimization-2026-09-23-2.md, Speed #2):
+      # release run 35802596362 ran its live E2E jobs for ~98 minutes after
+      # validate-scripts had already failed on a missing scripts/ reference.
+      # Every live job needs resolve-version, so this seconds-long check stops
+      # them first. validate-scripts keeps its own copy of the check.
+      - name: Preflight workflow script references
+        id: script_ref_preflight
+        env:
+          RELEASE_STATIC_PREFLIGHT_ENABLED: ${{ vars.RELEASE_STATIC_PREFLIGHT_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          switch="${RELEASE_STATIC_PREFLIGHT_ENABLED-true}"
+          case "${switch,,}" in
+            ""|true) ;;
+            false)
+              echo "::notice::RELEASE_STATIC_PREFLIGHT_ENABLED=false; workflow script reference preflight skipped"
+              exit 0
+              ;;
+            *)
+              echo "::warning::RELEASE_STATIC_PREFLIGHT_ENABLED has an unrecognised value; preflight skipped (validate-scripts still runs the check)"
+              exit 0
+              ;;
+          esac
+          checker="scripts/check_workflow_script_refs.py"
+          if [ -L "${checker}" ] || [ ! -f "${checker}" ]; then
+            echo "::warning::${checker} is missing or a symlink; preflight skipped (validate-scripts still runs the check)"
+            exit 0
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 "${checker}" || {
+            preflight_rc=$?
+            echo "::error::Workflow script reference preflight failed; see the FAIL lines above for the missing references"
+            exit "${preflight_rc}"
+          }
 
       - name: Resolve version tag
         id: resolve
@@ -432,6 +469,32 @@ jobs:
           fi
 
           echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+
+      # Release credential preflight (analysis/workflow-optimization-2026-09-22.md,
+      # Speed #4 / Reliability #2): release run 35639756385 spent about 94
+      # minutes before GitHub refused the tag push for a classic GH_PAT without
+      # the `workflow` scope. Fails here only when the classic PAT lacks that
+      # scope AND stable..HEAD changes .github/workflows/; every uncertain case
+      # proceeds. RELEASE_TAG_PREFLIGHT_ENABLED=false turns it off.
+      - name: Preflight release tag credential
+        id: release_tag_preflight
+        if: ${{ !inputs.dry_run && !inputs.gate_only }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          RELEASE_TAG_PREFLIGHT_ENABLED: ${{ vars.RELEASE_TAG_PREFLIGHT_ENABLED || 'true' }}
+          STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
+          RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          base="$(git rev-parse -q --verify 'refs/tags/stable^{commit}' 2>/dev/null || true)"
+          head="$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null || true)"
+          if [ ! -f scripts/release_tag_preflight.sh ] || [ -L scripts/release_tag_preflight.sh ]; then
+            echo "::warning::scripts/release_tag_preflight.sh is missing on this commit; skipping the release credential preflight."
+            echo "RELEASE_TAG_PREFLIGHT result=unknown error_class=none reason=script_missing"
+            exit 0
+          fi
+          RELEASE_TAG_PREFLIGHT_BASE_SHA="${base}" RELEASE_TAG_PREFLIGHT_HEAD_SHA="${head}" \
+            bash scripts/release_tag_preflight.sh
 
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
@@ -548,6 +611,17 @@ jobs:
       # e2e-smoke-test job timeout kills the run.
       REVIEW_STEP_TIMEOUT: ${{ inputs.review_step_timeout || inputs.review_timeout || inputs.phase_timeout || 75 }}
       E2E_JOB_TIMEOUT_MINUTES: 300
+      # Phase 3b inactivity limit while the watched Implement run's current
+      # step is "Pre-push affected-test gate" (issue #8244). That one step
+      # ran 31 minutes in run 40610855593 (two gate runs plus a repair turn);
+      # implement.yml gives it timeout-minutes: 60 and
+      # scripts/implement_step_prepush_test_gate.sh sizes it to 3300 s. The
+      # default is 35, not 60: 60 would push the conservative serial budget
+      # below past the 300-minute job timeout, which #8244 forbids raising.
+      # To give the gate its full 55 minutes, raise this value and
+      # E2E_JOB_TIMEOUT_MINUTES (plus the job's timeout-minutes) together in
+      # one PR; the budget check fails closed if only this one is raised.
+      PREPUSH_GATE_STEP_STALL_MINUTES: 35
       REVIEW_PHASE_HANDOFF_BUDGET_MINUTES: 15
       EDITOR_RETRY_BUDGET_MINUTES: 25
       PHASE7_WAIT_BUDGET_MINUTES: 10
@@ -577,11 +651,58 @@ jobs:
         with:
           ref: main
 
+      # Phase 4 and Phase 4b run step bodies moved to scripts/ (#7991,
+      # workflow file size guard). They are read from this run's own commit,
+      # never from the main checkout above, and copied to RUNNER_TEMP so they
+      # live outside the workspace that the later Phase 5 re-checkout cleans.
+      - name: Checkout release-gate step scripts
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: .stable-e2e-step-src
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            scripts/stable_e2e_step_wait_review.sh
+            scripts/stable_e2e_step_verify_bait_removed.sh
+
+      - name: Verify release-gate step scripts
+        id: stable_e2e_step_scripts
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SRC_DIR=".stable-e2e-step-src"
+          if [ -z "${RUNNER_TEMP:-}" ] || [[ "${RUNNER_TEMP}" != /* ]]; then
+            echo "::error::Release gate step scripts: RUNNER_TEMP must be an absolute path."
+            exit 1
+          fi
+          DEST_DIR="${RUNNER_TEMP}/stable-e2e-step-scripts"
+          if ! [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release gate step scripts: github.sha is not a 40-hex commit."
+            exit 1
+          fi
+          ACTUAL_SHA=$(git -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || true)
+          if [ "${ACTUAL_SHA}" != "${EXPECTED_SHA}" ]; then
+            echo "::error::Release gate step scripts checkout is not at ${EXPECTED_SHA} (got '${ACTUAL_SHA}')."
+            exit 1
+          fi
+          install -d -m 0700 "${DEST_DIR}"
+          for script in stable_e2e_step_wait_review.sh stable_e2e_step_verify_bait_removed.sh; do
+            src="${SRC_DIR}/scripts/${script}"
+            if [ -L "${SRC_DIR}" ] || [ -L "${SRC_DIR}/scripts" ] || [ -L "${src}" ] || [ ! -f "${src}" ]; then
+              echo "::error::Release gate step script ${script} is missing, not a regular file, or a symlink."
+              exit 1
+            fi
+            install -m 0755 "${src}" "${DEST_DIR}/${script}"
+          done
+          echo "STABLE_E2E_STEP_SCRIPTS_VERIFIED=true" >> "$GITHUB_ENV"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
-          # Phase 4b caps its queue-time deadline extension against the
-          # job's start, so the serial budget below still holds.
+          # Phase 4 (#8004) and Phase 4b cap their deadline extensions
+          # against the job's start, so the serial budget below still holds.
           echo "E2E_JOB_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           if [ -z "${GH_TOKEN}" ]; then
             echo "::error::GH_PAT secret is required for E2E tests (GITHUB_TOKEN cannot trigger downstream workflows)"
@@ -600,12 +721,18 @@ jobs:
             "${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}" \
             "${EDITOR_RETRY_BUDGET_MINUTES}" \
             "${PHASE7_WAIT_BUDGET_MINUTES}" \
-            "${E2E_FINALIZATION_RESERVE_MINUTES}"; do
+            "${E2E_FINALIZATION_RESERVE_MINUTES}" \
+            "${PREPUSH_GATE_STEP_STALL_MINUTES}"; do
             if ! [[ "${timeout_value}" =~ ^[0-9]+$ ]] || [ "${timeout_value}" -lt 1 ]; then
               echo "::error::E2E timeout budgets must be positive integers."
               exit 1
             fi
           done
+          # Extra time Phase 3b may wait on the pre-push gate step (#8244).
+          PREPUSH_GATE_EXTRA_BUDGET_MINUTES=$((PREPUSH_GATE_STEP_STALL_MINUTES - PHASE_TIMEOUT))
+          if [ "${PREPUSH_GATE_EXTRA_BUDGET_MINUTES}" -lt 0 ]; then
+            PREPUSH_GATE_EXTRA_BUDGET_MINUTES=0
+          fi
           REVIEW_EFFECTIVE_BUDGET_MINUTES="${REVIEW_STEP_TIMEOUT}"
           if [ "${REVIEW_EFFECTIVE_BUDGET_MINUTES}" -gt 90 ]; then
             REVIEW_EFFECTIVE_BUDGET_MINUTES=90
@@ -621,12 +748,13 @@ jobs:
             EDITOR_RETRY_BUDGET_MINUTES +
             PHASE_TIMEOUT +
             PHASE7_WAIT_BUDGET_MINUTES +
-            E2E_FINALIZATION_RESERVE_MINUTES
+            E2E_FINALIZATION_RESERVE_MINUTES +
+            PREPUSH_GATE_EXTRA_BUDGET_MINUTES
           ))
           echo "E2E conservative serial budget: ${E2E_SERIAL_BUDGET_MINUTES}/${E2E_JOB_TIMEOUT_MINUTES} minutes"
           if [ "${E2E_SERIAL_BUDGET_MINUTES}" -gt "${E2E_JOB_TIMEOUT_MINUTES}" ]; then
             echo "::error::Configured E2E phase budgets require ${E2E_SERIAL_BUDGET_MINUTES}m, exceeding the ${E2E_JOB_TIMEOUT_MINUTES}m job timeout."
-            echo "::error::Budget = 2*phase(${PHASE_TIMEOUT}) + plan(${PLAN_PHASE_TIMEOUT}) + max(review=${REVIEW_TIMEOUT}, min(review-step=${REVIEW_STEP_TIMEOUT}, cap=90) + handoff=${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}) + editor-retry(${EDITOR_RETRY_BUDGET_MINUTES}) + phase-6(${PHASE_TIMEOUT}) + phase-7(${PHASE7_WAIT_BUDGET_MINUTES}) + finalization(${E2E_FINALIZATION_RESERVE_MINUTES})."
+            echo "::error::Budget = 2*phase(${PHASE_TIMEOUT}) + plan(${PLAN_PHASE_TIMEOUT}) + max(review=${REVIEW_TIMEOUT}, min(review-step=${REVIEW_STEP_TIMEOUT}, cap=90) + handoff=${REVIEW_PHASE_HANDOFF_BUDGET_MINUTES}) + editor-retry(${EDITOR_RETRY_BUDGET_MINUTES}) + phase-6(${PHASE_TIMEOUT}) + phase-7(${PHASE7_WAIT_BUDGET_MINUTES}) + finalization(${E2E_FINALIZATION_RESERVE_MINUTES}) + prepush-gate-extra(${PREPUSH_GATE_EXTRA_BUDGET_MINUTES})."
             exit 1
           fi
           echo "Target repo: ${TEST_REPO}"
@@ -884,6 +1012,13 @@ jobs:
               exit 0
             fi
 
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Clarify phase paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
             # Check for failure: look for error comments from bot
             LAST_BOT_COMMENT=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=5&direction=desc" \
               --jq '[.[] | select(.user.login == "github-actions[bot]")] | .[0].body // ""' || echo "")
@@ -1106,6 +1241,13 @@ jobs:
               exit 0
             fi
 
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Plan phase paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+
             # Detect plan workflow failure (completed but no expected label)
             if [ "$PLAN_RUN_STATUS" = "completed" ]; then
               # Plan finished but didn't produce awaiting-approval or implementing
@@ -1237,11 +1379,24 @@ jobs:
           # display_title (the issue title for issues / issue_comment runs).
           # Release run 36374918973 recorded another issue's Clarify run without it.
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
+          # Passed through env so the run body holds no ${{ }} expression and
+          # stays clear of the 18,000-character expression guard
+          # (tests/test_workflow_file_size_limit.py, #8248).
+          IMPL_CREATED_AFTER_INPUT: ${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}
         run: |
           set -euo pipefail
           echo "Waiting for implementation PR on issue #${ISSUE_NUMBER}..."
           echo "Inactivity timeout: ${PHASE_TIMEOUT} minutes"
           INACTIVITY_LIMIT=$((PHASE_TIMEOUT * 60))
+          # The pre-push affected-test gate step may legitimately run longer
+          # than PHASE_TIMEOUT without a state change (#8244); it gets its own
+          # limit, which never shortens the normal one.
+          PREPUSH_GATE_STEP_NAME="Pre-push affected-test gate"
+          PREPUSH_GATE_STEP_STALL_MINUTES="${PREPUSH_GATE_STEP_STALL_MINUTES:-35}"
+          if ! [[ "${PREPUSH_GATE_STEP_STALL_MINUTES}" =~ ^[0-9]+$ ]]; then
+            PREPUSH_GATE_STEP_STALL_MINUTES="${PHASE_TIMEOUT}"
+          fi
+          PREPUSH_GATE_STALL_LIMIT=$((10#${PREPUSH_GATE_STEP_STALL_MINUTES} * 60))
           LAST_ACTIVITY=$(date +%s)
           PHASE_START=$(date +%s)
           # Grace period before declaring "all runs completed" failure.
@@ -1275,9 +1430,9 @@ jobs:
           # stale runs triggered by AUTO_IMPLEMENT_ON_CLEAR_PLAN auto-approval
           # during the plan phase. Fall back to issue creation time if Phase 3a
           # was skipped (plan auto-approved directly to ai:implementing).
-          IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"
+          IMPL_CREATED_AFTER="${IMPL_CREATED_AFTER_INPUT:-}"
 
-          # The first-page metrics below are only progress signals. A terminal
+          # The progress-counter metrics below are only progress signals. A terminal
           # decision needs every page of this issue's runs (not other issues'
           # Implement runs). A full tenth page or an unreadable page is unknown.
           SCOPED_IMPL_ACTIVE_ID=""
@@ -1371,6 +1526,106 @@ jobs:
             exit 1
           }
 
+          # Watched run URLs (#8248): ids already read, no API calls.
+          E2E_WATCHED_RUN_IDS=""
+          e2e_note_watched_run() {
+            local -a ids=()
+            local watched_id watched_seen=0 watched_rest=""
+            [[ "${1:-}" =~ ^[0-9]+$ ]] || return 0
+            # A repeat moves to the newest slot (no new line), so the cap never evicts a run still polled.
+            for watched_id in ${E2E_WATCHED_RUN_IDS}; do
+              if [ "$watched_id" = "$1" ]; then watched_seen=1; else watched_rest+=" $watched_id"; fi
+            done
+            read -r -a ids <<< "${watched_rest} $1"
+            [ "${#ids[@]}" -le 5 ] || ids=("${ids[@]: -5}")
+            E2E_WATCHED_RUN_IDS="${ids[*]}"
+            [ "$watched_seen" = 1 ] || echo "  ↳ Watching ${2:-} run $1: https://github.com/${TEST_REPO}/actions/runs/$1"
+          }
+          e2e_watched_run_urls() {
+            local id urls=""
+            for id in ${E2E_WATCHED_RUN_IDS}; do urls+=" https://github.com/${TEST_REPO}/actions/runs/${id}"; done
+            [ -z "$urls" ] || printf ' (watched runs:%s)' "$urls"
+          }
+
+          # Progress counter (issue #7968). Counts only THIS issue's non-skipped
+          # Implement runs, with the selection and validation rules of
+          # scoped_implement_runs_complete, walking pages of the created=>
+          # window up to SCOPED_RUN_LOOKUP_MAX_PAGES and stopping at the first
+          # page with a match or a short page. Run 39926633796 read one
+          # unscoped 50-run page, never saw its Implement run, and timed out
+          # instead of reporting implement_failed. An unreadable or malformed
+          # page leaves the totals at 0 / unknown, as the old fallback did.
+          scoped_implement_progress_counts() {
+            local progress_page=1
+            local progress_json=""
+            local progress_summary=""
+            local progress_count=0
+            local progress_page_matches=0
+            local progress_matches="[]"
+            IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"; IMPL_RUN_ID_WORKING=""
+            while [ "$progress_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
+              progress_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${progress_page}&created=>${IMPL_CREATED_AFTER}") || return 1
+              progress_summary=$(printf '%s' "$progress_json" | jq -sce --arg title "$ISSUE_TITLE" '
+                if length != 1 or (.[0].workflow_runs | type) != "array" or (.[0].workflow_runs | length) > 100 then error("invalid runs page") else .[0].workflow_runs end
+                | {count: length, matches: [.[] | select((.name | type) == "string" and (.name | test("Implement"; "i"))) | select(.display_title == $title) | select(.conclusion != "skipped")]}
+                | if all(.matches[]; (.id | type == "number" and . > 0 and floor == .) and
+                    (.status | type == "string" and IN("queued", "in_progress", "completed", "requested", "waiting", "pending")) and
+                    (if .status == "completed" then (.conclusion | IN("success", "failure", "cancelled", "timed_out", "action_required", "neutral", "stale", "startup_failure")) else .conclusion == null end))
+                  then . else error("invalid matching Implement run") end
+              ' 2>/dev/null) || return 1
+              progress_count=$(printf '%s' "$progress_summary" | jq -r '.count') || return 1
+              progress_page_matches=$(printf '%s' "$progress_summary" | jq -r '.matches | length') || return 1
+              if [ "$progress_page_matches" -gt 0 ]; then
+                progress_matches=$(printf '%s' "$progress_summary" | jq -c '.matches') || return 1
+                break
+              fi
+              if [ "$progress_count" -lt 100 ]; then
+                break
+              fi
+              progress_page=$((progress_page + 1))
+            done
+            IMPL_RUN_TOTAL=$(printf '%s' "$progress_matches" | jq -r 'length') || IMPL_RUN_TOTAL="0"
+            IMPL_RUN_IN_PROGRESS=$(printf '%s' "$progress_matches" | jq -r '[.[] | select(.status != "completed")] | length') || IMPL_RUN_IN_PROGRESS="0"
+            IMPL_RUN_STATUS=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .status // "unknown"') || IMPL_RUN_STATUS="unknown"
+            IMPL_RUN_ID_LATEST=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .id // empty') || IMPL_RUN_ID_LATEST=""
+            # Watch the newest in_progress run: a peer held pending by the
+            # ai-implement-<repo>-<issue> concurrency group has no jobs and hid
+            # the working run's steps (run 40608957733, issue #8241).
+            IMPL_RUN_ID_WORKING=$(printf '%s' "$progress_matches" | jq -r '[.[] | select(.status == "in_progress")] | sort_by(.created_at) | last | .id // empty') || IMPL_RUN_ID_WORKING=""
+            # The matching page held only a pending/queued run and was full, so
+            # the older in_progress run may sit on a later page. Look for it
+            # there (bounded by the page cap); counts stay from the first page,
+            # and a failed read keeps the latest-run fallback.
+            if [ -z "$IMPL_RUN_ID_WORKING" ] && [ "$IMPL_RUN_IN_PROGRESS" != "0" ] && [ "$progress_count" -ge 100 ]; then
+              local working_page=$((progress_page + 1))
+              local working_json=""
+              local working_found=""
+              while [ "$working_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
+                working_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${working_page}&created=>${IMPL_CREATED_AFTER}") || break
+                working_found=$(printf '%s' "$working_json" | jq -sre --arg title "$ISSUE_TITLE" '
+                  if length != 1 or (.[0].workflow_runs | type) != "array" then error("invalid runs page") else .[0].workflow_runs end
+                  | {count: length, id: ([.[] | select((.name | type) == "string" and (.name | test("Implement"; "i"))) | select(.display_title == $title) | select(.status == "in_progress") | select(.id | type == "number" and . > 0 and floor == .)] | sort_by(.created_at) | last | .id // "")}
+                  | "\(.count) \(.id)"
+                ' 2>/dev/null) || break
+                if [ -n "${working_found#* }" ]; then
+                  IMPL_RUN_ID_WORKING="${working_found#* }"
+                  break
+                fi
+                if [ "${working_found%% *}" -lt 100 ]; then
+                  break
+                fi
+                working_page=$((working_page + 1))
+              done
+            fi
+            if [ -z "$IMPL_RUN_ID_WORKING" ]; then IMPL_RUN_ID_WORKING="$IMPL_RUN_ID_LATEST"; fi
+            IMPL_RUN_CONCLUSION_LATEST=$(printf '%s' "$progress_matches" | jq -r 'sort_by(.created_at) | last | .conclusion // "unknown"') || IMPL_RUN_CONCLUSION_LATEST="unknown"
+            return 0
+          }
+
+          IMPL_PREV_LABELS=""
+          # The counter can read up to SCOPED_RUN_LOOKUP_MAX_PAGES pages, so it
+          # re-reads at most every 30s and the last counts are reused in between.
+          IMPL_PROGRESS_NEXT_READ=0
           while true; do
             NOW=$(date +%s)
             IDLE=$((NOW - LAST_ACTIVITY))
@@ -1400,21 +1655,45 @@ jobs:
             LABELS=$(gh_api_safe_print "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' || echo "")
 
-            # Fetch all implement runs once and extract metrics from the response
-            IMPL_RUNS_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=50&created=>${IMPL_CREATED_AFTER}" || echo "")
-            if [ -n "$IMPL_RUNS_JSON" ]; then
-              IMPL_RUN_TOTAL=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | length' 2>/dev/null || echo "0")
-              IMPL_RUN_IN_PROGRESS=$(echo "$IMPL_RUNS_JSON" | jq '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped") | select(.status != "completed")] | length' 2>/dev/null || echo "0")
-              IMPL_RUN_STATUS=$(echo "$IMPL_RUNS_JSON" | jq -r '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .status // "unknown"' 2>/dev/null || echo "unknown")
-              IMPL_RUN_ID_LATEST=$(echo "$IMPL_RUNS_JSON" | jq -r '[.workflow_runs[] | select(.name | test("Implement"; "i")) | select(.conclusion != "skipped")] | sort_by(.created_at) | last | .id // empty' 2>/dev/null || echo "")
-            else
-              IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""
+            # Name the run when the issue goes back to awaiting approval, so a
+            # skipped or failed implement run is visible in this log.
+            IMPL_RETURNED_TO_APPROVAL=false
+            if [[ ",${IMPL_PREV_LABELS}," == *",ai:implementing,"* ]] && [[ ",${LABELS}," == *",ai:awaiting-approval,"* ]] && [[ ",${LABELS}," != *",ai:implementing,"* ]]; then
+              IMPL_RETURNED_TO_APPROVAL=true
+            fi
+
+            # Count this issue's Implement runs across pages (issue #7968). The
+            # return to awaiting approval forces a fresh read, so its log line
+            # does not print counts cached up to 30s earlier.
+            if [ "$IMPL_RETURNED_TO_APPROVAL" = true ] || [ "$NOW" -ge "$IMPL_PROGRESS_NEXT_READ" ]; then
+              IMPL_PROGRESS_NEXT_READ=$((NOW + 30))
+              if ! scoped_implement_progress_counts; then
+                IMPL_RUN_TOTAL="0"; IMPL_RUN_IN_PROGRESS="0"; IMPL_RUN_STATUS="unknown"; IMPL_RUN_ID_LATEST=""; IMPL_RUN_CONCLUSION_LATEST="unknown"; IMPL_RUN_ID_WORKING=""
+              fi
+            fi
+
+            e2e_note_watched_run "${IMPL_RUN_ID_LATEST:-}" Implement
+            e2e_note_watched_run "${IMPL_RUN_ID_WORKING:-}" Implement
+
+            if [ "$IMPL_RETURNED_TO_APPROVAL" = true ]; then
+              echo "  ↩ Issue #${ISSUE_NUMBER} returned to ai:awaiting-approval — latest scoped Implement run: id=${IMPL_RUN_ID_LATEST:-unknown} status=${IMPL_RUN_STATUS} conclusion=${IMPL_RUN_CONCLUSION_LATEST}"
+            fi
+            # A failed label read returns "" and must not erase the last observation.
+            if [ -n "$LABELS" ]; then
+              IMPL_PREV_LABELS="$LABELS"
+            fi
+
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Implement phase paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
             fi
 
             # ── Adaptive signals: step name + commit count ──
             IMPL_STEP_NAME=""
-            if [ -n "$IMPL_RUN_ID_LATEST" ]; then
-              IMPL_STEP_NAME=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs/${IMPL_RUN_ID_LATEST}/jobs?per_page=10" \
+            if [ -n "$IMPL_RUN_ID_WORKING" ]; then
+              IMPL_STEP_NAME=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs/${IMPL_RUN_ID_WORKING}/jobs?per_page=10" \
                 --jq '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' || echo "")
             fi
 
@@ -1422,7 +1701,7 @@ jobs:
             COMMIT_COUNT=$(gh_api_safe_print "repos/${TEST_REPO}/commits?sha=${IMPL_BRANCH}&per_page=1" \
               --jq '.[0].sha // ""' || echo "")
 
-            CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT}"
+            CUR_STATE="labels=${LABELS};impl_run=${IMPL_RUN_STATUS};total=${IMPL_RUN_TOTAL};active=${IMPL_RUN_IN_PROGRESS};step=${IMPL_STEP_NAME};head=${COMMIT_COUNT};working=${IMPL_RUN_ID_WORKING}"
 
             # Reset inactivity timer on any state change
             if [ "$CUR_STATE" != "$PREV_STATE" ]; then
@@ -1472,7 +1751,8 @@ jobs:
                     continue
                   fi
                   if scoped_implement_runs_complete; then
-                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})"
+                    e2e_note_watched_run "${SCOPED_IMPL_RUN_ID:-}" Implement
+                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})$(e2e_watched_run_urls)"
                     echo "status=implement_failed" >> "$GITHUB_OUTPUT"
                     exit 1
                   fi
@@ -1487,15 +1767,26 @@ jobs:
               echo "  ⏳ All ${IMPL_RUN_TOTAL} implement run(s) completed but grace period active (${ELAPSED_SECS}s/${MIN_GRACE_SECONDS}s) — waiting for /approved-triggered run to start"
             fi
 
-            # Inactivity timeout
-            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
-              echo "::error::Implement phase stalled — no activity for ${PHASE_TIMEOUT} minutes"
+            e2e_note_watched_run "${SCOPED_IMPL_RUN_ID:-}" Implement
+            e2e_note_watched_run "${SCOPED_IMPL_ACTIVE_ID:-}" Implement
+
+            # Inactivity timeout (extended while the pre-push gate step runs)
+            EFFECTIVE_LIMIT=$INACTIVITY_LIMIT
+            EFFECTIVE_LIMIT_MINUTES=$PHASE_TIMEOUT
+            LIMIT_SUFFIX=""
+            if [ "$IMPL_STEP_NAME" = "$PREPUSH_GATE_STEP_NAME" ] && [ "$PREPUSH_GATE_STALL_LIMIT" -gt "$INACTIVITY_LIMIT" ]; then
+              EFFECTIVE_LIMIT=$PREPUSH_GATE_STALL_LIMIT
+              EFFECTIVE_LIMIT_MINUTES=$PREPUSH_GATE_STEP_STALL_MINUTES
+              LIMIT_SUFFIX=" (pre-push gate step: limit ${PREPUSH_GATE_STEP_STALL_MINUTES}m)"
+            fi
+            if [ "$IDLE" -ge "$EFFECTIVE_LIMIT" ]; then
+              echo "::error::Implement phase stalled — no activity for ${EFFECTIVE_LIMIT_MINUTES} minutes${LIMIT_SUFFIX}$(e2e_watched_run_urls)"
               echo "status=timeout" >> "$GITHUB_OUTPUT"
               exit 1
             fi
 
-            REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
-            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — impl_runs: ${IMPL_RUN_TOTAL} total, ${IMPL_RUN_IN_PROGRESS} active, latest: ${IMPL_RUN_STATUS}, labels: ${LABELS:-none}"
+            REMAINING=$(( (EFFECTIVE_LIMIT - IDLE + 59) / 60 ))
+            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — impl_runs: ${IMPL_RUN_TOTAL} total, ${IMPL_RUN_IN_PROGRESS} active, latest: ${IMPL_RUN_STATUS}, labels: ${LABELS:-none}${LIMIT_SUFFIX}"
             sleep "$POLL_INTERVAL"
           done
 
@@ -1634,7 +1925,7 @@ jobs:
 
           echo "Fetching current canary blob on branch ${BRANCH}..."
           # The implementer should have set the canary to exactly 3 lines.
-          # We fetch its SHA + decoded content so we can PUT a 4-line
+          # We fetch its SHA so we can PUT a 4-line
           # version that adds one removable bait line at the end.
           BLOB_JSON=$(gh api "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" 2>/dev/null || echo "")
           if [ -z "${BLOB_JSON}" ] || [ "${BLOB_JSON}" = "null" ]; then
@@ -1644,7 +1935,6 @@ jobs:
           fi
 
           BLOB_SHA=$(echo "${BLOB_JSON}" | jq -r '.sha // empty')
-          BLOB_CONTENT=$(echo "${BLOB_JSON}" | jq -r '.content // empty' | tr -d '\n' | base64 -d 2>/dev/null || echo "")
           if ! [[ "${BLOB_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::warning::Canary blob has no valid 40-hex SHA — skipping bait injection"
             echo "status=skipped" >> "$GITHUB_OUTPUT"
@@ -1826,694 +2116,12 @@ jobs:
           # 21,000-char limit; this script is ~25k chars and was tripping it.
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
         run: |
-          set -euo pipefail
-          if [ -n "${BAIT_SHA:-}" ] && ! [[ "${BAIT_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Bait commit output is not a valid 40-hex SHA."
+          STABLE_E2E_STEP_SCRIPT="${RUNNER_TEMP}/stable-e2e-step-scripts/stable_e2e_step_wait_review.sh"
+          if [ "${STABLE_E2E_STEP_SCRIPTS_VERIFIED:-}" != "true" ] || [ -L "${STABLE_E2E_STEP_SCRIPT}" ] || [ ! -f "${STABLE_E2E_STEP_SCRIPT}" ]; then
+            echo "::error::Release gate step script stable_e2e_step_wait_review.sh is missing or unverified."
             exit 1
           fi
-          if [ -n "${BAIT_CREATED_AT:-}" ] \
-              && ! [[ "${BAIT_CREATED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-            echo "::error::Bait commit timestamp is not valid UTC ISO-8601."
-            exit 1
-          fi
-          echo "Waiting for review workflow on PR #${PR_NUMBER}..."
-          if [ -n "${BAIT_SHA:-}" ]; then
-            echo "Pinning to review runs with head_sha=${BAIT_SHA:0:7} (bait commit)"
-          else
-            echo "No bait SHA — using legacy latest-by-created_at filter"
-          fi
-          echo "Inactivity timeout: ${REVIEW_TIMEOUT} minutes"
-          INACTIVITY_LIMIT=$((REVIEW_TIMEOUT * 60))
-          # Per-step wall-clock cap (see REVIEW_STEP_TIMEOUT env above):
-          # a single in-progress review step may run this long before the
-          # inactivity check treats it as a stall, since GitHub does not
-          # stream in-progress step logs and the cached activity signals
-          # freeze for the step's whole duration. Fall back to 75m when the
-          # env is unset/non-numeric so the arithmetic below never errors.
-          REVIEW_STEP_TIMEOUT="${REVIEW_STEP_TIMEOUT:-75}"
-          [[ "$REVIEW_STEP_TIMEOUT" =~ ^[0-9]+$ ]] && [ "$REVIEW_STEP_TIMEOUT" -gt 0 ] || REVIEW_STEP_TIMEOUT=75
-          REVIEW_STEP_TIMEOUT_MAX=90
-          if [ "$REVIEW_STEP_TIMEOUT" -gt "$REVIEW_STEP_TIMEOUT_MAX" ]; then
-            echo "::warning::REVIEW_STEP_TIMEOUT=${REVIEW_STEP_TIMEOUT} exceeds ${REVIEW_STEP_TIMEOUT_MAX}m cap; clamping so wait-review still reports genuine stalls before the job timeout"
-            REVIEW_STEP_TIMEOUT="$REVIEW_STEP_TIMEOUT_MAX"
-          fi
-          STEP_INACTIVITY_LIMIT=$((REVIEW_STEP_TIMEOUT * 60))
-          echo "Per-step stall cap: ${REVIEW_STEP_TIMEOUT} minutes"
-          REVIEW_PHASE_WALL_BUDGET_MINUTES=$((REVIEW_STEP_TIMEOUT + REVIEW_PHASE_HANDOFF_BUDGET_MINUTES))
-          if [ "$REVIEW_TIMEOUT" -gt "$REVIEW_PHASE_WALL_BUDGET_MINUTES" ]; then
-            REVIEW_PHASE_WALL_BUDGET_MINUTES="$REVIEW_TIMEOUT"
-          fi
-          REVIEW_PHASE_STARTED_AT=$(date +%s)
-          REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))
-          echo "Review total wall-clock budget: ${REVIEW_PHASE_WALL_BUDGET_MINUTES} minutes"
-          LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
-          PREV_STATE=""
-          LAST_STEP_GUARD_RUN_ID=""
-          LAST_STEP_GUARD_NAME=""
-          LAST_STEP_GUARD_STARTED_AT=""
-          ELAPSED=0
-          RATE_LIMIT_BACKOFF=0
-          # Mutable pin tracking the head SHA the loop is currently polling
-          # against. Initialised to BAIT_SHA; advances to the new PR head
-          # whenever the pinned run reports `cancelled` AND the PR head has
-          # moved past the pin. internal-review.yml uses `cancel-in-progress:
-          # true` on a `head_ref`-keyed group, so the editor's fix-commit
-          # push fires a fresh `pull_request: synchronize` event whose
-          # successor review run cancels the bait-triggered predecessor.
-          # Without advancing the pin, the BAIT_SHA-anchored jq filter never
-          # matches the successor (its head_sha is the editor's fix SHA, not
-          # the bait SHA) and the loop polls the dead cancelled run until
-          # the 30-minute inactivity timeout fires — observed on
-          # run-25428461223 (PR #2165), where the editor pushed 8234a6e at
-          # +10m, the bait run was cancelled at +10m22s, and wait-review
-          # then idled for the full REVIEW_TIMEOUT before failing.
-          PIN_SHA="${BAIT_SHA:-}"
-          BAIT_UNCOVERED_RUN_IDS=""
-          declare -A BAIT_REVIEW_COVERAGE_CACHE=()
-          declare -A BAIT_REVIEW_UNKNOWN_COUNTS=()
-
-          . ./scripts/comprehensive_test_and_release_gh_api.sh
-
-          # The runs API reports the trigger SHA, not the SHA checked out by
-          # codex-agent. Only a completed job log can prove leg (b) coverage.
-          # Cache conclusive verdicts; an API/log failure stays retryable.
-          review_run_checked_out_bait() {
-            local coverage_run_id="$1" coverage_jobs="" coverage_job_id=""
-            local coverage_log="" coverage_checked="" coverage_status="" coverage_display="none"
-            local coverage_verdict="unknown" coverage_reason="jobs_unavailable"
-            local coverage_read=0 coverage_failed=0
-            if ! [[ "$coverage_run_id" =~ ^[0-9]+$ ]]; then
-              BAIT_REVIEW_VERDICT="unknown"
-              echo "E2E_BAIT_REVIEW_COVERAGE run=invalid verdict=unknown checked_out=none reason=invalid_run_id"
-              return
-            fi
-            if [ -n "${BAIT_REVIEW_COVERAGE_CACHE[$coverage_run_id]:-}" ]; then
-              BAIT_REVIEW_VERDICT="${BAIT_REVIEW_COVERAGE_CACHE[$coverage_run_id]}"
-              return
-            fi
-            if [ "$RUN_STATUS" = "in_progress" ] && [ -n "${JOBS_JSON:-}" ] && [ "${RUN_ID:-}" = "$coverage_run_id" ]; then
-              coverage_jobs="$JOBS_JSON"
-            else
-              coverage_jobs=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${coverage_run_id}/jobs?per_page=10" || echo "")
-            fi
-            if [ -n "$coverage_jobs" ] && printf '%s' "$coverage_jobs" | jq -e '(.jobs | type == "array") and (.jobs | length > 0) and (.total_count == null or .total_count <= (.jobs | length))' >/dev/null 2>&1; then
-              while IFS= read -r coverage_job_id; do
-                coverage_log="$(mktemp)"
-                if ! gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${coverage_job_id}/logs" > "$coverage_log"; then
-                  coverage_failed=1
-                else
-                  coverage_read=$((coverage_read + 1))
-                  # Match only a resolved 40-hex SHA, never the echoed shell
-                  # source line containing a literal ${INITIAL_HEAD_SHA}.
-                  coverage_checked=$(grep -am1 -oE 'Captured INITIAL_HEAD_SHA=[0-9a-fA-F]{40}([^0-9a-fA-F]|$)' "$coverage_log" | grep -m1 -oE '[0-9a-fA-F]{40}' || true)
-                fi
-                rm -f "$coverage_log"
-                if [ -n "$coverage_checked" ]; then break; fi
-              done < <(printf '%s' "$coverage_jobs" | jq -r '.jobs[] | select(.status == "completed" and .conclusion != "skipped") | .id | select(type == "number" and . > 0 and . == floor) | tostring')
-              if [ -n "$coverage_checked" ]; then
-                if [ "${coverage_checked,,}" = "${BAIT_SHA,,}" ]; then
-                  coverage_verdict="covered"; coverage_reason="bait_sha"
-                else
-                  coverage_status=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/compare/${BAIT_SHA}...${coverage_checked}" --jq '.status' || echo "")
-                  case "$coverage_status" in
-                    ahead|identical) coverage_verdict="covered"; coverage_reason="bait_ancestor" ;;
-                    behind|diverged) coverage_verdict="not_covered"; coverage_reason="pre_bait_checkout" ;;
-                    *) coverage_reason="compare_unavailable" ;;
-                  esac
-                fi
-              elif [ "$coverage_failed" -eq 1 ] || [ "$coverage_read" -eq 0 ]; then
-                coverage_reason="logs_unavailable"
-              elif [ "$RUN_STATUS" = "completed" ]; then
-                coverage_verdict="not_covered"; coverage_reason="no_checkout_marker"
-              else
-                coverage_reason="checkout_pending"
-              fi
-            fi
-            BAIT_REVIEW_VERDICT="$coverage_verdict"
-            if [ "$coverage_verdict" != "unknown" ]; then
-              BAIT_REVIEW_COVERAGE_CACHE[$coverage_run_id]="$coverage_verdict"
-            fi
-            if [ -n "$coverage_checked" ]; then coverage_display="${coverage_checked:0:7}"; fi
-            echo "E2E_BAIT_REVIEW_COVERAGE run=${coverage_run_id} verdict=${coverage_verdict} checked_out=${coverage_display} reason=${coverage_reason}"
-          }
-
-          # A completed pre-bait-triggered run may finish after bait injection
-          # without ever checking out bait (run 37395952357). Apply this gate
-          # before *every* exit that reports a review run, including the
-          # in-progress failed-step and editor-noop shortcuts.
-          require_bait_review_coverage() {
-            local candidate_head=""
-            if [ -z "${BAIT_SHA:-}" ]; then return 0; fi
-            candidate_head=$(printf '%s' "$REVIEW_RUN" | jq -r '.head_sha // ""')
-            if [ "$candidate_head" = "$PIN_SHA" ] || [ "$candidate_head" = "$BAIT_SHA" ]; then return 0; fi
-            review_run_checked_out_bait "$RUN_ID"
-            if [ "$BAIT_REVIEW_VERDICT" = "covered" ]; then return 0; fi
-            if [ "$BAIT_REVIEW_VERDICT" = "not_covered" ]; then
-              echo "::warning::Review run ${RUN_ID} checked out a pre-bait head or had no checkout marker; not a review of the bait"
-              BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
-              LAST_ACTIVITY=$NOW
-              PREV_STATE=""
-            elif [ "$RUN_STATUS" = "completed" ]; then
-              # A completed run outranks the queued bait-head run in the
-              # selector, so persistently unverifiable coverage must not pin
-              # Phase 4 to it. Exclude it (never accept it) after 3 unknowns.
-              BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]=$(( ${BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]:-0} + 1 ))
-              if [ "${BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]}" -ge 3 ]; then
-                echo "::warning::Review run ${RUN_ID} bait coverage stayed unverifiable; waiting for a bait-head review instead"
-                BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
-                PREV_STATE=""
-              fi
-            fi
-            sleep "$POLL_INTERVAL"
-            ELAPSED=$((ELAPSED + POLL_INTERVAL))
-            return 1
-          }
-
-          # Give the review workflow a moment to start
-          sleep 5
-
-          while true; do
-            NOW=$(date +%s)
-            IDLE=$((NOW - LAST_ACTIVITY))
-            if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then
-              echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget"
-              echo "status=timeout" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-
-            # Find the review workflow run for this PR's head branch
-            PR_BRANCH="ai/issue-${ISSUE_NUMBER}"
-
-            # Look for workflow runs on this branch.
-            # When BAIT_SHA is set the filter pins to head_sha == BAIT_SHA
-            # so the wait loop cannot mistake a stale implement-phase
-            # review run (head_sha = the implement commit, not the bait
-            # commit) for a bait-triggered run. per_page is widened to
-            # 100 because a doc-only PR's head can carry several extra
-            # workflow runs (CI, Internal: AI Review & Autofix, …) and
-            # the bait-triggered run could get crowded out of a small
-            # page. Falls back to the legacy latest-by-created_at filter
-            # only when the bait-injection step did not produce a SHA
-            # (status=skipped path).
-            #
-            # The URL no longer pins event=pull_request: Phase 3c also
-            # dispatches ${REVIEW_WORKFLOW_FILE} as a Bug B fallback, and
-            # those runs carry event=workflow_dispatch. Dropping the
-            # event filter from the URL lets head_sha=BAIT_SHA match
-            # both paths uniformly. (We still rely on the jq name match
-            # to avoid latching onto e.g. CI runs that happen to share
-            # the bait SHA.) The dispatched run's head_sha matches
-            # BAIT_SHA because we dispatch with --ref "${BRANCH}" and
-            # GitHub records the ref's tip SHA at dispatch time.
-            #
-            # GitHub's "Running Copilot Code Review" run is excluded
-            # (event == "dynamic" / name contains "copilot"): it is a
-            # code-REVIEW agent, not the review-AND-AUTOFIX workflow, yet
-            # its name matches the broad `Review` token above. On v1.19.0
-            # (run 27926259717) the Copilot run (head=pre-bait SHA,
-            # created 02:56:26, updated 02:58:40) straddled the bait
-            # timestamp (02:58:37) so leg (b)'s created<=bait<=updated
-            # window admitted it; tier-1 preference then picked that
-            # already-completed Copilot success over the still-in-progress
-            # real autofix run, so Phase 4 declared success ~6s in and
-            # Phase 4b then failed on the unrestored canary. Excluding the
-            # Copilot reviewer keeps the loop watching the actual
-            # internal-review.yml / review_autofix.yml run instead.
-            #
-            # `self-healing` is part of the regex because review_autofix.yml
-            # ("Codex PR Self-Healing Semantic Agent") is dispatched directly
-            # by its own post_commit_retrigger after the editor commits the
-            # fix — that engine run is the canonical successor at PIN_SHA on
-            # repos where review_autofix.yml exists locally (coding-workflows
-            # itself, plus consumer repos that copy/sync it). Without this
-            # token the engine's name does not match `Review|review|autofix`,
-            # so the wait loop never sees the post-commit successor run and
-            # ages out at REVIEW_TIMEOUT — observed on run-25445414047 where
-            # PIN_SHA advanced to the editor commit but the engine
-            # workflow_dispatch run at that SHA was filtered out and the
-            # poll timed out 30m later.
-            if [ -n "${PIN_SHA:-}" ]; then
-              # Candidate set ($m): name-matched review runs that EITHER
-              #   (a) carry head_sha == PIN_SHA — the Phase 3c
-              #       workflow_dispatch fallback and the bait
-              #       pull_request:synchronize run; OR
-              #   (b) were in flight when the bait commit landed:
-              #       created_at <= BAIT_CREATED_AT AND the run is still
-              #       active — either updated_at >= BAIT_CREATED_AT OR
-              #       status == "in_progress".
-              # Leg (b) recovers the original PR-open review run: it is
-              # triggered on the pre-bait head SHA (so its run-level
-              # head_sha never equals BAIT_SHA and leg (a) misses it),
-              # but its checkout may predate the bait push. Before
-              # accepting its result, verify Captured INITIAL_HEAD_SHA
-              # from its job log includes the bait (run 37395952357).
-              # Crucially,
-              # the bait-SHA runs in leg (a) all serialise behind that
-              # original run in review_autofix.yml's `pr-autofix-${PR}`
-              # concurrency group (cancel-in-progress: false), so when
-              # the original review runs long they stay queued/pending
-              # past REVIEW_TIMEOUT and the loop, pinned to a 0-activity
-              # pending sibling, ages out — the failure on runs
-              # 27137020958 / 27244093614 / 27328808462 (v1.17.0). Leg (b)
-              # lets the loop watch the actually-running review instead;
-              # its growing job log registers as activity each poll and
-              # resets the inactivity timer until it completes.
-              # The BAIT_CREATED_AT guard (!= "") keeps leg (b) inert
-              # when no bait was injected.
-              #
-              # The `or .status == "in_progress"` half is load-bearing:
-              # the original updated_at >= BAIT_CREATED_AT bound alone
-              # produced a FALSE NEGATIVE on run 27328808462. There the
-              # PR-open review's codex-agent job started ~2m BEFORE the
-              # bait and then ran a single ~37m job with no further
-              # run-level state transitions, so the runs-list API reported
-              # its `updated_at` frozen at the pre-bait job-start time
-              # (< BAIT_CREATED_AT) for the whole 30m window. The bound
-              # therefore rejected the very run leg (b) exists to catch,
-              # the loop fell through to the queued-sibling fallback, and
-              # the phase aged out. A run created at/before the bait that
-              # is STILL in_progress was necessarily in flight when the
-              # bait landed (it has not finished), so status alone is a
-              # sound candidate signal independent of the frozen timestamp,
-              # but never proof that the checkout saw the bait.
-              #
-              # Both legs still exclude the historical stale-implement-
-              # review false match (run 25147636528) which COMPLETED
-              # before the bait: a completed run is neither updated_at >=
-              # BAIT_CREATED_AT (it stopped before the bait) nor
-              # status == "in_progress".
-              #
-              # Preference order over $m:
-              #   1. newest completed non-cancelled run (terminal accept);
-              #   2. oldest in_progress run created at/before the bait —
-              #      this is the original long-running PR-open review
-              #      (in flight when the bait landed), and it must win
-              #      over a newer caller workflow run that is merely
-              #      blocked behind it. (No updated_at bound here: see
-              #      the run 27328808462 frozen-timestamp note above.)
-              #   3. newest in_progress run (generic active-run fallback);
-              #   4. newest non-cancelled run (queued/pending fallback);
-              #   5. newest run overall (all cancelled).
-              # Tier 1 still precedes 2 so an already-completed success
-              # wins over an active sibling (preserves the run-26989483268
-              # fix).
-              #
-              # select(.name != .path) drops phantom "workflow file issue"
-              # runs. GitHub names a run after its file path only when it
-              # cannot load the workflow (e.g. a file over the 512,000-byte
-              # limit), since every workflow here and in workflow-templates/
-              # sets name:. Such a zero-job run on the pinned head_sha
-              # matched the name regex and was accepted instantly as
-              # "completed with failure" before any editor ran (stable gate
-              # run 35903885958, phantom .github/workflows/review_autofix.yml
-              # runs after #4327).
-              REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.name != .path) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\"))) | select((.id | tostring) as \$rid | (\"${BAIT_UNCOVERED_RUN_IDS:-}\" | split(\",\") | index(\$rid)) == null)] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
-            else
-              REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
-                --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i")) | select((.event == "dynamic" or (.name | test("copilot"; "i"))) | not) | select(.name != .path)] | sort_by(.created_at) | last' || echo "")
-            fi
-
-            # If rate-limited, skip this cycle entirely (don't corrupt state)
-            if [ "$RATE_LIMIT_BACKOFF" -gt 0 ] && [ -z "$REVIEW_RUN" ]; then
-              ELAPSED=$((ELAPSED + POLL_INTERVAL))
-              continue
-            fi
-
-            RUN_STATUS="none"
-            RUN_CONCLUSION="null"
-            RUN_ID="unknown"
-            FAILED_STEPS="0"
-
-            if [ -n "$REVIEW_RUN" ] && [ "$REVIEW_RUN" != "null" ]; then
-              RUN_STATUS=$(echo "$REVIEW_RUN" | jq -r '.status // "unknown"')
-              RUN_CONCLUSION=$(echo "$REVIEW_RUN" | jq -r '.conclusion // "null"')
-              RUN_ID=$(echo "$REVIEW_RUN" | jq -r '.id // "unknown"')
-
-              echo "  Review run #${RUN_ID}: status=${RUN_STATUS}, conclusion=${RUN_CONCLUSION}"
-
-              if [ "$RUN_STATUS" = "completed" ]; then
-                if [ "$RUN_CONCLUSION" = "success" ]; then
-                  if ! require_bait_review_coverage; then continue; fi
-                  echo "✓ Review & autofix completed successfully"
-                  echo "status=success" >> "$GITHUB_OUTPUT"
-                  echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-                  exit 0
-                elif [ "$RUN_CONCLUSION" = "failure" ]; then
-                  if ! require_bait_review_coverage; then continue; fi
-                  echo "::warning::Review workflow completed with failure — this may be acceptable if reviewers found issues"
-                  echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
-                  echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-                  exit 0
-                elif [ "$RUN_CONCLUSION" = "cancelled" ]; then
-                  echo "Review run was cancelled — checking for newer run..."
-                  # internal-review.yml's concurrency group is keyed on
-                  # `head_ref` with `cancel-in-progress: true`, so the
-                  # autofix editor pushing a fix commit fires a fresh
-                  # `pull_request: synchronize` event whose successor run
-                  # cancels this one. When that happens the PR head has
-                  # already moved past the pin, and the successor's
-                  # head_sha equals the new PR head — advance the pin so
-                  # the next iteration latches onto the successor instead
-                  # of polling this dead run forever (the failure mode on
-                  # run-25428461223). Reset the activity timer because
-                  # the pivot itself is meaningful progress.
-                  PIN_HEAD_NOW=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' || echo "")
-                  if [ -n "${PIN_HEAD_NOW}" ] && ! [[ "${PIN_HEAD_NOW}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-                    echo "::error::PR head API response is not a valid 40-hex SHA."
-                    exit 1
-                  fi
-                  if [ -n "${PIN_SHA:-}" ] && [ -n "${PIN_HEAD_NOW}" ] && [ "${PIN_HEAD_NOW}" != "${PIN_SHA}" ]; then
-                    echo "  ↪ PR head advanced past pin (${PIN_SHA:0:7} → ${PIN_HEAD_NOW:0:7}); advancing pin and polling successor run next iteration"
-                    PIN_SHA="${PIN_HEAD_NOW}"
-                    LAST_ACTIVITY=$NOW
-                    PREV_STATE=""
-                    sleep "$POLL_INTERVAL"
-                    ELAPSED=$((ELAPSED + POLL_INTERVAL))
-                    continue
-                  fi
-                fi
-              fi
-
-              # While the run is still in_progress, probe job steps to detect
-              # early failure. The review workflow uses if:always() cleanup steps
-              # that keep the run in_progress long after the main work has died.
-              if [ "$RUN_STATUS" = "in_progress" ] && [ "$RUN_ID" != "unknown" ]; then
-                # Fetch jobs once and reuse for failed-steps check, current step, and log size
-                JOBS_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
-                if [ -n "$JOBS_JSON" ]; then
-                  FAILED_STEPS=$(echo "$JOBS_JSON" | jq '[.jobs[].steps[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
-                else
-                  FAILED_STEPS="0"
-                fi
-                if [ "$FAILED_STEPS" -gt 0 ]; then
-                  if ! require_bait_review_coverage; then continue; fi
-                  echo "  ⚠ Review run has ${FAILED_STEPS} failed step(s) — main work has failed, cleanup still running"
-                  echo "::warning::Review workflow has failed steps while cleanup is still in_progress"
-                  echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
-                  echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-                  exit 0
-                fi
-
-                # Check live logs for reviewer progress
-                # and for the editor-noop fallback marker (early-exit shortcut).
-                # Both are gated behind ELAPSED >= 600 so we only pay the live-
-                # log API cost after the editor step is plausibly running —
-                # reviewers + editor together take well over 10 minutes in
-                # every observed run, so anything earlier is wasted I/O.
-                if [ "$ELAPSED" -ge 600 ]; then
-                  # Select the job that actually runs the reviewer/editor
-                  # LLM steps, NOT `.jobs[0]`. When the review run comes
-                  # from the wrapper workflow (internal-review.yml calling
-                  # review_autofix.yml — the default REVIEW_WORKFLOW_FILE),
-                  # the run carries several jobs and jobs[0] by creation
-                  # order is `review / gate`, a ~4s gate job whose log can
-                  # never contain the editor-noop annotation or the
-                  # "Reviewer … succeeded" counter lines — on v1.27.0 run
-                  # 32824674139 every live-log probe hit the gate job
-                  # (97733868951) while `review / codex-agent`
-                  # (97733894241) did the actual work, so both shortcuts
-                  # were permanently inert. Prefer the codex-agent job by
-                  # exact name/path component plus any parenthesized suffix
-                  # (a job rename is a breaking change per CLAUDE.md §6,
-                  # so the literal is safe), then any in-progress job, then
-                  # jobs[0] as the legacy single-job fallback.
-                  JOB_ID=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("(^| / )codex-agent( \\([^)]*\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
-                  if [ -n "$JOB_ID" ]; then
-                    # Stream the job log to a tempfile rather than capturing
-                    # into a shell variable. `gh_api_safe .../actions/jobs/
-                    # {id}/logs` returns the raw log bytes (multi-MB on long
-                    # autofix runs) and bash command-substitution `$(...)`
-                    # silently drops NUL bytes from the captured output —
-                    # which can occur when an inner tool (codex, jq, gh)
-                    # emits binary content into stderr/stdout. Dropped NULs
-                    # could merge adjacent lines and cause both the editor-
-                    # noop grep and the reviewer-success counter to silently
-                    # miss otherwise-valid matches. Writing once to a
-                    # tempfile and grepping the file is byte-exact and uses
-                    # no more API calls than before. See PR #1798 review by
-                    # copilot-pull-request-reviewer.
-                    LOG_FILE="$(mktemp)"
-                    # On API failure (rate-limit or transient blip),
-                    # gh_api_safe writes nothing to stdout and returns
-                    # non-zero. Truncate LOG_FILE to zero bytes so the
-                    # downstream greps see "no matches" rather than
-                    # stale content from a previous iteration's mktemp
-                    # collision (mktemp returns a fresh path so this is
-                    # belt-and-braces, not strictly required). Emit a
-                    # diagnostic so operators can spot API blips without
-                    # having to correlate the missing shortcuts against
-                    # the rate-limit log lines gh_api_safe emits to
-                    # stderr — surfaces the case Grok-4.1 flagged in
-                    # the claude-branch-review on PR #1798.
-                    # Stderr is intentionally NOT redirected: gh_api_safe
-                    # writes its own rate-limit / transient-failure
-                    # diagnostics to >&2 (e.g. "⏳ Rate limited — backing
-                    # off ${RATE_LIMIT_BACKOFF}s"), and operators rely on
-                    # those lines to distinguish a genuinely-stuck review
-                    # workflow from a slow smoke run caused by API blips.
-                    if ! gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" > "$LOG_FILE"; then
-                      : > "$LOG_FILE"
-                      echo "  ⚠ Live-log fetch failed for job ${JOB_ID} — editor-noop shortcut and reviewer-count shortcut are inactive this iteration; the wait loop continues with status/conclusion polling only" >&2
-                    fi
-
-                    # Editor-noop fallback marker shortcut.
-                    #
-                    # When `Validate editor no-op disposition` in
-                    # review_autofix.yml emits the literal warning
-                    # "Editor summary contains failure/fallback markers",
-                    # the editor never produced a validated summary and the
-                    # downstream merge-conflict / resolver / push steps
-                    # (now gated on EDITOR_NOOP_SUSPICIOUS != 'true') will
-                    # all skip — there is nothing left for the e2e bait
-                    # check to verify, so we can short-circuit the wait
-                    # loop the moment the marker appears in the live log
-                    # rather than waiting for the cleanup steps to wind
-                    # down (which can take another ~3.5 minutes and was
-                    # the proximate cause of the run-25126757724 cascade
-                    # masking the real editor failure).
-                    #
-                    # `grep -qaF` for an exact substring match — the
-                    # annotation text is stable per analysis/e2e-smoke-
-                    # failure-25126757724.md (a rename in
-                    # review_autofix.yml is a breaking change per
-                    # CLAUDE.md §6, so this literal is safe to depend on).
-                    # The `-a` flag forces grep to treat the input as text
-                    # even if a NUL byte in the streamed log would
-                    # otherwise make grep classify it as binary and
-                    # short-circuit to "Binary file ... matches" without
-                    # honouring `-q`'s quiet exit-code-only contract; do
-                    # not drop `-a` when editing this block.
-                    #
-                    # The `::warning::` prefix is part of the literal so
-                    # this only matches the validator's annotation, not
-                    # any other log line that happens to mention the
-                    # phrase (e.g. the in-step retry's own `::notice::`
-                    # before its widened gate fix landed — see PR #1798
-                    # review). The validator emits exactly this prefix
-                    # (`echo "::warning::Editor summary contains
-                    # failure/fallback markers — editor never completed
-                    # a validated review."`); GitHub Actions preserves
-                    # workflow-command prefixes verbatim in the raw log
-                    # bytes returned by /actions/jobs/{id}/logs.
-                    if grep -qaF '::warning::Editor summary contains failure/fallback markers' "$LOG_FILE"; then
-                      if ! require_bait_review_coverage; then
-                        rm -f "$LOG_FILE"
-                        continue
-                      fi
-                      # When the editor's no-op was caused by a model
-                      # safety-policy refusal (an OpenAI-style "I'm
-                      # sorry, but I cannot assist" final-channel
-                      # output), the validator additionally emits the
-                      # `::notice::Editor returned a safety-policy
-                      # refusal` annotation (review_autofix.yml,
-                      # `Validate editor no-op disposition`). Re-running
-                      # after the provider-side prompt cache expires
-                      # typically clears the trip, so the operator-facing
-                      # warning carries that hint. The generic-noop
-                      # warning literal stays unchanged for non-refusal
-                      # cases to avoid breaking any downstream grep
-                      # consumer (CLAUDE.md §6).
-                      if grep -qaF '::notice::Editor returned a safety-policy refusal' "$LOG_FILE"; then
-                        echo "  ⚠ Editor safety-refusal detected in live log — model returned a refusal; provider-side cache will serve identical refusals briefly; aborting wait early"
-                        echo "::warning::Review workflow editor refused (safety filter) — re-run after a few minutes (EDITOR_NOOP_REFUSAL marker observed); no autofix commit will be pushed"
-                      else
-                        echo "  ⚠ Editor noop marker detected in live log — editor never produced a validated commit; aborting wait early"
-                        echo "::warning::Review workflow editor produced no validated summary (EDITOR_NOOP_SUSPICIOUS marker observed); no autofix commit will be pushed"
-                      fi
-                      echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
-                      echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-                      rm -f "$LOG_FILE"
-                      exit 0
-                    fi
-
-                    # `-a` treats the input as text even if grep otherwise
-                    # heuristically classified it as binary (any NUL byte
-                    # would normally make grep fall through to "Binary file
-                    # ... matches" instead of printing/counting matches).
-                    SUCCEEDED=$(grep -caE "Reviewer .* succeeded" "$LOG_FILE" || true)
-                    FAILED_R=$(grep -caE "Reviewer .* failed after" "$LOG_FILE" || true)
-                    rm -f "$LOG_FILE"
-                    SUCCEEDED="${SUCCEEDED:-0}"; SUCCEEDED="${SUCCEEDED##*$'\n'}"
-                    FAILED_R="${FAILED_R:-0}"; FAILED_R="${FAILED_R##*$'\n'}"
-                    [[ "$SUCCEEDED" =~ ^[0-9]+$ ]] || SUCCEEDED=0
-                    [[ "$FAILED_R" =~ ^[0-9]+$ ]] || FAILED_R=0
-                    TOTAL_DONE=$((SUCCEEDED + FAILED_R))
-                    if [ "$SUCCEEDED" -ge 3 ] && [ $((SUCCEEDED * 2)) -gt "$TOTAL_DONE" ]; then
-                      echo "  ... ${SUCCEEDED}/${TOTAL_DONE} reviewers succeeded (>50%); waiting for authoritative review completion and editor verification..."
-                    elif [ "$TOTAL_DONE" -gt 0 ]; then
-                      echo "  ... ${SUCCEEDED}/${TOTAL_DONE} reviewers succeeded so far, waiting for more..."
-                    fi
-                  fi
-                fi
-              fi
-            fi
-
-            # ── Adaptive activity signals ──────────────────────────
-            # Beyond run status/conclusion, probe deeper indicators
-            # that the review workflow is genuinely making progress.
-
-            # 1) Current step name — reuse JOBS_JSON if already fetched.
-            #    Also capture the in-progress step's started_at so the
-            #    inactivity check can tell a healthy long step (whose logs
-            #    GitHub does not stream) apart from a genuinely hung run —
-            #    see the REVIEW_STEP_TIMEOUT guard below.
-            CURRENT_STEP=""
-            CURRENT_STEP_STARTED_AT=""
-            STEP_METADATA_FETCH_OK=0
-            if [ "$RUN_ID" != "unknown" ]; then
-              if [ -n "${JOBS_JSON:-}" ]; then
-                CURRENT_STEP=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
-                CURRENT_STEP_STARTED_AT=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
-                if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
-                  STEP_METADATA_FETCH_OK=1
-                fi
-              else
-                JOBS_STEP_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
-                if [ -n "$JOBS_STEP_JSON" ]; then
-                  CURRENT_STEP=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
-                  CURRENT_STEP_STARTED_AT=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
-                  if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
-                    STEP_METADATA_FETCH_OK=1
-                  fi
-                fi
-              fi
-            fi
-            if [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
-              LAST_STEP_GUARD_RUN_ID="$RUN_ID"
-              LAST_STEP_GUARD_NAME="${CURRENT_STEP:-}"
-              LAST_STEP_GUARD_STARTED_AT="$CURRENT_STEP_STARTED_AT"
-            elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ] && [ "${LAST_STEP_GUARD_RUN_ID:-}" = "$RUN_ID" ] && [ -n "${LAST_STEP_GUARD_STARTED_AT:-}" ] && { [ -z "${CURRENT_STEP:-}" ] || [ "${CURRENT_STEP}" = "${LAST_STEP_GUARD_NAME:-}" ]; }; then
-              CURRENT_STEP_STARTED_AT="$LAST_STEP_GUARD_STARTED_AT"
-              CURRENT_STEP="${CURRENT_STEP:-${LAST_STEP_GUARD_NAME:-}}"
-              echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; reusing last-seen step metadata for this poll" >&2
-            elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ]; then
-              echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; per-step stall guard is unavailable this poll" >&2
-            fi
-
-            # 2) Commit count on PR branch — editor pushes trigger changes
-            PR_HEAD_SHA=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-              --jq '.head.sha // ""' || echo "")
-
-            # 3) Review comment count on the PR
-            REVIEW_COMMENT_COUNT=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/pulls/${PR_NUMBER}/comments" \
-              --jq 'length' || echo "0")
-
-            # 4) Job log byte size — grows while reviewers/editor produce output
-            # Same job selection as the live-log shortcut block above:
-            # prefer the codex-agent job (the one producing log output),
-            # then any in-progress job, then jobs[0] — in wrapper runs
-            # jobs[0] is the completed `review / gate` job whose log size
-            # never changes, which starved this activity signal on run
-            # 32824674139 (log_sz pinned at 0b for the whole phase).
-            LOG_SIZE="0"
-            if [ "$RUN_ID" != "unknown" ]; then
-              JOB_ID_FOR_SIZE=""
-              if [ -n "${JOBS_JSON:-}" ]; then
-                JOB_ID_FOR_SIZE=$(echo "$JOBS_JSON" | jq -r '([.jobs[] | select(.name | test("(^| / )codex-agent( \\([^)]*\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' 2>/dev/null || echo "")
-              else
-                JOB_ID_FOR_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" \
-                  --jq '([.jobs[] | select(.name | test("(^| / )codex-agent( \\([^)]*\\))?$"))] | last | .id) // ([.jobs[] | select(.status == "in_progress")] | last | .id) // .jobs[0].id // empty' || echo "")
-              fi
-              if [ -n "$JOB_ID_FOR_SIZE" ]; then
-                LOG_SIZE=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${JOB_ID_FOR_SIZE}/logs" \
-                  | wc -c || echo "0")
-                LOG_SIZE="${LOG_SIZE##*$'\n'}"
-                [[ "$LOG_SIZE" =~ ^[0-9]+$ ]] || LOG_SIZE="0"
-              fi
-            fi
-
-            CUR_STATE="run=${RUN_STATUS};conclusion=${RUN_CONCLUSION};failed_steps=${FAILED_STEPS};step=${CURRENT_STEP};head=${PR_HEAD_SHA};reviews=${REVIEW_COMMENT_COUNT};log_sz=${LOG_SIZE}"
-
-            if [ "$CUR_STATE" != "$PREV_STATE" ]; then
-              if [ -n "$PREV_STATE" ]; then
-                echo "  ↻ Activity detected (state changed) — resetting inactivity timer"
-              fi
-              LAST_ACTIVITY=$NOW
-              IDLE=0
-              PREV_STATE="$CUR_STATE"
-            fi
-
-            # Inactivity timeout. When BAIT_SHA is set and the loop
-            # never matched a review run for that SHA, surface a
-            # distinct status so verify-bait-removed's failure isn't
-            # the first place the operator hears that the bait push
-            # never spawned a downstream review_autofix run. Dump the
-            # review-run inventory for the branch so the diagnosis
-            # doesn't require an out-of-band gh api call.
-            if [ $IDLE -ge $INACTIVITY_LIMIT ]; then
-              # Structural guard against GitHub not streaming in-progress
-              # step logs: when the pinned review run is still in_progress
-              # and its current step has been running for less than the
-              # per-step cap, the inactivity silence is explained by one
-              # long healthy step (e.g. "Run reviewer models", which ran
-              # 41m on v1.20.1 run 28282500673 with log_sz frozen at
-              # 52333b) rather than a genuine stall. Defer the stall check
-              # and keep polling. Once the step reaches the cap (or its
-              # timestamp cannot be trusted), execution falls through to the
-              # normal stall path below, so a truly-hung run still fails —
-              # just bounded by REVIEW_STEP_TIMEOUT instead of the global
-              # inactivity window.
-              if [ "${RUN_STATUS:-}" = "in_progress" ] && [ -n "${CURRENT_STEP_STARTED_AT:-}" ]; then
-                STEP_STARTED_EPOCH=$(date -d "${CURRENT_STEP_STARTED_AT}" +%s 2>/dev/null || echo 0)
-                if [ "$STEP_STARTED_EPOCH" -gt 0 ]; then
-                  STEP_ELAPSED=$((NOW - STEP_STARTED_EPOCH))
-                  if [ "$STEP_ELAPSED" -ge 0 ] && [ "$STEP_ELAPSED" -lt "$STEP_INACTIVITY_LIMIT" ]; then
-                    STEP_REMAINING=$(( (STEP_INACTIVITY_LIMIT - STEP_ELAPSED + 59) / 60 ))
-                    echo "  ⏳ idle ${IDLE}s ≥ ${REVIEW_TIMEOUT}m, but review run ${RUN_ID} step '${CURRENT_STEP:-?}' has only run ${STEP_ELAPSED}s (< ${REVIEW_STEP_TIMEOUT}m cap; GitHub does not stream in-progress step logs) — deferring stall check (~${STEP_REMAINING}m of step budget left)"
-                    sleep "$POLL_INTERVAL"
-                    ELAPSED=$((ELAPSED + POLL_INTERVAL))
-                    continue
-                  fi
-                else
-                  echo "  ⚠ Could not parse in-progress step started_at='${CURRENT_STEP_STARTED_AT}' for run ${RUN_ID}; per-step stall guard is unavailable this poll" >&2
-                fi
-              fi
-              # jq's `last` on an empty array yields the literal string
-              # "null" rather than empty, so both branches are needed.
-              if [ -n "${BAIT_SHA:-}" ] && { [ -z "${REVIEW_RUN:-}" ] || [ "${REVIEW_RUN}" = "null" ]; }; then
-                if [ "${PIN_SHA:-}" != "${BAIT_SHA:-}" ]; then
-                  echo "::error::Review run pin was advanced from BAIT_SHA=${BAIT_SHA} to PIN_SHA=${PIN_SHA} after a cancellation, but no successor run with head_sha=${PIN_SHA} appeared within ${REVIEW_TIMEOUT}m — the editor's fix-commit push did not produce a review_autofix run"
-                else
-                  echo "::error::No review workflow run (Internal: AI Review & Autofix) with head_sha=${BAIT_SHA} ever appeared within ${REVIEW_TIMEOUT}m — neither the bait push's pull_request:synchronize event nor the Phase 3c workflow_dispatch fallback produced a review run"
-                fi
-                echo "status=no_review_triggered" >> "$GITHUB_OUTPUT"
-                echo "Diagnostic: workflow runs visible on branch ${PR_BRANCH}:" >&2
-                gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=20" \
-                  --jq '.workflow_runs[] | "  \(.id) \(.name) event=\(.event) status=\(.status) conclusion=\(.conclusion // "null") head_sha=\(.head_sha[0:7])"' >&2 \
-                  || echo "  (inventory fetch failed)" >&2
-                exit 1
-              fi
-              echo "::error::Review phase stalled — no activity for ${REVIEW_TIMEOUT} minutes"
-              echo "status=timeout" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-
-            REMAINING=$(( (INACTIVITY_LIMIT - IDLE + 59) / 60 ))
-            echo "  ... idle ${IDLE}s (timeout in ~${REMAINING}m) — step: ${CURRENT_STEP:-?}, head: ${PR_HEAD_SHA:0:7}, reviews: ${REVIEW_COMMENT_COUNT}, log: ${LOG_SIZE}b"
-            sleep "$POLL_INTERVAL"
-            ELAPSED=$((ELAPSED + POLL_INTERVAL))
-          done
+          source "${STABLE_E2E_STEP_SCRIPT}"
 
       # Per-phase soft-error analysis: review_autofix.
       # Wait cap is bumped to 300s here because the previous single
@@ -2607,658 +2215,12 @@ jobs:
           # as one expression, capped at 21,000 chars; this body is ~21.3k.
           PRIOR_REVIEW_RUN: ${{ steps.wait-review.outputs.review_run_id }}
         run: |
-          set -euo pipefail
-          BRANCH="ai/issue-${ISSUE_NUMBER}"
-          CANARY_PATH="tests/e2e_smoke_canary.txt"
-          # The pytest test reconstructs the issue's exact 3-line target
-          # from E2E_EXPECTED_RUN_ID. Issue body at line ~347 hardcodes
-          # `run_id: ${RUN_ID}` where RUN_ID = GITHUB_RUN_ID, so the
-          # same value works on both sides.
-          export E2E_EXPECTED_RUN_ID="${GITHUB_RUN_ID}"
-          export E2E_CANARY_FILE="${RUNNER_TEMP:-/tmp}/e2e_canary_fetched.txt"
-          # Sentinel telling the test fixture this is the production
-          # invocation: missing canary env vars must fail loudly here
-          # (a configuration bug), not skip silently.
-          export E2E_PHASE_4B_INVOKED=1
-          PYTEST_OUTPUT="${RUNNER_TEMP:-/tmp}/e2e_pytest_output.txt"
-
-          # Capture pip + apt diagnostics into a tmp file so a failed
-          # install isn't silently lost. If the import probe below
-          # fails, we surface the captured log alongside the error
-          # so operators triaging pytest_unavailable can see the root
-          # cause (network error, missing package, permission, etc.)
-          # without re-running the workflow with verbose flags.
-          PYTEST_INSTALL_LOG="${RUNNER_TEMP:-/tmp}/e2e_pytest_install.log"
-          : > "${PYTEST_INSTALL_LOG}"
-          python3 -m pip install --quiet pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || {
-            echo "::warning::pip install pytest failed; trying apt fallback"
-            # Refresh package indexes before the apt install — without
-            # this a stale index on a long-running runner image can
-            # surface as a spurious pytest_unavailable. Other workflows
-            # in this repo (review_autofix.yml) precede their apt-get
-            # installs the same way.
-            sudo apt-get update -qq >>"${PYTEST_INSTALL_LOG}" 2>&1 || true
-            sudo apt-get install -y --no-install-recommends python3-pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || true
-          }
-          # Verify pytest is actually importable. Without this, a
-          # double-failure in pip+apt would later surface as a
-          # ModuleNotFoundError that looks like a test/spec mismatch
-          # rather than the infrastructure error it is.
-          if ! python3 -c "import pytest" 2>/dev/null; then
-            echo "::error::pytest is not importable after pip + apt install attempts; cannot verify canary"
-            echo "::group::pytest install diagnostics"
-            cat "${PYTEST_INSTALL_LOG}" || true
-            echo "::endgroup::"
-            echo "status=pytest_unavailable" >> "$GITHUB_OUTPUT"
+          STABLE_E2E_STEP_SCRIPT="${RUNNER_TEMP}/stable-e2e-step-scripts/stable_e2e_step_verify_bait_removed.sh"
+          if [ "${STABLE_E2E_STEP_SCRIPTS_VERIFIED:-}" != "true" ] || [ -L "${STABLE_E2E_STEP_SCRIPT}" ] || [ ! -f "${STABLE_E2E_STEP_SCRIPT}" ]; then
+            echo "::error::Release gate step script stable_e2e_step_verify_bait_removed.sh is missing or unverified."
             exit 1
           fi
-
-          # gh api wrapper with a small retry budget so a transient
-          # 429/5xx doesn't bypass the editor-flake retry budget. Used
-          # by every gh api call in this step (fetch helpers + poll
-          # loop) so ordinary blips get up to 3 attempts with 2s/4s
-          # backoff. A known rate limit instead returns 75 immediately;
-          # the poll loop can then wait within its own deadline. On final
-          # failure ALL attempts' stderr is surfaced (not just the
-          # last) so triage can spot patterns like "first 2 were
-          # rate-limited then 3rd was 5xx".
-          source scripts/gh_helpers.sh
-          GH_API_RATE_LIMIT_RESET_FILE=$(mktemp)
-          GH_API_RATE_LIMIT_PROBED=0
-          gh_api_with_retry() {
-            local out
-            local rc=0
-            local err_file
-            local response_file
-            local attempt_err
-            err_file="$(mktemp)"
-            response_file="$(mktemp)"
-            : > "${GH_API_RATE_LIMIT_RESET_FILE}"
-            for try in 1 2 3; do
-              # Tag each attempt's stderr so they're distinguishable
-              # in the final warning and append (>>) — overwriting
-              # would lose earlier diagnostics.
-              echo "--- attempt ${try} stderr ---" >> "${err_file}"
-              : > "${response_file}"
-              if gh api -i "$@" > "${response_file}" 2>>"${err_file}"; then
-                # -i supplies headers on both success and failure. Never
-                # hand headers (or a failed response body) to a caller.
-                out=$(sed '1,/^\r\{0,1\}$/d' "${response_file}")
-                rm -f "${err_file}" "${response_file}"
-                printf '%s' "${out}"
-                return 0
-              else
-                rc=$?
-              fi
-              attempt_err=$(cat "${err_file}")
-              if _is_gh_rate_limit "${attempt_err} $(cat "${response_file}")"; then
-                # _parse_reset_header uses arithmetic on Retry-After. Do
-                # not feed it an unbounded/untrusted numeric header.
-                local retry_after
-                retry_after=$(grep -im1 '^retry-after:' "${response_file}" | tr -d '\r' | cut -d: -f2- | tr -d '[:space:]' || true)
-                if [[ "${retry_after}" =~ ^[0-9]{1,9}$ ]]; then
-                  _parse_reset_header "${response_file}" > "${GH_API_RATE_LIMIT_RESET_FILE}"
-                else
-                  grep -im1 '^x-ratelimit-reset:' "${response_file}" | cut -d: -f2- | tr -d '[:space:]\r' > "${GH_API_RATE_LIMIT_RESET_FILE}" || true
-                fi
-                echo "::warning::gh api rate limited; deferring retry to the bounded wait" >&2
-                rm -f "${err_file}" "${response_file}"
-                return 75
-              fi
-              [ "${try}" -lt 3 ] && sleep $((try * 2))
-            done
-            if [ -s "${err_file}" ]; then
-              echo "::warning::gh api failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "${err_file}" | head -c 1000)" >&2
-            fi
-            rm -f "${err_file}" "${response_file}"
-            return "${rc}"
-          }
-
-          wait_for_gh_rate_limit() {
-            local limit_deadline="$1"
-            local reset_epoch
-            local now
-            local wait_secs
-            reset_epoch=$(cat "${GH_API_RATE_LIMIT_RESET_FILE}")
-            # Only probe once per step, and only when the failed response
-            # provided neither usable Retry-After nor reset epoch.
-            if ! [[ "${reset_epoch}" =~ ^[0-9]{1,12}$ ]] && [ "${GH_API_RATE_LIMIT_PROBED}" -eq 0 ]; then
-              GH_API_RATE_LIMIT_PROBED=1
-              reset_epoch=$(gh api /rate_limit --jq '.resources.core.reset // empty' 2>/dev/null) || reset_epoch=""
-            fi
-            now=$(date +%s)
-            if [ "${now}" -ge "${limit_deadline}" ]; then
-              return 1
-            fi
-            wait_secs=60  # Secondary limit with no usable reset: pause before retrying.
-            if [[ "${reset_epoch}" =~ ^[0-9]{1,12}$ ]]; then
-              wait_secs=$((10#${reset_epoch} - now + 1))
-              [ "${wait_secs}" -lt 1 ] && wait_secs=1
-            fi
-            if [ "${wait_secs}" -gt $((limit_deadline - now)) ]; then
-              wait_secs=$((limit_deadline - now))
-            fi
-            echo "::warning::GitHub rate limit; waiting ${wait_secs}s within retry deadline" >&2
-            sleep "${wait_secs}"
-            [ "$(date +%s)" -lt "${limit_deadline}" ]
-          }
-
-          fetch_canary_to_tmp() {
-            # NOTE: do NOT use `blob=$(gh api ... || echo "")` — on
-            # non-zero exit, `gh api` writes the error JSON body
-            # (e.g. `{"message":"Not Found",...}`) to stdout, which
-            # would land in $blob as a valid-looking but bogus
-            # response. gh_api_with_retry returns rc!=0 on hard
-            # failure and we further validate the .content field
-            # before trusting the response.
-            local blob_path="${RUNNER_TEMP:-/tmp}/e2e_canary_blob.json"
-            : > "${blob_path}"
-            if ! gh_api_with_retry "repos/${TEST_REPO}/contents/${CANARY_PATH}?ref=${BRANCH}" \
-                > "${blob_path}"; then
-              return 1
-            fi
-            if [ ! -s "${blob_path}" ]; then
-              return 1
-            fi
-            local content_b64
-            content_b64=$(jq -r '.content // empty' "${blob_path}")
-            if [ -z "${content_b64}" ]; then
-              return 1
-            fi
-            printf '%s' "${content_b64}" | tr -d '\n' | base64 -d > "${E2E_CANARY_FILE}" 2>/dev/null || return 1
-            return 0
-          }
-
-          # Fetch PR head SHA with the same fail-loud discipline as
-          # fetch_canary_to_tmp. Echoes the SHA on stdout, returns rc=0
-          # on success and rc=1 on any API/parse failure — callers MUST
-          # check rc and treat empty as "infrastructure error", not as
-          # "head differs from bait" (the original `|| echo ""` form
-          # silently fail-opened the no_editor_commit guard).
-          fetch_pr_head_sha() {
-            local resp_path="${RUNNER_TEMP:-/tmp}/e2e_pr_head_resp.json"
-            : > "${resp_path}"
-            if ! gh_api_with_retry "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
-                > "${resp_path}"; then
-              return 1
-            fi
-            if [ ! -s "${resp_path}" ]; then
-              return 1
-            fi
-            local sha
-            sha=$(jq -r '.head.sha // empty' "${resp_path}")
-            if ! [[ "${sha}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-              return 1
-            fi
-            printf '%s' "${sha}"
-            return 0
-          }
-
-          # Returns "open", "closed", "unknown", or "rate_limited".
-          # Used by the retry poll loop to bail out if
-          # the PR is closed/merged mid-wait — no point polling for a
-          # review run that won't fire on a closed PR.
-          fetch_pr_state() {
-            local state
-            local rc
-            state=$(gh_api_with_retry "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.state // "unknown"') || {
-              rc=$?
-              if [ "${rc}" -eq 75 ]; then
-                echo "rate_limited"
-                return 0
-              fi
-              echo "unknown"
-              return 0
-            }
-            case "${state}" in
-              open|closed) echo "${state}" ;;
-              *) echo "unknown" ;;
-            esac
-          }
-
-          run_pytest() {
-            : > "${PYTEST_OUTPUT}"
-            # Locally disable -e so a non-zero pytest exit doesn't
-            # propagate up before we can capture it. `set -e` semantics
-            # for a function called from `if !` should already exempt
-            # the body, but pipefail + the `tee` pipeline make the
-            # interaction subtle enough to be worth pinning down
-            # explicitly.
-            set +e
-            python3 -m pytest tests/test_e2e_editor_smoke_canary.py -v --no-header 2>&1 | tee "${PYTEST_OUTPUT}"
-            local rc="${PIPESTATUS[0]}"
-            set -e
-            return "${rc}"
-          }
-
-          # When pytest fails, distinguish a true editor regression
-          # (test assertion failed on canary content) from a harness/
-          # infra error (fixture exception, pytest internal error,
-          # missing dependency, runner I/O failure). pytest's own
-          # FAILED-vs-ERROR distinction is the cleanest signal:
-          #
-          #   FAILED  → the test function ran and an assertion failed
-          #             → real editor/spec bug → spec_mismatch
-          #   ERROR   → fixture / collection / setup raised before the
-          #             test body could run → harness issue
-          #   INTERNALERROR → pytest itself crashed → harness issue
-          #
-          # Anything that's neither FAILED nor a clean pass falls into
-          # the harness bucket — that catches RuntimeError from the
-          # canary_invocation fixture, ImportError on a broken Python
-          # env, OSError/PermissionError on runner I/O, pytest
-          # UsageError, and similar infra failures that should NOT
-          # blame the editor.
-          classify_pytest_failure() {
-            # Case-insensitive INTERNALERROR (-i) for forward-compat
-            # against pytest output-format tweaks. ^FAILED / ^ERROR
-            # stay case-sensitive — pytest's short-summary prefixes are
-            # documented as uppercase and matching them case-insensitively
-            # would risk false positives on user-controlled error
-            # message bodies that happen to contain "failed " or "error "
-            # at line start.
-            #
-            # ERROR is matched explicitly (rather than relying on the
-            # else fallthrough) so the classification decision is
-            # readable without having to know that pytest's setup/
-            # collection failures emit "ERROR file::test ..." in the
-            # short summary.
-            if grep -qiE "INTERNALERROR" "${PYTEST_OUTPUT}" 2>/dev/null; then
-              echo "harness_misconfigured"
-            elif grep -qE "^ERROR " "${PYTEST_OUTPUT}" 2>/dev/null; then
-              echo "harness_misconfigured"
-            elif grep -qE "^FAILED " "${PYTEST_OUTPUT}" 2>/dev/null; then
-              echo "spec_mismatch"
-            else
-              # Catch-all for unknown pytest output shapes (e.g. future
-              # format changes, pytest exiting with no FAILED/ERROR
-              # summary at all). Bias to harness_misconfigured rather
-              # than silently misclassifying as spec_mismatch.
-              echo "harness_misconfigured"
-            fi
-          }
-
-          # ── Attempt 1 ──────────────────────────────────────────────
-          echo "─── Phase 4b attempt 1: fetch + pytest ───"
-          if ! fetch_canary_to_tmp; then
-            echo "::error::Could not re-fetch ${CANARY_PATH} after review — branch may be gone"
-            echo "status=fetch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if run_pytest; then
-            echo "✓ Canary verification passed on first attempt"
-            # Confirm the editor pushed at least one commit on top of the bait.
-            if ! PR_HEAD=$(fetch_pr_head_sha); then
-              echo "::error::Could not fetch PR head SHA to verify editor commit; treating as infra failure (refusing to fail-open the no_editor_commit guard)"
-              echo "status=pr_head_fetch_failed" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
-              echo "::error::PR head is still the bait commit — editor did not push a fix commit"
-              echo "status=no_editor_commit" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            echo "✓ Editor produced commit(s) past the bait (PR head: ${PR_HEAD:0:7}, bait: ${BAIT_SHA:0:7})"
-            echo "status=success" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "::warning::Phase 4b first attempt failed — adopting or dispatching review_autofix and retrying once"
-
-          # ── Retry: adopt active work or redispatch ${REVIEW_WORKFLOW_FILE} ──
-          # Mirrors the fallback dispatch in Phase 3c's
-          # `Inject editor bait commit on PR branch` step, which uses
-          # ${REVIEW_WORKFLOW_FILE} as the public entry-point that gates into
-          # review_autofix.yml without an `[ai-autofix]` self-trigger guard.
-          #
-          # Capture the branch head SHA before discovery. An active run
-          # for either the bait or current head may already be queued by
-          # Phase 3c or pull_request:synchronize; adopting the oldest one
-          # avoids adding another run behind it in pr-autofix concurrency.
-          #
-          # `gh workflow run` is dispatched with --ref "${BRANCH}"
-          # (its documented contract is branch/tag, not raw SHA);
-          # RETRY_DISPATCH_SHA and BAIT_SHA select already-active work before
-          # dispatch. After dispatch, the branch-scoped baseline identifies
-          # the oldest new run even if the branch advanced. Once selected,
-          # one positive run id is polled directly so a newer peer cannot
-          # replace it.
-          if ! [[ "${PRIOR_REVIEW_RUN}" =~ ^[0-9]+$ ]] || [ "${PRIOR_REVIEW_RUN}" -lt 1 ]; then
-            echo "::error::wait-review.outputs.review_run_id is not a positive integer ('${PRIOR_REVIEW_RUN}'); refusing retry discovery with a no-op exclusion filter"
-            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if ! RETRY_DISPATCH_SHA=$(gh_api_with_retry "repos/${TEST_REPO}/git/refs/heads/${BRANCH}" --jq '.object.sha // empty'); then
-            echo "::error::Could not resolve ${BRANCH} head SHA before retry dispatch"
-            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if ! [[ "${RETRY_DISPATCH_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "::error::Branch head is not a valid 40-hex SHA before retry dispatch"
-            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "  resolved ${BRANCH} head for retry dispatch: ${RETRY_DISPATCH_SHA:0:7}"
-
-          RETRY_RUNS_QUERY="repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?branch=${BRANCH}&per_page=100"
-          if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
-            echo "::error::Could not discover existing review runs before retry dispatch"
-            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if ! printf '%s\n' "${RETRY_RUNS_JSON}" | jq -e '
-            type == "object" and
-            (.workflow_runs | type == "array") and
-            all(.workflow_runs[];
-              type == "object" and
-              (.id | type == "number") and .id > 0 and .id == (.id | floor) and
-              (.head_sha | type == "string") and
-              (.status | type == "string") and
-              (.created_at | type == "string") and
-              ((.conclusion == null) or (.conclusion | type == "string")))
-          ' >/dev/null 2>&1; then
-            echo "::error::Malformed review run-list payload before retry dispatch"
-            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          RETRY_BASELINE_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r '[.workflow_runs[].id] | max // 0')
-          if ! [[ "${RETRY_BASELINE_ID}" =~ ^[0-9]+$ ]]; then
-            echo "::error::Malformed review run baseline id: '${RETRY_BASELINE_ID}'"
-            echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          RETRY_ACTIVE_RUN=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -c \
-            --arg bait_sha "${BAIT_SHA}" \
-            --arg retry_sha "${RETRY_DISPATCH_SHA}" \
-            --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
-            '[.workflow_runs[]
-              | select(.id != $prior_run_id)
-              | select(.status != "completed")
-              | select(.head_sha == $bait_sha or .head_sha == $retry_sha)]
-            | sort_by(.created_at, .id)
-            | .[0] // empty')
-
-          RETRY_RUN_ID=""
-          RETRY_STATUS=""
-          RETRY_CONCL=""
-          RETRY_REGISTRATION_DEADLINE=0
-          if [ -n "${RETRY_ACTIVE_RUN}" ]; then
-            RETRY_RUN_ID=$(printf '%s\n' "${RETRY_ACTIVE_RUN}" | jq -r '.id')
-            if ! [[ "${RETRY_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${RETRY_RUN_ID}" -lt 1 ]; then
-              echo "::error::Adopted review run id is not a positive integer: '${RETRY_RUN_ID}'"
-              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            echo "✓ Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work"
-          else
-            # Same exposure as the Bug B fallback above: this retry still
-            # executes TEST_REPO's bait-branch workflow, not its default copy.
-            if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
-                --repo "${TEST_REPO}" \
-                --ref "${BRANCH}" \
-                -f pr_number="${PR_NUMBER}" >/tmp/retry_dispatch.txt 2>&1; then
-              echo "::error::Retry dispatch failed; cannot recover"
-              cat /tmp/retry_dispatch.txt >&2 || true
-              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            RETRY_REGISTRATION_DEADLINE=$(( $(date +%s) + 90 ))
-            echo "✓ Retry dispatch sent on ${BRANCH} (head ${RETRY_DISPATCH_SHA:0:7}) — registering the oldest new branch run after baseline ${RETRY_BASELINE_ID}"
-          fi
-
-          # EDITOR_RETRY_BUDGET_MINUTES defaults to 25 (was 10; raised after
-          # run 25371432937 timed out
-          # during the retry's reviewer pass — full review_autofix pipeline
-          # is 6 reviewers + consolidator + editor + conflict resolver and
-          # observed to take ~20 min wall time, so 600s reliably truncated
-          # genuine successful retries. 25 min keeps the upper bound below
-          # the orchestrator phase budget while covering the observed P95).
-          DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))
-          # Time the pinned retry run spends waiting for a runner is not
-          # editor time. Gate run 37395952357's retry run reported
-          # status=queued for about 24 of its 25 minutes and succeeded six
-          # minutes after this deadline. Queued time seen on two consecutive
-          # polls extends the deadline, never past the point that still
-          # leaves Phase 6 (PHASE_TIMEOUT), Phase 7
-          # (PHASE7_WAIT_BUDGET_MINUTES) and the finalization reserve inside
-          # E2E_JOB_TIMEOUT_MINUTES, so the serial budget checked in
-          # "Validate prerequisites" still holds. Without a recorded job
-          # start there is no extension. The cap bounds only the extension:
-          # the base deadline above is never shortened (pre-#6606 behaviour),
-          # so a Phase 4b that starts after the cap gets no extension, not a
-          # smaller budget.
-          RETRY_BASE_DEADLINE="${DEADLINE}"
-          RETRY_DEADLINE_CEILING="${DEADLINE}"
-          if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]]; then
-            RETRY_DEADLINE_CEILING=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60 ))
-            if [ "${RETRY_DEADLINE_CEILING}" -lt "${DEADLINE}" ]; then
-              RETRY_DEADLINE_CEILING="${DEADLINE}"
-            fi
-          fi
-          RETRY_QUEUED_SECS=0
-          RETRY_LAST_QUEUED_TS=""
-          # Circuit breaker: if fetch_pr_state returns "unknown" (API
-          # failure / parse failure) for too many consecutive iterations
-          # we're effectively polling blind and the closed-PR guard
-          # above is inactive. Bail out instead of burning the full
-          # 25-min retry window during a GitHub outage.
-          PR_STATE_FAILURES=0
-          PR_STATE_FAILURE_LIMIT=4  # ~60s of consecutive unknowns
-          SKIP_POLL_SLEEP=0
-          while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            if [ "${SKIP_POLL_SLEEP}" -eq 0 ]; then
-              sleep 15
-            fi
-            SKIP_POLL_SLEEP=0
-            if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
-              break
-            fi
-            if [ -z "${RETRY_RUN_ID}" ] && [ "$(date +%s)" -ge "${RETRY_REGISTRATION_DEADLINE}" ]; then
-              echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
-              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            # Bail out if the PR closed/merged during the wait — no
-            # point polling for a review run that won't fire on a
-            # closed PR.
-            PR_STATE=$(fetch_pr_state)
-            if [ "${PR_STATE}" = "rate_limited" ]; then
-              RATE_LIMIT_DEADLINE="${DEADLINE}"
-              if [ -z "${RETRY_RUN_ID}" ] && [ "${RETRY_REGISTRATION_DEADLINE}" -lt "${RATE_LIMIT_DEADLINE}" ]; then
-                RATE_LIMIT_DEADLINE="${RETRY_REGISTRATION_DEADLINE}"
-              fi
-              if ! wait_for_gh_rate_limit "${RATE_LIMIT_DEADLINE}"; then
-                if [ -z "${RETRY_RUN_ID}" ]; then
-                  echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
-                  echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-                else
-                  echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
-                  echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
-                fi
-                exit 1
-              fi
-              # A PR can close while we wait. Read it again immediately,
-              # before any run-list/run poll or another fixed sleep.
-              SKIP_POLL_SLEEP=1
-              continue
-            fi
-            if [ "${PR_STATE}" = "closed" ]; then
-              echo "::error::PR #${PR_NUMBER} closed during retry wait — abandoning retry"
-              echo "status=pr_closed_during_retry" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            if [ "${PR_STATE}" = "unknown" ]; then
-              PR_STATE_FAILURES=$((PR_STATE_FAILURES + 1))
-              if [ "${PR_STATE_FAILURES}" -ge "${PR_STATE_FAILURE_LIMIT}" ]; then
-                echo "::error::PR state unresolvable after ${PR_STATE_FAILURES} consecutive attempts (likely GitHub API outage) — bailing out instead of burning the full retry window"
-                echo "status=pr_state_check_failed" >> "$GITHUB_OUTPUT"
-                exit 1
-              fi
-            else
-              # Reset on any successful resolve so we only bail on
-              # *consecutive* failures, not cumulative.
-              PR_STATE_FAILURES=0
-            fi
-            # A completed run never establishes that a PR is still open.
-            if [ "${PR_STATE}" != "open" ]; then
-              continue
-            fi
-            if [ -z "${RETRY_RUN_ID}" ]; then
-              if [ "$(date +%s)" -ge "${RETRY_REGISTRATION_DEADLINE}" ]; then
-                echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
-                echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-                exit 1
-              fi
-              if RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
-                :
-              else
-                RATE_LIMIT_RC=$?
-                if [ "${RATE_LIMIT_RC}" -eq 75 ]; then
-                  if ! wait_for_gh_rate_limit "${RETRY_REGISTRATION_DEADLINE}"; then
-                    echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
-                    echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-                    exit 1
-                  fi
-                  SKIP_POLL_SLEEP=1
-                  continue
-                fi
-                echo "::warning::Could not list post-dispatch review runs; retrying within the registration window"
-                continue
-              fi
-              if ! printf '%s\n' "${RETRY_RUNS_JSON}" | jq -e '
-                type == "object" and
-                (.workflow_runs | type == "array") and
-                all(.workflow_runs[];
-                  type == "object" and
-                  (.id | type == "number") and .id > 0 and .id == (.id | floor) and
-                  (.head_sha | type == "string") and
-                  (.status | type == "string") and
-                  (.created_at | type == "string") and
-                  ((.conclusion == null) or (.conclusion | type == "string")))
-              ' >/dev/null 2>&1; then
-                echo "::warning::Malformed post-dispatch review run-list payload; retrying within the registration window"
-                continue
-              fi
-              RETRY_RUN_ID=$(printf '%s\n' "${RETRY_RUNS_JSON}" | jq -r \
-                --argjson prior_run_id "${PRIOR_REVIEW_RUN}" \
-                --argjson baseline_id "${RETRY_BASELINE_ID}" \
-                '[.workflow_runs[]
-                  | select(.id > $baseline_id and .id != $prior_run_id)]
-                | sort_by(.created_at, .id)
-                | .[0].id // empty')
-              if [ -z "${RETRY_RUN_ID}" ]; then
-                echo "  (retry review run not registered yet, pr_state=${PR_STATE})"
-                continue
-              fi
-              if ! [[ "${RETRY_RUN_ID}" =~ ^[0-9]+$ ]] || [ "${RETRY_RUN_ID}" -lt 1 ]; then
-                echo "::error::Registered review run id is not a positive integer: '${RETRY_RUN_ID}'"
-                echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
-                exit 1
-              fi
-              echo "✓ Registered retry review run #${RETRY_RUN_ID}; polling that exact run"
-            fi
-
-            if RETRY_RUN_JSON=$(gh_api_with_retry "repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"); then
-              :
-            else
-              RATE_LIMIT_RC=$?
-              if [ "${RATE_LIMIT_RC}" -eq 75 ]; then
-                if ! wait_for_gh_rate_limit "${DEADLINE}"; then
-                  break
-                fi
-                SKIP_POLL_SLEEP=1
-                continue
-              fi
-              echo "::warning::Could not read retry review run #${RETRY_RUN_ID}; retrying within the retry window"
-              continue
-            fi
-            if ! printf '%s\n' "${RETRY_RUN_JSON}" | jq -e \
-              --argjson retry_run_id "${RETRY_RUN_ID}" \
-              'type == "object" and .id == $retry_run_id and (.status | type == "string") and ((.conclusion == null) or (.conclusion | type == "string"))' \
-              >/dev/null 2>&1; then
-              echo "::warning::Malformed payload for retry review run #${RETRY_RUN_ID}; retrying within the retry window"
-              continue
-            fi
-            RETRY_STATUS=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.status')
-            RETRY_CONCL=$(printf '%s\n' "${RETRY_RUN_JSON}" | jq -r '.conclusion // "null"')
-            echo "  retry run #${RETRY_RUN_ID}: status=${RETRY_STATUS} conclusion=${RETRY_CONCL}"
-            if [ "${RETRY_STATUS}" = "completed" ]; then
-              break
-            fi
-            RETRY_POLL_NOW=$(date +%s)
-            case "${RETRY_STATUS}" in
-              queued|waiting|pending|requested)
-                if [ -n "${RETRY_LAST_QUEUED_TS}" ]; then
-                  RETRY_QUEUED_SECS=$(( RETRY_QUEUED_SECS + RETRY_POLL_NOW - RETRY_LAST_QUEUED_TS ))
-                  DEADLINE=$(( RETRY_BASE_DEADLINE + RETRY_QUEUED_SECS ))
-                  if [ "${DEADLINE}" -gt "${RETRY_DEADLINE_CEILING}" ]; then
-                    DEADLINE="${RETRY_DEADLINE_CEILING}"
-                  fi
-                fi
-                RETRY_LAST_QUEUED_TS="${RETRY_POLL_NOW}"
-                ;;
-              *)
-                RETRY_LAST_QUEUED_TS=""
-                ;;
-            esac
-          done
-
-          if [ "$(date +%s)" -ge "${DEADLINE}" ] || [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
-            echo "Retry review run queued for ${RETRY_QUEUED_SECS}s; deadline extended by $(( DEADLINE - RETRY_BASE_DEADLINE ))s (cap $(( RETRY_DEADLINE_CEILING - RETRY_BASE_DEADLINE ))s)."
-            echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
-            echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          # Validate the retry run's conclusion. If review_autofix
-          # itself errored (failure / cancelled / timed_out), running
-          # attempt-2 pytest against the resulting unchanged canary
-          # would surface as spec_mismatch and falsely blame the
-          # editor model. Report retry_workflow_failed so operators
-          # look at the retry run's logs, not the editor.
-          if [ "${RETRY_CONCL}" != "success" ]; then
-            echo "::error::Retry review run #${RETRY_RUN_ID} completed with conclusion=${RETRY_CONCL} (not 'success'); refusing to attribute the resulting canary state to the editor"
-            echo "status=retry_workflow_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          # ── Attempt 2 ──────────────────────────────────────────────
-          echo "─── Phase 4b attempt 2: re-fetch + pytest after retry ───"
-          if ! fetch_canary_to_tmp; then
-            echo "::error::Could not re-fetch ${CANARY_PATH} after retry"
-            echo "status=fetch_failed_after_retry" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if ! run_pytest; then
-            FAILURE_KIND=$(classify_pytest_failure)
-            if [ "${FAILURE_KIND}" = "harness_misconfigured" ]; then
-              echo "::error::Phase 4b pytest fixture raised RuntimeError or pytest had INTERNALERROR — harness misconfigured (env var / file path / pytest setup), not an editor regression"
-              echo "status=harness_misconfigured" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::Canary verification still failed after retry — editor is broken or model fully unavailable"
-              echo "status=spec_mismatch" >> "$GITHUB_OUTPUT"
-            fi
-            exit 1
-          fi
-          echo "✓ Canary verification passed on retry"
-
-          if ! PR_HEAD=$(fetch_pr_head_sha); then
-            echo "::error::Could not fetch PR head SHA after retry; treating as infra failure"
-            echo "status=pr_head_fetch_failed" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then
-            echo "::error::PR head is still the bait commit after retry — editor did not push a fix commit"
-            echo "status=no_editor_commit" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "✓ Editor produced commit(s) past the bait on retry (PR head: ${PR_HEAD:0:7}, bait: ${BAIT_SHA:0:7})"
-          echo "status=success_after_retry" >> "$GITHUB_OUTPUT"
-          # Explicit exit 0 — symmetric with the first-attempt success
-          # path above, and a guard against future code being added
-          # past this echo without realising the step was already done.
-          exit 0
+          source "${STABLE_E2E_STEP_SCRIPT}"
 
       # ── Phase 5: Orchestrator script integration test ──────────
       - name: Checkout repository for integration tests
@@ -4368,20 +3330,24 @@ jobs:
           # Wait for a new cancel-on-close run to register and complete.
           # Internal-cancel-on-pr-close fires near-immediately on the
           # pull_request[closed] webhook but the API can take a few
-          # seconds to index the new run. Poll fast for the first 30s
+          # seconds to index the new run. Poll every 3s for the first 30s
           # to catch quick runs (the cancel job is short — it only
-          # cancels other workflows), then back off to a slower cadence
-          # to ride out longer execution. Total budget defaults to 10m.
+          # cancels other workflows), then wait 10s, 20s and 30s for every
+          # later poll, never sleeping past DEADLINE. Total budget
+          # defaults to 10m.
           DEADLINE=$(( $(date +%s) + (PHASE7_WAIT_BUDGET_MINUTES * 60) ))
           POLL_START=$(date +%s)
           NEW_RUN_ID=""
           NEW_CONCLUSION=""
+          PHASE7_POLL_COUNT=0
+          PHASE7_SLOW_POLL_COUNT=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             if ! phase7_list_cancel_runs 10; then
               echo "::error::Could not list internal-cancel-on-pr-close runs after closing PR #${PR_NUMBER}."
               echo "status=lookup_failed" >> "$GITHUB_OUTPUT"
               exit 1
             fi
+            PHASE7_POLL_COUNT=$(( PHASE7_POLL_COUNT + 1 ))
             CANDIDATE_RUNS_JSON="${PHASE7_CANCEL_RUNS_JSON}"
             CANDIDATE=$(printf '%s' "${CANDIDATE_RUNS_JSON}" | jq -c \
               --argjson pre_run_id "${PRE_RUN_ID}" \
@@ -4405,13 +3371,63 @@ jobs:
             fi
             ELAPSED=$(( $(date +%s) - POLL_START ))
             if [ "${ELAPSED}" -lt 30 ]; then
-              sleep 3
+              PHASE7_POLL_SLEEP=3
             else
-              sleep 10
+              PHASE7_SLOW_POLL_COUNT=$(( PHASE7_SLOW_POLL_COUNT + 1 ))
+              case "${PHASE7_SLOW_POLL_COUNT}" in
+                1) PHASE7_POLL_SLEEP=10 ;;
+                2) PHASE7_POLL_SLEEP=20 ;;
+                *) PHASE7_POLL_SLEEP=30 ;;
+              esac
             fi
+            PHASE7_POLL_REMAINING=$(( DEADLINE - $(date +%s) ))
+            if [ "${PHASE7_POLL_REMAINING}" -le 0 ]; then
+              break
+            fi
+            if [ "${PHASE7_POLL_SLEEP}" -ge "${PHASE7_POLL_REMAINING}" ]; then
+              # Wake one second before DEADLINE so the loop makes one last
+              # listing instead of exiting straight after the sleep.
+              PHASE7_POLL_SLEEP=$(( PHASE7_POLL_REMAINING - 1 ))
+            fi
+            if [ "${PHASE7_POLL_SLEEP}" -lt 1 ]; then
+              # With one second left the clamp gives 0: the listing this
+              # iteration just made is the last one inside the budget, so
+              # stop instead of sleeping past DEADLINE or listing again.
+              break
+            fi
+            sleep "${PHASE7_POLL_SLEEP}"
           done
 
           if [ -z "${NEW_RUN_ID}" ]; then
+            # No-run diagnostic. Run fields are data, so control
+            # characters become spaces and any line or value that starts
+            # with a workflow command is prefixed with [neutralised].
+            echo "::group::Phase 7 no-run diagnostic"
+            PHASE7_DIAG_ELAPSED=$(( $(date +%s) - POLL_START ))
+            printf '%s\n' "pr=${PR_NUMBER} closed_at=${PR_CLOSED_AT} pre_run_id=${PRE_RUN_ID} polls=${PHASE7_POLL_COUNT} elapsed_secs=${PHASE7_DIAG_ELAPSED}" \
+              | tr -d '\r' | sed -e 's/^\(::\|##\[\)/[neutralised]\1/' || true
+            PHASE7_DIAG_RUNS=""
+            if PHASE7_DIAG_RUNS=$(printf '%s' "${CANDIDATE_RUNS_JSON:-}" | jq -r '
+                def safe: tostring | gsub("[[:cntrl:]]"; " ") | if startswith("::") then "[neutralised]" + . else . end;
+                .workflow_runs[]? | "  run id=\(.id|safe) event=\(.event|safe) status=\(.status|safe) conclusion=\(.conclusion // ""|safe) head_sha=\(.head_sha // ""|safe) created_at=\(.created_at // ""|safe)"' 2>/dev/null); then
+              if [ -n "${PHASE7_DIAG_RUNS}" ]; then
+                printf '%s\n' "${PHASE7_DIAG_RUNS}" | sed -e 's/^\(::\|##\[\)/[neutralised]\1/' || echo "  runs: unrenderable"
+              else
+                echo "  runs: none"
+              fi
+            else
+              echo "  runs: unrenderable"
+            fi
+            # §15: the runs listing above carries no workflow state, so
+            # this one read, made only on this failure path, is the only
+            # extra call. A failed read prints workflow_state=unknown and
+            # never changes the step's outcome.
+            PHASE7_CANCEL_WORKFLOW_STATE=$(gh api "repos/${TEST_REPO}/actions/workflows/internal-cancel-on-pr-close.yml" --jq '.state // ""' 2>/dev/null || true)
+            if ! [[ "${PHASE7_CANCEL_WORKFLOW_STATE}" =~ ^[a-z_]+$ ]]; then
+              PHASE7_CANCEL_WORKFLOW_STATE="unknown"
+            fi
+            echo "  workflow_state=${PHASE7_CANCEL_WORKFLOW_STATE}"
+            echo "::endgroup::"
             echo "::error::internal-cancel-on-pr-close did not register a new run within timeout"
             echo "status=no_run" >> "$GITHUB_OUTPUT"
             exit 1
@@ -4709,7 +3725,11 @@ jobs:
     # unit tests 14.5 minutes), too close to 45. `CI` splits the same
     # suite into parallel jobs instead; this job keeps one runner because
     # it is not the release's critical path.
-    timeout-minutes: 60
+    # 90, not 60: the job hit 60 minutes and was cancelled mid "Unit tests"
+    # in test-and-mark-stable run 39526632477 (2026-10-21, v1.37.0 attempt):
+    # orchestrate-poll took 39.5 minutes and unit tests had run 19 more. The
+    # prior release (run 39213880700, 2026-10-19) already used 56 of 60.
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -4740,8 +3760,25 @@ jobs:
       - name: ShellCheck static analysis
         run: |
           set -euo pipefail
+          # Issue #6680: ShellCheck 0.9.x (the runner image's copy) always runs
+          # its dataflow analysis, which takes the runner down on
+          # scripts/orchestrate_poll_process.sh. ShellCheck 0.10+ honours that
+          # file's `# shellcheck extended-analysis=false` directive, so pin it.
+          # A failed install keeps the runner's copy with a warning.
+          sc=shellcheck
+          if python3 -m pip install --quiet 'shellcheck-py==0.10.0.1'; then
+            sc_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')" || sc_dir=""
+            if [ -x "${sc_dir}/shellcheck" ]; then
+              sc="${sc_dir}/shellcheck"
+            else
+              echo "::warning::ShellCheck 0.10.0.1 installed but ${sc_dir:-<unknown>}/shellcheck is missing; using $(command -v shellcheck || echo 'no shellcheck')."
+            fi
+          else
+            echo "::warning::Could not install ShellCheck 0.10.0.1; using $(command -v shellcheck || echo 'no shellcheck')."
+          fi
+          "${sc}" --version
           for f in scripts/*.sh; do
-            shellcheck --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
+            "${sc}" --severity=error "$f" && echo "OK: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
       - name: Python syntax check
@@ -4836,7 +3873,11 @@ jobs:
             wait "${shard_pid}" || true
           done
 
+          # Each failed shard's failing tests are repeated after the loop (#6888).
+          # The shard logs above sit in collapsed groups, so in run 37907017153 the
+          # job tail showed only the last shard's "33 passed", not shard 1's failure.
           shard_failures=0
+          shard_failure_lines=()
           for shard in $(seq 0 "$((shards - 1))"); do
             [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
             # A shard with tests but no log died before its runner started, so
@@ -4844,6 +3885,7 @@ jobs:
             if [ ! -f "/tmp/poll_shard_${shard}.log" ]; then
               echo "::error::orchestrate-poll shard ${shard} produced no log; its tests did not run"
               shard_failures=$((shard_failures + 1))
+              shard_failure_lines+=("shard ${shard}: no log recorded, its tests did not run")
               continue
             fi
             echo "::group::orchestrate-poll shard ${shard} ($(wc -l < "/tmp/poll_shard_${shard}.txt" | tr -d '[:space:]') tests)"
@@ -4857,10 +3899,62 @@ jobs:
             esac
             if [ "${shard_rc}" -ne 0 ]; then
               echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
+              # Name the failing tests in annotations (#6885): the per-shard
+              # log above sits inside a ::group:: that triage cannot read.
+              # Match the runner's exact "  FAIL  <name>: ..." prefix, cap at
+              # 20 lines, and escape workflow-command data. Without a FAIL
+              # line (interrupted shard), print the log tail with a prefix so
+              # log text can never start a workflow command.
+              mapfile -t shard_fail_lines < <(grep -a -E '^  FAIL  ' "/tmp/poll_shard_${shard}.log" | head -n 20 || true)
+              if [ "${#shard_fail_lines[@]}" -gt 0 ]; then
+                for shard_fail_line in "${shard_fail_lines[@]}"; do
+                  shard_fail_line="${shard_fail_line//%/%25}"
+                  shard_fail_line="${shard_fail_line//$'\r'/%0D}"
+                  shard_fail_line="${shard_fail_line//$'\n'/%0A}"
+                  echo "::error::orchestrate-poll shard ${shard}: ${shard_fail_line#  }"
+                done
+              else
+                echo "::error::orchestrate-poll shard ${shard} had no FAIL line; last log lines follow"
+                while IFS= read -r shard_tail_line || [ -n "${shard_tail_line}" ]; do
+                  echo "orchestrate-poll shard ${shard} | ${shard_tail_line}"
+                done < <(tail -n 20 "/tmp/poll_shard_${shard}.log" || true)
+              fi
               shard_failures=$((shard_failures + 1))
+              # Prefer the runner's FAIL line (it carries the exception); fall back
+              # to its "complete" fail events; else say no failure was recorded.
+              # Every match is kept so the "... and <k> more" count below is exact.
+              # `-a`: a NUL byte in the log must not turn the matches into grep's
+              # "Binary file ... matches" line.
+              mapfile -t shard_fail_matches < <(grep -a -E '^[[:space:]]*FAIL[[:space:]]' "/tmp/poll_shard_${shard}.log" 2>/dev/null || true)
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                mapfile -t shard_fail_matches < <(grep -a -E '^TEST_CASE_EVENT: .*"event":"complete"' "/tmp/poll_shard_${shard}.log" 2>/dev/null | grep -a -F '"status":"fail"' || true)
+              fi
+              if [ "${#shard_fail_matches[@]}" -eq 0 ]; then
+                shard_failure_lines+=("shard ${shard}: exit ${shard_rc}, no FAIL line recorded (runner likely died)")
+              else
+                for shard_fail_match in "${shard_fail_matches[@]}"; do
+                  shard_failure_lines+=("shard ${shard}: ${shard_fail_match#"${shard_fail_match%%[![:space:]]*}"}")
+                done
+              fi
             fi
           done
           if [ "${shard_failures}" -ne 0 ]; then
+            # At most 20 annotations; CR removed, cut to 400 characters, then "%"
+            # escaped so a test message cannot break the annotation syntax.
+            shard_failure_shown=0
+            for shard_failure_line in "${shard_failure_lines[@]}"; do
+              if [ "${shard_failure_shown}" -ge 20 ]; then
+                break
+              fi
+              shard_failure_line="${shard_failure_line//$'\r'/}"
+              shard_failure_line="${shard_failure_line:0:400}"
+              shard_failure_line="${shard_failure_line//\%/%25}"
+              echo "::error::orchestrate-poll failing test: ${shard_failure_line}"
+              shard_failure_shown=$((shard_failure_shown + 1))
+            done
+            if [ "${#shard_failure_lines[@]}" -gt 20 ]; then
+              echo "::error::orchestrate-poll failing test: ... and $(( ${#shard_failure_lines[@]} - 20 )) more (see the shard groups above)"
+            fi
             echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
             exit 1
           fi
@@ -4905,6 +3999,10 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_smoke_deterministic.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_conflict_resolve_retry_prelude_render.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_manifest_union_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_review_conflict_resolve_sandbox_only.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_conflict_guard_hook_template_merge.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_conflict_ai_asset_take_base.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_integration_conflict_park.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost_audit_semble_metrics.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
@@ -4931,6 +4029,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_refresh_runner.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validation_discovery_bootstrap.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validation_harness_sandbox.py tests/test_validate_driver_credential_scrub.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_thread_reuse_core.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_skip_git_repo_check_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workspace_init.py
@@ -4979,7 +4078,8 @@ jobs:
             tests/test_security_pass_skip.py \
             tests/test_claude_md_section_numbers.py \
             tests/test_audit_plans_command.py \
-            tests/test_deploy_activate_command.py
+            tests/test_deploy_activate_command.py \
+            tests/test_safe_fetch_url.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
 
       - name: Prompt files integrity
@@ -5149,18 +4249,25 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # Sum of remaining in-step DEADLINEs (validation-refresh 2400s +
-    # update_workflows 600s + memory-maintenance 2400s = 5400s = 90m).
+    # Sum of remaining in-step DEADLINEs (validation-refresh 5520s +
+    # update_workflows 600s + memory-maintenance 2400s = 8520s = 142m);
+    # step limits 95 + 18 + 45 = 158m; the analyser steps below have no
+    # step limit, so the DEADLINE sum (142m) is what fits the 165m cap.
+    # The validation-refresh watch covers that workflow's whole 60-minute
+    # `refresh` job budget (run 39694107256 timed out after 40m on a run
+    # that was still in_progress) plus a 1800s runner-queue allowance
+    # (release gate run 40831286935: the child run sat 20m22s queued,
+    # ran 41m45s, finished success, and the gate gave up 5s earlier).
     # Add headroom for prerequisite validation, checkout, and the
     # per-phase run-soft-error-analyzer composite actions (each waits
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
     # call; log1 of run #25200117236 observed ~40s per phase, so 3
     # phases under OpenRouter latency variance can plausibly reach
-    # 6–9m), runner queueing, and step setup. Cap at 110m so a runaway
+    # 6–9m), runner queueing, and step setup. Cap at 165m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
     # still be killed within a sensible budget. Down from 360m before
     # the workflow-log-analysis split-out.
-    timeout-minutes: 110
+    timeout-minutes: 165
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -5205,7 +4312,7 @@ jobs:
       # deterministic ones whose failures still gate the release.
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
-        timeout-minutes: 42
+        timeout-minutes: 95
         run: |
           set -euo pipefail
           sleep 4
@@ -5221,18 +4328,28 @@ jobs:
           # filters runs by the pre-dispatch run-id snapshot, so a duplicate dispatch (if a 500
           # response masked a successful create) is harmless — the poll
           # picks up whichever run id was registered.
+          # The smoke run passes discovery_dry_run=true: it skips the model
+          # call and the discovery PR (up to 35m of VALIDATION_DISCOVERY_BUDGET_SECS)
+          # but still runs dedup, memory plumbing and every consumer's
+          # clone/render/lint/self-test. The completion window is measured
+          # from dispatch, so runner-queue time and run time share it:
+          # refresh job timeout-minutes (60) x 60 + 120s registration slack
+          # + 1800s queue allowance = 5520s. Run 39694107256 gave up after
+          # 2400s on a run that was still in_progress; run 40831286935 gave
+          # up 5s before a run that had queued 20m22s finished success.
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
             --display-name "validation-refresh" \
             --registration-timeout-secs 2400 \
             --registration-poll-interval-secs 5 \
-            --completion-timeout-secs 2400 \
+            --completion-timeout-secs 5520 \
             --completion-poll-interval-secs 15 \
             --dispatch-max-attempts 5 \
             --dispatch-backoff-base-secs 2 \
             --field "branch_name=${BRANCH_NAME}" \
-            --field alert_msg_level=SILENT
+            --field alert_msg_level=SILENT \
+            --field discovery_dry_run=true
 
       - name: "Soft-error analyser (validation-refresh)"
         if: always() && steps.dispatch_validation_refresh.outputs.run_id != ''
@@ -5399,6 +4516,10 @@ jobs:
           # and restrict matches to issues opened by THIS orchestrate run
           # rather than scanning the whole open-issue list.
           DISPATCH_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # tracking_labels=e2e-smoke-test: the tracking title is model-written
+          # and may drop the smoke marker, so the label is what lets the
+          # scheduled poller (tracking_issue_is_smoke_fixture) keep this
+          # fixture project's Telegram alerts silent.
           bash ./scripts/dispatch_and_watch_workflow_run.sh \
             --repo "${TEST_REPO}" \
             --workflow "${WF_FILE}" \
@@ -5408,7 +4529,8 @@ jobs:
             --completion-timeout-secs 3000 \
             --completion-poll-interval-secs 20 \
             --status-log-prefix "orchestrate-bootstrap" \
-            --field "project_description=${PROJECT_DESC}"
+            --field "project_description=${PROJECT_DESC}" \
+            --field "tracking_labels=e2e-smoke-test"
 
           # Locate the tracking issue (created by the orchestrator).
           # The orchestrator titles it `[Orchestrator] <project_title>`
@@ -5453,6 +4575,48 @@ jobs:
               sed 's/^/  /' "${TRACKING_ERR_FILE}" || true
             fi
             rm -f "${TRACKING_ERR_FILE}"
+            # A decomposer paused on Claude capacity (#7370) creates no tracking
+            # issue: report it as claude_capacity instead (#8217). Logs are only matched, never printed.
+            CAP_EVIDENCE=""
+            CAP_LOG_FAILS=0
+            ORCH_RUN_ID=$(sed -n 's/^run_id=//p' "$GITHUB_OUTPUT" | tail -n 1)
+            if [[ "${ORCH_RUN_ID}" =~ ^[0-9]+$ ]]; then
+              if ! CAP_JOB_IDS=$(gh api "repos/${TEST_REPO}/actions/runs/${ORCH_RUN_ID}/jobs?per_page=100" --jq '.jobs[].id' 2>/dev/null); then
+                CAP_JOB_IDS=""
+                echo "::warning::Could not list the jobs of orchestrate run ${ORCH_RUN_ID} while checking for a Claude capacity wait"
+              fi
+              for JOB_ID in ${CAP_JOB_IDS}; do
+                [[ "${JOB_ID}" =~ ^[0-9]+$ ]] || continue
+                # Job logs carry ANSI codes; gh refuses them without the flag.
+                if ! JOB_LOG=$(gh api --allow-escape-sequences "repos/${TEST_REPO}/actions/jobs/${JOB_ID}/logs" 2>/dev/null); then
+                  CAP_LOG_FAILS=$((CAP_LOG_FAILS + 1))
+                  continue
+                fi
+                # "Z " (end of the log timestamp) matches only the emitted line, not the echoed run: source.
+                if [[ "${JOB_LOG}" == *"Z AI_ENGINE_CAPACITY_WAIT role=ORCHESTRATE outcome=deferred"* ]]; then
+                  CAP_EVIDENCE="run_log"
+                  break
+                fi
+              done
+              if [ -z "${CAP_EVIDENCE}" ] && [ "${CAP_LOG_FAILS}" -gt 0 ]; then
+                echo "::warning::Could not read ${CAP_LOG_FAILS} job log(s) of orchestrate run ${ORCH_RUN_ID} while checking for a Claude capacity wait"
+              fi
+            else
+              ORCH_RUN_ID=""
+            fi
+            # TEST_REPO's own poller files its capacity tracker in TEST_REPO.
+            if [ -z "${CAP_EVIDENCE}" ]; then
+              CAP_TRACKERS=$(gh api "repos/${TEST_REPO}/issues?state=open&labels=ai:provider-outage&per_page=20" \
+                --jq '[.[] | select(.pull_request == null) | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR")) | select((.body // "") | contains("<!-- ai:provider-outage:v1 kind=capacity "))] | length' 2>/dev/null || echo "0")
+              if [[ "${CAP_TRACKERS}" =~ ^[0-9]+$ ]] && [ "${CAP_TRACKERS}" -gt 0 ]; then
+                CAP_EVIDENCE="capacity_tracker"
+              fi
+            fi
+            if [ -n "${CAP_EVIDENCE}" ]; then
+              echo "::error::Orchestrate decomposer paused — Claude pool at capacity (evidence=${CAP_EVIDENCE}, run=${ORCH_RUN_ID:-unknown}); no tracking issue is created until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             echo "::error::Could not locate tracking issue for run ${GITHUB_RUN_ID} after 90s polling (label=ai:orchestrator-tracking, since=${DISPATCH_START_ISO}, body must contain ${GITHUB_RUN_ID})"
             exit 1
           fi
@@ -5997,14 +5161,47 @@ jobs:
         run: |
           set -euo pipefail
           DEADLINE=$(( $(date +%s) + 4500 ))
+          # Post /approved once per arrival in ai:awaiting-approval, as
+          # Phase 3a does. Posting on every poll left ~67 comments in run
+          # 40831286935 (08:08:20-08:31:55); each one starts every
+          # issue_comment workflow, and the extra implement runs queue in
+          # ai-implement-<repo>-<issue> (cancel-in-progress: false). A failed
+          # POST leaves the flag at 0 so the next poll retries. An issue still
+          # awaiting approval 600s after a post gets one more post, because
+          # implement can skip before it changes the label (metadata read or
+          # dependency hold) and nothing else re-triggers it.
+          ALT_APPROVED_POSTED=0
+          ALT_APPROVED_POSTED_AT=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
             echo "  labels: ${LABELS:-none}"
+            # Claude pool at capacity: the phase paused (#7370); fail fast with its own status (#8217).
+            if [[ ",${LABELS}," == *",ai:claude-capacity-wait,"* ]]; then
+              echo "::error::Alt-model run paused — Claude pool at capacity (ai:claude-capacity-wait); release gate cannot complete until capacity returns"
+              echo "status=claude_capacity" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             # Auto-approve the plan when the issue lands in awaiting-approval.
             if echo "${LABELS}" | grep -q 'ai:awaiting-approval'; then
-              gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
-                -f body="/approved" >/dev/null 2>&1 || true
+              if [ "${ALT_APPROVED_POSTED}" = "1" ] && [ $(( $(date +%s) - ALT_APPROVED_POSTED_AT )) -ge 600 ]; then
+                echo "  still awaiting approval 600s after /approved; posting again"
+                ALT_APPROVED_POSTED=0
+              fi
+              if [ "${ALT_APPROVED_POSTED}" = "0" ]; then
+                if gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
+                    -f body="/approved" >/dev/null 2>&1; then
+                  ALT_APPROVED_POSTED=1
+                  ALT_APPROVED_POSTED_AT=$(date +%s)
+                  echo "  posted /approved (once per arrival)"
+                else
+                  echo "::warning::Posting /approved failed; retrying on the next poll"
+                fi
+              fi
+            elif [ -n "${LABELS}" ]; then
+              # Reset only after a read that returned labels: a failed read
+              # yields "" and must not re-arm the post mid-arrival.
+              ALT_APPROVED_POSTED=0
             fi
             # Success: the implement phase produced a PR and either is
             # mid-review or done. The alt-model gate doesn't need to wait
@@ -6181,7 +5378,17 @@ jobs:
       (needs.clarify-rejects-unsolvable-test.result == 'success' || needs.clarify-rejects-unsolvable-test.result == 'skipped') &&
       (needs.e2e-alt-model-test.result == 'success' || needs.e2e-alt-model-test.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 45, not 5: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
+    # (default 30 minutes, maximum 40) for a pending `CI / lint` run; the
+    # extra 5 minutes cover checkout and the tag preflight so the gate can
+    # log its wait_timeout outcome. A job timeout fails closed.
+    timeout-minutes: 45
+    # checks/actions read let the CI gate read check-runs and workflow runs
+    # with github.token; this job writes nothing.
+    permissions:
+      contents: read
+      checks: read
+      actions: read
     steps:
       - name: Validate version format
         run: |
@@ -6238,49 +5445,51 @@ jobs:
               ;;
           esac
 
+      # Security finding #6548 (Refs #7029): the legacy combined commit
+      # status never contains GitHub Actions check-runs, so this check used
+      # to pass on an empty or pending state. It now reuses the bounded
+      # release CI gate (scripts/release_ci_gate.sh, #6797): the newest
+      # github-actions `lint` check-run from ci.yml on the validated SHA must
+      # be completed with success; missing, failed, cancelled, timed-out or
+      # unreadable results fail closed after the bounded wait.
+      # gate_only runs never tag (the release job is skipped), so there the
+      # check is advisory: it does not wait, its errors become warnings and
+      # the step always succeeds. The real release re-gates in this job and
+      # again in the release job.
       - name: Verify CI passed on source branch
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
+          GATE_REPO: ${{ github.repository }}
+          GATE_ONLY: ${{ inputs.gate_only }}
+          RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
+          RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          SHA=$(git rev-parse HEAD)
-          echo "Checking CI status for ${SOURCE_BRANCH} @ $SHA ..."
-          # Allow the release even if no CI status is reported (repos
-          # with no required checks). Fail only on explicit failure.
-          # Distinguish three failure modes:
-          #   1. API call itself failed (transport / auth / repeated 5xx
-          #      / rate-limit retries exhausted) → hard error. The old
-          #      `|| echo "pending"` coerced this into a synthetic
-          #      "pending" that bypassed the gate.
-          #   2. API returned an empty state (repo has no required
-          #      checks configured) → proceed (preserves the documented
-          #      "Allow the release even if no CI status is reported"
-          #      policy above).
-          #   3. API returned a real state — fail only on explicit
-          #      "failure" / "error".
-          # gh_retry already surfaces the final failure stderr, so rc
-          # alone distinguishes transport/auth failure from an empty CI
-          # state.
-          set +e
-          STATE=$(gh_retry gh api "repos/${{ github.repository }}/commits/${SHA}/status" \
-            --jq '.state')
-          rc=$?
-          set -e
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::Failed to query CI status after retries (rc=${rc}). Refusing to release without a confirmed CI signal."
+          SHA="$(git rev-parse HEAD)"
+          gate_only="$(printf '%s' "${GATE_ONLY:-false}" | tr '[:upper:]' '[:lower:]')"
+          echo "Checking CI / lint for ${SOURCE_BRANCH} @ ${SHA} (gate_only=${gate_only}) ..."
+          if [ "${gate_only}" = "true" ]; then
+            export RELEASE_CI_GATE_WAIT_SECS=0
+            if [ ! -f scripts/release_ci_gate.sh ]; then
+              echo "::warning::gate_only: scripts/release_ci_gate.sh is missing on ${SOURCE_BRANCH}@${SHA}; CI check skipped (advisory only, no release in gate_only mode)."
+              exit 0
+            fi
+            rc=0
+            out="$(bash scripts/release_ci_gate.sh "${GATE_REPO}" "${SHA}" 2>&1)" || rc=$?
+            if [ -n "${out}" ]; then
+              printf '%s\n' "${out}" | sed 's/^::error::/::warning::/'
+            fi
+            if [ "${rc}" -ne 0 ]; then
+              echo "::warning::gate_only: CI gate did not pass for ${SOURCE_BRANCH}@${SHA} (rc=${rc}); advisory only, no release in gate_only mode."
+            fi
+            exit 0
+          fi
+          if [ ! -f scripts/release_ci_gate.sh ]; then
+            echo "::error::scripts/release_ci_gate.sh is missing on ${SOURCE_BRANCH}@${SHA}. Refusing to release without a confirmed CI signal."
             exit 1
           fi
-          if [ -z "$STATE" ]; then
-            echo "CI state: (empty — no required checks configured?) — proceeding"
-          elif [ "$STATE" = "failure" ] || [ "$STATE" = "error" ]; then
-            echo "::error::CI is failing on ${SOURCE_BRANCH} ($STATE). Fix before releasing."
-            exit 1
-          else
-            echo "CI state: $STATE — OK"
-          fi
+          bash scripts/release_ci_gate.sh "${GATE_REPO}" "${SHA}"
 
       # Temporary: reveal which git invocation in checkout's post-step
       # produces `The process '/usr/bin/git' failed with exit code 128`.
@@ -6293,9 +5502,42 @@ jobs:
   release:
     needs: [source, resolve-version, validate]
     # gate_only runs stop here: every test job above ran, nothing is tagged.
-    if: ${{ success() && !inputs.gate_only }}
+    # Explicit result checks, not success(): GitHub reports success() as false
+    # when any ancestor job was skipped, so with skip_e2e=true (every live e2e
+    # job skipped) a success() gate skipped release even though validate
+    # passed, and nothing was tagged (run 39955031510, 2026-10-23).
+    if: >-
+      !cancelled() &&
+      !inputs.gate_only &&
+      needs.source.result == 'success' &&
+      needs.resolve-version.result == 'success' &&
+      needs.validate.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 50, not 10: the CI gate below waits up to RELEASE_CI_GATE_WAIT_SECS
+    # (default 30 minutes) for a pending `CI / lint` run, and the tag-push
+    # retries still have to fit after it. A job timeout fails closed.
+    timeout-minutes: 50
+    # Least privilege: only this job gets an OIDC token and attestation write,
+    # for the release-manifest attestation (#6943). A job-level block replaces
+    # the inherited one, so contents: write is listed again.
+    # checks: read lets the CI lint gates read check-runs with github.token;
+    # actions: read lets the CI gate read workflow runs when GH_PAT is absent;
+    # contents: write keeps the tag and release writes.
+    # id-token/attestations write also sign the consumer sync manifest (#7128).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      checks: read
+      actions: read
+    outputs:
+      # true only when both STABLE_RELEASE_ENABLED and RELEASE_TAGGING_ENABLED
+      # let this run publish, so sync-to-main and the notify summary never
+      # treat an untagged run as a release.
+      release_enabled: ${{ steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' && 'true' || 'false' }}
+    env:
+      STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
+      STABLE_RELEASE_CI_WAIT_SECS: ${{ vars.STABLE_RELEASE_CI_WAIT_SECS || '600' }}
     # Serialise the mutating tag pushes across every dispatcher of this
     # workflow (auto-release-stable.yml, promote-main-to-stable.yml, manual).
     # The dispatchers' own locks end at dispatch time, so without this lock
@@ -6326,12 +5568,206 @@ jobs:
           fi
           echo "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" >> "$GITHUB_ENV"
 
+      # Publishing switch (issue #6532 / #6809). On by default: an unset or
+      # empty repository variable STABLE_RELEASE_ENABLED, or `true` (any
+      # case), publishes. `false` turns publishing off; any other value also
+      # turns it off and warns, so a typo never publishes. The default was
+      # off until the off switch held every release since v1.31.0 back
+      # (#7029: stable tagging was never meant to sit behind an off switch).
+      # While off the gate still runs every validation job and the CI lint
+      # check below, but the changelog push, tags, GitHub release, consumer
+      # dispatch and sync-to-main are skipped. The value reaches the script
+      # only through env.
+      - name: Resolve stable release switch
+        id: release_switch
+        run: |
+          set -euo pipefail
+          release_switch_value="${STABLE_RELEASE_ENABLED:-true}"
+          release_switch_value="${release_switch_value,,}"
+          if [ "${release_switch_value}" = "true" ]; then
+            release_switch_enabled=true
+          else
+            release_switch_enabled=false
+            if [ "${release_switch_value}" != "false" ]; then
+              echo "::warning::STABLE_RELEASE_ENABLED has an unrecognised value; publishing stays off. Use true or false."
+            fi
+          fi
+          echo "STABLE_RELEASE_SWITCH enabled=${release_switch_enabled}"
+          printf 'enabled=%s\n' "${release_switch_enabled}" >> "$GITHUB_OUTPUT"
+
+      # Issue #6532: never release a commit whose CI failed. GitHub Actions
+      # jobs report as check-runs, not commit statuses, so the validate job's
+      # combined-status read cannot see `lint`, the aggregate job of ci.yml.
+      # Runs before the first step that can push, whatever dry_run and the
+      # switch say. Only `lint` check-runs created by the github-actions app
+      # in a check suite of a `.github/workflows/ci.yml` run for the SHA
+      # count (other workflows also have `lint` jobs). As in
+      # scripts/release_ci_gate.sh, the newest of them (highest check-run id)
+      # decides, so a re-run that passed outweighs an older failed attempt;
+      # it must be completed with `success`. Missing and incomplete results are
+      # re-checked within a bounded wait; whatever is still missing or
+      # incomplete then, and failed or unreadable results, fail closed.
+      # GitHub API audit (§14): no existing call in this job returns
+      # check-runs; each poll makes two reads (ci.yml runs for the SHA,
+      # then the commit's `lint` check-runs).
+      - name: Require successful CI lint check-run
+        id: ci_lint_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CHECK_NAME: lint
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          gate_sha="${RELEASE_TESTED_SHA:-}"
+          if ! [[ "${gate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::STABLE_RELEASE_CI_GATE outcome=fail reason=invalid_sha sha=invalid runs=0"
+            exit 1
+          fi
+          gate_check_name="${CI_CHECK_NAME:-lint}"
+          gate_wait_secs="${STABLE_RELEASE_CI_WAIT_SECS:-600}"
+          case "${gate_wait_secs}" in
+            ''|*[!0-9]*)
+              echo "::warning::STABLE_RELEASE_CI_WAIT_SECS is not a non-negative integer; using 600."
+              gate_wait_secs=600
+              ;;
+          esac
+          # Drop leading zeros first so a zero-padded in-range value (`002400`)
+          # is not mistaken for an oversized one by the length check below.
+          gate_wait_secs="${gate_wait_secs#"${gate_wait_secs%%[!0]*}"}"
+          gate_wait_secs="${gate_wait_secs:-0}"
+          # Same range as RELEASE_CI_GATE_WAIT_SECS (0..2400); the length check
+          # runs first so a huge value never reaches shell arithmetic.
+          if [ "${#gate_wait_secs}" -gt 4 ] || [ "$((10#${gate_wait_secs}))" -gt 2400 ]; then
+            echo "::warning::STABLE_RELEASE_CI_WAIT_SECS is above 2400; using 600."
+            gate_wait_secs=600
+          fi
+          # Force base 10: a leading zero (`0900`, `08`) would be read as octal.
+          gate_wait_secs=$((10#${gate_wait_secs}))
+          gate_poll_secs=30
+          # Round up so any positive budget below one poll interval still re-checks once.
+          gate_polls_left=$(((gate_wait_secs + gate_poll_secs - 1) / gate_poll_secs))
+          gate_response_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate.XXXXXX")"
+          gate_runs_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate_runs.XXXXXX")"
+          trap 'rm -f "${gate_response_file}" "${gate_runs_file}"' EXIT
+
+          # Prints "<reason> <runs>" where reason is one of
+          # pass|missing|incomplete|failed|unreadable.
+          stable_release_ci_gate_classify() {
+            local gate_rc=0
+            local gate_verdict=""
+            set +e
+            gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${gate_sha}&per_page=100" >"${gate_runs_file}"
+            gate_rc=$?
+            if [ "${gate_rc}" -eq 0 ]; then
+              gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${gate_sha}/check-runs?check_name=${gate_check_name}&filter=latest&per_page=100" >"${gate_response_file}"
+              gate_rc=$?
+            fi
+            set -e
+            if [ "${gate_rc}" -ne 0 ]; then
+              printf 'unreadable 0\n'
+              return 0
+            fi
+            if ! gate_verdict="$(jq -rn --arg name "${gate_check_name}" --arg sha "${gate_sha}" \
+                --slurpfile checks "${gate_response_file}" --slurpfile ci_runs "${gate_runs_file}" '
+                if ($checks | length) != 1 or ($ci_runs | length) != 1 then "unreadable 0"
+                else $ci_runs[0] as $wr
+                  | $checks[0]
+                  | if (type != "object") or ((.check_runs | type) != "array") or ((.total_count | type) != "number") then "unreadable 0"
+                    elif ($wr | type) != "object" or (($wr.workflow_runs | type) != "array") or (($wr.total_count | type) != "number") then "unreadable 0"
+                    elif .total_count > (.check_runs | length) or $wr.total_count > ($wr.workflow_runs | length) then "unreadable \(.check_runs | length)"
+                    else
+                      [$wr.workflow_runs[] | select(type == "object" and .head_sha == $sha) | .check_suite_id | select(type == "number")] as $suites
+                      | [.check_runs[] | select(type == "object" and .name == $name and (.app.slug? // "") == "github-actions"
+                          and ((.check_suite.id? // null) as $sid | ($sid | type) == "number" and any($suites[]; . == $sid))
+                          and ((.id? // null) | type) == "number")] as $runs
+                      | if ($runs | length) == 0 then "missing 0"
+                        else ($runs | max_by(.id)) as $newest
+                          | if $newest.status != "completed" then "incomplete \($runs | length)"
+                            elif $newest.conclusion != "success" then "failed \($runs | length)"
+                            else "pass \($runs | length)"
+                            end
+                        end
+                    end
+                end' 2>/dev/null)"; then
+              printf 'unreadable 0\n'
+              return 0
+            fi
+            case "${gate_verdict}" in
+              *$'\n'*) printf 'unreadable 0\n' ;;
+              "pass "*|"missing "*|"incomplete "*|"failed "*|"unreadable "*) printf '%s\n' "${gate_verdict}" ;;
+              *) printf 'unreadable 0\n' ;;
+            esac
+          }
+
+          while :; do
+            gate_result="$(stable_release_ci_gate_classify)"
+            gate_reason="${gate_result%% *}"
+            gate_runs="${gate_result##* }"
+            if [ "${gate_reason}" = "pass" ]; then
+              echo "STABLE_RELEASE_CI_GATE outcome=pass sha=${gate_sha} runs=${gate_runs}"
+              exit 0
+            fi
+            if { [ "${gate_reason}" = "incomplete" ] || [ "${gate_reason}" = "missing" ]; } && [ "${gate_polls_left}" -gt 0 ]; then
+              gate_polls_left=$((gate_polls_left - 1))
+              echo "STABLE_RELEASE_CI_GATE outcome=wait reason=${gate_reason} sha=${gate_sha} runs=${gate_runs} polls_left=${gate_polls_left}"
+              sleep "${gate_poll_secs}"
+              continue
+            fi
+            echo "::error::STABLE_RELEASE_CI_GATE outcome=fail reason=${gate_reason} sha=${gate_sha} runs=${gate_runs}"
+            exit 1
+          done
+
+      # Security finding release-gate-ignores-actions-ci (#6797, Refs #6532):
+      # the jobs above run this workflow's own tests, and the combined commit
+      # status never contains GitHub Actions check-runs, so a commit whose
+      # `CI / lint` aggregate was red, cancelled or never ran could be tagged.
+      # Require the github-actions `lint` check-run from ci.yml on the exact
+      # tested commit to be completed with success. Pending or missing runs
+      # are waited for (bounded); anything else fails closed. It runs before
+      # the changelog push and every tag write, and in dry runs too (read only).
+      # The tag may point at this commit plus a changelog-only commit; the
+      # RELEASE_UNTESTED_HEAD and RELEASE_STALE_TIP guards below bind it.
+      - name: Require CI / lint success on the tested commit
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GATE_REPO: ${{ github.repository }}
+          RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
+          RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
+        run: |
+          set -euo pipefail
+          bash scripts/release_ci_gate.sh "${GATE_REPO}" "${RELEASE_TESTED_SHA}"
+
+      # Kill switch for stable tag writes (Refs #6548, #7029). Default on:
+      # any value other than `true` (case-insensitive) skips the changelog
+      # commit, the tag pushes, the GitHub Release and the consumer dispatch.
+      # The CI gate above and the validate job still run.
+      - name: Resolve release tagging switch
+        id: release_tagging
+        env:
+          RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          raw="${RELEASE_TAGGING_ENABLED-true}"
+          value="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          if [ -z "${value}" ] || [ "${value}" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Release tagging enabled."
+            exit 0
+          fi
+          shown="$(printf '%s' "${raw}" | tr -cd 'A-Za-z0-9_.-' | cut -c1-32)"
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::RELEASE_TAGGING_ENABLED=${shown} — skipping tag writes, GitHub Release and consumer dispatch; CI gate and validation still ran."
+          echo "Release tagging disabled (RELEASE_TAGGING_ENABLED=${shown}): no changelog commit, tag push, GitHub Release or consumer dispatch." >> "${GITHUB_STEP_SUMMARY:-/dev/null}" || true
+
       - name: Assemble changelog fragments
         id: changelog_assemble
         env:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          # The switch off behaves like a dry run here: assembled locally, never pushed.
+          DRY_RUN: ${{ (inputs.dry_run || steps.release_switch.outputs.enabled != 'true') && 'true' || 'false' }}
           VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_TAGGING: ${{ steps.release_tagging.outputs.enabled }}
         run: |
           set -euo pipefail
 
@@ -6341,8 +5777,15 @@ jobs:
           # open (reset to the remote tip) if the commit cannot be pushed.
 
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # agents.d/ fragments (CLAUDE.md §30) fold into agents.md in the same
+          # commit. Fail open: a fragment that cannot fold stays in agents.d/
+          # for the next release, and a missing script (an older ref) is a no-op.
+          if [ -f scripts/assemble_agents.py ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_agents.py assemble --repo-root . \
+              || echo "::warning::agents.md fragment assembly failed; fragments stay in agents.d/ for the next release."
+          fi
 
-          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d)" ]; then
+          if [ -z "$(git status --porcelain -- CHANGELOG.md changelog.d agents.md agents.d)" ]; then
             echo "No changelog fragments to fold — nothing to commit."
             exit 0
           fi
@@ -6352,9 +5795,16 @@ jobs:
             exit 0
           fi
 
+          # Kill switch: anything but an explicit `true` (including a missing
+          # output) leaves the stable branch untouched.
+          if [ "${RELEASE_TAGGING:-}" != "true" ]; then
+            echo "Release tagging disabled — assembled CHANGELOG.md left uncommitted."
+            exit 0
+          fi
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A -- CHANGELOG.md changelog.d
+          git add -A -- CHANGELOG.md changelog.d agents.md agents.d
           git commit -m "chore: assemble changelog fragments for ${VERSION}"
 
           pushed="false"
@@ -6401,8 +5851,33 @@ jobs:
           echo "$NOTES" > /tmp/release_notes.md
           echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
 
+      # Signed consumer sync manifest (#7128). Built on the final release
+      # commit (HEAD: the tested commit plus any changelog/agents fold), on
+      # dry runs too so the builder is exercised. Consumers verify its
+      # attestation and hashes before running any fetched upstream code.
+      - name: Build sync manifest
+        id: sync_manifest
+        env:
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          SYNC_MANIFEST_PATH="${RUNNER_TEMP}/sync-manifest.json"
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/build_sync_manifest.py build \
+            --repo-root . \
+            --commit "$(git rev-parse HEAD)" \
+            --version "${VERSION}" \
+            --out "${SYNC_MANIFEST_PATH}"
+          echo "path=${SYNC_MANIFEST_PATH}" >> "$GITHUB_OUTPUT"
+
+      # A failed attestation fails the job here, before any tag is pushed.
+      - name: Attest sync manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.sync_manifest.outputs.path }}
+
       - name: Tag version and update stable pointer
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
@@ -6426,6 +5901,8 @@ jobs:
             local max_attempts=5
             local backoff_seconds=2
             local lookup_rc=0
+            local push_error_file=""
+            local push_rc=0
 
             case "${publication_mode}" in
               immutable|moving) ;;
@@ -6446,13 +5923,28 @@ jobs:
 
             while [ "${attempt}" -le "${max_attempts}" ]; do
               echo "Publishing ${tag_ref} (attempt ${attempt}/${max_attempts})..."
+              push_error_file="$(mktemp "${RUNNER_TEMP:-/tmp}/release_tag_push_err.XXXXXX")"
+              set +e
               if [ "${publication_mode}" = "immutable" ]; then
-                if git push origin "${tag_ref}"; then
-                  return 0
-                fi
-              elif git push -f origin "${tag_ref}"; then
+                git push origin "${tag_ref}" 2>"${push_error_file}"
+              else
+                git push -f origin "${tag_ref}" 2>"${push_error_file}"
+              fi
+              push_rc=$?
+              set -e
+              cat "${push_error_file}" >&2 || true
+              if [ "${push_rc}" -eq 0 ]; then
+                rm -f "${push_error_file}"
                 return 0
               fi
+              # A missing workflow scope never clears on retry (run 35639756385): stop now.
+              if { grep -qi 'refusing to allow' "${push_error_file}" && grep -qi 'workflow' "${push_error_file}"; } \
+                || grep -qiE 'workflows[^[:alnum:]]{0,2}permission' "${push_error_file}"; then
+                rm -f "${push_error_file}"
+                echo "::error::RELEASE_TAG_PUBLISH outcome=failed error_class=workflow_scope tag_ref=${tag_ref}: GitHub refused the push because the release credential cannot update workflow files. Give GH_PAT the \`workflow\` scope (classic PAT) or \`workflows: write\` (fine-grained PAT / GitHub App), then re-run the release."
+                return 1
+              fi
+              rm -f "${push_error_file}"
 
               remote_lookup_error_file="$(mktemp "${RUNNER_TEMP:-/tmp}/release_tag_lsremote_err.XXXXXX")"
               set +e
@@ -6524,8 +6016,8 @@ jobs:
           HEAD_SHA="$(git rev-parse HEAD)"
           if [ "${HEAD_SHA}" != "${RELEASE_TESTED_SHA}" ]; then
             if [ "$(git rev-parse HEAD^)" != "${RELEASE_TESTED_SHA}" ] \
-              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/)' || true)" ]; then
-              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog assembly; refusing to tag."
+              || [ -n "$(git diff --name-only HEAD^ HEAD | grep -vE '^(CHANGELOG\.md$|changelog\.d/|agents\.md$|agents\.d/)' || true)" ]; then
+              echo "::error::RELEASE_UNTESTED_HEAD tested=${RELEASE_TESTED_SHA} head=${HEAD_SHA}: HEAD is not the tested commit plus its changelog/agents.md assembly; refusing to tag."
               exit 1
             fi
           fi
@@ -6555,8 +6047,34 @@ jobs:
 
           echo "Tagged $VERSION and updated stable + $MAJOR pointers."
 
+      # Release manifest (safeguarded consumer updater, phase 1, #6943):
+      # build it from the tagged tree, attest it, and upload it as a release
+      # asset before consumers are notified. Any failure stops the job before
+      # consumer dispatch; dry runs skip all three steps. Logic lives in
+      # scripts/release_manifest_publish.sh (log prefix RELEASE_MANIFEST).
+      - name: Build release manifest
+        id: release_manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release-manifest
+        run: |
+          set -euo pipefail
+          RELEASE_SHA="$(git rev-parse "${RELEASE_VERSION}^{commit}")"
+          RELEASE_SHA="${RELEASE_SHA,,}"
+          bash scripts/release_manifest_publish.sh build \
+            --tag "${RELEASE_VERSION}" \
+            --release-sha "${RELEASE_SHA}" \
+            --output-dir "${RELEASE_MANIFEST_DIR}"
+
+      - name: Attest release manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.release_manifest.outputs.manifest_path }}
+
       - name: Create GitHub Release
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
@@ -6617,12 +6135,47 @@ jobs:
           cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
           exit "${RELEASE_CREATE_RC}"
 
+      # Separate from "Create GitHub Release", which exits early on
+      # partial-release recovery. A rerun rebuilds a byte-identical manifest
+      # for the same commit and --clobber replaces the asset.
+      - name: Upload sync manifest
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          VERSION: ${{ needs.resolve-version.outputs.version }}
+          SYNC_MANIFEST_PATH: ${{ steps.sync_manifest.outputs.path }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          if ! gh_retry gh release upload "${VERSION}" "${SYNC_MANIFEST_PATH}" --clobber; then
+            echo "::error::SYNC_MANIFEST outcome=upload_failed version=${VERSION}"
+            exit 1
+          fi
+          echo "SYNC_MANIFEST outcome=uploaded version=${VERSION}"
+
+      - name: Upload release manifest asset
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_MANIFEST_PATH: ${{ steps.release_manifest.outputs.manifest_path }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash scripts/release_manifest_publish.sh upload \
+            --tag "${RELEASE_VERSION}" \
+            --manifest "${RELEASE_MANIFEST_PATH}" \
+            --repo "${RELEASE_REPOSITORY}"
+
       - name: Notify consumer repos via repository_dispatch
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           VERSION="${{ needs.resolve-version.outputs.version }}"
           RELEASE_SHA="$(git rev-parse "${VERSION}^{commit}")"
           if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -6631,26 +6184,61 @@ jobs:
           fi
           RELEASE_SHA="${RELEASE_SHA,,}"
 
+          # Read consumer repos from .github/ai/consumer_repos.json (a JSON
+          # array of repo strings, e.g. ["owner/repo"]). If the file is
+          # absent the step is a no-op — consumers still pick up changes via
+          # their daily schedule.
           CONSUMER_FILE=".github/ai/consumer_repos.json"
           if [ ! -f "$CONSUMER_FILE" ]; then
             echo "No consumer_repos.json found — skipping repository_dispatch."
             exit 0
           fi
 
-          REPOS=$(jq -r '.[]' "$CONSUMER_FILE" 2>/dev/null || true)
+          # The registry must be a JSON array; `.[]` on an object would dispatch to its values.
+          if ! jq -e 'type == "array"' "$CONSUMER_FILE" >/dev/null 2>&1; then
+            echo "::warning::${CONSUMER_FILE} is not a JSON array of owner/repo strings — skipping repository_dispatch."
+            exit 0
+          fi
+
+          REPOS=$(jq -r '.[] | tostring | explode | map(if . < 32 or . == 127 then 32 else . end) | implode' "$CONSUMER_FILE" 2>/dev/null || true)
           if [ -z "$REPOS" ]; then
             echo "consumer_repos.json is empty — skipping."
             exit 0
           fi
 
-          for REPO in $REPOS; do
+          # Control characters (CR, LF, NUL, ...) become spaces inside jq, before bash
+          # command substitution could silently drop a NUL and let the entry pass.
+          # One entry per line; each must be a plain owner/repo before it reaches a
+          # URL path, so a malformed entry can never split or glob into extra targets.
+          # The rejected value is never printed, only its position in the list.
+          REPO_INDEX=0
+          while IFS= read -r REPO; do
+            REPO_INDEX=$((REPO_INDEX + 1))
+            [ -z "${REPO}" ] && continue
+            if [[ ! "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+              || [[ "${REPO}" =~ (^|/)\.{1,2}(/|$) ]]; then
+              echo "::warning::Skipping malformed consumer registry entry #${REPO_INDEX} in ${CONSUMER_FILE} (expected owner/repo)."
+              continue
+            fi
             echo "Dispatching coding-workflows-stable-released to ${REPO} ..."
-            gh api "repos/${REPO}/dispatches" \
+            # A duplicate event is harmless: the consumer updater renders current
+            # stable regardless of the payload, so a retried POST is safe.
+            GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${REPO}/dispatches" \
               -f event_type="coding-workflows-stable-released" \
               -f "client_payload[version]=${VERSION}" \
               -f "client_payload[sha]=${RELEASE_SHA}" \
+              </dev/null \
               || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
-          done
+          done <<< "${REPOS}"
+
+      - name: Release disabled summary
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled != 'true' }}
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "::notice::STABLE_RELEASE_DISABLED version=${RELEASE_VERSION} sha=${RELEASE_TESTED_SHA}: validation and the CI lint gate passed; changelog push, tags, GitHub release, consumer dispatch and sync-to-main skipped"
+          printf 'Stable release %s passed the gate but was not published: STABLE_RELEASE_ENABLED is off.\n' "${RELEASE_VERSION}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dry-run summary
         if: ${{ inputs.dry_run }}
@@ -6676,14 +6264,19 @@ jobs:
   # here guarantees the sync is tied to the release event itself, so
   # `main` can never silently drift behind a tagged stable release.
   #
-  # Skipped on dry runs (no real release happened).
+  # Skipped on dry runs (no real release happened) and while
+  # STABLE_RELEASE_ENABLED is off (nothing was published).
   # ──────────────────────────────────────────────────────────────────
   sync-to-main:
     needs: [release]
+    # !cancelled(): without a status function GitHub applies success(), which
+    # is false whenever an ancestor (a skip_e2e e2e job) was skipped.
     if: >-
+      !cancelled() &&
       !inputs.dry_run &&
       !inputs.gate_only &&
-      needs.release.result == 'success'
+      needs.release.result == 'success' &&
+      needs.release.outputs.release_enabled == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
@@ -6935,6 +6528,9 @@ jobs:
         if: always()
         env:
           GATE_ONLY: ${{ inputs.gate_only }}
+          SKIP_E2E: ${{ inputs.skip_e2e }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_ENABLED: ${{ needs.release.outputs.release_enabled }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -6993,17 +6589,66 @@ jobs:
           if [ "$RELEASE" = "success" ] || { [ "$GATE_ONLY" = "true" ] && [ "$RELEASE" = "skipped" ]; }; then
             release_ok=true
           fi
-          if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$release_ok" = "true" ] && [ "$all_supplemental_ok" = "true" ]; then
+          # skip_e2e (not dry_run) skips the smoke test on purpose; the release
+          # still published, so a skipped e2e must not report FAILED (#7977).
+          e2e_ok=false
+          E2E_ICON="✓"
+          if [ "$E2E" = "success" ]; then
+            e2e_ok=true
+          elif [ "$E2E" = "skipped" ] && [ "${SKIP_E2E:-}" = "true" ] && [ "${DRY_RUN:-}" != "true" ]; then
+            e2e_ok=true
+            E2E_ICON="⊘"
+          fi
+          if [ "$e2e_ok" = "true" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$release_ok" = "true" ] && [ "$all_supplemental_ok" = "true" ]; then
             if [ "$GATE_ONLY" = "true" ]; then
               MSG="Release gate ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
+              RELEASE_ICON="⊘"
+            elif [ "${RELEASE_ENABLED:-}" != "true" ]; then
+              MSG="Release gate ${{ needs.resolve-version.outputs.version }} PASSED — publishing disabled (STABLE_RELEASE_ENABLED or RELEASE_TAGGING_ENABLED off); nothing tagged"
               RELEASE_ICON="⊘"
             else
               MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
               RELEASE_ICON="✓"
             fi
-            MSG+=$'\n'"e2e ✓ scripts ✓ orphans ✓ orchestrate ✓ validate-fx ✓ negative ✓ alt-model ✓ release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
+            # Supplemental jobs are skipped on skip_e2e runs; show ⊘, not ✓.
+            _result_icon() { case "$1" in success) echo "✓" ;; skipped) echo "⊘" ;; "") echo "-" ;; *) echo "✗" ;; esac; }
+            MSG+=$'\n'"e2e ${E2E_ICON} scripts ✓ orphans $(_result_icon "$ORPHANS") orchestrate $(_result_icon "$ORCHESTRATE_DECOMPOSE") validate-fx $(_result_icon "$VALIDATE_STANDALONE") negative $(_result_icon "$CLARIFY_REJECTS") alt-model $(_result_icon "$ALT_MODEL") release ${RELEASE_ICON} log-analysis ${LOG_ANALYSIS_ICON}"
           else
             MSG="Release ${{ needs.resolve-version.outputs.version }} FAILED"
+            # A newer release run cancels this run's e2e-smoke-test through the
+            # job's concurrency group (cancel-in-progress: true). That is not a
+            # failure: this run releases nothing and the newer run carries on.
+            # Report SUPERSEDED when the smoke test was cancelled, no other job
+            # failed, and a newer run of this workflow exists. One API call;
+            # on any error the header stays FAILED. This step makes no other
+            # workflow-runs read, so the lookup has no existing call to join.
+            # Known limit: the runs API exposes neither the test_repo input nor
+            # who cancelled the job, so a manual cancel while any newer run
+            # exists is also reported SUPERSEDED (nothing is released either way).
+            RELEASE_SUPERSEDED_BY=""
+            if [ "$E2E" = "cancelled" ]; then
+              release_hard_failure=false
+              for r in "$SCRIPTS" "$ORPHANS" "$ORCHESTRATE_DECOMPOSE" "$VALIDATE_STANDALONE" "$CLARIFY_REJECTS" "$ALT_MODEL" "$VALIDATE" "$RELEASE"; do
+                case "$r" in
+                  success|skipped|cancelled|"") ;;
+                  *) release_hard_failure=true ;;
+                esac
+              done
+              if [ "$release_hard_failure" = "false" ] && [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+                if ! RELEASE_SUPERSEDED_BY="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml/runs?per_page=20" \
+                  --jq "[.workflow_runs[] | select(.id > ${GITHUB_RUN_ID}) | .id] | min // empty" 2>/dev/null)"; then
+                  echo "::warning::Superseded-run lookup failed; keeping the FAILED header"
+                  RELEASE_SUPERSEDED_BY=""
+                fi
+                if ! [[ "${RELEASE_SUPERSEDED_BY}" =~ ^[0-9]+$ ]]; then
+                  RELEASE_SUPERSEDED_BY=""
+                fi
+              fi
+            fi
+            if [ -n "${RELEASE_SUPERSEDED_BY}" ]; then
+              MSG="Release ${{ needs.resolve-version.outputs.version }} SUPERSEDED: newer run ${RELEASE_SUPERSEDED_BY} cancelled this run's e2e-smoke-test; nothing was released by this run"
+              echo "RELEASE_NOTIFY_V1 outcome=superseded run_id=${GITHUB_RUN_ID} superseded_by=${RELEASE_SUPERSEDED_BY}"
+            fi
             STATUS_LINE=""
             for JOB_NAME in e2e-smoke-test validate-scripts workflow-log-analysis-test orphan-workflows-test orchestrate-decompose-test validate-standalone-test clarify-rejects-unsolvable-test e2e-alt-model-test validate release; do
               case "$JOB_NAME" in

@@ -111,12 +111,12 @@ Rules:
   paths/lines as bare `apps/x/y.ts:NN` without that prefix.
 - For option D (merge_with_followup): the follow-up issue body must describe
   the specific gap that was deferred and provide acceptance criteria. The
-  workflow attempts a SYNCHRONOUS squash merge (no auto-merge enrollment) and
+  workflow attempts a SYNCHRONOUS merge (no auto-merge enrollment; `--squash`, or `--merge` for `auto/forward-merge-stable-*` PRs) and
   creates the follow-up issue ONLY when the PR is definitively merged — either
   because it was already merged before the judge ran, or because the
   synchronous merge just landed in this turn. Both the standalone and
-  orchestrator paths gate the merge on ALL check-runs (required AND
-  informational) being completed with success/neutral/skipped/cancelled — so
+  orchestrator paths gate the merge on check-runs: unless an explicitly empty required-checks list allows all, any pending run blocks, and a
+  required check blocks on any failed run, or when its newest run was cancelled — so
   the merge never lands while CI is still validating. Both paths also bind the
   merge to the judged head SHA via `--match-head-commit`, so a concurrent push
   between judge decision and merge is rejected by GitHub. Cite `file:line` refs
@@ -124,7 +124,7 @@ Rules:
   base branch by the time the follow-up's clarify / planner phases run. The
   workflow refuses this action when: follow-up details are missing; the PR has
   merge conflicts; ENABLE_AUTO_MERGE=false with the PR still open; any
-  check-run is still pending or has a non-success conclusion; the head SHA
+  check-run gate above blocks (pending run, failed required run, or newest required run cancelled); the head SHA
   cannot be resolved; or the bound sync merge fails (e.g., branch protection /
   merge queue / concurrent push). In those refusal cases the PR stays in
   ai:review-blocked. For ORCHESTRATOR-MANAGED PRs the orchestrator's ~5min poll

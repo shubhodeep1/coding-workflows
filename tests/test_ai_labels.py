@@ -587,6 +587,35 @@ def test_sync_labels_rejects_invalid_repo_before_api_calls() -> None:
 	assert "repo must be in 'owner/name' format" in stderr_buffer.getvalue()
 
 
+def test_repair_labels_keeps_needs_human_parked_on_blocked():
+	payload = _repair("ai:needs-human,ai:orchestrator-managed,ai:blocked")
+	assert payload["add"] == []
+	assert payload["remove"] == []
+
+
+def test_repair_labels_keeps_needs_human_parked_on_review_blocked_and_implementation_failed():
+	assert _repair("ai:needs-human,ai:review-blocked")["remove"] == []
+	assert _repair("ai:needs-human,ai:implementation-failed")["remove"] == []
+
+
+def test_repair_labels_keeps_needs_human_and_latest_stop_label_only():
+	payload = _repair("ai:needs-human,ai:awaiting-approval,ai:blocked")
+	assert payload["add"] == []
+	assert payload["remove"] == ["ai:awaiting-approval"]
+
+
+def test_repair_labels_needs_human_still_wins_over_earlier_phases():
+	payload = _repair("ai:needs-human,ai:awaiting-approval,ai:implementing")
+	assert payload["add"] == []
+	assert payload["remove"] == ["ai:awaiting-approval", "ai:implementing"]
+
+
+def test_repair_labels_terminal_phase_drops_needs_human():
+	payload = _repair("ai:needs-human,ai:blocked,ai:merged")
+	assert payload["add"] == []
+	assert payload["remove"] == ["ai:blocked", "ai:needs-human"]
+
+
 def main() -> int:
 	for name in sorted(globals()):
 		if name.startswith("test_") and callable(globals()[name]):

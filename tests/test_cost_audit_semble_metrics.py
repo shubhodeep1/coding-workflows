@@ -477,6 +477,41 @@ def test_context_budget_warn_fixture_generates_and_parses_review_telemetry() -> 
 	assert override["threshold"] == 128
 
 
+def test_parse_log_ignores_codex_tokens_used_mid_sentence() -> None:
+	log = "\n".join([
+		"Diff: the summary says tokens used 123 here",
+		"> tokens used",
+		"456 extra",
+		"tokens used: see below 42",
+		"tokens used 7,000 total",
+	])
+	parsed = parse_log(log)
+	assert parsed["codex_tokens_used"] == 0
+	assert parsed["codex_calls"] == 0
+
+
+def test_parse_log_counts_timestamped_codex_two_line_form_once() -> None:
+	plain = (
+		"2026-09-22T00:00:00.0000000Z tokens used\n"
+		"2026-09-22T00:00:00.0000001Z 12,345\n"
+	)
+	parsed = parse_log(plain)
+	assert parsed["codex_tokens_used"] == 12345
+	assert parsed["codex_calls"] == 1
+
+	colored = (
+		"2026-09-22T00:00:00.0000000Z \x1b[35m\x1b[3mtokens used\x1b[0m\r\n"
+		"2026-09-22T00:00:00.0000001Z 12,345\r\n"
+	)
+	parsed = parse_log(colored)
+	assert parsed["codex_tokens_used"] == 12345
+	assert parsed["codex_calls"] == 1
+
+	single = parse_log("tokens used 7,000")
+	assert single["codex_tokens_used"] == 7000
+	assert single["codex_calls"] == 1
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

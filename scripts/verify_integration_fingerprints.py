@@ -99,6 +99,7 @@ import subprocess
 import sys
 import tempfile
 import hashlib
+import difflib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -337,6 +338,12 @@ _AI_MERGE_RESOLVE_SUBJECT_PREFIX = "[ai-merge-resolve]"
 # or before capture, no attributable commit, or any plumbing/parse error —
 # the defense fails CLOSED so genuine resolver regressions still fail).
 _POST_CAPTURE_EVOLUTION_CACHE: dict[tuple[str, str, str, str], str | None] = {}
+
+# Cache for the must_contain resolver-union-merge defense, keyed like the
+# post-capture-evolution cache. Value is the resolver merge commit SHA when
+# the captured line survives whole inside a union of both merge sides, or
+# None when the defense does not apply (it fails CLOSED).
+_RESOLVER_UNION_MERGE_CACHE: dict[tuple[str, str, str, str], str | None] = {}
 
 
 def _find_pr_merge_commit_for_path(ref: str | None, pr_num: Any, path: str) -> str | None:
@@ -653,6 +660,187 @@ def _is_must_contain_post_capture_evolution_false_positive(
 _post_capture_non_resolver_line_change_commit = (
 	_is_must_contain_post_capture_evolution_false_positive
 )
+
+
+def _only_inserts(base: str, merged: str) -> list[str] | None:
+	"""The text ``merged`` adds to ``base``, or None when it changes or drops any of it.
+
+	Returns the inserted runs in order (empty when the strings are equal).
+	"""
+	inserted: list[str] = []
+	for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, base, merged, autojunk=False).get_opcodes():
+		if tag == "equal":
+			continue
+		if tag != "insert" or i1 != i2:
+			return None
+		inserted.append(merged[j1:j2])
+	return inserted
+
+
+def _matched_positions(base: str, merged: str) -> set[int]:
+	"""Positions of ``merged`` that ``difflib`` matches to a character of ``base``."""
+	positions: set[int] = set()
+	for _i, j, size in difflib.SequenceMatcher(None, base, merged, autojunk=False).get_matching_blocks():
+		positions.update(range(j, j + size))
+	return positions
+
+
+def _is_must_contain_resolver_union_merge_false_positive(
+	ref: str | None,
+	captured_at: Any,
+	path: str,
+	regex_src: str,
+	content: str | None,
+) -> str | None:
+	"""Detect must_contain misses where a resolver merge kept both sides of one line.
+
+	When the sub-issue's captured line and the other merge side (usually a
+	back-merge of ``main``) both edited the *same* line, a correct
+	``[ai-merge-resolve]`` resolution combines the two edits into one line.
+	The exact captured regex then no longer matches, and the post-capture-
+	evolution defense refuses on purpose because the line-changing commit is
+	a resolver commit (project #7355 wave 3: issue #7358 / PR #7365 added
+	``HTTP 400|HTTP 401|...`` to ``_is_gh_permanent_failure``'s regex while
+	``main`` (#7376) appended ``|Commenting is disabled ...`` to the same line;
+	resolver commit ``bb3c9871`` kept both).
+
+	The miss is classified as a union merge, NOT a resolver regression, only
+	when ALL of these hold:
+
+	* ref mode (working-tree mode stays strict), a parseable
+	``captured_at``, and a pure ``re.escape`` regex;
+	* the newest first-parent commit that changed the captured line's count
+	on the verified ref is an ``[ai-merge-resolve]`` commit dated after
+	capture, with exactly two parents;
+	* the file at the verified ref has a line L3 that contains the whole
+	captured line L1 with text only inserted (no character of L1 changed
+	or dropped), and
+	* one line L2 of the file at the resolver's second parent, different
+	from L3, is itself contained whole in L3 the same way, every run L3
+	inserts into L1 is a substring of that L2, and every character of L3
+	is matched to a character of L1 or of L2 (so the resolver added
+	nothing of its own, not even a second copy of other-side text);
+	* L2 is absent from the file at the merge base of the two parents (the
+	other side changed it), and one merge-base line is kept whole, with text
+	only inserted, in both L1 and L2 (so L2 is the other side's edit of
+	the line the sub-issue edited, not an unrelated line).
+
+	Everything else returns None: working-tree mode, no or unparseable
+	``captured_at``, a non-``re.escape`` regex, a non-resolver,
+	single-parent or pre-capture line-changing commit, dropped or changed
+	captured text, text found on neither side, or an L2 that is identical to
+	L3, unchanged since the merge base, or derived from a different base line.
+
+	Returns the resolver merge commit SHA when confirmed (caller skips the
+	violation); None otherwise. Fails CLOSED on every guard and on any git
+	plumbing or decoding error. API call count: zero (local ``git`` only).
+	"""
+	effective_ref = _normalize_ref(ref)
+	if effective_ref is None or content is None:
+		return None
+	captured_epoch = _captured_at_to_epoch(captured_at)
+	if captured_epoch is None:
+		return None
+	normalized_path, path_error = _normalize_repo_path(path)
+	if path_error is not None or normalized_path is None:
+		return None
+	if not isinstance(regex_src, str) or not regex_src or not _looks_like_re_escape_output(regex_src):
+		return None
+	literal = re.sub(r"\\(.)", r"\1", regex_src)
+	if not literal:
+		return None
+	cache_key = (effective_ref, normalized_path, regex_src, str(captured_at).strip())
+	if cache_key in _RESOLVER_UNION_MERGE_CACHE:
+		return _RESOLVER_UNION_MERGE_CACHE[cache_key]
+	result: str | None = None
+	try:
+		log = subprocess.run(
+			[
+				"git", "log",
+				"-S" + literal,
+				"--first-parent",
+				"--max-count=1",
+				"--format=%H%x00%ct%x00%P%x00%s",
+				effective_ref,
+				"--",
+				normalized_path,
+			],
+			capture_output=True,
+			check=False,
+			timeout=GIT_COMMAND_TIMEOUT_SECS,
+		)
+		fields = log.stdout.decode("utf-8", errors="replace").split("\n", 1)[0].split("\x00") if log.returncode == 0 else []
+		if len(fields) == 4:
+			sha, ct_text, parents_text, subject = (field.strip() for field in fields)
+			parents = parents_text.split()
+			if (
+				sha
+				and ct_text.isdigit()
+				and int(ct_text) > captured_epoch
+				and subject.startswith(_AI_MERGE_RESOLVE_SUBJECT_PREFIX)
+				and len(parents) == 2
+			):
+				other = subprocess.run(
+					["git", "show", f"{parents[1]}:{normalized_path}"],
+					capture_output=True,
+					check=False,
+					timeout=GIT_COMMAND_TIMEOUT_SECS,
+				)
+				other_lines = (
+					[line.strip() for line in other.stdout.decode("utf-8", errors="replace").splitlines()]
+					if other.returncode == 0 else []
+				)
+				# Tie the other side's line to an edit of the same line: it must be absent
+				# at the merge base (the other side changed it), and it and the captured
+				# line must both keep one merge-base line whole. A merge base or file that
+				# cannot be read leaves base_lines empty, so the defense fails closed.
+				base = subprocess.run(
+					["git", "merge-base", parents[0], parents[1]],
+					capture_output=True,
+					check=False,
+					timeout=GIT_COMMAND_TIMEOUT_SECS,
+				)
+				base_sha = base.stdout.decode("utf-8", errors="replace").strip() if base.returncode == 0 else ""
+				base_show = subprocess.run(
+					["git", "show", f"{base_sha}:{normalized_path}"],
+					capture_output=True,
+					check=False,
+					timeout=GIT_COMMAND_TIMEOUT_SECS,
+				) if base_sha else None
+				base_lines = {
+					line.strip() for line in base_show.stdout.decode("utf-8", errors="replace").splitlines()
+				} if base_show is not None and base_show.returncode == 0 else set()
+				base_lines.discard("")
+				literal_bases = [line for line in base_lines if _only_inserts(line, literal) is not None]
+				for merged_line in (line.strip() for line in content.splitlines()):
+					if len(merged_line) <= len(literal):
+						continue
+					inserted = _only_inserts(literal, merged_line)
+					if not inserted:
+						continue
+					literal_matched = _matched_positions(literal, merged_line)
+					for other_line in other_lines:
+						# other_line == merged_line would make both checks vacuous: a resolver
+						# that took the other side verbatim (undoing a sub-issue deletion) must fail.
+						# Every merged character must also be matched against the captured line or
+						# this other line, so a duplicated or moved run of other-side text fails.
+						if (
+							other_line
+							and other_line != merged_line
+							and other_line not in base_lines
+							and all(run in other_line for run in inserted)
+							and any(_only_inserts(line, other_line) is not None for line in literal_bases)
+							and _only_inserts(other_line, merged_line) is not None
+							and len(literal_matched | _matched_positions(other_line, merged_line)) == len(merged_line)
+						):
+							result = sha
+							break
+					if result:
+						break
+	except Exception:  # noqa: BLE001 — defense must stay fail-closed
+		result = None
+	_RESOLVER_UNION_MERGE_CACHE[cache_key] = result
+	return result
 
 
 def _is_must_not_contain_post_capture_evolution_false_positive(
@@ -1283,6 +1471,27 @@ def _evaluate_fp_state(
 				f"after capture by non-resolver commit {evolution_sha[:12]} on the verified ref; the "
 				"pickaxe-identified line-removal commit is not an [ai-merge-resolve] commit, so this "
 				f"miss is not attributable to the resolver. Skipping violation. Pattern (first 200 chars): {regex_src[:200]}",
+				flush=True,
+				file=sys.stderr,
+			)
+			return {
+				"kind": kind,
+				"path": path,
+				"regex": regex_src,
+				"fp_key": fp_key,
+				"satisfied": True,
+				"check_error": None,
+				"violation": None,
+			}
+		union_sha = _is_must_contain_resolver_union_merge_false_positive(
+			ref, captured_at, path, regex_src, content,
+		)
+		if union_sha:
+			print(
+				f"::warning::FINGERPRINT_RESOLVER_UNION_MERGE_V1 "
+				f"issue=#{issue_num} pr=#{pr_num} file={path} "
+				f"resolver_commit={union_sha[:12]} "
+				f"reason=must_contain_line_kept_whole_in_union_with_other_merge_side",
 				flush=True,
 				file=sys.stderr,
 			)

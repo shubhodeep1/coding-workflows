@@ -96,6 +96,25 @@ def test_select_targets_skips_runs_with_excerpts_or_existing_summary():
 	assert [r["run_id"] for r in picked] == [4, 1], picked
 
 
+def test_select_targets_skips_untrusted_origin_runs():
+	# Issue #6637: fork-origin and unknown-origin PR runs are excluded by the
+	# collector and must never have their archives fetched or summarised.
+	runs = [
+		{"repository": "a/b", "run_id": 1, "created_at": "2026-01-01T00:00:00Z", "origin_trust": "trusted"},
+		{"repository": "a/b", "run_id": 2, "created_at": "2026-01-02T00:00:00Z", "origin_trust": "fork"},
+		{"repository": "a/b", "run_id": 3, "created_at": "2026-01-03T00:00:00Z", "origin_trust": "origin_unknown"},
+		{
+			"repository": "a/b",
+			"run_id": 4,
+			"created_at": "2026-01-04T00:00:00Z",
+			"log_download_status": "excluded_untrusted_origin",
+		},
+		{"repository": "a/b", "run_id": 5, "created_at": "2026-01-05T00:00:00Z"},
+	]
+	picked = summarizer.select_targets(runs, max_summaries=10)
+	assert [r["run_id"] for r in picked] == [5, 1], picked
+
+
 def test_select_targets_requires_repo_and_run_id():
 	runs = [
 		{"run_id": 5, "created_at": "2026-01-01T00:00:00Z"},

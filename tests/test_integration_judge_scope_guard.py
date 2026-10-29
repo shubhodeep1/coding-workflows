@@ -307,9 +307,14 @@ def test_unprotected_conflict_accepts_empty_resolution(judge_repo):
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
 
 
-def test_integration_judge_prompt_requires_shared_line_retention():
-	assert "keep every line both merge sides contain at least as" in POLL_SCRIPT
-	assert "many times as the side with fewer copies" in POLL_SCRIPT
+def test_integration_judge_prompt_matches_resolver_synthesize_rule():
+	# The judge never edits on the conflict path; its guidance goes to the
+	# resolver, whose template says to synthesize. The either-side line rule
+	# is enforced only by _integration_judge_verify_scope on the judge's own
+	# conflict-free publish, so the prompt no longer states it
+	# (tele-funtoken-msg-scoring final PR #3933).
+	assert "keep every line both merge sides contain at least as" not in POLL_SCRIPT
+	assert "synthesize one hunk that keeps both sides" in POLL_SCRIPT
 
 
 @pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)

@@ -1,6 +1,5 @@
-# IMPORTANT: This file is managed by coding-workflows and may be overwritten
-# automatically when upstream templates change. To opt out of auto-updates,
-# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
 name: AI Review
 # Dispatched runs carry their PR in the run name. The orchestrator poller and
 # the merge train dispatch this workflow from the default branch only
@@ -42,6 +41,11 @@ on:
         required: false
         default: false
         type: boolean
+      post_sync_test_repair:
+        description: "Integration branch only: gate and repair post-sync test failures"
+        required: false
+        default: false
+        type: boolean
 permissions:
   actions: write
   contents: write
@@ -63,21 +67,64 @@ jobs:
       pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
       force_rb_judge: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true' }}
-    secrets: inherit
+      post_sync_test_repair: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.post_sync_test_repair == 'true' }}
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+
+  # Non-retryable failure backfill (issue #7291): re-send a review/autofix
+  # failure whose trusted current-head marker names a non-retryable reason the
+  # heal intake never diagnosed, so the PR gets the intake's diagnosis and
+  # ai:needs-human. All writes use GH_PAT; the job has no id-token.
+  non-retryable-backfill:
+    if: ${{ github.event_name == 'schedule' && vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED != 'false' && vars.WORKFLOW_HEAL_ENABLED != 'false' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out trusted non-retryable backfill support
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: stable
+          path: .non-retryable-backfill-support
+          persist-credentials: false
+      - name: Backfill non-retryable autofix failure reports
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED || 'true' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PER_TICK: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PER_TICK || '3' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MAX_PRS || '50' }}
+          WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_MIN_AGE_MINUTES || '60' }}
+        run: bash .non-retryable-backfill-support/scripts/workflow_failure_heal_non_retryable_backfill.sh
 
   security-hold-sweep:
-    if: ${{ github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' }}
+    # Issue #7099: wait for the provider-outage probe and skip dispatch while
+    # it reports a pause. A skipped or failed probe job leaves `paused` empty,
+    # so the sweep still runs (fail-open, like review_autofix_sweep.yml).
+    needs: provider-outage-resume
+    if: ${{ !cancelled() && github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' && needs.provider-outage-resume.outputs.paused != 'true' }}
     runs-on: ubuntu-latest
-    # Least privilege for the github.token fallback: list PRs and comments,
-    # post the dedup marker, dispatch the judge. Replaces the workflow block.
+    # Least privilege: github.token does every sweep operation (list PRs and
+    # comments, post the dedup marker, dispatch the judge) within these grants.
+    # GH_PAT only names the account that posts findings markers (issue #7209).
+    # Replaces the workflow block.
     permissions:
       actions: write
       contents: read
       pull-requests: read
       issues: write
     steps:
+      # `ref: stable` is a render token: installed wrappers pin it to the same
+      # release SHA as the reusable-workflow refs (scripts/workflow_wrapper_refs.py).
       - name: Check out trusted security-hold sweep support
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           repository: shubhodeep1/coding-workflows
           ref: stable
@@ -85,9 +132,75 @@ jobs:
           persist-credentials: false
       - name: Re-dispatch stale security holds
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ github.token }}
+          SECURITY_HOLD_FINDING_AUTHOR_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_HOLD_SWEEP_TOKEN_MODE: actions_token
           REPOSITORY: ${{ github.repository }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
           SECURITY_HOLD_REVIEW_WORKFLOW: ai-review.yml
         run: PYTHONDONTWRITEBYTECODE=1 python3 .security-hold-support/scripts/review_security_hold_sweep.py
+
+  # Model-provider outage resume (issue #6633): while the repo's
+  # ai:provider-outage tracker is open, probe the provider once per tick; on
+  # recovery re-dispatch the PRs whose newest current-head failure was
+  # provider_unavailable (PR-named ai-review.yml runs), remove only the
+  # marker-backed outage labels, close the tracker and send one alert.
+  provider-outage-resume:
+    if: ${{ github.event_name == 'schedule' && vars.PROVIDER_OUTAGE_RESUME_ENABLED != 'false' }}
+    runs-on: ubuntu-latest
+    outputs:
+      paused: ${{ steps.provider_outage.outputs.paused }}
+    concurrency:
+      group: provider-outage-resume-${{ github.repository }}
+      cancel-in-progress: false
+    # Least privilege: read PRs and comments, write the tracker issue,
+    # comments and labels, dispatch ai-review.yml.
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      # `ref: stable` is a render token here too (tele-funtoken-msg-scoring#4566).
+      - name: Check out trusted provider-outage support
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: stable
+          path: .provider-outage-support
+          persist-credentials: false
+      - name: Provider outage probe and resume
+        id: provider_outage
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PROVIDER_OUTAGE_RESUME_ENABLED: ${{ vars.PROVIDER_OUTAGE_RESUME_ENABLED || 'true' }}
+          PROVIDER_OUTAGE_PROBE_MODEL: ${{ vars.PROVIDER_OUTAGE_PROBE_MODEL || 'openai/gpt-6-luna' }}
+          PROVIDER_OUTAGE_RESUME_MAX_DISPATCH: ${{ vars.PROVIDER_OUTAGE_RESUME_MAX_DISPATCH || '50' }}
+          PROVIDER_OUTAGE_REVIEW_WORKFLOW: ai-review.yml
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS != 'false' && 'true' || 'false' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "PROVIDER_OUTAGE op=sweep outcome=skip reason=gh_pat_missing"
+            echo "paused=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          helper=".provider-outage-support/scripts/provider_outage.py"
+          if [ ! -f "${helper}" ]; then
+            echo "PROVIDER_OUTAGE op=sweep outcome=skip reason=helper_missing"
+            echo "paused=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          alert_file="$(mktemp)"
+          PYTHONDONTWRITEBYTECODE=1 python3 "${helper}" sweep --repo "${REPOSITORY}" --alert-out "${alert_file}" || true
+          if [ -s "${alert_file}" ] && [ -f .provider-outage-support/scripts/tg_helpers.sh ]; then
+            source .provider-outage-support/scripts/tg_helpers.sh
+            tg_send_msg "$(cat "${alert_file}")" "WARNING" >/dev/null || true
+          fi
+          rm -f -- "${alert_file}"

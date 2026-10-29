@@ -46,6 +46,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:done"]="0e8a16"
 	["ai:ready-to-merge"]="0e8a16"
 	["ai:needs-human"]="e11d48"
+	["ai:claude-capacity-wait"]="fbca04"
 	["ai:blocked"]="b60205"
 	["ai:merged"]="5319e7"
 	["ai:review-blocked"]="e11d48"
@@ -57,6 +58,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:implement-fix-up"]="d4c5f9"
 	["ai:destructive-blocked"]="b60205"
 	["ai:scope-blocked"]="b60205"
+	["ai:split-to-project"]="a2eeef"
 	["ai:closed"]="6a737d"
 	["ai:orchestrator-tracking"]="a2eeef"
 	["ai:orchestrator-managed"]="bfdadc"
@@ -64,6 +66,7 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:comprehensive-test-pending"]="1d76db"
 	["ai:needs-prompt-review"]="fbca04"
 	["ai:review-skipped"]="c2e0c6"
+	["ai:skip-activation-verify"]="c2e0c6"
 	["ai:merge-queued"]="c5def5"
 	["ai:retro"]="5319e7"
 	["ai:security-audit"]="5319e7"
@@ -75,6 +78,8 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:workflow-heal"]="d876e3"
 	["ai:workflow-heal-escalated"]="b60205"
 	["ai:operator-step"]="fbca04"
+	["ai:provider-outage"]="b60205"
+	["ai:scheduled-validation-failed"]="b60205"
 	["ai:unblock-closed"]="5c5c5c"
 	["ai:codex"]="0e8a16"
 	["ai:engine-claude"]="d4c5f9"
@@ -106,6 +111,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:done"]="Implementation PR created"
 	["ai:ready-to-merge"]="PR review complete and ready to merge"
 	["ai:needs-human"]="Escalated for human intervention; autonomous stall recovery is paused"
+	["ai:claude-capacity-wait"]="Claude pool at capacity; work is waiting for the hourly resume pass"
 	["ai:blocked"]="Orchestrator auto-answer loop blocked pending human intervention"
 	["ai:merged"]="Linked PR merged"
 	["ai:review-blocked"]="PR review/autofix could not resolve all issues — needs human intervention"
@@ -117,6 +123,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:implement-fix-up"]="Implement-phase post-Codex fix-up issue"
 	["ai:destructive-blocked"]="Implementation blocked for mass/destructive deletions; this issue ID now waits for human review"
 	["ai:scope-blocked"]="Implementation blocked: staged files fell outside files_touched scope; human review required"
+	["ai:split-to-project"]="Plan too large for one grant; handed to an orchestrator project, closed when the project completes"
 	["ai:closed"]="Linked PR closed without merge"
 	["ai:orchestrator-tracking"]="Orchestrator project tracking issue"
 	["ai:orchestrator-managed"]="Issue is managed by the AI orchestrator"
@@ -124,6 +131,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:comprehensive-test-pending"]="Pending comprehensive release callback dispatch."
 	["ai:needs-prompt-review"]="Validation prompt self-heal PR awaiting manual review"
 	["ai:review-skipped"]="Reviewer panel + editor cycle skipped by deterministic gate (doc-only or under size threshold)"
+	["ai:skip-activation-verify"]="Activation verification skips this merged PR (no verdict, no fix issue)"
 	["ai:merge-queued"]="Review queued behind an older open PR that edits the same files (merge train)"
 	["ai:retro"]="Stable tracker issue for weekly workflow retrospectives"
 	["ai:security-audit"]="Stable tracker issue for periodic default-branch security audits"
@@ -135,12 +143,23 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:workflow-heal"]="Issue auto-filed from an escalated workflow failure by workflow failure heal"
 	["ai:workflow-heal-escalated"]="Workflow failure heal chain hit the lineage cap; needs human attention"
 	["ai:operator-step"]="Steps only a person can take; the pipeline continues and gated work stays off until they are done"
+	["ai:provider-outage"]="Model provider outage tracker (automation); the review sweep resumes and closes it on recovery"
+	["ai:scheduled-validation-failed"]="Weekly scheduled validation of the default branch is failing (automation); closes when a later scheduled run passes"
 	["ai:unblock-closed"]="Closed by the unblock judge after every verdict was spent; a closed project is marked abandoned"
 	["ai:codex"]="Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
 	["ai:engine-claude"]="Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'
+
+# Process-local cache of labels confirmed to exist, keyed "<repo>|<label>".
+# Holds only confirmed outcomes (create succeeded, or GitHub said the label
+# already exists); failures are never cached. Guarded so re-sourcing keeps
+# the existing cache. Subshells ($(...), pipelines) get a copy that is
+# discarded, so they may repeat one create; that is acceptable.
+if [[ "$(declare -p _AI_LABEL_ENSURED_CACHE 2>/dev/null)" != "declare -A"* ]]; then
+	declare -gA _AI_LABEL_ENSURED_CACHE=()
+fi
 
 # ensure_label_exists <label_name> [repo]
 #
@@ -161,6 +180,12 @@ ensure_label_exists() {
 		return 1
 	fi
 
+	local _label_cache_key="${repo}|${label_name}"
+	if [ -n "${_AI_LABEL_ENSURED_CACHE["${_label_cache_key}"]+x}" ]; then
+		echo "::debug::ensure_label_exists: label '${label_name}' already ensured in this process for '${repo}', skipping API call." >&2
+		return 0
+	fi
+
 	local _label_err_file
 	_label_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
 
@@ -170,6 +195,7 @@ ensure_label_exists() {
 		--description "${description}" \
 		>/dev/null 2>"${_label_err_file}"; then
 		[ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
+		_AI_LABEL_ENSURED_CACHE["${_label_cache_key}"]=1
 		return 0
 	fi
 
@@ -178,6 +204,7 @@ ensure_label_exists() {
 	[ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
 
 	if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|already_exists'; then
+		_AI_LABEL_ENSURED_CACHE["${_label_cache_key}"]=1
 		echo "::debug::ensure_label_exists: label already exists, skipping '${label_name}'." >&2
 		return 0
 	fi
@@ -186,17 +213,27 @@ ensure_label_exists() {
 	return 1
 }
 
+# set_issue_phase_label_resilient <issue_number> <target_label> [repo]
+#
+# Always returns 0. Callers that need to know whether the label landed read
+# SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME afterwards (issue #7099):
+# `applied` (the target POST, or the POST fallback, succeeded), `failed` (the
+# POST failed) or `skipped` (missing arguments / repo). The helper only POSTs
+# the target and DELETEs stale phase labels; it never PUTs the full set.
 set_issue_phase_label_resilient() {
+	SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME=""
 	local issue_number="${1:-}"
 	local target_label="${2:-}"
 	local repo="${3:-${GITHUB_REPOSITORY:-}}"
 
 	if [ -z "${issue_number}" ] || [ -z "${target_label}" ]; then
 		echo "::warning::set_issue_phase_label_resilient: issue_number and target_label are required; skipping." >&2
+		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="skipped"
 		return 0
 	fi
 	if [ -z "${repo}" ]; then
 		echo "::warning::set_issue_phase_label_resilient: repo required for issue #${issue_number}; skipping." >&2
+		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="skipped"
 		return 0
 	fi
 
@@ -206,35 +243,70 @@ set_issue_phase_label_resilient() {
 	if ! _cur="$(gh_retry gh api --paginate "repos/${repo}/issues/${issue_number}/labels" \
 		--jq '[.[].name]' 2>/dev/null | jq -cs 'add // []')"; then
 		echo "::warning::set_issue_phase_label_resilient: GET labels failed for #${issue_number} — falling back to POST add." >&2
-		if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 			-f "labels[]=${target_label}" >/dev/null 2>&1; then
+			SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
+		else
+			SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
 			echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
 		fi
 		return 0
 	fi
 
 	_cur="${_cur:-[]}"
-	local _new=""
-	if ! _new="$(printf '%s' "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" --arg t "${target_label}" \
-		'(. - $p) + [$t] | unique' 2>/dev/null)"; then
+	# BUG-001: this helper used to PUT the whole computed label set
+	# ((current - phase labels) + target). Any label added between the GET
+	# above and that PUT (ai:orchestrator-managed, force-review,
+	# ai:needs-human, ai:merge-queued, ...) was silently removed by the stale
+	# replacement payload. The swap is now additive: POST the target first, so
+	# the issue is never without a phase label, then DELETE each stale phase
+	# label from the GET snapshot one at a time. Non-phase labels are never
+	# touched. API cost: 1 GET + 1 POST + one DELETE per stale phase label
+	# (usually 1), instead of 1 GET + 1 PUT. A phase label added concurrently
+	# between the GET and the DELETEs can remain; the existing label repair
+	# (scripts/ai_labels.py repair-labels / reconcile_managed_issue_labels)
+	# reconciles it.
+	local _stale=""
+	if ! _stale="$(printf '%s' "${_cur}" | jq -c --argjson p "${_AI_PHASE_LABELS}" --arg t "${target_label}" \
+		'[.[] | select(. as $l | $p | index($l) != null) | select(. != $t)] | unique' 2>/dev/null)"; then
 		echo "::warning::set_issue_phase_label_resilient: failed to compute new labels for #${issue_number} — falling back to POST add." >&2
-		if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
 			-f "labels[]=${target_label}" >/dev/null 2>&1; then
+			SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
+		else
+			SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
 			echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
 		fi
 		return 0
 	fi
 
-	if printf '{"labels":%s}' "${_new}" | \
-		gh_retry gh api -X PUT "repos/${repo}/issues/${issue_number}/labels" \
-			--input - >/dev/null 2>&1; then
+	if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
+		-f "labels[]=${target_label}" >/dev/null 2>&1; then
+		SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="failed"
+		echo "::warning::set_issue_phase_label_resilient: POST add failed for #${issue_number}." >&2
 		return 0
 	fi
+	SET_ISSUE_PHASE_LABEL_RESILIENT_OUTCOME="applied"
 
-	echo "::warning::set_issue_phase_label_resilient: PUT labels failed for #${issue_number} — falling back to POST add." >&2
-	if ! gh_retry gh api -X POST "repos/${repo}/issues/${issue_number}/labels" \
-		-f "labels[]=${target_label}" >/dev/null 2>&1; then
-		echo "::warning::set_issue_phase_label_resilient: POST fallback also failed for #${issue_number}." >&2
-	fi
+	local _stale_name="" _stale_enc="" _del_err=""
+	while IFS= read -r _stale_name; do
+		[ -n "${_stale_name}" ] || continue
+		if ! _stale_enc="$(jq -rn --arg l "${_stale_name}" '$l|@uri' 2>/dev/null)" || [ -z "${_stale_enc}" ]; then
+			echo "::warning::set_issue_phase_label_resilient: could not remove stale phase label '${_stale_name}' from #${issue_number}." >&2
+			continue
+		fi
+		if _del_err="$(GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE \
+			"repos/${repo}/issues/${issue_number}/labels/${_stale_enc}" </dev/null 2>&1 >/dev/null)"; then
+			continue
+		fi
+		# A 404 means the label is already gone (removed concurrently).
+		if printf '%s' "${_del_err}" | grep -qiE 'HTTP 404|Not Found'; then
+			continue
+		fi
+		local _del_first=""
+		# gh_retry prints its retry notices first and gh's own error last.
+		_del_first="$(printf '%s\n' "${_del_err}" | tr -d '\r' | awk 'NF { l = $0 } END { print substr(l, 1, 200) }')"
+		echo "::warning::set_issue_phase_label_resilient: could not remove stale phase label '${_stale_name}' from #${issue_number}: ${_del_first//::/: :}" >&2
+	done < <(printf '%s' "${_stale}" | jq -r '.[]' 2>/dev/null || true)
 	return 0
 }

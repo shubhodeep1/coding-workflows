@@ -23,8 +23,15 @@ otherwise) and classifies the call:
              A complete double-quoted `$(gh api ...)` REST read is also
              approvable in an `echo` argument, including a #4786 literal-ID
              loop whose variable occurs only in the endpoint path.
+             A bare `gh api --help` or `gh api -h` (no other argument)
+             only prints usage, so it is a read too.
   routine  — a CLAUDE.md §23.B write to the repository of the local checkout
-             (or the `{owner}/{repo}` placeholders): create a PR, edit a PR's
+             (or the `{owner}/{repo}` placeholders, but only while every git
+             remote names that repository, no `gh-resolved` remote points
+             elsewhere, the command changes no directory and sets no `GH_*`
+             or `GIT_*` variable, and neither the session environment nor
+             `CLAUDE_ENV_FILE` sets `GH_REPO` or another `GH_HOST`; issue
+             #7555): create a PR, edit a PR's
              or issue's title/body, add or edit an issue/PR comment, reply to a
              review thread, add or remove a label, request reviewers, and
              dispatch one of the workflows `settings.json` already allows as
@@ -45,8 +52,16 @@ otherwise) and classifies the call:
              substitution Bash would run (single-quoted text is data), handed
              to an executor such as `bash -c`, `sudo`, `xargs`, `python3`, or
              in a heredoc fed to one). Forces the permission prompt, in every
-             permission mode. `gh api` text handed to any other command
+             permission mode (Auto mode: see below). `gh api` text handed to any other command
              (`git commit -m`, `grep`, `echo`) is data and is ignored.
+             Quoted or escaped spellings (`'gh' api`, `gh a''pi`,
+             `gh \\<newline>api`, `gh a\\<newline>pi`) are read like the plain
+             form; an expansion in the subcommand position (`gh $'api'`,
+             `gh $SUB`), an expanding command word before `api` (`$G api`)
+             and `env -S '<gh api ...>'` count as hidden calls (issue #7555).
+             A flag between `gh` and `api` (`gh -R x api ...`) also prompts.
+             A write with `--hostname` naming a host other than github.com,
+             or with a `GH_*` assignment in the command, is not routine.
              An unquoted `$` or backtick in a direct `gh api` argument also
              prompts: Bash could split it into a new flag. Quoted read paths
              keep their existing no-decision outcome in compound commands.
@@ -86,13 +101,49 @@ Decision for the whole Bash call (a hook decides once per tool call):
     counter `echo`, with only safe pipe filters and `2>&1`. Writes still ask;
     unvetted loops still receive no decision.
 
+Auto mode (`permission_mode` `auto` in the hook payload): a hook "ask"
+forces a human prompt even in Auto mode, so the asks above that only mean
+"the guard cannot read this command's shell shape" step aside there and give
+no decision, leaving the command to the Auto-mode classifier. They are the
+unparseable command, the hidden `gh api` call, and the ANSI-C / comment /
+brace hazard. An unquoted `$` or backtick in a direct `gh api` argument is
+denied in Auto mode instead, with the rewrite steps: Bash can split the word
+into a method flag (such as `-XDELETE`) that the guard read as part of a GET
+endpoint (issue #8198). Only the fully validated literal-ID read loop is
+exempt, and it is allowed. A call the guard reads
+and classifies as a write (unreadable calls included) still asks, a flag
+between `gh` and `api` still asks, and the malformed-jq deny and every allow
+are unchanged. A command that an allow rule could match does not step aside
+(it is denied, see below), because Auto mode resolves a matching allow rule
+before its classifier runs:
+the shipped `Bash(gh api repos/*)` / `Bash(gh api user *)` prefixes (quoted
+spellings included), and any `Bash(...)` rule in the project settings (next
+to this hook and under `CLAUDE_PROJECT_DIR`, `settings.local.json` too), the
+user's `~/.claude/settings.json` or `CLAUDE_CONFIG_DIR`, or the managed
+settings files, such as `Bash(test *)` around a hidden
+`$(gh api -X DELETE ...)`. A piece that starts with a wrapper (`timeout`,
+`nice`, `env`, `sudo`, `xargs`, ...) is also matched with its leading words
+dropped, so `timeout 60 git diff "$(...)"` counts as matching
+`Bash(git diff *)`. A settings file that exists but cannot be read counts as
+a match. A brace / ANSI-C / comment hazard never steps aside when the command
+holds an `@` or an escape that can produce one, because it could hide a
+file-backed `-F key=@file` field. Any other or missing mode keeps the prompts.
+
+Where Auto mode cannot step aside (an allow rule could match, the `@`
+hazard case, or an unquoted `gh api` argument expansion), the hook denies instead of asking, with a reason that says how to
+rewrite the command: a hook ask prompts a human even in Auto mode, while a
+deny runs nothing and the session can retry with plain `gh api` calls. Write
+classifications and the flag-between-`gh`-and-`api` check still ask.
+
 Unlike the other hooks in this directory this one fails CLOSED: an unreadable,
 invalid, or non-object payload, or an internal error, asks instead of allowing,
 because it is the only thing standing where the ask rules were. Empty or
 whitespace-only input carries no command and is allowed silently.
 
-The hook issues no GitHub API calls (§15). The only subprocess is one
-`git config --get remote.origin.url`, run only when a call could be routine.
+The hook issues no GitHub API calls (§15). The only subprocesses are one
+`git config --get remote.origin.url` and, for a `{owner}/{repo}` write, one
+`git config --get-regexp` read of the remote URLs and `gh-resolved` values,
+run only when a call could be routine.
 There is deliberately no environment-variable escape hatch.
 
 Exit code is always 0 (Claude Code hook protocol); the decision travels in the
@@ -105,6 +156,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 
@@ -117,6 +169,42 @@ DECISION_ASK = "ask"
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
 
+# Claude Code's `permission_mode` hook field for Auto mode (hooks reference,
+# "Common input fields").
+AUTO_PERMISSION_MODE = "auto"
+# Auto mode resolves a matching allow rule before its classifier runs, so a
+# no-decision on a command that the shipped `Bash(gh api repos/*)` or
+# `Bash(gh api user *)` allow rule could match would approve it unprompted.
+# Such commands keep the ask in Auto mode. Quoted forms count too, because the
+# guard cannot tell how Claude Code normalises a command before matching.
+_GH_API_ALLOW_RULE_RE = re.compile(r"""(?<![\w./-])gh\s+api\s+["']?(?:repos/|user(?=["']?(?:[\s;&|)`]|$)))""")
+# Settings files whose `permissions.allow` rules Auto mode resolves before its
+# classifier runs; see `_may_match_bash_allow_rule`.
+_SETTINGS_FILE_NAMES = ("settings.json", "settings.local.json")
+_SETTINGS_READ_BYTES = 1048576
+_ALLOW_RULE_COARSE_SPLIT_RE = re.compile(r"&&|\|\||[;&|\n]")
+_ALLOW_RULE_FINE_SPLIT_RE = re.compile(r"&&|\|\||\$\(|[;&|\n()`]")
+_ALLOW_RULE_LEADING_WORDS_RE = re.compile(r"^(?:(?:do|then|else|elif|if|while|until|time|!|\{)\s+)+")
+_ALLOW_RULE_LEADING_ASSIGNMENTS_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*\+?=\S*\s+)+")
+# Commands that run their remaining words as a command. Claude Code can match
+# an allow rule against the wrapped command (`timeout 60 git diff ...` against
+# `Bash(git diff *)`), so a piece that starts with one is also tried with up to
+# _ALLOW_RULE_WRAPPER_MAX_DROP leading words dropped.
+_ALLOW_RULE_WRAPPER_WORDS = frozenset({
+	"builtin", "command", "doas", "env", "exec", "ionice", "nice", "nohup", "noglob",
+	"setsid", "stdbuf", "sudo", "time", "timeout", "xargs",
+})
+_ALLOW_RULE_WRAPPER_MAX_DROP = 16
+# Managed (administrator) settings files, which also hold allow rules.
+_MANAGED_SETTINGS_FILES = (
+	"/etc/claude-code/managed-settings.json",
+	"/Library/Application Support/ClaudeCode/managed-settings.json",
+)
+# In Auto mode a brace / ANSI-C / comment hazard is denied (never steps aside) when the command
+# holds an `@` or an escape that can produce one (`\x40`, `\100`), because the
+# hazard could turn a word into a file-backed `-F key=@file` field (#4619).
+_AUTO_HAZARD_FILE_FIELD_RE = re.compile(r"@|\\(?:[xuU][0-9A-Fa-f]|[0-7])")
+
 KIND_READ = "read"
 KIND_ROUTINE = "routine"
 KIND_WRITE = "write"
@@ -124,6 +212,40 @@ KIND_WRITE = "write"
 # Anything that looks like `gh api` in a piece of text (a token, a heredoc
 # body). The fast path skips every command that contains none.
 _RAW_GH_API_RE = re.compile(r"(?<![\w.-])gh\s+api(?![\w-])")
+# `gh` followed by a word with an expansion in it (`gh $'api'`, `gh $SUB`,
+# `gh "$X"`): Bash could expand that word into `api` (issue #7555).
+_GH_EXPANDED_SUBCOMMAND_RE = re.compile(r"(?<![\w.-])gh\s+[^\s;&|]*[$`]")
+# An expanding command word before `api` (`G=gh; $G api`, `` `printf gh` api ``):
+# Bash could expand it into `gh` (issue #7555).
+# Each match is one shell word (backtick and `$(...)` groups kept whole) followed
+# by `api`; `_has_expanding_word_before_api` checks the word for `$` or a backtick.
+# The lookbehind starts each match at a word boundary, so a long token is scanned once.
+_WORD_BEFORE_API_RE = re.compile(r"(?<![^\s;&|`()])((?:`[^`]*`|\$\([^)]*\)|[^\s;&|`()])+)[ \t]+api(?![\w-])")
+# A `)` right before `api` in text with a `$(` substitution: a nested command word
+# such as `$(printf $(printf gh)) api`, which `_WORD_BEFORE_API_RE` cannot span
+# (issue #7555). Matching any `) api` after a `$(` only adds prompts.
+_SUBSTITUTION_CLOSE_BEFORE_API_RE = re.compile(r"\)[ \t]+api(?![\w-])")
+# `gh` glued to an expansion (`gh${IFS}api`, `gh$IFS'api'`): Bash can split the
+# word into `gh api` (issue #7555).
+_GH_GLUED_EXPANSION_RE = re.compile(r"(?<![\w.-])gh[$`]")
+# A brace expansion with a `gh` element (`{gh,api}`): Bash expands it into
+# separate words, so it can run `gh api` (issue #7555).
+_BRACE_WITH_GH_RE = re.compile(r"\{(?:[^{}\s]*,)?gh(?:,[^{}\s]*)?\}")
+# `gh` with a flag before the `api` subcommand (`gh -R other/repo api ...`,
+# `gh --hostname h api ...`): the flag could change where the call goes, so
+# the call prompts instead of being classified (issue #7555).
+_GH_FLAG_BEFORE_API_RE = re.compile(r"(?<![\w.-])gh\s+-[^;&|\n]*?(?<![\w-])api(?![\w-])")
+# A `GH_*` (gh settings: GH_REPO, GH_HOST, GH_TOKEN, ...) or `GIT_*` (which
+# repository's remotes gh reads) assignment anywhere in the command: a prefix,
+# `export`, `env NAME=`, `declare -x`. Matching quoted text too only prompts.
+_GH_ENV_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z0-9_])GH_[A-Za-z0-9_]*\+?=")
+_GIT_ENV_ASSIGNMENT_RE = re.compile(r"(?<![A-Za-z0-9_])GIT_[A-Za-z0-9_]*\+?=")
+# A directory change before the call: gh would read another checkout's remotes.
+_DIRECTORY_CHANGE_RE = re.compile(r"(?:^|[\s;&|(`{])(?:cd|pushd|popd)(?=[\s;&|)}]|$)")
+# `CLAUDE_ENV_FILE` is sourced before every Bash command, so a `GH_REPO` or
+# `GH_HOST` written there changes where gh sends the placeholder call.
+_CLAUDE_ENV_FILE_READ_BYTES = 65536
+_ENV_FILE_GH_TARGET_RE = re.compile(r"(?<![A-Za-z0-9_])GH_(?:REPO|HOST)\s*\+?=")
 
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>()"
 
@@ -173,6 +295,19 @@ _BOOL_FLAGS = frozenset(
 	{"-i", "--include", "--paginate", "--silent", "--slurp", "--verbose", "--allow-escape-sequences"}
 )
 _SHORT_VALUE_FLAGS = frozenset(flag for flag in _VALUE_FLAGS if len(flag) == 2)
+
+# `gh api --help` / `gh api -h` with no other argument only prints usage and
+# sends no API request, so it is a read. Any other argument beside it (an
+# endpoint, a flag, `--`) keeps the call unreadable, so it still asks: the
+# guard does not rely on gh ignoring the rest (operator decision 2026-09-30,
+# Q1: A; issue #6668).
+_BARE_HELP_ARGS = frozenset({("--help",), ("-h",)})
+
+
+def _is_bare_gh_api_help(args: list[str]) -> bool:
+	"""True when the `gh api` arguments are exactly `--help` or exactly `-h`."""
+	return tuple(args) in _BARE_HELP_ARGS
+
 
 # A `-q` / `--jq` value that is one of jq's own command-line options
 # (`--arg`, `-r`, `--raw-output`, `-c`, ...), not a jq program. `gh api` has no
@@ -315,6 +450,60 @@ class MalformedJq(Unreadable):
 		self.value = value
 
 
+def _normalize_for_gh_api_scan(command: str) -> str:
+	"""Undo the quoting Bash removes before it runs a command (detection only).
+
+	Joins backslash-newline continuations, drops the `$` of `$'...'` / `$"..."`,
+	and removes quote and backslash characters, so `'gh' api`, `g''h api`,
+	`gh a""pi` and `gh \\<newline>api` all read as `gh api` (issue #7555).
+	The result only decides whether to parse the command; classification
+	always uses the tokenizer.
+	"""
+	text = command.replace("\\\n", "")
+	text = re.sub(r"\$(?=['\"])", "", text)
+	return re.sub(r"['\"\\]", "", text)
+
+
+def _has_expanding_word_before_api(text: str) -> bool:
+	"""True when a word Bash expands (`$G`, `${G}`, `` `printf gh` ``, `$(printf gh)`)
+	stands before `api`, so Bash could run `gh api` from it (issue #7555)."""
+	joined = text.replace("\\\n", "")
+	for match in _WORD_BEFORE_API_RE.finditer(joined):
+		if "$" in match.group(1) or "`" in match.group(1):
+			return True
+	return "$(" in joined and bool(_SUBSTITUTION_CLOSE_BEFORE_API_RE.search(joined))
+
+
+def _may_invoke_gh_api(command: str) -> bool:
+	"""True when Bash could run `gh api` from this text, however it is quoted."""
+	if _RAW_GH_API_RE.search(command):
+		return True
+	normalized = _normalize_for_gh_api_scan(command)
+	if _RAW_GH_API_RE.search(normalized):
+		return True
+	joined = command.replace("\\\n", "")
+	# The normalized text also catches a quoted `api` after an expanding word
+	# (`$G "api"`, `$G a''pi`), which Bash runs as `gh api`.
+	if _has_expanding_word_before_api(joined) or _has_expanding_word_before_api(normalized):
+		return True
+	if _GH_FLAG_BEFORE_API_RE.search(joined) or _GH_FLAG_BEFORE_API_RE.search(normalized):
+		return True
+	if _GH_GLUED_EXPANSION_RE.search(normalized) or _BRACE_WITH_GH_RE.search(normalized):
+		return True
+	return bool(_GH_EXPANDED_SUBCOMMAND_RE.search(joined))
+
+
+def _gh_flag_before_api(segments: list[list[str]]) -> bool:
+	"""True when a `gh` word is followed by a flag and later an `api` word
+	(`gh -R other/repo api ...`): the guard does not read gh's global flags, so
+	it cannot tell which repository or host the call targets (issue #7555)."""
+	for tokens in segments:
+		for position, token in enumerate(tokens[:-1]):
+			if _is_gh(token) and tokens[position + 1].startswith("-") and "api" in tokens[position + 2 :]:
+				return True
+	return False
+
+
 def strip_heredoc_bodies(command: str) -> tuple[str, list[tuple[str, bool, str]]]:
 	"""Split heredoc bodies out of a command.
 
@@ -434,7 +623,9 @@ def shell_segments(command: str) -> list[list[str]]:
 	so it is never mistaken for an argument. Quoted text stays one token.
 	Raises ValueError on unbalanced quotes.
 	"""
-	lexer = shlex.shlex(command.replace("\\\n", " "), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
+	# Bash removes a backslash-newline outright, so `gh a<backslash-newline>pi`
+	# runs `gh api` (issue #7555); a space here would split the word.
+	lexer = shlex.shlex(command.replace("\\\n", ""), posix=True, punctuation_chars=_SHELL_PUNCTUATION_CHARS)
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
@@ -601,17 +792,20 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 	`sudo`, `xargs`, `python3 -c`, ...) or to a command word that is itself an
 	expansion; `gh api` words behind any other prefix; and a heredoc body
 	that mentions `gh api` when it feeds an executor or, with an unquoted
-	delimiter, contains a substitution. `gh api` text handed to any other
+	delimiter, contains a substitution. Also hidden (issue #7555): an
+	expansion in the subcommand word (`gh $'api'`), an expanding command word
+	before `api` (`$G api`), `env` options before the command word
+	(`env -S '...'`), and quoted spellings of any of the above. `gh api` text handed to any other
 	command (`git commit -m`, `grep`, `echo`) is data and is not counted.
 	"""
 	for prefix, quoted, body in heredocs:
-		if not _RAW_GH_API_RE.search(body):
+		if not _may_invoke_gh_api(body):
 			continue
 		if _EXECUTOR_BEFORE_HEREDOC_RE.search(prefix):
 			return True
 		if not quoted and re.search(r"\$\(|`", body):
 			return True
-	if command is not None and any(_RAW_GH_API_RE.search(body) for body in substitution_bodies(command)):
+	if command is not None and any(_may_invoke_gh_api(body) for body in substitution_bodies(command)):
 		return True
 	# Backstop for the body scanner: the older token reading still applies
 	# whenever the command holds a real substitution (an unescaped backtick
@@ -621,17 +815,51 @@ def has_hidden_gh_api(segments: list[list[str]], heredocs: list[tuple[str, bool,
 		token_substitution_check = True
 	else:
 		outside_text, has_real_substitution = _outside_single_quotes(command)
-		token_substitution_check = has_real_substitution and bool(_RAW_GH_API_RE.search(outside_text))
+		token_substitution_check = has_real_substitution and _may_invoke_gh_api(outside_text)
+		# `$(printf gh) api`, `` `printf gh` api ``, `$G api`: the tokenizer splits
+		# these words, so check the text outside single quotes (issue #7555).
+		if _has_expanding_word_before_api(outside_text) or _has_expanding_word_before_api(
+			_normalize_for_gh_api_scan(outside_text)
+		):
+			return True
+		# `$(printf gh) 'api'`: `_outside_single_quotes` drops the quoted `api`, so
+		# with a live substitution also check the whole command after quote removal.
+		if has_real_substitution and _has_expanding_word_before_api(_normalize_for_gh_api_scan(command)):
+			return True
 	for tokens in segments:
 		index = _command_word_index(tokens)
 		if index >= len(tokens):
 			continue
 		command_word = tokens[index]
-		direct = index + 1 < len(tokens) and _is_gh(command_word) and tokens[index + 1] == "api"
+		next_word = tokens[index + 1] if index + 1 < len(tokens) else ""
+		direct = _is_gh(command_word) and next_word == "api"
+		# `gh $'api'` / `gh $SUB`: Bash expands the subcommand word.
+		if _is_gh(command_word) and ("$" in next_word or "`" in next_word):
+			return True
+		# `$G api` / `` `printf gh` api ``: the command word itself expands.
+		if next_word == "api" and ("$" in command_word or "`" in command_word):
+			return True
+		# `gh${IFS}api`: an expansion glued to `gh` can split into `gh api`.
+		if ("$" in command_word or "`" in command_word) and _GH_GLUED_EXPANSION_RE.search(
+			_normalize_for_gh_api_scan(command_word)
+		):
+			return True
+		# `` `printf gh` 'api' ``: the tokenizer splits the backtick word, so find
+		# the token that closes it and check the word after it (issue #7555).
+		if command_word.startswith("`"):
+			for position in range(index, len(tokens) - 1):
+				if tokens[position].endswith("`") and (position > index or tokens[position].count("`") >= 2):
+					if tokens[position + 1] == "api":
+						return True
+					break
 		executor = os.path.basename(command_word) in _EXECUTOR_COMMANDS or command_word.startswith("$")
+		# `env -S '<command>'`, `env -i ...`: `env` options before the command
+		# word, so the guard cannot tell which word env will run.
+		if "env" in tokens[:index] and command_word.startswith("-"):
+			executor = True
 		for position, token in enumerate(tokens):
 			substitution_word = token_substitution_check and ("$(" in token or "`" in token)
-			if _RAW_GH_API_RE.search(token) and (substitution_word or executor):
+			if _may_invoke_gh_api(token) and (substitution_word or executor):
 				return True
 			if (
 				not direct
@@ -649,7 +877,7 @@ def parse_gh_api_args(args: list[str]) -> dict:
 	Raises Unreadable on an unknown flag, a missing value, or anything other
 	than exactly one endpoint.
 	"""
-	parsed = {"method": None, "endpoints": [], "fields": [], "headers": [], "input": None}
+	parsed = {"method": None, "endpoints": [], "fields": [], "headers": [], "input": None, "hostname": None}
 	index = 0
 	options_done = False
 	while index < len(args):
@@ -687,6 +915,8 @@ def parse_gh_api_args(args: list[str]) -> dict:
 			parsed["headers"].append(value)
 		elif role == "input":
 			parsed["input"] = value
+		elif role == "hostname":
+			parsed["hostname"] = value
 		elif role == "jq" and _JQ_CLI_OPTION_RE.match(value):
 			raise MalformedJq(value)
 	if len(parsed["endpoints"]) != 1:
@@ -744,6 +974,203 @@ def local_repo_slug(cwd: str) -> str:
 	except (OSError, subprocess.SubprocessError):
 		return ""
 	return extract_repo_slug(proc.stdout) if proc.returncode == 0 else ""
+
+
+def placeholder_repo_slug(cwd: str) -> str:
+	"""Return the `<owner>/<repo>` gh would use for `{owner}/{repo}`, or "".
+
+	gh fills the placeholders from `GH_REPO`, then a `remote.<name>.gh-resolved`
+	setting, then the remotes in priority order (upstream, github, origin).
+	Rather than reproduce that order, this accepts only a checkout where every
+	remote URL names the same repository and no `gh-resolved` value names
+	another one. A remote the guard cannot parse (another host, a local path)
+	could still be picked by gh, so it also returns "" (fail closed, #7555).
+	"""
+	try:
+		proc = subprocess.run(
+			["git", "config", "--get-regexp", r"^remote\..*\.(url|gh-resolved)$"],
+			cwd=cwd,
+			capture_output=True,
+			text=True,
+			timeout=_GIT_TIMEOUT_SECONDS,
+			check=False,
+		)
+	except (OSError, subprocess.SubprocessError):
+		return ""
+	if proc.returncode != 0:
+		return ""
+	slugs: dict[str, str] = {}
+	resolved: list[str] = []
+	for line in proc.stdout.splitlines():
+		key, _separator, value = line.partition(" ")
+		key = key.lower()
+		if key.endswith(".gh-resolved"):
+			resolved.append(value.strip())
+		elif key.endswith(".url"):
+			slug = extract_repo_slug(value)
+			if not slug:
+				return ""
+			slugs[slug.lower()] = slug
+	if len(slugs) != 1:
+		return ""
+	(lowered, slug), = slugs.items()
+	for value in resolved:
+		if value != "base" and value.lower() != lowered:
+			return ""
+	return slug
+
+
+def _settings_files() -> list[str]:
+	"""Settings files that can hold allow rules for this session."""
+	directories = [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+	project_dir = os.environ.get("CLAUDE_PROJECT_DIR", "")
+	if project_dir:
+		directories.append(os.path.join(project_dir, ".claude"))
+	home = os.path.expanduser("~")
+	if home and home != "~":
+		directories.append(os.path.join(home, ".claude"))
+	config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+	if config_dir:
+		directories.append(config_dir)
+	paths: list[str] = []
+	for directory in directories:
+		for name in _SETTINGS_FILE_NAMES:
+			path = os.path.realpath(os.path.join(directory, name))
+			if path not in paths:
+				paths.append(path)
+	for managed in _MANAGED_SETTINGS_FILES:
+		path = os.path.realpath(managed)
+		if path not in paths:
+			paths.append(path)
+	return paths
+
+
+def _bash_allow_rule_patterns() -> list[re.Pattern] | None:
+	"""Compile every `Bash(...)` allow rule; None when a settings file cannot be checked."""
+	patterns: list[re.Pattern] = []
+	for path in _settings_files():
+		try:
+			info = os.stat(path)
+		except FileNotFoundError:
+			continue
+		except OSError:
+			return None
+		if not stat.S_ISREG(info.st_mode) or info.st_size > _SETTINGS_READ_BYTES:
+			return None
+		try:
+			with open(path, encoding="utf-8") as handle:
+				settings = json.load(handle)
+		except (OSError, ValueError):
+			return None
+		permissions = settings.get("permissions") if isinstance(settings, dict) else None
+		allow = permissions.get("allow") if isinstance(permissions, dict) else None
+		if allow is None:
+			continue
+		if not isinstance(allow, list):
+			return None
+		for rule in allow:
+			rule = rule.strip() if isinstance(rule, str) else ""
+			if rule == "Bash":
+				body = "*"
+			elif rule.startswith("Bash(") and rule.endswith(")"):
+				body = rule[5:-1].strip()
+			else:
+				continue
+			if body.endswith(":*"):
+				body = body[:-2] + " *"
+			regex = re.escape(body).replace(r"\*", ".*")
+			if regex.endswith(r"\ .*"):
+				regex = regex[: -len(r"\ .*")] + r"(?:\s.*)?"
+			patterns.append(re.compile(regex, re.DOTALL))
+	return patterns
+
+
+def _may_match_bash_allow_rule(command: str) -> bool:
+	"""True when a `Bash(...)` allow rule could match the command or one of its parts.
+
+	Auto mode resolves a matching allow rule before its classifier runs, so a
+	no-decision on such a command could approve a hidden write unprompted.
+	Every split piece is tried (more matches only keep more asks), and an
+	unreadable settings file counts as a match (fail closed).
+	"""
+	patterns = _bash_allow_rule_patterns()
+	if patterns is None:
+		return True
+	if not patterns:
+		return False
+	pieces: set[str] = set()
+	for text in (command, _normalize_for_gh_api_scan(command)):
+		candidates = [text, *_ALLOW_RULE_COARSE_SPLIT_RE.split(text), *_ALLOW_RULE_FINE_SPLIT_RE.split(text)]
+		for candidate in candidates:
+			piece = _ALLOW_RULE_LEADING_WORDS_RE.sub("", candidate.strip())
+			pieces.add(piece)
+			unassigned = _ALLOW_RULE_LEADING_ASSIGNMENTS_RE.sub("", piece)
+			pieces.add(unassigned)
+			words = unassigned.split()
+			if words and words[0] in _ALLOW_RULE_WRAPPER_WORDS:
+				for drop in range(1, min(len(words), _ALLOW_RULE_WRAPPER_MAX_DROP + 1)):
+					pieces.add(" ".join(words[drop:]))
+	return any(pattern.fullmatch(piece) for piece in pieces if piece for pattern in patterns)
+
+
+def _session_redirects_gh() -> str:
+	"""Name a session setting that sends gh elsewhere, or "" when there is none.
+
+	Checks the hook's own environment for a `GH_HOST` other than github.com and
+	`CLAUDE_ENV_FILE` (sourced before each Bash command) for a `GH_REPO` or
+	`GH_HOST` assignment. An unreadable, oversized or non-regular env file
+	counts as one. Returns a fixed, path-free reason.
+	"""
+	gh_host = os.environ.get("GH_HOST", "").strip().lower()
+	if gh_host and gh_host != "github.com":
+		return "GH_HOST in the session environment"
+	env_file = os.environ.get("CLAUDE_ENV_FILE", "")
+	if not env_file:
+		return ""
+	try:
+		info = os.stat(env_file)
+	except FileNotFoundError:
+		return ""
+	except OSError:
+		return "CLAUDE_ENV_FILE unreadable"
+	if not stat.S_ISREG(info.st_mode) or info.st_size > _CLAUDE_ENV_FILE_READ_BYTES:
+		return "CLAUDE_ENV_FILE not checkable"
+	try:
+		with open(env_file, "rb") as handle:
+			data = handle.read(_CLAUDE_ENV_FILE_READ_BYTES)
+	except OSError:
+		return "CLAUDE_ENV_FILE unreadable"
+	if _ENV_FILE_GH_TARGET_RE.search(data.decode("utf-8", "replace")):
+		return "CLAUDE_ENV_FILE sets GH_REPO or GH_HOST"
+	return ""
+
+
+def _placeholder_target_is_local(command: str, repo_slug_lookup, placeholder_lookup) -> tuple[bool, str]:
+	"""Decide whether `{owner}/{repo}` surely means the local checkout's repository.
+
+	Returns `(is_local, reason)`; the reason is a fixed, path-free token for the
+	prompt and never contains a remote URL or env-file text.
+	"""
+	if _GH_ENV_ASSIGNMENT_RE.search(command) or _GIT_ENV_ASSIGNMENT_RE.search(command):
+		return False, "the command sets a GH_* or GIT_* variable"
+	# Quoted or escaped spellings (`'cd'`, `"cd"`, `c''d`) change directory too.
+	if _DIRECTORY_CHANGE_RE.search(command) or _DIRECTORY_CHANGE_RE.search(_normalize_for_gh_api_scan(command)):
+		return False, "the command changes directory"
+	if placeholder_lookup is None:
+		return False, "remote resolution not checked"
+	local_slug = repo_slug_lookup()
+	if not local_slug:
+		return False, "the local repository is unknown"
+	gh_repo = os.environ.get("GH_REPO", "").strip()
+	if gh_repo and gh_repo.lower() != local_slug.lower():
+		return False, "GH_REPO in the session environment"
+	redirect = _session_redirects_gh()
+	if redirect:
+		return False, redirect
+	resolved = placeholder_lookup()
+	if not resolved or resolved.lower() != local_slug.lower():
+		return False, "the git remotes do not all name the local repository"
+	return True, ""
 
 
 def _has_expansion_outside_single_quotes(command: str) -> bool:
@@ -897,6 +1324,8 @@ def _unquoted_gh_api_expansion(command: str) -> bool:
 	argument parser runs. Only words belonging to a direct call count; an
 	expansion in a neighbouring echo/loop is not a gh api argument.
 	"""
+	# Bash removes a backslash-newline outright (`gh a<backslash-newline>pi`).
+	command = command.replace("\\\n", "")
 	segments: list[list[tuple[str, bool]]] = []
 	words: list[tuple[str, bool]] = []
 	word = ""
@@ -1249,6 +1678,14 @@ def _is_approvable_read_loop(command: str, results: list[tuple[str, str]]) -> bo
 
 
 _ECHO_READ_PLACEHOLDER = "__GH_API_GUARD_ECHO_READ__"
+# Appended when Auto mode denies a shape ask instead of prompting a human.
+_AUTO_SHAPE_DENY_SUFFIX = (
+	"\n\nAuto mode: nothing ran. Rewrite the command so the guard can read it: run each gh api call as its "
+	"own plain command with IDs typed out (for example `gh api repos/o/r/issues/comments/123`), and read its "
+	"output directly instead of redirecting it to a `$VAR` file. A `for ID in 1 2 3; do gh api .../$ID; done` "
+	"loop over literal IDs with no redirect is allowed. If `gh api` is only text being written, edit the file "
+	"with the Edit or Write tool instead of a heredoc fed to python3 or another interpreter."
+)
 _ECHO_READ_HINT = (
 	" For reads, run the call separately, e.g. `for n in 1 2; do echo $n; "
 	"gh api repos/o/r/issues/$n --jq .title; done`."
@@ -1357,8 +1794,13 @@ def _approved_echo_read_command(command: str) -> tuple[str, list[tuple[str, str]
 	return reduced, read_results
 
 
-def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
-	"""Return `(kind, description)` for one parsed `gh api` call."""
+def classify(parsed: dict, command: str, repo_slug_lookup, placeholder_lookup=None) -> tuple[str, str]:
+	"""Return `(kind, description)` for one parsed `gh api` call.
+
+	`placeholder_lookup` returns the repository gh would use for the
+	`{owner}/{repo}` placeholders; without it a placeholder write is not
+	routine (fail closed, issue #7555).
+	"""
 	method = parsed["method"]
 	endpoint = parsed["endpoints"][0]
 	description = f"{method} {endpoint}"
@@ -1405,16 +1847,31 @@ def classify(parsed: dict, command: str, repo_slug_lookup) -> tuple[str, str]:
 		return KIND_WRITE, f"GraphQL call {endpoint} (mutation, file, or expanded query)"
 	if method in _READ_METHODS:
 		return KIND_READ, description
+	hostname = (parsed.get("hostname") or "").strip().lower()
+	if hostname and hostname != "github.com":
+		return KIND_WRITE, f"{description} on another host (--hostname)"
 	if re.search(r"[?#$`\s]|\.\.", path):
 		return KIND_WRITE, description
 	match = re.match(r"^repos/([^/]+)/([^/]+)/(.+)$", path)
 	if not match:
 		return KIND_WRITE, description
 	owner, repo, rest = match.groups()
-	if (owner, repo) != ("{owner}", "{repo}"):
+	if (owner, repo) == ("{owner}", "{repo}"):
+		is_local, why = _placeholder_target_is_local(command, repo_slug_lookup, placeholder_lookup)
+		if not is_local:
+			return KIND_WRITE, (
+				f"{description} ({{owner}}/{{repo}} may resolve to another repository: {why}; "
+				"name the repository explicitly)"
+			)
+	else:
 		local_slug = repo_slug_lookup()
 		if not local_slug or f"{owner}/{repo}".lower() != local_slug.lower():
 			return KIND_WRITE, f"{description} (not the local checkout's repository)"
+		if _GH_ENV_ASSIGNMENT_RE.search(command):
+			return KIND_WRITE, f"{description} with a GH_* environment change"
+		redirect = _session_redirects_gh()
+		if redirect:
+			return KIND_WRITE, f"{description} ({redirect})"
 	keys = {key for _role, key, _value in parsed["fields"]}
 	for routine_method, pattern, allowed_keys in _ROUTINE_ENDPOINTS:
 		if method == routine_method and pattern.match(rest):
@@ -1436,11 +1893,24 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
 	if not isinstance(command, str):
 		return None, ""
-	if not _RAW_GH_API_RE.search(command):
+	if not _may_invoke_gh_api(command):
 		if _READ_LOOP_RE.match(command) and _is_approvable_read_loop(command, []):
 			return DECISION_ALLOW, "gh api guard (CLAUDE.md §23.H): for loop over literal IDs whose body only reads."
 		if not command.lstrip().startswith("for "):
 			return None, ""
+
+	# In Auto mode, doubts about the command's shell shape step aside instead of
+	# asking (see the module docstring); `shape_doubt` records that one fired.
+	# An unquoted `gh api` argument expansion never steps aside: it is denied.
+	auto_mode = (
+		payload.get("permission_mode") == AUTO_PERMISSION_MODE
+		and not _GH_API_ALLOW_RULE_RE.search(command)
+		and not _GH_API_ALLOW_RULE_RE.search(_normalize_for_gh_api_scan(command))
+		and not _may_match_bash_allow_rule(command)
+	)
+	shape_doubt = False
+	# Auto mode where a shape ask would otherwise reach a human: deny instead.
+	auto_shape_deny = payload.get("permission_mode") == AUTO_PERMISSION_MODE and not auto_mode
 
 	stripped_command, heredocs = strip_heredoc_bodies(command)
 	if not heredocs:
@@ -1460,16 +1930,27 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 	try:
 		segments = shell_segments(stripped_command)
 	except ValueError:
-		return DECISION_ASK, (
+		if auto_mode:
+			return None, ""
+		return (DECISION_DENY if auto_shape_deny else DECISION_ASK), (
 			"gh api guard (CLAUDE.md §23.H): the command could not be parsed, so its gh api call is treated as a write."
 			+ (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if auto_shape_deny else "")
 		)
 	invocations = gh_api_invocations(segments)
-	if has_hidden_gh_api(segments, heredocs, stripped_command):
-		return DECISION_ASK, (
+	if has_hidden_gh_api(segments, heredocs, stripped_command) and auto_mode:
+		shape_doubt = True
+	elif has_hidden_gh_api(segments, heredocs, stripped_command):
+		return (DECISION_DENY if auto_shape_deny else DECISION_ASK), (
 			"gh api guard (CLAUDE.md §23.H): a gh api call could run hidden inside a $(...) or backtick word, "
 			"an executor (bash -c, sudo, xargs, python3, ...), or a heredoc fed to one, so it is treated as a "
 			"write. Run it as its own plain command." + (_ECHO_READ_HINT if "$(" in command else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if auto_shape_deny else "")
+		)
+	if _gh_flag_before_api(segments):
+		return DECISION_ASK, (
+			"gh api guard (CLAUDE.md §23.H): a flag stands between `gh` and `api` (such as -R or --hostname), "
+			"which could send the call to another repository or host. Put `api` right after `gh`."
 		)
 
 	cwd = payload.get("cwd")
@@ -1482,11 +1963,21 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			slug_cache.append(local_repo_slug(cwd))
 		return slug_cache[0]
 
+	placeholder_cache: list[str] = []
+
+	def placeholder_slug_lookup() -> str:
+		if not placeholder_cache:
+			placeholder_cache.append(placeholder_repo_slug(cwd))
+		return placeholder_cache[0]
+
 	results: list[tuple[str, str]] = []
 	malformed_jq_values: list[str] = []
 	for args in invocations:
+		if _is_bare_gh_api_help(args):
+			results.append((KIND_READ, f"usage text `gh api {args[0]}` (prints help, sends no API request)"))
+			continue
 		try:
-			results.append(classify(parse_gh_api_args(args), command, repo_slug_lookup))
+			results.append(classify(parse_gh_api_args(args), command, repo_slug_lookup, placeholder_slug_lookup))
 		except MalformedJq as exc:
 			malformed_jq_values.append(exc.value)
 		except Unreadable as exc:
@@ -1506,17 +1997,31 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 
 	hazard = _shell_rewrite_hazard(stripped_command)
 	# Only a fully validated literal-ID loop may bypass the shell-hazard check.
-	if hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)):
-		return DECISION_ASK, (
+	if (
+		hazard
+		and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results))
+		and auto_mode
+		and not _AUTO_HAZARD_FILE_FIELD_RE.search(stripped_command)
+	):
+		shape_doubt = True
+	elif hazard and not (_LOOP_HEADER_RE.match(command) and _is_approvable_read_loop(command, results)):
+		hazard_auto_deny = payload.get("permission_mode") == AUTO_PERMISSION_MODE
+		return (DECISION_DENY if hazard_auto_deny else DECISION_ASK), (
 			f"gh api guard (CLAUDE.md §23.H): the command uses {hazard}, which Bash expands or parses differently "
 			"from this guard, so a word could turn into a hidden flag (such as a file-backed -F field) or command. "
 			"Write the command without it." + (_ECHO_READ_HINT if "$(" in command or _LOOP_HEADER_RE.match(command) else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if hazard_auto_deny and _may_invoke_gh_api(command) else "")
 		)
 	if _unquoted_gh_api_expansion(stripped_command) and not _is_approvable_read_loop(command, results):
-		return DECISION_ASK, (
+		# Bash can split the word into a method flag (`EP="-XDELETE repos/..."; gh api $EP`)
+		# that the guard read as a GET endpoint, so Auto mode denies instead of
+		# leaving the call to its classifier (issue #8198).
+		unquoted_auto_deny = payload.get("permission_mode") == AUTO_PERMISSION_MODE
+		return (DECISION_DENY if unquoted_auto_deny else DECISION_ASK), (
 			"gh api guard (CLAUDE.md §23.H): an unquoted gh api argument expansion can word-split into "
 			"a new flag or command. Quote the expanded word or run it with explicit arguments."
 			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
+			+ (_AUTO_SHAPE_DENY_SUFFIX if unquoted_auto_deny else "")
 		)
 
 	writes = [description for kind, description in results if kind == KIND_WRITE]
@@ -1525,6 +2030,9 @@ def evaluate(payload: dict) -> tuple[str | None, str]:
 			"gh api guard (CLAUDE.md §23.H): not a read or a §23.B routine write: " + "; ".join(writes) + "."
 			+ (_ECHO_READ_HINT if _LOOP_HEADER_RE.match(command) else "")
 		)
+	if shape_doubt:
+		# Never allow a command whose shape the guard could not trust.
+		return None, ""
 	if invocations and _is_approvable_command(command):
 		summary = "; ".join(f"{kind} call {description}" for kind, description in results)
 		return DECISION_ALLOW, f"gh api guard (CLAUDE.md §23.H): {summary}."

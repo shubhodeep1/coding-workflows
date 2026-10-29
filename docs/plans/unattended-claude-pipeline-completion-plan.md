@@ -253,6 +253,27 @@ mergeable.
 7. Let the nightly `promote-main-to-stable.yml` cycle run. If it does not
    start by itself, dispatch it (one §23.C ask).
 
+#### Q12 — rate-limit-aware GitHub API retry (#6634, re-issue of #5873)
+
+Delivered: `gh_api_retry` in `scripts/gh_helpers.sh` and its Python twin
+`scripts/gh_api_retry.py`; the remaining helper defects (wrong bucket,
+sleep after the last attempt, failed body left by `gh_retry_to_file`,
+ignored secondary limits, retried POST creates); migration steps 1-4
+(review gate, validate authorize, implement / clarify-respond / security
+audit resolve calls, integration-ref resolver) and 6 (sweep snapshot).
+
+Follow-ups to file, each linking back to #6634:
+
+1. Step 5: remove the inline retry copies (`review_autofix.yml`,
+   `gh_api_with_retry` in `implement.yml` / `test-and-mark-stable.yml`,
+   `audit_consumer_drift._run_gh_api`, `collect_workflow_logs`).
+2. Step 7: the poller's `|| echo "main"` / `|| echo '[]'` fallbacks in
+   `scripts/orchestrate_poll_process.sh`.
+3. Step 8: the Python readers adopt `scripts/gh_api_retry.py`
+   (including `ai_labels._github_api_request`).
+4. Re-run a validation or review that failed only on a rate limit after
+   the reset instead of escalating it.
+
 ### Phase 3 — Claude everywhere
 
 - **3a validate roles.** From #6209: `validate.yml`, `validation-refresh.yml`,

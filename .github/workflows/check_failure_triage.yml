@@ -34,6 +34,23 @@ name: AI Check Failure Triage (Reusable)
         required: false
         type: string
         default: ""
+      # Historical mode (#7093): triage one finished CI run of a PR that is no
+      # longer open. All three default to empty, which keeps the normal path.
+      historical_run_id:
+        description: "Failed CI workflow run id to triage after the PR closed (historical mode)"
+        required: false
+        type: string
+        default: ""
+      historical_job_id:
+        description: "Failed job id inside historical_run_id"
+        required: false
+        type: string
+        default: ""
+      historical_repro_artifact_prefix:
+        description: "Name prefix of same-run reproduction artifacts, used when the job log is gone"
+        required: false
+        type: string
+        default: ""
     secrets:
       GH_PAT:
         required: true
@@ -45,8 +62,13 @@ name: AI Check Failure Triage (Reusable)
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
 
 jobs:
   derive_check_name_key:
@@ -63,6 +85,7 @@ jobs:
       check_name_key: ${{ steps.hash_check_name.outputs.check_name_key }}
       same_repo: ${{ steps.hash_check_name.outputs.same_repo }}
       smoke_pr: ${{ steps.hash_check_name.outputs.smoke_pr }}
+      pr_labels: ${{ steps.hash_check_name.outputs.pr_labels }}
     steps:
       - name: Validate inputs, hash check name, and verify PR origin
         id: hash_check_name
@@ -75,9 +98,24 @@ jobs:
           CHECK_CONCLUSION: ${{ inputs.check_conclusion }}
           HEAD_SHA: ${{ inputs.head_sha }}
           DETAILS_URL: ${{ inputs.details_url }}
+          HISTORICAL_RUN_ID: ${{ inputs.historical_run_id }}
+          HISTORICAL_JOB_ID: ${{ inputs.historical_job_id }}
+          HISTORICAL_REPRO_PREFIX: ${{ inputs.historical_repro_artifact_prefix }}
         run: |
           set -euo pipefail
 
+          if [ -n "${HISTORICAL_RUN_ID}${HISTORICAL_JOB_ID}" ]; then
+            if ! [[ "${HISTORICAL_RUN_ID}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${HISTORICAL_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Invalid historical run/job id (both must be set and numeric)"
+              exit 1
+            fi
+          fi
+          if [ -n "${HISTORICAL_REPRO_PREFIX}" ]; then
+            if [ -z "${HISTORICAL_RUN_ID}" ] || ! [[ "${HISTORICAL_REPRO_PREFIX}" =~ ^[a-z0-9-]{1,64}$ ]]; then
+              echo "::error::Invalid historical reproduction artifact prefix"
+              exit 1
+            fi
+          fi
           if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::Invalid PR number"
             exit 1
@@ -151,6 +189,13 @@ jobs:
           else
             echo "smoke_pr=false" >> "$GITHUB_OUTPUT"
           fi
+          # The PR's labels, from the same payload (no extra API call), let the
+          # triage job's engine preflight see the labels the diagnosis stage
+          # reads, so an ai:engine-claude / ai:codex label decides both the
+          # same way. jq -c keeps the value on one line; failure means no labels.
+          pr_labels="$(jq -c '[.labels[]?.name | select(type == "string")]' "${pr_payload}" 2>/dev/null || echo '[]')"
+          [ -n "${pr_labels}" ] || pr_labels='[]'
+          echo "pr_labels=${pr_labels}" >> "$GITHUB_OUTPUT"
           if [ "${head_repo}" != "${REPOSITORY}" ]; then
             echo "same_repo=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Skipping check-failure triage for fork PR #${PR_NUMBER} (head repo: ${head_repo})."
@@ -162,6 +207,9 @@ jobs:
     needs: derive_check_name_key
     permissions:
       contents: read
+      # OIDC: the Claude pool credential step and the "Route upstream-managed
+      # check failure" step (its heal report identity, #8265); both callers grant it.
+      id-token: write
     # Cost gate: enabled by default; a consumer opts OUT via
     # CHECK_FAILURE_TRIAGE_ENABLED=false. Only genuine failure conclusions on a
     # real PR proceed. The job is skipped (no checkout / no codex install) when
@@ -195,6 +243,18 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH: ${{ vars.CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH || '3' }}
+      # Opt-in: add a verified "Target branch: <PR head>" line to new triage
+      # issues (same-repository open PRs only). Off until an operator sets it.
+      CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false' }}
+      # Off by default: add a verified PR-head Integration branch line to the
+      # triage issue only after an operator enables it.
+      CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED: ${{ vars.CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED || 'false' }}
+      # Issue #6726: add a verified Integration branch line for orchestrator/project-<N> PR heads.
+      TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED: ${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'true' }}
+      CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED || 'true' }}
+      # Issue #8265: a failure whose fix is only in unmodified upstream-managed
+      # files goes upstream as one heal report instead of a consumer issue.
+      CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED || 'true' }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       # Job-level override of the workflow-level default: a PR carrying the
@@ -202,7 +262,7 @@ jobs:
       # with every Telegram send suppressed. SILENT > CRITICAL in
       # tg_helpers.sh, so scripts/check_failure_triage.sh and the
       # failure-notify step below both go quiet.
-      ALERT_MSG_LEVEL: ${{ needs.derive_check_name_key.outputs.smoke_pr == 'true' && 'SILENT' || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+      ALERT_MSG_LEVEL: ${{ needs.derive_check_name_key.outputs.smoke_pr == 'true' && 'SILENT' || vars.ALERT_MSG_LEVEL || 'WARNING' }}
     steps:
       - name: Log trigger context
         env:
@@ -222,6 +282,10 @@ jobs:
           printf 'Head SHA: %s\n' "${HEAD_SHA}"
 
       - name: Checkout PR head (failing branch)
+        id: checkout_pr_head
+        # Historical mode only: a closed PR's head may no longer be fetchable.
+        # Normal mode evaluates to false and fails on a checkout error as before.
+        continue-on-error: ${{ inputs.historical_run_id != '' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ inputs.head_sha || github.sha }}
@@ -229,19 +293,61 @@ jobs:
           token: ${{ github.token }}
           persist-credentials: false
 
+      - name: Checkout default-branch fallback (historical mode)
+        if: ${{ inputs.historical_run_id != '' && steps.checkout_pr_head.outcome == 'failure' }}
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          token: ${{ github.token }}
+          persist-credentials: false
+
       - name: Install Codex CLI
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/check_failure_triage\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/check_failure_triage\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -257,7 +363,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -267,7 +373,65 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Verify pinned workflow support checkout
+        run: |
+          set -euo pipefail
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF}."
+            exit 1
+          fi
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
+
+      # The CHECK_TRIAGE diagnosis runs on Claude unless AI_ENGINE_CHECK_TRIAGE
+      # or AI_ENGINE say codex. The engine policy is read only from the
+      # support checkout (never the PR head). The CLI and the pool credential
+      # are fetched only for Claude, before staging removes the support
+      # checkout; when Claude cannot start (exit 75) the diagnosis runs its
+      # unchanged isolated codex command, so these steps never fail the job.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_CHECK_TRIAGE: ${{ vars.AI_ENGINE_CHECK_TRIAGE || '' }}
+          # Same labels scripts/check_failure_triage.sh reads from pr_payload.json.
+          AI_ENGINE_LABELS: ${{ needs.derive_check_name_key.outputs.pr_labels || '' }}
+        run: |
+          set -uo pipefail
+          engine="codex"
+          engine_helper="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/ai_engine.sh"
+          if [ -f "${engine_helper}" ] && [ ! -L "${engine_helper}" ]; then
+            # shellcheck source=/dev/null
+            if source "${engine_helper}"; then
+              engine="$(ai_engine_for_role CHECK_TRIAGE || echo codex)"
+            else
+              echo "::warning::Failed to source the trusted ai_engine.sh; triage stays on codex." >&2
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Stage workflow support files
+        env:
+          CHECK_TRIAGE_ENGINE: ${{ steps.ai_engine.outputs.engine }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -279,7 +443,7 @@ jobs:
           mkdir -p scripts
 
           _fetched=()
-          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do
+          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py workflow_failure_heal.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               if [ "${f}" = "render_prompt.py" ]; then
@@ -354,7 +518,11 @@ jobs:
           done
           install -m 0755 .codex-workflow-src/scripts/check_failure_triage.sh "${trusted_dir}/scripts/check_failure_triage.sh"
           install -m 0755 .codex-workflow-src/scripts/collect_pr_check_runs_context.py "${trusted_dir}/scripts/collect_pr_check_runs_context.py"
+          # Historical mode redacts job logs with redact-stream before diagnosis.
+          install -m 0755 .codex-workflow-src/scripts/workflow_failure_heal.py "${trusted_dir}/scripts/workflow_failure_heal.py"
           install -m 0755 .codex-workflow-src/scripts/clarify_isolated_run.sh "${trusted_dir}/scripts/clarify_isolated_run.sh"
+          install -m 0755 .codex-workflow-src/scripts/sandbox_image.sh "${trusted_dir}/scripts/sandbox_image.sh"
+          install -m 0755 .codex-workflow-src/scripts/clarify_base_image_preseed.sh "${trusted_dir}/scripts/clarify_base_image_preseed.sh"
           install -m 0755 .codex-workflow-src/scripts/clarify_openrouter_broker.py "${trusted_dir}/scripts/clarify_openrouter_broker.py"
           install -m 0755 .codex-workflow-src/scripts/write_codex_config.sh "${trusted_dir}/scripts/write_codex_config.sh"
           install -m 0644 "${catalog_src}" "${trusted_dir}/scripts/codex_model_catalog.json"
@@ -365,9 +533,66 @@ jobs:
             install -m 0755 .codex-workflow-src/scripts/render_prompt.py "${trusted_dir}/scripts/render_prompt.py"
           fi
           install -m 0755 .codex-workflow-src/scripts/assemble_prompt.sh "${trusted_dir}/scripts/assemble_prompt.sh"
+          # Claude engine support for the isolated helper's Claude branch (the
+          # same files clarify stages). Missing or non-regular files keep
+          # triage on codex; they never fail staging.
+          engine_files_ok=true
+          for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_anthropic_relay.py scripts/claude_settings.json.tmpl .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py; do
+            if [ ! -f ".codex-workflow-src/${engine_file}" ] || [ -L ".codex-workflow-src/${engine_file}" ]; then
+              engine_files_ok=false
+              break
+            fi
+          done
+          if [ "${engine_files_ok}" = "true" ]; then
+            for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_anthropic_relay.py scripts/claude_settings.json.tmpl .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py; do
+              engine_mode=0644
+              case "${engine_file}" in *.sh) engine_mode=0755 ;; esac
+              install -D -m "${engine_mode}" ".codex-workflow-src/${engine_file}" "${trusted_dir}/${engine_file}"
+            done
+          else
+            echo "::warning::Claude engine support files are missing from the support ref; check-failure triage stays on codex."
+          fi
           echo "CHECK_TRIAGE_TRUSTED_SUPPORT_DIR=${trusted_dir}" >> "$GITHUB_ENV"
 
-          rm -rf .codex-workflow-src
+          # Issue #8265: build the managed-digest map from the SHA-verified
+          # pinned support checkout before it is pruned below. Consumers on a
+          # 40-hex wrapper pin only; this repository never routes upstream.
+          for sync_helper in build_sync_manifest.py workflow_wrapper_refs.py; do
+            if [ -f ".codex-workflow-src/scripts/${sync_helper}" ] && [ ! -L ".codex-workflow-src/scripts/${sync_helper}" ]; then
+              install -m 0755 ".codex-workflow-src/scripts/${sync_helper}" "${trusted_dir}/scripts/${sync_helper}"
+            fi
+          done
+          upstream_digests="${RUNNER_TEMP}/check-triage-managed-digests.json"
+          : > "${upstream_digests}"
+          upstream_routing_switch="${CHECK_FAILURE_TRIAGE_UPSTREAM_ROUTING_ENABLED:-true}"
+          if [ "${GITHUB_REPOSITORY:-}" != "${wf_source}" ] &&
+             [ "${upstream_routing_switch,,}" != "false" ] &&
+             [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] &&
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" = "${SCRIPT_REF}" ] &&
+             [ -f "${trusted_dir}/scripts/build_sync_manifest.py" ]; then
+            if timeout 120 env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
+              python3 -I -B .codex-workflow-src/scripts/build_sync_manifest.py managed-digests \
+              --repo-root .codex-workflow-src --commit HEAD > "${upstream_digests}" 2>/dev/null &&
+              jq -e 'type == "object" and length > 0' "${upstream_digests}" >/dev/null 2>&1; then
+              echo "CHECK_TRIAGE_WRAPPER_SHA=${SCRIPT_REF}" >> "$GITHUB_ENV"
+            else
+              : > "${upstream_digests}"
+              echo "::notice::Upstream-managed routing is unavailable for this run: the managed-digest map could not be built."
+            fi
+          fi
+          echo "CHECK_TRIAGE_UPSTREAM_MANAGED_DIGESTS_FILE=${upstream_digests}" >> "$GITHUB_ENV"
+
+          # The Claude credential step's post action (token cleanup) runs from
+          # the support checkout at job end, so keep only that action
+          # directory. The sandbox snapshot never includes .codex-workflow-src.
+          if [ "${CHECK_TRIAGE_ENGINE:-codex}" = "claude" ] && [ -d .codex-workflow-src/.github/actions/claude-pool-token ] &&
+             [ ! -L .codex-workflow-src/.github/actions/claude-pool-token ]; then
+            find .codex-workflow-src -mindepth 1 -maxdepth 1 ! -name .github -exec rm -rf {} +
+            find .codex-workflow-src/.github -mindepth 1 -maxdepth 1 ! -name actions -exec rm -rf {} +
+            find .codex-workflow-src/.github/actions -mindepth 1 -maxdepth 1 ! -name claude-pool-token -exec rm -rf {} +
+          else
+            rm -rf .codex-workflow-src
+          fi
 
       - name: Create Codex config
         run: |
@@ -382,6 +607,16 @@ jobs:
           mkdir -p "${RUNTIME_DIR}"
           echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
 
+      # Historical mode only: reproduction results uploaded by the caller's
+      # credential-free job in this run. Data only; never sourced or executed.
+      - name: Download historical reproduction results
+        if: ${{ inputs.historical_repro_artifact_prefix != '' }}
+        uses: actions/download-artifact@v6
+        with:
+          pattern: ${{ inputs.historical_repro_artifact_prefix }}*
+          path: ${{ env.RUNTIME_DIR }}/historical_repro
+          merge-multiple: false
+
       - name: Collect check-failure context
         id: collect_triage
         env:
@@ -394,6 +629,9 @@ jobs:
           CHECK_TRIAGE_CHECK_CONCLUSION: ${{ inputs.check_conclusion }}
           CHECK_TRIAGE_HEAD_SHA: ${{ inputs.head_sha }}
           CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
+          CHECK_TRIAGE_HISTORICAL_RUN_ID: ${{ inputs.historical_run_id }}
+          CHECK_TRIAGE_HISTORICAL_JOB_ID: ${{ inputs.historical_job_id }}
+          CHECK_TRIAGE_HISTORICAL_REPRO_DIR: ${{ inputs.historical_repro_artifact_prefix != '' && format('{0}/historical_repro', env.RUNTIME_DIR) || '' }}
         run: |
           set -euo pipefail
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
@@ -407,6 +645,8 @@ jobs:
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           CHECK_TRIAGE_STAGE: diagnose
           CHECK_TRIAGE_PREPARE_ONLY: "true"
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_CHECK_TRIAGE: ${{ vars.AI_ENGINE_CHECK_TRIAGE || '' }}
           CHECK_TRIAGE_PR_NUMBER: ${{ inputs.pr_number }}
           CHECK_TRIAGE_CHECK_RUN_ID: ${{ inputs.check_run_id }}
           CHECK_TRIAGE_CHECK_NAME: ${{ inputs.check_name }}
@@ -418,10 +658,29 @@ jobs:
           cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
           bash scripts/check_failure_triage.sh
 
+      # Issue #8265: a failure whose fix is only in unmodified upstream-managed
+      # files is reported upstream (one repository_dispatch with an OIDC
+      # identity) instead of filing a consumer issue. Any failure here leaves
+      # `routed` unset, so the post step below files the issue as before.
+      - name: Route upstream-managed check failure
+        id: upstream_route
+        if: ${{ steps.diagnose_triage.outputs.ready == 'true' && github.repository != 'shubhodeep1/coding-workflows' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          CHECK_TRIAGE_STAGE: route
+          # The consumer's heal opt-out also stops the upstream report.
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
+          bash scripts/check_failure_triage.sh
+
       # A fine-grained PAT with Issues: write (and Metadata: read) keeps
       # issues:opened dispatching clarify; github.token would suppress it.
       - name: Post check-failure triage issue
-        if: ${{ steps.diagnose_triage.outputs.ready == 'true' }}
+        if: ${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -503,7 +762,7 @@ jobs:
             cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR}" || exit 0
             source scripts/tg_helpers.sh 2>/dev/null || true
             type tg_send_msg >/dev/null 2>&1 && tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
-          elif [[ "${ALERT_MSG_LEVEL:-DEBUG}" != [sS][iI][lL][eE][nN][tT] ]] && [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
+          elif [[ "${ALERT_MSG_LEVEL:-WARNING}" != [sS][iI][lL][eE][nN][tT] ]] && [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
             # No PR-checkout helper may run when trusted support staging failed.
             curl -fsS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
               -d "chat_id=${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" -d 'disable_web_page_preview=true' \

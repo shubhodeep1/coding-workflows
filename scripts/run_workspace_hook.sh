@@ -86,15 +86,40 @@ report_hook_failure()
 	return 0
 }
 
-# Validation hooks are branch-authored code. Stage only screened regular files,
-# never the host checkout, environment, Docker socket, or runner home.
+# Workspace hooks are branch-authored code for every phase (issue #7158: an
+# implement after_create hook ran on the host and could read the GH_PAT in the
+# checkout's origin URL). Stage only screened regular files, never the host
+# checkout, environment, Docker socket, or runner home. The function keeps its
+# historical name; arguments 5 (phase) and 6 (trusted hook path) are optional
+# so the original 4-argument validate call keeps working.
 run_validate_hook_isolated()
 {
 	local workspace_path="$1"
 	local hook="$2"
 	local timeout_seconds="$3"
 	local runner_temp="$4"
-	local isolated_root isolated_status container_name
+	local phase="${5:-validate}"
+	local hook_path="${6:-${workspace_path}/.github/ai/workspace_hooks/${phase}/${hook}.sh}"
+	local isolated_root isolated_status container_name replay_root
+	case "${phase}" in
+		''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*)
+			return 125
+			;;
+	esac
+	case "${hook}" in
+		after_create|before_run|after_run|before_remove)
+			;;
+		*)
+			return 125
+			;;
+	esac
+	if [ "${phase}" = "validate" ]; then
+		replay_root="${workspace_path}"
+	else
+		# Non-validate hook output never lands in the workspace that later host
+		# steps commit; it goes to a runner-temp data directory instead.
+		replay_root="${runner_temp}/workspace-hooks/output/${phase}"
+	fi
 	command -v docker >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 125
 	isolated_root="$(mktemp -d "${runner_temp}/validate-hook-XXXXXXXX")" || return 125
 	container_name="validate-hook-$$"
@@ -106,16 +131,27 @@ run_validate_hook_isolated()
 	}
 	trap 'cleanup_validate_isolation; exit 143' TERM
 	# Snapshot and manifest are separate; the container can only write the copy.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_path}" "${isolated_root}" <<'PY'
+	# Host Python runs with -I (no cwd or PYTHON* env on sys.path): the cwd is the
+	# branch-authored workspace, and a root-level json.py there must never be
+	# imported on the credential-bearing host.
+	# The excluded names and allowed() below keep .git (whose config carries the
+	# origin-URL token in implement), .ai, the workflow-support checkouts,
+	# credential files and every dot-directory except the hook directory out of
+	# the sandbox; implement relies on this as much as validate does.
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${workspace_path}" "${isolated_root}" "${phase}" "${hook}" "${hook_path}" <<'PY'
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 
 root = Path(sys.argv[1])
 stage = Path(sys.argv[2]) / "source"
+phase, hook_name, hook_source = sys.argv[3], sys.argv[4], sys.argv[5]
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", phase) or hook_name not in ("after_create", "before_run", "after_run", "before_remove"):
+    raise SystemExit("workspace hook phase or name is invalid")
 stage.mkdir(mode=0o700)
 excluded = {".git", ".ai", ".ssh", ".aws", ".config", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", "node_modules", "__pycache__", "secrets", "credentials"}
 bad_suffixes = (".pem", ".key", ".p12", ".pfx", ".keystore", ".pyc")
@@ -160,6 +196,36 @@ for current, dirs, files in os.walk(root, followlinks=False):
         manifest["/".join(parts)] = {"digest": hashlib.sha256(data).hexdigest(), "mode": mode}
         total += len(data)
 
+# Inject the hook the trusted runner resolved. For implement after_run and
+# before_remove that is the pre-editor copy, so a hook the agent edited in the
+# workspace never runs. The hook must be a regular file reached without any
+# symlink below the directory holding .github, so it cannot pull a host file
+# into the sandbox.
+hook_relative = (".github", "ai", "workspace_hooks", phase, f"{hook_name}.sh")
+hook_suffix = os.path.join(*hook_relative)
+hook_abs = os.path.abspath(hook_source)
+if not hook_abs.endswith(os.sep + hook_suffix):
+    raise SystemExit("workspace hook path is unexpected")
+hook_base = hook_abs[: -len(hook_suffix) - 1]
+if os.path.realpath(hook_abs) != os.path.join(os.path.realpath(hook_base), hook_suffix):
+    raise SystemExit("workspace hook path traverses a symlink")
+try:
+    hook_fd = os.open(hook_abs, os.O_RDONLY | os.O_NOFOLLOW)
+except OSError:
+    raise SystemExit("workspace hook file is not a regular file")
+with os.fdopen(hook_fd, "rb") as stream:
+    hook_info = os.fstat(stream.fileno())
+    if not stat.S_ISREG(hook_info.st_mode) or hook_info.st_size > 256 * 1024:
+        raise SystemExit("workspace hook file is not a regular file of at most 256 KiB")
+    hook_data = stream.read(256 * 1024 + 1)
+if len(hook_data) > 256 * 1024:
+    raise SystemExit("workspace hook file is too large")
+hook_target = stage.joinpath(*hook_relative)
+hook_target.parent.mkdir(parents=True, exist_ok=True)
+hook_target.write_bytes(hook_data)
+hook_target.chmod(0o644)
+manifest["/".join(hook_relative)] = {"digest": hashlib.sha256(hook_data).hexdigest(), "mode": 0o644}
+
 (stage.parent / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 PY
 	then
@@ -188,11 +254,11 @@ PY
 			--tmpfs /workspace:rw,nosuid,nodev,size=80m,mode=1777 \
 			--mount "type=bind,src=${isolated_root}/source,dst=/source,readonly" \
 			--env HOME=/tmp --env PYTHONDONTWRITEBYTECODE=1 \
-			--env "VALIDATE_HOOK_NAME=${hook}" --workdir /workspace \
+			--env "VALIDATE_HOOK_NAME=${hook}" --env "WORKSPACE_HOOK_PHASE=${phase}" --workdir /workspace \
 			python:3.12-slim /bin/bash -c '
 				set -euo pipefail
 				cp -R /source/. /workspace/
-				bash ".github/ai/workspace_hooks/validate/${VALIDATE_HOOK_NAME}.sh" >&2
+				bash ".github/ai/workspace_hooks/${WORKSPACE_HOOK_PHASE}/${VALIDATE_HOOK_NAME}.sh" >&2
 				tar -C /workspace -cf - .
 			' > "${isolated_root}/result.tar"
 	)
@@ -205,7 +271,7 @@ PY
 		return "${isolated_status}"
 	fi
 	# Never extract an untrusted tar entry directly onto the host workspace.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${isolated_root}" <<'PY'
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${isolated_root}" <<'PY'
 import os
 from pathlib import Path, PurePosixPath
 import tarfile
@@ -244,8 +310,14 @@ PY
 		cleanup_validate_isolation
 		return 125
 	fi
+	if [ "${phase}" != "validate" ]; then
+		if ! mkdir -p "${replay_root}" || ! chmod 0700 "${replay_root}"; then
+			cleanup_validate_isolation
+			return 125
+		fi
+	fi
 	# Validate the entire returned tree before changing the host workspace.
-	if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_path}" "${isolated_root}" "${hook}" <<'PY'
+	if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${workspace_path}" "${isolated_root}" "${hook}" "${phase}" "${replay_root}" <<'PY'
 import hashlib
 import json
 import os
@@ -258,6 +330,8 @@ import sys
 root = Path(sys.argv[1])
 stage_root = Path(sys.argv[2])
 hook_name = sys.argv[3]
+phase = sys.argv[4]
+replay_root = Path(sys.argv[5])
 stage = stage_root / "returned"
 original = json.loads((stage_root / "manifest.json").read_text(encoding="utf-8"))
 excluded = {".git", ".ai", ".ssh", ".aws", ".config", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", "node_modules", "__pycache__", "secrets", "credentials"}
@@ -298,19 +372,31 @@ deletions = set(original) - set(updates)
 # credentialed host workspace. Refuse the entire result before any replay.
 if hook_name not in ("after_create", "before_run", "after_run", "before_remove"):
     raise SystemExit("validation hook name is invalid")
-allowed_prefix = f"validation/hook-output/{hook_name}/"
+if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", phase):
+    raise SystemExit("workspace hook phase is invalid")
+if phase == "validate":
+    # Validation output is replayed into the workspace, as before.
+    allowed_prefix = f"validation/hook-output/{hook_name}/"
+    destination_strip = ""
+else:
+    # Other phases (implement) replay only into the runner-temp data directory,
+    # at <replay_root>/<hook>/<name>.txt, never into the committed workspace.
+    allowed_prefix = f"{phase}/hook-output/{hook_name}/"
+    destination_strip = f"{phase}/hook-output/"
 for name in changes.keys() | deletions:
     if not name.startswith(allowed_prefix) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\.txt", name[len(allowed_prefix):]):
         raise SystemExit("validation hook returned disallowed mutation")
 for data, guest_mode in changes.values():
     if guest_mode & 0o111:
         raise SystemExit("validation hook returned executable output")
+changes = {name[len(destination_strip):]: result for name, result in changes.items()}
+deletions = {name[len(destination_strip):] for name in deletions}
 
 # Open every parent relative to the same workspace fd, rejecting symlinks at
 # preflight and again at mutation time. Dirfd operations also keep a parent
 # symlink swap from redirecting an unlink or atomic replacement outside it.
 directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-workspace_fd = os.open(root, directory_flags)
+workspace_fd = os.open(replay_root, directory_flags)
 def checked_parent(name, create=False):
     parent_fd = os.dup(workspace_fd)
     try:
@@ -396,7 +482,7 @@ main()
 	local status_text
 
 	case "${phase}" in
-		''|*[!A-Za-z0-9._-]*)
+		''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*)
 			fail "unsupported phase: ${phase}"
 			;;
 	esac
@@ -445,14 +531,10 @@ main()
 
 	run_started_at="$(date +%s)"
 	set +e
+	# Every phase runs in the credential-free sandbox; there is no host fallback.
 	(
-		if [ "${phase}" = "validate" ]; then
-			timeout --kill-after=10s "${timeout_seconds}" bash "${BASH_SOURCE[0]}" --isolated \
-				"${workspace_path}" "${hook}" "${timeout_seconds}" "${runner_temp}"
-		else
-			cd "${workspace_path}" && \
-			timeout --kill-after=10s "${timeout_seconds}" bash -lc 'bash "$1"' bash "${hook_path}"
-		fi
+		timeout --kill-after=10s "${timeout_seconds}" bash "${BASH_SOURCE[0]}" --isolated \
+			"${workspace_path}" "${hook}" "${timeout_seconds}" "${runner_temp}" "${phase}" "${hook_path}"
 	) >"${log_file}" 2>&1
 	run_status="$?"
 	set -e

@@ -12,13 +12,23 @@ name: AI Clarify (Reusable)
         required: false
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   clarify:
     if: >-
-      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
-      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
+      !contains(toJson(github.event.issue.labels.*.name), 'ai:auto-heal-source') &&
+      (
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step') && !contains(toJson(github.event.issue.labels.*.name), 'ai:provider-outage') && !contains(toJson(github.event.issue.labels.*.name), 'ai:consumer-health') && !contains(toJson(github.event.issue.labels.*.name), 'ai:scheduled-validation-failed') && !contains(toJson(github.event.issue.labels.*.name), 'ai:heal-intake-queue')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && vars.AI_ORCHESTRATOR_APP_LOGIN != '' && github.event.issue.user.login == vars.AI_ORCHESTRATOR_APP_LOGIN && contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-managed') && contains(github.event.issue.body, '<!-- ai-orchestrator-provenance:v1 ')))) ||
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && (startsWith(github.event.comment.body, '/reclarify') || (contains(github.event.comment.body, fromJson('"\n/reclarify"')) && !contains(github.event.comment.body, '<!-- ai:') && !contains(github.event.comment.body, 'To restart clarification reply:')))) ||
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:pr-dependency-released:"'))) ||
+      (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:partial-delivery-restart:"')))
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
@@ -27,9 +37,22 @@ jobs:
       # immediately with no comment, label update, or Telegram alert. This is
       # intentional — the new run supersedes the old one. The "Comment on issue
       # failure" step does NOT fire for cancelled runs (only for failures).
-      group: ai-clarify-${{ github.event.issue.number }}
+      # A comment from an author without an OWNER/MEMBER/COLLABORATOR
+      # association can only reach this job as the poller's PR-dependency
+      # release marker (issue #7328) or the partial-delivery restart marker
+      # (issue #7657); it gets its own group per comment so
+      # anyone posting that text cannot cancel or replace a running clarify.
+      # The route step verifies that such a comment came from the GH_PAT login.
+      group: ai-clarify-${{ github.event.issue.number }}${{ (github.event_name == 'issue_comment' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) && format('-release-{0}', github.event.comment.id) || '' }}
       cancel-in-progress: true
     env:
+      AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+      # Claude capacity wait (issue #7370): the report step labels this issue
+      # and the hourly capacity-resume pass replays the triggering command.
+      CLAUDE_CAPACITY_WAIT_ITEM_KIND: issue
+      CLAUDE_CAPACITY_WAIT_ITEM_NUMBER: ${{ github.event.issue.number }}
+      CLAUDE_CAPACITY_WAIT_STAGE: clarify
+      CLAUDE_CAPACITY_WAIT_SOURCE_COMMENT: ${{ github.event.comment.id || '' }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
@@ -71,7 +94,12 @@ jobs:
       - name: Resolve integration ref
         id: refctx
         env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          HOLD_EVENT_NAME: ${{ github.event_name }}
+          HOLD_COMMENT_LOGIN: ${{ github.event.comment.user.login }}
+          HOLD_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -83,6 +111,14 @@ jobs:
 
           resolver_repo="shubhodeep1/coding-workflows"
           resolver_ref="stable"
+          resolver_ref_pinned=false
+          # A consumer wrapper pinned to a commit runs the resolver from that
+          # commit, never from stable or main (issue tele-funtoken#4566).
+          resolver_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [[ "${resolver_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/clarify\.yml@[0-9a-f]{40}$ ]]; then
+            resolver_ref="${resolver_workflow_ref##*@}"
+            resolver_ref_pinned=true
+          fi
           if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
             resolver_ref="${{ github.sha }}"
           fi
@@ -102,11 +138,38 @@ jobs:
             rm -rf "${resolver_stage_root}"
           }
           trap cleanup_resolver_stage EXIT
+          # Issue #7283: with CI-triage PR-branch routing on, a resolver that cannot
+          # be staged, pinned or found fails the step instead of falling back to the
+          # default branch (the unpinned main fallback clone counts as a pinning
+          # failure). The flag is parsed like ci_triage_routing_enabled in
+          # scripts/resolve_integration_ref.sh. With routing off, the fallbacks below
+          # are unchanged.
+          resolver_ci_triage_routing_on=false
+          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" in
+            [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
+          esac
+          resolver_stage_fail_closed() {
+            if [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+              resolver_pin_log=""
+              if [ "${resolver_ref_pinned}" = "true" ]; then resolver_pin_log=" pinned_ref=${resolver_ref}"; fi
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 ci_triage_routing=on${resolver_pin_log}; refusing to fall back to the default branch."
+            elif [ "${resolver_ref_pinned}" = "true" ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 pinned_ref=${resolver_ref}; refusing to run resolver code from another ref."
+            else
+              return 0
+            fi
+            if [ -s "${resolver_clone_log}" ]; then
+              sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
+            fi
+            exit 1
+          }
 
           if resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
             if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
-               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
+               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}" || \
+               { [ "${resolver_ref_pinned}" = "true" ] && [ "$(git -C "${resolver_stage_primary}" rev-parse HEAD 2>/dev/null || true)" != "${resolver_ref}" ]; }; then
+              resolver_stage_fail_closed pin_failed
               echo "::warning::Failed to stage canonical integration resolver ref ${resolver_ref}; using main fallback."
               if [ -s "${resolver_clone_log}" ]; then
                 sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
@@ -114,7 +177,9 @@ jobs:
             fi
           elif resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_fallback}" 2>>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_fallback}/scripts/resolve_integration_ref.sh"
+            resolver_stage_fail_closed pin_failed
           else
+            resolver_stage_fail_closed stage_failed
             echo "::warning::Failed to stage canonical integration resolver; falling back to default branch."
             if [ -s "${resolver_clone_log}" ]; then
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
@@ -124,25 +189,154 @@ jobs:
           fi
 
           if [ ! -f "${resolver_script}" ]; then
+            resolver_stage_fail_closed script_missing
             echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           chmod +x "${resolver_script}"
-          if integration_branch="$({
+          # Exit 3 means CI-triage PR-branch routing was required but could
+          # not be verified; never fall back to the default branch then.
+          resolver_rc=0
+          resolver_err_file="${resolver_stage_root}/resolver.err"
+          integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
-            bash "${resolver_script}"
-          })"; then
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
+            bash "${resolver_script}" 2>"${resolver_err_file}"
+          })" || resolver_rc=$?
+          # A triage issue whose PR is merged or closed (reason=pr_not_open)
+          # keeps the default branch in clarify only, so the check-triage
+          # resolution gate (#7095) below can close it with evidence. Plan,
+          # implement, clarify-respond and validate still refuse it.
+          resolver_pr_not_open=false
+          if [ "${resolver_rc}" -eq 3 ] && grep -Eq 'outcome=refused reason=pr_not_open$' "${resolver_err_file}" 2>/dev/null; then
+            resolver_pr_not_open=true
+          fi
+          # Issue #7516: an issue that carries the check-failure-triage markers
+          # but not ai:check-triage (and, when ai:orchestrator-managed, no
+          # canonical tracking line) is refused as reason=label_missing. That
+          # refusal is deterministic, so failing the job only re-files heal
+          # reports. Clarify holds the issue instead: one explanatory comment
+          # (deduplicated on the GH_PAT login's marker), ai:blocked, and every
+          # later step skips on label_missing_hold=true. Routing is still
+          # refused and nothing runs on the default branch. Only the resolver's
+          # own line for this issue counts; every other exit 3 still fails.
+          resolver_label_missing=false
+          if [ "${resolver_rc}" -eq 3 ] && grep -Eq "^::error::CI_TRIAGE_PR_BRANCH_ROUTING issue=${issue_number} (pr=([0-9]+|none) )?outcome=refused reason=label_missing$" "${resolver_err_file}" 2>/dev/null; then
+            resolver_label_missing=true
+          fi
+          if [ -s "${resolver_err_file}" ]; then
+            if [ "${resolver_pr_not_open}" = "true" ]; then
+              sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::notice::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            elif [ "${resolver_label_missing}" = "true" ]; then
+              sed 's/^::error::CI_TRIAGE_PR_BRANCH_ROUTING /::warning::CI_TRIAGE_PR_BRANCH_ROUTING /' "${resolver_err_file}" >&2
+            else
+              cat "${resolver_err_file}" >&2
+            fi
+          fi
+          if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_pr_not_open}" = "true" ]; then
+            echo "::notice::CI-triage PR for issue #${issue_number} is no longer open; clarifying on the default branch so the resolution gate can run."
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_label_missing}" = "true" ]; then
+            hold_repo="${{ github.repository }}"
+            hold_marker="<!-- ai:integration-ref-label-missing:v1 issue=${issue_number} -->"
+            hold_fail() {
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=hold_failed reason=$1 issue=${issue_number}; refusing to fall back to the default branch."
+              exit 1
+            }
+            hold_login="$(gh api user --jq .login 2>/dev/null || true)"
+            if ! [[ "${hold_login}" =~ ^[A-Za-z0-9](-?[A-Za-z0-9])*(\[bot\])?$ ]]; then
+              hold_fail identity_unavailable
+            fi
+            # The job predicate admits a PR-dependency release comment from any
+            # author; "Decide clarify route" verifies it later. Make no GH_PAT
+            # write for a comment that is neither from a trusted association
+            # nor from the GH_PAT login: stop the run without holding.
+            if [ "${HOLD_EVENT_NAME:-}" = "issue_comment" ] \
+              && ! [[ "${HOLD_COMMENT_ASSOCIATION:-}" =~ ^(OWNER|MEMBER|COLLABORATOR)$ ]] \
+              && [ "${HOLD_COMMENT_LOGIN:-}" != "${hold_login}" ]; then
+              {
+                echo "label_missing_hold=true"
+                echo "ref="
+              } >> "$GITHUB_OUTPUT"
+              echo "::warning::INTEGRATION_REF_RESOLVE outcome=skip reason=label_missing_untrusted_comment issue=${issue_number}; no comment or label written."
+              exit 0
+            fi
+            hold_comments_file="${resolver_stage_root}/hold_comments.json"
+            if ! gh api --paginate --slurp "repos/${hold_repo}/issues/${issue_number}/comments?per_page=100" > "${hold_comments_file}" 2>/dev/null; then
+              hold_fail comments_unavailable
+            fi
+            # Count the marker only on comments by the GH_PAT login, and only
+            # as the comment's last line.
+            hold_present="$(python3 -I -B -c '
+          import json, sys
+          path, login, marker = sys.argv[1:4]
+          with open(path, encoding="utf-8") as fh:
+              pages = json.load(fh)
+          if not isinstance(pages, list):
+              raise SystemExit(1)
+          count = 0
+          for page in pages:
+              for comment in (page if isinstance(page, list) else [page]):
+                  if not isinstance(comment, dict):
+                      continue
+                  user = comment.get("user") or {}
+                  if not isinstance(user, dict) or user.get("login") != login:
+                      continue
+                  body = comment.get("body") or ""
+                  if isinstance(body, str) and body.rstrip().endswith(marker):
+                      count += 1
+          print(count)
+          ' "${hold_comments_file}" "${hold_login}" "${hold_marker}" 2>/dev/null || true)"
+            if ! [[ "${hold_present}" =~ ^[0-9]+$ ]]; then
+              hold_fail comments_unavailable
+            fi
+            hold_comment_state=present
+            if [ "${hold_present}" -eq 0 ]; then
+              hold_run_url="${GITHUB_SERVER_URL:-https://github.com}/${hold_repo}/actions/runs/${GITHUB_RUN_ID}"
+              hold_body="$(printf '%s\n\n%s\n\n%s\n\n%s\n\n%s\n\n%s' \
+                "**Clarify is on hold: CI-triage routing refused (\`reason=label_missing\`).**" \
+                "This issue carries the check-failure-triage markers but not the \`ai:check-triage\` label. On an \`ai:orchestrator-managed\` issue, the canonical \`- Tracking issue: #N\` line is missing as well. The integration-ref resolver cannot verify a branch, so clarify does not fall back to the default branch." \
+                "To fix it, either restore \`ai:check-triage\` and remove \`ai:orchestrator-managed\`, or, only when the issue keeps \`ai:orchestrator-managed\`, add the canonical tracking line to the issue body. Then comment \`/reclarify\` to run clarify again. The issue is labelled \`ai:blocked\` until then." \
+                "Run: ${hold_run_url}" \
+                "_Posted by the clarify workflow._" \
+                "${hold_marker}")"
+              if ! gh api -X POST "repos/${hold_repo}/issues/${issue_number}/comments" -f body="${hold_body}" >/dev/null 2>&1; then
+                hold_fail comment_failed
+              fi
+              hold_comment_state=posted
+            fi
+            # The label goes on after the comment, so the ai:blocked label
+            # event never precedes the explanation.
+            # Adding a label is idempotent, so one retry is safe.
+            if ! gh api -X POST "repos/${hold_repo}/issues/${issue_number}/labels" -f 'labels[]=ai:blocked' >/dev/null 2>&1 \
+              && ! { sleep 2; gh api -X POST "repos/${hold_repo}/issues/${issue_number}/labels" -f 'labels[]=ai:blocked' >/dev/null 2>&1; }; then
+              hold_fail label_failed
+            fi
+            {
+              echo "label_missing_hold=true"
+              echo "ref="
+            } >> "$GITHUB_OUTPUT"
+            echo "::warning::INTEGRATION_REF_RESOLVE outcome=held reason=label_missing issue=${issue_number} comment=${hold_comment_state} label=applied"
+            exit 0
+          elif [ "${resolver_rc}" -eq 3 ]; then
+            echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
+            exit 1
+          elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+            echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
+            exit 1
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout repository
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -150,6 +344,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
 
       - name: Log checkout ref
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           CLARIFY_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
@@ -163,6 +358,7 @@ jobs:
           fi
 
       - name: Configure git auth for memory helper clones
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -174,21 +370,57 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Install Codex CLI
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        if: steps.refctx.outputs.label_missing_hold != 'true'
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
+        if: steps.refctx.outputs.label_missing_hold != 'true'
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/clarify\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (Q64, as validate.yml in #7123). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/clarify\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         id: checkout_support_source
         continue-on-error: true
         uses: actions/checkout@v5
@@ -200,7 +432,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: ${{ steps.checkout_support_source.outcome == 'failure' }}
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.checkout_support_source.outcome == 'failure') && env.SCRIPT_REF == 'stable'
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -210,15 +442,22 @@ jobs:
           fetch-depth: 1
 
       - name: Ensure workflow support source checkout
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
             echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
             exit 1
           fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
 
       - name: Checkout workflow support source main snapshot
-        if: ${{ env.SCRIPT_REF != 'main' }}
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.SCRIPT_REF == 'stable')
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -229,13 +468,19 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
 
+          # Host Python helpers run outside the issue branch checkout.
+          CLARIFY_HOST_PYTHON_DIR="${RUNNER_TEMP}/clarify-host-python-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p -- "${CLARIFY_HOST_PYTHON_DIR}"
+          echo "CLARIFY_HOST_PYTHON_DIR=${CLARIFY_HOST_PYTHON_DIR}" >> "$GITHUB_ENV"
+
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh check_triage_resolution.py codex_helpers.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -245,6 +490,10 @@ jobs:
               exit 1
             fi
             install -m 0755 "${src}" "scripts/${f}"
+            case "${f}" in
+              pr_dependency.py|load_workflow_overlay.py|security_dependency.py|check_triage_resolution.py|workflow_failure_heal.py)
+                install -m 0755 "${src}" "${CLARIFY_HOST_PYTHON_DIR}/${f}" ;;
+            esac
             _fetched_scripts+=("${f}")
           done
 
@@ -260,12 +509,12 @@ jobs:
           fi
           install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile
 
-          # render_prompt.py is the optional Python backend for the
-          # render_prompt.sh shim adopted by branches that took the issue
-          # #3043 refactor.  main ships a self-contained bash render_prompt.sh
-          # that needs no backend, so the file is absent on main and must be
-          # staged only when the branch under processing actually carries it.
-          # Absence is expected (non-shim branches, incl. main) and must not
+          # render_prompt.py is the Python backend of the render_prompt.sh
+          # shim (issue #3043 refactor). main ships both, the shim needs the
+          # backend, and check_workflow_script_refs.py fails CI if it goes
+          # missing. Some older refs still bundle a self-contained bash
+          # render_prompt.sh with no backend, so absence on the ref under
+          # processing (and on main's copy) only skips staging and must not
           # fail the bootstrap; presence stages it beside the shim so the
           # shim resolves ${SCRIPT_DIR}/render_prompt.py.
           for f in render_prompt.py; do
@@ -320,7 +569,8 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+          # Isolated mode also excludes PYTHONPATH and the checkout's cwd.
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/load_workflow_overlay.py" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
@@ -378,6 +628,7 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: Create runtime workspace
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-issue-${GITHUB_RUN_ID}"
@@ -398,6 +649,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue metadata
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -421,13 +673,21 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Decide clarify route
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         id: clarify_route
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          COMMENT_USER_LOGIN: ${{ github.event.comment.user.login || '' }}
+          COMMENT_AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association || '' }}
           RUN_ID: ${{ github.run_id }}
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # Same value the runner exports; the run body reads it instead of an
+          # inline ${{ }} so the body stays under the 18,000-character guard.
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           LABELS_CSV="$(jq -r '[(.labels // [])[]?.name] | join(",")' "${ISSUE_META_FILE}")"
@@ -437,10 +697,155 @@ jobs:
             IS_ORCHESTRATOR_MANAGED="true"
           fi
 
+          # Same rule as jobs.clarify.if (issue #6630): /reclarify on the first
+          # line, or on a later line of a comment that carries no automation
+          # marker and no plan-comment trailer. Case-insensitive like GitHub's
+          # startsWith/contains; pure bash so a large body cannot SIGPIPE.
+          _rc_body_lc="${COMMENT_BODY,,}"
+          _rc_first="${_rc_body_lc%%$'\n'*}"
+          _rc_is_command="false"
+          if [[ "${_rc_first}" == /reclarify* ]] || { [[ $'\n'"${_rc_body_lc}" == *$'\n/reclarify'* ]] && [[ "${_rc_body_lc}" != *'<!-- ai:'* ]] && [[ "${_rc_body_lc}" != *'to restart clarification reply:'* ]]; }; then
+            _rc_is_command="true"
+          fi
           IS_FORCED_RECLARIFY="false"
-          if [ "${EVENT_NAME}" = "issue_comment" ] && printf '%s' "${COMMENT_BODY}" | grep -q '^/reclarify'; then
+          if [ "${EVENT_NAME}" = "issue_comment" ] && [ "${_rc_is_command}" = "true" ]; then
             IS_FORCED_RECLARIFY="true"
           fi
+
+          # BEGIN pr-dependency release classification (#7328)
+          # The standalone poller posts exactly "/reclarify" + newline +
+          # "<!-- ai:pr-dependency-released:<n> -->" with GH_PAT once a held
+          # issue's pull-request dependency is met. That comment restarts
+          # clarify automatically: it is not a human request for answers, so
+          # it must not add the human-answer marker that makes clarify-respond
+          # skip the issue. It counts as a release only when its author is the
+          # GH_PAT login, read live (fail closed); any other author keeps the
+          # ordinary /reclarify rules, and a comment from an author without an
+          # OWNER/MEMBER/COLLABORATOR association is not trusted at all.
+          IS_AUTOMATED_RELEASE="false"
+          COMMENT_ROUTE_TRUSTED="true"
+          if [ "${EVENT_NAME}" = "issue_comment" ]; then
+            case "${COMMENT_AUTHOR_ASSOCIATION:-}" in
+              OWNER|MEMBER|COLLABORATOR) COMMENT_ROUTE_TRUSTED="true" ;;
+              *) COMMENT_ROUTE_TRUSTED="false" ;;
+            esac
+            _rel_body="${COMMENT_BODY//$'\r'/}"
+            _rel_body="${_rel_body%"${_rel_body##*[![:space:]]}"}"
+            _rel_expected="/reclarify"$'\n'"<!-- ai:pr-dependency-released:${ISSUE_NUMBER} -->"
+            # Issue #7657: issue_pr_status.yml posts the same shape with
+            # "<!-- ai:partial-delivery-restart:<n> -->" after a merged PR
+            # delivered only part of the issue; it is verified the same way.
+            _rel_expected_partial="/reclarify"$'\n'"<!-- ai:partial-delivery-restart:${ISSUE_NUMBER} -->"
+            _rel_gate="pr_dependency_release"
+            if [[ "${_rel_body}" == "${_rel_expected_partial}" ]]; then
+              _rel_gate="partial_delivery_restart"
+            fi
+            # A failed release run is requeued by the poller's
+            # replay_failed_reclarify_commands as "/reclarify
+            # [auto-requeued-by-poller]" + "<!-- ai:reclarify-replay:v1
+            # source=<id> -->"; it is a release only when comment <id> is this
+            # issue's exact release marker from the same GH_PAT login.
+            _rel_replay_prefix="/reclarify [auto-requeued-by-poller]"$'\n'"<!-- ai:reclarify-replay:v1 source="
+            _rel_replay_source=""
+            if [[ "${_rel_body}" == "${_rel_replay_prefix}"*" -->" ]]; then
+              _rel_replay_source="${_rel_body#"${_rel_replay_prefix}"}"
+              _rel_replay_source="${_rel_replay_source%" -->"}"
+              [[ "${_rel_replay_source}" =~ ^[1-9][0-9]{0,19}$ ]] || _rel_replay_source=""
+            fi
+            if [[ "${_rel_body}" == "${_rel_expected}" ]] || [[ "${_rel_body}" == "${_rel_expected_partial}" ]] || [ -n "${_rel_replay_source}" ]; then
+              # GitHub API audit (CLAUDE.md §14): no earlier call in this job
+              # returns the token's own identity ("Fetch issue metadata" reads
+              # only the issue), so this one GET /user runs only for a comment
+              # that is exactly this issue's release marker or a poller replay;
+              # a verified replay adds one GET of its source comment. The login
+              # is reused below as pr_dependency.py's --trusted-login.
+              _rel_login=""
+              _rel_reason="identity_unavailable"
+              if _rel_login="$(source scripts/gh_helpers.sh && gh_retry gh api user --jq .login)" \
+                && [[ "${_rel_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+                if [ -n "${COMMENT_USER_LOGIN:-}" ] && [ "${_rel_login,,}" = "${COMMENT_USER_LOGIN,,}" ]; then
+                  _rel_reason="verified"
+                else
+                  _rel_reason="author_mismatch"
+                fi
+              fi
+              if [ "${_rel_reason}" = "verified" ] && [ -n "${_rel_replay_source}" ]; then
+                # One GET of the replay's source comment, only for a replay
+                # comment already verified to come from the GH_PAT login.
+                _rel_reason="replay_source_unverified"
+                if _rel_src_json="$(source scripts/gh_helpers.sh && gh_retry gh api "repos/${GITHUB_REPOSITORY:-}/issues/comments/${_rel_replay_source}")" \
+                  && printf '%s' "${_rel_src_json}" | jq -e --arg login "${_rel_login,,}" --arg expected "${_rel_expected}" \
+                    --arg expected_partial "${_rel_expected_partial}" \
+                    --arg suffix "/repos/${GITHUB_REPOSITORY:-}/issues/${ISSUE_NUMBER}" \
+                    '((.user.login // "") | ascii_downcase) == $login and ((.issue_url // "") | endswith($suffix)) and ((((.body // "") | gsub("\r"; "") | sub("\\s+$"; "")) as $b | $b == $expected or $b == $expected_partial))' >/dev/null 2>&1; then
+                  _rel_reason="verified_replay"
+                  if printf '%s' "${_rel_src_json}" | jq -e --arg expected_partial "${_rel_expected_partial}" \
+                    '((.body // "") | gsub("\r"; "") | sub("\\s+$"; "")) == $expected_partial' >/dev/null 2>&1; then
+                    _rel_gate="partial_delivery_restart"
+                  fi
+                fi
+              fi
+              if [ "${_rel_reason}" = "verified" ] || [ "${_rel_reason}" = "verified_replay" ]; then
+                IS_AUTOMATED_RELEASE="true"
+                IS_FORCED_RECLARIFY="false"
+                COMMENT_ROUTE_TRUSTED="true"
+                echo "AI_PHASE_GATE_V1 phase=clarify gate=${_rel_gate} reason=${_rel_reason} outcome=restart issue=${ISSUE_NUMBER}"
+              elif [ "${COMMENT_ROUTE_TRUSTED}" = "true" ]; then
+                echo "AI_PHASE_GATE_V1 phase=clarify gate=${_rel_gate} reason=${_rel_reason} outcome=human_reclarify issue=${ISSUE_NUMBER}"
+              else
+                echo "AI_PHASE_GATE_V1 phase=clarify gate=${_rel_gate} reason=${_rel_reason} outcome=skip issue=${ISSUE_NUMBER}"
+              fi
+            fi
+          fi
+          # END pr-dependency release classification (#7328)
+
+          # BEGIN capacity-wait replay classification (#7370)
+          # The capacity-resume pass (scripts/provider_outage.py) replays a
+          # clarify run that waited for Claude capacity as
+          # "/reclarify [auto-requeued-by-capacity-wait]" ending in
+          # "<!-- ai:claude-capacity-wait-replay:v1 source=<id|none> run=<id> -->".
+          # Only the GH_PAT login's replay counts (read live, fail closed).
+          # source=none restarts clarify automatically (no human-answer
+          # marker); a replay of a human /reclarify keeps its human semantics.
+          # A human typing the tag gets ordinary /reclarify handling.
+          _cw_body="${COMMENT_BODY//$'\r'/}"
+          _cw_body="${_cw_body%"${_cw_body##*[![:space:]]}"}"
+          _cw_first="${_cw_body%%$'\n'*}"
+          _cw_last="${_cw_body##*$'\n'}"
+          if [ "${EVENT_NAME}" = "issue_comment" ] && [ "${_cw_first}" = "/reclarify [auto-requeued-by-capacity-wait]" ] \
+            && [[ "${_cw_last}" =~ ^\<\!--\ ai:claude-capacity-wait-replay:v1\ source=(none|[1-9][0-9]{0,19})\ run=[0-9]{1,20}\ --\>$ ]]; then
+            _cw_source="${BASH_REMATCH[1]}"
+            _cw_reason="identity_unavailable"
+            if [ -z "${_rel_login:-}" ]; then
+              _rel_login="$(source scripts/gh_helpers.sh && gh_retry gh api user --jq .login 2>/dev/null)" || _rel_login=""
+            fi
+            if [[ "${_rel_login:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+              if [ -n "${COMMENT_USER_LOGIN:-}" ] && [ "${_rel_login,,}" = "${COMMENT_USER_LOGIN,,}" ]; then
+                _cw_reason="verified"
+              else
+                _cw_reason="author_mismatch"
+              fi
+            fi
+            if [ "${_cw_reason}" = "verified" ] && [ "${_cw_source}" != "none" ]; then
+              # One GET of the source comment: it must be a /reclarify by an
+              # OWNER/MEMBER/COLLABORATOR on this issue.
+              _cw_reason="source_unverified"
+              if _cw_src_json="$(source scripts/gh_helpers.sh && gh_retry gh api "repos/${GITHUB_REPOSITORY:-}/issues/comments/${_cw_source}")" \
+                && printf '%s' "${_cw_src_json}" | jq -e --arg suffix "/repos/${GITHUB_REPOSITORY:-}/issues/${ISSUE_NUMBER}" \
+                  '((.issue_url // "") | endswith($suffix)) and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ((.body // "") | ascii_downcase | startswith("/reclarify"))' >/dev/null 2>&1; then
+                _cw_reason="verified_source"
+              fi
+            fi
+            if [ "${_cw_reason}" = "verified" ]; then
+              IS_AUTOMATED_RELEASE="true"
+              IS_FORCED_RECLARIFY="false"
+              COMMENT_ROUTE_TRUSTED="true"
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=capacity_wait_replay reason=verified outcome=restart issue=${ISSUE_NUMBER}"
+            else
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=capacity_wait_replay reason=${_cw_reason} outcome=human_reclarify issue=${ISSUE_NUMBER}"
+            fi
+          fi
+          # END capacity-wait replay classification (#7370)
 
           # State gate: a closed issue should not produce side effects (label
           # changes, /answer auto-post that triggers plan→implement). The
@@ -471,6 +876,9 @@ jobs:
           elif [ "${EVENT_NAME}" = "issues" ] && [ "${EVENT_ACTION}" = "opened" ] && [ "${ISSUE_AUTHOR_TRUSTED}" != "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_issue_author outcome=skip issue=${ISSUE_NUMBER}"
+          elif [ "${COMMENT_ROUTE_TRUSTED}" != "true" ]; then
+            SKIP_CODEX="true"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=untrusted_comment_author outcome=skip issue=${ISSUE_NUMBER}"
           elif [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_FORCED_RECLARIFY}" != "true" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
@@ -480,20 +888,82 @@ jobs:
           # /answer write until the issue it depends on has merged (issue
           # #4934). The target is already fetched; only a dependent issue
           # costs one additional issue read (scripts/security_dependency.py).
-          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"dependency check failed"}')"
+          # The runner-temp copy is staged from verified support, not the issue branch.
+          DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/security_dependency.py" security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${GITHUB_REPOSITORY}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"dependency check failed"}')"
           if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
             SKIP_CODEX="true"
             echo "AI_PHASE_GATE_V1 phase=clarify gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
             # Retain the issue in the scheduled standalone poller's existing
             # candidate set; it releases this label once the fix merges.
-            source scripts/gh_helpers.sh
-            if ! gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
-              echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
-              exit 1
+            # An untrusted comment author (#7328) causes no label write.
+            if [ "${COMMENT_ROUTE_TRUSTED}" = "true" ]; then
+              source scripts/gh_helpers.sh
+              if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
+                echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
+                exit 1
+              fi
             fi
           fi
+          # Hold a trusted standalone issue that declares `- Depends on PR: #N`
+          # and `- Requires on main: <path> contains <string>` until that PR is
+          # merged into the default branch and the string is on it (issue
+          # #7228). Held issues get no questions or /answer, keep only
+          # ai:clarification (the standalone poller releases them once), and
+          # drop ai:blocked so the unblock scan never spends rounds on them.
+          # The runner-temp copy is staged from verified support, not the issue branch.
+          # Reuse the release block's validated GH_PAT login so the helper does
+          # not repeat GET /user (#7328); without it the helper reads it itself.
+          _pr_dependency_login_args=()
+          if [[ "${_rel_login:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+            _pr_dependency_login_args=(--trusted-login "${_rel_login}")
+          fi
+          PR_DEPENDENCY_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/pr_dependency.py" pr-dependency --issue-json "${ISSUE_META_FILE}" --repo "${GITHUB_REPOSITORY}" --issue-number "${ISSUE_NUMBER}" "${_pr_dependency_login_args[@]}" 2>/dev/null || echo '{"status":"held","reason":"pr_dependency_check_failed"}')"
+          if [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
+            SKIP_CODEX="true"
+            _pr_dependency_reason="$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.reason // "unknown"' 2>/dev/null | tr -cd 'A-Za-z0-9_.-' | cut -c1-64 || true)"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=pr_dependency reason=${_pr_dependency_reason:-unknown} outcome=skip issue=${ISSUE_NUMBER}"
+            # No label writes on a closed issue, an untrusted new issue or an
+            # untrusted comment author (#7328).
+            if [ "${IS_CLOSED}" != "true" ] && [ "${COMMENT_ROUTE_TRUSTED}" = "true" ] && { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
+              source scripts/gh_helpers.sh
+              if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
+                echo "::error::Could not mark PR-dependent issue #${ISSUE_NUMBER} as waiting"
+                exit 1
+              fi
+              if jq -e '[(.labels // [])[]?.name] | index("ai:blocked") != null' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+                if ! gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/labels/ai:blocked" >/dev/null; then
+                  echo "::warning::Could not remove ai:blocked from PR-dependent issue #${ISSUE_NUMBER}; the unblock scan may still see it."
+                fi
+              fi
+            fi
+          fi
+          # An ai:check-triage issue whose linked PR merged and whose failure
+          # is verified fixed on the default branch is closed with evidence
+          # instead of asking for /answer (issue #7095). Unverified or
+          # unreadable evidence keeps the normal path (the helper posts the
+          # failing job's traceback); a write failure after verification
+          # fails the run so no /answer follows. Non-triage issues: no API call.
+          CHECK_TRIAGE_RESOLVED="false"
+          if [ "${SKIP_CODEX}" != "true" ] && jq -e '[(.labels // [])[]?.name] | index("ai:check-triage") != null' "${ISSUE_META_FILE}" >/dev/null; then
+            triage_rc=0
+            TRIAGE_VERDICT="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/check_triage_resolution.py" gate --issue-json "${ISSUE_META_FILE}" --repo "${GITHUB_REPOSITORY}" --issue-number "${ISSUE_NUMBER}" --default-branch "${DEFAULT_BRANCH:-main}")" || triage_rc=$?
+            triage_status="$(printf '%s' "${TRIAGE_VERDICT}" | jq -r '.status // ""' 2>/dev/null || true)"
+            if [ "${triage_rc}" -eq 3 ]; then
+              echo "::error::Verified check-triage issue #${ISSUE_NUMBER} as resolved but could not record or close it"
+              exit 1
+            elif [ "${triage_rc}" -eq 0 ] && { [ "${triage_status}" = "resolved" ] || [ "${triage_status}" = "already_resolved" ]; }; then
+              SKIP_CODEX="true"
+              CHECK_TRIAGE_RESOLVED="true"
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=check_triage_resolved reason=verified outcome=skip issue=${ISSUE_NUMBER}"
+            elif [ "${triage_rc}" -ne 0 ]; then
+              echo "::warning::Check-triage resolution gate failed (rc=${triage_rc}); continuing with clarification"
+            fi
+          fi
+          echo "check_triage_resolved=${CHECK_TRIAGE_RESOLVED}" >> "$GITHUB_OUTPUT"
+
           # Only a verified orchestrator fast path may post its automatic /answer.
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "${COMMENT_ROUTE_TRUSTED}" = "true" ] && [ "${CHECK_TRIAGE_RESOLVED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
+            [ "$(printf '%s' "${PR_DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
             echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
           else
@@ -502,12 +972,15 @@ jobs:
 
           echo "is_orchestrator_managed=${IS_ORCHESTRATOR_MANAGED}" >> "$GITHUB_OUTPUT"
           echo "is_forced_reclarify=${IS_FORCED_RECLARIFY}" >> "$GITHUB_OUTPUT"
+          echo "is_automated_release=${IS_AUTOMATED_RELEASE}" >> "$GITHUB_OUTPUT"
+          echo "comment_route_trusted=${COMMENT_ROUTE_TRUSTED}" >> "$GITHUB_OUTPUT"
           echo "is_closed=${IS_CLOSED}" >> "$GITHUB_OUTPUT"
           echo "skip_codex=${SKIP_CODEX}" >> "$GITHUB_OUTPUT"
 
-          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX}"
+          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} automated_release=${IS_AUTOMATED_RELEASE} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX}"
 
       - name: Detect smoke test and tune LLM settings
+        if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
           set -euo pipefail
           # Match every `[E2E <variant>]` fixture title the release gate
@@ -531,7 +1004,7 @@ jobs:
           fi
 
       - name: Fetch issue comments
-        if: steps.clarify_route.outputs.skip_codex != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -568,7 +1041,7 @@ jobs:
           fi
 
       - name: Set clarification phase label
-        if: steps.clarify_route.outputs.is_closed != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' || steps.clarify_route.outputs.orchestrator_fast_path == 'true')
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.is_closed != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' || steps.clarify_route.outputs.orchestrator_fast_path == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -577,6 +1050,53 @@ jobs:
           source scripts/label_helpers.sh
           # Add clarification label
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
+          # Issue #7516: once routing passes again, a /reclarify after a
+          # label_missing hold drops the hold's ai:blocked label, so plan and
+          # the unblock scan do not see a stale block. Only an open hold marker
+          # by the GH_PAT login counts. The marker is first rewritten to its
+          # "released" form, so a later ai:blocked set for another reason is
+          # never removed by this step; any failure leaves the label on. Open
+          # markers are retired even when ai:blocked is already gone (removed
+          # by hand), so a stale marker cannot release a later, unrelated block.
+          if [ "${{ github.event_name }}" = "issue_comment" ] \
+            && [ -s "${ISSUE_ALL_COMMENTS_FILE:-}" ]; then
+            hold_release_has_label=false
+            if jq -e '[(.labels // [])[]?.name] | index("ai:blocked") != null' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
+              hold_release_has_label=true
+            fi
+            hold_release_login="$(gh api user --jq .login 2>/dev/null || true)"
+            hold_release_marker="<!-- ai:integration-ref-label-missing:v1 issue=${ISSUE_NUMBER} -->"
+            hold_release_done="<!-- ai:integration-ref-label-missing:v1 issue=${ISSUE_NUMBER} released -->"
+            hold_release_ids=""
+            if [ -n "${hold_release_login}" ]; then
+              hold_release_ids="$(jq -r --arg login "${hold_release_login}" --arg marker "${hold_release_marker}" \
+                '[.[]? | select((.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker))) | .id | tostring] | join(" ")' \
+                "${ISSUE_ALL_COMMENTS_FILE}" 2>/dev/null || true)"
+            fi
+            if [ -n "${hold_release_ids}" ]; then
+              hold_release_ok=true
+              for hold_release_id in ${hold_release_ids}; do
+                hold_release_body=""
+                if [[ "${hold_release_id}" =~ ^[0-9]+$ ]]; then
+                  hold_release_body="$(jq -r --argjson id "${hold_release_id}" --arg marker "${hold_release_marker}" --arg done "${hold_release_done}" \
+                    'first(.[]? | select(.id == $id)) | (.body | sub("\\s+$"; "")) as $b | $b[0:(($b | length) - ($marker | length))] + $done' \
+                    "${ISSUE_ALL_COMMENTS_FILE}" 2>/dev/null || true)"
+                fi
+                if [ -z "${hold_release_body}" ] \
+                  || ! gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${hold_release_id}" -f body="${hold_release_body}" >/dev/null 2>&1; then
+                  hold_release_ok=false
+                fi
+              done
+              if [ "${hold_release_ok}" = "true" ] && [ "${hold_release_has_label}" != "true" ]; then
+                echo "::notice::INTEGRATION_REF_RESOLVE outcome=released reason=label_missing issue=${ISSUE_NUMBER} label=absent"
+              elif [ "${hold_release_ok}" = "true" ] \
+                && GH_RETRY_IDEMPOTENT=true gh_retry gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai:blocked" >/dev/null 2>&1; then
+                echo "::notice::INTEGRATION_REF_RESOLVE outcome=released reason=label_missing issue=${ISSUE_NUMBER} label=removed"
+              else
+                echo "::warning::Could not release the label_missing hold on issue #${ISSUE_NUMBER}; ai:blocked may need removing by hand."
+              fi
+            fi
+          fi
           # Remove stale phase labels only on /reclarify (new issues won't have them)
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
             gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
@@ -584,11 +1104,11 @@ jobs:
               --remove-label 'ai:planning' --remove-label 'ai:awaiting-approval' \
               --remove-label 'ai:implementing' --remove-label 'ai:done' >/dev/null 2>&1 || true
           else
-            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
+            GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           fi
 
       - name: Orchestrator-managed fast path
-        if: steps.clarify_route.outputs.orchestrator_fast_path == 'true' && steps.clarify_route.outputs.skip_codex == 'true' && steps.clarify_route.outputs.is_closed != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.orchestrator_fast_path == 'true' && steps.clarify_route.outputs.skip_codex == 'true' && steps.clarify_route.outputs.is_closed != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -603,6 +1123,8 @@ jobs:
             -f body=$'/answer [auto-answered-by-orchestrator]\n\nAuto answer was posted because this issue is labeled ai:orchestrator-managed and this run was not a forced human /reclarify.'
 
       - name: Record clarification run start
+        # A comment the route step did not trust (#7328) writes no AI-memory events.
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.comment_route_trusted != 'false')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -644,7 +1166,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Build context file
-        if: steps.clarify_route.outputs.skip_codex != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true')
         run: |
           set -euo pipefail
           {
@@ -656,14 +1178,14 @@ jobs:
           } > "${ISSUE_CONTEXT_FILE}"
 
       - name: Install Redis Python client
-        if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis')
         continue-on-error: true
         run: |
           set -euo pipefail
           python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
       - name: Restore semantic cache SQLite
-        if: steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec')
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
@@ -674,7 +1196,7 @@ jobs:
 
       - name: Semantic cache lookup
         id: semantic_cache_lookup
-        if: always() && steps.clarify_route.outputs.skip_codex != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true')
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -687,6 +1209,13 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
+          # always() step: the job may have stopped before the runtime
+          # workspace and support scripts were staged (#7516).
+          if [ -z "${RUNTIME_DIR:-}" ] || [ ! -f scripts/semantic_cache.py ]; then
+            echo "::warning::Semantic cache lookup skipped: runtime workspace or support scripts missing (job stopped before setup)"
+            echo "cache_hit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           LOOKUP_JSON="${RUNTIME_DIR}/semantic_cache_lookup.json"
           if python3 scripts/semantic_cache.py lookup \
             --phase "clarify" \
@@ -715,7 +1244,7 @@ jobs:
           fi
 
       - name: Create Codex config
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         run: |
           set -euo pipefail
           source scripts/codex_helpers.sh
@@ -725,7 +1254,9 @@ jobs:
           codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
       - name: Pre-assemble static context (cacheable across runs)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
           # See scripts/build_static_context.sh for trimming rationale and
@@ -736,7 +1267,7 @@ jobs:
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
 
       - name: Retrieve memory context
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -791,7 +1322,7 @@ jobs:
           PY
 
       - name: Set orchestrator /reclarify reasoning effort
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.clarify_route.outputs.is_orchestrator_managed == 'true' && steps.clarify_route.outputs.is_forced_reclarify == 'true')
         run: |
           set -euo pipefail
           sed -i -E "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}\"/" ~/.codex/config.toml
@@ -804,7 +1335,7 @@ jobs:
       # the unchanged codex call below (exit 75, plan D1).
       - name: Resolve AI engine
         id: ai_engine
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         env:
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_CLARIFY: ${{ vars.AI_ENGINE_CLARIFY || '' }}
@@ -824,25 +1355,55 @@ jobs:
           echo "engine=${engine}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI
-        if: steps.ai_engine.outputs.engine == 'claude'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.ai_engine.outputs.engine == 'claude')
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/install-claude
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
+      # Heal #7476 (source shubhodeep1/multi-user-ai-agent#266), same cause as
+      # #7434 in plan.yml: the claude-pool-token action ships CommonJS main.js /
+      # post.js with no package.json of its own, so in a consumer whose root
+      # package.json sets "type": "module" Node loads them as ES modules, they
+      # crash on `require`, no pool is written and clarify is refused with
+      # reason=no_credential. Pin the action's module type in the support
+      # checkout before the action runs. The body is kept byte-identical to the
+      # plan.yml step (tests/test_plan_codex_step_extraction.py). Since #7432
+      # the action ships package.json, so this step normally logs
+      # reason=present; it stays as a fallback for a staged support checkout
+      # whose action copy lacks the file.
+      - name: Pin claude-pool-token action module type
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.ai_engine.outputs.engine == 'claude')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          action_dir=".codex-workflow-src/.github/actions/claude-pool-token"
+          pkg="${action_dir}/package.json"
+          if [ -L .codex-workflow-src ] || [ -L .codex-workflow-src/.github ] || [ -L .codex-workflow-src/.github/actions ] || [ -L "${action_dir}" ] || [ ! -d "${action_dir}" ]; then
+            echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=skip reason=action_dir_unavailable"
+            exit 0
+          fi
+          if [ -e "${pkg}" ] || [ -L "${pkg}" ]; then
+            echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=skip reason=present"
+            exit 0
+          fi
+          ( set -C; printf '{"type":"commonjs"}\n' > "${pkg}" ) || { echo "::warning::CLAUDE_POOL_MODULE_PIN outcome=failed reason=write_failed"; exit 0; }
+          echo "::notice::CLAUDE_POOL_MODULE_PIN outcome=written"
+
       - name: Resolve Claude credential
-        if: steps.ai_engine.outputs.engine == 'claude'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.ai_engine.outputs.engine == 'claude')
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
         with:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Collect verified heal evidence
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           WORKFLOW_HEAL_EVIDENCE_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_BYTES || '' }}
           WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
+          HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED: ${{ vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' }}
         run: |
           if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then
             echo '::error::Heal route classification failed' >&2
@@ -853,9 +1414,34 @@ jobs:
             bash scripts/workflow_failure_heal_evidence.sh
           fi
 
+      # scripts/clarify_isolated_run.sh builds scripts/clarify_sandbox/Dockerfile
+      # (FROM node:<tag>) with a plain `docker build`, which on a fresh runner
+      # is an anonymous Docker Hub pull. Docker Hub answered 429 Too Many
+      # Requests on every attempt of runs 37990077414 and 37990177613 (heal
+      # issue #6985), so retrying never helped. This step loads the same
+      # official-image tag from a vendor-run mirror and tags it under its
+      # Docker Hub name; `docker build` without --pull then uses the local
+      # image and sends no request to Docker Hub. Always exits 0: if every
+      # mirror fails the build behaves exactly as before.
+      - name: Pre-seed clarify sandbox base image
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
+        continue-on-error: true
+        env:
+          CLARIFY_BASE_IMAGE_MIRRORS: ${{ vars.CLARIFY_BASE_IMAGE_MIRRORS || 'public.ecr.aws/docker/library mirror.gcr.io/library' }}
+          CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS: ${{ vars.CLARIFY_BASE_IMAGE_PULL_TIMEOUT_SECS || '300' }}
+        run: |
+          # The step body lives in scripts/clarify_base_image_preseed.sh (#7215),
+          # which scripts/clarify_isolated_run.sh also runs before every build.
+          # Best effort: a missing helper or any failure never blocks Run Codex.
+          if [ ! -f scripts/clarify_base_image_preseed.sh ] || [ -L scripts/clarify_base_image_preseed.sh ]; then
+            echo "::warning::CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=helper_missing"
+            exit 0
+          fi
+          bash scripts/clarify_base_image_preseed.sh scripts/clarify_sandbox/Dockerfile || true; exit 0
+
       - name: Run Codex
         id: run_codex
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true')
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
@@ -878,9 +1464,12 @@ jobs:
 
           Your task is to determine whether the GitHub issue contains enough information to implement the task.
 
-          IMPORTANT: The system instructions, AI pipeline spec, agents.md, and README.md
-          are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt or
-          any of the individual source files — they are already loaded.
+          IMPORTANT: The system instructions, AI pipeline spec, README.md and agents.md
+          (either inlined in full, or as an `=== AGENTS.MD INDEX ===` list of sections)
+          are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt, the
+          system instructions, the pipeline spec or README.md — they are already loaded.
+          When an agents.md index is shown, read only the agents.md sections (and the
+          agents.d/ fragments it lists) that you need, from the working tree.
 
           The issue context (description and comments) is provided BELOW at the end of
           this prompt — do NOT read issue_context.txt separately.
@@ -951,16 +1540,23 @@ jobs:
           1. Determine if the issue is clear enough to implement.
           2. If clarification is required, ask concise clarification questions.
           3. Ask only essential questions needed for implementation.
-          4. Prefer repo-local context first. Web search IS available (the `web_search`
-             tool is enabled in the codex config — see `scripts/write_codex_config.sh`'s
-             `--web-search live` default) — use it for public 3rd-party API docs, library
-             reference, RFCs, standards, and similar publicly-readable resources. Do NOT
-             use it for private/auth-walled resources or anything that requires a
-             credential.
-          5. If an external API/service is involved, fetch its official docs via the
-             web tool, verify the source is the official vendor/library or relevant
-             standards publisher, and identify the expected endpoints, signature
-             scheme, and payload shapes so planning can include concrete call details.
+          4. Prefer repo-local context first. Web search is available only when this
+             run has a web tool: Codex runs do (the `web_search` tool is enabled in the
+             codex config — see `scripts/write_codex_config.sh`'s `--web-search live`
+             default). Claude-engine runs have no web search or web fetch; their system
+             instructions say so. When a web tool is available, use it for public
+             3rd-party API docs, library reference, RFCs, standards, and similar
+             publicly-readable resources. Do NOT use it for private/auth-walled
+             resources or anything that requires a credential.
+          5. If an external API/service is involved and a web tool is available, fetch
+             its official docs, verify the source is the official vendor/library or
+             relevant standards publisher, and identify the expected endpoints,
+             signature scheme, and payload shapes so planning can include concrete call
+             details. Without a web tool, take external facts (a release tag's commit
+             SHA, a package version, an API endpoint or signature) only from the issue
+             body, its answers, the comment thread or the repository, never try to look
+             them up, use a fact the issue states as verified as given, and ask for a
+             fact the task depends on that is in none of those places.
           6. Flag any factual conflicts between the issue description and the codebase
              (e.g., a name in the issue doesn't match the name in the code).
           7. Do NOT write code.
@@ -973,10 +1569,11 @@ jobs:
              Only when the task depends on the content of an auth-walled or
              private URL absent from the issue and repository, emit exactly
              `BLOCKED: <short reason>` instead of Q/Choices.
-             Public 3rd-party documentation is NOT a BLOCKED trigger: fetch it with the
-             web tool and proceed with `STATUS: CLEAR` (or Q-IDs if other genuine
-             ambiguities remain) only when the relevant public docs are found; if they
-             are genuinely unavailable, ask a clarification question instead of
+             Public 3rd-party documentation is NOT a BLOCKED trigger: when a web tool
+             is available (point 4), fetch it and proceed with `STATUS: CLEAR` (or
+             Q-IDs if other genuine ambiguities remain) only when the relevant public
+             docs are found; without a web tool, or if the docs are genuinely
+             unavailable, follow point 5 and ask a clarification question instead of
              inventing details.
 
           ANSWER COMPATIBILITY (MANDATORY — prevents wasted planning runs):
@@ -1053,14 +1650,26 @@ jobs:
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex clarify attempt ${attempt}/${max_attempts} (engine ${CLARIFY_ENGINE})..."
+            # Name the engine that actually runs, so a Claude run is not logged as Codex.
+            clarify_engine_name="Codex"
+            if [ "${CLARIFY_ENGINE}" = "claude" ]; then clarify_engine_name="Claude"; fi
+            echo "${clarify_engine_name} clarify attempt ${attempt}/${max_attempts}..."
             rc=0
             if [ "${CLARIFY_ENGINE}" = "claude" ]; then
               bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY || rc=$?
+              if [ "${rc}" -eq 80 ]; then
+                # Claude capacity wait (issue #7370): never codex, no retries.
+                # Later output steps skip; the report step records the wait
+                # and the hourly capacity-resume pass replays the command.
+                echo "AI_ENGINE_CAPACITY_WAIT role=CLARIFY outcome=deferred stage=clarify"
+                echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+                exit 0
+              fi
               if [ "${rc}" -eq 75 ]; then
                 # Claude unavailable (logged as AI_ENGINE_FALLBACK): this
                 # attempt and the rest run the codex path (plan D1).
                 CLARIFY_ENGINE="codex"
+                clarify_engine_name="Codex"
                 rc=0
               fi
             fi
@@ -1069,25 +1678,25 @@ jobs:
             fi
             if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
-                echo "Codex clarify succeeded on attempt ${attempt}."
+                echo "${clarify_engine_name} clarify succeeded on attempt ${attempt}."
                 break
               fi
-              echo "::warning::Codex returned empty output on attempt ${attempt}."
+              echo "::warning::${clarify_engine_name} returned empty output on attempt ${attempt}."
             else
-              echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+              echo "::warning::${clarify_engine_name} exited with code $rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
               sleep_secs=$(( 10 * (2 ** (attempt - 1)) + RANDOM % 10 ))
               echo "Retrying in ${sleep_secs}s (includes jitter)..."
               sleep "${sleep_secs}"
             else
-              echo "::error::Codex clarify failed after ${max_attempts} attempts."
+              echo "::error::${clarify_engine_name} clarify failed after ${max_attempts} attempts."
               exit 1
             fi
           done
 
       - name: Semantic cache store
-        if: always() && steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'))
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -1115,18 +1724,24 @@ jobs:
           fi
 
       - name: Save semantic cache SQLite
-        if: always() && steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'))
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Write run summary
-        if: always() && steps.clarify_route.outputs.skip_codex != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true'))
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY || '80000' }}
         run: |
           set -euo pipefail
+          # always() step: the job may have stopped before the runtime
+          # workspace was created (#7516).
+          if [ -z "${RUNTIME_DIR:-}" ]; then
+            echo "::warning::Run summary skipped: runtime workspace missing (job stopped before setup)"
+            exit 0
+          fi
           TOKENS=""
           if [ -f "${RUNTIME_DIR}/codex_log.txt" ]; then
             # Codex CLI prints "tokens used\n<number>" to stderr
@@ -1145,7 +1760,7 @@ jobs:
                 echo "| :warning: Token alert | Above ${TOKEN_WARN_THRESHOLD} threshold — review prompt efficiency |"
               fi
             fi
-            if [ -f "${CODEX_OUTPUT_FILE}" ]; then
+            if [ -n "${CODEX_OUTPUT_FILE:-}" ] && [ -f "${CODEX_OUTPUT_FILE}" ]; then
               STATUS="$(grep -oiE 'STATUS:\s*(CLEAR|NEEDS_CLARIFICATION)|^\s*BLOCKED:\s*.+$' "${CODEX_OUTPUT_FILE}" | head -1 || echo "unknown")"
               echo "| Result | ${STATUS} |"
               # Count questions if clarification was needed
@@ -1159,7 +1774,7 @@ jobs:
 
       - name: Parse Codex output
         id: parse_codex
-        if: steps.clarify_route.outputs.skip_codex != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true'))
         run: |
           set -euo pipefail
           BLOCKED_REASON="$(perl -ne '
@@ -1222,12 +1837,12 @@ jobs:
           fi
 
       - name: Handle blocked clarification output
-        if: steps.parse_codex.outputs.blocked == 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.parse_codex.outputs.blocked == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           BLOCKED_REASON: ${{ steps.parse_codex.outputs.blocked_reason }}
         run: |
           set -euo pipefail
@@ -1254,6 +1869,7 @@ jobs:
             printf '%s\n' "Provide the required input, then run /reclarify or continue with /answer as appropriate."
             printf '\n'
             printf '%s\n' "Run: ${RUN_URL}"
+            printf '\n%s\n' "<!-- ai:clarification-blocked:v1 -->"
           } > "${BLOCKED_COMMENT_FILE}"
 
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
@@ -1267,7 +1883,7 @@ jobs:
 
       - name: Post clarification questions
         id: post_questions
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CLARIFY_HUMAN_ANSWER_REQUESTED: ${{ steps.clarify_route.outputs.is_forced_reclarify }}
@@ -1320,7 +1936,7 @@ jobs:
         # clarify-respond worker and falls back to these RECOMMENDED picks
         # itself (issue #6262 follow-up).
         id: standalone_auto_decide
-        if: steps.post_questions.outcome == 'success' && steps.clarify_route.outputs.is_orchestrator_managed != 'true' && steps.clarify_route.outputs.is_forced_reclarify != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.post_questions.outcome == 'success' && steps.clarify_route.outputs.is_orchestrator_managed != 'true' && steps.clarify_route.outputs.is_forced_reclarify != 'true'))
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1330,7 +1946,7 @@ jobs:
           ORCHESTRATOR_MAX_CLARIFY_CYCLES: ${{ vars.ORCHESTRATOR_MAX_CLARIFY_CYCLES || '3' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           AUTO_DECIDE_CLARIFICATION_COMMENT_ID: ${{ steps.post_questions.outputs.comment_id }}
         run: |
           set -euo pipefail
@@ -1402,7 +2018,7 @@ jobs:
           echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decisions=${AUTO_DECIDE_COUNT} ad_total=$(jq -r '.total' "${AUTO_DECIDE_RENDER_FILE}")"
 
       - name: Record clarification candidate (needs clarification)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1425,7 +2041,7 @@ jobs:
 
       - name: Post clear-to-proceed comment
         id: post_clear
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1444,7 +2060,7 @@ jobs:
             -f body=$'/answer [auto-answered-by-clarify]\n\nAuto answer was posted because no human clarification was required.'
 
       - name: Record clarification candidate (clear)
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1464,12 +2080,12 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Telegram clarification notification
-        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'))
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           CLARIFY_AUTO_DECIDE_ANSWERED: ${{ steps.standalone_auto_decide.outputs.answered || 'false' }}
           CLARIFY_AUTO_DECIDE_DELEGATED: ${{ steps.standalone_auto_decide.outputs.delegated || 'false' }}
         run: |
@@ -1507,7 +2123,7 @@ jobs:
           fi
 
       - name: Record clarification run completed
-        if: success()
+        if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (success() && steps.clarify_route.outputs.comment_route_trusted != 'false'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1517,7 +2133,9 @@ jobs:
           declare -F memory_record_run_event >/dev/null 2>&1 || memory_record_run_event(){ return 0; }
 
           OUTCOME="clear"
-          if [ "${{ steps.clarify_route.outputs.skip_codex }}" = "true" ]; then
+          if [ "${{ steps.clarify_route.outputs.check_triage_resolved }}" = "true" ]; then
+            OUTCOME="check_triage_resolved"
+          elif [ "${{ steps.clarify_route.outputs.skip_codex }}" = "true" ]; then
             OUTCOME="auto_answered_by_orchestrator"
           elif [ "${{ steps.parse_codex.outputs.blocked }}" = "true" ]; then
             OUTCOME="blocked"
@@ -1536,7 +2154,9 @@ jobs:
             --metadata-json "{\"outcome\": \"${OUTCOME}\"}"
 
       - name: Record clarification run failed
-        if: failure() || cancelled()
+        # The route output is empty when the job fails before "Decide clarify
+        # route" finishes; then fall back to the comment's association (#7328).
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && ((failure() || cancelled()) && steps.clarify_route.outputs.comment_route_trusted != 'false' && (steps.clarify_route.outputs.comment_route_trusted == 'true' || github.event_name != 'issue_comment' || contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PYTHONDONTWRITEBYTECODE: "1"
@@ -1561,7 +2181,7 @@ jobs:
             --metadata-json "{\"outcome\": \"${FINAL_OUTCOME}\"}"
 
       - name: Comment on issue failure
-        if: failure() || cancelled()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() || cancelled())
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1580,7 +2200,7 @@ jobs:
       # A token-created marker does not start a new workflow; the scheduled
       # poller replays this command with the PAT once the budget recovers.
       - name: Queue failed reclarify for poller
-        if: ${{ failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && steps.clarify_route.outputs.skip_codex != 'true' && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success' }}
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && steps.clarify_route.outputs.skip_codex != 'true' && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success')
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
@@ -1590,8 +2210,21 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ && "${SOURCE_COMMENT_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
-          [[ "${SOURCE_COMMENT_BODY}" == /reclarify* ]] || exit 1
-          case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac
+          COMMENT_BODY="${SOURCE_COMMENT_BODY}"
+          # Same rule as jobs.clarify.if (issue #6630): /reclarify on the first
+          # line, or on a later line of a comment that carries no automation
+          # marker and no plan-comment trailer. Case-insensitive like GitHub's
+          # startsWith/contains; pure bash so a large body cannot SIGPIPE.
+          _rc_body_lc="${COMMENT_BODY,,}"
+          _rc_first="${_rc_body_lc%%$'\n'*}"
+          _rc_is_command="false"
+          if [[ "${_rc_first}" == /reclarify* ]] || { [[ $'\n'"${_rc_body_lc}" == *$'\n/reclarify'* ]] && [[ "${_rc_body_lc}" != *'<!-- ai:'* ]] && [[ "${_rc_body_lc}" != *'to restart clarification reply:'* ]]; }; then
+            _rc_is_command="true"
+          fi
+          [ "${_rc_is_command}" = "true" ] || exit 1
+          case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *)
+            echo "::notice::Failed /reclarify not requeued: poller replay requires an OWNER, MEMBER or COLLABORATOR author (association=${SOURCE_ASSOCIATION:-none})."
+            exit 1 ;; esac
           gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
             -f body="<!-- ai:reclarify-requeue:v1 source=${SOURCE_COMMENT_ID} -->" >/dev/null
           # The marker alone is undiscoverable by the poller. Retry transient
@@ -1614,27 +2247,35 @@ jobs:
           exit 1
 
       - name: Telegram failure notification
-        if: failure() || cancelled()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() || cancelled())
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
+          # The job may have failed before support staging (#7516); keep the
+          # real error as the run's first error.
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::Telegram failure notification skipped: scripts/tg_helpers.sh not staged (job stopped before setup)"
+            exit 0
+          fi
           source scripts/tg_helpers.sh
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${{ job.status }}" = "cancelled" ]; then
-            MSG="AI clarification cancelled/timed out for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+            MSG="AI clarification cancelled/timed out for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
           else
-            MSG="AI clarification failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
+            MSG="AI clarification failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
           fi
           MSG+=$'\n'
           MSG+="Issue: ${ISSUE_URL}"
           MSG+=$'\n'
           MSG+="Run: ${RUN_URL}"
-          tg_send_phase_failure clarify "${MSG}" "ERROR" "${ISSUE_NUMBER}"
+          # DEBUG: the heal-report job and the unblock judge (ai:clarify-failed)
+          # pick this up and page when a person is needed.
+          tg_send_phase_failure clarify "${MSG}" "DEBUG" "${ISSUE_NUMBER}"
 
       - name: Record GH_PAT budget at clarify end
         if: always()
@@ -1648,21 +2289,45 @@ jobs:
           else
             echo 'GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown'
           fi
+      # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
+      # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
+      # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
+      # the copy in the trusted support checkout, never a PR-head script.
+      - name: Report refused AI engine fallbacks
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+        run: |
+          fallback_support_dir="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          fallback_report="${fallback_support_dir}/scripts/ai_engine_fallback_report.sh"
+          if [ -n "${fallback_support_dir}" ] && [ -f "${fallback_report}" ] && [ ! -L "${fallback_report}" ]; then
+            REPORT_WRAPPER_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${fallback_support_dir}" rev-parse HEAD 2>/dev/null || true)" \
+              bash "${fallback_report}" || true
+          else
+            echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi
   heal-report:
     # Workflow failure heal (README "Workflow Failure Heal"): report a failed
     # clarify run to coding-workflows' heal intake, which diagnoses it and opens
     # an ai:workflow-heal issue for the pipeline to fix. A separate job, so the
     # clarify job has finished and the intake reads its complete log. Only a
     # `failure` result is reported: a cancelled run was superseded or timed
-    # out. `permissions: {}` keeps the job inside any caller's grant;
-    # GH_PAT does the work. The reporter always exits 0.
+    # out. The job is granted only `id-token: write` (every caller wrapper
+    # grants it) so the reporter can attach the OIDC report identity the heal
+    # intake verifies; GH_PAT does the work. The reporter always exits 0.
     needs: clarify
     if: >-
       always() && needs.clarify.result == 'failure' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions: {}
+    permissions:
+      id-token: write
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
@@ -1685,13 +2350,46 @@ jobs:
           echo "GH_PAT_BUDGET phase=start workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=unknown"
 
       - name: Resolve workflow support ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
-            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/clarify\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
           else
-            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (Q64, as validate.yml in #7123). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/clarify\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
           fi
 
       - name: Checkout workflow support source
@@ -1712,6 +2410,12 @@ jobs:
           reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
           if [ ! -f "${reporter}" ]; then
             echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          # A pinned support ref must be exactly the commit the caller pinned
+          # (tele-funtoken-msg-scoring#4566); never run another ref's reporter.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=support_ref_mismatch ref=${SCRIPT_REF}"
             exit 0
           fi
           REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \

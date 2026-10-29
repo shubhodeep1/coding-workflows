@@ -78,6 +78,49 @@ def _install_mock_codex(
 	(mock_bin_dir / "write_opencode_config.sh").chmod(0o755)
 
 
+# Sandbox stub: the interim judge must run its model only through
+# review_untrusted_sandbox.sh (read-only role JUDGE_INTERIM), never as a host
+# OpenCode process.  The stub records each call and replays the mock output.
+FAKE_JUDGE_INTERIM_SANDBOX = r'''#!/usr/bin/env bash
+set -euo pipefail
+calls="${MOCK_JUDGE_INTERIM_SANDBOX_CALLS:-/dev/null}"
+case "$1" in
+  prepare-ephemeral)
+    [ "$#" -eq 2 ] && [ "$2" = codex ] || exit 2
+    printf 'prepare-ephemeral\n' >> "${calls}"
+    [ "${MOCK_JUDGE_INTERIM_SANDBOX_MODE:-}" != prepare_failed ] || exit 1
+    printf '%s\n' "${MOCK_JUDGE_INTERIM_SANDBOX_ROOT:-/tmp/judge-interim-isolated}"
+    ;;
+  run)
+    [ "$#" -eq 9 ] || exit 2
+    printf 'run|%s|%s|%s\n' "$7" "$8" "$9" >> "${calls}"
+    [ "${MOCK_JUDGE_INTERIM_SANDBOX_MODE:-}" != run_outdated ] || exit 2
+    cat "${MOCK_CODEX_STDOUT_FILE}" > "$3"
+    cat "${MOCK_CODEX_STDERR_FILE}" >&2
+    exit "${MOCK_CODEX_EXIT_CODE:-0}"
+    ;;
+  cleanup)
+    printf 'cleanup\n' >> "${calls}"
+    ;;
+  *) exit 2 ;;
+esac
+'''
+
+
+def _install_judge_interim_support(support_dir: Path, *, sandbox: bool = True) -> Path:
+	support_dir.mkdir(parents=True, exist_ok=True)
+	for script in (REPO_ROOT / "scripts").iterdir():
+		if script.is_file() and script.name != "review_untrusted_sandbox.sh":
+			target = support_dir / script.name
+			if not target.exists():
+				target.symlink_to(script)
+	if sandbox:
+		stub = support_dir / "review_untrusted_sandbox.sh"
+		stub.write_text(FAKE_JUDGE_INTERIM_SANDBOX, encoding="utf-8")
+		stub.chmod(0o755)
+	return support_dir
+
+
 def _seed_repo_with_autofix_commit(workspace: Path) -> str:
 	workspace.mkdir(parents=True, exist_ok=True)
 	(workspace / "src").mkdir(parents=True, exist_ok=True)
@@ -138,8 +181,10 @@ def _base_env(workspace: Path, runtime_dir: Path, mock_bin_dir: Path) -> dict[st
 	env["HOME"] = str(home_dir)
 	env["PATH"] = f"{mock_bin_dir}:{env.get('PATH', '')}"
 	env["SUPPORT_ROOT_DIR"] = str(REPO_ROOT)
-	env["SUPPORT_SCRIPTS_DIR"] = str(REPO_ROOT / "scripts")
+	support_dir = _install_judge_interim_support(workspace / "judge_interim_support")
+	env["SUPPORT_SCRIPTS_DIR"] = str(support_dir)
 	env["SUPPORT_PROMPTS_DIR"] = str(REPO_ROOT / "prompts")
+	env["MOCK_JUDGE_INTERIM_SANDBOX_CALLS"] = str(workspace / "judge_interim_sandbox_calls.txt")
 	env["RUNTIME_DIR"] = str(runtime_dir)
 	env["LINKED_ISSUE_CONTEXT_FILE"] = str(linked_issue_file)
 	env["PR_META_FILE"] = str(pr_meta_file)
@@ -724,9 +769,80 @@ def test_review_run_judge_interim_uses_bounded_timeout() -> None:
 		"Interim judge must mirror the resolver's bounded timeout so hung OpenCode children "
 		"cannot outlive JUDGE_INTERIM_TIMEOUT_S indefinitely."
 	)
-	assert 'opencode_run_cmd "$@"' in script
-	assert 'reviewer\n\t"${MODEL_EDITOR:-openai/gpt-6-sol}"' in script
 	assert 'command -v codex' not in script
+
+
+def test_review_run_judge_interim_never_runs_host_opencode() -> None:
+	script = JUDGE_INTERIM_SCRIPT.read_text(encoding="utf-8")
+	assert "opencode_run_cmd" not in script
+	assert "codex JUDGE_INTERIM read" in script
+	assert "prepare-ephemeral codex" in script
+	assert "REVIEW_UTILITY_ISOLATION role=JUDGE_INTERIM" in script
+
+
+def test_review_run_judge_interim_runs_in_read_only_sandbox() -> None:
+	with tempfile.TemporaryDirectory(prefix="judge_interim_sandbox_calls_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		_seed_repo_with_autofix_commit(workspace)
+		_install_mock_codex(mock_bin_dir, stdout_text="not json\n")
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		result = subprocess.run(
+			["bash", str(JUDGE_INTERIM_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		calls = Path(env["MOCK_JUDGE_INTERIM_SANDBOX_CALLS"]).read_text(encoding="utf-8").splitlines()
+		assert calls == ["prepare-ephemeral", "run|codex|JUDGE_INTERIM|read", "cleanup"], calls
+
+
+def test_review_run_judge_interim_refuses_without_sandbox() -> None:
+	for mode, sandbox, reason in (
+		("", False, "sandbox_unavailable"),
+		("prepare_failed", True, "sandbox_unavailable"),
+		("run_outdated", True, "sandbox_helper_outdated"),
+	):
+		with tempfile.TemporaryDirectory(prefix="judge_interim_no_sandbox_") as td:
+			workspace = Path(td)
+			runtime_dir = workspace / "runtime"
+			runtime_dir.mkdir(parents=True, exist_ok=True)
+			mock_bin_dir = workspace / "mock_bin"
+			_seed_repo_with_autofix_commit(workspace)
+			valid = json.dumps({"round": 1, "remaining_issues": []})
+			_install_mock_codex(mock_bin_dir, stdout_text=valid + "\n")
+			host_marker = workspace / "host_opencode_ran"
+			(mock_bin_dir / "opencode").write_text(
+				"#!/usr/bin/env bash\n"
+				"if [ \"${1:-}\" = \"--version\" ]; then printf '1.18.23\\n'; exit 0; fi\n"
+				f"touch {host_marker}\n",
+				encoding="utf-8",
+			)
+			env = _base_env(workspace, runtime_dir, mock_bin_dir)
+			support_dir = Path(env["SUPPORT_SCRIPTS_DIR"])
+			if not sandbox:
+				(support_dir / "review_untrusted_sandbox.sh").unlink()
+			env["MOCK_JUDGE_INTERIM_SANDBOX_MODE"] = mode
+			result = subprocess.run(
+				["bash", str(JUDGE_INTERIM_SCRIPT)],
+				cwd=workspace,
+				env=env,
+				capture_output=True,
+				text=True,
+			)
+			combined_output = result.stdout + result.stderr
+			assert result.returncode == 0, combined_output
+			assert (
+				f"REVIEW_UTILITY_ISOLATION role=JUDGE_INTERIM engine=codex outcome=refused reason={reason}"
+				in combined_output
+			), combined_output
+			assert "JUDGE_INTERIM_PASS_FAIL reason=isolation_unavailable" in combined_output
+			assert not host_marker.exists(), combined_output
 
 
 # ---------------------------------------------------------------------------

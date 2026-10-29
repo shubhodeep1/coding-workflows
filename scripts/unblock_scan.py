@@ -6,9 +6,10 @@ docs/plans/replace-claude-sessions-with-cli-engine-plan.md Phase 7) fetches
 the candidates and hands them to this script, which decides offline:
 
   select --search-file PATH --details-file PATH --runs-file PATH
-         [--failed-projects-file PATH] --trusted-login LOGIN --now ISO8601
+         [--failed-projects-file PATH] [--parked-items-file PATH]
+         --trusted-login LOGIN --now ISO8601
          [--min-blocked-minutes 30] [--marker-hours 6]
-         [--inflight-minutes 60] [--max 5]
+         [--inflight-minutes 60] [--escalated-recheck-hours 24] [--max 5]
 
 Inputs:
   --search-file           `items` of one REST `search/issues` call for open
@@ -26,7 +27,35 @@ Inputs:
   --failed-projects-file  JSON array of tracking issue numbers whose project
                           state is `failed` this tick (no API call: the poller
                           already holds the state).
+  --parked-items-file     JSON array of item numbers the needs-human digest
+                          lists this tick (`items` of
+                          `operator_step_issue.py needs-human prune`).
 
+An item that carries `ai:needs-human` and whose newest trusted
+`ai:unblock:v1` marker is a `close` verdict is parked in the needs-human
+digest (scripts/operator_step_issue.py) and skipped as `parked`. With
+--parked-items-file, only an item the digest lists counts as parked: one left
+labelled after a failed digest write is judged (and parked) again. Without it
+(prune failed this tick) the label and marker alone decide, as before.
+Two terminal states are not judged again while nothing material changed:
+  - an escalated fix-up: the judge posted `<!-- ai:unblock-fixup-escalated:v1
+    item=<n> -->` (a fix-up of its own that is blocked; scripts/unblock_judge.sh
+    `unblock_escalate_fixup`), after which every judge run only logs
+    `reason=fixup_escalated`. The scan skips it as `fixup_escalated` and lets
+    one judge run through per --escalated-recheck-hours (default 24; 0 turns
+    the skip off), so a scope-blocked fix-up still gets its automation-path
+    re-grant check (`unblock_try_regrant`) when the guard changes. The last run
+    time comes from --runs-file; a run that fell out of its window dispatches;
+  - a parked terminal verdict whose park was dropped: the newest trusted
+    `close` marker names the item's current stop, `ai:needs-human` was applied
+    right after it (the digest park ran) but is gone now (the poller's label
+    repair keeps `ai:blocked` over it on a managed issue), and since the marker
+    there is no new block label event and no comment other than the judge's own
+    markers, state comments and bots (the fingerprint of an issue or project is
+    a function of its stop and its newest pipeline comment). The scan skips it
+    as `terminal_unchanged`. Pull requests are not covered (their fingerprint
+    holds failing check names the scan cannot see), nor failed projects, nor
+    the kill switch NEEDS_HUMAN_DIGEST_ENABLED=false (the judge then closes it).
 An item is picked when all hold:
   - it has been blocked for at least --min-blocked-minutes (the newest
     `labeled` event of a block label it still carries; for a failed project
@@ -57,6 +86,7 @@ import argparse
 import datetime as dt
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -70,8 +100,18 @@ TRACKING_LABEL = "ai:orchestrator-tracking"
 CLOSED_LABEL = "ai:unblock-closed"
 MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
 STATE_PREFIX = "<!-- ORCHESTRATOR_STATE_V"
+NEEDS_HUMAN_LABEL = "ai:needs-human"
+VERDICT_PREFIX = "<!-- ai:unblock:v1 "
+VERDICT_RE = re.compile(r" verdict=([a-z_]+) ")
 RUN_NAME_RE = re.compile(r"^Unblock judge #([1-9][0-9]*)$")
 ACTIVE_RUN_STATES = ("queued", "in_progress", "waiting", "requested", "pending")
+VERDICT_MARKER_RE = re.compile(
+	r"^<!-- ai:unblock:v1 item=(?P<item>[1-9][0-9]*) stop=(?P<stop>[a-z-]+) fingerprint=[0-9a-f]{12} "
+	r"verdict=(?P<verdict>[a-z_]+) round=[1-9][0-9]*(?: override=[a-z_]+)? -->$"
+)
+ESCALATED_MARKER_RE = re.compile(r"^<!-- ai:unblock-fixup-escalated:v1 item=(?P<item>[1-9][0-9]*) -->$")
+# Comments the judge's evidence ignores (unblock_judge.sh `unblock_evidence`).
+LEDGER_BODY_MARKERS = ("ai:unblock", "ORCHESTRATOR_STATE")
 
 
 class UsageError(Exception):
@@ -129,6 +169,23 @@ def _latest_marker(comments: object, trusted_login: str) -> dt.datetime | None:
 	return newest
 
 
+def _latest_verdict(comments: object, trusted_login: str) -> str:
+	"""The verdict name of the newest trusted `ai:unblock:v1` marker, or ''."""
+	newest = None
+	verdict = ""
+	for comment in comments if isinstance(comments, list) else []:
+		if not isinstance(comment, dict) or comment.get("login") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines or not lines[-1].startswith(VERDICT_PREFIX):
+			continue
+		created = _time(comment.get("created_at"))
+		match = VERDICT_RE.search(lines[-1])
+		if created and match and (newest is None or created >= newest):
+			newest, verdict = created, match.group(1)
+	return verdict
+
+
 def _latest_state_comment(comments: object, trusted_login: str) -> dt.datetime | None:
 	newest = None
 	for comment in comments if isinstance(comments, list) else []:
@@ -139,6 +196,86 @@ def _latest_state_comment(comments: object, trusted_login: str) -> dt.datetime |
 		created = _time(comment.get("created_at"))
 		if created and (newest is None or created > newest):
 			newest = created
+	return newest
+
+
+def _newest_trusted_marker(comments: object, trusted_login: str, pattern: re.Pattern, item: int) -> tuple[dt.datetime, re.Match] | None:
+	"""The newest trusted comment whose last non-empty line matches `pattern` for `item`."""
+	newest = None
+	for comment in comments if isinstance(comments, list) else []:
+		if not isinstance(comment, dict) or comment.get("login") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		match = pattern.match(lines[-1]) if lines else None
+		created = _time(comment.get("created_at"))
+		if match and created and match.group("item") == str(item) and (newest is None or created >= newest[0]):
+			newest = (created, match)
+	return newest
+
+
+def _has_new_evidence(comments: object, trusted_login: str, since: dt.datetime) -> bool:
+	"""Whether a comment newer than `since` could change the item's fingerprint or call for a human look."""
+	for comment in comments if isinstance(comments, list) else []:
+		if not isinstance(comment, dict):
+			continue
+		created = _time(comment.get("created_at"))
+		if created is None or created <= since:
+			continue
+		login = str(comment.get("login") or "")
+		body = str(comment.get("body") or "")
+		if login.endswith("[bot]"):
+			continue
+		if login == trusted_login and any(marker in body for marker in LEDGER_BODY_MARKERS):
+			continue
+		return True
+	return False
+
+
+def _terminal_unchanged(info: dict, labels: set[str], number: int, trusted_login: str) -> bool:
+	"""A parked terminal `close` whose park label was dropped, with nothing new since (see the module docstring)."""
+	if NEEDS_HUMAN_LABEL in labels:
+		return False
+	try:
+		stop = unblock_ledger.stop_for_labels(sorted(labels), False)
+	except unblock_ledger.UsageError:
+		return False
+	found = _newest_trusted_marker(info.get("comments"), trusted_login, VERDICT_MARKER_RE, number)
+	if not found or found[1].group("verdict") != "close" or found[1].group("stop") != stop:
+		return False
+	closed_at = found[0]
+	# Any block label applied after the verdict re-arms the item, including one
+	# that was removed again; only the park's own ai:needs-human does not.
+	carried = set(unblock_ledger.BLOCK_LABELS) - {NEEDS_HUMAN_LABEL}
+	parked = False
+	episode = None
+	for event in info.get("labeled") or []:
+		if not isinstance(event, dict):
+			continue
+		created = _time(event.get("created_at"))
+		if created is None:
+			continue
+		if event.get("label") == NEEDS_HUMAN_LABEL and created >= closed_at:
+			parked = True
+		if event.get("label") in carried and (episode is None or created > episode):
+			episode = created
+	if not parked or episode is None or episode > closed_at:
+		return False
+	return not _has_new_evidence(info.get("comments"), trusted_login, closed_at)
+
+
+def _last_run_times(runs: object) -> dict[int, dt.datetime]:
+	"""Newest start time of a judge run per item (cancelled and skipped runs never judged it)."""
+	newest: dict[int, dt.datetime] = {}
+	for run in runs if isinstance(runs, list) else []:
+		if not isinstance(run, dict) or run.get("status") in ("cancelled", "skipped"):
+			continue
+		# GitHub reports these outcomes as status=completed with a conclusion.
+		if run.get("conclusion") in ("cancelled", "skipped", "startup_failure"):
+			continue
+		match = RUN_NAME_RE.match(str(run.get("display_title") or run.get("name") or ""))
+		created = _time(run.get("created_at"))
+		if match and created and (int(match.group(1)) not in newest or created > newest[int(match.group(1))]):
+			newest[int(match.group(1))] = created
 	return newest
 
 
@@ -169,11 +306,15 @@ def select(
 	marker_age: dt.timedelta,
 	inflight: dt.timedelta,
 	limit: int,
+	parked_items: object = None,
+	escalated_recheck: dt.timedelta = dt.timedelta(hours=24),
 ) -> dict:
+	parked_set = {int(n) for n in parked_items if str(n).isdigit()} if isinstance(parked_items, list) else None
 	block_labels = set(unblock_ledger.BLOCK_LABELS)
 	details = details if isinstance(details, dict) else {}
 	failed = {int(n) for n in (failed_projects if isinstance(failed_projects, list) else []) if str(n).isdigit()}
 	busy = _busy_items(runs, now, inflight)
+	last_runs = _last_run_times(runs)
 	skipped: dict[str, int] = {}
 	candidates: list[tuple[dt.datetime, int, str]] = []
 	unverified: list[tuple[dt.datetime, int]] = []
@@ -222,6 +363,26 @@ def select(
 		if info is None:
 			skip("no_details")
 			continue
+		# An escalated fix-up (the judge only logs reason=fixup_escalated for it):
+		# one judge run per escalated_recheck, for the automation-path re-grant.
+		escalated = _newest_trusted_marker(info.get("comments"), trusted_login, ESCALATED_MARKER_RE, number)
+		if escalated and escalated_recheck > dt.timedelta(0) and number in last_runs and now - last_runs[number] < escalated_recheck:
+			skip("fixup_escalated")
+			continue
+		# Parked in the needs-human digest (plan item 4a, D6): every round is
+		# spent and a person decides; never re-judge it on every tick.
+		# The kill switch (NEEDS_HUMAN_DIGEST_ENABLED=false) lets parked items
+		# reach the judge again, whose planner then restores the legacy close.
+		if (os.environ.get("NEEDS_HUMAN_DIGEST_ENABLED", "true").strip().lower() != "false"
+				and NEEDS_HUMAN_LABEL in labels and _latest_verdict(info.get("comments"), trusted_login) == "close"
+				and (parked_set is None or number in parked_set)):
+			skip("parked")
+			continue
+		if (os.environ.get("NEEDS_HUMAN_DIGEST_ENABLED", "true").strip().lower() != "false"
+				and not item.get("pull_request") and number not in failed
+				and _terminal_unchanged(info, labels, number, trusted_login)):
+			skip("terminal_unchanged")
+			continue
 		marker = _latest_marker(info.get("comments"), trusted_login)
 		if marker and now - marker < marker_age:
 			skip("recent_verdict")
@@ -265,11 +426,13 @@ def build_parser() -> argparse.ArgumentParser:
 	cmd.add_argument("--details-file", required=True)
 	cmd.add_argument("--runs-file", required=True)
 	cmd.add_argument("--failed-projects-file")
+	cmd.add_argument("--parked-items-file")
 	cmd.add_argument("--trusted-login", required=True)
 	cmd.add_argument("--now", required=True)
 	cmd.add_argument("--min-blocked-minutes", type=int, default=30)
 	cmd.add_argument("--marker-hours", type=int, default=6)
 	cmd.add_argument("--inflight-minutes", type=int, default=60)
+	cmd.add_argument("--escalated-recheck-hours", type=int, default=24)
 	cmd.add_argument("--max", type=int, default=5)
 	return parser
 
@@ -281,7 +444,7 @@ def run(argv: list[str] | None = None) -> dict:
 	now = _time(args.now)
 	if now is None:
 		raise UsageError(f"--now is not an ISO 8601 time: {args.now!r}")
-	for name in ("min_blocked_minutes", "marker_hours", "inflight_minutes", "max"):
+	for name in ("min_blocked_minutes", "marker_hours", "inflight_minutes", "escalated_recheck_hours", "max"):
 		if getattr(args, name) < 0:
 			raise UsageError(f"--{name.replace('_', '-')} must not be negative")
 	search = _read_json(args.search_file, "--search-file", [])
@@ -301,6 +464,8 @@ def run(argv: list[str] | None = None) -> dict:
 		dt.timedelta(hours=args.marker_hours),
 		dt.timedelta(minutes=args.inflight_minutes),
 		args.max,
+		_read_json(args.parked_items_file, "--parked-items-file", None),
+		dt.timedelta(hours=args.escalated_recheck_hours),
 	)
 
 

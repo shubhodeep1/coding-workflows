@@ -153,6 +153,22 @@ def test_required_failing_check_blocks() -> None:
 	assert rc == 1 and reason == "blocking", (rc, reason)
 
 
+def test_default_required_set_blocks_failing_ci_aggregate_job() -> None:
+	"""The built-in default must name the real CI check-run. The CI workflow
+	reports its jobs (`lint` is the aggregate that requires every other job to
+	succeed), never a check-run called `CI`, so a failing `lint` with every
+	other listed check green has to block under the default set (PR #6643
+	merged red on 2026-10-09 because it did not)."""
+	runs = _page([
+		{"name": "lint", "status": "completed", "conclusion": "failure"},
+		{"name": "static-checks", "status": "completed", "conclusion": "success"},
+		{"name": "Integration PR readiness check", "status": "completed", "conclusion": "success"},
+		{"name": "review / gate", "status": "completed", "conclusion": "success"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=REPO_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
 def test_pending_check_always_blocks_even_if_not_required() -> None:
 	"""Pending check-runs always block (an in-flight workflow must not race
 	the merge), regardless of whether they are in the required set."""
@@ -170,6 +186,261 @@ def test_legacy_two_arg_mode_blocks_on_any_failure() -> None:
 	])
 	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=REPO_ENV)
 	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+# ---------------------------------------------------------------------------
+# Cancelled conclusions block; only the newest run per name counts.
+# ---------------------------------------------------------------------------
+
+
+CI_REQUIRED_ENV = {**REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"}
+
+
+def test_cancelled_required_check_blocks() -> None:
+	"""A cancelled required check is a settled failure: it blocks and does
+	not count as pending, so the auto-merge wait refuses instead of
+	waiting."""
+	runs = _page([{"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled"}])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	res = _run(
+		'_pr_checks_completed 5 "abc1234" "main" >/dev/null 2>&1; '
+		'printf "%s\\n" "${PR_CHECKS_LAST_PENDING}"',
+		runs_json=runs,
+		env=CI_REQUIRED_ENV,
+	)
+	assert res.returncode == 0, res.stderr
+	assert res.stdout.strip() == "0", res.stdout
+
+
+def test_cancelled_non_required_check_does_not_block_in_required_mode() -> None:
+	runs = _page([
+		{"id": 1, "name": "CI", "status": "completed", "conclusion": "success"},
+		{"id": 2, "name": "Copilot", "status": "completed", "conclusion": "cancelled"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+def test_cancelled_run_superseded_by_newer_success_does_not_block() -> None:
+	"""A re-run creates a new check-run with the same name; the cancelled,
+	superseded run must not block, whatever the array order."""
+	older = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled"}
+	newer = {"id": 2, "name": "CI", "status": "completed", "conclusion": "success"}
+	for order in ([older, newer], [newer, older]):
+		rc, reason = _gate(runs_json=_page(order), args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+		assert rc == 0 and reason == "ok", (order, rc, reason)
+
+
+def test_newer_cancelled_run_after_success_blocks() -> None:
+	older = {"id": 1, "name": "CI", "status": "completed", "conclusion": "success"}
+	newer = {"id": 2, "name": "CI", "status": "completed", "conclusion": "cancelled"}
+	for order in ([older, newer], [newer, older]):
+		rc, reason = _gate(runs_json=_page(order), args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+		assert rc == 1 and reason == "blocking", (order, rc, reason)
+
+
+def test_failed_run_is_not_hidden_by_newer_same_name_success() -> None:
+	"""Check-runs carry no workflow identity, and this repo has several jobs
+	named `lint`. A newer same-name success (possibly another workflow's)
+	supersedes only a cancellation, never a failure."""
+	runs = _page([
+		{"id": 1, "name": "CI", "status": "completed", "conclusion": "failure"},
+		{"id": 2, "name": "CI", "status": "completed", "conclusion": "success"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=REPO_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_running_run_is_not_hidden_by_newer_same_name_success() -> None:
+	"""A still-running run blocks and counts as pending even when a newer
+	same-name run already succeeded, so the wait keeps polling."""
+	runs = _page([
+		{"id": 1, "name": "CI", "status": "in_progress", "conclusion": None},
+		{"id": 2, "name": "CI", "status": "completed", "conclusion": "success"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	res = _run(
+		'_pr_checks_completed 5 "abc1234" "main" >/dev/null 2>&1; '
+		'printf "%s\\n" "${PR_CHECKS_LAST_PENDING}"',
+		runs_json=runs,
+		env=CI_REQUIRED_ENV,
+	)
+	assert res.returncode == 0, res.stderr
+	assert res.stdout.strip() == "1", res.stdout
+
+
+def test_cancelled_check_blocks_in_star_mode() -> None:
+	runs = _page([
+		{"id": 1, "name": "CI", "status": "completed", "conclusion": "success"},
+		{"id": 2, "name": "advisory", "status": "completed", "conclusion": "cancelled"},
+	])
+	rc, reason = _gate(
+		runs_json=runs,
+		args='5 "abc1234" "main"',
+		env={**REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "*"},
+	)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=REPO_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_timed_out_and_action_required_required_checks_block() -> None:
+	for conclusion in ("timed_out", "action_required", "startup_failure"):
+		runs = _page([{"id": 1, "name": "CI", "status": "completed", "conclusion": conclusion}])
+		rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=CI_REQUIRED_ENV)
+		assert rc == 1 and reason == "blocking", (conclusion, rc, reason)
+
+
+def test_self_run_newest_hides_older_same_name_cancelled() -> None:
+	"""Dedupe runs before the self-run exclusion: when the caller's own job
+	is the newest run of its name, an older cancelled attempt of the same
+	job does not resurface."""
+	runs = _page([
+		{
+			"id": 1,
+			"name": "review / codex-agent",
+			"status": "completed",
+			"conclusion": "cancelled",
+			"details_url": "https://github.com/owner/repo/actions/runs/111/job/1",
+		},
+		{
+			"id": 2,
+			"name": "review / codex-agent",
+			"status": "in_progress",
+			"conclusion": None,
+			"details_url": "https://github.com/owner/repo/actions/runs/999/job/9",
+		},
+	])
+	rc, reason = _gate(
+		runs_json=runs,
+		args='5 "abc1234" "main"',
+		env={**REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "*", "PR_CHECKS_SELF_RUN_ID": "999"},
+	)
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+def test_legacy_object_shape_is_deduped() -> None:
+	"""The legacy single-object check-runs shape gets the same dedupe."""
+	runs = json.dumps({"check_runs": [
+		{"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled"},
+		{"id": 2, "name": "CI", "status": "completed", "conclusion": "success"},
+	]})
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=REPO_ENV)
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+def _lint_run(run_id: str, conclusion: str, check_id: int) -> dict:
+	return {
+		"id": check_id,
+		"name": "lint",
+		"status": "completed",
+		"conclusion": conclusion,
+		"details_url": f"https://github.com/o/r/actions/runs/{run_id}/job/{check_id}",
+	}
+
+
+LINT_REQUIRED_ENV = {
+	"PR_CHECKS_REPOSITORY": "shubhodeep1/coding-workflows",
+	"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "lint",
+}
+
+
+def test_cancelled_ci_check_not_superseded_by_other_workflow_same_name() -> None:
+	"""The CI check name (`lint` here) is shared with lint-pr-body-auto-close
+	and lint-plan-archival, which re-run on every PR body edit. A newer
+	`lint` from another Actions run must not hide a cancelled CI `lint`,
+	in either filter mode, when the runs are not bound to CI run ids."""
+	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("777", "success", 2)])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=LINT_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234"', env=LINT_REQUIRED_ENV)
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_cancelled_ci_check_superseded_by_rerun_of_same_actions_run() -> None:
+	"""Re-running the cancelled job keeps the Actions run id, so the newer
+	attempt supersedes the cancellation."""
+	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("555", "success", 2)])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"', env=LINT_REQUIRED_ENV)
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+def test_cancelled_ci_check_superseded_by_newer_bound_ci_run_only() -> None:
+	"""With PR_CHECKS_CI_RUN_IDS a newer bound CI run supersedes a bound
+	cancelled run; an unbound newer run still does not."""
+	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("556", "success", 2)])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"',
+		env={**LINT_REQUIRED_ENV, "PR_CHECKS_CI_RUN_IDS": "555,556"})
+	assert rc == 0 and reason == "ok", (rc, reason)
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"',
+		env={**LINT_REQUIRED_ENV, "PR_CHECKS_CI_RUN_IDS": "555"})
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_cancelled_ci_check_not_superseded_when_bound_ids_empty() -> None:
+	"""An empty PR_CHECKS_CI_RUN_IDS binds nothing: a newer `lint` from a
+	different Actions run must not replace a cancelled CI `lint`."""
+	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("777", "success", 2)])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"',
+		env={**LINT_REQUIRED_ENV, "PR_CHECKS_CI_RUN_IDS": ""})
+	assert rc == 1 and reason == "blocking", (rc, reason)
+
+
+def test_non_ci_names_keep_cross_run_supersession() -> None:
+	"""Names other than the CI check (a new review run's `review / gate`)
+	still supersede a cancelled run from an earlier Actions run."""
+	runs = _page([
+		{**_lint_run("555", "cancelled", 1), "name": "review / gate"},
+		{**_lint_run("777", "success", 2), "name": "review / gate"},
+	])
+	rc, reason = _gate(runs_json=runs, args='5 "abc1234" "main"',
+		env={**LINT_REQUIRED_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "review / gate"})
+	assert rc == 0 and reason == "ok", (rc, reason)
+
+
+def test_rb_judge_jq_mirror_matches_library_defs() -> None:
+	"""The runtime jq mirror in test_review_rb_judge_self_run_exclusion.py
+	must carry the library's supersession defs verbatim."""
+	import re
+
+	lib_text = LIB.read_text(encoding="utf-8")
+	m = re.search(r"\nPR_CHECKS_JQ_SUPERSEDE_DEFS='\n(.*?)\n'\n", lib_text, re.S)
+	assert m, "pr_checks_lib.sh must define PR_CHECKS_JQ_SUPERSEDE_DEFS"
+	mirror = (REPO_ROOT / "tests" / "test_review_rb_judge_self_run_exclusion.py").read_text(encoding="utf-8")
+	assert m.group(1) in mirror
+
+
+_ACCEPT_EXPR = (
+	'.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" '
+	'and (.conclusion != "cancelled" or (._superseded | not))'
+)
+
+
+def test_restore_7126_cancelled_not_in_accept_set() -> None:
+	"""Static guard (no jq needed), project #7126: a sync or conflict
+	resolution once dropped the #7127 hunks silently. Both gate filters in
+	_pr_checks_completed must share PR_CHECKS_JQ_SUPERSEDE_DEFS and accept a
+	cancelled check-run only when a newer run superseded it."""
+	import re
+
+	lib_text = LIB.read_text(encoding="utf-8")
+	assert re.search(r"\nPR_CHECKS_JQ_SUPERSEDE_DEFS='\n.*def _mark_superseded:", lib_text, re.S), (
+		"PR_CHECKS_JQ_SUPERSEDE_DEFS with _mark_superseded is missing from pr_checks_lib.sh"
+	)
+	start = lib_text.index("\n_pr_checks_completed()\n")
+	end = lib_text.index("\n}\n", start)
+	body = lib_text[start:end]
+	assert body.count('"${PR_CHECKS_JQ_SUPERSEDE_DEFS}"') == 2, body.count('"${PR_CHECKS_JQ_SUPERSEDE_DEFS}"')
+	assert body.count("_mark_superseded") == 2
+	assert body.count(_ACCEPT_EXPR) == 2, "each gate filter must accept cancelled only when superseded"
+	code = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
+	assert '.conclusion == "cancelled"' not in code
+	assert 'and .conclusion != "cancelled" and' not in code
+	assert not re.search(r'\[[^\]]*"success"[^\]]*"cancelled"[^\]]*\]', code), "cancelled must not be in an accepted list"
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +609,7 @@ def test_required_names_uses_env_default_when_unset() -> None:
 	)
 	assert res.returncode == 0, res.stderr
 	assert res.stdout.strip() == (
-		"CI,Integration PR readiness check,"
+		"CI,lint,Integration PR readiness check,"
 		"Lint plan-archival completeness,"
 		"Lint PR body for auto-close keywords against orchestrator-tracking issues,"
 		"review / gate"
@@ -414,6 +685,150 @@ def test_orchestrator_rb_gates_pass_base_ref() -> None:
 		f"(merge / force-merge / no-fix / merge_with_followup); found "
 		f"{len(three_arg)}: {three_arg}"
 	)
+
+
+# ---------------------------------------------------------------------------
+# Issue #6963: the configured CI check side channel. _pr_checks_completed
+# records PR_CHECKS_LAST_CI_NAME / PR_CHECKS_LAST_CI_STATE from the listing
+# it already fetched; its return value and reason do not change.
+# ---------------------------------------------------------------------------
+
+THIS_REPO_ENV = {"PR_CHECKS_REPOSITORY": "shubhodeep1/coding-workflows"}
+
+
+def _ci_side_channel(runs_json: str, env: dict[str, str], args: str = '5 "abc1234" "main"') -> tuple[str, str, str]:
+	body = (
+		f'_pr_checks_completed {args} >/dev/null 2>&1; rc=$?; '
+		'printf "%s|%s|%s|%s\\n" "${rc}:${PR_CHECKS_LAST_REASON}" "${PR_CHECKS_LAST_CI_NAME}" "${PR_CHECKS_LAST_CI_STATE}" "end"'
+	)
+	res = _run(body, runs_json=runs_json, env=env)
+	assert res.returncode == 0, res.stderr
+	gate, name, state, _ = res.stdout.strip().split("|")
+	return gate, name, state
+
+
+def _ci_run(name: str, status: str, conclusion: str | None, run_id: str = "999") -> dict:
+	return {"name": name, "status": status, "conclusion": conclusion, "head_sha": "abc1234",
+		"details_url": f"https://github.com/o/r/actions/runs/{run_id}/job/1"}
+
+
+def test_ci_side_channel_defaults_to_lint_only_in_this_repo() -> None:
+	runs = _page([_ci_run("lint", "completed", "success")])
+	gate, name, state = _ci_side_channel(runs, THIS_REPO_ENV)
+	assert (gate, name, state) == ("0:ok", "lint", "success"), (gate, name, state)
+	gate, name, state = _ci_side_channel(runs, {"PR_CHECKS_REPOSITORY": "SHUBHODEEP1/Coding-Workflows"})
+	assert name == "lint" and state == "success", (name, state)
+	gate, name, state = _ci_side_channel(runs, REPO_ENV)
+	assert (gate, name, state) == ("0:ok", "none", "disabled"), (gate, name, state)
+
+
+def test_ci_side_channel_does_not_change_the_gate_result() -> None:
+	runs = _page([_ci_run("CI", "completed", "success"), _ci_run("review / gate", "completed", "success")])
+	gate, name, state = _ci_side_channel(runs, THIS_REPO_ENV)
+	assert gate == "0:ok" and name == "lint" and state == "absent", (gate, name, state)
+
+
+def test_ci_side_channel_aggregates_every_matching_run() -> None:
+	cases = [
+		([_ci_run("lint", "completed", "success"), _ci_run("lint", "completed", "failure")], "failure"),
+		([_ci_run("lint", "completed", "success"), _ci_run("lint", "in_progress", None)], "pending"),
+		([_ci_run("lint", "completed", "skipped")], "failure"),
+		([_ci_run("lint", "completed", "neutral")], "failure"),
+		([_ci_run("lint", "completed", "cancelled")], "failure"),
+		([_ci_run("lint", "completed", "success", run_id="4242")], "absent"),
+		([{**_ci_run("lint", "completed", "success"), "head_sha": "fff0000"}], "absent"),
+	]
+	for runs, expected in cases:
+		_, _, state = _ci_side_channel(_page(runs), {**THIS_REPO_ENV, "PR_CHECKS_SELF_RUN_ID": "4242"})
+		assert state == expected, (runs, state, expected)
+
+
+def test_ci_side_channel_rerun_supersedes_cancelled_only_when_bound() -> None:
+	"""Bound to CI run ids, a successful re-run supersedes a cancelled run so
+	the auto-merge wait agrees with the gate. Name-only matching keeps every
+	run (fail closed), and a failure is never superseded."""
+	cancelled = {**_ci_run("lint", "completed", "cancelled", run_id="555"), "id": 1}
+	rerun = {**_ci_run("lint", "completed", "success", run_id="556"), "id": 2}
+	failed = {**_ci_run("lint", "completed", "failure", run_id="555"), "id": 1}
+	bound = {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": "555,556"}
+	gate, _, state = _ci_side_channel(_page([cancelled, rerun]), bound)
+	assert gate == "0:ok" and state == "success", (gate, state)
+	_, _, state = _ci_side_channel(_page([rerun, cancelled]), bound)
+	assert state == "success", state
+	_, _, state = _ci_side_channel(_page([cancelled, rerun]), THIS_REPO_ENV)
+	assert state == "failure", state
+	_, _, state = _ci_side_channel(_page([failed, rerun]), bound)
+	assert state == "failure", state
+
+
+def test_ci_side_channel_counts_only_bound_runs_when_ids_are_given() -> None:
+	runs = _page([_ci_run("lint", "completed", "success", run_id="555")])
+	_, _, state = _ci_side_channel(runs, {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": "999"})
+	assert state == "absent", state
+	_, _, state = _ci_side_channel(runs, {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": "999,555"})
+	assert state == "success", state
+	_, _, state = _ci_side_channel(runs, {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": ""})
+	assert state == "absent", state
+
+
+def test_ci_side_channel_is_unknown_on_api_failure_and_set_on_allow_all() -> None:
+	_, _, state = _ci_side_channel("{}", THIS_REPO_ENV)
+	assert state == "unknown", state
+	gate, _, state = _ci_side_channel(_page([_ci_run("lint", "completed", "success")]),
+		{**THIS_REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
+	assert gate == "0:allow_all" and state == "success", (gate, state)
+
+
+def test_ci_check_name_resolution() -> None:
+	cases = [
+		({**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "  build  "}, "build"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "NONE"}, "none"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": ""}, "lint"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "review / gate"}, "review / gate"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "a,b"}, "lint"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "li\nnt"}, "lint"),
+		({**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "x" * 101}, "__invalid__"),
+		({**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "lint,test"}, "__invalid__"),
+	]
+	for env, expected in cases:
+		res = _run('printf "%s\\n" "$(_pr_auto_merge_required_ci_check_name)"', env=env)
+		assert res.returncode == 0, res.stderr
+		assert res.stdout.strip() == expected, (env.get("AUTO_MERGE_REQUIRED_CI_CHECK"), res.stdout)
+		if expected != "none" and env.get("AUTO_MERGE_REQUIRED_CI_CHECK", "").strip() not in ("", expected):
+			assert "::warning::AUTO_MERGE_REQUIRED_CI_CHECK" in res.stderr, res.stderr
+
+
+def test_invalid_ci_check_name_in_a_consumer_fails_closed() -> None:
+	"""A malformed explicit value must not silently drop the requirement."""
+	runs = _page([_ci_run("lint,test", "completed", "success")])
+	gate, name, state = _ci_side_channel(runs, {**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "lint,test"})
+	assert (gate, name, state) == ("0:ok", "__invalid__", "unknown"), (gate, name, state)
+
+
+def test_ci_check_default_applies_only_to_bases_ci_runs_on() -> None:
+	"""ci.yml's pull_request trigger covers every base since issue #7283, so in
+	this repo the `lint` default applies to every base, including a fix PR
+	routed to a failing PR's ai/issue-* head. Consumers stay off."""
+	cases = [
+		(THIS_REPO_ENV, "", "lint"),
+		(THIS_REPO_ENV, "main", "lint"),
+		(THIS_REPO_ENV, "stable", "lint"),
+		(THIS_REPO_ENV, "orchestrator/project-42", "lint"),
+		(THIS_REPO_ENV, "ai/issue-9", "lint"),
+		(THIS_REPO_ENV, "release/v1", "lint"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "none"}, "ai/issue-9", "none"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "lint"}, "ai/issue-9", "lint"),
+		(REPO_ENV, "main", "none"),
+	]
+	for env, base, expected in cases:
+		res = _run(f'printf "%s\\n" "$(_pr_auto_merge_required_ci_check_name {base!r})"', env=env)
+		assert res.returncode == 0, res.stderr
+		assert res.stdout.strip() == expected, (env.get("AUTO_MERGE_REQUIRED_CI_CHECK"), base, res.stdout)
+	gate, name, state = _ci_side_channel(_page([_ci_run("CI", "completed", "success")]), THIS_REPO_ENV,
+		args='5 "abc1234" "ai/issue-9"')
+	# No `lint` check-run in the listing: the side channel names the required
+	# check and reports it absent; the gate result itself is unchanged.
+	assert (gate, name, state) == ("0:ok", "lint", "absent"), (gate, name, state)
 
 
 def main() -> int:

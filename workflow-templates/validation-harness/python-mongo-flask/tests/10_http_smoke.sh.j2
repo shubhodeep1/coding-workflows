@@ -4,9 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
-APP_PORT="${APP_PORT:-{{ manifest.get('port', 8000) }}}"
-HEALTH_PATH="${HEALTH_PATH:-{{ slots.get('health_path', '/health') }}}"
-TEST_HOST_HEADER="${TEST_HOST_HEADER:-{{ slots.get('test_host_header', 'app.local.test') }}}"
+_default_app_port={{ manifest.get('port', 8000) | shell_quote }}
+APP_PORT="${APP_PORT:-${_default_app_port}}"
+_default_health_path={{ slots.get('health_path', '/health') | shell_quote }}
+HEALTH_PATH="${HEALTH_PATH:-${_default_health_path}}"
+_default_test_host_header={{ slots.get('test_host_header', 'app.local.test') | shell_quote }}
+TEST_HOST_HEADER="${TEST_HOST_HEADER:-${_default_test_host_header}}"
 APP_URL="${APP_URL:-http://127.0.0.1:${APP_PORT}${HEALTH_PATH}}"
 HTTP_SMOKE_TIMEOUT_SECONDS="${HTTP_SMOKE_TIMEOUT_SECONDS:-30}"
 

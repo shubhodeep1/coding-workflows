@@ -38,10 +38,15 @@ on:
     - cron: "0 6 * * *"
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: workflow_log_analysis
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
-  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+  ALERT_MSG_LEVEL: ${{ (github.event.inputs.alert_msg_level || '') != '' && github.event.inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   WORKFLOW_LOG_SCENARIO_TRACE_ENABLED: ${{ vars.WORKFLOW_LOG_SCENARIO_TRACE_ENABLED || 'false' }}
   WORKFLOW_RETRO_ENABLED: ${{ vars.WORKFLOW_RETRO_ENABLED || 'true' }}
@@ -235,11 +240,67 @@ jobs:
     timeout-minutes: 45
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+      AI_ENGINE_RETRO: ${{ vars.AI_ENGINE_RETRO || '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
+
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          WLA_ENGINE_ROLES: RETRO
+          CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+        run: |
+          set -euo pipefail
+          # Claude engine (plan item 3d): this job's model roles run Claude
+          # through the engine root staged here from this workflow's own
+          # checkout; the codex CLI stays installed as the fallback. No work
+          # item, so no labels. This workflow is not reusable (schedule +
+          # dispatch only): its YAML, scripts and this checkout are one
+          # commit, so the checkout is the verified support source once HEAD
+          # is pinned to GITHUB_SHA and the run is on the default branch. A
+          # dispatch of any other ref runs codex, so unmerged engine support
+          # never fetches the Claude pool credential.
+          any_claude="false"
+          trusted_ref="false"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] ||
+             { [ -n "${DEFAULT_BRANCH}" ] && [ "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}" ]; }; then
+            trusted_ref="true"
+          fi
+          checkout_head="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)"
+          # shellcheck disable=SC1091
+          if [ "${trusted_ref}" = "true" ] && [ -n "${checkout_head}" ] && [ "${checkout_head}" = "${GITHUB_SHA}" ] &&
+             source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
+            for wla_role in ${WLA_ENGINE_ROLES}; do
+              wla_engine="$(SUPPORT_ROOT_DIR="${CLAUDE_ENGINE_SUPPORT_DEST}" ai_engine_for_role "${wla_role}" || echo codex)"
+              if [ "${wla_engine}" = "claude" ]; then
+                any_claude="true"
+              fi
+            done
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; ${WLA_ENGINE_ROLES} run codex."
+          fi
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -255,7 +316,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -417,6 +478,19 @@ jobs:
           fi
 
           RETRO_EXIT=0
+          # The codex command of this pass, unchanged (AI_ENGINE_RETRO=codex, or
+          # no trusted engine support). Claude runs it as the fallback.
+          wla_codex_retro()
+          {
+            bash scripts/codex_heartbeat.sh \
+              --phase workflow_weekly_retro \
+              --stdout-file "${RETRO_BODY_FILE}" \
+              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
+          }
+          wla_engine_ready()
+          {
+            [ -n "${CLAUDE_ENGINE_SUPPORT_DIR:-}" ] && [ -f "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh" ] && [ ! -L "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh" ]
+          }
           for attempt in $(seq 1 "${max_attempts}"); do
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
@@ -424,12 +498,34 @@ jobs:
             set +e
             # The agent reads workflow logs from every consumer repo; it runs in the
             # credential-free, network-isolated container (scripts/codex_isolated_exec.sh).
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_weekly_retro \
-              --stdout-file "${RETRO_BODY_FILE}" \
-              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
+            # Engine selection (role RETRO): Claude in the same isolated container
+            # via claude_run_selected, the codex command above as its fallback.
+            if wla_engine_ready; then
+              (
+                unset GH_TOKEN GITHUB_TOKEN TG_BOT_SECRET TG_ADMIN_CHAT_ID TG_CHAT_ID
+                # shellcheck disable=SC1091
+                if ! source "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh"; then
+                  echo "AI_ENGINE_FALLBACK role=RETRO reason=engine_support_missing" >&2
+                  wla_codex_retro
+                  exit $?
+                fi
+                AI_ENGINE_MODEL_HINT="${WORKFLOW_RETRO_MODEL}" AI_ENGINE_EFFORT_HINT="${WORKFLOW_RETRO_REASONING}" \
+                  claude_run_selected RETRO "${CODEX_PROMPT_FILE}" "${RETRO_BODY_FILE}" "${PWD}" -- wla_codex_retro
+              )
+            else
+              echo "AI_ENGINE_FALLBACK role=RETRO reason=engine_support_missing" >&2
+              wla_codex_retro
+            fi
             RETRO_EXIT=$?
             set -e
+            if [ "${RETRO_EXIT}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): no codex fallback and no
+              # retries against a gated pool; this scheduled pass runs again
+              # on its next trigger.
+              echo "AI_ENGINE_CAPACITY_WAIT role=RETRO outcome=deferred stage=workflow_log_analysis"
+              echo "::error::Claude pool at capacity (role RETRO); stopping this pass without codex fallback or retries."
+              exit 80
+            fi
             if [ "${RETRO_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${RETRO_BODY_FILE}"; then
               break
             fi
@@ -719,12 +815,69 @@ jobs:
       analysis_status: ${{ steps.analyze.outputs.analysis_status }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+      AI_ENGINE_LOG_SUMMARY: ${{ vars.AI_ENGINE_LOG_SUMMARY || '' }}
+      AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          WLA_ENGINE_ROLES: LOG_SUMMARY LOG_ANALYSIS
+          CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+        run: |
+          set -euo pipefail
+          # Claude engine (plan item 3d): this job's model roles run Claude
+          # through the engine root staged here from this workflow's own
+          # checkout; the codex CLI stays installed as the fallback. No work
+          # item, so no labels. This workflow is not reusable (schedule +
+          # dispatch only): its YAML, scripts and this checkout are one
+          # commit, so the checkout is the verified support source once HEAD
+          # is pinned to GITHUB_SHA and the run is on the default branch. A
+          # dispatch of any other ref runs codex, so unmerged engine support
+          # never fetches the Claude pool credential.
+          any_claude="false"
+          trusted_ref="false"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] ||
+             { [ -n "${DEFAULT_BRANCH}" ] && [ "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}" ]; }; then
+            trusted_ref="true"
+          fi
+          checkout_head="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)"
+          # shellcheck disable=SC1091
+          if [ "${trusted_ref}" = "true" ] && [ -n "${checkout_head}" ] && [ "${checkout_head}" = "${GITHUB_SHA}" ] &&
+             source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
+            for wla_role in ${WLA_ENGINE_ROLES}; do
+              wla_engine="$(SUPPORT_ROOT_DIR="${CLAUDE_ENGINE_SUPPORT_DEST}" ai_engine_for_role "${wla_role}" || echo codex)"
+              if [ "${wla_engine}" = "claude" ]; then
+                any_claude="true"
+              fi
+            done
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; ${WLA_ENGINE_ROLES} run codex."
+          fi
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -745,7 +898,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -922,6 +1075,8 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
+          _wla_label_retry() { if type gh_retry >/dev/null 2>&1; then gh_retry "$@"; else "$@"; fi; }
+          _wla_label_create() { local _wla_err; _wla_err=$(gh label create "$@" 2>&1 >/dev/null) && return 0; case "${_wla_err}" in *"already exists"*) return 0 ;; esac; _wla_label_retry gh label create "$@"; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -1026,12 +1181,12 @@ jobs:
               "recommended_resume_action=retrigger_log_analysis" \
               "timestamp=${timestamp}"
 
-            gh label create "ai:log-analysis-failed" \
+            _wla_label_create "ai:log-analysis-failed" \
               --repo "${GITHUB_REPOSITORY}" \
               --color "e11d48" \
               --description "Workflow log analysis failed" >/dev/null 2>&1 || true
 
-            gh issue edit "${TRACKING_ISSUE_NUM}" \
+            GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
               --repo "${GITHUB_REPOSITORY}" \
               --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || \
               echo "::warning::Failed to apply ai:log-analysis-failed to #${TRACKING_ISSUE_NUM}."
@@ -1169,6 +1324,19 @@ jobs:
           fi
           codex_failure_mode=""
           analyze_attempts_used=0
+          # The codex command of this pass, unchanged (AI_ENGINE_LOG_ANALYSIS=codex, or
+          # no trusted engine support). Claude runs it as the fallback.
+          wla_codex_analyze()
+          {
+            bash scripts/codex_heartbeat.sh \
+              --phase workflow_log_analysis \
+              --stdout-file "${REPORT_FILE}" \
+              -- bash scripts/codex_isolated_exec.sh run --mode read-only ${wla_run_logs_include_args[@]+"${wla_run_logs_include_args[@]}"} -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+          }
+          wla_engine_ready()
+          {
+            [ -n "${CLAUDE_ENGINE_SUPPORT_DIR:-}" ] && [ -f "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh" ] && [ ! -L "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh" ]
+          }
           for attempt in $(seq 1 "${max_attempts}"); do
             analyze_attempts_used="${attempt}"
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
@@ -1177,12 +1345,34 @@ jobs:
             set +e
             # The agent reads workflow logs from every consumer repo; it runs in the
             # credential-free, network-isolated container (scripts/codex_isolated_exec.sh).
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_log_analysis \
-              --stdout-file "${REPORT_FILE}" \
-              -- bash scripts/codex_isolated_exec.sh run --mode read-only ${wla_run_logs_include_args[@]+"${wla_run_logs_include_args[@]}"} -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+            # Engine selection (role LOG_ANALYSIS): Claude in the same isolated container
+            # via claude_run_selected, the codex command above as its fallback.
+            if wla_engine_ready; then
+              (
+                unset GH_TOKEN GITHUB_TOKEN TG_BOT_SECRET TG_ADMIN_CHAT_ID TG_CHAT_ID
+                # shellcheck disable=SC1091
+                if ! source "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh"; then
+                  echo "AI_ENGINE_FALLBACK role=LOG_ANALYSIS reason=engine_support_missing" >&2
+                  wla_codex_analyze
+                  exit $?
+                fi
+                AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL}" AI_ENGINE_EFFORT_HINT="" \
+                  claude_run_selected LOG_ANALYSIS "${CODEX_PROMPT_FILE}" "${REPORT_FILE}" "${PWD}" -- wla_codex_analyze
+              )
+            else
+              echo "AI_ENGINE_FALLBACK role=LOG_ANALYSIS reason=engine_support_missing" >&2
+              wla_codex_analyze
+            fi
             ANALYZE_EXIT=$?
             set -e
+            if [ "${ANALYZE_EXIT}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): no codex fallback and no
+              # retries against a gated pool; this scheduled pass runs again
+              # on its next trigger.
+              echo "AI_ENGINE_CAPACITY_WAIT role=LOG_ANALYSIS outcome=deferred stage=workflow_log_analysis"
+              echo "::error::Claude pool at capacity (role LOG_ANALYSIS); stopping this pass without codex fallback or retries."
+              exit 80
+            fi
             if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
               codex_failure_mode=""
               break
@@ -1230,6 +1420,10 @@ jobs:
         if: steps.analyze.outputs.analysis_status == 'completed'
         env:
           REPORT_RETENTION_DAYS: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS || '30' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # Same trusted-marker set the promote cycle and poller use, so the
+          # purge keeps every doc a trusted marker names.
+          COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
         run: |
           set -euo pipefail
 
@@ -1238,7 +1432,11 @@ jobs:
             echo "::error::Workflow log analysis can only push report updates from branch refs (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
             exit 1
           fi
-          TARGET_BRANCH="${{ github.ref_name }}"
+          TARGET_BRANCH="${GITHUB_REF_NAME:-}"
+          if [ -z "${TARGET_BRANCH}" ]; then
+            echo "::error::Workflow log analysis can only push report updates from branch refs (got ref_type='${GITHUB_REF_TYPE:-unknown}', ref_name='${GITHUB_REF_NAME:-unknown}')."
+            exit 1
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -1258,10 +1456,26 @@ jobs:
           # for that reason.
           purged_count=0
           cutoff_date=""
-          if cutoff_date="$(date -u -d "${retention_raw} days ago" +%Y-%m-%d 2>/dev/null)" && [ -n "${cutoff_date}" ]; then
+          # Never purge a doc an open apply-analysis project still reads: its
+          # plan and implement stages read the doc from the default branch,
+          # and the project's own final PR deletes it. Issue #7022 blocked when
+          # a doc was purged from main before its project could read it. When
+          # the open projects cannot be read, skip the purge (fail closed; a
+          # report kept one more day costs nothing).
+          purge_in_flight_docs=""
+          purge_guard_ok="true"
+          if ! purge_in_flight_docs="$(APPLY_ANALYSIS_IN_FLIGHT_DOCS=true bash scripts/apply_analysis_on_main.sh)"; then
+            purge_guard_ok="false"
+            echo "::warning::Could not list the analysis docs open apply-analysis projects use (or an orchestrator run is still creating a project); skipping the age-based purge this run."
+          fi
+          if [ "${purge_guard_ok}" = "true" ] && cutoff_date="$(date -u -d "${retention_raw} days ago" +%Y-%m-%d 2>/dev/null)" && [ -n "${cutoff_date}" ]; then
             shopt -s nullglob
             for old_report in analysis/workflow-optimization-*.md; do
               [ "${old_report}" = "${REPORT_FILE}" ] && continue
+              if printf '%s\n' "${purge_in_flight_docs}" | grep -qxF -- "${old_report}"; then
+                echo "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc=${old_report} reason=in_flight_project"
+                continue
+              fi
               filename="$(basename "${old_report}")"
               # Match workflow-optimization-YYYY-MM-DD(-N).md and capture only
               # the date stamp; greedy parameter expansion (e.g. ${s%%-[0-9]*})
@@ -1276,7 +1490,7 @@ jobs:
               fi
             done
             shopt -u nullglob
-          else
+          elif [ "${purge_guard_ok}" = "true" ]; then
             echo "::warning::Unable to compute report purge cutoff date for retention window (${retention_raw} days); skipping age-based purge to avoid accidental deletions."
           fi
           if [ "${purged_count}" -gt 0 ]; then
@@ -1393,7 +1607,7 @@ jobs:
           REPORT_FILE="${{ steps.commit_report.outputs.report_file || steps.analyze.outputs.report_file || '' }}"
           REPORT_URL=""
           if [ -n "${REPORT_FILE}" ]; then
-            REPORT_URL="${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${REPORT_FILE}"
+            REPORT_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/${REPORT_FILE}"
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           if [ "${ANALYSIS_STATUS}" = "completed" ]; then
@@ -1445,12 +1659,68 @@ jobs:
       audit_status: ${{ steps.audit.outputs.audit_status }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+      AI_ENGINE_LOG_AUDIT: ${{ vars.AI_ENGINE_LOG_AUDIT || '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          WLA_ENGINE_ROLES: LOG_AUDIT
+          CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+        run: |
+          set -euo pipefail
+          # Claude engine (plan item 3d): this job's model roles run Claude
+          # through the engine root staged here from this workflow's own
+          # checkout; the codex CLI stays installed as the fallback. No work
+          # item, so no labels. This workflow is not reusable (schedule +
+          # dispatch only): its YAML, scripts and this checkout are one
+          # commit, so the checkout is the verified support source once HEAD
+          # is pinned to GITHUB_SHA and the run is on the default branch. A
+          # dispatch of any other ref runs codex, so unmerged engine support
+          # never fetches the Claude pool credential.
+          any_claude="false"
+          trusted_ref="false"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] ||
+             { [ -n "${DEFAULT_BRANCH}" ] && [ "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}" ]; }; then
+            trusted_ref="true"
+          fi
+          checkout_head="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)"
+          # shellcheck disable=SC1091
+          if [ "${trusted_ref}" = "true" ] && [ -n "${checkout_head}" ] && [ "${checkout_head}" = "${GITHUB_SHA}" ] &&
+             source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
+            for wla_role in ${WLA_ENGINE_ROLES}; do
+              wla_engine="$(SUPPORT_ROOT_DIR="${CLAUDE_ENGINE_SUPPORT_DEST}" ai_engine_for_role "${wla_role}" || echo codex)"
+              if [ "${wla_engine}" = "claude" ]; then
+                any_claude="true"
+              fi
+            done
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; ${WLA_ENGINE_ROLES} run codex."
+          fi
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1471,7 +1741,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -1608,6 +1878,8 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
+          _wla_label_retry() { if type gh_retry >/dev/null 2>&1; then gh_retry "$@"; else "$@"; fi; }
+          _wla_label_create() { local _wla_err; _wla_err=$(gh label create "$@" 2>&1 >/dev/null) && return 0; case "${_wla_err}" in *"already exists"*) return 0 ;; esac; _wla_label_retry gh label create "$@"; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -1693,8 +1965,8 @@ jobs:
               "attempt_count=${attempt_count}" \
               "recommended_resume_action=retrigger_log_analysis" \
               "timestamp=${timestamp}"
-            gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
-            gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
+            _wla_label_create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
+            GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
           }
 
           if [ -z "${REPORT_FILE}" ]; then
@@ -1751,6 +2023,19 @@ jobs:
           fi
 
           AUDIT_EXIT=0
+          # The codex command of this pass, unchanged (AI_ENGINE_LOG_AUDIT=codex, or
+          # no trusted engine support). Claude runs it as the fallback.
+          wla_codex_audit()
+          {
+            bash scripts/codex_heartbeat.sh \
+              --phase workflow_deep_audit \
+              --stdout-file "${SECTION_FILE}" \
+              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
+          }
+          wla_engine_ready()
+          {
+            [ -n "${CLAUDE_ENGINE_SUPPORT_DIR:-}" ] && [ -f "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh" ] && [ ! -L "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh" ]
+          }
           for attempt in $(seq 1 "${max_attempts}"); do
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
@@ -1758,12 +2043,34 @@ jobs:
             set +e
             # The agent reads workflow logs from every consumer repo; it runs in the
             # credential-free, network-isolated container (scripts/codex_isolated_exec.sh).
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_deep_audit \
-              --stdout-file "${SECTION_FILE}" \
-              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
+            # Engine selection (role LOG_AUDIT): Claude in the same isolated container
+            # via claude_run_selected, the codex command above as its fallback.
+            if wla_engine_ready; then
+              (
+                unset GH_TOKEN GITHUB_TOKEN TG_BOT_SECRET TG_ADMIN_CHAT_ID TG_CHAT_ID
+                # shellcheck disable=SC1091
+                if ! source "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh"; then
+                  echo "AI_ENGINE_FALLBACK role=LOG_AUDIT reason=engine_support_missing" >&2
+                  wla_codex_audit
+                  exit $?
+                fi
+                AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL}" AI_ENGINE_EFFORT_HINT="" \
+                  claude_run_selected LOG_AUDIT "${CODEX_PROMPT_FILE}" "${SECTION_FILE}" "${PWD}" -- wla_codex_audit
+              )
+            else
+              echo "AI_ENGINE_FALLBACK role=LOG_AUDIT reason=engine_support_missing" >&2
+              wla_codex_audit
+            fi
             AUDIT_EXIT=$?
             set -e
+            if [ "${AUDIT_EXIT}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): no codex fallback and no
+              # retries against a gated pool; this scheduled pass runs again
+              # on its next trigger.
+              echo "AI_ENGINE_CAPACITY_WAIT role=LOG_AUDIT outcome=deferred stage=workflow_log_analysis"
+              echo "::error::Claude pool at capacity (role LOG_AUDIT); stopping this pass without codex fallback or retries."
+              exit 80
+            fi
             if [ "${AUDIT_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
               break
             fi
@@ -1959,12 +2266,68 @@ jobs:
       api_redundancy_status: ${{ steps.api_redundancy.outputs.api_redundancy_status }}
     env:
       CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+      AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          WLA_ENGINE_ROLES: LOG_ANALYSIS
+          CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+        run: |
+          set -euo pipefail
+          # Claude engine (plan item 3d): this job's model roles run Claude
+          # through the engine root staged here from this workflow's own
+          # checkout; the codex CLI stays installed as the fallback. No work
+          # item, so no labels. This workflow is not reusable (schedule +
+          # dispatch only): its YAML, scripts and this checkout are one
+          # commit, so the checkout is the verified support source once HEAD
+          # is pinned to GITHUB_SHA and the run is on the default branch. A
+          # dispatch of any other ref runs codex, so unmerged engine support
+          # never fetches the Claude pool credential.
+          any_claude="false"
+          trusted_ref="false"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] ||
+             { [ -n "${DEFAULT_BRANCH}" ] && [ "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}" ]; }; then
+            trusted_ref="true"
+          fi
+          checkout_head="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)"
+          # shellcheck disable=SC1091
+          if [ "${trusted_ref}" = "true" ] && [ -n "${checkout_head}" ] && [ "${checkout_head}" = "${GITHUB_SHA}" ] &&
+             source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
+            for wla_role in ${WLA_ENGINE_ROLES}; do
+              wla_engine="$(SUPPORT_ROOT_DIR="${CLAUDE_ENGINE_SUPPORT_DEST}" ai_engine_for_role "${wla_role}" || echo codex)"
+              if [ "${wla_engine}" = "claude" ]; then
+                any_claude="true"
+              fi
+            done
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; ${WLA_ENGINE_ROLES} run codex."
+          fi
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -1985,7 +2348,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -2100,6 +2463,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
+          WLA_API_REDUNDANCY_EFFORT_HINT: ${{ vars.THINKING_LEVEL_ANALYSIS || 'high' }}
           MAX_CODEX_ATTEMPTS: ${{ vars.MAX_CODEX_ATTEMPTS || '3' }}
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue || '0' }}
@@ -2114,6 +2478,8 @@ jobs:
           # shellcheck source=/dev/null
           source scripts/gh_helpers.sh 2>/dev/null || true
           type emit_event >/dev/null 2>&1 || emit_event() { return 0; }
+          _wla_label_retry() { if type gh_retry >/dev/null 2>&1; then gh_retry "$@"; else "$@"; fi; }
+          _wla_label_create() { local _wla_err; _wla_err=$(gh label create "$@" 2>&1 >/dev/null) && return 0; case "${_wla_err}" in *"already exists"*) return 0 ;; esac; _wla_label_retry gh label create "$@"; }
 
           TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
           TRACKING_ISSUE_NUM=""
@@ -2199,8 +2565,8 @@ jobs:
               "attempt_count=${attempt_count}" \
               "recommended_resume_action=retrigger_log_analysis" \
               "timestamp=${timestamp}"
-            gh label create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
-            gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
+            _wla_label_create "ai:log-analysis-failed" --repo "${GITHUB_REPOSITORY}" --color "e11d48" --description "Workflow log analysis failed" >/dev/null 2>&1 || true
+            GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit "${TRACKING_ISSUE_NUM}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:log-analysis-failed" >/dev/null 2>&1 || true
           }
 
           if [ -z "${REPORT_FILE}" ]; then
@@ -2256,6 +2622,19 @@ jobs:
           fi
 
           API_EXIT=0
+          # The codex command of this pass, unchanged (AI_ENGINE_LOG_ANALYSIS=codex, or
+          # no trusted engine support). Claude runs it as the fallback.
+          wla_codex_api_redundancy()
+          {
+            bash scripts/codex_heartbeat.sh \
+              --phase workflow_api_redundancy \
+              --stdout-file "${SECTION_FILE}" \
+              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
+          }
+          wla_engine_ready()
+          {
+            [ -n "${CLAUDE_ENGINE_SUPPORT_DIR:-}" ] && [ -f "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh" ] && [ ! -L "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh" ]
+          }
           for attempt in $(seq 1 "${max_attempts}"); do
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
@@ -2263,12 +2642,34 @@ jobs:
             set +e
             # The agent reads workflow logs from every consumer repo; it runs in the
             # credential-free, network-isolated container (scripts/codex_isolated_exec.sh).
-            bash scripts/codex_heartbeat.sh \
-              --phase workflow_api_redundancy \
-              --stdout-file "${SECTION_FILE}" \
-              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
+            # Engine selection (role LOG_ANALYSIS): Claude in the same isolated container
+            # via claude_run_selected, the codex command above as its fallback.
+            if wla_engine_ready; then
+              (
+                unset GH_TOKEN GITHUB_TOKEN TG_BOT_SECRET TG_ADMIN_CHAT_ID TG_CHAT_ID
+                # shellcheck disable=SC1091
+                if ! source "${CLAUDE_ENGINE_SUPPORT_DIR}/scripts/ai_engine.sh"; then
+                  echo "AI_ENGINE_FALLBACK role=LOG_ANALYSIS reason=engine_support_missing" >&2
+                  wla_codex_api_redundancy
+                  exit $?
+                fi
+                AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL}" AI_ENGINE_EFFORT_HINT="${WLA_API_REDUNDANCY_EFFORT_HINT:-}" \
+                  claude_run_selected LOG_ANALYSIS "${CODEX_PROMPT_FILE}" "${SECTION_FILE}" "${PWD}" -- wla_codex_api_redundancy
+              )
+            else
+              echo "AI_ENGINE_FALLBACK role=LOG_ANALYSIS reason=engine_support_missing" >&2
+              wla_codex_api_redundancy
+            fi
             API_EXIT=$?
             set -e
+            if [ "${API_EXIT}" -eq 80 ]; then
+              # Claude capacity wait (issue #7370): no codex fallback and no
+              # retries against a gated pool; this scheduled pass runs again
+              # on its next trigger.
+              echo "AI_ENGINE_CAPACITY_WAIT role=LOG_ANALYSIS outcome=deferred stage=workflow_log_analysis"
+              echo "::error::Claude pool at capacity (role LOG_ANALYSIS); stopping this pass without codex fallback or retries."
+              exit 80
+            fi
             if [ "${API_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
               break
             fi

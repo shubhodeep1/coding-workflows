@@ -22,7 +22,22 @@ owner="${GITHUB_REPOSITORY%%/*}"
 repo="${GITHUB_REPOSITORY#*/}"
 live="$(gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}' -f owner="${owner}" -f repo="${repo}" -F number="${ISSUE_NUMBER}" 2>/dev/null)" || stub issue_unavailable
 verification="$(printf '%s' "${live}" | jq -c --arg login "${login}" '{body:.data.repository.issue.body,last_edited_at:.data.repository.issue.lastEditedAt,author_login:.data.repository.issue.author.login,labels:[.data.repository.issue.labels.nodes[].name],pipeline_login:$login}' | PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-scope verify --input-json /dev/stdin)" || stub scope_unverified
-[ "$(printf '%s' "${verification}" | jq -r .status)" = verified ] || stub scope_unverified
+status="$(printf '%s' "${verification}" | jq -r .status)"
+# #7444: like the implement preflight, accept a body that only the pipeline
+# login edited with an unchanged scope marker (heal-scope verify-edits).
+if [ "${status}" = edited ]; then
+	case "$(printf '%s' "${HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		''|true)
+			verification="$(gh api graphql -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body author{login} labels(first:100){nodes{name}} userContentEdits(first:100){totalCount pageInfo{hasNextPage} nodes{editor{login} deletedAt diff}}}}}' -f owner="${owner}" -f repo="${repo}" -F number="${ISSUE_NUMBER}" 2>/dev/null \
+				| jq -c --arg login "${login}" '.data.repository.issue as $i | {body: $i.body, author_login: $i.author.login, labels: [$i.labels.nodes[].name], pipeline_login: $login, edits: $i.userContentEdits.nodes, edits_total: $i.userContentEdits.totalCount, edits_has_next_page: $i.userContentEdits.pageInfo.hasNextPage}' \
+				| PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-scope verify-edits --input-json /dev/stdin)" || stub scope_unverified
+			status="$(printf '%s' "${verification}" | jq -r .status)"
+			;;
+		false) ;;
+		*) echo "::warning::HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED has invalid value; treating as off" ;;
+	esac
+fi
+[ "${status}" = verified ] || stub scope_unverified
 scratch="$(mktemp -d "${RUNNER_TEMP:-/tmp}/heal-evidence.XXXXXXXX")"
 trap 'rm -rf -- "${scratch}"' EXIT
 jobs_count=0

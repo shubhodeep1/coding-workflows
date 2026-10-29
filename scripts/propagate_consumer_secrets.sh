@@ -28,11 +28,23 @@
 #                           OPENROUTER_API_KEY TG_BOT_SECRET). Each value is
 #                           read from the environment variable of the same
 #                           name; an empty value is skipped (status=skipped_empty).
+#   PROPAGATE_ONLY_MISSING — `true` or `false` (default `false`, which keeps
+#                           the overwrite behaviour of push and dispatch runs).
+#                           When `true` (the workflow's weekly schedule), each
+#                           target's secret names are listed once before any
+#                           write and a secret that already exists is left
+#                           untouched (status=skipped_present). A failed
+#                           listing writes nothing to that target
+#                           (status=failed reason=presence_list_failed); it
+#                           never falls back to overwriting. Any other value
+#                           exits 1 before the first gh call.
 #
 # Output: one `CONSUMER_SECRETS_PROPAGATE repo=<owner/repo> secret=<NAME>
-# status=<set|skipped_empty|failed|verify_missing>` line per secret (plus
-# `repo=<owner/repo> status=verify_list_failed` when the post-write listing
-# itself fails) and a final `CONSUMER_SECRETS_PROPAGATE summary ...` line.
+# status=<set|skipped_empty|skipped_present|failed|verify_missing>` line per
+# secret (plus `repo=<owner/repo> status=verify_list_failed` when the
+# post-write listing itself fails, and `repo=<owner/repo> status=failed
+# reason=presence_list_failed` when the only-missing pre-write listing fails)
+# and a final `CONSUMER_SECRETS_PROPAGATE summary ...` line.
 # Per-repo failures do
 # not stop the loop (fail open across repos, like
 # scripts/workflow_retro_fanout.sh), but the exit status is 1 when any
@@ -46,12 +58,22 @@ cd "${REPO_ROOT}"
 CONSUMER_REPOS_FILE="${CONSUMER_REPOS_FILE:-${REPO_ROOT}/.github/ai/consumer_repos.json}"
 PROPAGATE_TARGETS="${PROPAGATE_TARGETS:-}"
 CONSUMER_SECRET_NAMES="${CONSUMER_SECRET_NAMES:-CHECK_TRIAGE_ISSUES_TOKEN GH_PAT OPENROUTER_API_KEY TG_BOT_SECRET}"
+PROPAGATE_ONLY_MISSING="${PROPAGATE_ONLY_MISSING:-false}"
 
 log()
 {
 	echo "CONSUMER_SECRETS_PROPAGATE $*"
 }
 
+case "${PROPAGATE_ONLY_MISSING}" in
+	true|false) ;;
+	*)
+		# Fail closed: a typo must neither overwrite consumer values by
+		# accident nor silently skip the run.
+		echo "::error::propagate-consumer-secrets: PROPAGATE_ONLY_MISSING must be true or false."
+		exit 1
+		;;
+esac
 if [ -z "${GH_TOKEN:-}" ]; then
 	echo "::error::propagate-consumer-secrets: GH_TOKEN is empty; the library GH_PAT is required to write consumer secrets."
 	exit 1
@@ -136,10 +158,26 @@ while IFS= read -r target; do
 		continue
 	fi
 	targets_total=$((targets_total + 1))
+	present=""
+	if [ "${PROPAGATE_ONLY_MISSING}" = "true" ]; then
+		# Only-missing mode (weekly backfill): read the consumer's secret
+		# names once before writing. An unreadable listing writes nothing;
+		# overwriting would replace values the consumer set on purpose.
+		if ! present="$(gh_retry gh secret list --repo "${target}" --json name --jq '.[].name' 2>/dev/null)"; then
+			log "repo=${target} status=failed reason=presence_list_failed"
+			failed_count=$((failed_count + 1))
+			continue
+		fi
+	fi
 	set_names=""
 	for secret_name in ${CONSUMER_SECRET_NAMES}; do
 		if [ -z "${!secret_name:-}" ]; then
 			log "repo=${target} secret=${secret_name} status=skipped_empty"
+			skipped_count=$((skipped_count + 1))
+			continue
+		fi
+		if [ "${PROPAGATE_ONLY_MISSING}" = "true" ] && printf '%s\n' "${present}" | grep -Fxq -- "${secret_name}"; then
+			log "repo=${target} secret=${secret_name} status=skipped_present"
 			skipped_count=$((skipped_count + 1))
 			continue
 		fi

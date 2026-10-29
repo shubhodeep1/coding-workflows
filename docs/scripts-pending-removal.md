@@ -53,6 +53,18 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/workflow_failure_heal_recovery_scan.sh` + the `recovery-candidates` / `recovery-scan` jobs and `schedule` trigger of `.github/workflows/workflow-failure-heal-intake.yml`
+
+- **Introduced in:** PR for #7333 (2026-10-13)
+- **Type:** single-use
+- **Removal trigger:** no open, pipeline-authored `ai:workflow-heal` issue without a scope marker for 30 consecutive days. The intake's creation guards (#7059, #6871) already refuse markerless bodies, so no new ones are filed.
+- **Removal preflight checks:**
+  - The `recovery-candidates` job of `workflow-failure-heal-intake.yml` logs `heal_scope_recovery outcome=scan reason=listed count=0` on every run of the last 30 days (`gh run list --workflow workflow-failure-heal-intake.yml --event schedule -R shubhodeep1/coding-workflows`).
+  - `gh issue list -R shubhodeep1/coding-workflows -l ai:workflow-heal -s open --json number,body --jq '[.[] | select(.body | contains("ai:workflow-heal-scope") | not)] | length'` prints `0`.
+  - The `recovery-scan` job logs of the last 30 days contain no `heal_scope_recovery outcome=replaced` or `outcome=attempt_failed` line.
+  - The removal PR also drops the `recovery_scan` origin and `REPORT_AUTH=reconstructed` from `scripts/workflow_failure_heal_intake.sh`, `heal-scope-recovery reconstruct` / `scan-marker` from `scripts/workflow_failure_heal.py`, `tests/test_workflow_failure_heal_recovery_scan.py` (and its `ci.yml` entry) and the `docs/INVENTORY.md` line.
+- **Owner:** @shubhodeep1
+
 ### `scripts/sync_claude_live_copies.py` + `.github/workflows/sync-claude-live-copies.yml`
 
 - **Introduced in:** #6118 (2026-10-05)
@@ -79,6 +91,29 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_workflow_failure_heal.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
+### `scripts/workflow_failure_heal_queue.sh` + the "Wait for the heal intake queue" / "Leave the heal intake queue" steps of `.github/workflows/workflow-failure-heal-intake.yml`
+
+- **Introduced in:** the PR "Queue heal intake reports instead of cancelling them" (2026-10-23)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually (or together with the heal intake in the entry above)
+- **Removal preflight checks:**
+  - `rg -n 'workflow_failure_heal_queue\.sh' .github/workflows` returns nothing, and both jobs of `workflow-failure-heal-intake.yml` use the shared `workflow-failure-heal-intake` concurrency group again (the `HEAL_INTAKE_QUEUE_ENABLED=false` behaviour).
+  - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:heal-intake-queue"` returns at most the queue issue, and its comments hold no ticket younger than `HEAL_INTAKE_QUEUE_LEASE_SECONDS` (10800 s), so no run is waiting; then close that issue.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py` passes after `tests/test_workflow_failure_heal_queue.py` and the `heal-queue` subcommand are removed.
+- **Owner:** @shubhodeep1
+
+### `scripts/workflow_failure_heal_non_retryable_backfill.sh` + the "Backfill non-retryable autofix failure reports" step of `.github/workflows/review_autofix_sweep.yml` + the `non-retryable-backfill` job of `workflow-templates/ai-review.yml`
+
+- **Introduced in:** the PR for #7291 (2026-10-14)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually (or together with the review/autofix reporter and heal intake in the entry above)
+- **Removal preflight checks:**
+  - The last 10 runs of `review_autofix_sweep.yml` log `WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL outcome=complete ... dispatched=0` and no `pr=<n> outcome=skip reason=tick_cap` line (`gh run view <id> --log | grep WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL`), so no undiagnosed non-retryable failure is still waiting on the backfill.
+  - The same runs log no `outcome=warn reason=listing_truncated` line, or every rotated window has been covered with `dispatched=0`.
+  - `rg -n 'workflow_failure_heal_non_retryable_backfill\.sh' .github/workflows workflow-templates` shows the sweep step and the consumer job removed first, and consumers have synced an `ai-review.yml` without the job.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py` passes after the backfill selector and `tests/test_workflow_failure_heal_non_retryable_backfill.py` are removed.
+- **Owner:** @shubhodeep1
+
 ### `scripts/promote_main_cycle.sh` + `scripts/apply_analysis_on_main.sh` + the `cycle` job of `.github/workflows/promote-main-to-stable.yml`
 
 - **Introduced in:** #4134 (2026-09-19)
@@ -101,6 +136,17 @@ Copy this block when adding a new entry:
   - `git ls-remote origin refs/heads/stable 'refs/tags/stable^{}'` prints the same commit for both refs (nothing on the `stable` branch is waiting for a release).
   - `gh api "repos/shubhodeep1/coding-workflows/actions/workflows/test-and-mark-stable.yml/runs?per_page=1"` shows the latest run was not dispatched by the schedule, i.e. a replacement release path is live.
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_auto_release_stable.py` returns exit code 0.
+- **Owner:** @shubhodeep1
+
+### `scripts/propagate_consumer_secrets.sh` + `.github/workflows/propagate-consumer-secrets.yml`
+
+- **Introduced in:** #6709 (2026-10-08); weekly only-missing schedule added in #6712 (2026-10-08)
+- **Type:** supervisor
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh workflow view propagate-consumer-secrets.yml -R shubhodeep1/coding-workflows` shows the push trigger on `.github/ai/consumer_repos.json` and the weekly schedule.
+  - For each entry in `.github/ai/consumer_repos.json`, `gh secret list -R <consumer> --json name` lists `CHECK_TRIAGE_ISSUES_TOKEN`, `GH_PAT`, `OPENROUTER_API_KEY` and `TG_BOT_SECRET`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_propagate_consumer_secrets.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
 ### `scripts/workflow_retro.py`
@@ -174,6 +220,17 @@ Copy this block when adding a new entry:
   - The feature is on by default, so removal requires confirming no consumer still wants it: for every consumer in `.github/ai/consumer_repos.json`, `gh variable list --repo <consumer>` shows `CHECK_FAILURE_TRIAGE_ENABLED` is explicitly `false` (the repo has opted out) before removing it.
 - **Owner:** @shubhodeep1
 
+### `.github/workflows/check-failure-triage-historical.yml`
+
+- **Introduced in:** #7093 (2026-10-10)
+- **Type:** single-use
+- **Removal trigger:** the `ai:check-triage` issue for PR #6611's CI run 37922279826 (job 113792812346) is closed. The workflow already skips itself on every push once that issue exists; removing it also lets the historical inputs of `check_failure_triage.yml` stay unused until another historical follow-up needs them.
+- **Removal preflight checks:**
+  - `gh issue list --label ai:check-triage --search 37922279826 --state all -R shubhodeep1/coding-workflows` shows a closed issue whose body links run 37922279826.
+  - `gh run list --workflow check-failure-triage-historical.yml --limit 5 -R shubhodeep1/coding-workflows` shows the latest runs ending in the guard job with `HISTORICAL_TRIAGE skip reason=already_filed` (no `repro` or `triage` job ran).
+  - `rg -n 'check-failure-triage-historical' .github/ docs/ agents.md tests/` lists only this workflow, its inventory line, the generated TREE block, its entry in `tests/test_workflow_checkout_integration_ref_audit.py` and `tests/test_check_failure_triage_historical.py` (plus that test's line in `ci.yml`), which are removed together.
+- **Owner:** @shubhodeep1
+
 ### `.github/workflows/workspace-cache-maintenance.yml`
 
 - **Introduced in:** #3066 (2026-06-02)
@@ -183,6 +240,18 @@ Copy this block when adding a new entry:
   - `gh workflow view workspace-cache-maintenance.yml -R shubhodeep1/coding-workflows` confirms the workflow still exists and still has a scheduled nightly cron.
   - `gh run list --workflow workspace-cache-maintenance.yml --limit 5 -R shubhodeep1/coding-workflows` shows recent scheduled/manual runs completing with `success`.
 - `gh cache list --repo shubhodeep1/coding-workflows --limit 100 --key workspace-v1- --sort created_at --order desc` still shows bounded workspace cache families (newest 3 retained per family) so the maintenance job remains operationally useful.
+- **Owner:** @shubhodeep1
+
+### `scripts/assemble_agents.py`
+
+- **Introduced in:** claude/elegant-mendel-5pli2i-agents-fragments (2026-10-10)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. The script is the only thing that folds `agents.d/` fragments into `agents.md` (this repo) and `AGENTS.md` (consumers); removing it without a replacement strands every fragment and hides the documentation it carries from the next release.
+- **Removal preflight checks:**
+  - `rg -n 'assemble_agents\.py' .github/workflows/ scripts/build_static_context.sh` returns no hits — no release step, consumer sync, CI check, staging list or static-context reader still uses it.
+  - `ls -A agents.d/` shows only `README.md` in this repo, and the same holds for every repo in `.github/ai/consumer_repos.json` — no unassembled fragment would be stranded.
+  - `rg -n 'agents\.d' CLAUDE.md prompts/mode-implement.txt prompts/_templates/mode-implement.txt` returns no hits — §30 and both implement prompts have been migrated, so agents are no longer told to write fragments nothing will fold.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_assemble_agents.py tests/test_agents_fragment_contract.py` — both suites removed or migrated with the script.
 - **Owner:** @shubhodeep1
 
 ### `scripts/assemble_changelog.py`
@@ -225,4 +294,69 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
+- **Owner:** @shubhodeep1
+
+### `scripts/ai_engine_fallback_report.sh`
+
+- **Introduced in:** #6705 (2026-10-07), plan item 3e of `docs/plans/unattended-claude-pipeline-completion-plan.md` (Refs #6664)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `git grep -n ai_engine_fallback_report.sh .github/workflows` returns no callers.
+  - `git grep -n AI_ENGINE_FALLBACK_POLICY scripts/ai_engine.sh` returns no matches (the fallback policy was removed).
+  - `gh issue list --repo shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search engine_fallback_refused` returns no issues.
+- **Owner:** @shubhodeep1
+
+### `workflow-templates/.claude/hooks/prepush_affected_tests.py`
+
+- **Introduced in:** PR for #7137 (2026-10-11)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the pre-push affected-test gate: the interactive `PreToolUse` hook and stamp, and (from plan phases P3-P5) every AI push path run it. Removing it drops the only pre-push test run.
+- **Removal preflight checks:**
+  - `grep -rn prepush_affected_tests .github/workflows scripts workflow-templates` returns no callers other than this file and `scripts/prepush_test_gate_run.sh`.
+  - `workflow-templates/.claude/settings.json` and `.claude/settings.json` no longer register the `prepush_affected_tests.py hook` command, in this repo and in every repo in `.github/ai/consumer_repos.json`.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_prepush_affected_tests.py` is removed or migrated with the module.
+- **Owner:** @shubhodeep1
+
+### `scripts/prepush_test_gate_run.sh`
+
+- **Introduced in:** PR for #7137 (2026-10-11)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the only credential-free container path for running PR tests before an AI push (plan phases P3-P5 call it).
+- **Removal preflight checks:**
+  - `grep -rn prepush_test_gate_run .github/workflows scripts workflow-templates` returns no callers.
+  - `docs/INVENTORY.md` row and the `tests/test_prepush_affected_tests.py` wrapper tests are removed in the same PR.
+- **Owner:** @shubhodeep1
+
+### `scripts/implement_step_prepush_test_gate.sh`
+
+- **Introduced in:** PR for #8190 (2026-10-26)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the implement-side caller of the pre-push affected-test gate (plan phase P3); removing it stops AI implement runs from testing their change before push.
+- **Removal preflight checks:**
+  - `grep -rn implement_step_prepush_test_gate .github/workflows scripts` returns no callers other than this file.
+  - `tests/test_implement_prepush_test_gate.py` is removed in the same PR.
+  - The README note "Pre-push affected-test gate (in-job, issue #8190)" and the `PREPUSH_TEST_GATE_*` variable rows are removed in the same PR.
+- **Owner:** @shubhodeep1
+
+### `scripts/review_autofix_step_prepush_test_gate.sh`
+
+- **Introduced in:** PR for #8201 (2026-10-26)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It runs the pre-push affected-test gate for review autofix, the conflict resolver and the workflow-heal editor (plan phase P4); removing it stops those paths from testing their change before push.
+- **Removal preflight checks:**
+  - `grep -rn review_autofix_step_prepush_test_gate .github/workflows scripts` returns no callers other than this file (today: `review_autofix.yml`, `scripts/review_conflict_resolve.sh`, `scripts/heal_isolated_implement.sh`, `scripts/stage_workflow_support.sh`).
+  - `tests/test_review_prepush_test_gate.py` is removed in the same PR, and the "Pre-push affected-test gate" entry leaves `tests/review_autofix_step_scripts.py`.
+  - `grep -n -- '--repair-turn' scripts/review_apply_fixes.sh` and `grep -n -- '--extra-allowed-file' scripts/check_resolver_diff.sh` are either removed with it or still have another caller.
+- **Owner:** @shubhodeep1
+
+### `scripts/consumer_health_check.sh` + `scripts/consumer_health_check.py` (daily step in `.github/workflows/orchestrate_poll.yml`)
+
+- **Introduced in:** #7415 (2026-10-15)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh api 'repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai%3Aconsumer-health&per_page=100' --jq length` returns `0` (no consumer problem is still being tracked), or a replacement check owns those issues.
+  - `rg -n 'consumer_health_check' .github/workflows scripts --glob '!scripts/consumer_health_check.*'` lists only the four `orchestrate_poll.yml` steps, so they are removed together with the scripts.
+  - A replacement that watches the same four signals (inactivity-disabled wrappers, manually disabled wrappers, silent pollers, tracking issues near the comment cap) is wired into the scheduler and has run green for 7 days.
 - **Owner:** @shubhodeep1

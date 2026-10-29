@@ -348,6 +348,58 @@ def test_prepare_deps_node_modules_remain_in_prep_root(sandbox):
 		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
 
 
+def _nested_worker(repo: Path) -> Path:
+	worker = repo / "cloudflare" / "funtoken-competition-worker"
+	worker.mkdir(parents=True)
+	(worker / "package.json").write_text('{"name":"worker"}\n')
+	(worker / "package-lock.json").write_text("{}\n")
+	(worker / "index.ts").write_text("export {}\n")
+	return worker
+
+
+def test_prepare_deps_installs_a_nested_node_project_into_the_sandbox_only(sandbox):
+	# tele-funtoken-msg-scoring#4770: the Worker's own package.json was never installed.
+	_nested_worker(sandbox["repo"])
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DEPS_CREATE_NODE_MODULES": "1"})
+	prep = run_helper(sandbox, "prepare", "--deps")
+	assert prep.returncode == 0, prep.stderr
+	assert "stage-deps nested_node=1 nested_over_limit=0" in prep.stderr
+	assert "handoff-nested-deps moved=1" in prep.stderr
+	root = Path(prep.stdout.strip())
+	try:
+		(runner,) = docker_runs(sandbox["docker_log"])
+		assert runner["argv"][runner["argv"].index("--network") + 1] == "none"
+		assert not any(f"src={root}/work" in m for m in mounts_of(runner))
+		assert "index.ts" not in json.dumps(runner)
+		installed = root / "work" / "cloudflare" / "funtoken-competition-worker" / "node_modules" / "marker"
+		assert installed.read_text() == "nested 0\n"
+		assert "cloudflare/funtoken-competition-worker/node_modules" in json.loads((root / "manifest.json").read_text())["prep_roots"]
+		assert not (root / "nested-deps.json").exists()
+		write_fake_codex(sandbox, action="edit")
+		result = run_helper(sandbox, "run", "--mode", "workspace", "--root", str(root), *CODEX_ARGS)
+		assert result.returncode == 0, result.stderr
+		assert not (sandbox["repo"] / "cloudflare" / "funtoken-competition-worker" / "node_modules").exists()
+		assert (sandbox["repo"] / "new_file.py").exists()
+	finally:
+		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+def test_prepare_deps_nested_handoff_ignores_a_rewritten_stage_list(sandbox):
+	_nested_worker(sandbox["repo"])
+	# A plausible redirect target: a package.json but no lockfile, so it is
+	# not a nested project of its own and only a rewritten list could name it.
+	(sandbox["repo"] / "src" / "package.json").write_text('{"name":"src"}\n')
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DEPS_CREATE_NODE_MODULES": "1", "FAKE_DEPS_TAMPER_NESTED": "1"})
+	prep = run_helper(sandbox, "prepare", "--deps")
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	try:
+		assert (root / "work" / "cloudflare" / "funtoken-competition-worker" / "node_modules" / "marker").is_file()
+		assert not (root / "work" / "src" / "node_modules").exists()
+	finally:
+		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
 def test_prepare_deps_failure_remains_unverified_warning(sandbox):
 	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DEPS_FAIL": "1"})
 	prep = run_helper(sandbox, "prepare", "--deps")
@@ -566,3 +618,181 @@ def test_claude_options_are_refused_for_codex_and_prepare(sandbox, claude_engine
 	write_fake_codex(sandbox)
 	proc = run_helper(sandbox, "run", "--mode", "read-only", "--claude-home", str(sandbox["runner_temp"] / "h"), *CODEX_ARGS)
 	assert proc.returncode == 1 and "--claude-home needs --engine claude" in proc.stderr
+
+
+# --- bounded image-build retries (issue #7196) ---------------------------------------
+
+def builds_of(sandbox):
+	return [entry for entry in read_docker_log(sandbox["docker_log"]) if entry["argv"][:1] == ["build"]]
+
+
+RETRY_ENV = {"CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS": "3", "CODEX_ISOLATED_IMAGE_BUILD_RETRY_SLEEP_SECS": "0"}
+
+
+def test_image_build_retry_recovers_a_run(sandbox):
+	write_fake_codex(sandbox)
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL_TIMES": "2"})
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS, env_extra=RETRY_ENV)
+	assert proc.returncode == 0, proc.stderr
+	assert len(builds_of(sandbox)) == 3
+	assert proc.stderr.count("CODEX_ISOLATION image_build attempt=") == 3
+	assert "attempt=1/3 outcome=retry" in proc.stderr and "attempt=2/3 outcome=retry" in proc.stderr
+	assert "attempt=3/3 outcome=ok" in proc.stderr
+	assert proc.stdout.strip() == "FAKE_CODEX_OUTPUT"
+
+
+def test_image_build_retry_recovers_prepare_deps(sandbox):
+	(sandbox["repo"] / "requirements.txt").write_text("example==1\n")
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL_TIMES": "2"})
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]), "--deps", env_extra=RETRY_ENV)
+	assert prep.returncode == 0, prep.stderr
+	assert len(builds_of(sandbox)) == 3
+	assert "attempt=3/3 outcome=ok" in prep.stderr
+	assert docker_runs(sandbox["docker_log"]), "the dependency container runs after the retried build"
+	assert run_helper(sandbox, "cleanup", "--root", prep.stdout.strip()).returncode == 0
+
+
+def test_image_build_retry_exhausted_fails_closed_and_removes_the_root(sandbox):
+	(sandbox["repo"] / "requirements.txt").write_text("example==1\n")
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL": "1"})
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]), "--deps", env_extra=RETRY_ENV)
+	assert prep.returncode == 1
+	assert len(builds_of(sandbox)) == 3
+	assert "sandbox image build failed" in prep.stderr
+	assert "attempt=3/3 outcome=fail" in prep.stderr
+	assert prep.stdout.strip() == ""
+	assert not list(sandbox["runner_temp"].glob("codex-isolated-*"))
+	assert not docker_runs(sandbox["docker_log"])
+
+
+def test_image_build_is_attempted_once_by_default(sandbox):
+	write_fake_codex(sandbox)
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL": "1"})
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS)
+	assert proc.returncode == 1
+	assert len(builds_of(sandbox)) == 1
+	assert "image_build attempt=" not in proc.stderr
+	assert codex_records(sandbox) == []
+
+
+@pytest.mark.parametrize("value, expected_builds, warned", [("abc", 1, True), ("0", 1, True), ("9", 5, False)])
+def test_image_build_attempts_are_validated_and_capped(sandbox, value, expected_builds, warned):
+	write_fake_codex(sandbox)
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL": "1"})
+	env = {"CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS": value, "CODEX_ISOLATED_IMAGE_BUILD_RETRY_SLEEP_SECS": "0"}
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS, env_extra=env)
+	assert proc.returncode == 1
+	assert len(builds_of(sandbox)) == expected_builds
+	assert ("image_build invalid_attempts" in proc.stderr) is warned
+
+
+def test_non_build_isolation_failures_are_not_retried(sandbox):
+	write_fake_codex(sandbox)
+	unsafe = sandbox["repo"] / "comma,path"
+	unsafe.mkdir()
+	proc = run_helper(sandbox, "run", "--mode", "read-only", "--workdir", str(unsafe), *CODEX_ARGS, env_extra=RETRY_ENV)
+	assert proc.returncode == 1 and "workdir path rejected" in proc.stderr
+	assert builds_of(sandbox) == []
+	assert "image_build attempt=" not in proc.stderr
+
+
+def test_claude_engine_build_failure_stays_single_attempt(sandbox, claude_engine):
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DOCKER_BUILD_FAIL": "1"})
+	proc = run_helper(sandbox, *claude_engine["args"], *CLAUDE_ARGS)
+	assert proc.returncode == 75, proc.stderr
+	assert "CODEX_ISOLATION unavailable engine=claude reason=image_build_failed" in proc.stderr
+	assert len(builds_of(sandbox)) == 1
+	assert claude_records(claude_engine) == []
+
+
+# --- gawk in the generated image context (issue #7359) -------------------------------
+
+@pytest.mark.parametrize("engine", ["codex", "claude"])
+def test_image_context_installs_gawk(tmp_path, engine):
+	out = tmp_path / engine
+	out.mkdir()
+	subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "codex_isolated_exec.sh"), "image-context", "--engine", engine, "--out", str(out)],
+		check=True,
+	)
+	(apt_line,) = [line for line in (out / "Dockerfile").read_text().splitlines() if "apt-get install" in line]
+	tokens = apt_line.split()
+	for package in ("gawk", "ripgrep", "build-essential"):
+		assert package in tokens, apt_line
+
+
+# --- static-context files under /support (issue #8262) -------------------------------
+
+
+def _static_context_file(sandbox, name="agents_canonical.md", text="# canon\n\n## One\nbody\n"):
+	runtime = sandbox["runner_temp"] / "runtime"
+	runtime.mkdir(exist_ok=True)
+	path = runtime / name
+	path.write_text(text)
+	return path
+
+
+def test_static_context_file_is_copied_under_the_read_only_support_mount(sandbox):
+	write_fake_codex(sandbox)
+	canonical = _static_context_file(sandbox)
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]))
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	proc = run_helper(sandbox, "run", "--mode", "workspace", "--root", str(root), *CODEX_ARGS,
+		env_extra={"CODEX_ISOLATED_STATIC_CONTEXT_FILES": f"{canonical}\n"})
+	assert proc.returncode == 0, proc.stderr
+	assert "CODEX_ISOLATION static_context files=1" in proc.stderr
+	assert str(canonical) not in proc.stderr
+	copied = root / "support" / "static-context" / "agents_canonical.md"
+	assert copied.read_text() == canonical.read_text()
+	run_entry = docker_runs(sandbox["docker_log"])[-1]
+	support_mounts = [m for m in mounts_of(run_entry) if "dst=/support," in m or m.endswith("dst=/support")]
+	assert support_mounts == [f"type=bind,src={root}/support,dst=/support,readonly"]
+	assert not any("static-context" in m for m in mounts_of(run_entry))
+	assert not (sandbox["repo"] / "agents_canonical.md").exists()
+	for entry in read_docker_log(sandbox["docker_log"]):
+		assert "CODEX_ISOLATED_STATIC_CONTEXT_FILES" not in entry["env"]
+	assert "CODEX_ISOLATED_STATIC_CONTEXT_FILES" not in codex_records(sandbox)[-1]["env"]
+	assert not any("CODEX_ISOLATED_STATIC_CONTEXT_FILES" in arg for arg in run_entry["argv"])
+
+	# A later attempt on the same root without the variable keeps no stale copy.
+	proc = run_helper(sandbox, "run", "--mode", "workspace", "--root", str(root), *CODEX_ARGS)
+	assert proc.returncode == 0, proc.stderr
+	assert not (root / "support" / "static-context").exists()
+	assert "static_context" not in proc.stderr
+	assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+@pytest.mark.parametrize("case", ["symlink", "name", "duplicate", "missing", "directory"])
+def test_static_context_file_rejections_fail_closed(sandbox, case):
+	write_fake_codex(sandbox)
+	canonical = _static_context_file(sandbox)
+	if case == "symlink":
+		link = canonical.parent / "link" / "agents_canonical.md"
+		link.parent.mkdir()
+		link.symlink_to(canonical)
+		value = str(link)
+	elif case == "name":
+		value = str(_static_context_file(sandbox, name="secrets.md"))
+	elif case == "duplicate":
+		other = canonical.parent / "other"
+		other.mkdir()
+		(other / "agents_canonical.md").write_text("again\n")
+		value = f"{canonical}\n{other / 'agents_canonical.md'}"
+	elif case == "missing":
+		value = str(canonical.parent / "agents.rendered.md")
+	else:
+		directory = canonical.parent / "dir" / "agents.rendered.md"
+		directory.mkdir(parents=True)
+		value = str(directory)
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS,
+		env_extra={"CODEX_ISOLATED_STATIC_CONTEXT_FILES": value})
+	assert proc.returncode == 1
+	assert "::error::CODEX_ISOLATION static context file rejected" in proc.stderr
+	assert not docker_runs(sandbox["docker_log"])
+	assert not codex_records(sandbox)
+
+
+def test_static_context_marker_is_advertised():
+	text = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text()
+	assert "# supports: CODEX_ISOLATED_STATIC_CONTEXT_FILES" in text.splitlines()

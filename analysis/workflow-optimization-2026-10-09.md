@@ -1,0 +1,221 @@
+## Executive Summary
+
+- **Fix metering before using it to set cost priorities.** In `shubhodeep1/coding-workflows`, failed implement runs `37856245085`, `37861086888`, and `37862435230` account for 6,610,695 of 6,610,697 reported Codex tokens. Their matches come from *echoed examples in workflow shell code*, not verified model usage. Add producer-side structured usage events and exclude echoed commands from parsing. **Impact:** removes a material false cost signal; **confidence: high**.
+- **Review scheduling and execution dominate elapsed time.** Across 183 review/autofix runs, p50 is 483 seconds and p95 is 2,143.5 seconds. In failed runs `37855612051` and `37863790469`, the gate finished roughly 24 and 28 minutes before the reviewer job began waiting for a runner. Log gate-ready, job-queued, runner-picked, and concurrency-state timestamps before changing dispatch behavior. **Potential impact:** up to the observed gap on affected runs if avoidable serialization is confirmed; **confidence: medium**.
+- **CI has a concentrated regression.** Seven of 16 CI runs failed; five failed the merged-PR guard’s `test_template_copies_are_identical` (`37860827117`, `37864440428`, `37864932438`, `37864981340`, `37865800241`). Restore template parity and run that contract early; do not weaken the guard. **Impact:** addresses five observed failures; **confidence: high**.
+- **Review-workspace initialization needs an earlier, classified failure.** Three reviews (`37855612051`, `37860320131`, `37863790469`) reached *Checkout PR head branch* before reporting that the review workspace was unavailable. Record whether the workspace path was unset, absent, or removed, and validate it immediately after creation. **Impact:** avoids later setup and makes recurrence diagnosable; **confidence: high**.
+- **MCP and token totals also contain duplicate log events.** The full logs contain six distinct Semble queries totaling 76,213 bytes, while their collector rows count nine and 115,152 bytes. Aggregate-job and individual-step copies have slightly different timestamps, defeating exact-line deduplication. Deduplicate by event identity, not whole timestamped line. **Impact:** corrects measured volume rather than saving runtime; **confidence: high**.
+
+## Speed Optimizations
+
+1. **Critical path — explain the gate-to-review gap first.** Review gate logs end at approximately 22:59:39 UTC in `37855612051`, 23:49:36 in `37860320131`, and 00:17:01 in `37863790469`; reviewer-system logs next show runner waits beginning about **24, 16, and 28 minutes** later. The cause is *not established*: dependency or concurrency delay may account for the gap, and `run_started_at` equals `created_at` in all 1,000 collector rows, so it cannot separate queueing. Emit `gate_ready_at`, `job_queued_at`, `runner_picked_at`, concurrency key, PR number, and head identifier as bounded diagnostic fields. If these show redundant same-head dispatches, coalesce only those dispatches while preserving forced and changed-head reviews. **Estimated saving:** up to 16–28 minutes per confirmed redundant wait; **risk: medium** until state transitions are measured.
+2. **Critical path — fail earlier on missing review workspace.** The three checkout failures above lasted 2,199–2,489 seconds end-to-end, although the workspace error occurs inside the reviewer job; those totals must **not** be presented as checkout-step time. Validate `WORKSPACE_PATH` immediately after workspace setup, logging a categorical reason and setup-step duration before memory retrieval or agent preparation. **Estimated saving:** subsequent setup time, plausibly minutes rather than the entire run duration; measure it with the new timestamps. **Risk: low**; keep the existing refusal to start agents.
+3. **Failed-CI path — surface template drift sooner.** CI runs `37864440428` and `37865800241` took 696 and 589 seconds and failed the same guard-copy assertion. Put the existing parity check in the earliest applicable CI stage, without dropping later tests. **Estimated saving:** up to the remaining CI time on drifted commits, not on passing runs; **risk: low**.
+4. **Micro-optimization — retain lazy Semble loading.** Six distinct full-log bootstraps took 210,401 ms combined; reviewer queries themselves logged 404–604 ms. In `37859850305`, bootstrap was 36,406 ms against a 2,147-second run. Log install and index cache reuse before optimizing startup; disabling context retrieval is not supported by this latency evidence. **Estimated saving:** at most tens of seconds per affected run; **risk: low** for reuse, higher for removal.
+
+## Cost Optimizations
+
+1. **Repair cost attribution before model or budget changes.** `scripts/cost_audit.py` matches “tokens used” inside echoed shell examples: each of the three failed implement logs contributes the same spurious 1,322,139-token pattern, with two runs counted twice. Emit a structured `CODEX_USAGE` event from the actual CLI result, keyed by run, attempt, and invocation; test against echoed-script fixtures. **Estimated saving:** none directly; **accounting correction:** at least 6,610,695 reported tokens cannot be treated as verified usage. Dollar savings and actual Codex consumption remain unknown. **Quality risk:** none.
+2. **Prevent work that cannot pass authorization or task preflight.** Implement runs `37856245085` and `37862435230` failed after model work when automation-path grants rejected respectively three and two staged paths; `37861086888` ended in a deliberate BLOCKED verdict because the expected target was not in its checkout. Check branch/task identity and permitted path scope *before* model execution where those inputs are knowable. Log preflight decision, permitted-scope category, and elapsed time. **Estimated saving:** one otherwise avoidable model attempt per confirmed preflight mismatch; tokens and dollars are unquantifiable with current metering. **Quality risk:** low if the existing final guard remains authoritative; never fail open on a denial.
+3. **Measure, then trim repeated review context.** Review runs `37856496606`, `37859850305`, and `37860827535` contain **five distinct** review `CONTEXT_BUDGET_WARN` events, with logged prompts from 142,051 to 191,462 tokens. The assembled collector counts eight because three events are duplicated. Log stable-prefix bytes, dynamic-context bytes, retrieved-context bytes, and per-pass prompt size; move changing status/noise behind reusable instructions and trial bounded context trimming against review findings. **Illustrative saving:** a verified 5% reduction on a 190,728-token warned prompt would be about 9,536 prompt tokens; this is a scenario, **not** an observed saving. **Quality risk: medium**; compare findings before rollout.
+4. **Do not change model tiers on this evidence alone.** `37866817342` configured a high-reasoning unblock judge, while review logs show multiple configured models; the assembled OpenRouter usage has 32 unavailable of 101 counted calls, and counted lines can repeat. Add unique invocation IDs, model, reasoning setting, outcome, and provider usage availability. Only then trial lower reasoning for non-decision summaries, retaining the judge and security decisions. **Estimated saving:** unknown pending corrected per-invocation costs; **quality risk: medium**.
+5. **Keep MCP contributions selective.** Distinct Semble `reviewer-context` queries supplied 70,534 logged bytes and 30 sources across five full-log queries; one `conflict-resolver-context` query supplied 5,679 bytes and five sources in `37860118534`. Logged `static_dup_bytes=0` on reviewer events is encouraging, but there is no comparison proving reduced prompt expansion or improved findings. Record included-versus-discarded bytes and downstream prompt delta per target before reducing chunks. Serena has zero queries, tool calls, and response bytes, so no replacement benefit or low-value-response problem can be assessed. **Estimated saving:** unknown; **quality risk: medium** for context cuts.
+
+## Reliability Improvements
+
+1. **Restore guard-copy parity without bypassing protection.** The five CI failures named in the executive summary assert that merged-PR guard copies differ. Root-cause category: **repository/template drift**. Sync the copies and retain the equality test; log both copy identifiers and the first differing location, without dumping file contents. **Expected impact:** remove the repeated CI failure mode; **rollback:** revert the synchronization, never disable the guard.
+2. **Classify and fail early on review workspace loss.** Three `review / codex-agent` checkout failures report “Review workspace is unavailable.” Root-cause category: **workspace setup or lifecycle**, not demonstrated Git fetch failure. Log setup result and categorical missing-path reason at the setup boundary; allow a bounded retry only for a demonstrated transient creation failure. **Expected impact:** earlier detection and targeted recovery; **fail-open:** none when workspace integrity is uncertain.
+3. **Preserve authorization and isolation stops.** Implement runs `37856245085`/`37862435230` had grant denials; review run `37860118534` stopped because a host-only conflicted path required manual merge and resolver isolation was unavailable (`reason=sandbox_path_host_only`). Root-cause categories: **scope authorization** and **conflict isolation**. Log denial counts, scope category, isolation decision, and handoff state; route the latter to manual resolution. **Expected impact:** fewer blind redispatches, not automatic clearance; **rollback/fail-open:** retain both hard stops.
+4. **Separate network transience from application failures.** `37862635273` failed *Install OpenCode CLI* with npm `ECONNRESET`. Add a small bounded retry around that installation, logging attempt, failure class, and backoff, while retaining a terminal failure. **Expected impact:** reduce reruns for transient install errors; **risk: low**.
+5. **Treat Semble fallbacks by context, not one global alarm.** The assembled 48 fallbacks comprise **44 counted CI contract-test events** targeting `overflow` with an intentionally missing binary and **four runtime** `binary-unavailable` events, all in implement run `37856245085` on `overflow`. Full-log inspection finds 28 distinct CI test events: duplicate aggregate/step logs explain the higher count. The four runtime events are healthy *fail-open behavior* for that run but, with zero successful implement queries observed, warrant checking whether the optional binary was staged; they do **not** prove a broadly broken rollout. Add one per-run availability result and preserve the legacy-context fallback. Serena emitted no probe, query, or fallback; a recent review (`37866853445`) reports it disabled, so zero probe failures are **not** proof of availability.
+6. **Interpret pressure signals narrowly.** `BREAK_GLASS` is zero in available telemetry: no observed rubric override. The five distinct review budget warnings indicate **prompt-size pressure**, not a demonstrated policy failure. Log warning by invocation and unique prompt identifier; avoid counting aggregate and step copies twice.
+
+## AI Memory Health
+
+Across **14 deduplicated `retrieve` events** in the available deep-dive logs, **14/14 selected records**; average `estimated_tokens` was **1,430** against an average **1,443-token budget**. Keyword methods were **11 `llm`, three `plain`, zero `none`**. No sampled retrieve returned zero records or reported `enabled: false` or `fail_open: true`. This is good sampled retrieval coverage, not a 1,000-run hit-rate estimate.
+
+Writes merit a small diagnostic addition: `review_autofix` run `37860320131` logged three push attempts for both its start and failure events, and failed-install run `37862635273` logged four for its failure event. Emit retry cause, backoff time, and final push outcome once per operation; alert on repeated high attempts without turning memory writes into a workflow blocker. A summarized, non-deep-dive status-sync run (`37866165895`) reports successful `finalize-task` and two push attempts, but its underlying step log is not in this archive.
+
+## GH API Call Audit
+
+- **Highest observed budget signal:** `GH_PAT_BUDGET phase=end` reports `used_in_job=506` for `review_autofix / codex-agent` run `37860118534`, a 469-second run. This is a PAT-budget delta, **not an endpoint-level inventory**; the shared quota and concurrent work limit attribution. Of 25 distinct end-budget rows inspected, the other **24 say `unknown`**. No explicit rate-limit error was found in the inspected full logs, which does not establish that none occurred elsewhere.
+- **Redundancy remains unmeasured.** Neither the supplied aggregates nor these logs provide calls by normalized endpoint, item, page, retry, or cache hit. Add counters at the existing `gh` helper boundary: workflow/job/step, endpoint template, read/write, pages, attempts, HTTP or rate-limit class, cache-hit, and bounded latency. Do **not** log tokens, URLs with query contents, or response bodies, and do not make another API call solely to measure one.
+- **Optimize only a demonstrated hotspot.** Repo rule `CLAUDE.md` §15 requires checking existing reads first, batching per-item lookups, and reusing cycle-local caches; `agents.md` documents `_fetch_candidate_issue_details_graphql` and `_fetch_linked_pr_status_graphql`. If endpoint counters show 50 independent lookups for the same cycle, replacing them with one supported 50-alias fetch could remove **up to 49 calls** for that case; this is a conditional estimate, not a claim about the 506-unit run. Preserve the documented cache-miss fallback. Log repeated-key counts in orchestrator loops to identify missed prefetch opportunities and rate-limit risk before changing them.
+
+## Prompt Cache & Memory System
+
+The assembled telemetry reports **60,943,081 OpenRouter cache-read tokens** and **2,908,942 cache-write tokens**, but `cache_hit_rate` is **unavailable**, not zero: `scripts/cost_audit.py` returns null when any usage call is unavailable, and the context records **32 unavailable of 101 counted calls**. Aggregate/step duplication also affects counted OpenRouter usage. Neither a dollar cache benefit nor a provider hit percentage is defensible yet.
+
+Keep stable rubric and tool instructions ahead of changing PR state, timestamps, and retrieved excerpts; log stable-prefix hash and byte length, dynamic-context length, cache breakpoint, provider cache fields, and invocation ID. This makes fragmentation and prompt variance measurable without logging prompt content. The five distinct budget warnings in three review runs warrant a bounded-context trial; memory retrieval itself averaged roughly 1.4k tokens, so blaming memory for approximately 190k-token warned prompts would be unsupported. No cache fail-open rate is supplied: emit cache-attempt/result and fallback-retry status per invocation, then assess latency, billed tokens, and review quality together.
+
+## Orchestrator Health
+
+Eight `orchestrate_poll` runs succeeded (p50 **627.5 s**, p95 **964.7 s**), but no wave-transition or conflict-heal retry totals are supplied. Do not treat CI’s deliberately exercised “integration fingerprint verification FAILED” test output as live orchestrator failures; CI run `37860675537` actually failed an orchestrate-poll test shard (**32 passed, one failed**).
+
+There are observable handoffs needing clearer state logs: implement run `37861086888` gave a deliberate BLOCKED verdict on attempt one, with no retry; unblock-judge run `37866817342` recorded issue `#6785` as `scope-blocked`, fixup `#6794`, `outcome=waiting`; intake run `37865439033` skipped with `provenance_rejected` and `unexpected_workflow_path`. Emit one structured transition per issue/PR with prior state, next state, reason category, attempt, and next allowed action. Track age in waiting/blocked, unchanged-head review dispatches, wave advancement, deferrals, conflict-heal attempts, and terminal-without-handoff counts. Preserve provenance rejection and BLOCKED no-retry behavior.
+
+## Pipeline Flow Bottlenecks
+
+| Stage | Evidence and bottleneck class | Safest next action |
+|---|---|---|
+| Clarify → plan | Clarify: 153/162 skipped; plan: 140/152 skipped. Their 1-second family medians largely describe skipped dispatches, **not** task-processing speed. | Log eligibility and skip reason before interpreting cadence. |
+| Implement | Only five of 152 runs executed to success/failure: two success, three failure; two grant denials and one deliberate BLOCKED verdict. **Preflight/authorization overhead** is demonstrated; model time is not separately metered. | Validate scope and target identity early; retain guards. |
+| Review/autofix | 183 runs, p50 483 s, p95 2,143.5 s; gate-to-review gaps of about 16–28 minutes in three failures. **Scheduling/dependency delay versus compute** is unresolved. | Timestamp gate-ready, concurrency wait, runner pickup, model passes, and checkout. |
+| Validate/CI | Seven failures in 16 runs, five on one guard-copy test. **Retry/rework overhead** is likely if commits are resubmitted, but no `run_attempt>1` or measured rerun link exists. | Restore parity and run the test early; link CI run to PR head for rework measurement. |
+| Orchestrate/merge | Eight successful poll runs still have p50 627.5 s; `37860118534` stopped a host-only conflict for manual merge. **Merge/conflict overhead** is evident in that review, not quantified across projects. | Log conflict classification, manual handoff, and time to next state. |
+
+## Per-Repo Breakdown
+
+### shubhodeep1/coding-workflows
+
+**Top bottlenecks:** review tail latency and unexplained gate-to-review gaps; slow CI and poll runs. **Top failure modes:** guard-template drift (five CI runs), unavailable review workspace (three runs), and implement scope/checkout stops (three runs). **Highest-cost drivers:** review OpenRouter usage is large but duplicated and partly unavailable; reported Codex usage is largely invalid. **Prioritized actions:** (1) repair metering and add queue/API event identities; (2) restore guard parity and classify workspace setup failures; (3) use corrected per-invocation data to trial prompt/context reductions without weakening review or authorization.
+
+## Metrics Appendix
+
+**Window:** October 8, 2026 22:26:56 UTC–October 9, 2026 00:52:29 UTC; collector generated October 9 at 00:56:16 UTC. One repository; success-log sampling configured at 7%. “Skipped” is separate from failure; overall rates use all 1,000 runs.
+
+| Workflow family | Runs | Success | Failure | Skipped | Success / failure rate | Duration p50 / p95 |
+|---|---:|---:|---:|---:|---:|---:|
+| All | 1,000 | 305 | 15 | 680 | 30.5% / 1.5% | 2 / 794 s |
+| Review/autofix | 183 | 178 | 5 | 0 | 97.3% / 2.7% | 483 / 2,143.5 s |
+| CI | 16 | 9 | 7 | 0 | 56.3% / 43.8% | 1,086.5 / 1,275.75 s |
+| Implement | 152 | 2 | 3 | 147 | 1.3% / 2.0% | 1 / 11 s |
+| Plan | 152 | 12 | 0 | 140 | 7.9% / 0% | 1 / 655.4 s |
+| Clarify | 162 | 9 | 0 | 153 | 5.6% / 0% | 1 / 166.8 s |
+| Orchestrate poll | 8 | 8 | 0 | 0 | 100% / 0% | 627.5 / 964.7 s |
+
+| Assembled cost/review metric | Reported value | Interpretation |
+|---|---:|---|
+| Codex calls / tokens | 59 / 6,610,697 | **Not valid spend data:** 6,610,695 tokens attributable to echoed examples in three implement logs. |
+| OpenRouter counted calls; usage available / unavailable | 101; 69 / 32 | Calls and tokens may include duplicate archive entries. |
+| OpenRouter prompt / completion / total tokens | 13,441,535 / 792,148 / 78,080,587 | Reported, **not deduplicated**; total includes reported cache usage. |
+| OpenRouter cache write / read tokens; `cache_hit_rate` | 2,908,942 / 60,943,081; **null** | Null is required by incomplete usage coverage; no hit-rate estimate. |
+| `wall_clock_p50_ms` / `wall_clock_p99_ms` | 2,000 / 2,691,120 | Assembled telemetry, **118 samples**; not the full-run p95 above. |
+| `break_glass_count` / `context_budget_warn_count` | 0 / 8 | Warnings comprise **five distinct full-log events** in three review runs. |
+| GH API | One logged `used_in_job=506`; 24/25 inspected end rows `unknown` | No endpoint/call, retry, or cache-hit summary available. |
+
+| MCP telemetry | Assembled reported totals | Verified distinct full-log evidence / limitation |
+|---|---|---|
+| Semble query / logged bytes / sources | **11 / 116,326 B / 53** | **6 / 76,213 B / 35** across inspected full logs; two additional counted queries totaling 1,174 B appear on summarized run `37866206379` without full logs here. The nine full-log collector query counts include three duplicates. |
+| Semble targets | Target totals not separated in assembled aggregate | Full logs: `reviewer-context` **5 queries, 70,534 B, 30 sources**; `conflict-resolver-context` **1 query, 5,679 B, 5 sources**. Reviewer `static_dup_bytes=0` where logged; conflict event does not supply that field. |
+| Semble bootstrap / failed / unused / time | **11 / 0 / 0 / 381,247 ms** | Six distinct full-log bootstraps total **210,401 ms**; three full-log bootstrap events are counted twice. |
+| Semble fallback | **48:** 44 CI contract-test, four runtime | Full logs: **28 distinct** intentional `overflow` contract-test events and four runtime `overflow`/`binary-unavailable` events in `37856245085`. Query-to-fallback rate is not meaningful across these different contexts. |
+| Serena query / response bytes / tool calls / fallbacks | **0 / 0 / 0 / 0** | No tool-level breakdown or replacement-rate estimate possible. |
+| Serena probe ok / failed / skipped | **0 / 0 / 0** | No probe availability measurement was emitted. |
+
+| MCP availability target | `probe_ok` | `probe_failed` | `probe_skipped` | Qualification |
+|---|---:|---:|---:|---|
+| Semble `reviewer-context` | — | — | — | Bootstrap/query observed; no per-target probe fields supplied. |
+| Semble `conflict-resolver-context` | — | — | — | One distinct query; no probe fields supplied. |
+| Semble `overflow` | — | — | — | Fallback target, not a measured probe. |
+| Serena, target not emitted | 0 | 0 | 0 | Disabled in recent review summary `37866853445`; availability unknown. |
+
+**Other MCP servers observed:** none in inspected emitted full-log lines. **Material collection gaps:** corrected invocation-level usage and event deduplication; endpoint-level GitHub calls and retries; reliable queue/concurrency timestamps; full logs for most non-deep-dive runs. These gaps bound the savings estimates above.
+
+## Deep Audit — Workflows & Scripts (2026-10-09)
+
+### Section 1: Bug & Correctness Sweep
+
+- **BUG-001** — `scripts/tg_helpers.sh:169-205` and `scripts/tg_helpers.sh:241-277`. **Severity:** Medium. **Category:** `bug`. **Description:** Both tracked-message writers create a new marker comment when the preceding comment read fails. Their fallback POSTs use `curl -s` without checking HTTP status and then return success. A read failure can therefore duplicate a marker, while a rejected write can leave a sent message untracked. **Recommended fix:** Do not create a marker after an unreadable history; surface an unknown tracking outcome. Check write status through a status-aware helper and verify the recorded marker before reporting success.
+- **BUG-002** — `scripts/tg_helpers.sh:330-374` and `scripts/tg_helpers.sh:399-445`. **Severity:** Medium. **Category:** `bug`. **Description:** Cleanup fetches page 1, deletes comments from that page, then requests page 2. Deletion shifts remaining comments toward page 1, so later pages can be skipped. For example, deleting the first 100 of 150 matching comments can leave the other 50 unseen. **Recommended fix:** Complete a paginated snapshot of matching comment IDs before deleting any, then delete from that snapshot; retain failure handling for unreadable pages.
+- **BUG-003** — `scripts/review_single_issue_security_pass.sh:148-170`. **Severity:** Low. **Category:** `bug`. **Description:** `single_pass_post_pending_marker` repeats a comment POST when the command succeeds but its response fails JSON/body validation. If GitHub stored the first comment but its acknowledgement was unusable, retries can post the same pending marker again; the gate still fails closed when none is verified. This is an inference about an ambiguous acknowledgement, not an observed duplicate. **[NEEDS VERIFICATION]** **Recommended fix:** After an ambiguous response, read back the bounded, head-and-cycle-specific marker before another POST. Keep the existing fail-closed result if the read cannot establish that it was stored.
+- **BUG-004** — `.github/workflows/test-and-mark-stable.yml:2414-2446`. **Severity:** Low. **Category:** `bug`. **Description:** The review-activity signal uses the length of one unpaginated `/pulls/${PR_NUMBER}/comments` response. Once comments extend beyond its returned page, additional comments need not change `REVIEW_COMMENT_COUNT`; other activity signals may mask the resulting false-idle condition. **[NEEDS VERIFICATION]** **Recommended fix:** Track the newest comment identity using a verified latest-comment query, or count all pages, and test an over-one-page review.
+
+The report’s existing executive summary already covers guard-template drift, review-workspace loss, and cost-log misattribution; they are not repeated as new findings here. No direct interpolation of an issue or PR body into a shell `run:` block was established by the targeted sweep.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below describe the stated execution path, not measured production totals. Preserve the existing cache-miss and authorization behavior when batching.
+
+- **API-001** — `scripts/orchestrate_poll_process.sh:11796-11838` and `scripts/orchestrate_poll_process.sh:12511-12575`; configured at `.github/workflows/orchestrate_poll.yml:844-844`. **Severity:** Medium. **Category:** `api-redundancy`. **Description:** The default validation workflow is `ai-validate.yml`, although the poller itself documents that this file is absent in this repository. On the self-repo path, dispatch attempts it before `internal-validate.yml`; each active- or completed-run probe likewise reads the absent workflow before its fallback. **Current → proposed:** two calls to one per dispatch or probe when the default is absent; if both probes execute, four reads to two. **Recommended fix:** Resolve the effective workflow name once for this repository, while preserving `VALIDATE_WORKFLOW_NAME` overrides and consumer defaults. Reuse the cycle-local value as the cache pattern in `orchestrate_poll_process.sh` does for linked-PR state.
+- **API-002** — `.github/workflows/test-and-mark-stable.yml:2384-2437`. **Severity:** Low. **Category:** `api-redundancy`. **Description:** When `JOBS_JSON` is empty, the step fetches the run’s jobs into `JOBS_STEP_JSON`, then can fetch the same jobs again to select `JOB_ID_FOR_SIZE`. **Current → proposed:** two jobs reads to one on this cache-miss branch. **Recommended fix:** Reuse the successful `JOBS_STEP_JSON` response for job selection, as the same step already reuses `JOBS_JSON` on its primary branch; do not reuse a response that was empty or invalid.
+- **API-003** — `scripts/gh_helpers.sh:810-839`. **Severity:** Medium. **Category:** `api-redundancy`. **Description:** `curl_gh_api` backs off and retries every non-rate-limit response, including deterministic HTTP 404/422 responses, and sleeps after its final failed attempt. **Current → proposed:** with the default five attempts, five calls to one for a classified permanent failure. **Recommended fix:** Extend the permanent-failure classification used by `gh_retry` in `scripts/gh_helpers.sh:165-185` to HTTP status handling here; retain exponential backoff for transient failures and omit the final unnecessary sleep.
+- **BATCH-001** — `scripts/orchestrate_poll_process.sh:4103-4139`. **Severity:** Medium. **Category:** `api-batching`. **Description:** After its branch-based lookup misses, `_subissue_closing_pr_number` reads each of *N* cross-referenced PRs separately for merge state and closing-keyword body. **Current → proposed:** one branch search + *T* timeline pages + *N* PR reads, to one + *T* + `ceil(N/25)` batched PR reads. **Recommended fix:** Extend the aliased GraphQL pattern of `_fetch_candidate_issue_details_graphql` in this file with a PR-number batch returning body and merged state. Preserve the current closing-keyword check, ordering, and smallest-safe-call fallback for missing entries.
+- **BATCH-002** — `scripts/orchestrate_poll_process.sh:28-86`. **Severity:** Medium. **Category:** `api-batching`. **Description:** `replay_failed_reclarify_commands` reads a live issue and its complete comments separately for every queued issue after the shared listing and identity reads. Its trust check depends on comment history, so a bounded recent-comments response cannot simply replace the paginated read. **[NEEDS VERIFICATION]** **Current → proposed:** for *N* queued issues with one comment page each, `2 + 2N` reads to approximately `2 + ceil(N/25)` batched reads, plus full-history fallback reads for overflow or incomplete entries. **Recommended fix:** Extend `_fetch_candidate_issue_details_graphql` with the fields and completeness indicators this verifier needs; retain full-history REST and a live state check wherever completeness or write-time state cannot be established. An incomplete batch must never authorize replay.
+- **BATCH-003** — `scripts/workflow_failure_heal_pr_reconcile.sh:239-275`. **Severity:** Low. **Category:** `api-batching`. **Description:** Each heal issue triggers an open-PR lookup filtered by its head branch. Whether an aliased GraphQL head-ref lookup preserves the REST selection semantics needs verification. **[NEEDS VERIFICATION]** **Current → proposed:** *N* lookups to `ceil(N/25)` on a verified batched path, with per-head REST fallback for missing or ambiguous results. **Recommended fix:** Adapt the alias-and-keyed-result contract of `_fetch_linked_pr_status_graphql` to the required open-PR head/base fields; verify fork and multiple-PR cases before replacing the existing lookup.
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001** — `.github/workflows/mark-stable.yml:760-909` and `.github/workflows/test-and-mark-stable.yml:6408-6557`; the release-creation blocks at `.github/workflows/mark-stable.yml:915-971` and `.github/workflows/test-and-mark-stable.yml:6563-6619` are also identical. **Severity:** Medium. **Category:** `duplication`. **Description:** The tag-publishing blocks are byte-identical 6,307-character `run:` bodies in two release workflows; release creation repeats another 2,346-character body. A safety fix to one copy can miss the other. **Recommended fix:** Put `publish_verified_tags(version, source_branch)` and `create_release_if_needed(version, notes_file)` in a trusted `scripts/release_helpers.sh`, then call them from both workflows while retaining their existing guards and checkout ordering.
+- **DUP-002** — `.github/workflows/clarify.yml:75-144` and `.github/workflows/orchestrate_clarify_respond.yml:161-230`. **Severity:** Low. **Category:** `duplication`. **Description:** Both pre-checkout integration-ref steps contain the same 2,965-character bootstrap, including support-source staging and fallback. **Recommended fix:** Stage a trusted `scripts/resolve_integration_ref_bootstrap.sh` before either target checkout, exposing `resolve_integration_ref_precheckout(repo, issue, script_ref)` to both workflows. Keep their current source-ref selection, authentication, and default-branch fallback unchanged.
+- **DUP-003** — `scripts/tg_helpers.sh:155-207` and `scripts/tg_helpers.sh:227-278`. **Severity:** Low. **Category:** `duplication`. **Description:** General and phase-specific marker writers repeat comment lookup, read-failure fallback, append, and create logic. **Recommended fix:** Centralize it as `_tg_store_marker(issue_num, marker_kind, phase, msg_id)` in `scripts/tg_helpers.sh`; update `tg_store_msg_id` and `tg_store_phase_msg_id` as thin callers. Incorporate the BUG-001 read/write checks rather than extracting the current failure behavior unchanged.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+The in-memory sweep examined all 54 `.github/workflows/*.yml` files. It counted **232** `run:` bodies containing `${{ }}`, after removing YAML block indentation; these are static character estimates, since substituted values can change the evaluated length. Only two exceeded 15,000 characters, both exceeding 18,000. The largest workflow was `.github/workflows/review_autofix.yml` at **473,485 bytes**; none exceeded the 800 KB warning threshold. No measured `if:` body approached the expression limit.
+
+- **EXPR-001** — `.github/workflows/implement.yml:3552-3943`. **Severity:** High. **Category:** `expression-limit`. **Description:** The interpolated *Preflight destructive-commit guard* `run:` value is approximately **19,826 characters**, leaving approximately **1,174** before 21,000, prior to substitution. Its present compiled headroom is not measured. **[NEEDS VERIFICATION]** **Recommended fix:** Move the guard body into a trusted, staged `scripts/implement_preflight_destructive_guard.sh`; keep the workflow step’s explicit guard-variable `env:` bindings and final guard authoritative.
+- **EXPR-002** — `.github/workflows/implement.yml:1007-1396`. **Severity:** High. **Category:** `expression-limit`. **Description:** The interpolated *Stage workflow support files* `run:` value is approximately **19,305 characters**, leaving approximately **1,695** before 21,000, prior to substitution. Its present compiled headroom is not measured. **[NEEDS VERIFICATION]** **Recommended fix:** Move support-file staging into a script invoked from the already trusted support-source checkout, such as `scripts/stage_implement_support.sh`; retain the missing-file checks and staged-support ledger behavior.
+
+The next-largest interpolated body measured approximately 13,415 characters. The much larger prompt-containing block at `.github/workflows/implement.yml:2312-3482` has **no** `${{ }}` interpolation and is excluded from this expression assessment, notwithstanding its inline heredoc.
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEAD-001** — `scripts/review_run_reviewers.sh:755-783` and `scripts/review_run_reviewers.sh:3872-3881`. **Severity:** Low. **Category:** `dead-code`. **Description:** `is_mcp_incompatible_model` and `strip_all_mcp_server_blocks` are documented compatibility no-ops; `reviewer_patch_reasoning_config_file` is a defined Codex-config mutator. The identifier sweep found no script or workflow caller for these functions. **Recommended fix:** Confirm that no externally sourced interface requires them, then remove the obsolete functions and their configuration documentation; retain tests for the active OpenCode configuration path.
+- **DEAD-002** — `scripts/orchestrate_poll_process.sh:12673-12681`. **Severity:** Low. **Category:** `dead-code`. **Description:** `get_last_validation_run_conclusion` merely extracts a field from `get_last_validation_run_info`; the script and workflow sweep found no call to the wrapper, while the latter function has direct callers. **Recommended fix:** Remove the wrapper after checking external consumers of the sourced script; keep direct callers on `get_last_validation_run_info`.
+- **SHELL-001** — `.github/workflows/test-and-mark-stable.yml:899-899`, also lines `1191`, `1491`, `2464`, and `3804`. **Severity:** Low. **Category:** `shellcheck`. **Description:** Five inactivity tests use unquoted `$IDLE` and `$INACTIVITY_LIMIT` in `[ ... ]`. Their numeric assignments reduce practical exposure, but quoting removes word-splitting risk and the obvious SC2086 pattern. This is a static finding; `shellcheck` was unavailable in the audit environment. **Recommended fix:** Quote both operands in all five tests or use Bash arithmetic conditions, and include these inline blocks in shell linting.
+- **DEBT-001** — `scripts/gh_helpers.sh:810-839`, with callers at `scripts/tg_helpers.sh:169-172` and `scripts/tg_helpers.sh:401-404`. **Severity:** Low. **Category:** `tech-debt`. **Description:** `curl_gh_api` and these comment-read callers specify no connect or total request timeout. Its bounded attempt count therefore does not bound an attempt stalled inside `curl`. No stalled call was observed here. **[NEEDS VERIFICATION]** **Recommended fix:** Give the wrapper bounded connect and total timeouts, with an explicit override for callers needing more time; retain its existing retry and rate-limit handling.
+
+No `TODO`, `FIXME`, or `HACK` markers were found in the scoped workflows and scripts. The raw-write inconsistency in `tg_helpers.sh` is covered by BUG-001 rather than counted again.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 2 | EXPR-001, EXPR-002 |
+| Medium | 7 | BUG-001, BUG-002, API-001, API-003, BATCH-001, BATCH-002, DUP-001 |
+| Low | 10 | BUG-003, BUG-004, API-002, BATCH-003, DUP-002, DUP-003, DEAD-001, DEAD-002, SHELL-001, DEBT-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 0 confirmed correctness fixes; High findings are expression risks | Small |
+| API call optimization | Approximately 5 existing workflow/script files | Medium |
+| Code modularization | Approximately 5 existing files and 2 new helpers | Large |
+| Expression size reduction | `implement.yml` and approximately 2 extracted scripts | Medium |
+| Medium/Low fixes | Approximately 6 existing files, overlapping categories above | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-09)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for direct implementation; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented because a protected API path needs manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `RISKY_SKIP`.** **Calls:** `scripts/orchestrate_poll_process.sh:24083` and `scripts/orchestrate_poll_process.sh:24084`, in the implementation-failure reissue loop. **Current → proposed:** 2 → 1 read per eligible reissue. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}`. **Evidence:** Adjacent `gh_retry _safe_gh_jq` calls fetch `.title` and `.body` from the same issue; both values are later used to create the replacement issue at `scripts/orchestrate_poll_process.sh:24109-24149`. **Proposed fix:** In that loop, fetch one issue payload and extract `IF_TITLE` and `IF_BODY` locally, retaining their separate empty-string fallbacks. **Safety rationale:** The calls are inside `orchestrate_poll_process.sh`, an explicit `RISKY_SKIP` trigger, and the separate reads’ failure behavior has not been proved equivalent to one failed fetch. **Downstream signal:** Do not auto-implement; manually test title-read failure, body-read failure, and an issue changed between reads before approving a single-snapshot replacement.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Poller dispatch and run probes require manual review of override and fallback behavior.
+- API-002: `RISKY_SKIP` — The jobs reads are in a polling path; confirm freshness and rate-limit behavior before reuse.
+- API-003: `RISKY_SKIP` — Changing calls inside `curl_gh_api`’s retry loop requires manual failure-classification review.
+- BATCH-001: `RISKY_SKIP` — Poller batching must preserve cross-reference ordering and the per-PR fallback.
+- BATCH-002: `RISKY_SKIP` — Poller replay authorization depends on complete paginated comments and live issue state.
+- BATCH-003: `NEEDS_VERIFICATION` — Verify fork, multiple-PR, and REST head-filter selection equivalence before batching.
+
+### Summary Counts
+
+Net-new findings only; Section 2 cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.

@@ -7,10 +7,16 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
 from runpy import run_path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
+from agents_doc import agents_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -20,7 +26,8 @@ extract_refs = run_path(str(REPO_ROOT / "scripts" / "check_workflow_script_refs.
 
 
 def _read_workflow() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# Phase 4 / 4b bodies live in scripts/stable_e2e_step_*.sh (#7991).
+	return expanded_test_and_mark_stable_text()
 
 
 def _slice_between(text: str, start_marker: str, end_marker: str) -> str:
@@ -126,10 +133,12 @@ def test_default_serial_budget_leaves_required_headroom() -> None:
 		+ phase_timeout
 		+ _integer_contract_value(job, "PHASE7_WAIT_BUDGET_MINUTES")
 		+ finalization_reserve
+		# Issue #8244: the pre-push gate step's extra Phase 3b wait.
+		+ max(0, _integer_contract_value(job, "PREPUSH_GATE_STEP_STALL_MINUTES") - phase_timeout)
 	)
 	assert review_handoff_budget == 15
 	assert review_effective_budget == 90
-	assert serial_budget == 295
+	assert serial_budget == 300
 	assert serial_budget <= job_timeout
 	assert job_timeout - (serial_budget - finalization_reserve) >= finalization_reserve
 
@@ -179,6 +188,67 @@ def test_budget_guard_clamps_review_step_timeout_before_serial_math() -> None:
 	job_timeout = _integer_contract_value(job, "E2E_JOB_TIMEOUT_MINUTES")
 	assert shared_budget + max(review_timeout, review_step_override) > job_timeout
 	assert shared_budget + max(review_timeout, min(review_step_override, 90) + review_handoff_budget) > job_timeout
+
+
+def _prerequisites_budget_block(workflow: str) -> str:
+	job = _e2e_job(workflow)
+	prerequisites = _slice_between(job, "- name: Validate prerequisites", "# Fast-fail the hottest")
+	return _slice_between(prerequisites, "for timeout_value in", 'echo "Target repo:')
+
+
+def _run_prerequisites_budget(**overrides: str) -> subprocess.CompletedProcess[str]:
+	workflow = _read_workflow()
+	job = _e2e_job(workflow)
+	env = dict(os.environ)
+	env.update({
+		"PHASE_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "phase_timeout")),
+		"PLAN_PHASE_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "plan_timeout")),
+		"REVIEW_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "review_timeout")),
+		"REVIEW_STEP_TIMEOUT": str(_workflow_dispatch_integer_default(workflow, "review_step_timeout")),
+	})
+	for name in (
+		"E2E_JOB_TIMEOUT_MINUTES",
+		"REVIEW_PHASE_HANDOFF_BUDGET_MINUTES",
+		"EDITOR_RETRY_BUDGET_MINUTES",
+		"PHASE7_WAIT_BUDGET_MINUTES",
+		"E2E_FINALIZATION_RESERVE_MINUTES",
+		"PREPUSH_GATE_STEP_STALL_MINUTES",
+	):
+		env[name] = str(_integer_contract_value(job, name))
+	env.update(overrides)
+	body = "set -euo pipefail\n" + _prerequisites_budget_block(workflow)
+	return subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
+
+
+def test_prepush_gate_stall_minutes_is_validated_and_budgeted() -> None:
+	# Issue #8244: the extended Phase 3b limit for the pre-push gate step is a
+	# positive integer and its extra minutes count toward the serial budget.
+	block = _prerequisites_budget_block(_read_workflow())
+	loop = block[: block.index("done")]
+	assert '"${PREPUSH_GATE_STEP_STALL_MINUTES}"' in loop
+	assert "PREPUSH_GATE_EXTRA_BUDGET_MINUTES=$((PREPUSH_GATE_STEP_STALL_MINUTES - PHASE_TIMEOUT))" in block
+	assert "E2E_FINALIZATION_RESERVE_MINUTES +\n            PREPUSH_GATE_EXTRA_BUDGET_MINUTES" in block
+	assert "prepush-gate-extra(${PREPUSH_GATE_EXTRA_BUDGET_MINUTES})" in block
+
+
+def test_prepush_gate_stall_budget_defaults_fit_and_bad_values_fail() -> None:
+	result = _run_prerequisites_budget()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "E2E conservative serial budget: 300/300 minutes" in result.stdout
+
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="abc")
+	assert result.returncode == 1
+	assert "positive integers" in result.stdout
+
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="36")
+	assert result.returncode == 1
+	assert "require 301m" in result.stdout
+	assert "prepush-gate-extra(6)" in result.stdout
+
+	# A value at or below PHASE_TIMEOUT adds nothing.
+	result = _run_prerequisites_budget(PREPUSH_GATE_STEP_STALL_MINUTES="10")
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "E2E conservative serial budget: 295/300 minutes" in result.stdout
 
 
 def test_named_retry_and_phase7_budgets_replace_literal_deadlines() -> None:
@@ -647,6 +717,166 @@ def test_phase4_checkout_marker_and_every_early_exit_are_covered() -> None:
 	assert "BAIT_UNCOVERED_RUN_IDS" in phase4
 	assert phase4.count('if ! require_bait_review_coverage; then') == 4
 	assert phase4.count('review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"') == 4
+
+
+_PHASE4_EXT_BEGIN = "# BEGIN phase4 review deadline extension (#8004)"
+_PHASE4_EXT_END = "# END phase4 review deadline extension (#8004)"
+_PHASE4_BASE = 100_000
+_PHASE4_JOB_START = 90_000
+_PHASE4_DEFAULT_CEILING = _PHASE4_JOB_START + (300 - 25 - 30 - 10 - 20) * 60
+_PHASE4_BUDGET_ENV = {
+	"E2E_JOB_TIMEOUT_MINUTES": "300", "EDITOR_RETRY_BUDGET_MINUTES": "25", "PHASE_TIMEOUT": "30",
+	"PHASE7_WAIT_BUDGET_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "20",
+}
+
+
+def _phase4_step(workflow: str) -> str:
+	return _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
+
+
+def _phase4_deadline_extension_block(workflow: str) -> str:
+	step = _phase4_step(workflow)
+	block = _slice_between(step, _PHASE4_EXT_BEGIN, _PHASE4_EXT_END)
+	return textwrap.dedent("          " + block)
+
+
+def _run_phase4_deadline_logic(**env: str) -> dict[str, str]:
+	block = _phase4_deadline_extension_block(_read_workflow())
+	script = "set -euo pipefail\n" + block + textwrap.dedent("""\
+	REVIEW_PHASE_HANDOFF_PENDING="${TEST_HANDOFF_PENDING:-0}"
+	rc=0
+	review_phase_deadline_extension_allowed || rc=$?
+	echo "base=${REVIEW_PHASE_BASE_DEADLINE}"
+	echo "ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+	echo "rc=${rc}"
+	""")
+	full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "TZ": "UTC",
+		"REVIEW_PHASE_DEADLINE": str(_PHASE4_BASE), "INACTIVITY_LIMIT": "3600",
+		"STEP_INACTIVITY_LIMIT": "4500"}
+	full_env.update(env)
+	full_env = {key: value for key, value in full_env.items() if value is not None}
+	result = subprocess.run(["bash", "-c", script], env=full_env, capture_output=True, text=True, timeout=30)
+	assert result.returncode == 0, result.stderr + result.stdout
+	values = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+	return values
+
+
+def _phase4_iso(epoch: int) -> str:
+	return subprocess.run(["date", "-u", "-d", f"@{epoch}", "+%Y-%m-%dT%H:%M:%SZ"],
+		capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _phase4_active(**overrides: str) -> dict[str, str]:
+	env = {**_PHASE4_BUDGET_ENV, "E2E_JOB_STARTED_EPOCH": str(_PHASE4_JOB_START),
+		"NOW": str(_PHASE4_BASE + 600), "RUN_ID": "20", "RUN_STATUS": "in_progress", "IDLE": "30",
+		"BAIT_UNCOVERED_RUN_IDS": "", "CURRENT_STEP_STARTED_AT": ""}
+	env.update(overrides)
+	return _run_phase4_deadline_logic(**env)
+
+
+def test_phase4_deadline_ceiling_formula_and_base_never_shortened() -> None:
+	step = _phase4_step(_read_workflow())
+	assert "REVIEW_PHASE_DEADLINE=$((REVIEW_PHASE_STARTED_AT + (REVIEW_PHASE_WALL_BUDGET_MINUTES * 60)))" in step
+	assert ("REVIEW_PHASE_DEADLINE_CEILING=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - EDITOR_RETRY_BUDGET_MINUTES"
+		" - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60 ))") in step
+	assert step.index("REVIEW_PHASE_DEADLINE=$((") < step.index(_PHASE4_EXT_BEGIN)
+	values = _phase4_active()
+	assert values["base"] == str(_PHASE4_BASE)
+	assert values["ceiling"] == str(_PHASE4_DEFAULT_CEILING)
+	# A ceiling below the base is raised to the base, never below it.
+	values = _phase4_active(E2E_JOB_STARTED_EPOCH="1000")
+	assert values["ceiling"] == str(_PHASE4_BASE)
+	assert values["rc"] == "1"
+	# No (or a non-numeric) job start: the ceiling equals the base.
+	for start in ("", "abc"):
+		values = _phase4_active(E2E_JOB_STARTED_EPOCH=start)
+		assert values["ceiling"] == str(_PHASE4_BASE)
+		assert values["rc"] == "1"
+	values = _phase4_active(PHASE_TIMEOUT="x")
+	assert values["ceiling"] == str(_PHASE4_BASE)
+
+
+def test_phase4_active_in_progress_candidate_waits_past_base_deadline() -> None:
+	assert _phase4_active()["rc"] == "0"
+	for status in ("queued", "pending", "waiting", "requested"):
+		assert _phase4_active(RUN_STATUS=status, IDLE="9999")["rc"] == "0"
+	now = _PHASE4_BASE + 600
+	step_start = _phase4_iso(now - 600)
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT=step_start)["rc"] == "0"
+
+
+def test_phase4_stalled_or_uncovered_candidate_times_out_at_base_deadline() -> None:
+	now = _PHASE4_BASE + 600
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT=_phase4_iso(now - 5000))["rc"] == "1"
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT="not-a-date")["rc"] == "1"
+	assert _phase4_active(IDLE="9999", CURRENT_STEP_STARTED_AT=_phase4_iso(now + 600))["rc"] == "1"
+	assert _phase4_active(IDLE="9999")["rc"] == "1"
+	assert _phase4_active(BAIT_UNCOVERED_RUN_IDS="10,20")["rc"] == "1"
+	assert _phase4_active(BAIT_UNCOVERED_RUN_IDS="20")["rc"] == "1"
+	assert _phase4_active(BAIT_UNCOVERED_RUN_IDS="200,2")["rc"] == "0"
+	for status in ("none", "completed", "unknown", ""):
+		assert _phase4_active(RUN_STATUS=status)["rc"] == "1"
+	values = _run_phase4_deadline_logic(**_PHASE4_BUDGET_ENV, E2E_JOB_STARTED_EPOCH=str(_PHASE4_JOB_START),
+		NOW=str(now), IDLE="30")
+	assert values["rc"] == "1"
+	for run_id in ("unknown", "", "20x"):
+		assert _phase4_active(RUN_ID=run_id)["rc"] == "1"
+
+
+def test_phase4_nothing_waits_past_the_ceiling() -> None:
+	for now in (_PHASE4_DEFAULT_CEILING, _PHASE4_DEFAULT_CEILING + 1):
+		assert _phase4_active(NOW=str(now), RUN_STATUS="queued")["rc"] == "1"
+		assert _phase4_active(NOW=str(now))["rc"] == "1"
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 1))["rc"] == "0"
+	# A poll (and its sleep) must end by the ceiling, so the check keeps a
+	# POLL_INTERVAL margin; a malformed interval counts as no margin.
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 10), POLL_INTERVAL="10")["rc"] == "1"
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 11), POLL_INTERVAL="10")["rc"] == "0"
+	assert _phase4_active(NOW=str(_PHASE4_DEFAULT_CEILING - 1), POLL_INTERVAL="x")["rc"] == "0"
+
+
+def test_phase4_handoff_polls_the_next_run_past_the_base_deadline() -> None:
+	# A run just dropped as not covering the bait, or a just-advanced pin,
+	# still gets the poll that finds its successor (until the ceiling).
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", RUN_STATUS="completed", BAIT_UNCOVERED_RUN_IDS="20")["rc"] == "0"
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", RUN_STATUS="none", RUN_ID="unknown")["rc"] == "0"
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", NOW=str(_PHASE4_DEFAULT_CEILING), RUN_STATUS="completed")["rc"] == "1"
+	assert _phase4_active(TEST_HANDOFF_PENDING="1", E2E_JOB_STARTED_EPOCH="", RUN_STATUS="completed")["rc"] == "1"
+	step = _phase4_step(_read_workflow())
+	coverage = _slice_between(step, "require_bait_review_coverage() {", "# Give the review workflow a moment to start")
+	# Set only where a run is actually dropped, never for an in-progress
+	# run whose coverage is still unknown (it is not dropped).
+	assert coverage.count("REVIEW_PHASE_HANDOFF_PENDING=1") == 2
+	for drop in re.finditer(r'BAIT_UNCOVERED_RUN_IDS="\$\{BAIT_UNCOVERED_RUN_IDS:\+', coverage):
+		assert coverage[drop.end():].lstrip().split("\n", 2)[1].strip() == "REVIEW_PHASE_HANDOFF_PENDING=1"
+	assert "REVIEW_PHASE_HANDOFF_PENDING=1" not in coverage[coverage.rindex("fi"):]
+	# One-shot: consumed right after the deadline check, so it allows one poll.
+	check = _slice_between(step, 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then', "# Find the review workflow run")
+	assert check.rstrip().endswith("REVIEW_PHASE_HANDOFF_PENDING=0")
+	pin_advance = _slice_between(step, 'PIN_SHA="${PIN_HEAD_NOW}"', "continue")
+	assert "REVIEW_PHASE_HANDOFF_PENDING=1" in pin_advance
+	assert 'if [[ "$RUN_ID" =~ ^[0-9]+$ ]]; then REVIEW_PHASE_HANDOFF_PENDING=0; fi' in step
+
+
+def test_phase4_deadline_check_uses_extension_and_logs_once() -> None:
+	step = _phase4_step(_read_workflow())
+	check = _slice_between(step, 'if [ "$NOW" -ge "$REVIEW_PHASE_DEADLINE" ]; then', "# Find the review workflow run")
+	assert "if review_phase_deadline_extension_allowed; then" in check
+	assert step.count("E2E_REVIEW_DEADLINE_EXTENDED") == 1
+	log_index = check.index("E2E_REVIEW_DEADLINE_EXTENDED")
+	assert check.index('if [ "$REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED" = "0" ]; then') < log_index
+	assert "REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=1" in check[log_index:]
+	timeout_path = check[check.index("          else\n"):]
+	assert "Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget" in timeout_path
+	assert 'echo "status=timeout" >> "$GITHUB_OUTPUT"' in timeout_path
+	assert "exit 1" in timeout_path
+	# The extension never bypasses the inactivity or per-step stall checks.
+	assert 'if [ $IDLE -ge $INACTIVITY_LIMIT ]; then' in step
+	assert 'REVIEW_STEP_TIMEOUT_MAX=90' in step
+	# The prefix stays registered as a stable log prefix (fragment or folded agents.md).
+	agents = agents_text()
+	assert "- `E2E_REVIEW_DEADLINE_EXTENDED`" in agents
+	assert "LOG_PREFIX.name=E2E_REVIEW_DEADLINE_EXTENDED" in agents
 
 
 def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:

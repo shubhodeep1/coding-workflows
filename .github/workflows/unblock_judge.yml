@@ -27,6 +27,13 @@ name: AI Unblock Judge (Reusable)
       OPENROUTER_API_KEY:
         required: false
 
+env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
+
 jobs:
   unblock-judge:
     runs-on: ubuntu-latest
@@ -118,7 +125,7 @@ jobs:
           fetch-depth: 1
 
       - name: Install Codex CLI
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
@@ -144,18 +151,41 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           PYTHONDONTWRITEBYTECODE: "1"
           REPOSITORY: ${{ github.repository }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           ITEM: ${{ inputs.item }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
           UNBLOCK_JUDGE_MODEL: ${{ vars.UNBLOCK_JUDGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           UNBLOCK_JUDGE_REASONING: ${{ vars.THINKING_LEVEL_UNBLOCK_JUDGE || 'high' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           UNBLOCK_JUDGE_FIXUP_WAIT_HOURS: ${{ vars.UNBLOCK_JUDGE_FIXUP_WAIT_HOURS || '72' }}
+          # `wait` verdicts and operator-step holds (Q116, Q126): on by default;
+          # a hold is judged again after this many days.
+          UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
+          UNBLOCK_JUDGE_WAIT_MAX_DAYS: ${{ vars.UNBLOCK_JUDGE_WAIT_MAX_DAYS || '14' }}
+          # Refuse verdict instructions the network-less implementer cannot run, and re-ask once.
+          UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED: ${{ vars.UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED || 'true' }}
+          # Q129: the check-triage resolution gate clarify runs (#7095).
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
+          # Q148: close a heal issue whose failure a sibling already fixed.
+          UNBLOCK_HEAL_ALREADY_FIXED_ENABLED: ${{ vars.UNBLOCK_HEAL_ALREADY_FIXED_ENABLED || 'true' }}
+          UNBLOCK_PROTECTED_HANDOFF_ENABLED: ${{ vars.UNBLOCK_PROTECTED_HANDOFF_ENABLED || 'false' }}
+          # Harness routing: a harness-owned verdict sends a heal report instead of a fix-up.
+          UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED: ${{ vars.UNBLOCK_JUDGE_TARGET_REPO_GUARD_ENABLED || 'true' }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          # The automation-path re-check runs the implement guard with the
+          # same ALLOW_WORKFLOW_EDITS default implement.yml uses.
+          UNBLOCK_JUDGE_REGRANT_ENABLED: ${{ vars.UNBLOCK_JUDGE_REGRANT_ENABLED || 'true' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_UNBLOCK_JUDGE: ${{ vars.AI_ENGINE_UNBLOCK_JUDGE || '' }}
+          # #7032: the CI-failure supersede check reads the same named CI check
+          # and CI workflow binding as review_autofix.yml's auto-merge wait.
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/.codex-workflow-src/unattended_system_instructions.md
         run: |
           SUPPORT_DIR="${GITHUB_WORKSPACE}/.codex-workflow-src" \

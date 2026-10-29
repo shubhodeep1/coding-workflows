@@ -627,6 +627,220 @@ def test_invalid_emit_timeout_literals_keep_the_default_bound() -> None:
 		assert 100 < elapsed < 240, elapsed
 
 
+CIRCUIT_OPENED_TIMEOUT_LINE = (
+	"::warning::ledger_emit_substate circuit opened (reason=timeout); "
+	"later substates in this job are skipped"
+)
+CIRCUIT_OPENED_AUTH_LINE = (
+	"::warning::ledger_emit_substate circuit opened (reason=auth); "
+	"later substates in this job are skipped"
+)
+
+
+def _write_circuit_stub(path: Path) -> None:
+	"""Stub that records each call, then sleeps, prints stderr and exits."""
+	path.write_text(
+		"import os\n"
+		"import sys\n"
+		"import time\n"
+		"with open(os.environ['CIRCUIT_TEST_CALLS'], 'a', encoding='utf-8') as handle:\n"
+		"\thandle.write('call\\n')\n"
+		"sleep_secs = float(os.environ.get('CIRCUIT_TEST_SLEEP', '0') or '0')\n"
+		"if sleep_secs:\n"
+		"\ttime.sleep(sleep_secs)\n"
+		"sys.stderr.write(os.environ.get('CIRCUIT_TEST_STDERR', ''))\n"
+		"raise SystemExit(int(os.environ.get('CIRCUIT_TEST_RC', '0') or '0'))\n",
+		encoding="utf-8",
+	)
+
+
+def _run_circuit_helper(
+	tmp_path: Path,
+	substate: str,
+	extra_env: dict[str, str] | None = None,
+) -> tuple[int, str, str]:
+	stub_path = tmp_path / "circuit_stub.py"
+	if not stub_path.exists():
+		_write_circuit_stub(stub_path)
+	env = {
+		key: value
+		for key, value in os.environ.items()
+		if key not in ("LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED", "LEDGER_EMIT_TIMEOUT_SECONDS")
+	}
+	env.update(
+		{
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"LEDGER_AI_MEMORY_SCRIPT": str(stub_path),
+			"LEDGER_SUBSTATES_SEEN_FILE": str(tmp_path / "seen.txt"),
+			"RUNNER_TEMP": str(tmp_path),
+			"CIRCUIT_TEST_CALLS": str(tmp_path / "calls.txt"),
+		}
+	)
+	if extra_env:
+		env.update(extra_env)
+	result = subprocess.run(
+		[
+			"bash",
+			str(HELPER_SCRIPT),
+			"--run-id",
+			"run-7493",
+			"--workflow",
+			"implement",
+			"--phase",
+			"implement",
+			"--mode",
+			"implement",
+			"--repo-root",
+			str(tmp_path),
+			"--actor",
+			"codex-bot",
+			"--substate",
+			substate,
+			"--attempt",
+			"1",
+		],
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	return result.returncode, result.stdout, result.stderr
+
+
+def _circuit_call_count(tmp_path: Path) -> int:
+	calls_path = tmp_path / "calls.txt"
+	if not calls_path.exists():
+		return 0
+	return len(calls_path.read_text(encoding="utf-8").splitlines())
+
+
+def _circuit_sentinel(tmp_path: Path) -> Path:
+	return tmp_path / "seen.txt.d" / "circuit_open"
+
+
+def test_circuit_breaker_timeout_opens_circuit_and_skips_later_substates() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		rc, stdout, stderr = _run_circuit_helper(
+			tmp_path,
+			"PreparingWorkspace",
+			extra_env={"CIRCUIT_TEST_SLEEP": "30", "LEDGER_EMIT_TIMEOUT_SECONDS": "2"},
+		)
+		assert rc == 0, stderr
+		assert stdout == "", stdout
+		assert "record-run-event failed (timeout:" in stderr, stderr
+		assert stderr.count(CIRCUIT_OPENED_TIMEOUT_LINE) == 1, stderr
+		assert stderr.count("circuit opened") == 1, stderr
+		assert _circuit_sentinel(tmp_path).is_file()
+		assert _circuit_call_count(tmp_path) == 1
+
+		started = time.monotonic()
+		rc, stdout, stderr = _run_circuit_helper(
+			tmp_path,
+			"Succeeded",
+			extra_env={"CIRCUIT_TEST_SLEEP": "30", "LEDGER_EMIT_TIMEOUT_SECONDS": "2"},
+		)
+		elapsed = time.monotonic() - started
+		assert rc == 0, stderr
+		assert stdout == "", stdout
+		assert stderr == "", stderr
+		assert _circuit_call_count(tmp_path) == 1
+		assert elapsed < 10, elapsed
+
+
+def test_circuit_breaker_auth_failure_opens_circuit() -> None:
+	auth_details = (
+		"fatal: Authentication failed for 'https://github.com/example/repo.git/'",
+		"gh: Bad credentials (HTTP 401)",
+		"remote: Permission to example/repo.git denied to bot.",
+	)
+	for index, auth_detail in enumerate(auth_details):
+		with tempfile.TemporaryDirectory() as tmp_dir:
+			tmp_path = Path(tmp_dir)
+			# Case-insensitive switch value still means on.
+			auth_env = {
+				"CIRCUIT_TEST_STDERR": auth_detail,
+				"CIRCUIT_TEST_RC": "128",
+				"LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED": "TRUE" if index == 0 else "",
+			}
+			rc, _stdout, stderr = _run_circuit_helper(tmp_path, "PreparingWorkspace", extra_env=auth_env)
+			assert rc == 0, stderr
+			assert stderr.count(CIRCUIT_OPENED_AUTH_LINE) == 1, (auth_detail, stderr)
+			assert _circuit_sentinel(tmp_path).is_file(), auth_detail
+
+			rc, _stdout, stderr = _run_circuit_helper(tmp_path, "Succeeded", extra_env=auth_env)
+			assert rc == 0, stderr
+			assert stderr == "", stderr
+			assert _circuit_call_count(tmp_path) == 1, auth_detail
+
+
+def test_circuit_breaker_ignores_unrelated_failures() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		failure_env = {"CIRCUIT_TEST_STDERR": "some other error", "CIRCUIT_TEST_RC": "1"}
+		rc, _stdout, stderr = _run_circuit_helper(tmp_path, "PreparingWorkspace", extra_env=failure_env)
+		assert rc == 0, stderr
+		assert "record-run-event failed (1:some other error)" in stderr, stderr
+		assert "circuit opened" not in stderr, stderr
+		assert not _circuit_sentinel(tmp_path).exists()
+
+		rc, _stdout, stderr = _run_circuit_helper(tmp_path, "Succeeded", extra_env=failure_env)
+		assert rc == 0, stderr
+		assert "record-run-event failed" in stderr, stderr
+		assert _circuit_call_count(tmp_path) == 2
+
+
+def test_circuit_breaker_ignores_rate_limited_403() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		rate_env = {
+			"CIRCUIT_TEST_STDERR": "gh: You have exceeded a secondary rate limit (HTTP 403)",
+			"CIRCUIT_TEST_RC": "1",
+		}
+		for substate in ("PreparingWorkspace", "Succeeded"):
+			rc, _stdout, stderr = _run_circuit_helper(tmp_path, substate, extra_env=rate_env)
+			assert rc == 0, stderr
+			assert "circuit opened" not in stderr, stderr
+		assert not _circuit_sentinel(tmp_path).exists()
+		assert _circuit_call_count(tmp_path) == 2
+
+
+def test_circuit_breaker_switch_off_keeps_calling_the_store() -> None:
+	for switch_value in ("false", "FALSE"):
+		with tempfile.TemporaryDirectory() as tmp_dir:
+			tmp_path = Path(tmp_dir)
+			off_env = {
+				"CIRCUIT_TEST_STDERR": "fatal: Authentication failed",
+				"CIRCUIT_TEST_RC": "128",
+				"LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED": switch_value,
+			}
+			for substate in ("PreparingWorkspace", "Succeeded"):
+				rc, _stdout, stderr = _run_circuit_helper(tmp_path, substate, extra_env=off_env)
+				assert rc == 0, stderr
+				assert "circuit opened" not in stderr, stderr
+				assert "invalid LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED" not in stderr, stderr
+			assert not _circuit_sentinel(tmp_path).exists()
+			assert _circuit_call_count(tmp_path) == 2
+
+
+def test_circuit_breaker_invalid_switch_warns_and_behaves_as_off() -> None:
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		invalid_env = {
+			"CIRCUIT_TEST_STDERR": "fatal: Authentication failed",
+			"CIRCUIT_TEST_RC": "128",
+			"LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED": "maybe",
+		}
+		for substate in ("PreparingWorkspace", "Succeeded"):
+			rc, _stdout, stderr = _run_circuit_helper(tmp_path, substate, extra_env=invalid_env)
+			assert rc == 0, stderr
+			assert "invalid LEDGER_EMIT_CIRCUIT_BREAKER_ENABLED" in stderr, stderr
+			assert "maybe" not in stderr, stderr
+			assert "circuit opened" not in stderr, stderr
+		assert not _circuit_sentinel(tmp_path).exists()
+		assert _circuit_call_count(tmp_path) == 2
+
+
 def test_schema_accepts_legacy_and_new_substate_entries_additively() -> None:
 	_require_jsonschema()
 	validator = jsonschema.Draft202012Validator(_schema())

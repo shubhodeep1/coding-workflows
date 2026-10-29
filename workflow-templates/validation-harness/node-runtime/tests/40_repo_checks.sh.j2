@@ -77,6 +77,7 @@ SH
 	return "${parse_rc}"
 }
 
+echo "# repo checks: reading skip_tests and custom_tests $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if ! render_json_list_to_file "SKIP_TESTS_JSON" 1 "${SKIP_FILE}"; then
 	echo "1..1"
 	tap_not_ok 1 "skip tests parsed"
@@ -146,11 +147,16 @@ for test_cmd in "${TEST_LIST[@]}"; do
 	fi
 
 	test_log="${LOG_DIR}/repo_check_${test_id}.log"
+	echo "# repo check ${test_id} started $(date -u +%Y-%m-%dT%H:%M:%SZ): ${test_cmd}"
+	# The command's output is echoed as TAP comments while it runs, so the
+	# validation idle watchdog sees progress during a long install or test
+	# suite, and a line such as "ok 1" in it is never counted as a result.
 	set +e
 	REPO_CHECK_CMD="${test_cmd}" \
-		docker compose -f "${COMPOSE_FILE}" exec -T -e REPO_CHECK_CMD "${APP_SERVICE}" /bin/sh -c 'sh -eu -c "${REPO_CHECK_CMD}"' >"${test_log}" 2>&1
-	status=$?
+		docker compose -f "${COMPOSE_FILE}" exec -T -e REPO_CHECK_CMD "${APP_SERVICE}" /bin/sh -c 'sh -eu -c "${REPO_CHECK_CMD}"' 2>&1 | tee "${test_log}" | sed -u 's/^/# /'
+	status=${PIPESTATUS[0]}
 	set -e
+	echo "# repo check ${test_id} finished $(date -u +%Y-%m-%dT%H:%M:%SZ) (exit=${status})"
 
 	if [ "${status}" -ne 0 ]; then
 		tap_not_ok "${test_id}" "repo check command: ${test_cmd}"

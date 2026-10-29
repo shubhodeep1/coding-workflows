@@ -14,14 +14,21 @@
 #     closes such an issue is not verified again, so fixes never recurse);
 #   - `operator` gaps are written to the repository's ai:operator-step issue
 #     (scripts/operator_step_issue.py);
-#   - one Telegram message (WARNING when DORMANT, DEBUG when LIVE).
+#   - one Telegram message: WARNING when a person has to act (DORMANT with
+#     operator steps, or a code-gap fix issue that could not be checked or
+#     opened), DEBUG otherwise (LIVE, or DORMANT with only code gaps that
+#     went to the pipeline's fix issue).
 #
 # Usage:
 #   activation_verify.sh pr       issue_pr_status.yml, after a PR merged into
 #                                 the default branch. Env: REPOSITORY,
 #                                 PR_NUMBER, MERGE_SHA, PR_TITLE, PR_BODY,
 #                                 LINKED_ISSUE (number or empty), PR_COMMITS,
-#                                 TARGET_DIR.
+#                                 TARGET_DIR; optional PR_HEAD_REF and
+#                                 PR_HEAD_REPOSITORY (see the sync-PR skip),
+#                                 PR_LABELS (JSON array of label names) and
+#                                 ACTIVATION_VERIFY_EXEMPT_GLOBS (see the
+#                                 exempt-path skip).
 #   activation_verify.sh project  the poller, when an orchestrator project
 #                                 completes. Env: REPOSITORY, TRACKING_NUM,
 #                                 PROJECT_TITLE, PROJECT_BODY, TARGET_DIR,
@@ -36,6 +43,28 @@
 # TG_BOT_SECRET. It needs OPENROUTER_API_KEY for the model call; that value
 # is removed from every model-derived field before any GitHub write.
 #
+# Consumer workflow-sync PRs are not verified: a merged PR from the updater's
+# own same-repository branch (auto/update-workflows-<sha12>, or ai-sync/stable
+# when UPDATER_PR_DELIVERY_ENABLED is false) only refreshes upstream-managed
+# wrappers, so grading it produced activation-gap issues and verdict comments
+# that were noise. The skip needs PR_HEAD_REF and a PR_HEAD_REPOSITORY equal to
+# REPOSITORY; a missing value verifies as before. It runs before any GitHub
+# call, so a skipped PR costs no API request.
+#
+# Plans and raw input drops are not verified (issue #4726 in
+# tele-funtoken-msg-scoring): a merged plan or a designer's raw game build
+# reads to the model as unshipped work, so it filed a code gap that the
+# pipeline then built and merged with nobody asking. In PR mode:
+#   - a PR labelled ai:skip-activation-verify is skipped before any GitHub
+#     call (reason=skip_label);
+#   - when every changed file matches ACTIVATION_VERIFY_EXEMPT_GLOBS
+#     (comma-separated, default docs/plans/**; a value replaces the default;
+#     `**` spans folders, `*` stays inside one), the merge is skipped without
+#     a model call or comment (reason=exempt_paths);
+#   - a mixed PR is verified on its other files only; the exempt ones go to
+#     the model as exempt_changed_files, which it must never turn into a gap.
+# Project mode is unchanged: a project was ordered explicitly.
+#
 # Model text never starts a comment line ("Summary: ", "Trigger: ", "Fix: "):
 # the poller's /judge_resume, /revalidate and /re-security-pass handlers match
 # a command at the start of any tracking-issue comment line.
@@ -44,8 +73,20 @@
 # API budget (CLAUDE.md §15): in `pr` mode, one linked-issue read and one
 # paginated PR-files lookup (the status job cannot share its issue snapshot);
 # in `project` mode, one final-PR-files lookup when that PR is recorded;
+# in both modes, one open-pull-request listing for the model context
+# (activation_open_prs_json);
 # when code gaps exist, one source-key search before creating the fix issue;
 # one comment, at most one fix-issue create, and the operator-step writer's calls.
+# The tracked-symlink listing (activation_tracked_symlinks_json) is local git
+# only and makes no GitHub API call.
+#
+# Code gaps an open pull request already fixes (tele-funtoken-msg-scoring
+# #4992): the model sees the open pull requests and may tag a code gap with
+# `open_pr`. A tag naming a pull request outside that list is dropped. Tagged
+# gaps stay in the verdict comment, marked as in progress in that pull
+# request, but go into no fix issue, so the pipeline never plans a duplicate
+# of work that is already under review. When every code gap is tagged, no fix
+# issue is searched for or opened.
 # POSTs are single-attempt: retrying after a lost response can duplicate writes.
 # Log: ACTIVATION_VERIFY mode= item= verdict= code_gaps= operator_gaps= outcome= reason=
 set -uo pipefail
@@ -62,12 +103,33 @@ activation_log()
 	echo "ACTIVATION_VERIFY $*"
 }
 
+# Best-effort Telegram send through tg_helpers.sh (level filtering included).
+_activation_tg_send()
+{
+	local msg="$1" level="$2"
+	[ -f "${SUPPORT_DIR}/scripts/tg_helpers.sh" ] || return 0
+	# shellcheck source=/dev/null
+	source "${SUPPORT_DIR}/scripts/tg_helpers.sh" 2>/dev/null || true
+	if declare -F tg_send_msg >/dev/null 2>&1; then
+		tg_send_msg "${msg}" "${level}" >/dev/null 2>&1 || true
+	fi
+}
+
 # Validates and normalises the model's verdict; prints the clean JSON or nothing.
+# $2 (optional) is the context file: a code gap's `open_pr` is kept only when
+# it names a pull request in its `open_pull_requests` list, else it is null.
 activation_normalise_verdict()
 {
-	python3 - "$1" <<'PY'
+	python3 - "$1" "${2:-}" <<'PY'
 import json, os, re, sys
 raw = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+open_pr_numbers = set()
+if len(sys.argv) > 2 and sys.argv[2]:
+	try:
+		context = json.load(open(sys.argv[2], encoding="utf-8"))
+		open_pr_numbers = {item["number"] for item in context.get("open_pull_requests", []) if isinstance(item, dict) and type(item.get("number")) is int}
+	except (OSError, ValueError, AttributeError, TypeError):
+		open_pr_numbers = set()
 match = None
 for candidate in re.finditer(r"\{", raw):
 	try:
@@ -98,6 +160,7 @@ for gap in match["gaps"]:
 		"evidence": clean(gap.get("evidence"), 600),
 		"fix": clean(gap.get("fix"), 1500),
 		"dormant_until": clean(gap.get("dormant_until"), 200),
+		"open_pr": gap.get("open_pr") if gap["kind"] == "code" and type(gap.get("open_pr")) is int and gap.get("open_pr") in open_pr_numbers else None,
 	})
 print(json.dumps({
 	"verdict": match["verdict"],
@@ -108,11 +171,210 @@ print(json.dumps({
 PY
 }
 
+# Lists the symbolic links HEAD of $1 tracks, read from git objects on the
+# host (never following a link). The read-only model sandbox leaves symlinks
+# out of both its file snapshot and its synthetic git tree, so without this
+# list the verifier reports a tracked link as missing.
+# Prints {"tracked_symlinks": [{path, target, target_exists}], "tracked_symlinks_truncated": bool};
+# on any git or parse failure prints an empty list and one ::warning:: line.
+activation_tracked_symlinks_json()
+{
+	local activation_symlinks_out activation_symlinks_rc=0 activation_symlinks_reason
+	activation_symlinks_out="$(python3 -I -B - "$1" <<'PY'
+import json, posixpath, subprocess, sys
+MAX_ENTRIES = 200
+MAX_FIELD_BYTES = 1024
+target = sys.argv[1]
+try:
+	listing = subprocess.run(["git", "-C", target, "ls-tree", "-r", "-z", "--full-tree", "HEAD"],
+		capture_output=True, check=True, timeout=60).stdout
+except Exception:
+	sys.exit(2)
+links = []
+tracked = set()
+try:
+	for record in listing.split(b"\0"):
+		if not record:
+			continue
+		meta, sep, path = record.partition(b"\t")
+		mode, _otype, oid = meta.split(b" ")
+		if not sep:
+			raise ValueError("missing path")
+		tracked.add(path)
+		if mode == b"120000":
+			links.append((path, oid.decode("ascii")))
+except ValueError:
+	sys.exit(3)
+blobs = {}
+if links:
+	try:
+		batch = subprocess.run(["git", "-C", target, "cat-file", "--batch"],
+			input=b"".join(oid.encode("ascii") + b"\n" for _path, oid in links),
+			capture_output=True, check=True, timeout=60).stdout
+	except Exception:
+		sys.exit(2)
+	try:
+		pos = 0
+		for _path, oid in links:
+			newline = batch.index(b"\n", pos)
+			header = batch[pos:newline].split(b" ")
+			if len(header) != 3 or header[0].decode("ascii") != oid or header[1] != b"blob":
+				raise ValueError("unexpected cat-file header")
+			size = int(header[2])
+			blobs[oid] = batch[newline + 1:newline + 1 + size]
+			pos = newline + 1 + size + 1
+	except (ValueError, IndexError, UnicodeDecodeError):
+		sys.exit(3)
+def clean(raw):
+	if len(raw) > MAX_FIELD_BYTES:
+		return None
+	try:
+		text = raw.decode("utf-8")
+	except UnicodeDecodeError:
+		return None
+	if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+		return None
+	return text
+def resolves(path, raw_target):
+	# True when the target names a tracked file or directory inside the repo.
+	if raw_target.startswith(b"/"):
+		return False
+	resolved = posixpath.normpath(posixpath.join(posixpath.dirname(path), raw_target))
+	if resolved == b"." or resolved.startswith(b"../") or resolved == b"..":
+		return False
+	return resolved in tracked or any(name.startswith(resolved + b"/") for name in tracked)
+entries = []
+for path, oid in links:
+	path_text, target_text = clean(path), clean(blobs.get(oid, b""))
+	if path_text and target_text:
+		entries.append({"path": path_text, "target": target_text,
+			"target_exists": resolves(path, blobs.get(oid, b""))})
+entries.sort(key=lambda entry: entry["path"])
+print(json.dumps({"tracked_symlinks": entries[:MAX_ENTRIES], "tracked_symlinks_truncated": len(entries) > MAX_ENTRIES}))
+PY
+)" || activation_symlinks_rc=$?
+	if [ "${activation_symlinks_rc}" -ne 0 ] || [ -z "${activation_symlinks_out}" ]; then
+		activation_symlinks_reason="git_failed"
+		[ "${activation_symlinks_rc}" -eq 3 ] && activation_symlinks_reason="parse_failed"
+		echo "::warning::ACTIVATION_VERIFY tracked_symlinks unavailable reason=${activation_symlinks_reason}" >&2
+		activation_symlinks_out='{"tracked_symlinks": [], "tracked_symlinks_truncated": false}'
+	fi
+	printf '%s\n' "${activation_symlinks_out}"
+}
+
+# Lists the repository's open pull requests for the model, so a code gap one
+# of them already fixes is not filed again as an activation-fix issue.
+# One REST call: the 50 most recently updated open pull requests (trusted
+# same-repository ones are kept), with titles
+# and head refs cut to 200 characters and bodies to 1500 (untrusted text).
+# Prints {"open_pull_requests": [{number, title, head, draft, body}]}; on any
+# failure prints an empty list and one ::warning:: line, so every code gap
+# goes to the fix issue as before (fail open).
+activation_open_prs_json()
+{
+	local activation_open_prs_response activation_open_prs_out="" activation_open_prs_reason="lookup_failed"
+	if activation_open_prs_response="$(gh_retry gh api "repos/${REPOSITORY}/pulls?state=open&sort=updated&direction=desc&per_page=50" 2>/dev/null)"; then
+		# The call succeeded: an empty result below means the response did not parse.
+		activation_open_prs_reason="parse_failed"
+		# Only same-repository heads from trusted authors (the trust rule used
+		# for the linked issue and fix-issue lookup), so an outside or fork PR's
+		# text cannot steer a gap out of the fix issue.
+		activation_open_prs_out="$(printf '%s' "${activation_open_prs_response}" | jq -c --arg repo "${REPOSITORY}" '
+			if type == "array" then
+				{open_pull_requests: [.[] | select(type == "object" and (.number | type) == "number")
+					| select((.head.repo.full_name // "") == $repo)
+					| select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+					| {number, title: ((.title // "") | tostring | .[0:200]), head: ((.head.ref // "") | tostring | .[0:200]),
+						draft: (.draft == true), body: ((.body // "") | tostring | .[0:1500])}]}
+			else empty end' 2>/dev/null)"
+	fi
+	if [ -z "${activation_open_prs_out}" ]; then
+		echo "::warning::ACTIVATION_VERIFY open_pull_requests unavailable reason=${activation_open_prs_reason}" >&2
+		activation_open_prs_out='{"open_pull_requests": []}'
+	fi
+	printf '%s\n' "${activation_open_prs_out}"
+}
+
+# Prints the fixed label of the updater branch family when PR_HEAD_REF names
+# one and the PR's head repository is REPOSITORY itself (a fork cannot claim
+# the skip); prints nothing and returns 1 otherwise. Never prints the ref.
+activation_sync_branch_label()
+{
+	local activation_head_ref="${PR_HEAD_REF:-}"
+	[ -n "${activation_head_ref}" ] || return 1
+	[ -n "${PR_HEAD_REPOSITORY:-}" ] && [ "${PR_HEAD_REPOSITORY}" = "${REPOSITORY:-}" ] || return 1
+	case "${activation_head_ref}" in
+		auto/update-workflows-*)
+			printf '%s' "auto/update-workflows-"
+			;;
+		ai-sync/stable)
+			printf '%s' "ai-sync/stable"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+# True when PR_LABELS (a JSON array of names) holds ai:skip-activation-verify.
+# A missing or malformed value is no label.
+activation_has_skip_label()
+{
+	printf '%s' "${PR_LABELS:-[]}" | jq -e 'type == "array" and any(.[]; . == "ai:skip-activation-verify")' >/dev/null 2>&1
+}
+
+# Splits the JSON array of changed files in $1 by ACTIVATION_VERIFY_EXEMPT_GLOBS.
+# Prints {"exempt": [...], "other": [...]}; on a parse failure prints nothing
+# and returns 1 (the caller then verifies every file, as before).
+activation_split_exempt_files()
+{
+	ACTIVATION_SPLIT_FILES_JSON="$1" python3 -I -B - <<'PY'
+import fnmatch, json, os, sys
+from functools import lru_cache
+from pathlib import PurePosixPath
+raw = os.environ.get("ACTIVATION_VERIFY_EXEMPT_GLOBS", "") or "docs/plans/**"
+patterns = [item.strip().lstrip("/") for item in raw.split(",") if item.strip().lstrip("/")]
+if not patterns:
+	# A set value such as "," names no pattern: nothing is exempt, so every file is verified.
+	print("::warning::ACTIVATION_VERIFY_EXEMPT_GLOBS names no pattern; verifying every changed file.", file=sys.stderr)
+def matches(path, pattern):
+	path_parts = PurePosixPath(path).parts
+	pattern_parts = PurePosixPath(pattern).parts
+	@lru_cache(maxsize=None)
+	def match(path_idx, pattern_idx):
+		while pattern_idx < len(pattern_parts):
+			part = pattern_parts[pattern_idx]
+			if part == "**":
+				if pattern_idx + 1 == len(pattern_parts):
+					return path_idx < len(path_parts)
+				return any(match(next_idx, pattern_idx + 1) for next_idx in range(path_idx, len(path_parts) + 1))
+			if path_idx >= len(path_parts) or not fnmatch.fnmatchcase(path_parts[path_idx], part):
+				return False
+			path_idx += 1
+			pattern_idx += 1
+		return path_idx == len(path_parts)
+	return match(0, 0)
+try:
+	files = json.loads(os.environ["ACTIVATION_SPLIT_FILES_JSON"])
+	if not isinstance(files, list) or not all(isinstance(name, str) for name in files):
+		raise ValueError
+except (KeyError, ValueError):
+	sys.exit(1)
+exempt = [name for name in files if any(matches(name, pattern) for pattern in patterns)]
+other = [name for name in files if name not in exempt]
+print(json.dumps({"exempt": exempt, "other": other}))
+PY
+}
+
 activation_main()
 {
-	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file
+	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file activation_model_rc=0
+	local activation_symlinks_context activation_context_tmp activation_open_prs_context
+	local activation_issue_gaps activation_in_flight_prs
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_existing_fix activation_fix_lookup_ok
+	local activation_engine_labels="" activation_sync_label=""
+	local activation_exempt_json activation_split_json
 	if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
 		activation_log "mode=${mode} outcome=skip reason=disabled"
 		return 0
@@ -130,6 +392,14 @@ activation_main()
 		pr)
 			if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
 				activation_log "mode=pr outcome=skip reason=missing_pr"
+				return 0
+			fi
+			if activation_sync_label="$(activation_sync_branch_label)"; then
+				activation_log "mode=pr item=${PR_NUMBER} outcome=skip reason=workflow_sync_pr sync_branch=${activation_sync_label}"
+				return 0
+			fi
+			if activation_has_skip_label; then
+				activation_log "mode=pr item=${PR_NUMBER} outcome=skip reason=skip_label"
 				return 0
 			fi
 			key="pr-${PR_NUMBER}"
@@ -168,10 +438,22 @@ activation_main()
 				activation_log "mode=pr item=${item} outcome=skip reason=fallback_diff_empty"
 				return 0
 			fi
+			activation_exempt_json="[]"
+			if activation_split_json="$(activation_split_exempt_files "${activation_files_json}")"; then
+				activation_exempt_json="$(printf '%s' "${activation_split_json}" | jq -c '.exempt')"
+				if printf '%s' "${activation_split_json}" | jq -e '.other | length == 0' >/dev/null 2>&1; then
+					activation_log "mode=pr item=${item} outcome=skip reason=exempt_paths exempt_files=$(printf '%s' "${activation_exempt_json}" | jq 'length')"
+					return 0
+				fi
+				activation_files_json="$(printf '%s' "${activation_split_json}" | jq -c '.other')"
+			else
+				echo "::warning::Activation exempt-path check failed for #${PR_NUMBER}; verifying every changed file."
+			fi
 			jq -n --arg pr "${PR_NUMBER}" --arg sha "${MERGE_SHA:-}" --arg title "${PR_TITLE:-}" --arg body "${PR_BODY:-}" \
 				--argjson linked "${linked_json}" \
 				--argjson files "${activation_files_json}" \
-				'{kind: "merged pull request", pull_request: ($pr | tonumber), merge_commit: $sha, title: $title, body: ($body[0:6000]), linked_issue: $linked, changed_files: $files}' \
+				--argjson exempt "${activation_exempt_json}" \
+				'{kind: "merged pull request", pull_request: ($pr | tonumber), merge_commit: $sha, title: $title, body: ($body[0:6000]), linked_issue: $linked, changed_files: $files} + (if ($exempt | length) > 0 then {exempt_changed_files: $exempt} else {} end)' \
 				> "${context_file}" 2>/dev/null || echo '{}' > "${context_file}"
 			;;
 		project)
@@ -183,6 +465,18 @@ activation_main()
 			item="${TRACKING_NUM}"
 			item_label="project #${TRACKING_NUM}"
 			target_issue="${TRACKING_NUM}"
+			# Engine selection: an ai:codex label on the tracking issue keeps the
+			# ACTIVATION_VERIFY role on codex. The poller does not pass the labels
+			# (orchestrate_poll_process.sh is out of scope for this change) and no
+			# other project-mode read returns them, so read them once per completed
+			# project. Fails open to no labels (the configured default engine).
+			activation_engine_labels="${AI_ENGINE_LABELS:-}"
+			if [ -z "${activation_engine_labels}" ]; then
+				activation_engine_labels="$(gh_retry gh api "repos/${REPOSITORY}/issues/${TRACKING_NUM}/labels?per_page=100" --jq '[.[].name]' 2>/dev/null || true)"
+				if ! printf '%s' "${activation_engine_labels}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+					activation_engine_labels=""
+				fi
+			fi
 			# The final PR's file list is the complete project diff; the planned
 			# files from state are only hints when a final PR is not available.
 			# The poller's existing PR metadata read has no filenames to reuse.
@@ -209,6 +503,26 @@ activation_main()
 			;;
 	esac
 
+	# Fail open: a failed merge leaves the context as it was.
+	activation_symlinks_context="$(activation_tracked_symlinks_json "${TARGET_DIR}")"
+	activation_context_tmp="${context_file}.tmp"
+	if jq --argjson extra "${activation_symlinks_context}" '. + $extra' "${context_file}" > "${activation_context_tmp}" 2>/dev/null; then
+		mv -f "${activation_context_tmp}" "${context_file}"
+	else
+		rm -f "${activation_context_tmp}"
+	fi
+	# Fail open the same way: without the list no gap can be tagged `open_pr`.
+	# The list goes through a file: 50 bodies can exceed the per-argument limit
+	# of --argjson.
+	activation_open_prs_context="${RUNTIME_DIR}/activation_open_prs.json"
+	activation_open_prs_json > "${activation_open_prs_context}"
+	if jq --slurpfile extra "${activation_open_prs_context}" '. + $extra[0]' "${context_file}" > "${activation_context_tmp}" 2>/dev/null; then
+		mv -f "${activation_context_tmp}" "${context_file}"
+	else
+		rm -f "${activation_context_tmp}"
+		echo "::warning::ACTIVATION_VERIFY open_pull_requests unavailable reason=context_merge_failed" >&2
+	fi
+
 	prompt_file="${RUNTIME_DIR}/activation_prompt.txt"
 	output_file="${RUNTIME_DIR}/activation_output.txt"
 	verdict_file="${RUNTIME_DIR}/activation_verdict.json"
@@ -234,12 +548,38 @@ activation_main()
 		# credential-free, network-isolated container (read-only snapshot of the
 		# target's tracked files): no GH_TOKEN, no OpenRouter key and no .git
 		# reach it; model calls go through the host-side broker.
-		(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
-			bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
-			--ask-for-approval never -c model_verbosity=low exec \
-			--skip-git-repo-check --model "${model}" --sandbox read-only < "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/activation_codex.err") || true
+		# The ACTIVATION_VERIFY role picks its engine with claude_run_selected
+		# from the trusted support checkout: on codex, or when Claude is
+		# unavailable (exit 75), it runs the unchanged isolated codex command;
+		# the Claude engine runs read-only in the same credential-free container.
+		# Without the engine helper the codex command runs as before.
+		local activation_engine_helper="${SUPPORT_DIR}/scripts/ai_engine.sh"
+		if [ -f "${activation_engine_helper}" ] && [ ! -L "${activation_engine_helper}" ] \
+			&& bash -c 'source "$0" >/dev/null 2>&1 && declare -F claude_run_selected >/dev/null' "${activation_engine_helper}" 2>/dev/null; then
+			activation_model_rc=0
+			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET \
+				AI_ENGINE_MODEL_HINT="${model}" AI_ENGINE_EFFORT_HINT="${reasoning}" \
+				AI_ENGINE_LABELS="${activation_engine_labels:-${AI_ENGINE_LABELS:-}}" \
+				timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
+				bash -c 'source "$0"; claude_run_selected "$@"' "${activation_engine_helper}" \
+				ACTIVATION_VERIFY "${prompt_file}" "${output_file}" "${TARGET_DIR}" --codex-stdio -- \
+				bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
+				--ask-for-approval never -c model_verbosity=low exec \
+				--skip-git-repo-check --model "${model}" --sandbox read-only 2>"${RUNTIME_DIR}/activation_codex.err") || activation_model_rc=$?
+			if [ "${activation_model_rc}" -eq 80 ]; then
+				# Claude capacity wait (issue #7370): no codex, no verdict.
+				activation_log "mode=${mode} item=${item} outcome=skip reason=claude_capacity_wait"
+				return 0
+			fi
+		else
+			echo "AI_ENGINE_FALLBACK role=ACTIVATION_VERIFY reason=engine_support_missing" >&2
+			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
+				bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
+				--ask-for-approval never -c model_verbosity=low exec \
+				--skip-git-repo-check --model "${model}" --sandbox read-only < "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/activation_codex.err") || true
+		fi
 	fi
-	if ! activation_normalise_verdict "${output_file}" > "${verdict_file}" 2>/dev/null || [ ! -s "${verdict_file}" ]; then
+	if ! activation_normalise_verdict "${output_file}" "${context_file}" > "${verdict_file}" 2>/dev/null || [ ! -s "${verdict_file}" ]; then
 		activation_log "mode=${mode} item=${item} outcome=skip reason=invalid_verdict"
 		return 0
 	fi
@@ -247,8 +587,16 @@ activation_main()
 	code_gaps="$(jq '[.gaps[] | select(.kind == "code")] | length' "${verdict_file}")"
 	operator_gaps="$(jq '[.gaps[] | select(.kind == "operator")] | length' "${verdict_file}")"
 
+	# Code gaps tagged `open_pr` are left to that open pull request: they are
+	# reported in the verdict comment but go into no fix issue.
+	activation_issue_gaps="$(jq '[.gaps[] | select(.kind == "code" and .open_pr == null)] | length' "${verdict_file}")"
+	activation_in_flight_prs="$(jq -r '[.gaps[] | select(.kind == "code" and .open_pr != null) | .open_pr] | unique | map(tostring) | join(",")' "${verdict_file}")"
+	if [ -n "${activation_in_flight_prs}" ]; then
+		activation_log "mode=${mode} item=${item} op=in_flight_gaps count=$((code_gaps - activation_issue_gaps)) prs=${activation_in_flight_prs} outcome=left_to_open_prs"
+	fi
+
 	activation_fix_lookup_ok="true"
-	if [ "${code_gaps}" -gt 0 ]; then
+	if [ "${activation_issue_gaps}" -gt 0 ]; then
 		# Neither the linked-issue read nor the PR-files call can detect a fix issue
 		# from an earlier run whose verdict comment failed.
 		if ! activation_existing_fix="$(gh_retry gh api "search/issues?q=repo%3A${REPOSITORY}%20in%3Abody%20%22ai%3Aactivation-fix%3Av1%20source%3D${key}%22&per_page=100" 2>/dev/null)" \
@@ -265,11 +613,12 @@ activation_main()
 				"<!-- ai:activation-fix:v1 source=" + $key + " -->\n"
 				+ "## Activation gaps\n\nActivation verification of " + $label
 				+ " found these gaps that code in this repository can close. Close each one with the smallest change; do not change unrelated behaviour.\n\n"
-				+ ([.gaps[] | select(.kind == "code") | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
+				+ ([.gaps[] | select(.kind == "code" and .open_pr == null) | "- **" + .title + "**\n  Evidence: " + .evidence + "\n  Fix: " + .fix] | join("\n"))
 			' "${verdict_file}")"
 			if ! gh api "repos/${REPOSITORY}/issues" -f title="Activation gaps after ${item_label}" -f body="${fix_body}" >/dev/null 2>&1; then
 				echo "::warning::Could not open the activation-fix issue for ${key}."
 				activation_log "mode=${mode} item=${item} outcome=skip reason=fix_issue_failed"
+				_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${activation_issue_gaps} code gap(s), but the fix issue could not be opened; nothing will implement them until verification is re-run." "WARNING"
 				return 0
 			fi
 		fi
@@ -277,10 +626,25 @@ activation_main()
 	if [ "${operator_gaps}" -gt 0 ]; then
 		steps_file="${RUNTIME_DIR}/activation_operator_steps.json"
 		jq '[.gaps[] | select(.kind == "operator") | {title, instructions: (.fix + (if .evidence != "" then "\nEvidence: " + .evidence else "" end)), dormant_until}]' "${verdict_file}" > "${steps_file}"
+		# The merge commit lets the nightly promote cycle tick the entry once the
+		# `stable` tag includes it (operator_step_issue.py tick, plan item 4d).
+		# PR mode: the merge commit; project mode: the checked-out default branch.
+		# Without a valid commit the entry is recorded but never auto-ticked.
+		local activation_source_sha=""
+		if [ "${mode}" = "pr" ]; then
+			activation_source_sha="${MERGE_SHA:-}"
+		else
+			activation_source_sha="$(git -C "${TARGET_DIR}" rev-parse HEAD 2>/dev/null || true)"
+		fi
+		local -a activation_source_args=()
+		if [[ "${activation_source_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+			activation_source_args=(--source-sha "${activation_source_sha}")
+		fi
 		if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_DIR}/scripts/operator_step_issue.py" upsert --repo "${REPOSITORY}" --key "${key}" \
-			--source "Activation of ${item_label}" --steps-file "${steps_file}" >"${RUNTIME_DIR}/operator_step_issue.log" 2>&1; then
+			--source "Activation of ${item_label}" --steps-file "${steps_file}" "${activation_source_args[@]}" >"${RUNTIME_DIR}/operator_step_issue.log" 2>&1; then
 			echo "::warning::Could not update the ai:operator-step issue for ${key}: $(tr '\r\n' '  ' < "${RUNTIME_DIR}/operator_step_issue.log" | cut -c1-300)"
 			activation_log "mode=${mode} item=${item} outcome=skip reason=operator_issue_failed"
+			_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} has ${operator_gaps} operator step(s), but the ai:operator-step issue could not be updated." "WARNING"
 			return 0
 		fi
 	fi
@@ -288,7 +652,7 @@ activation_main()
 	comment_body="$(jq -r --arg key "${key}" --argjson lookup_ok "${activation_fix_lookup_ok}" '
 		"## Activation: " + .verdict + "\n\nSummary: " + .summary + "\n\n"
 		+ (if .trigger != "" then "Trigger: " + .trigger + "\n\n" else "" end)
-		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title] | join("\n")) + "\n\n" else "" end)
+		+ (if (.gaps | length) > 0 then "Gaps:\n" + ([.gaps[] | "- [" + .kind + "] " + .title + (if .open_pr != null then " (fix in progress in open PR #" + (.open_pr | tostring) + ")" else "" end)] | join("\n")) + "\n\n" else "" end)
 		+ (if $lookup_ok then "<!-- ai:activation:v1 verdict=" + .verdict + " source=" + $key + " -->" else "Code-gap follow-up is pending: the GitHub fix-issue lookup failed. The activation verdict is not finalized; retry verification.\n\n<!-- ai:activation:v1 partial=true source=" + $key + " -->" end)
 	' "${verdict_file}")"
 	if ! gh api "repos/${REPOSITORY}/issues/${target_issue}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
@@ -297,15 +661,14 @@ activation_main()
 		return 0
 	fi
 
-	if [ -f "${SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
-		# shellcheck source=/dev/null
-		source "${SUPPORT_DIR}/scripts/tg_helpers.sh" 2>/dev/null || true
-		tg_level="DEBUG"
-		[ "${verdict}" = "DORMANT" ] && tg_level="WARNING"
-		if declare -F tg_send_msg >/dev/null 2>&1; then
-			tg_send_msg "Activation ${verdict}: ${REPOSITORY} ${item_label} (${code_gaps} code gap(s), ${operator_gaps} operator step(s))" "${tg_level}" >/dev/null 2>&1 || true
-		fi
+	# DEBUG when the pipeline owns every gap: code gaps went to the fix issue
+	# the pipeline implements. WARNING only when a person has something to do:
+	# operator steps, or a code-gap fix issue that could not be checked/opened.
+	tg_level="DEBUG"
+	if [ "${verdict}" = "DORMANT" ] && { [ "${operator_gaps}" -gt 0 ] || [ "${activation_fix_lookup_ok}" = "false" ]; }; then
+		tg_level="WARNING"
 	fi
+	_activation_tg_send "Activation ${verdict}: ${REPOSITORY} ${item_label} (${code_gaps} code gap(s), ${operator_gaps} operator step(s))" "${tg_level}"
 	if [ "${activation_fix_lookup_ok}" = "false" ]; then
 		activation_log "mode=${mode} item=${item} verdict=${verdict} code_gaps=${code_gaps} operator_gaps=${operator_gaps} outcome=partial reason=fix_lookup_failed"
 	else

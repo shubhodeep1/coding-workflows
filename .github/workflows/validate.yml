@@ -60,8 +60,28 @@ name: AI Validate (Reusable)
       metadata_file:
         description: "Path to validation_metadata.json"
         value: ${{ jobs.validate.outputs.metadata_file }}
+      failure_owner:
+        description: "Who owns a failed validation (harness|project|mixed|none); docs/plans/validation-failure-harness-routing-plan.md"
+        value: ${{ jobs.validate.outputs.failure_owner }}
+      harness_report:
+        description: "true when the failure is harness-owned and its stage, reason and fingerprint passed validation, so the heal-report job reports it"
+        value: ${{ jobs.validate.outputs.harness_report }}
+      harness_stage:
+        description: "Harness stage of a harness-owned failure ([a-z_]{1,40}, empty otherwise)"
+        value: ${{ jobs.validate.outputs.harness_stage }}
+      harness_reason:
+        description: "Harness reason of a harness-owned failure ([a-z_]{1,40}, empty otherwise)"
+        value: ${{ jobs.validate.outputs.harness_reason }}
+      harness_fp:
+        description: "Fingerprint of a harness-owned failure (64 hex, empty otherwise)"
+        value: ${{ jobs.validate.outputs.harness_fp }}
 
 env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
   UNATTENDED_PHASE: validate
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
@@ -99,12 +119,83 @@ jobs:
       failure_summary: ${{ steps.collect_status.outputs.failure_summary }}
       status_file: ${{ steps.collect_status.outputs.status_file }}
       metadata_file: ${{ steps.collect_status.outputs.metadata_file }}
+      failure_owner: ${{ steps.collect_status.outputs.failure_owner }}
+      harness_report: ${{ steps.collect_status.outputs.harness_report }}
+      harness_stage: ${{ steps.collect_status.outputs.harness_stage }}
+      harness_reason: ${{ steps.collect_status.outputs.harness_reason }}
+      harness_fp: ${{ steps.collect_status.outputs.harness_fp }}
+      harness_signature_b64: ${{ steps.collect_status.outputs.harness_signature_b64 }}
 
+    env:
+      AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+      # Claude capacity wait (issue #7370): the tracking issue is labelled;
+      # the resume pass removes the label and the poller re-dispatches.
+      CLAUDE_CAPACITY_WAIT_ITEM_KIND: ${{ inputs.tracking_issue && inputs.tracking_issue != '0' && 'issue' || 'run' }}
+      CLAUDE_CAPACITY_WAIT_ITEM_NUMBER: ${{ inputs.tracking_issue || '' }}
+      CLAUDE_CAPACITY_WAIT_STAGE: validate
+      # Opt-in weekly scheduled run of the consumer wrapper (issue #7553). A
+      # called workflow keeps the caller's github context, so the schedule is
+      # read from github.event_name. A tracking issue or an explicit target
+      # turns scheduled mode off. Scheduled mode runs no model phase and
+      # reports through scripts/validate_scheduled_sink.sh.
+      VALIDATE_SCHEDULED_MODE: ${{ github.event_name == 'schedule' && (inputs.tracking_issue == '' || inputs.tracking_issue == '0') && inputs.target_ref == '' && 'true' || 'false' }}
     steps:
+      - name: Bootstrap GitHub API retry helper
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+        run: |
+          # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
+          # (issue #6634): main in this repo, stable in consumers, never the PR
+          # head or the caller checkout. emit_event.sh is fetched next to it so
+          # the helper never sources a checkout copy. Git transport spends no
+          # REST budget. On failure the steps below fall back to plain gh api.
+          # A consumer run whose job workflow_ref pins a coding-workflows file
+          # to a commit fetches that commit instead, never stable
+          # (tele-funtoken-msg-scoring#4566); a fetch that does not land
+          # exactly on it leaves the helper unset.
+          ghr_ref=stable
+          if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then ghr_ref=main; fi
+          ghr_pin=""
+          ghr_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [ "${ghr_ref}" = "stable" ] && [[ "${ghr_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml@[0-9a-f]{40}$ ]]; then
+            ghr_pin="${ghr_workflow_ref##*@}"
+            ghr_ref="${ghr_pin}"
+          fi
+          ghr_dir="${RUNNER_TEMP}/gh-api-retry-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ghr_auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+          for ghr_try in 1 2 3; do
+            rm -rf "${ghr_dir}"
+            mkdir -p "${ghr_dir}"
+            if { if [ -n "${ghr_pin}" ]; then
+                  git init -q "${ghr_dir}/src" 2>/dev/null \
+                    && git -C "${ghr_dir}/src" remote add origin https://github.com/shubhodeep1/coding-workflows \
+                    && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" fetch -q --no-tags --depth 1 --filter=blob:none origin "${ghr_pin}" 2>/dev/null \
+                    && [ "$(git -C "${ghr_dir}/src" rev-parse FETCH_HEAD 2>/dev/null)" = "${ghr_pin}" ] \
+                    && git -C "${ghr_dir}/src" update-ref HEAD FETCH_HEAD
+                else
+                  git -c http.extraHeader="${ghr_auth}" clone -q --no-tags --depth 1 --filter=blob:none --no-checkout \
+                    --branch "${ghr_ref}" https://github.com/shubhodeep1/coding-workflows "${ghr_dir}/src" 2>/dev/null
+                fi; } \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/gh_helpers.sh > "${ghr_dir}/gh_helpers.sh" 2>/dev/null \
+              && git -c http.extraHeader="${ghr_auth}" -C "${ghr_dir}/src" show HEAD:scripts/emit_event.sh > "${ghr_dir}/emit_event.sh" 2>/dev/null; then
+              break
+            fi
+            if [ "${ghr_try}" -lt 3 ]; then sleep $(( ghr_try * 5 )); fi
+          done
+          if grep -q '^gh_api_retry()' "${ghr_dir}/gh_helpers.sh" 2>/dev/null && [ -s "${ghr_dir}/emit_event.sh" ]; then
+            echo "GH_API_RETRY_HELPERS=${ghr_dir}/gh_helpers.sh" >> "${GITHUB_ENV}"
+          else
+            echo "::warning::GH_API_RETRY bootstrap unavailable (ref=${ghr_ref}); steps use plain gh api."
+          fi
+
       - name: Resolve integration ref
         id: refctx
         env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
         run: |
           set -euo pipefail
@@ -117,8 +208,39 @@ jobs:
 
           resolver_repo="shubhodeep1/coding-workflows"
           resolver_ref="stable"
+          resolver_ref_pinned=false
+          # A consumer wrapper pinned to a commit runs the resolver from that
+          # commit, never from stable or main (issue tele-funtoken#4566).
+          resolver_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+          if [[ "${resolver_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@[0-9a-f]{40}$ ]]; then
+            resolver_ref="${resolver_workflow_ref##*@}"
+            resolver_ref_pinned=true
+          fi
           if [ "${{ github.repository }}" = "${resolver_repo}" ]; then
             resolver_ref="${{ github.sha }}"
+            # Runs pinned to the protected promote-candidate branch (promote cycle,
+            # docs/plans/pin-promote-cycle-to-candidate-plan.md) take support code
+            # from its tip; a look-alike ref, an unprotected branch or a failed read
+            # keep the source above. One branches read, only on this path.
+            if [[ "${resolver_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$ ]]; then
+              # Tells "Fetch workflow support files" this step already decided, so a
+              # rejected read is not repeated there with a possibly different answer.
+              echo "promote_candidate_checked=true" >> "$GITHUB_OUTPUT"
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                resolver_ref="${promote_candidate_sha}"
+                resolver_ref_pinned=true
+                # "Fetch workflow support files" reuses this SHA, so both checkouts
+                # come from one candidate commit even if the branch moves meanwhile.
+                echo "promote_candidate_sha=${promote_candidate_sha}" >> "$GITHUB_OUTPUT"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
           fi
 
           resolver_stage_root="${RUNNER_TEMP}/resolve-integration-ref-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -136,11 +258,38 @@ jobs:
             rm -rf "${resolver_stage_root}"
           }
           trap cleanup_resolver_stage EXIT
+          # Issue #7283: with CI-triage PR-branch routing on, a resolver that cannot
+          # be staged, pinned or found fails the step instead of falling back to the
+          # default branch (the unpinned main fallback clone counts as a pinning
+          # failure). The flag is parsed like ci_triage_routing_enabled in
+          # scripts/resolve_integration_ref.sh. With routing off, the fallbacks below
+          # are unchanged.
+          resolver_ci_triage_routing_on=false
+          case "${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" in
+            [Tt][Rr][Uu][Ee]|1|[Yy][Ee][Ss]|[Oo][Nn]) resolver_ci_triage_routing_on=true ;;
+          esac
+          resolver_stage_fail_closed() {
+            if [ "${resolver_ci_triage_routing_on}" = "true" ]; then
+              resolver_pin_log=""
+              if [ "${resolver_ref_pinned}" = "true" ]; then resolver_pin_log=" pinned_ref=${resolver_ref}"; fi
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 ci_triage_routing=on${resolver_pin_log}; refusing to fall back to the default branch."
+            elif [ "${resolver_ref_pinned}" = "true" ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=resolver_unavailable reason=$1 pinned_ref=${resolver_ref}; refusing to run resolver code from another ref."
+            else
+              return 0
+            fi
+            if [ -s "${resolver_clone_log}" ]; then
+              sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
+            fi
+            exit 1
+          }
 
           if resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_primary}" 2>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_primary}/scripts/resolve_integration_ref.sh"
             if ! resolver_git -C "${resolver_stage_primary}" fetch --quiet --depth 1 origin "${resolver_ref}" 2>>"${resolver_clone_log}" || \
-               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}"; then
+               ! git -C "${resolver_stage_primary}" checkout --quiet --detach FETCH_HEAD 2>>"${resolver_clone_log}" || \
+               { [ "${resolver_ref_pinned}" = "true" ] && [ "$(git -C "${resolver_stage_primary}" rev-parse HEAD 2>/dev/null || true)" != "${resolver_ref}" ]; }; then
+              resolver_stage_fail_closed pin_failed
               echo "::warning::Failed to stage canonical integration resolver ref ${resolver_ref}; using main fallback."
               if [ -s "${resolver_clone_log}" ]; then
                 sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
@@ -148,7 +297,9 @@ jobs:
             fi
           elif resolver_git clone --quiet --depth 1 --branch main "${resolver_repo_url}" "${resolver_stage_fallback}" 2>>"${resolver_clone_log}"; then
             resolver_script="${resolver_stage_fallback}/scripts/resolve_integration_ref.sh"
+            resolver_stage_fail_closed pin_failed
           else
+            resolver_stage_fail_closed stage_failed
             echo "::warning::Failed to stage canonical integration resolver; falling back to default branch."
             if [ -s "${resolver_clone_log}" ]; then
               sed -E 's#x-access-token:[^@]+@#x-access-token:***@#g' "${resolver_clone_log}" | sed -n '1,20p'
@@ -158,20 +309,44 @@ jobs:
           fi
 
           if [ ! -f "${resolver_script}" ]; then
+            resolver_stage_fail_closed script_missing
             echo "::warning::Canonical integration resolver script not found in staged source; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           chmod +x "${resolver_script}"
-          if integration_branch="$({
+          # Exit 3 means CI-triage PR-branch routing was required but could
+          # not be verified; never fall back to the default branch then.
+          resolver_rc=0
+          integration_branch="$({
             REPO="${{ github.repository }}" \
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
+            CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}"
-          })"; then
+          })" || resolver_rc=$?
+          if [ "${resolver_rc}" -eq 0 ]; then
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
+          elif [ "${resolver_rc}" -eq 3 ]; then
+            echo "::error::CI-triage PR-branch routing refused for issue #${issue_number}; refusing to fall back to the default branch."
+            exit 1
           else
+            # resolver_rc already holds the resolver's exit code (captured by
+            # `|| resolver_rc=$?` above); `$?` here would be the failed exit-3
+            # test's status and would hide exits 75 and 2.
+            # A resolver that stayed rate-limited (exit 75, issue #6634) must
+            # not silently fall back to the default branch.
+            if [ "${resolver_rc}" -eq 75 ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc}"
+              exit 1
+            fi
+            # Exit 2 is an API failure (retries exhausted or a permanent error);
+            # only exit 1 (declared branch missing) keeps the fallback below.
+            if [ "${resolver_rc}" -eq 2 ]; then
+              echo "::error::INTEGRATION_REF_RESOLVE outcome=api_unavailable rc=${resolver_rc}"
+              exit 1
+            fi
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
             echo "ref=" >> "$GITHUB_OUTPUT"
           fi
@@ -184,6 +359,8 @@ jobs:
           VALIDATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
           if [ -z "${VALIDATE_TARGET_REF}" ]; then
             exit 0
           fi
@@ -211,10 +388,17 @@ jobs:
                 [ .[][] ] |
                 if length != 1 then error("\($what) PR binding is missing or ambiguous") else .[0] end
               end;'
-          target_prs="$(gh api --method GET --paginate --slurp \
+          # A transient or rate-limited listing is not "not authorized"
+          # (issue #6634): report it as an API failure.
+          target_prs_rc=0
+          target_prs="$(gh_api_retry --method GET --paginate --slurp \
             -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:${VALIDATE_TARGET_REF}" \
             -f per_page=100 \
-            "repos/${GITHUB_REPOSITORY}/pulls")" || exit 1
+            "repos/${GITHUB_REPOSITORY}/pulls")" || target_prs_rc=$?
+          if [ "${target_prs_rc}" -ne 0 ]; then
+            echo "::error::VALIDATE_AUTHORIZE_TARGET outcome=api_unavailable rc=${target_prs_rc}"
+            exit 1
+          fi
           target_binding="$(jq -er --arg repo "${GITHUB_REPOSITORY}" \
             --arg branch "${VALIDATE_TARGET_REF}" --arg base "${VALIDATE_DEFAULT_BRANCH}" "${validate_pr_jq_defs}"'
             single_pr("target") |
@@ -281,6 +465,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
+          VALIDATE_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          VALIDATE_PROMOTE_CANDIDATE_SHA: ${{ steps.refctx.outputs.promote_candidate_sha }}
+          VALIDATE_PROMOTE_CANDIDATE_CHECKED: ${{ steps.refctx.outputs.promote_candidate_checked }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -288,6 +475,41 @@ jobs:
           if [ "${GITHUB_REPOSITORY}" = "${wf_source}" ]; then
             helper_ref="main"
           fi
+          # A consumer wrapper pins this workflow to a commit (validate.yml@<sha>).
+          # Stage the support scripts from that same commit, never from a newer
+          # stable: binance-blessings#249's integration branch pinned an old
+          # validate.yml that failed against stable's scripts on every dispatch
+          # (Q49). Same identity source as review_autofix.yml's support commit.
+          validate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${VALIDATE_WORKFLOW_JOB_JSON}" 2>/dev/null || true)"
+          validate_support_pin_pattern='^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@[0-9a-f]{40}$'
+          if [ "${GITHUB_REPOSITORY}" != "${wf_source}" ] && [[ "${validate_workflow_ref}" =~ ${validate_support_pin_pattern} ]]; then
+            helper_ref="${validate_workflow_ref##*@}"
+          fi
+          if [ "${GITHUB_REPOSITORY}" = "${wf_source}" ]; then
+            # Runs pinned to the protected promote-candidate branch (promote cycle,
+            # docs/plans/pin-promote-cycle-to-candidate-plan.md) take support code
+            # from its tip; a look-alike ref, an unprotected branch or a failed read
+            # keep the source above. One branches read, only on this path.
+            if [[ "${validate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$ ]]; then
+              # Reuse the SHA "Resolve integration ref" accepted (a step output,
+              # which later steps cannot overwrite). Read the branch only when that
+              # step never read it (no tracking issue); a rejection there keeps main.
+              promote_candidate_sha="${VALIDATE_PROMOTE_CANDIDATE_SHA:-}"
+              if [[ ! "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]] && [ "${VALIDATE_PROMOTE_CANDIDATE_CHECKED:-}" != "true" ]; then
+                source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+                type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+                promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+                promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              fi
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                helper_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+          fi
+          echo "VALIDATE_SUPPORT_REF ref=${helper_ref} workflow_ref=${validate_workflow_ref:-unknown}"
           helper_stage_root="${RUNNER_TEMP}/codex-validate-helper-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           helper_stage_dir="${helper_stage_root}/src"
           mkdir -p "${helper_stage_root}"
@@ -296,13 +518,29 @@ jobs:
           helper_git() {
             git -c "http.extraHeader=Authorization: Basic ${helper_auth}" "$@"
           }
-          if ! helper_git clone --quiet --no-tags --depth 1 --branch "${helper_ref}" \
+          if [[ "${helper_ref}" =~ ^[0-9a-f]{40}$ ]]; then
+            # A commit is not a branch, so fetch it directly.
+            if ! { helper_git init --quiet "${helper_stage_dir}" &&
+                   helper_git -C "${helper_stage_dir}" fetch --quiet --no-tags --depth 1 "https://github.com/${wf_source}" "${helper_ref}" &&
+                   helper_git -C "${helper_stage_dir}" checkout --quiet --detach FETCH_HEAD; }; then
+              echo "::error::Trusted validation support checkout failed (ref=${helper_ref})."
+              exit 1
+            fi
+          elif ! helper_git clone --quiet --no-tags --depth 1 --branch "${helper_ref}" \
             "https://github.com/${wf_source}" "${helper_stage_dir}"; then
             echo "::error::Trusted validation support checkout failed."
             exit 1
           fi
           support_sha="$(git -C "${helper_stage_dir}" rev-parse HEAD)"
           [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          if [[ "${helper_ref}" =~ ^[0-9a-f]{40}$ ]] && [ "${support_sha}" != "${helper_ref}" ]; then
+            echo "::error::Validation support checkout is not the pinned commit (expected ${helper_ref}, got ${support_sha})."
+            exit 1
+          fi
+          # The commit the support scripts come from; scripts/validate_process.sh
+          # records it in the validation-harness-owner:v1 marker.
+          echo "VALIDATE_SUPPORT_SHA sha=${support_sha}"
+          echo "VALIDATE_SUPPORT_SHA=${support_sha}" >> "$GITHUB_ENV"
           if [ ! -f "${helper_stage_dir}/scripts/stage_workflow_support.sh" ] ||
              [ ! -f "${helper_stage_dir}/scripts/run_workspace_hook.sh" ]; then
             echo "::error::Trusted validation support helpers are unavailable."
@@ -312,6 +550,7 @@ jobs:
           mkdir -p "${hook_helper_dir}"
           install -m 0755 "${helper_stage_dir}/scripts/run_workspace_hook.sh" "${hook_helper_dir}/run_workspace_hook.sh"
           echo "VALIDATE_HOOK_HELPER=${hook_helper_dir}/run_workspace_hook.sh" >> "$GITHUB_ENV"
+          echo "VALIDATE_HELPER_STAGE_DIR=${helper_stage_dir}" >> "$GITHUB_ENV"
 
           manifest_path="${RUNNER_TEMP}/validate-support-manifest.json"
           cat > "${manifest_path}" <<'EOF'
@@ -329,6 +568,7 @@ jobs:
               "scripts/memory_injection_patterns.py",
               "scripts/openrouter_prompt_cache.py",
               "scripts/build_static_context.sh",
+              "scripts/assemble_agents.py",
               "scripts/write_codex_config.sh",
               "scripts/codex_helpers.sh",
               "scripts/orchestrate_force_tick.sh",
@@ -338,7 +578,9 @@ jobs:
               "scripts/workspace_safety_check.sh",
               "scripts/run_workspace_hook.sh",
               "scripts/codex_isolated_exec.sh",
+              "scripts/sandbox_image.sh",
               "scripts/codex_isolated_workspace.py",
+              "scripts/validation_harness_sandbox.sh",
               "scripts/clarify_openrouter_broker.py"
             ],
             "optional_preserve_scripts_before_templates": [
@@ -353,6 +595,7 @@ jobs:
               "workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
               "workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
               "workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",
+              "workflow-templates/validation-harness/_shared/Dockerfile.app.dockerignore.j2",
               "workflow-templates/validation-harness/node-hardhat-solidity/Dockerfile.app.j2",
               "workflow-templates/validation-harness/node-hardhat-solidity/_lib/graceful_shutdown.sh.j2",
               "workflow-templates/validation-harness/node-hardhat-solidity/docker-compose.test.yml.j2",
@@ -411,6 +654,17 @@ jobs:
               "scripts/validate_driver.sh",
               "scripts/validate_process.sh"
             ],
+            "self_repo_trusted_support_files": [
+              "scripts/templates/slot_manifest.schema.json",
+              "scripts/validation_harness_sandbox.sh",
+              "scripts/validate_driver.sh",
+              "scripts/validate_process.sh"
+            ],
+            "self_repo_trusted_scripts": [
+              "scripts/validation_harness_sandbox.sh",
+              "scripts/codex_isolated_workspace.py",
+              "scripts/validate_driver.sh"
+            ],
             "schema_files_if_missing": [
               "ai-memory/schemas/memory_record.v1.json",
               "ai-memory/schemas/processed_command_entry.v1.json",
@@ -438,7 +692,9 @@ jobs:
               "scripts/mcp_handshake_probe.py",
               "scripts/transcript_archive.sh",
               "scripts/emit_event.sh",
-              "scripts/emit_event.py"
+              "scripts/emit_event.py",
+              "scripts/workflow_failure_heal.py",
+              "scripts/build_sync_manifest.py"
             ],
             "serena_template_path": "scripts/templates/serena_project.yml.j2",
             "required_prompts": [
@@ -481,6 +737,127 @@ jobs:
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"
+      - name: Stage trusted Claude engine support
+        env:
+          CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+        run: |
+          set -euo pipefail
+          # The engine helpers (ai_engine.sh, policy, relay, isolation helper,
+          # guard hook, instructions) come only from the verified support
+          # clone, never from the checkout being validated. Without them every
+          # validate role keeps its unchanged codex path
+          # (AI_ENGINE_FALLBACK reason=engine_support_missing).
+          helper_stage_dir="${VALIDATE_HELPER_STAGE_DIR:-}"
+          if [ -n "${helper_stage_dir}" ] && [ -f "${helper_stage_dir}/scripts/ai_engine.sh" ] &&
+             bash -c 'source "$0" && declare -F ai_engine_stage_support >/dev/null && ai_engine_stage_support "$1" "$2"' \
+               "${helper_stage_dir}/scripts/ai_engine.sh" "${helper_stage_dir}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; the validate roles run codex."
+          fi
+
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TRACKING_ISSUE_INPUT: ${{ inputs.tracking_issue }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_VALIDATE: ${{ vars.AI_ENGINE_VALIDATE || '' }}
+          AI_ENGINE_VALIDATE_SELF_HEAL: ${{ vars.AI_ENGINE_VALIDATE_SELF_HEAL || '' }}
+        run: |
+          set -euo pipefail
+          engine="codex"
+          engine_script="${CLAUDE_ENGINE_SUPPORT_DIR:-}/scripts/ai_engine.sh"
+          # Scheduled mode (#7553) calls no model: keep codex so the Claude CLI
+          # install and the pool-token probes below are skipped.
+          if [ "${VALIDATE_SCHEDULED_MODE:-false}" = "true" ]; then
+            echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "${CLAUDE_ENGINE_SUPPORT_DIR:-}" ] && [ -f "${engine_script}" ] && [ ! -L "${engine_script}" ]; then
+            if [[ "${TRACKING_ISSUE_INPUT}" =~ ^[1-9][0-9]*$ ]]; then
+              # API audit (unattended section 14): no earlier step of this job
+              # reads the tracking issue's labels ("Resolve integration ref"
+              # exposes only the branch), and validate_process.sh reads the
+              # issue body after the CLI and pool steps that need the engine.
+              # One read; the labels go to GITHUB_ENV so validate_process.sh
+              # and self-heal reuse them. A failed read leaves them empty.
+              labels_json=""
+              if labels_json="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_INPUT}" --jq '[.labels[].name]' 2>/dev/null)" &&
+                 labels_json="$(printf '%s' "${labels_json}" | python3 -I -c 'import json,sys; v=json.load(sys.stdin); assert isinstance(v,list) and all(isinstance(x,str) for x in v); print(json.dumps(v))' 2>/dev/null)"; then
+                export AI_ENGINE_LABELS="${labels_json}"
+                echo "AI_ENGINE_LABELS=${labels_json}" >> "$GITHUB_ENV"
+              else
+                echo "::warning::Could not read the tracking issue labels; engine selection uses variables and the engine config."
+              fi
+            fi
+            # shellcheck disable=SC1090
+            source "${engine_script}"
+            for role in VALIDATE VALIDATE_SELF_HEAL; do
+              if [ "$(ai_engine_for_role "${role}" || echo codex)" = "claude" ]; then
+                engine="claude"
+              fi
+            done
+          fi
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Stage trusted Claude engine actions
+        id: claude_engine_actions
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          # `uses:` resolves local actions only inside GITHUB_WORKSPACE. The
+          # copies come from the verified support clone (never the checkout)
+          # and live under .codex-workflow-src, which workspace_init.sh keeps
+          # out of the validation workspace. They stay until the job ends:
+          # the pool-token post step runs from there and deletes the tokens.
+          src="${VALIDATE_HELPER_STAGE_DIR:?}"
+          dest="${GITHUB_WORKSPACE}/.codex-workflow-src"
+          if [ -e "${dest}" ] || [ -L "${dest}" ]; then
+            echo "::warning::${dest} already exists; not staging the Claude engine actions (codex runs)."
+            exit 1
+          fi
+          for rel in .github/actions/install-claude .github/actions/claude-pool-token; do
+            if [ ! -d "${src}/${rel}" ] || [ -L "${src}/${rel}" ] || [ -n "$(find "${src}/${rel}" ! -type f ! -type d -print -quit)" ]; then
+              echo "::warning::Trusted ${rel} is missing or holds a non-regular file; codex runs."
+              exit 1
+            fi
+          done
+          if [ ! -f "${src}/.github/ai/claude_engine.json" ] || [ -L "${src}/.github/ai/claude_engine.json" ]; then
+            echo "::warning::Trusted .github/ai/claude_engine.json is missing; codex runs."
+            exit 1
+          fi
+          # The pool-token action runs <action>/../../../scripts/claude_pool_token.sh,
+          # which calls claude_engine.py beside it. Without them the credential
+          # step exits 127 and every Claude role ends with no_credential.
+          for rel in scripts/claude_pool_token.sh scripts/claude_engine.py; do
+            if [ ! -f "${src}/${rel}" ] || [ -L "${src}/${rel}" ]; then
+              echo "::warning::Trusted ${rel} is missing; codex runs."
+              exit 1
+            fi
+          done
+          mkdir -p "${dest}/.github/actions" "${dest}/.github/ai" "${dest}/scripts"
+          cp -R "${src}/.github/actions/install-claude" "${src}/.github/actions/claude-pool-token" "${dest}/.github/actions/"
+          install -m 0644 "${src}/.github/ai/claude_engine.json" "${dest}/.github/ai/claude_engine.json"
+          install -m 0755 "${src}/scripts/claude_pool_token.sh" "${dest}/scripts/claude_pool_token.sh"
+          install -m 0644 "${src}/scripts/claude_engine.py" "${dest}/scripts/claude_engine.py"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude' && steps.claude_engine_actions.outcome == 'success'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.engine == 'claude' && steps.claude_engine_actions.outcome == 'success'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Initialize workspace metadata
         id: workspace_meta
         env:
@@ -979,6 +1356,7 @@ jobs:
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}
@@ -989,16 +1367,36 @@ jobs:
           CODEX_RETRY_BACKOFF_BASE_SECS: ${{ vars.CODEX_RETRY_BACKOFF_BASE_SECS || '10' }}
           MODEL_EDITOR: ${{ env.MODEL_EDITOR }}
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
-          MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_VALIDATE: ${{ vars.AI_ENGINE_VALIDATE || '' }}
+          AI_ENGINE_VALIDATE_SELF_HEAL: ${{ vars.AI_ENGINE_VALIDATE_SELF_HEAL || '' }}
+          # Scheduled mode (#7553): no self-heal, no model phases, and no
+          # per-phase alerts (the sink step sends one WARNING when it opens
+          # the failure issue).
+          MAX_SELF_HEAL_ATTEMPTS: ${{ env.VALIDATE_SCHEDULED_MODE == 'true' && '0' || vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
+          VALIDATE_DETERMINISTIC_ONLY: ${{ env.VALIDATE_SCHEDULED_MODE }}
+          # Harness-owned failures go to workflow failure heal (README "Runtime
+          # Validation Phase" > "Harness-owned failures"); false restores the old path.
+          VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
           VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' && steps.renderer_dependencies.outputs.renderer_state == 'prepared' }}
           VALIDATION_RENDERER_DEPENDENCIES_OUTCOME: ${{ steps.renderer_dependencies.outcome }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
-          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          ALERT_MSG_LEVEL: ${{ env.VALIDATE_SCHEDULED_MODE == 'true' && 'SILENT' || inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
-          bash scripts/validate_process.sh
+          validate_process_rc=0
+          bash scripts/validate_process.sh || validate_process_rc=$?
+          if [ "${validate_process_rc}" -eq 80 ]; then
+            # Claude capacity wait (issue #7370): no verdict label. The report
+            # step labels the tracking issue; the capacity-resume pass removes
+            # the label and the poller re-dispatches validation.
+            echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE outcome=deferred stage=validate"
+            echo "CLAUDE_CAPACITY_WAIT=true" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+          exit "${validate_process_rc}"
 
       - name: Run workspace after_run hook
         if: always() && steps.validate_run.outcome != 'skipped'
@@ -1034,7 +1432,7 @@ jobs:
 
       - name: Collect validation status
         id: collect_status
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
         run: |
@@ -1062,6 +1460,44 @@ jobs:
           summary="$(jq -r '.summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
           failure_summary="$(jq -r '.failure_summary // ""' "${STATUS_FILE_PATH}" | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
 
+          # Harness ownership (docs/plans/validation-failure-harness-routing-plan.md,
+          # Phase 1). scripts/validate_process.sh writes these fields after the
+          # model phases ran, so each value is checked against a fixed vocabulary
+          # or pattern before it becomes an output. Anything else turns the heal
+          # report off (fail closed: nothing is reported).
+          failure_owner="$(jq -r '(.failure_owner // "none") | tostring' "${STATUS_FILE_PATH}" 2>/dev/null || echo none)"
+          case "${failure_owner}" in
+            harness|project|mixed|none) ;;
+            *) failure_owner="none" ;;
+          esac
+          harness_stage="$(jq -r '(.harness_stage // "") | tostring' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+          [[ "${harness_stage}" =~ ^[a-z_]{1,40}$ ]] || harness_stage=""
+          harness_reason="$(jq -r '(.harness_reason // "") | tostring' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+          [[ "${harness_reason}" =~ ^[a-z_]{1,40}$ ]] || harness_reason=""
+          harness_fp="$(jq -r '(.harness_fp // "") | tostring' "${STATUS_FILE_PATH}" 2>/dev/null || true)"
+          [[ "${harness_fp}" =~ ^[0-9a-f]{64}$ ]] || harness_fp=""
+          harness_report="$(jq -r 'if .harness_report == true then "true" else "false" end' "${STATUS_FILE_PATH}" 2>/dev/null || echo false)"
+          [ "${harness_report}" = "true" ] || harness_report="false"
+          case "${failure_owner}" in
+            harness|mixed) ;;
+            *) harness_report="false" ;;
+          esac
+          if [ -z "${harness_stage}" ] || [ -z "${harness_reason}" ] || [ -z "${harness_fp}" ]; then
+            harness_report="false"
+          fi
+          # The heal-report job runs on another runner, so the signature file
+          # travels as a base64 job output: exact bytes (the reporter recomputes
+          # the fingerprint from them), at most 1024 bytes, base64 alphabet only.
+          harness_signature_b64=""
+          harness_signature_path="${RUNTIME_DIR}/validation_harness_signature.txt"
+          if [ "${harness_report}" = "true" ] && [ -f "${harness_signature_path}" ] && [ ! -L "${harness_signature_path}" ]; then
+            harness_signature_bytes="$(wc -c < "${harness_signature_path}" 2>/dev/null | tr -d '[:space:]' || true)"
+            if [[ "${harness_signature_bytes}" =~ ^[0-9]+$ ]] && [ "${harness_signature_bytes}" -ge 1 ] && [ "${harness_signature_bytes}" -le 1024 ]; then
+              harness_signature_b64="$(base64 -w0 < "${harness_signature_path}" 2>/dev/null || true)"
+              [[ "${harness_signature_b64}" =~ ^[A-Za-z0-9+/=]{4,1368}$ ]] || harness_signature_b64=""
+            fi
+          fi
+
           if [ ! -f "${METADATA_FILE_PATH}" ]; then
             jq -n \
               --arg status "${status}" \
@@ -1084,10 +1520,16 @@ jobs:
             echo "failure_summary=${failure_summary}"
             echo "status_file=${STATUS_FILE_PATH}"
             echo "metadata_file=${METADATA_FILE_PATH}"
+            echo "failure_owner=${failure_owner}"
+            echo "harness_report=${harness_report}"
+            echo "harness_stage=${harness_stage}"
+            echo "harness_reason=${harness_reason}"
+            echo "harness_fp=${harness_fp}"
+            echo "harness_signature_b64=${harness_signature_b64}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Emit Serena stats
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         continue-on-error: true
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
@@ -1116,7 +1558,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/serena_stats_emit.py "${serena_stat_args[@]}"
 
       - name: Record validation candidate
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1195,7 +1637,7 @@ jobs:
             --issue-number "${issue_number}"
 
       - name: Upload validation artifacts
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         uses: actions/upload-artifact@v6
         with:
           name: ai-validation-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1206,7 +1648,7 @@ jobs:
             ${{ steps.workspace_state.outputs.workspace_path }}/validation/
 
       - name: Write run summary
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           SUMMARY_TRACKING_ISSUE: ${{ inputs.tracking_issue }}
           SUMMARY_COMPOSE_FILE: ${{ inputs.compose_file }}
@@ -1237,7 +1679,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record validation run end
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1297,8 +1739,41 @@ jobs:
             --actor "${{ github.actor }}" \
             --metadata-json "${metadata_json}"
 
+      # Issue #7553: a scheduled run reports its result in one deduplicated
+      # ai:scheduled-validation-failed issue in this repository (opened with one
+      # Telegram WARNING, updated in place, closed when a later run passes).
+      # Runs only the trusted support copy of the helper, never the checkout.
+      # A cancelled run is not evidence of a red branch, so it reports nothing.
+      - name: Report scheduled validation result
+        id: scheduled_sink
+        if: "!cancelled() && env.VALIDATE_SCHEDULED_MODE == 'true' && env.CLAUDE_CAPACITY_WAIT != 'true'"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          SINK_STATUS: ${{ steps.collect_status.outputs.status }}
+          SINK_RAW_STATUS: ${{ steps.collect_status.outputs.raw_status }}
+          SINK_SUMMARY: ${{ steps.collect_status.outputs.summary }}
+          SINK_FAILURE_SUMMARY: ${{ steps.collect_status.outputs.failure_summary }}
+          SINK_RESULT_FILE: ${{ steps.runtime.outputs.runtime_dir }}/validation_result.json
+          SINK_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SINK_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          # Do not source the workspace-directed shell startup file here.
+          BASH_ENV: ''
+        run: |
+          sink_support_dir="${VALIDATE_HELPER_STAGE_DIR:-}"
+          sink_script="${sink_support_dir}/scripts/validate_scheduled_sink.sh"
+          if [ -z "${sink_support_dir}" ] || [ ! -f "${sink_script}" ] || [ -L "${sink_script}" ]; then
+            echo "::warning::VALIDATE_SCHEDULED_SINK outcome=skip reason=support_missing"
+            exit 0
+          fi
+          SINK_HEAD_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)" \
+            bash "${sink_script}" || true
+
       - name: Force orchestrate poll after validation finalization
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1327,7 +1802,7 @@ jobs:
           bash "${VALIDATE_HOOK_HELPER}" validate before_remove
 
       - name: Enforce validation outcome
-        if: always()
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always())
         env:
           VALIDATION_STATUS: ${{ steps.collect_status.outputs.status }}
           VALIDATION_RAW_STATUS: ${{ steps.collect_status.outputs.raw_status }}
@@ -1345,3 +1820,155 @@ jobs:
           fi
           echo "Validation did not pass."
           exit 1
+      # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
+      # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
+      # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
+      # the copy in the trusted support checkout, never a PR-head script.
+      - name: Report refused AI engine fallbacks
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+          REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+        run: |
+          fallback_support_dir="${VALIDATE_HELPER_STAGE_DIR:-}"
+          fallback_report="${fallback_support_dir}/scripts/ai_engine_fallback_report.sh"
+          if [ -n "${fallback_support_dir}" ] && [ -f "${fallback_report}" ] && [ ! -L "${fallback_report}" ]; then
+            REPORT_WRAPPER_SHA="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${fallback_support_dir}" rev-parse HEAD 2>/dev/null || true)" \
+              bash "${fallback_report}" || true
+          else
+            echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi
+
+  heal-report:
+    # Workflow failure heal (README "Runtime Validation Phase" > "Harness-owned
+    # failures"; docs/plans/validation-failure-harness-routing-plan.md, Phase 1).
+    # A runtime validation failure owned by the harness this repository ships
+    # (a Layer 0 stage, a harness_error diagnosis, or needs_fixes whose files
+    # are all harness-managed; a mixed result too) is reported to
+    # coding-workflows' heal intake as one `validation_failure` report, so the
+    # harness is fixed upstream instead of filing fix-up issues the project
+    # cannot act on. Only a failed validate job with a validated
+    # harness_report output is reported: a cancelled run was superseded or
+    # timed out, and the intake requires a failed run conclusion. A separate
+    # job, so the validate job has finished and the intake reads its complete
+    # log. The signature file reaches this runner as the base64 job output
+    # harness_signature_b64 (checked against the base64 alphabet on both
+    # sides) and is decoded into RUNNER_TEMP. Granted only `id-token: write`
+    # (every caller wrapper grants it) so the reporter can attach the OIDC
+    # report identity the intake verifies; GH_PAT does the work. The reporter
+    # always exits 0. VALIDATION_HARNESS_HEAL_ENABLED=false turns it off.
+    needs: validate
+    if: >-
+      always() && needs.validate.result == 'failure' &&
+      needs.validate.outputs.harness_report == 'true' &&
+      inputs.tracking_issue != '' && inputs.tracking_issue != '0' &&
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
+      !contains(fromJson('["false"]'), vars.VALIDATION_HARNESS_HEAL_ENABLED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      VALIDATION_HARNESS_HEAL_ENABLED: ${{ vars.VALIDATION_HARNESS_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_PHASE: validate
+      WORKFLOW_HEAL_ISSUE_NUMBER: ${{ inputs.tracking_issue }}
+      WORKFLOW_HEAL_VALIDATION_STAGE: ${{ needs.validate.outputs.harness_stage }}
+      WORKFLOW_HEAL_VALIDATION_REASON: ${{ needs.validate.outputs.harness_reason }}
+      WORKFLOW_HEAL_VALIDATION_FP: ${{ needs.validate.outputs.harness_fp }}
+      VALIDATION_SIGNATURE_B64: ${{ needs.validate.outputs.harness_signature_b64 }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+    steps:
+      - name: Resolve workflow support ref
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          # Expression values reach the script only through env (never run: source).
+          SUPPORT_REF_REPOSITORY: ${{ github.repository }}
+          SUPPORT_REF_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${SUPPORT_REF_REPOSITORY:-}" = "${wf_source}" ]; then
+            promote_candidate_support_ref="${SUPPORT_REF_HEAD_SHA:-}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
+          else
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, not a newer
+            # stable (as implement.yml's heal-report job). Tags, branches and
+            # any other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/validate\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Report the harness-owned validation failure to workflow failure heal
+        run: |
+          set -euo pipefail
+          reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          # A pinned support ref must be exactly the commit the caller pinned
+          # (tele-funtoken-msg-scoring#4566); never run another ref's reporter.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=support_ref_mismatch ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          report_dir="${RUNNER_TEMP}/workflow-heal-phase-report"
+          mkdir -p "${report_dir}" || { echo "::warning::WORKFLOW_HEAL_PHASE_REPORT skip reason=report_dir_unavailable"; exit 0; }
+          # Decode the signature only when the job output is plain base64; the
+          # reporter skips (and logs why) when the variable is left empty.
+          WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE=""
+          if [[ "${VALIDATION_SIGNATURE_B64:-}" =~ ^[A-Za-z0-9+/=]{4,1368}$ ]]; then
+            signature_file="${report_dir}/validation_harness_signature.txt"
+            rm -f "${signature_file}"
+            if printf '%s' "${VALIDATION_SIGNATURE_B64}" | base64 -d > "${signature_file}" 2>/dev/null; then
+              WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE="${signature_file}"
+            fi
+          fi
+          export WORKFLOW_HEAL_VALIDATION_SIGNATURE_FILE
+          REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
+            RUNTIME_DIR="${report_dir}" \
+            bash "${reporter}"

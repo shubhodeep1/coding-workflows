@@ -308,8 +308,26 @@ echo "Worktree changes before staging (post artifact-cleanup):"
 # shellcheck disable=SC2001
 echo "${porcelain_status}" | sed 's/^/  /'
 
-git config user.name "codex-bot"
-git config user.email "codex@users.noreply.github.com"
+# The commit author names the engine that wrote the edits: claude-bot only
+# when both editing roles (IMPLEMENT and IMPLEMENT_REPAIR) resolved to Claude
+# and neither fell back to Codex (codex_thread_reuse.sh leaves a
+# claude-<key>.unavailable marker when it does); codex-bot otherwise. Both
+# emails are on the reserved .invalid domain so GitHub links the commit to
+# no account.
+implement_commit_identity_states="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR:-/nonexistent}}/codex-thread-reuse/states"
+if [ "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" = "claude" ] \
+  && [ "${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" = "claude" ] \
+  && [ ! -e "${implement_commit_identity_states}/claude-implement.unavailable" ] \
+  && [ ! -e "${implement_commit_identity_states}/claude-implement-repair.unavailable" ]; then
+  implement_commit_engine=claude
+  git config user.name "claude-bot"
+  git config user.email "claude-bot@users.noreply.invalid"
+else
+  implement_commit_engine=codex
+  git config user.name "codex-bot"
+  git config user.email "codex-bot@users.noreply.invalid"
+fi
+echo "AI_COMMIT_IDENTITY role=IMPLEMENT engine=${AI_ENGINE_RESOLVED_IMPLEMENT:-codex} repair_engine=${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex} commit_engine=${implement_commit_engine} name=$(git config user.name)"
 git rm -r --cached node_modules 2>/dev/null || true
 # Template-owned paths (prompts/, .github/prompts/,
 # .github/scripts/) are fetched from coding-workflows at runtime in
@@ -582,6 +600,7 @@ else
         "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' '--allowlist-file'; else printf '%s' '--issue-body-file'; fi)" \
         "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' "${HEAL_SCOPE_FILE:?}"; else printf '%s' "${ISSUE_BODY_FILE:-}"; fi)" \
         "${scope_guard_extra_args[@]}" \
+        --issue-number "${ISSUE_NUMBER:-}" \
         --staged-file "${scope_staged_file}" \
         --allowlist-out "${scope_allowlist_file}")"
       scope_rc=$?

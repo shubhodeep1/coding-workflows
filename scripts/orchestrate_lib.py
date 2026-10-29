@@ -781,10 +781,51 @@ def _parallel_groups_from_edges(
 	return groups
 
 
+def trusted_prepush_augmented_paths(data: dict[str, Any]) -> dict[str, set[str]]:
+	"""Return the augmented-only paths per issue that the partition guard may ignore.
+
+	``data["prepush_augmented_paths"]`` (``PREPUSH_AUGMENTED_PATHS_KEY``) is
+	written by :func:`augment_files_touched`, but it travels inside
+	model-written decomposition JSON, so it is untrusted. An issue gets an
+	entry only when its marker value is a list of strings that are all in
+	that issue's ``files_touched`` and do not cover all of them (at least
+	one planned path remains, the ``marker_ignored`` rule of
+	``augment_files_touched``). Any other shape gives the issue no entry, so
+	its overlaps count as before. ``data`` is never mutated (issue #8244).
+	"""
+	raw = data.get(PREPUSH_AUGMENTED_PATHS_KEY) if isinstance(data, dict) else None
+	if not isinstance(raw, dict):
+		return {}
+	trusted: dict[str, set[str]] = {}
+	for issue in data.get("issues", []) or []:
+		if not isinstance(issue, dict):
+			continue
+		issue_id = issue.get("id")
+		if not isinstance(issue_id, str) or issue_id not in raw:
+			continue
+		entry = raw.get(issue_id)
+		if not isinstance(entry, list) or not entry:
+			continue
+		if not all(isinstance(p, str) for p in entry):
+			continue
+		touched_raw = issue.get("files_touched", []) or []
+		if not isinstance(touched_raw, list):
+			continue
+		touched = {p for p in touched_raw if isinstance(p, str)}
+		entry_set = set(entry)
+		if not entry_set <= touched:
+			continue
+		if not (touched - entry_set):
+			continue
+		trusted[issue_id] = entry_set
+	return trusted
+
+
 def validate_wave_file_partition(
 	wave_ids: list[str],
 	issues_by_id: dict[str, dict[str, Any]],
 	hot_files: set[str] | None = None,
+	augmented_paths: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
 	"""Detect sibling file-touch overlaps within a single wave.
 
@@ -816,9 +857,18 @@ def validate_wave_file_partition(
 		scope closes that bypass. Two unknown-scope siblings are also paired
 		with each other.
 
+	``augmented_paths`` (from :func:`trusted_prepush_augmented_paths`) maps
+	an issue id to the paths the pre-push gate added to its files_touched.
+	A shared path listed for BOTH issues of a pair was planned by neither,
+	so it does not count as an overlap (issue #8244: a shared affected test
+	serialized two independent siblings). A path at least one of the two
+	issues planned counts as before, hot-file handling included. The
+	``unknown_scope`` check still looks at the raw lists.
+
 	A wave with a single issue never yields overlaps.
 	"""
 	hot = hot_files or set()
+	augmented = augmented_paths or {}
 	overlaps: list[dict[str, Any]] = []
 
 	# Build {issue_id: set(paths)} once.
@@ -844,7 +894,9 @@ def validate_wave_file_partition(
 					"files": [],
 				})
 				continue
-			common = sorted(fa & fb)
+			shared = fa & fb
+			augmented_both = augmented.get(iid_a, set()) & augmented.get(iid_b, set())
+			common = sorted(shared - augmented_both)
 			if not common:
 				continue
 			pair_key = (iid_a, iid_b)
@@ -904,6 +956,8 @@ def auto_serialize_file_overlaps(
 	issues_by_id: dict[str, dict[str, Any]] = {i["id"]: i for i in data["issues"]}
 	edges: list[dict[str, str]] = list(data.get("dependency_edges", []) or [])
 	serializations: list[dict[str, Any]] = []
+	# Overlaps on paths only the pre-push gate added never serialize (#8244).
+	augmented = trusted_prepush_augmented_paths(data)
 
 	def _edge_exists(frm: str, to: str) -> bool:
 		for e in edges:
@@ -926,7 +980,7 @@ def auto_serialize_file_overlaps(
 		groups = _parallel_groups_from_edges(issues_by_id, edges)
 		any_new = False
 		for group_idx, wave_ids in enumerate(groups):
-			overlaps = validate_wave_file_partition(wave_ids, issues_by_id, hot)
+			overlaps = validate_wave_file_partition(wave_ids, issues_by_id, hot, augmented_paths=augmented)
 			if not overlaps:
 				continue
 			for record in overlaps:
@@ -1455,6 +1509,10 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	"ai:merged",
 	"ai:closed",
 	"ai:needs-human",
+	"ai:claude-capacity-wait",
+	# Plan split to an orchestrator project (Q151/Q152): the project owns the
+	# work and the poller closes the source issue when it completes.
+	"ai:split-to-project",
 	"ai:blocked",
 	"ai:clarify-failed",
 	"ai:clarify-respond-failed",
@@ -1521,6 +1579,10 @@ BLOCKER_TERMINAL_WAVE_STATUSES: set[str] = {"merged", "closed", "skipped", "not_
 # STALL_RECOVERY_ACTIONS["ai:review-blocked"] below.
 DEDICATED_HANDLER_PHASES: set[str] = {
 	"ai:needs-human",
+	# Claude pool capacity wait (issue #7251): the hourly resume pass owns it.
+	"ai:claude-capacity-wait",
+	# Plan split source issue (Q152): close_plan_split_source_if_needed owns it.
+	"ai:split-to-project",
 	"ai:blocked",
 	"ai:implementation-failed",
 	"ai:validating",
@@ -3386,9 +3448,20 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 
 	wave_reports: list[dict[str, Any]] = []
 	total_overlaps = 0
+	# Same augmented-only rule as auto_serialize_file_overlaps (issue #8244),
+	# so the reported counts match the edges actually injected.
+	augmented = trusted_prepush_augmented_paths(data)
+	augmented_only_overlaps_ignored = 0
 	for wave_idx, wave in enumerate(raw_waves):
 		ids = [i["id"] for i in wave]
-		overlaps = validate_wave_file_partition(ids, issues_by_id, hot_files)
+		overlaps = validate_wave_file_partition(ids, issues_by_id, hot_files, augmented_paths=augmented)
+		if augmented:
+			unfiltered_pairs = {
+				(o["issue_a"], o["issue_b"])
+				for o in validate_wave_file_partition(ids, issues_by_id, hot_files)
+			}
+			kept_pairs = {(o["issue_a"], o["issue_b"]) for o in overlaps}
+			augmented_only_overlaps_ignored += len(unfiltered_pairs - kept_pairs)
 		total_overlaps += len(overlaps)
 		wave_reports.append({
 			"wave": wave_idx + 1,
@@ -3406,6 +3479,7 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 			"ok": False,
 			"error": str(exc),
 			"total_overlaps": total_overlaps,
+			"augmented_only_overlaps_ignored": augmented_only_overlaps_ignored,
 			"wave_reports": wave_reports,
 			"hot_files_audit": hot_files_audit,
 		})
@@ -3416,6 +3490,7 @@ def cmd_check_partition(args: argparse.Namespace) -> int:
 		"hot_files": sorted(hot_files),
 		"hot_files_audit": hot_files_audit,
 		"total_overlaps": total_overlaps,
+		"augmented_only_overlaps_ignored": augmented_only_overlaps_ignored,
 		"wave_reports": wave_reports,
 		"planned_serializations": planned,
 	})
@@ -3661,6 +3736,23 @@ def cmd_print_integration_ref(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_extract_integration_branch(args: argparse.Namespace) -> int:
+	"""Print the integration branch an issue body declares, or nothing.
+
+	Reads the issue body from stdin and applies extract_integration_branch
+	(canonical ``Integration branch:`` line first, ``Target branch:`` alias
+	otherwise). Issue #6631: close_merged_issues_sweep and
+	issue_pr_status.yml use it to decide whether a merged PR's base is the
+	issue's own target branch, so the parser stays in one place.
+	"""
+	del args
+	body = sys.stdin.read()
+	branch = extract_integration_branch(body)
+	if branch:
+		print(branch)
+	return 0
+
+
 def cmd_check_stalls(args: argparse.Namespace) -> int:
 	"""Detect stalled issues and return recommended recovery actions."""
 	path = Path(args.state_file).resolve()
@@ -3774,6 +3866,655 @@ def cmd_concurrency_caps(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Retired host-only conflict classifier (issue #6680)
+# ---------------------------------------------------------------------------
+#
+# Stall recovery uses this to recognise a PR conflict the sandboxed conflict
+# resolver can never merge: a conflicted path the sandbox keeps on the host
+# (``review_untrusted_workspace.allowed()`` refuses it) that is listed in the
+# trusted ``workflow-templates/retired_files.txt`` manifest and no longer
+# exists on the PR base. Such a PR is closed and re-issued against the
+# current base instead of re-dispatching a resolver that fails closed with
+# ``sandbox_path_host_only``. Anything else, including any doubt, keeps the
+# existing resolver dispatch (which still fails closed).
+
+RETIRED_CONFLICT_PATH_RE = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9._/-]{0,199}")
+RETIRED_CONFLICT_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+RETIRED_CONFLICT_MAX_LISTED = 50
+
+
+def _retired_conflict_result(decision: str, reason: str, retired: Any = (), blocking: Any = (), other: Any = ()) -> dict[str, Any]:
+	return {
+		"decision": decision,
+		"reason": reason,
+		"retired_paths": sorted(retired)[:RETIRED_CONFLICT_MAX_LISTED],
+		"blocking_paths": sorted(blocking)[:RETIRED_CONFLICT_MAX_LISTED],
+		"other_paths": sorted(other)[:RETIRED_CONFLICT_MAX_LISTED],
+	}
+
+
+def _retired_conflict_path_ok(path: str) -> bool:
+	return bool(RETIRED_CONFLICT_PATH_RE.fullmatch(path)) and ".." not in path.split("/") and "//" not in path and ".." not in path
+
+
+def parse_retired_files_manifest(manifest_text: str) -> set[str] | None:
+	"""Return the retired paths, or None when any entry is malformed.
+
+	Same format the ``Remove retired upstream files`` step of
+	``update_workflows.yml`` reads: ``#`` comment lines and blank lines are
+	skipped; other lines are ``<path> <sha256> [<sha256> ...]``.
+	"""
+	paths: set[str] = set()
+	for raw_line in manifest_text.splitlines():
+		line = raw_line.strip()
+		if not line or line.startswith("#"):
+			continue
+		tokens = line.split()
+		if len(tokens) < 2 or not _retired_conflict_path_ok(tokens[0]):
+			return None
+		if not all(RETIRED_CONFLICT_SHA256_RE.fullmatch(token) for token in tokens[1:]):
+			return None
+		paths.add(tokens[0])
+	return paths
+
+
+def classify_retired_host_only_conflicts(conflict_paths: Any, manifest_text: str, base_present_paths: Any, is_sandbox_allowed: Any) -> dict[str, Any]:
+	"""Decide whether a conflicted PR should be closed and re-issued.
+
+	``decision`` is ``reissue`` only when at least one conflicted host-only
+	path is retired and absent from the base, and every host-only path is.
+	``no_match`` keeps the existing resolver dispatch; ``unavailable`` means
+	the inputs could not be trusted (fail closed to the existing path).
+	"""
+	paths = [str(path) for path in (conflict_paths or [])]
+	paths = [path for path in paths if path != ""]
+	if not paths:
+		return _retired_conflict_result("unavailable", "no_conflict_paths")
+	if any(not _retired_conflict_path_ok(path) for path in paths):
+		return _retired_conflict_result("unavailable", "unsafe_path")
+	retired = parse_retired_files_manifest(manifest_text or "")
+	if retired is None:
+		return _retired_conflict_result("unavailable", "manifest_malformed")
+	base_present = {str(path) for path in (base_present_paths or [])}
+	unique_paths = set(paths)
+	host_only: set[str] = set()
+	for path in unique_paths:
+		try:
+			if not is_sandbox_allowed(path):
+				host_only.add(path)
+		except Exception:  # noqa: BLE001 - any policy error fails closed
+			return _retired_conflict_result("unavailable", "policy_error")
+	other = unique_paths - host_only
+	retired_absent = {path for path in host_only if path in retired and path not in base_present}
+	blocking = host_only - retired_absent
+	if not host_only:
+		return _retired_conflict_result("no_match", "no_host_only", other=other)
+	if blocking:
+		retired_on_base = {path for path in blocking if path in retired}
+		reason = "retired_present_on_base" if retired_on_base == blocking else "host_only_not_retired"
+		return _retired_conflict_result("no_match", reason, retired_absent, blocking, other)
+	return _retired_conflict_result("reissue", "retired_host_only_absent_from_base", retired_absent, (), other)
+
+
+def _retired_conflict_trusted_dir(path: Path) -> bool:
+	return not path.is_symlink() and path.is_dir()
+
+
+def _retired_conflict_read_lines(path: str) -> list[str] | None:
+	try:
+		return Path(path).read_text(encoding="utf-8").splitlines()
+	except (OSError, UnicodeDecodeError):
+		return None
+
+
+def cmd_retired_conflict_check(args: argparse.Namespace) -> int:
+	"""Print the classifier decision as JSON; always exits 0."""
+
+	def _emit(result: dict[str, Any]) -> int:
+		print(json.dumps(result, sort_keys=True))
+		return 0
+
+	support = Path(args.support_dir)
+	templates = support / "workflow-templates"
+	manifest = templates / "retired_files.txt"
+	scripts_dir = support / "scripts"
+	module_path = scripts_dir / "review_untrusted_workspace.py"
+	try:
+		if not (_retired_conflict_trusted_dir(support) and _retired_conflict_trusted_dir(templates) and _retired_conflict_trusted_dir(scripts_dir)):
+			return _emit(_retired_conflict_result("unavailable", "support_untrusted"))
+		if manifest.is_symlink() or not manifest.is_file() or module_path.is_symlink() or not module_path.is_file():
+			return _emit(_retired_conflict_result("unavailable", "support_untrusted"))
+		manifest_text = manifest.read_text(encoding="utf-8")
+	except (OSError, UnicodeDecodeError):
+		return _emit(_retired_conflict_result("unavailable", "support_untrusted"))
+	try:
+		import importlib.util
+
+		spec = importlib.util.spec_from_file_location("_retired_conflict_review_untrusted_workspace", module_path)
+		if spec is None or spec.loader is None:
+			raise ImportError("no loader")
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+		policy = getattr(module, "allowed")
+		if not callable(policy):
+			raise ImportError("allowed not callable")
+	except Exception:  # noqa: BLE001 - any import failure fails closed
+		return _emit(_retired_conflict_result("unavailable", "policy_unavailable"))
+	conflict_lines = _retired_conflict_read_lines(args.conflict_paths_file)
+	base_lines = _retired_conflict_read_lines(args.base_present_file)
+	if conflict_lines is None or base_lines is None:
+		return _emit(_retired_conflict_result("unavailable", "input_unreadable"))
+	return _emit(classify_retired_host_only_conflicts(conflict_lines, manifest_text, base_lines, policy))
+
+
+# ---------------------------------------------------------------------------
+# Unrouted replies on blocked issues (issue #6630)
+# ---------------------------------------------------------------------------
+# The poller's sweep-only tick flags an open ai:blocked issue whose newest
+# trusted human comment never resumed the pipeline: a /reclarify the intake
+# skipped, or an answer posted without any command. Classification goes by
+# comment content, never by login: automation and the operator can share the
+# GH_PAT account.
+
+UNROUTED_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+UNROUTED_ROUTED_LABELS = frozenset({"ai:clarification", "ai:planning", "ai:awaiting-approval", "ai:implementing"})
+UNROUTED_BLOCK_LABEL = "ai:blocked"
+_UNROUTED_AUTOMATION_MARKER_RE = re.compile(r"<!--\s*(?:ai:|ai_|orchestrator_)", re.IGNORECASE)
+# Other pipeline markers: helpers post comments under their own names
+# (tg_cleanup / tg_phase from tg_helpers.sh, workflow-failure-heal:occurrence,
+# ...) and versioned NAME_V1 blocks. These are never a human reply, but unlike
+# the markers above they do not show that a reply was handled, so they only
+# disqualify the comment as the human candidate. Missing them let a bare
+# `<!-- tg_cleanup:N -->`, posted a second after the block, pass as a human
+# reply and page the operator.
+_UNROUTED_PIPELINE_MARKER_RE = re.compile(
+	r"<!--\s*(?:ai-|tg_cleanup:|tg_phase:|gh_rl_ts:|status:"
+	r"|workflow-failure-heal:|check-failure-triage:|claude-branch-review:"
+	r"|review-autofix-failure|security-pass-|re-security-pass-dedup|revalidate-dedup"
+	r"|merge-train|validation-failure-fingerprint|force-merge-bypass"
+	r"|[a-z][a-z0-9_]*_v[0-9]+\b)",
+	re.IGNORECASE,
+)
+# A reply has visible text; a body that is only HTML comments is bookkeeping.
+_UNROUTED_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
+# Openings of automation comments that predate their markers (or never carry
+# one). Lower-case; compared against the left-stripped, lower-cased body.
+_UNROUTED_AUTOMATION_PREFIXES = (
+	"/answer [auto-",
+	"/reclarify [auto-",
+	"/approved [auto-",
+	"clarification blocked:",
+	"planning blocked:",
+	"implementation blocked:",
+	"autonomous resolution not possible",
+	"clarification loop guard escalation",
+	"clarification required",
+	"implementation plan",
+	"the task appears clear.",
+	"ai clarification workflow",
+	"ai planning workflow",
+	"ai implementation workflow",
+)
+
+
+def is_reclarify_command_body(body: Any) -> bool:
+	"""Mirror clarify.yml's jobs.clarify.if: /reclarify on the first line, or on
+	a later line of a comment with no automation marker and no plan trailer.
+	Case-insensitive like GitHub's startsWith/contains."""
+	text = (body if isinstance(body, str) else "").lower()
+	if text.startswith("/reclarify"):
+		return True
+	return (
+		"\n/reclarify" in ("\n" + text)
+		and "<!-- ai:" not in text
+		and "to restart clarification reply:" not in text
+	)
+
+
+def _is_unrouted_automation_body(body: Any) -> bool:
+	text = body if isinstance(body, str) else ""
+	if _UNROUTED_AUTOMATION_MARKER_RE.search(text):
+		return True
+	return text.lstrip().lower().startswith(_UNROUTED_AUTOMATION_PREFIXES)
+
+
+def _is_unrouted_non_human_body(body: Any) -> bool:
+	if _is_unrouted_automation_body(body):
+		return True
+	text = body if isinstance(body, str) else ""
+	if _UNROUTED_PIPELINE_MARKER_RE.search(text):
+		return True
+	return not _UNROUTED_HTML_COMMENT_RE.sub("", text).strip()
+
+
+def _parse_github_ts(value: Any) -> datetime | None:
+	if not isinstance(value, str) or not value:
+		return None
+	try:
+		parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+	except ValueError:
+		return None
+	if parsed.tzinfo is None:
+		parsed = parsed.replace(tzinfo=timezone.utc)
+	return parsed.astimezone(timezone.utc)
+
+
+def _nodes(container: Any) -> list:
+	if isinstance(container, dict):
+		nodes = container.get("nodes")
+		return [node for node in nodes if isinstance(node, dict)] if isinstance(nodes, list) else []
+	if isinstance(container, list):
+		return [node for node in container if isinstance(node, dict)]
+	return []
+
+
+def classify_unrouted_blocked_issues(
+	details: Any,
+	now: datetime,
+	grace_minutes: int = 15,
+	max_age_hours: int = 168,
+) -> list[dict[str, Any]]:
+	"""Return the blocked issues whose newest trusted human comment was never routed.
+
+	`details` maps (or lists) GraphQL issue objects carrying `number`,
+	`labels.nodes[].name`, `comments.nodes[]` (databaseId, body, createdAt,
+	authorAssociation, author{login,__typename}) and `timelineItems.nodes[]`
+	LabeledEvents (createdAt, label{name}). Pure: no I/O.
+	"""
+	if now.tzinfo is None:
+		now = now.replace(tzinfo=timezone.utc)
+	grace_seconds = max(0, int(grace_minutes)) * 60
+	max_age_seconds = max(1, int(max_age_hours)) * 3600
+	issues = list(details.values()) if isinstance(details, dict) else details if isinstance(details, list) else []
+	flagged: list[dict[str, Any]] = []
+	for issue in issues:
+		if not isinstance(issue, dict):
+			continue
+		number = issue.get("number")
+		if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+			continue
+		labels = {node.get("name") for node in _nodes(issue.get("labels"))}
+		if UNROUTED_BLOCK_LABEL not in labels:
+			continue
+		comments = []
+		for comment in _nodes(issue.get("comments")):
+			created = _parse_github_ts(comment.get("createdAt"))
+			if created is not None:
+				comments.append((created, comment))
+		comments.sort(key=lambda item: item[0])
+		human = None
+		for created, comment in comments:
+			author = comment.get("author") if isinstance(comment.get("author"), dict) else {}
+			if (
+				comment.get("authorAssociation") in UNROUTED_TRUSTED_ASSOCIATIONS
+				and author.get("__typename") == "User"
+				and not _is_unrouted_non_human_body(comment.get("body"))
+			):
+				human = (created, comment)
+		if human is None:
+			continue
+		human_ts, human_comment = human
+		comment_id = human_comment.get("databaseId")
+		if not isinstance(comment_id, int) or isinstance(comment_id, bool) or comment_id <= 0:
+			continue
+		age_seconds = (now - human_ts).total_seconds()
+		if age_seconds < grace_seconds or age_seconds > max_age_seconds:
+			continue
+		# Any later automation comment (clarify output, a replay, or this
+		# detector's own marker) means the reply was handled or already flagged.
+		if any(created > human_ts and _is_unrouted_automation_body(comment.get("body")) for created, comment in comments):
+			continue
+		label_events = []
+		for event in _nodes(issue.get("timelineItems")):
+			label = event.get("label") if isinstance(event.get("label"), dict) else {}
+			created = _parse_github_ts(event.get("createdAt"))
+			if created is not None:
+				label_events.append((created, label.get("name")))
+		# The reply must answer the current block, not precede it.
+		blocked_at = [created for created, name in label_events if name == UNROUTED_BLOCK_LABEL]
+		if blocked_at and human_ts <= max(blocked_at):
+			continue
+		if any(created > human_ts and name in UNROUTED_ROUTED_LABELS for created, name in label_events):
+			continue
+		flagged.append({
+			"issue": number,
+			"comment_id": comment_id,
+			"reason": "command_unrouted" if is_reclarify_command_body(human_comment.get("body")) else "no_command",
+			"age_minutes": int(age_seconds // 60),
+		})
+	flagged.sort(key=lambda item: item["issue"])
+	return flagged
+
+
+def cmd_unrouted_blocked_comments(args: argparse.Namespace) -> int:
+	details = json.loads(sys.stdin.read() or "{}")
+	now = _parse_github_ts(args.now) if args.now else datetime.now(timezone.utc)
+	if now is None:
+		raise ValueError(f"invalid --now timestamp: {args.now!r}")
+	print(json.dumps(classify_unrouted_blocked_issues(details, now, args.grace_minutes, args.max_age_hours)))
+	return 0
+
+
+# ---------------------------------------------------------------------------
+# Pre-push affected-test gate, phase P2 (issue #8189): orchestrator scoping.
+#
+# ``augment-files-touched`` runs the trusted gate module's ``select
+# --paths-file`` on each issue's planned files_touched and appends the
+# affected tests and companion registries, so the partition guard and the
+# child issue body see them. ``render-expected-files`` renders the advisory
+# "Expected files" section of a child issue body. The section is advisory
+# only: its heading never contains the allowlist key and its entries are
+# backticked bullets, so scripts/files_touched_scope_guard.py still finds no
+# allowlist block in it (plan D5, Q18).
+# ---------------------------------------------------------------------------
+
+PREPUSH_AUGMENT_MAX_FILES_TOUCHED = 50
+PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS = 60
+# Top-level decomposition key recording the paths augmentation added per
+# issue (like partition_serializations, a key the poller does not read).
+PREPUSH_AUGMENTED_PATHS_KEY = "prepush_augmented_paths"
+_EXPECTED_FILE_FORBIDDEN_RE = re.compile(r"[\s`<>\\\x00-\x1f\x7f-\x9f]")
+EXPECTED_FILES_SECTION_HEADER = (
+	"**Expected files** (advisory, from the decomposition; includes the tests and\n"
+	"registries this change affects. Update them in the same change.)"
+)
+
+
+def _expected_file_entry_ok(path: Any) -> bool:
+	"""Return True for a repository-relative path that is safe to render in a code span."""
+	if not isinstance(path, str) or not 1 <= len(path) <= 300:
+		return False
+	if _EXPECTED_FILE_FORBIDDEN_RE.search(path):
+		return False
+	if path.startswith("/"):
+		return False
+	parts = path.split("/")
+	if any(part == ".." for part in parts):
+		return False
+	if parts[0].lower() == ".git":
+		return False
+	return True
+
+
+def render_expected_files_section(paths: Any) -> str:
+	"""Render the advisory "Expected files" section; empty string when nothing is left."""
+	if not isinstance(paths, list):
+		return ""
+	kept: list[str] = []
+	seen: set[str] = set()
+	for path in paths:
+		if not _expected_file_entry_ok(path) or path in seen:
+			continue
+		seen.add(path)
+		kept.append(path)
+	if not kept:
+		return ""
+	return EXPECTED_FILES_SECTION_HEADER + "\n" + "\n".join(f"- `{path}`" for path in kept)
+
+
+def cmd_render_expected_files(args: argparse.Namespace) -> int:
+	"""Print the "Expected files" section for a JSON array of paths; never fails."""
+	try:
+		source = args.paths_json_file
+		if source == "-":
+			raw = sys.stdin.read()
+		else:
+			raw = Path(source).read_text(encoding="utf-8")
+		section = render_expected_files_section(json.loads(raw))
+		if section:
+			sys.stdout.write(section + "\n")
+	except Exception:  # noqa: BLE001 - advisory renderer, fail open to no section
+		return 0
+	return 0
+
+
+def _prepush_augment_log_id(issue_id: Any) -> str:
+	return re.sub(r"[^A-Za-z0-9._-]", "_", str(issue_id))[:80] or "unknown"
+
+
+def _prepush_augment_log(message: str) -> None:
+	print(f"PREPUSH_TEST_GATE phase=augment {message}", file=sys.stderr)
+
+
+def _prepush_select_planned_paths(
+	module: Path,
+	repo_root: Path,
+	paths: list[str],
+	timeout_secs: int,
+) -> tuple[list[str] | None, str]:
+	"""Run the gate module's ``select --paths-file`` and return its candidate paths.
+
+	Candidates are ``affected_tests[].path`` first, then ``companion_files``,
+	in module order, so the 50-entry cap keeps the affected tests. Returns ``(None, reason)`` on any failure.
+	"""
+	import tempfile
+
+	with tempfile.TemporaryDirectory(prefix="prepush-augment-") as tmp:
+		paths_file = Path(tmp) / "paths.txt"
+		out_file = Path(tmp) / "select.json"
+		lines = [p for p in paths if "\n" not in p and "\r" not in p]
+		paths_file.write_text("".join(f"{p}\n" for p in lines), encoding="utf-8")
+		env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG") if key in os.environ}
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		cmd = [
+			sys.executable, "-I", "-B", str(module), "select",
+			"--repo-root", str(repo_root),
+			"--paths-file", str(paths_file),
+			"--out", str(out_file),
+		]
+		try:
+			proc = subprocess.run(
+				cmd,
+				cwd=str(repo_root),
+				env=env,
+				stdin=subprocess.DEVNULL,
+				capture_output=True,
+				timeout=timeout_secs,
+				check=False,
+			)
+		except subprocess.TimeoutExpired:
+			return None, "timeout"
+		except OSError:
+			return None, "module_error"
+		if proc.returncode != 0:
+			return None, "module_failed"
+		if not out_file.is_file():
+			return None, "output_missing"
+		try:
+			payload = json.loads(out_file.read_text(encoding="utf-8"))
+		except (OSError, ValueError):
+			return None, "malformed_json"
+	if not isinstance(payload, dict):
+		return None, "malformed_json"
+	# The module always emits both keys; a response missing one is incomplete.
+	if "companion_files" not in payload or "affected_tests" not in payload:
+		return None, "malformed_json"
+	companions = payload.get("companion_files", [])
+	affected = payload.get("affected_tests", [])
+	if not isinstance(companions, list) or not isinstance(affected, list):
+		return None, "malformed_json"
+	candidates: list[str] = []
+	for entry in affected:
+		if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+			return None, "malformed_json"
+		candidates.append(entry["path"])
+	for entry in companions:
+		if not isinstance(entry, str):
+			return None, "malformed_json"
+		candidates.append(entry)
+	return candidates, ""
+
+
+def _prepush_write_json_atomic(path: Path, data: Any) -> None:
+	import tempfile
+
+	fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+	try:
+		with os.fdopen(fd, "w", encoding="utf-8") as handle:
+			json.dump(data, handle, ensure_ascii=True, indent=2)
+			handle.flush()
+			os.fsync(handle.fileno())
+		os.chmod(tmp_name, 0o644)
+		os.replace(tmp_name, str(path))
+	except BaseException:
+		try:
+			os.unlink(tmp_name)
+		except OSError:
+			pass
+		raise
+
+
+def augment_files_touched(
+	data: dict[str, Any],
+	module: Path,
+	repo_root: Path,
+	timeout_secs: int = PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS,
+) -> dict[str, int]:
+	"""Append affected tests and companions to each issue's files_touched, in place.
+
+	``data`` must already have passed ``validate_decomposition``. An issue with
+	an empty files_touched list stays empty. Never exceeds
+	PREPUSH_AUGMENT_MAX_FILES_TOUCHED entries per issue.
+	"""
+	totals = {"issues": 0, "added": 0, "truncated": 0, "skipped": 0}
+	# Paths an earlier run added, keyed by issue id. Only the planned paths
+	# (files_touched minus these) go to the module, so a second run selects
+	# the same candidates, finds them present and adds nothing; feeding the
+	# added tests back in would expand the scope transitively.
+	recorded_raw = data.get(PREPUSH_AUGMENTED_PATHS_KEY)
+	recorded: dict[str, list[str]] = {}
+	if isinstance(recorded_raw, dict):
+		for key, value in recorded_raw.items():
+			if isinstance(key, str) and isinstance(value, list):
+				recorded[key] = [v for v in value if isinstance(v, str)]
+	recorded_initial = {key: list(value) for key, value in recorded.items()}
+	for issue in data.get("issues", []):
+		totals["issues"] += 1
+		issue_id = str(issue.get("id", ""))
+		log_id = _prepush_augment_log_id(issue_id)
+		existing = list(issue.get("files_touched", []) or [])
+		if not existing:
+			# Nothing was planned, so nothing could have been added: drop any
+			# model-supplied marker entry instead of writing it back.
+			recorded.pop(issue_id, None)
+			_prepush_augment_log(f"issue={log_id} added=0 truncated=0")
+			continue
+		previously_added = set(recorded.get(issue_id, [])) & set(existing)
+		planned = [p for p in existing if p not in previously_added]
+		# The marker arrives inside model-written JSON, so it is trusted only
+		# when it is consistent with what this code would have recorded: some
+		# planned path remains, and every recorded path is still selected from
+		# the remaining planned paths. Otherwise the whole list is planned.
+		marker_ignored = bool(previously_added) and not planned
+		candidates: list[str] | None = None
+		reason = ""
+		if not marker_ignored:
+			candidates, reason = _prepush_select_planned_paths(module, repo_root, planned, timeout_secs)
+			if candidates is not None and previously_added and not previously_added.issubset(candidates):
+				marker_ignored = True
+		if marker_ignored:
+			_prepush_augment_log(f"issue={log_id} outcome=marker_ignored")
+			previously_added = set()
+			recorded.pop(issue_id, None)
+			planned = list(existing)
+			candidates, reason = _prepush_select_planned_paths(module, repo_root, planned, timeout_secs)
+		if candidates is None:
+			# A timeout is a no-op for this issue only; later issues still run.
+			# Restore a marker entry the ignored-marker branch dropped, so a
+			# failed selection leaves this issue's marker unchanged.
+			if issue_id in recorded_initial:
+				recorded[issue_id] = recorded_initial[issue_id]
+			totals["skipped"] += 1
+			_prepush_augment_log(f"issue={log_id} outcome=skipped reason={reason}")
+			continue
+		present = set(existing)
+		new_paths: list[str] = []
+		for candidate in candidates:
+			if candidate in present or not _expected_file_entry_ok(candidate):
+				continue
+			present.add(candidate)
+			new_paths.append(candidate)
+		room = max(0, PREPUSH_AUGMENT_MAX_FILES_TOUCHED - len(existing))
+		added = new_paths[:room]
+		truncated = len(new_paths) - len(added)
+		if added:
+			issue["files_touched"] = existing + added
+			recorded[issue_id] = [p for p in existing if p in previously_added] + added
+		totals["added"] += len(added)
+		totals["truncated"] += truncated
+		_prepush_augment_log(f"issue={log_id} added={len(added)} truncated={truncated}")
+	# Write the marker back when paths were added, or when dropping ignored or
+	# empty-issue entries changed it, so model-supplied junk is not kept.
+	# A raw marker the parser had to filter (non-dict, non-list values,
+	# non-string entries) is cleaned only when some issue did not fail, so a
+	# run where every selection failed leaves the file unchanged.
+	marker_malformed = recorded_raw is not None and recorded_raw != recorded_initial
+	totals["marker_changed"] = 0
+	if (
+		totals["added"] > 0
+		or recorded != recorded_initial
+		or (marker_malformed and totals["skipped"] < totals["issues"])
+	):
+		totals["marker_changed"] = 1
+		if recorded:
+			data[PREPUSH_AUGMENTED_PATHS_KEY] = recorded
+		else:
+			data.pop(PREPUSH_AUGMENTED_PATHS_KEY, None)
+	return totals
+
+
+def cmd_augment_files_touched(args: argparse.Namespace) -> int:
+	"""Fail-open CLI for augment_files_touched; always exits 0."""
+	import copy
+
+	summary: dict[str, Any] = {"ok": True, "issues": 0, "added": 0, "truncated": 0, "skipped": 0, "written": False}
+	try:
+		module = Path(args.gate_module)
+		if module.is_symlink() or not module.is_file():
+			_prepush_augment_log("outcome=skipped reason=module_absent")
+			_print_json(summary)
+			return 0
+		path = Path(args.decomposition)
+		try:
+			with path.open("r", encoding="utf-8") as handle:
+				raw = json.load(handle)
+		except (OSError, ValueError):
+			raw = None
+		if not isinstance(raw, dict):
+			_prepush_augment_log("outcome=skipped reason=decomposition_unreadable")
+			_print_json(summary)
+			return 0
+		try:
+			data = validate_decomposition(raw)
+		except OrchestrateError:
+			_prepush_augment_log("outcome=skipped reason=decomposition_invalid")
+			_print_json(summary)
+			return 0
+		timeout_secs = int(getattr(args, "timeout_secs", PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS) or PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS)
+		timeout_secs = min(300, max(5, timeout_secs))
+		repo_root = Path(args.repo_root).resolve()
+		totals = augment_files_touched(data, module.resolve(), repo_root, timeout_secs)
+		summary.update(totals)
+		try:
+			validate_decomposition(copy.deepcopy(data))
+		except OrchestrateError:
+			_prepush_augment_log("outcome=skipped reason=post_validate_failed")
+			summary.update({"issues": 0, "added": 0, "truncated": 0, "skipped": 0, "marker_changed": 0})
+			_print_json(summary)
+			return 0
+		if (totals["added"] > 0 or totals.get("marker_changed")) and getattr(args, "write_back", False):
+			try:
+				_prepush_write_json_atomic(path, data)
+				summary["written"] = True
+			except OSError:
+				_prepush_augment_log("outcome=skipped reason=write_failed")
+	except Exception as exc:  # noqa: BLE001 - the augmentation must never fail the step
+		_prepush_augment_log(f"outcome=skipped reason=internal_error error={type(exc).__name__}")
+	_print_json(summary)
+	return 0
+
 
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description="Orchestrator helper utilities")
@@ -3916,6 +4657,36 @@ def build_parser() -> argparse.ArgumentParser:
 	p_completion_lessons.add_argument("--state-file", required=True)
 	p_completion_lessons.add_argument("--tracking-issue", required=True)
 	p_completion_lessons.set_defaults(func=cmd_completion_lessons)
+
+	p_retired = subparsers.add_parser("retired-conflict-check", help="Classify a PR conflict on retired host-only files (stall recovery reissue)")
+	p_retired.add_argument("--support-dir", required=True)
+	p_retired.add_argument("--conflict-paths-file", required=True)
+	p_retired.add_argument("--base-present-file", required=True)
+	p_retired.set_defaults(func=cmd_retired_conflict_check)
+
+	p_extract_branch = subparsers.add_parser(
+		"extract-integration-branch",
+		help="Print the integration branch declared in an issue body read from stdin",
+	)
+	p_extract_branch.set_defaults(func=cmd_extract_integration_branch)
+
+	p_unrouted = subparsers.add_parser("unrouted-blocked-comments", help="Flag blocked issues whose newest trusted human reply was never routed (JSON on stdin)")
+	p_unrouted.add_argument("--grace-minutes", type=int, default=15)
+	p_unrouted.add_argument("--max-age-hours", type=int, default=168)
+	p_unrouted.add_argument("--now", default="")
+	p_unrouted.set_defaults(func=cmd_unrouted_blocked_comments)
+
+	p_augment = subparsers.add_parser("augment-files-touched", help="Append affected tests and companions from the pre-push gate module to each issue's files_touched (fail-open)")
+	p_augment.add_argument("--decomposition", required=True)
+	p_augment.add_argument("--repo-root", default=".")
+	p_augment.add_argument("--gate-module", required=True)
+	p_augment.add_argument("--timeout-secs", type=int, default=PREPUSH_AUGMENT_DEFAULT_TIMEOUT_SECS)
+	p_augment.add_argument("--write-back", action="store_true", help="Atomically write the augmented decomposition back to --decomposition")
+	p_augment.set_defaults(func=cmd_augment_files_touched)
+
+	p_expected = subparsers.add_parser("render-expected-files", help="Render the advisory Expected files section for a JSON array of paths ('-' reads stdin)")
+	p_expected.add_argument("--paths-json-file", required=True)
+	p_expected.set_defaults(func=cmd_render_expected_files)
 
 	return parser
 

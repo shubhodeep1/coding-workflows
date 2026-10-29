@@ -60,6 +60,10 @@ CUTOVER_ROLES = {"CLARIFY", "CLARIFY_RESPOND", "PLAN"}  # Phase 5a
 CUTOVER_ROLES |= {"IMPLEMENT", "IMPLEMENT_REPAIR", "IMPLEMENT_DIAGNOSE"}  # Phase 5b
 CUTOVER_ROLES |= {"ORCHESTRATE", "WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE"}  # Phase 5c
 CUTOVER_ROLES |= {"SECURITY_AUDIT"}  # security audit on Claude, codex fallback
+CUTOVER_ROLES |= {"VALIDATE", "VALIDATE_SELF_HEAL", "VALIDATION_REFRESH"}  # validate roles (plan item 3a)
+CUTOVER_ROLES |= {"WORKFLOW_HEAL", "CHECK_TRIAGE", "ACTIVATION_VERIFY", "UNBLOCK_JUDGE"}  # plan item 3c
+CUTOVER_ROLES |= {"LOG_ANALYSIS", "LOG_AUDIT", "LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE"}  # plan item 3d
+CUTOVER_ROLES |= {"PANEL_REVIEWER"}  # Claude account-pool review-panel slot (skipped, not codex, when unavailable)
 
 
 def test_checked_in_config_is_valid_and_inert() -> None:
@@ -71,7 +75,7 @@ def test_checked_in_config_is_valid_and_inert() -> None:
 	on_claude = {role for role, fields in config["role_defaults"].items() if fields["engine"] == "claude"}
 	assert on_claude == CUTOVER_ROLES
 	assert config["broker_url"] == "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool"
-	assert config["gate_utilization"] == 0.9
+	assert config["gate_utilization"] == 0.95
 	assert config["probe_model"] == "claude-haiku-4-5-20251001"
 	assert config["oidc_audience"] == "coding-workflows-claude-pool"
 
@@ -109,9 +113,15 @@ def test_broker_url_must_be_https_or_loopback(url: str, ok: bool) -> None:
 def test_utility_roles_use_sonnet_and_the_rest_opus() -> None:
 	config, _ = ce.normalize_config(None)
 	for role in ce.ROLES:
-		expected = "claude-sonnet-5-5" if role in ce.UTILITY_ROLES else "claude-opus-5-5"
+		expected = "claude-sonnet-5-5" if role in ce.UTILITY_ROLES or role in ce.SONNET_DEFAULT_ROLES else "claude-opus-5-5"
 		assert config["role_defaults"][role]["claude_model"] == expected, role
 	assert set(config["utility_roles"]) == {"LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE"}
+	# The review-panel slot and the review consolidator run on Sonnet but are
+	# not utility roles.
+	assert ce.SONNET_DEFAULT_ROLES == ("PANEL_REVIEWER", "REVIEW_CONSOLIDATOR")
+	assert config["role_defaults"]["REVIEW_CONSOLIDATOR"]["claude_model"] == "claude-sonnet-5-5"
+	assert "PANEL_REVIEWER" in ce.READ_ROLES
+	assert config["role_defaults"]["PANEL_REVIEWER"]["profile"] == "read"
 
 
 def test_missing_config_is_every_role_on_codex(tmp_path: Path) -> None:
@@ -138,6 +148,8 @@ def test_unreadable_config_falls_back_to_defaults(tmp_path: Path) -> None:
 		({"probe_model": "Haiku!"}, "probe_model"),
 		({"default_effort": "extreme"}, "default_effort"),
 		({"hide_claude_md": "yes"}, "hide_claude_md"),
+		({"web_search": "yes"}, "web_search"),
+		({"web_search": 1}, "web_search"),
 		({"utility_roles": ["NOT_A_ROLE"]}, "utility_roles"),
 		({"role_defaults": {"PLAN": {"engine": "gpt"}}}, "role_defaults.PLAN.engine"),
 		({"role_defaults": {"PLAN": {"claude_model": "gpt-5"}}}, "role_defaults.PLAN.claude_model"),
@@ -150,6 +162,17 @@ def test_invalid_config_values_keep_their_default(raw: dict, key: str) -> None:
 	assert key in invalid
 	assert config["cli_version"] == ce.DEFAULT_CONFIG["cli_version"]
 	assert config["role_defaults"]["PLAN"] == ce.DEFAULT_CONFIG["role_defaults"]["PLAN"]
+
+
+def test_web_search_defaults_on_and_can_be_turned_off(tmp_path: Path) -> None:
+	assert ce.DEFAULT_CONFIG["web_search"] is True
+	assert ce.normalize_config({})[0]["web_search"] is True
+	config, invalid = ce.normalize_config({"web_search": False})
+	assert invalid == [] and config["web_search"] is False
+	# An invalid value keeps the default, like every other key.
+	assert ce.normalize_config({"web_search": "off"})[0]["web_search"] is True
+	checked_in, invalid = ce.load_config(ce.SCRIPT_DIR.parent / ".github" / "ai" / "claude_engine.json")
+	assert invalid == [] and checked_in["web_search"] is True
 
 
 def test_role_defaults_merge_per_field() -> None:
@@ -503,6 +526,52 @@ def test_choose_cli_uses_config_gate_and_rejects_bad_input() -> None:
 	assert json.loads(result.stdout)["outcome"] == "all_gated"
 	assert _run("choose", stdin="{}").returncode == 2
 	assert _run("choose", "--gate", "2", stdin="[]").returncode == 2
+
+
+def test_pool_health_is_quiet_while_every_account_is_below_the_gate() -> None:
+	probes = [ce.parse_probe(_probe_text(0.85, 0.1), "A"), ce.parse_probe(_probe_text(None, None), "B")]
+	report = ce.pool_health(probes, 0.9)
+	assert report["alert"] is False and report["text"] == ""
+	assert (report["accounts"], report["usable"], report["gated"], report["auth_failed"], report["probe_failed"]) == (2, ["A", "B"], [], [], [])
+
+
+def test_pool_health_names_gated_accounts_with_both_windows_and_reset_times() -> None:
+	probes = [
+		ce.parse_probe(_probe_text(0.2, 0.95), "B"),
+		ce.parse_probe(_probe_text(0.9, 0.1), "A"),
+		ce.parse_probe(_probe_text(0.3, 0.2), "C"),
+		ce.parse_probe(_probe_text(None, None, status="rejected", ok=False), "D"),
+		{"account": "E", "error": "probe_failed"},
+	]
+	report = ce.pool_health(probes, 0.9)
+	assert report["alert"] is True
+	assert report["gated"] == ["A", "B", "D"] and report["usable"] == ["C"] and report["probe_failed"] == ["E"]
+	assert report["text"].splitlines() == [
+		"Claude pool: 3 of 5 account(s) at or above the 90% usage gate; 1 usable.",
+		"A: 5h 90% (resets 1970-01-01 00:16 UTC), 7d 10%",
+		"B: 5h 20%, 7d 95% (resets 1970-01-01 00:33 UTC)",
+		"D: usage limit reached (resets unknown)",
+		"Probe failed (not counted): E",
+	]
+
+
+def test_pool_health_alerts_on_a_rejected_token() -> None:
+	probes = [ce.parse_probe(_probe_text(0.1, 0.1), "A"), ce.parse_probe(_probe_text(0.1, 0.1, ok=False).replace('"OK"', '"API Error: 401 OAuth access token is invalid"'), "B")]
+	report = ce.pool_health(probes, 0.9)
+	assert report["auth_failed"] == ["B"] and report["gated"] == [] and report["alert"] is True
+	assert report["text"].splitlines() == [
+		"Claude pool: 0 of 2 account(s) at or above the 90% usage gate, 1 with a rejected token; 1 usable.",
+		"B: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_B",
+	]
+
+
+def test_pool_health_cli_uses_the_config_gate_and_rejects_bad_input() -> None:
+	probes = [ce.parse_probe(_probe_text(0.85, 0.1), "A")]
+	assert json.loads(_run("pool-health", stdin=json.dumps(probes)).stdout)["alert"] is False
+	result = _run("pool-health", "--gate", "0.8", stdin=json.dumps(probes))
+	assert json.loads(result.stdout)["gated"] == ["A"]
+	assert _run("pool-health", stdin="{}").returncode == 2
+	assert _run("pool-health", "--gate", "0", stdin="[]").returncode == 2
 
 
 # --- trust and support files ---------------------------------------------------

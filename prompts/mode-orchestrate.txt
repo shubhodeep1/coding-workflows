@@ -14,6 +14,14 @@ Rules:
 - Each issue must be self-contained: its body must have enough context for
   the AI pipeline (clarify → plan → implement → review) to handle it
   without knowledge of sibling issues.
+- External facts: when an issue depends on a fact from outside the
+  repository (a release tag's commit SHA, a package version, an API
+  endpoint or signature), write the value into the issue body and say how
+  it was verified (for example, quote the source that states it, such as
+  `git ls-remote` output given in the request).
+  Claude-engine planners have no web fetch, and web search only when
+  their system instructions say the `WebSearch` tool is available. When you cannot verify a value, say so in the body instead of
+  writing a guessed one.
 - One concern per issue. A single issue should be implementable within a
   single PR touching at most ~10 files.
 - Do not propose issues that duplicate existing functionality.
@@ -110,6 +118,11 @@ File partitioning (prevents merge conflicts between parallel siblings):
   existing `<!-- anchor:NAME -->` HTML-comment anchors rather than
   renumbering or reflowing surrounding content. State this expectation in
   each doc-touching issue body.
+- agents.md fragments: a task that documents behaviour in `agents.md`
+  adds an `agents.d/<issue-or-pr>-<slug>.md` fragment instead of editing
+  the file (CLAUDE.md §30). Fragments never conflict, so such tasks do not
+  count against the `agents.md` hot file; list `agents.md` in
+  `files_touched` and the fragment is covered.
 - Implementer discipline: inside each issue body, instruct the
   implementer to stay inside the `files_touched` list, avoid reflowing
   unrelated code, and prefer append-only edits in shared files.

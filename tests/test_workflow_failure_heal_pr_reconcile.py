@@ -349,4 +349,4 @@ def test_workflow_runs_reconcile_on_pr_close_only() -> None:
 	assert steps[1]["continue-on-error"] is True
 	assert "scripts/workflow_failure_heal_pr_reconcile.sh" in steps[1]["run"]
 	# The existing cancel job is unchanged.
-	assert workflow["jobs"]["cancel"]["uses"] == "shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@main"
+	assert workflow["jobs"]["cancel"]["uses"] == "shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@promote-candidate"

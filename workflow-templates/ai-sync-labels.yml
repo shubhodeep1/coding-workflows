@@ -1,6 +1,5 @@
-# IMPORTANT: This file is managed by coding-workflows and may be overwritten
-# automatically when upstream templates change. To opt out of auto-updates,
-# set the ALLOW_WORKFLOW_EDITS repository variable to 'false'.
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
 name: AI Sync Labels
 on:
   workflow_dispatch:
@@ -20,4 +19,8 @@ jobs:
     uses: shubhodeep1/coding-workflows/.github/workflows/sync_ai_labels.yml@stable
     with:
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-    secrets: inherit
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

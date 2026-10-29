@@ -38,6 +38,8 @@ Rows with pinned override fields are marked `(frozen)` in `notes`.
 | mistralai/mistral-small-2603 | null | false | function | — |
 | z-ai/glm-5.2 | null | false | freeform | — |
 | z-ai/glm-5.3-flashx | null | false | freeform | — |
+| z-ai/glm-5.3-flash | null | false | freeform | — |
+| anthropic/claude-sonnet-5.5 | null | false | freeform | — |
 | x-ai/grok-4.3 | null | false | function | — |
 | google/gemini-3.1-flash-lite | null | false | freeform | — |
 | google/gemini-3.8-flash | null | false | freeform | — |

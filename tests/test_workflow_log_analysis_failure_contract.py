@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -155,6 +158,143 @@ def test_semble_wiring_is_consistent_across_four_codex_jobs() -> None:
 	assert wf.count("{{SEMBLE_PREFETCH}}") == 0
 
 
+def test_failure_label_writes_route_through_gh_retry_with_fallback() -> None:
+	wf = _workflow_text()
+	helper_def = '_wla_label_retry() { if type gh_retry >/dev/null 2>&1; then gh_retry "$@"; else "$@"; fi; }'
+	create_def = (
+		'_wla_label_create() { local _wla_err; _wla_err=$(gh label create "$@" 2>&1 >/dev/null) && return 0; '
+		'case "${_wla_err}" in *"already exists"*) return 0 ;; esac; _wla_label_retry gh label create "$@"; }'
+	)
+	for step_name in (
+		"Run workflow log analysis",
+		"Run deep audit pass",
+		"Run API redundancy pass",
+	):
+		body = wf.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name: ", 1)[0]
+		assert body.count(helper_def) == 1, step_name
+		assert body.count(create_def) == 1, step_name
+		assert '_wla_label_create "ai:log-analysis-failed"' in body, step_name
+		assert 'GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit "${TRACKING_ISSUE_NUM}"' in body, step_name
+		for line in body.splitlines():
+			stripped = line.lstrip()
+			assert not stripped.startswith('gh label create "ai:log-analysis-failed"'), step_name
+			assert not stripped.startswith('gh issue edit "${TRACKING_ISSUE_NUM}"'), step_name
+			if "_wla_label_retry" in stripped:
+				assert "AI_PHASE_FAILURE_V1" not in stripped, step_name
+		# The per-run AI_PHASE_FAILURE_V1 comment post stays a single attempt.
+		assert "_wla_label_retry gh api" not in body, step_name
+		assert "AI_PHASE_FAILURE_V1" in body, step_name
+
+
+def _run_label_create_helper(tmp: str, gh_stderr: str) -> tuple[int, int]:
+	wf = _workflow_text()
+	defs = [
+		line.strip()
+		for line in wf.splitlines()
+		if line.strip().startswith(("_wla_label_retry() {", "_wla_label_create() {"))
+	][:2]
+	assert len(defs) == 2
+	calls = os.path.join(tmp, "calls")
+	open(calls, "w", encoding="utf-8").close()
+	script = "\n".join(
+		[
+			"gh() { echo call >> \"$CALLS\"; printf '%s\\n' \"$GH_STDERR\" >&2; return 1; }",
+			"gh_retry() { local i; for i in 1 2 3 4 5; do \"$@\" && return 0; done; return 1; }",
+			*defs,
+			'_wla_label_create "ai:log-analysis-failed" --repo o/r',
+		]
+	)
+	env = dict(os.environ, CALLS=calls, GH_STDERR=gh_stderr)
+	proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+	with open(calls, encoding="utf-8") as fh:
+		count = len(fh.read().splitlines())
+	return proc.returncode, count
+
+
+def test_label_create_helper_does_not_retry_an_existing_label() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, calls = _run_label_create_helper(
+			tmp, 'label with name "ai:log-analysis-failed" already exists; use `--force` to update'
+		)
+	assert rc == 0
+	assert calls == 1
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, calls = _run_label_create_helper(tmp, "HTTP 502: Bad Gateway")
+	assert rc != 0
+	assert calls == 6
+
+
+GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
+
+
+def _run_label_helpers_with_real_gh_retry(tmp: str, command: str, gh_stderr: str, fail_first: int) -> tuple[int, int]:
+	"""Run the workflow's label helpers against the real scripts/gh_helpers.sh
+	gh_retry (sourced the way the workflow step sources it), with a stub gh
+	that fails the first ``fail_first`` calls with ``gh_stderr`` and then
+	succeeds, and sleep stubbed out so retries cost no wall time."""
+	wf = _workflow_text()
+	defs = [
+		line.strip()
+		for line in wf.splitlines()
+		if line.strip().startswith(("_wla_label_retry() {", "_wla_label_create() {"))
+	][:2]
+	assert len(defs) == 2
+	calls = os.path.join(tmp, "calls")
+	open(calls, "w", encoding="utf-8").close()
+	script = "\n".join(
+		[
+			f'source "{GH_HELPERS}"',
+			"type gh_retry >/dev/null 2>&1 || { echo 'gh_retry missing' >&2; exit 97; }",
+			"sleep() { :; }",
+			'gh() { echo call >> "$CALLS"; n=$(wc -l < "$CALLS"); '
+			'if [ "$n" -le "$FAIL_FIRST" ]; then printf \'%s\\n\' "$GH_STDERR" >&2; return 1; fi; return 0; }',
+			*defs,
+			command,
+		]
+	)
+	env = dict(
+		os.environ,
+		CALLS=calls,
+		GH_STDERR=gh_stderr,
+		FAIL_FIRST=str(fail_first),
+		GH_RETRY_MAX_ATTEMPTS="3",
+		TMPDIR=tmp,
+	)
+	proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+	assert proc.returncode != 97, proc.stderr
+	with open(calls, encoding="utf-8") as fh:
+		count = len(fh.read().splitlines())
+	return proc.returncode, count
+
+
+def test_label_helpers_retry_through_real_gh_retry() -> None:
+	create = '_wla_label_create "ai:log-analysis-failed" --repo o/r'
+	add = 'GH_RETRY_IDEMPOTENT=true _wla_label_retry gh issue edit 5 --repo o/r --add-label "ai:log-analysis-failed"'
+	with tempfile.TemporaryDirectory() as tmp:
+		# "already exists" is success on the first raw attempt; no retry.
+		rc, calls = _run_label_helpers_with_real_gh_retry(
+			tmp, create, 'label with name "ai:log-analysis-failed" already exists; use `--force` to update', 99
+		)
+	assert (rc, calls) == (0, 1)
+	with tempfile.TemporaryDirectory() as tmp:
+		# A transient 502 on the raw attempt and the first retry recovers.
+		rc, calls = _run_label_helpers_with_real_gh_retry(tmp, create, "HTTP 502: Bad Gateway", 2)
+	assert (rc, calls) == (0, 3)
+	with tempfile.TemporaryDirectory() as tmp:
+		# A persistent 502: one raw attempt plus GH_RETRY_MAX_ATTEMPTS retries.
+		rc, calls = _run_label_helpers_with_real_gh_retry(tmp, create, "HTTP 502: Bad Gateway", 99)
+	assert rc != 0
+	assert calls == 4
+	with tempfile.TemporaryDirectory() as tmp:
+		# The idempotent label add is retried up to GH_RETRY_MAX_ATTEMPTS.
+		rc, calls = _run_label_helpers_with_real_gh_retry(tmp, add, "HTTP 502: Bad Gateway", 99)
+	assert rc != 0
+	assert calls == 3
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, calls = _run_label_helpers_with_real_gh_retry(tmp, add, "HTTP 502: Bad Gateway", 1)
+	assert (rc, calls) == (0, 2)
+
+
 def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
@@ -163,6 +303,9 @@ def main() -> int:
 	test_weekly_retro_path_is_schedule_gated_and_default_on()
 	test_scenario_trace_renderer_is_flag_gated_and_local_only()
 	test_semble_wiring_is_consistent_across_four_codex_jobs()
+	test_failure_label_writes_route_through_gh_retry_with_fallback()
+	test_label_create_helper_does_not_retry_an_existing_label()
+	test_label_helpers_retry_through_real_gh_retry()
 	return 0
 
 

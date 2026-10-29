@@ -240,11 +240,28 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+# A missing checker is not a syntax error. The heal editor's sandbox image had
+# no PyYAML, so every edited workflow file "failed" `import yaml`, the repair
+# loop could never fix it, and issue #6982's heal discarded two correct
+# attempts as reason=syntax (run 38017269081). Unchecked YAML is reported and
+# exits VALIDATOR_UNAVAILABLE_EXIT (3) unless a real syntax error exits 1.
+VALIDATOR_UNAVAILABLE_EXIT=3
+UNCHECKED=0
+yaml_checker_available="true"
+if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  yaml_checker_available="false"
+fi
+
 candidate_paths="$(mktemp)"
 emit_changed_or_untracked_paths '*.yml' '*.yaml' > "${candidate_paths}"
 while IFS= read -r -d '' f; do
   if [ -f "${f}" ] && { [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ] || [[ "${f}" != .github/workflows/* ]]; }; then
     strip_full_file_fence "${f}"
+    if [ "${yaml_checker_available}" != "true" ]; then
+      echo "::error file=${f}::YAML checker unavailable (python3 cannot import yaml); ${f} was not validated"
+      UNCHECKED=$((UNCHECKED + 1))
+      continue
+    fi
     checker_stderr="$(mktemp)"
     if ! python3 -c "import yaml, sys; f=open(sys.argv[1], 'rb'); list(yaml.safe_load_all(f)); f.close()" "${f}" 2>"${checker_stderr}"; then
       echo "::error file=${f}::YAML syntax error in ${f}"
@@ -277,6 +294,12 @@ rm -f "${candidate_paths}"
 if [ "${ERRORS}" -gt 0 ]; then
   echo "::error::${ERRORS} file(s) failed syntax validation."
   exit 1
+fi
+
+if [ "${UNCHECKED}" -gt 0 ]; then
+  echo "VALIDATE_CHANGED_FILES_SYNTAX outcome=validator_unavailable checker=yaml unchecked=${UNCHECKED}"
+  echo "::error::${UNCHECKED} file(s) could not be validated: the YAML checker is unavailable."
+  exit "${VALIDATOR_UNAVAILABLE_EXIT}"
 fi
 
 echo "All changed files passed syntax validation."

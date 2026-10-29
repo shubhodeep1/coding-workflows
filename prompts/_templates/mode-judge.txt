@@ -114,6 +114,11 @@ text:
 }
 
 `new_issues`: empty array if no fixes needed.
+When a `new_issues[].body` limits the files the fix may change, write a
+`files_touched:` line followed by one `  - <repo-relative path>` line per
+entry, indented two spaces. Name automation paths (`.github/`, `.claude/`,
+`scripts/`, `prompts/`, `workflow-templates/`) as exact files: a directory or
+glob there is never granted.
 `lessons_learned`: optional; omit this field or use `[]` when there is no
 grounded plan-divergence lesson to carry forward. When present,
 `lesson_kind` should be one of `out_of_plan_fix`,

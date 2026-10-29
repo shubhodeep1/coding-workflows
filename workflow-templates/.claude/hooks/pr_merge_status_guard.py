@@ -80,6 +80,12 @@ Exit codes (Claude Code hook protocol):
   0 — allow the command. A warning may be emitted via `systemMessage`, or a
       `permissionDecision: ask` may route the call through the harness prompt.
   2 — block the command; stderr is fed back to Claude as the reason.
+In Auto mode (`permission_mode` `auto`), a push whose only doubt is its shell
+shape (a branch created earlier in the same command, a push inside control
+flow, an expansion in a refspec) exits 2 with instructions to split the
+command, instead of asking: an ask prompts a human even in Auto mode, while a
+block runs nothing and the session can push again as one plain command.
+Deletions, default-branch, bulk and other-repository pushes still ask.
 The hook prints at most one JSON object on stdout per call, merging warnings
 and confirmation reasons into that object.
 
@@ -111,6 +117,9 @@ GUARDED_SUBCOMMANDS = frozenset({"commit", "push"})
 # GitHub MCP tools that push commits to a remote branch without a local
 # `git push`. Their `tool_input` carries `owner`, `repo` and `branch`.
 MCP_PUSH_TOOLS = frozenset({"mcp__github__push_files", "mcp__github__create_or_update_file"})
+# Claude Code's `permission_mode` hook field for Auto mode; any other or
+# missing value keeps the asks.
+AUTO_PERMISSION_MODE = "auto"
 
 # Verdicts of the API-free git-history fallback (see git_history_verdict).
 VERDICT_STRANDED = "stranded"
@@ -153,11 +162,43 @@ _HEREDOC_DELIMITER_END = frozenset(" \t;|&<>()`")
 # finding merged-pr-guard-misses-wrapped-git). A literal `-c` / `eval` script
 # or `$(...)` / backtick / `<(...)` body is parsed and gets the normal check;
 # text that cannot be read safely and could run a Git write asks instead.
-# Prefix wrappers (`sudo`, `timeout`, `xargs`) and `... | bash` stay unparsed.
+# Transparent prefixes (`time`, `timeout`, `nice`, ...) are skipped and the Git
+# command behind them checked; other runners (`sudo`, `xargs`) with a Git write
+# in their words ask (#6038). `... | bash` stays unparsed.
 _SHELL_WRAPPER_INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash"})
 _MAX_SHELL_WRAPPER_DEPTH = 3
 _MAX_SHELL_SCAN_NESTING = 32
 _UNPARSED_SHELL_WRAPPER = "unparsed shell wrapper"
+# Prefix commands that run the rest of their words as a command in the same
+# directory (#6038): `time -p git push`, `command git push`, `nice -n 5 git
+# push`. Each maps to (options that take a value, options that do not).
+# `command -v` / `-V` only look a name up and run nothing.
+_TRANSPARENT_COMMAND_PREFIXES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+	"time": (frozenset({"-o", "-f", "--output", "--format"}),
+		frozenset({"-p", "-a", "-v", "-q", "--portability", "--append", "--verbose", "--quiet"})),
+	"command": (frozenset(), frozenset({"-p"})),
+	"nice": (frozenset({"-n", "--adjustment"}), frozenset()),
+	"ionice": (frozenset({"-c", "-n", "--class", "--classdata"}), frozenset({"-t", "--ignore"})),
+	"exec": (frozenset({"-a"}), frozenset({"-c", "-l"})),
+	"nohup": (frozenset(), frozenset()),
+	"setsid": (frozenset(), frozenset({"-c", "-f", "-w", "--ctty", "--fork", "--wait"})),
+	"timeout": (frozenset({"-k", "-s", "--kill-after", "--signal"}),
+		frozenset({"-v", "--verbose", "--foreground", "--preserve-status"})),
+}
+# Any other command word that has a `git` word followed by `push` or `commit`
+# among its arguments (`sudo git push`, `xargs git push`) may run that Git
+# write where the hook cannot see it, so it asks (#6038). These commands only
+# print, search or describe their arguments and never run them.
+_DATA_ONLY_COMMANDS = frozenset({
+	"echo", "printf", "man", "info", "help", "type", "which", "whatis", "apropos", "history",
+	"grep", "egrep", "fgrep", "rg", "ag", "ack", "true", "false", ":", "test", "[",
+})
+_UNPARSED_COMMAND_PREFIX = "unparsed command prefix"
+# Statements that change how a later `cd` resolves or whether `cd` is the
+# builtin at all (#6038): a CDPATH set in the command line, a `cd` function,
+# alias or disabled builtin. After one, every `cd` leaves the directory unknown.
+_CDPATH_ASSIGNMENT_RE = re.compile(r"^CDPATH\+?=")
+_SHELL_DECLARATION_BUILTINS = frozenset({"export", "declare", "typeset", "readonly", "local"})
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -249,6 +290,9 @@ class _GuardTarget(NamedTuple):
 	warning: str = ""
 	bulk: str = ""
 	remote: str = ""
+	# Non-empty for a push that deletes remote branches (`--delete`, `-d`, a
+	# `:ref` refspec, `--prune`); names what is deleted. Always asks (#7220).
+	deletes: str = ""
 
 
 class LookupUnavailable(Exception):
@@ -508,9 +552,15 @@ def _strip_data_heredoc_bodies(command: str) -> str:
 def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
 	"""Expose a command behind shell control words without trusting its cwd."""
 	control_prefix_seen = False
+	subshell_opened = False
 	while tokens:
 		if tokens[0] in _SHELL_CONTROL_PREFIXES or tokens[0].endswith(")"):
+			subshell_opened = subshell_opened or tokens[0] == "("
 			tokens = tokens[1:]
+		elif re.match(r"^\([^()]", tokens[0]):
+			# `(git push ...)`: the subshell paren is glued to the command word (#6038).
+			subshell_opened = True
+			tokens = [tokens[0][1:]] + tokens[1:]
 		elif tokens[0] == "case":
 			for position, word in enumerate(tokens[3:], start=3):
 				if word.endswith(")"):
@@ -521,6 +571,13 @@ def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
 		else:
 			break
 		control_prefix_seen = True
+	# A subshell's closing paren is shell syntax, not an argument: drop a bare
+	# `)` word, and a `)` glued to the last word of a segment that opened the
+	# subshell, so `(git push origin x)` still names branch `x` (#6038).
+	if tokens and tokens[-1] == ")":
+		tokens = tokens[:-1]
+	elif subshell_opened and tokens and tokens[-1].endswith(")") and "(" not in tokens[-1]:
+		tokens = tokens[:-1] + [tokens[-1][:-1]]
 	return tokens, control_prefix_seen
 
 
@@ -730,12 +787,19 @@ def _git_environment(overrides: dict[str, str]):
 
 
 def _literal_guard_path(
-	path: str, cwd: str, *, shell_cd: bool = False, git_file: bool = False
+	path: str, cwd: str, *, shell_cd: bool = False, git_file: bool = False, cdpath_set: bool = False
 ) -> str | None:
-	"""Resolve a path only when its spelling and destination are unambiguous."""
+	"""Resolve a path only when its spelling and destination are unambiguous.
+
+	`cdpath_set` marks a CDPATH set earlier in the same command line (#6038),
+	which the hook process's own environment does not show.
+	"""
 	if not path or path.startswith("~") or any(char in path for char in "$`*?[]{}()\\\n"):
 		return None
-	if shell_cd and not os.path.isabs(path) and os.environ.get("CDPATH") and not path.startswith(("./", "../")):
+	if (
+		shell_cd and not os.path.isabs(path) and (os.environ.get("CDPATH") or cdpath_set)
+		and not path.startswith(("./", "../"))
+	):
 		return None
 	resolved = os.path.realpath(os.path.join(cwd, path))
 	if os.path.isdir(resolved) and os.access(resolved, os.X_OK):
@@ -789,8 +853,177 @@ def _env_wrapped_git_index(tokens: list[str], index: int) -> int:
 	return index
 
 
+def _transparent_prefix_index(tokens: list[str], index: int) -> int:
+	"""Skip prefix commands that run their remaining words as a command (#6038).
+
+	Returns the index of the command they run, or -1 when an option is not
+	understood. `command -v` / `-V` runs nothing: the index of that option is
+	returned, so the caller sees no Git command.
+	"""
+	while index < len(tokens):
+		prefix_name = tokens[index].rsplit("/", 1)[-1]
+		prefix_spec = _TRANSPARENT_COMMAND_PREFIXES.get(prefix_name)
+		if prefix_spec is None:
+			return index
+		value_options, flag_options = prefix_spec
+		index += 1
+		while index < len(tokens) and tokens[index].startswith("-") and tokens[index] != "-":
+			word = tokens[index]
+			if word == "--":
+				index += 1
+				break
+			if prefix_name == "command" and word in ("-v", "-V"):
+				return index
+			if word in value_options:
+				if index + 1 >= len(tokens):
+					return -1
+				index += 2
+			elif (
+				word in flag_options
+				or (prefix_name == "nice" and re.fullmatch(r"-[0-9]+", word))
+				or any(
+					word.startswith(option + "=") if option.startswith("--") else word.startswith(option)
+					for option in value_options
+				)
+			):
+				index += 1
+			else:
+				return -1
+		if prefix_name == "timeout":
+			# The duration comes before the command.
+			if index >= len(tokens) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?[smhd]?", tokens[index]):
+				return -1
+			index += 1
+	return index
+
+
+def _wrapped_command_index(tokens: list[str], index: int) -> tuple[int, bool]:
+	"""Skip `env` wrappers and transparent prefixes, in any order.
+
+	Returns (index of the command word, or -1 when a wrapper is ambiguous;
+	whether an `env` wrapper was skipped).
+	"""
+	env_seen = False
+	while True:
+		after_env = _env_wrapped_git_index(tokens, index)
+		if after_env == -1:
+			return -1, env_seen
+		env_seen = env_seen or after_env != index
+		after_prefix = _transparent_prefix_index(tokens, after_env)
+		if after_prefix in (-1, after_env):
+			return after_prefix, env_seen
+		index = after_prefix
+
+
+# Commands that run the rest of their words, or a script in them, somewhere
+# the hook cannot follow. A Git write named anywhere in their words asks.
+_COMMAND_RUNNERS = frozenset({
+	"sudo", "doas", "su", "runuser", "ssh", "xargs", "parallel", "find", "stdbuf", "unbuffer",
+	"nsenter", "chroot", "unshare", "flock", "watch", "strace", "ltrace", "firejail",
+	"chrt", "taskset", "numactl", "systemd-run", "script",
+})
+
+
+def _hidden_git_write(tokens: list[str], index: int) -> bool:
+	"""Whether a non-Git command word may run a Git commit or push (#6038).
+
+	True when a `git` word is followed by `push` or `commit` among its words
+	(`sudo git push`, `xargs git push`), or when a known command runner has a
+	Git write anywhere in its words (`sudo sh -c "git push"`).
+	"""
+	if index >= len(tokens):
+		return False
+	command_name = tokens[index].rsplit("/", 1)[-1]
+	if command_name == "git" or command_name in _DATA_ONLY_COMMANDS:
+		return False
+	words = tokens[index + 1:]
+	for position, word in enumerate(words):
+		if (word == "git" or word.endswith("/git")) and any(
+			later in GUARDED_SUBCOMMANDS for later in words[position + 1:]
+		):
+			return True
+	return command_name in _COMMAND_RUNNERS and _mentions_git_write(" ".join(words))
+
+
+def _shell_builtin_view(tokens: list[str]) -> tuple[list[str], bool] | None:
+	"""Return (words from the builtin name on, whether CDPATH is assigned).
+
+	Skips the prefixes after which Bash still runs a builtin in the current
+	shell (#6038): leading assignments, `builtin`, `command` (with `-p`),
+	and the `time` reserved word (with `-p`). `time -p cd dir` and
+	`command -p pushd dir` change the directory like a bare `cd` / `pushd`.
+	None when `command -v` / `-V` runs nothing, or a prefix option is not
+	understood.
+	"""
+	position = 0
+	cdpath_assigned = False
+	while position < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[position]):
+		cdpath_assigned = cdpath_assigned or bool(_CDPATH_ASSIGNMENT_RE.match(tokens[position]))
+		position += 1
+	while position < len(tokens) and tokens[position] in ("builtin", "command", "time"):
+		prefix_word = tokens[position]
+		position += 1
+		if prefix_word == "builtin":
+			continue
+		while position < len(tokens) and tokens[position].startswith("-"):
+			if tokens[position] == "--":
+				position += 1
+				break
+			if tokens[position] != "-p":
+				return None
+			position += 1
+	return tokens[position:], cdpath_assigned
+
+
+def _cd_command_words(tokens: list[str]) -> tuple[list[str], bool] | None:
+	"""Return (cd words, whether CDPATH is set for it) for a `cd` segment.
+
+	Leading assignments (`X=1 cd dir`, `CDPATH=.. cd dir`) and `builtin` /
+	`command [-p]` / `time [-p]` prefixes still run the cd builtin (#6038).
+	None when the segment is not a cd.
+	"""
+	builtin_view = _shell_builtin_view(tokens)
+	if builtin_view is not None and builtin_view[0][:1] == ["cd"]:
+		return builtin_view
+	return None
+
+
+def _changes_cd_resolution(tokens: list[str]) -> tuple[bool, bool]:
+	"""Return (sets CDPATH, redefines cd) for one shell statement (#6038).
+
+	`export CDPATH=...` or a bare `CDPATH=...` statement changes where a later
+	relative `cd` goes; a `cd` function, alias or `enable -n cd` means a later
+	`cd` may not be the builtin at all.
+	"""
+	if not tokens:
+		return False, False
+	# `builtin enable -n cd`, `command export CDPATH=..` act like the bare form.
+	builtin_view = _shell_builtin_view(tokens)
+	if builtin_view is not None and builtin_view[0] and builtin_view[0] != tokens:
+		view_sets_cdpath, view_redefines_cd = _changes_cd_resolution(builtin_view[0])
+		if view_sets_cdpath or view_redefines_cd:
+			return view_sets_cdpath, view_redefines_cd
+	first = tokens[0]
+	sets_cdpath = (
+		(first in _SHELL_DECLARATION_BUILTINS and any(
+			_CDPATH_ASSIGNMENT_RE.match(word) or word == "CDPATH" for word in tokens[1:]
+		))
+		or (all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", word) for word in tokens)
+			and any(_CDPATH_ASSIGNMENT_RE.match(word) for word in tokens))
+	)
+	redefines_cd = (
+		first.startswith("cd(")
+		or (first == "cd" and len(tokens) > 1 and tokens[1].startswith("()"))
+		or (first == "function" and len(tokens) > 1 and (tokens[1] == "cd" or tokens[1].startswith("cd(")))
+		or (first == "enable" and "cd" in tokens[1:])
+		or (first in ("alias", "unalias") and any(word == "cd" or word.startswith("cd=") for word in tokens[1:]))
+	)
+	return sets_cdpath, redefines_cd
+
+
 def _guarded_git_invocations(
-	command: str, checkout: str, *, _depth: int = 0, _inherited_unresolved: bool = False
+	command: str, checkout: str, *, _depth: int = 0, _inherited_unresolved: bool = False,
+	_inherited_cdpath_set: bool = False,
 ) -> list[_GitInvocation]:
 	segment_text, wrapped_bodies, wrapped_unparsed = _wrapped_shell_text(command, _depth)
 	invocations: list[_GitInvocation] = []
@@ -815,14 +1048,39 @@ def _guarded_git_invocations(
 	# branch may run with or without that directory change.
 	list_changed_directory = False
 	directory_change_seen = False
+	# A CDPATH set, or a cd redefined, earlier in this command line (#6038).
+	shell_cdpath_set = _inherited_cdpath_set
+	cd_redefined = False
+	# A prefixed pushd/popd/eval/source (`time pushd dir`, `builtin eval ..`)
+	# leaves the directory unknown from the next segment on (#6038).
+	prefixed_directory_change = False
 	for segment_position, (operator, tokens, redirect_may_fail) in enumerate(segments):
+		if prefixed_directory_change:
+			working_directory = None
+			unresolved_directory_change = True
+			prefixed_directory_change = False
+		raw_sets_cdpath, raw_redefines_cd = _changes_cd_resolution(tokens)
 		tokens, control_prefix = _command_after_control_prefix(tokens)
+		stripped_sets_cdpath, stripped_redefines_cd = _changes_cd_resolution(tokens)
+		shell_cdpath_set = shell_cdpath_set or raw_sets_cdpath or stripped_sets_cdpath
+		cd_redefined = cd_redefined or raw_redefines_cd or stripped_redefines_cd
 		if control_prefix:
 			working_directory = None
 		if operator in ("", ";", "\n", "&"):
 			list_changed_directory = False
 		if not tokens:
 			continue
+		# `X=1 cd dir`, `CDPATH=.. cd dir`, `builtin cd dir`, `command cd dir`
+		# run the cd builtin too (#6038).
+		cd_view = _cd_command_words(tokens)
+		cd_cdpath_assigned = False
+		if cd_view is not None:
+			tokens, cd_cdpath_assigned = cd_view
+		# The builtin a `time` / `builtin` / `command` / `VAR=` prefix runs.
+		segment_builtin_view = _shell_builtin_view(tokens)
+		segment_builtin_word = (
+			segment_builtin_view[0][0] if segment_builtin_view and segment_builtin_view[0] else tokens[0]
+		)
 		next_operator = segments[segment_position + 1][0] if segment_position + 1 < len(segments) else ""
 		# Each pipeline element runs in its own subshell: a directory change
 		# inside one ends with it, and every element starts where the list is.
@@ -841,9 +1099,9 @@ def _guarded_git_invocations(
 		# after a directory change in its own list, or when it is itself a cd.
 		if operator == "&" or (operator == "||" and (list_changed_directory or (tokens[0] == "cd" and not in_pipeline))):
 			working_directory = None
-		if in_pipeline and tokens[0] in ("cd", "pushd", "popd"):
+		if in_pipeline and segment_builtin_word in ("cd", "pushd", "popd"):
 			continue
-		if tokens[0] in ("cd", "pushd", "popd"):
+		if segment_builtin_word in ("cd", "pushd", "popd"):
 			list_changed_directory = True
 		# A cd after a condition may not have happened when a later list starts.
 		# A wrapped script (`bash -c`, `eval`) starts where this segment starts.
@@ -855,9 +1113,15 @@ def _guarded_git_invocations(
 			if operand[:1] == ["--"]:
 				operand = operand[1:]
 			# A failed builtin redirect means cd did not run (#6289).
+			# After a cd function, alias or `enable -n cd` this may not be the
+			# builtin, so the directory it leaves is unknown (#6038).
 			working_directory = (
-				_literal_guard_path(operand[0], working_directory, shell_cd=True)
-				if len(operand) == 1 and working_directory is not None and not redirect_may_fail else None
+				_literal_guard_path(
+					operand[0], working_directory, shell_cd=True,
+					cdpath_set=shell_cdpath_set or cd_cdpath_assigned,
+				)
+				if len(operand) == 1 and working_directory is not None and not redirect_may_fail
+				and not cd_redefined else None
 			)
 			if working_directory is None:
 				unresolved_directory_change = True
@@ -866,6 +1130,11 @@ def _guarded_git_invocations(
 		if tokens[0] in ("pushd", "popd", "eval", "source", ".", "(", "{"):
 			working_directory = None
 			unresolved_directory_change = True
+			directory_change_seen = True
+		elif segment_builtin_word in ("pushd", "popd", "eval", "source", "."):
+			# Git later in this segment (`time eval 'git push'`) is still
+			# judged where the segment starts, as for the bare form.
+			prefixed_directory_change = True
 			directory_change_seen = True
 		index = 0
 		environment: dict[str, str] = {}
@@ -890,12 +1159,15 @@ def _guarded_git_invocations(
 				config_override = True
 			index += 1
 		env_index = index
-		index = _env_wrapped_git_index(tokens, index)
+		index, env_wrapped = _wrapped_command_index(tokens, index)
 		if index == -1:
 			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
-				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
+				unparsed_reason = (
+					"unparsed env wrapper" if env_wrapped or tokens[env_index].rsplit("/", 1)[-1] == "env"
+					else _UNPARSED_COMMAND_PREFIX
+				)
+				invocations.append(_GitInvocation(checkout, {}, "push", [], unparsed_reason, True))
 			continue
-		env_wrapped = index != env_index
 		env_cwd = working_directory
 		explicit_directory_unresolved = False
 		env_directory_unresolved = False
@@ -937,6 +1209,7 @@ def _guarded_git_invocations(
 				checkout if wrapper_unresolved or wrapper_directory is None else wrapper_directory,
 				_depth=_depth + 1,
 				_inherited_unresolved=wrapper_unresolved,
+				_inherited_cdpath_set=shell_cdpath_set,
 			):
 				if wrapper_git_location:
 					inner_invocation = inner_invocation._replace(
@@ -947,6 +1220,11 @@ def _guarded_git_invocations(
 				if config_override:
 					inner_invocation = inner_invocation._replace(config_override=True)
 				invocations.append(inner_invocation)
+			continue
+		if _hidden_git_write(tokens, index):
+			# `sudo git push`, `xargs git push`: the hook cannot follow where
+			# the Git write runs, so it asks (#6038).
+			invocations.append(_GitInvocation(checkout, {}, "push", [], _UNPARSED_COMMAND_PREFIX, True))
 			continue
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
 			continue
@@ -1025,6 +1303,7 @@ def _guarded_git_invocations(
 	for body in wrapped_bodies:
 		invocations.extend(_guarded_git_invocations(
 			body, checkout, _depth=_depth + 1, _inherited_unresolved=bodies_unresolved,
+			_inherited_cdpath_set=shell_cdpath_set,
 		))
 	return invocations
 
@@ -1059,6 +1338,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	remote_value = ""
 	bulk = ""
 	delete = False
+	prune = False
 	tags = False
 	uncertain = False
 	arguments = invocation.arguments
@@ -1072,6 +1352,10 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			delete = True
 		elif word == "--no-delete":
 			delete = False
+		elif word == "--prune":
+			prune = True
+		elif word == "--no-prune":
+			prune = False
 		elif word in ("--tags", "--tag", "--ta"):
 			tags = True
 		elif word == "--no-tags":
@@ -1118,14 +1402,18 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if positionals:
 		remote_value = positionals[0]
 	if delete:
-		# No merged-PR check for deletions, but a foreign destination still asks.
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
+		# No merged-PR check for a deletion, but it always asks (#7220, §23.C).
+		named = ", ".join(f"`{ref.removeprefix('+')}`" for ref in positionals[1:]) or "an unnamed ref"
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value,
+			deletes=f"--delete of {named}")]
 	refspecs = positionals[1:]
+	pruned = [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value,
+		deletes="--prune of remote branches without a local counterpart")] if prune else []
 	if not refspecs and tags and not bulk:
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
+		return pruned + ([_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else [])
 	if not refspecs:
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value)]
-	targets: list[_GuardTarget] = []
+		return pruned + [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value)]
+	targets: list[_GuardTarget] = list(pruned)
 	for refspec in refspecs:
 		refspec = refspec.removeprefix("+")
 		if refspec == ":" or "*" in refspec:
@@ -1134,7 +1422,10 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		if ":" in refspec:
 			source, destination = refspec.split(":", 1)
 			if not source:
-				continue  # Branch deletion.
+				# A `:ref` refspec deletes the remote ref; it always asks (#7220).
+				targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "", True,
+					remote=remote_value, deletes=f"`:{destination}`"))
+				continue
 		else:
 			source = destination = refspec
 			if destination == "HEAD":
@@ -1151,7 +1442,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if bulk:
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value))
 	if not targets and remote_value and remote_value != "origin":
-		# Every refspec was a branch deletion; only the remote needs checking.
+		# Every refspec was a tag or other non-branch ref; only the remote needs checking.
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value))
 	return targets
 
@@ -1325,11 +1616,12 @@ def git_subcommands(command: str, *, _depth: int = 0) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
 	Only counts `git` when it is the first real token of a shell segment after
-	control words, leading `VAR=value` assignments, or a simple `env` wrapper.
-	That keeps `man git commit` and
-	`echo "git commit"` from tripping the guard, at the cost of missing
-	wrapper-prefixed invocations like `sudo git commit` — an acceptable trade,
-	since a false block is more disruptive than a missed check on a rare form.
+	control words, leading `VAR=value` assignments, a simple `env` wrapper, or a
+	transparent prefix such as `time`, `command`, `nice` or `timeout` (#6038).
+	That keeps `man git commit` and `echo "git commit"` from tripping the
+	guard. Any other command with a `git` word followed by `push` or `commit`
+	in its words (`sudo git commit`, `xargs git push`) reports `push`, so the
+	caller asks rather than passing a write it cannot follow.
 
 	Shell `-c` scripts (`bash`, `sh`, `zsh`, `dash`), `eval` arguments and
 	`$(...)` / backtick / `<(...)` bodies are parsed the same way, up to
@@ -1361,10 +1653,10 @@ def git_subcommands(command: str, *, _depth: int = 0) -> set[str]:
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1
 		env_index = index
-		index = _env_wrapped_git_index(tokens, index)
+		index, _env_wrapped = _wrapped_command_index(tokens, index)
 		if index == -1:
 			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
-				found.add("push")  # Unparseable env commands must request confirmation.
+				found.add("push")  # Unparseable env or prefix commands must request confirmation.
 			continue
 		if index >= len(tokens):
 			continue
@@ -1377,6 +1669,9 @@ def git_subcommands(command: str, *, _depth: int = 0) -> set[str]:
 			continue
 		if wrapped_script is not None:
 			found |= git_subcommands(wrapped_script, _depth=_depth + 1)
+			continue
+		if _hidden_git_write(tokens, index):
+			found.add("push")  # `sudo git push`, `xargs git push` (#6038).
 			continue
 
 		executable = tokens[index]
@@ -2053,13 +2348,21 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
+	# #7220 / §23.C: deleting a remote branch and pushing to the default branch
+	# are ask-first. The settings.json ask rules only match `main`/`master`
+	# by wildcard; these use the parsed refspecs and the resolved default branch.
+	deletion_reasons: list[str] = []
+	default_branch_reasons: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
 			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
 			continue
-		if invocation.subcommand == "push" and invocation.warning in ("unparsed env wrapper", _UNPARSED_SHELL_WRAPPER):
+		if invocation.subcommand == "push" and invocation.warning in (
+			"unparsed env wrapper", _UNPARSED_SHELL_WRAPPER, _UNPARSED_COMMAND_PREFIX,
+		):
 			unverified_destinations.add(
 				"unparsed shell-wrapped Git command" if invocation.warning == _UNPARSED_SHELL_WRAPPER
+				else "Git command behind an unparsed command prefix" if invocation.warning == _UNPARSED_COMMAND_PREFIX
 				else "unparsed env-wrapped Git command"
 			)
 			continue
@@ -2093,6 +2396,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
 		)
 		for target in targets:
+			if target.deletes:
+				deletion_reasons.append(target.deletes)
+				continue
 			if target.branch is None:
 				unresolved_push_destinations.append(
 					"could not resolve git push destination; shell expansion may change the pushed branch."
@@ -2144,7 +2450,15 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					continue
 				base = default_branch(target.cwd)
 				if base and branch == base:
+					if target.reaches_remote:
+						default_branch_reasons.append(f"`{branch}` is the default branch")
 					continue
+				if not base and target.reaches_remote and not branch.startswith("claude/"):
+					# AD-2 on #7220: fail closed when neither the local origin/HEAD
+					# nor `git ls-remote --symref` names the default branch.
+					default_branch_reasons.append(
+						f"could not resolve the default branch, so `{branch}` may be it"
+					)
 				slug = repo_slug(target.cwd)
 				if not slug:
 					_warn(f"could not derive <owner>/<repo> from the git remote (branch `{branch}`)")
@@ -2204,7 +2518,32 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		)
 	confirmation_reasons.extend(unresolved_push_sources)
 	confirmation_reasons.extend(unresolved_push_destinations)
+	# Auto mode: when the only doubt is the command's shell shape (a branch
+	# made earlier in the same command, a push inside control flow, an
+	# expansion in a refspec), deny instead of asking. A hook "ask" prompts a
+	# human even in Auto mode; a deny runs nothing and the session can split
+	# the command and push again, which this guard then checks in full.
+	push_shape_only = bool(confirmation_reasons) and not (
+		unknown_destination_reasons or deletion_reasons or default_branch_reasons
+		or bulk_reasons or unverified_destinations
+	)
+	if push_shape_only and payload.get("permission_mode") == AUTO_PERMISSION_MODE:
+		return 2, (
+			"merged-PR guard (CLAUDE.md §21.E): " + "; ".join(confirmation_reasons)
+			+ "\n\nAuto mode: nothing ran (any branch or commit in this command was not created either). "
+			"Create the branch and commit in their own command first, then push as one plain command with "
+			"literal arguments: `git push -u origin <branch>` (no loop, `$VAR` or `$(...)`). The guard checks "
+			"that push normally."
+		)
 	confirmation_reasons.extend(unknown_destination_reasons)
+	if deletion_reasons:
+		confirmation_reasons.append(
+			"git push deletes remote branches: " + ", ".join(dict.fromkeys(deletion_reasons))
+		)
+	if default_branch_reasons:
+		confirmation_reasons.append(
+			"git push writes to the default branch: " + ", ".join(dict.fromkeys(default_branch_reasons))
+		)
 	if bulk_reasons:
 		confirmation_reasons.append(
 			"Bulk git push may write more branches than the current branch: "

@@ -14,6 +14,22 @@ Conflict detection: if the plan's facts conflict with the actual codebase
 (function name mismatch, file path absent, API signature differs), proceed
 with the codebase truth and note the conflict in your output.
 
+Default-branch reference: your git checkout has no remote and no network, so
+`origin/...` refs do not exist. When `git branch --list isolated-base` shows
+that branch, it is the repository's default branch as it was when this run
+started, filtered like your checkout (credential-like and oversized files are
+left out). Read what production runs with `git show isolated-base:<path>`,
+`git diff isolated-base -- <path>` or `git ls-tree -r --name-only
+isolated-base`. A file missing there may only have been filtered out.
+`isolated-base` is the default branch's current tip and the direct parent of
+your HEAD commit, not the commit your branch was cut from. If the default
+branch moved on, `git diff isolated-base` also shows its newer commits
+reversed. Those are not your deletions, and the sandbox has no history that
+separates them (`git merge-base HEAD isolated-base` is `isolated-base`
+itself). `git diff HEAD` shows the edits from this run that you have not
+committed yet; commits you make come after the `isolated snapshot` commit in
+`git log isolated-base..HEAD`.
+
 Plan-divergence discipline: if the approved plan, issue scope, or
 `files_touched` context materially diverges from the checked-out codebase,
 surface that divergence prominently in your output instead of silently
@@ -31,6 +47,17 @@ Test verification:
 - If `pytest` is not installed, install it via `pip install pytest`.
 - For `npm test`, treat "Missing script" errors as a pass (no tests defined);
   treat any other test failure as a real error.
+- Update the tests and registries listed under Expected files together with
+  the code; a pre-push gate re-runs them.
+
+Pinned-SHA test discipline: never write a test that asserts a specific
+upstream commit SHA in a file the workflow sync manages, such as a wrapper's
+`uses: shubhodeep1/coding-workflows/...@<40-hex>` line or a constant like
+`PINNED_SUPPORT_SHA` holding the SHA you just read. Every `@stable` sync
+rewrites those pins, so the test fails on the next sync PR. Assert the shape
+instead: the ref matches `^[0-9a-f]{40}$` (a full commit, not a branch or
+tag), and where two pins must agree (a checkout `ref:` and a reusable
+workflow `uses:`), read one from the file and compare it to the other.
 
 Verification stage order:
 - Resolve the exact `typecheck -> lint -> tests -> build` commands from the target repo's `AGENTS.md`, `package.json`, and `Makefile` when those surfaces exist; do not invent new repo-level commands in this prompt.
@@ -47,9 +74,9 @@ Restrictions:
 
 Sibling-conflict discipline: if the issue body lists `files_touched:` (machine
 or prose form) or names files in scope/acceptance, stay inside that set.
-Prefer append-only edits in shared docs (`README.md`, `agents.md`) under
-existing `<!-- anchor:NAME -->` HTML anchors rather than reflowing prose. Do
-not delete, rename, or reorder anchors.
+Prefer append-only edits in shared docs (`README.md`) under existing
+`<!-- anchor:NAME -->` HTML anchors rather than reflowing prose. Do not
+delete, rename, or reorder anchors.
 
 Changelog discipline: never edit `CHANGELOG.md` directly — newest-entry-first
 insertion makes every concurrent PR collide on the same hunk at line 1. When
@@ -58,7 +85,23 @@ the issue changes observable behaviour, write exactly one fragment file at
 `<!-- changelog: fixed -->` names the section (`added`, `changed`,
 `deprecated`, `removed`, `fixed`, `security`; default `added`); everything
 after it is the entry body. Automation folds fragments into `CHANGELOG.md`
-and deletes them — do not fold them yourself.
+and deletes them — do not fold them yourself. Name the fragment after the
+issue you are implementing (`changelog.d/<this issue number>-<slug>.md`,
+and the same for `agents.d/`): the scope guard always allows the issue's
+own fragments even when `files_touched` does not list them, and refuses
+any other fragment path outside that list.
+
+agents.md discipline: never edit `agents.md` directly (or `AGENTS.md` in a
+consumer repo) — concurrent PRs collide on the same few sections. To
+document behaviour there, write one fragment at
+`agents.d/<issue-or-pr>-<slug>.md`. Each block starts with
+`<!-- agents: section="<exact ## heading>" -->` and its text is appended
+to that section; for a new log prefix use
+`<!-- agents: section="Stable log prefixes (contractual)" -->` followed by
+the `` - `PREFIX` `` bullet and the `LOG_PREFIX.name=PREFIX` line. Add ` new`
+inside the marker only to create a section that does not exist yet. A
+scope that lists `agents.md` covers its `agents.d/` fragments. Automation
+folds fragments into the agents file — do not fold them yourself.
 
 Scope-lock discipline: if the implementation context says an `ai:scope:<glob>`
 label is active for this issue, edit only files matching that glob. If the

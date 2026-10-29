@@ -26,6 +26,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESOLVE_SCRIPT = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
@@ -393,6 +396,60 @@ def test_resolve_script_uses_single_escalation_marker_literal_source() -> None:
 	assert body.count(marker) == 1
 
 
+def _persist_retry_state_function_text() -> str:
+	body = _resolve_script_text()
+	start = body.index("_persist_resolver_retry_state_from_current_failure()")
+	# End at the function's own closing brace (first column-0 "}"), not at the
+	# next function header, so unrelated top-level code is not checked.
+	end = body.index("\n}\n", start) + 2
+	return body[start:end]
+
+
+def test_retry_state_body_write_uses_rest_patch_on_pulls_endpoint() -> None:
+	# Issue #7931: `gh pr edit` goes through GraphQL and needs read:org; the
+	# retry-state body write must use the REST pulls endpoint instead.
+	fn = _persist_retry_state_function_text()
+	patch_call = (
+		'gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" '
+		'-F "body=@${_body_file}" >/dev/null'
+	)
+	assert patch_call in fn
+	assert not re.search(r"gh\s+pr\s+edit", fn)
+	assert "pr edit" not in fn
+	assert "--body-file" not in fn
+	warning = "::warning::Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1"
+	sync_call = '_sync_local_pr_body_from_file "${_body_file}"'
+	assert fn.index(patch_call) < fn.index(warning) < fn.index(sync_call)
+
+
+def test_retry_state_patch_keeps_gh_retry_attempts() -> None:
+	import shutil
+	import subprocess
+
+	if shutil.which("bash") is None:
+		import pytest
+
+		pytest.skip("bash unavailable")
+	helpers = REPO_ROOT / "scripts" / "gh_helpers.sh"
+	proc = subprocess.run(
+		[
+			"bash",
+			"-c",
+			'source "$1"; _gh_cmd_is_unsafe_post gh api -X PATCH repos/o/r/pulls/1 -F body=@/tmp/x',
+			"_",
+			str(helpers),
+		],
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	# Exit 1 means "retryable"; any other non-zero (e.g. 127) means the helper
+	# could not be sourced or was renamed, which must not pass silently.
+	assert proc.returncode == 1, (
+		f"PATCH must keep full gh_retry attempts (rc={proc.returncode}, stderr={proc.stderr[:200]})"
+	)
+
+
 def test_retry_state_artifact_treats_missing_baseline_as_regressed(tmp_path: Path) -> None:
 	_seed_repo_files(tmp_path)
 	artifact = _build_artifact(
@@ -406,7 +463,7 @@ def test_retry_state_artifact_treats_missing_baseline_as_regressed(tmp_path: Pat
 
 
 def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression() -> None:
-	body = REVIEW_AUTOFIX.read_text(encoding="utf-8")
+	body = expanded_review_autofix_text()
 	resolve_body = RESOLVE_SCRIPT.read_text(encoding="utf-8")
 	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"' in resolve_body
 	assert "RESOLVER_ESCAPE_THRESHOLD_N:" in body
@@ -457,6 +514,101 @@ def test_resolve_script_wires_tier_selection_and_verifier_args() -> None:
 	assert 'if [ "${RESOLVER_FP_EXIT}" -eq 1 ] || [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" = "warn_only" ]; then' in body
 	assert "select_verification_tier_from_pr_payload" in body
 	assert "FINGERPRINT_TIER_DOWNGRADED_V1" in body
+
+
+def test_non_retryable_isolation_failure_escalates_on_first_failure(tmp_path: Path) -> None:
+	ns = _retry_state_namespace()
+	with _pushd(tmp_path):
+		artifact = ns["build_resolver_retry_state_artifact"](
+			pr_payload=_pr_payload(head_sha="head-host-only"),
+			pr_issue_comments=[],
+			fingerprints={},
+			baseline_state={},
+			threshold=5,
+			repository="owner/repo",
+			pr_number="3933",
+			run_url="https://github.com/owner/repo/actions/runs/39882356505",
+			verifier_module=None,
+			isolation_failure_reason="sandbox_path_host_only",
+			run_id="39882356505",
+			conflict_paths=[".ai/validate.yml", "../escape", "bad path"],
+		)
+	assert artifact["ok"] is True
+	assert artifact["consecutive_failure_count"] == 1
+	assert artifact["escalated"] is True
+	state = artifact["retry_state"]
+	assert state["escalated_at"]
+	assert state["non_retryable"] is True
+	assert state["last_failure_reason"] == "sandbox_path_host_only"
+	assert state["last_run_id"] == "39882356505"
+	assert state["last_conflict_paths"] == [".ai/validate.yml"]
+	assert "Escalated on the first failure: `sandbox_path_host_only`" in artifact["summary_comment_body"]
+	assert "`.ai/validate.yml`" in artifact["summary_comment_body"]
+
+
+def test_non_retryable_escalation_kill_switch_keeps_threshold(tmp_path: Path) -> None:
+	ns = _retry_state_namespace()
+	with _pushd(tmp_path):
+		artifact = ns["build_resolver_retry_state_artifact"](
+			pr_payload=_pr_payload(head_sha="head-host-only"),
+			pr_issue_comments=[],
+			fingerprints={},
+			baseline_state={},
+			threshold=5,
+			repository="owner/repo",
+			pr_number="3933",
+			run_url="",
+			verifier_module=None,
+			isolation_failure_reason="sandbox_path_host_only",
+			escalate_non_retryable=False,
+		)
+	assert artifact["escalated"] is False
+	assert artifact["retry_state"]["non_retryable"] is True
+	assert "last_run_id" not in artifact["retry_state"]
+
+
+def test_retryable_failures_record_reason_without_escalating(tmp_path: Path) -> None:
+	_seed_repo_files(tmp_path)
+	artifact = _build_artifact(tmp_path=tmp_path, pr_payload=_pr_payload(head_sha="head-fp"))
+	assert artifact["escalated"] is False
+	assert artifact["retry_state"]["last_failure_reason"] == "fingerprint_violations"
+	assert artifact["retry_state"]["non_retryable"] is False
+	other = _build_artifact(
+		tmp_path=tmp_path,
+		pr_payload=_pr_payload(head_sha="head-iso"),
+		fingerprints={},
+		baseline_state={},
+		isolation_failure_reason="provider_unavailable",
+	)
+	assert other["escalated"] is False
+
+
+def test_retry_state_persists_over_rest_not_graphql() -> None:
+	body = _resolve_script_text()
+	persist = body[body.index("_persist_resolver_retry_state_from_current_failure()"):]
+	persist = persist[: persist.index("\n}\n")]
+	assert "gh_retry gh pr edit" not in persist
+	assert "gh_retry gh issue edit" not in persist
+	assert 'gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" -F "body=@${_body_file}"' in persist
+	assert 'GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:resolver-escalated"' in persist
+	assert persist.index("Failed to persist AUTOFIX_RESOLVER_RETRY_STATE_V1") < persist.index("_sync_local_pr_body_from_file")
+	assert 'RESOLVER_CONFLICT_PATH_REPORT_FILE="${conflict_path_report}"' in body
+
+
+def test_non_retryable_escalation_keeps_failure_marker() -> None:
+	# RESOLVER_ESCALATED=true skips the review-autofix-failure:v1 marker the
+	# gate's identical-failure cap counts; a first-failure non-retryable
+	# escalation must not export it.
+	body = _resolve_script_text()
+	persist = body[body.index("_persist_resolver_retry_state_from_current_failure()"):]
+	persist = persist[: persist.index("\n}\n")]
+	assert ".retry_state.non_retryable // false" in persist
+	guarded = persist.split('if [ "${_escalated_env}" = "true" ]; then\n    echo "RESOLVER_ESCALATED=true"', 1)
+	assert len(guarded) == 2
+	assert '[ "${_comment_present}" = "true" ] && [ "${_escalated_env}" = "true" ]' in persist
+	# With RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED=false only threshold
+	# escalations happen, and those keep exporting RESOLVER_ESCALATED=true.
+	assert '"${RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED-true}"' in persist
 
 
 def main() -> int:

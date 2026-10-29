@@ -284,9 +284,18 @@ if args[0] == "label" and len(args) >= 3 and args[1] in ("create", "edit"):
 		"repo": first_value("--repo"),
 	})
 	save()
+	if args[1] == "create" and os.environ.get("MOCK_GH_LABEL_CREATE_EXISTS") == "true":
+		sys.stderr.write(f'label with name "{args[2]}" already exists; use `--force` to update its color and description\n')
+		sys.exit(1)
 	sys.exit(0)
 
 if args[0] == "issue" and len(args) >= 3 and args[1] == "edit":
+	transient_failures = int(os.environ.get("MOCK_GH_ISSUE_EDIT_TRANSIENT_FAILURES") or "0")
+	if int(state.get("issue_edit_transient_failures_seen", 0)) < transient_failures:
+		state["issue_edit_transient_failures_seen"] = int(state.get("issue_edit_transient_failures_seen", 0)) + 1
+		save()
+		sys.stderr.write("HTTP 502: Bad Gateway\n")
+		sys.exit(1)
 	if os.environ.get("MOCK_GH_ISSUE_EDIT_FAILURE") == "true":
 		save()
 		sys.exit(1)
@@ -647,6 +656,9 @@ def _run_diagnose_step(
 			"MOCK_CODEX_CALLS_FILE": str(calls_file),
 			"MOCK_CODEX_STDIN_FILE": str(stdin_file),
 			"TMPDIR": str(runtime_dir),
+			# The step skips when the staged support run dir is unset (#7540);
+			# point it at the helper copy _copy_diagnose_assets made.
+			"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(repo_dir / "scripts"),
 		}
 	)
 	if extra_env:
@@ -1520,8 +1532,9 @@ def test_self_repo_guards_use_exact_canonical_repo_match() -> None:
 
 	for block in (stage_block, preflight_block):
 		assert 'wf_source="shubhodeep1/coding-workflows"' in block
-		assert 'if [ "${{ github.repository }}" = "${wf_source}" ]; then' in block
-		assert 'if [[ "${{ github.repository }}" == *"/coding-workflows" ]]; then' not in block
+		assert 'if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then' in block
+		assert 'if [[ "${GITHUB_REPOSITORY:-}" == *"/coding-workflows" ]]; then' not in block
+		assert '${{ github.repository }}' not in block
 
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
 	assert 'wf_source="shubhodeep1/coding-workflows"' in commit_helper
@@ -2212,7 +2225,7 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py" in stage_block
+	assert "codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py" in stage_block
 	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in stage_block
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
@@ -2259,7 +2272,7 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 	"""
 	for step_name, launch_line in (
 		("Run Codex implementation", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?'),
-		("Attempt post-Codex syntax repair", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run; then'),
+		("Attempt post-Codex syntax repair", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || repair_direct_rc=$?'),
 	):
 		script_lines = _extract_run_script(step_name).splitlines()
 		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]
@@ -2546,6 +2559,9 @@ def _run_guard_handler_case(
 	staged_support_auto_release_safe: bool = False,
 	mock_issue_edit_failure: bool = False,
 	guard_overrides: dict[str, str] | None = None,
+	with_gh_helpers: bool = False,
+	issue_edit_transient_failures: int = 0,
+	mock_label_create_exists: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
 	repo_dir = tmp_path / "repo"
 	runtime_dir = tmp_path / "runtime"
@@ -2560,6 +2576,8 @@ def _run_guard_handler_case(
 	shutil.copy2(repository_helper, runtime_helper)
 	repository_helper.unlink()
 	assert not repository_helper.exists(), "test setup must simulate fetched-support cleanup"
+	if with_gh_helpers:
+		shutil.copy2(REPO_ROOT / "scripts" / "gh_helpers.sh", runtime_dir / "gh_helpers.sh")
 
 	_install_mock_gh(bin_dir)
 	_install_guard_mock_curl(bin_dir)
@@ -2599,6 +2617,8 @@ def _run_guard_handler_case(
 			"SSB_FILES": "scripts/helper.sh",
 			"SSB_AUTO_RELEASE_SAFE": "true" if staged_support_auto_release_safe else "",
 			"MOCK_GH_ISSUE_EDIT_FAILURE": "true" if mock_issue_edit_failure else "false",
+			"MOCK_GH_ISSUE_EDIT_TRANSIENT_FAILURES": str(issue_edit_transient_failures),
+			"MOCK_GH_LABEL_CREATE_EXISTS": "true" if mock_label_create_exists else "false",
 		},
 		cwd=repo_dir,
 	)
@@ -2748,6 +2768,114 @@ def test_staged_support_guard_marks_only_auto_release_safe_conflicts() -> None:
 		)
 		assert proc.returncode != 0
 		assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" in gh_state["issue_comments"][0]["body"]
+
+
+def test_guard_handler_retries_transient_destructive_latch_write() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_retry_destructive_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			destructive_reason="canonical-source",
+			with_gh_helpers=True,
+			issue_edit_transient_failures=1,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert "gh_helpers.sh not available" not in output
+		assert gh_state["issue_edit_transient_failures_seen"] == 1
+		# The retried call is the combined add+remove edit, not the add-only fallback.
+		assert gh_state["issue_edits"][0]["remove"] == ["ai:implementing"]
+		assert "ai:destructive-blocked" in gh_state["issue_labels"]
+		assert "ai:implementing" not in gh_state["issue_labels"]
+		assert gh_state["label_creates"] == [{"name": "ai:destructive-blocked", "repo": "owner/consumer"}]
+		assert "Confirmed ai:destructive-blocked is latched" in output
+		assert len(gh_state["issue_comments"]) == 1
+
+
+def test_guard_handler_retries_transient_needs_human_latch_write() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_retry_staged_") as td:
+		proc, gh_state, curl_calls = _run_guard_handler_case(
+			Path(td),
+			repository="shubhodeep1/coding-workflows",
+			staged_support_reason="true",
+			staged_support_auto_release_safe=True,
+			with_gh_helpers=True,
+			issue_edit_transient_failures=1,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert gh_state["issue_edit_transient_failures_seen"] == 1
+		assert gh_state["issue_edits"][0]["remove"] == ["ai:implementing"]
+		assert gh_state["issue_labels"] == ["ai:needs-human"]
+		assert "Confirmed ai:needs-human is latched" in output
+		assert len(gh_state["issue_comments"]) == 1
+		assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" in gh_state["issue_comments"][0]["body"]
+		assert "Confirmed ai:needs-human latch" in " ".join(curl_calls[0])
+
+
+def test_guard_handler_scope_latch_with_gh_helpers() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_retry_scope_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			scope_reason="out-of-scope",
+			with_gh_helpers=True,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert gh_state["label_creates"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert gh_state["issue_labels"] == ["ai:scope-blocked"]
+		assert "Confirmed ai:scope-blocked is latched" in output
+		assert len(gh_state["issue_comments"]) == 1
+
+
+def test_guard_handler_existing_label_edits_without_retrying_create() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_label_exists_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			scope_reason="out-of-scope",
+			with_gh_helpers=True,
+			mock_label_create_exists=True,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		# One raw create; the "already exists" reply goes straight to the edit, never to a create retry.
+		assert gh_state["label_creates"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert gh_state["label_edits"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert "gh command failed" not in output
+		assert "Could not ensure the ai:scope-blocked label exists" not in output
+		assert "Confirmed ai:scope-blocked is latched" in output
+
+
+def test_guard_handler_fails_open_without_gh_helpers() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_no_helpers_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			destructive_reason="canonical-source",
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert "gh_helpers.sh not available beside the handler" in output
+		assert gh_state["issue_labels"] == ["ai:destructive-blocked"]
+		assert "Confirmed ai:destructive-blocked is latched" in output
+
+
+def test_guard_handler_gh_retry_wiring_contract() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	handler = _implement_guard_handler_text()
+	assert 'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"' in stage_block
+	assert stage_block.index('install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"') < stage_block.index(
+		'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"'
+	)
+	assert 'GUARD_BLOCK_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"' in handler
+	assert 'source "${GUARD_BLOCK_GH_HELPERS_FILE}" && declare -F gh_retry' in handler
+	assert "::warning::implement_handle_guard_block: gh_helpers.sh not available beside the handler" in handler
+	assert handler.count("gh_retry gh issue view") == 3
+	assert handler.count("guard_block_gh gh issue edit") == 6
+	assert "gh_retry gh issue comment" not in handler
+	assert "guard_block_gh gh issue comment" not in handler
 
 
 def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
@@ -4374,7 +4502,7 @@ def test_codex_blocked_verdict_bail_and_flag() -> None:
 	)
 	assert "captured from final assistant output" in codex_block[diag_idx:diag_idx + 600]
 	assert "tails below contain stderr only" in codex_block[diag_idx:diag_idx + 600]
-	generic_idx = codex_block.find('diag_reason="Codex implement failed after ${max_attempts} attempts"')
+	generic_idx = codex_block.find('diag_reason="${implement_engine_name} implement failed after ${max_attempts} attempts"')
 	assert generic_idx != -1 and generic_idx < diag_idx, (
 		"the BLOCKED branch must override the generic default reason"
 	)
@@ -4462,7 +4590,7 @@ def test_blocked_already_satisfied_routes_to_success_noop() -> None:
 		'grep -qiE "${BLOCKED_ALREADY_SATISFIED_REGEX}"'
 	)
 	fail_bail_idx = codex_block.find(
-		"Codex returned a deliberate BLOCKED verdict on attempt"
+		"${implement_engine_name} returned a deliberate BLOCKED verdict on attempt"
 	)
 	assert -1 not in (blocked_idx, classifier_idx, fail_bail_idx)
 	assert blocked_idx < classifier_idx < fail_bail_idx, (
@@ -4734,6 +4862,65 @@ def test_implement_prompt_reserves_blocked_for_real_obstacles() -> None:
 	)
 
 
+def _heredoc_body(block: str, opener: str, terminator: str) -> str:
+	"""Return the text between `opener` and a line that is just
+	`terminator` (both matched after stripping indentation), with all
+	whitespace runs collapsed to single spaces."""
+	lines = block.splitlines()
+	start = next(
+		(i for i, line in enumerate(lines) if line.strip().endswith(opener)),
+		None,
+	)
+	assert start is not None, f"could not find heredoc opener {opener!r}"
+	end = next(
+		(i for i in range(start + 1, len(lines)) if lines[i].strip() == terminator),
+		None,
+	)
+	assert end is not None, f"could not find heredoc terminator {terminator!r}"
+	# Collapse wrapping so assertions can match phrases across line breaks.
+	return " ".join(" ".join(line.strip() for line in lines[start + 1:end]).split())
+
+
+def test_implement_inline_prompt_names_success_noop_sentinel() -> None:
+	"""The prompt `implement.yml` actually sends is the inline
+	`mode-implement-inline.txt` heredoc, not `prompts/mode-implement.txt`.
+	Run 38082111776 (issue #6812, a verification-only plan whose fix was
+	already on `main`) spent 5 attempts and about $14 because the inline
+	completeness contract never named `No changes needed.`: the model wrote
+	"This is reported as already done" in prose, the success-no-op regex did
+	not match, and the retry nudge then insisted the plan required edits.
+	Both texts the model sees must name the exact sentinel, and the
+	sentinel must satisfy the workflow's success-no-op regex.
+	"""
+	block = _step_block_text("Run Codex implementation")
+	inline_prompt = _heredoc_body(block, '"${PROMPT_TEMPLATE_FILE}" <<\'EOF\'', "EOF")
+	retry_nudge = _heredoc_body(block, "<<'RETRY_EOF'", "RETRY_EOF")
+	for label, text in (("inline prompt", inline_prompt), ("retry nudge", retry_nudge)):
+		assert "exactly `No changes needed.` on its own line" in text, (
+			f"the {label} must name the exact success-no-op sentinel"
+		)
+	assert "It is NOT the marker for" in inline_prompt, (
+		"the inline prompt must state that BLOCKED is not the nothing-to-do marker"
+	)
+	match = re.search(
+		r"if grep -qEi '(\^\(\[\[:space:\]\]\*.*?)' \"\$\{CODEX_OUTPUT_FILE\}\"",
+		block,
+	)
+	assert match is not None, "could not extract the success-no-op regex from implement.yml"
+	# The final message from run 38082111776, ended the way the prompt now
+	# asks; the prose-only original must still miss (no loosening).
+	prose = "I've again made no file changes. This is reported as already done, not as `BLOCKED`.\n"
+	for text, expected_rc in ((prose, 1), (prose + "\nNo changes needed.\n", 0)):
+		proc = subprocess.run(
+			["grep", "-qEi", match.group(1)],
+			input=text,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		assert proc.returncode == expected_rc, text
+
+
 def test_codex_empty_output_streak_bail_and_flag() -> None:
 	"""Pin Fix #2: when Codex returns empty output for
 	`empty_streak_threshold` (default 2) attempts in a row, the retry
@@ -4777,7 +4964,7 @@ def test_codex_empty_output_streak_bail_and_flag() -> None:
 	# streak. Without this, a series of watchdog kills (which exit
 	# with non-zero AND empty stdout) would never trip the bail and
 	# the loop would burn the full 5-attempt budget on stuck runs.
-	assert 'Codex exited with code $cmd_rc and returned empty output' in codex_block, (
+	assert '${implement_engine_name} exited with code $cmd_rc and returned empty output' in codex_block, (
 		"the cmd_rc != 0 branch must distinguish empty-stdout exits "
 		"(stuck/no-output, count toward streak) from non-empty exits "
 		"(legitimate work attempted, don't count). Without this, a run "
@@ -5004,7 +5191,7 @@ def test_salvage_branches_gate_on_substantive_changes() -> None:
 		"trailing-newline append (PR #2176 root cause)"
 	)
 	assert (
-		"Codex returned empty output on attempt ${attempt} and only made "
+		"${implement_engine_name} returned empty output on attempt ${attempt} and only made "
 		"whitespace-only worktree changes — refusing to salvage; treating as empty."
 	) in codex_block, (
 		"empty-stdout branch must emit a distinct warning when the "
@@ -5012,7 +5199,7 @@ def test_salvage_branches_gate_on_substantive_changes() -> None:
 		"loop continues retrying instead of breaking"
 	)
 	assert (
-		"Codex exited with code $cmd_rc on attempt ${attempt} and only made "
+		"${implement_engine_name} exited with code $cmd_rc on attempt ${attempt} and only made "
 		"whitespace-only worktree changes — refusing to salvage; treating as empty."
 	) in codex_block, (
 		"watchdog-kill / non-zero-exit branch must emit the symmetric "
@@ -5101,7 +5288,7 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 		"diagnostics file must have a stable name so future tooling "
 		"can read it"
 	)
-	assert "Codex bailed: request_user_input rejected" in codex_block, (
+	assert "${implement_engine_name} bailed: request_user_input rejected" in codex_block, (
 		"diagnostics reason must distinguish the request_user_input "
 		"bail so the orchestrator can route accordingly"
 	)
@@ -5238,7 +5425,7 @@ def test_failure_diagnostics_posted_to_source_issue() -> None:
 	)
 	# gh failure must not abort the job — the diagnostics file is
 	# preserved locally as a fallback.
-	assert "Could not post Codex failure diagnostics" in codex_block, (
+	assert "Could not post ${implement_engine_name} failure diagnostics" in codex_block, (
 		"a failed gh issue comment must downgrade to a warning, not "
 		"abort the job — the underlying Codex failure is still the "
 		"primary signal"
@@ -5813,6 +6000,282 @@ def test_diagnose_codex_command_is_unchanged() -> None:
 		'timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s "${diagnose_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low '
 		'-c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access'
 	) in diagnose
+
+
+_RESTORE_SYMLINK_STEP_A = "Restore tracked symlinks the editor replaced"
+_RESTORE_SYMLINK_STEP_B = "Restore tracked symlinks the syntax-repair editor replaced"
+_RESTORE_SYMLINK_ENV_LINE = (
+	"IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED: ${{ vars.IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED || 'true' }}"
+)
+
+
+def _workflow_step_index(step_name: str) -> int:
+	names = [line.strip() for line in _workflow_text().splitlines() if line.strip().startswith("- name:")]
+	matches = [i for i, name in enumerate(names) if name == f"- name: {step_name}"]
+	assert len(matches) == 1, f"expected exactly one step named {step_name!r}, got {len(matches)}"
+	return matches[0]
+
+
+def _symlink_restore_repo(root: Path) -> Path:
+	repo = root / "repo"
+	_bootstrap_git_repo(repo)
+	(repo / "CLAUDE.md").write_text("root rules\n", encoding="utf-8")
+	(repo / "workflow-templates").mkdir()
+	os.symlink("../CLAUDE.md", repo / "workflow-templates" / "CLAUDE.md")
+	(repo / "src").mkdir()
+	(repo / "src" / "a.txt").write_text("original\n", encoding="utf-8")
+	_git(["git", "add", "-A"], cwd=repo)
+	_git(["git", "commit", "-m", "fixture"], cwd=repo)
+	return repo
+
+
+def _break_tracked_symlink(repo: Path, case: str) -> None:
+	link = repo / "workflow-templates" / "CLAUDE.md"
+	link.unlink()
+	if case == "regular_file":
+		link.write_text("editor copy\n", encoding="utf-8")
+	elif case == "directory":
+		link.mkdir()
+		(link / "dump.txt").write_text("x\n", encoding="utf-8")
+	elif case == "retarget":
+		os.symlink("../src/a.txt", link)
+	elif case != "deleted":
+		raise AssertionError(case)
+	(repo / "src" / "a.txt").write_text("edited by editor\n", encoding="utf-8")
+
+
+def _changed_paths(repo: Path) -> list[str]:
+	env = _isolated_test_env(cwd=repo)
+	out = subprocess.run(
+		["git", "diff", "--name-only", "HEAD"], cwd=str(repo), env=env, check=True, capture_output=True, text=True
+	)
+	return [line for line in out.stdout.splitlines() if line]
+
+
+def _run_symlink_restore(repo: Path, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+	script = _extract_run_script(_RESTORE_SYMLINK_STEP_A)
+	env = {
+		"IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED": "",
+		"STAGED_SUPPORT_LEDGER": "",
+		"FETCHED_MANIFEST": "",
+	}
+	env.update(extra_env or {})
+	result = _run_shell_script(script, cwd=repo, env=env)
+	(repo / "__workflow_step_under_test.sh").unlink(missing_ok=True)
+	return result
+
+
+def test_restore_tracked_symlink_steps_are_placed_before_the_guards() -> None:
+	a = _workflow_step_index(_RESTORE_SYMLINK_STEP_A)
+	b = _workflow_step_index(_RESTORE_SYMLINK_STEP_B)
+	assert _workflow_step_index("Create implementation branch") < a < _workflow_step_index(
+		"Preflight destructive-commit guard"
+	)
+	assert _workflow_step_index("Attempt post-Codex syntax repair") < b
+	assert b < _workflow_step_index("Protect workflow files from implementation edits")
+	assert b < _workflow_step_index("Commit changes")
+
+
+def test_restore_tracked_symlink_steps_share_one_body() -> None:
+	body_a = _extract_run_script(_RESTORE_SYMLINK_STEP_A)
+	body_b = _extract_run_script(_RESTORE_SYMLINK_STEP_B)
+	assert body_a == body_b
+	assert "${{" not in body_a
+	for name in (_RESTORE_SYMLINK_STEP_A, _RESTORE_SYMLINK_STEP_B):
+		block = "\n".join(_step_block(name))
+		assert "if: env.SKIP_IMPLEMENT != 'true'" in block
+		assert _RESTORE_SYMLINK_ENV_LINE in block
+
+
+def test_restore_tracked_symlink_puts_back_every_broken_link_shape() -> None:
+	for case in ("regular_file", "deleted", "directory", "retarget"):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _symlink_restore_repo(Path(tmp))
+			_break_tracked_symlink(repo, case)
+			result = _run_symlink_restore(repo)
+			assert result.returncode == 0, (case, result.stdout, result.stderr)
+			link = repo / "workflow-templates" / "CLAUDE.md"
+			assert link.is_symlink(), case
+			assert os.readlink(link) == "../CLAUDE.md", case
+			assert (repo / "CLAUDE.md").read_text(encoding="utf-8") == "root rules\n", case
+			assert (repo / "src" / "a.txt").read_text(encoding="utf-8") == "edited by editor\n", case
+			assert "::warning::Restored tracked symlink workflow-templates/CLAUDE.md" in result.stdout, case
+			assert "restored=1 skipped=0" in result.stdout, case
+			assert _changed_paths(repo) == ["src/a.txt"], case
+
+
+def test_restore_tracked_symlink_regression_shape_without_the_step() -> None:
+	# The #7623 failure shape: without the step the replaced alias stays changed.
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _symlink_restore_repo(Path(tmp))
+		_break_tracked_symlink(repo, "regular_file")
+		assert "workflow-templates/CLAUDE.md" in _changed_paths(repo)
+
+
+def test_restore_tracked_symlink_switch() -> None:
+	for value, expect_restore in (("false", False), ("FALSE", False), ("bogus", False), ("", True), ("TRUE", True), (None, True)):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _symlink_restore_repo(Path(tmp))
+			_break_tracked_symlink(repo, "regular_file")
+			extra: dict[str, str] = {}
+			if value is not None:
+				extra["IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED"] = value
+			script = _extract_run_script(_RESTORE_SYMLINK_STEP_A)
+			env = os.environ.copy()
+			env.pop("IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED", None)
+			env.pop("STAGED_SUPPORT_LEDGER", None)
+			env.pop("FETCHED_MANIFEST", None)
+			env.update(extra)
+			result = _run_shell_script(script, cwd=repo, env=env)
+			(repo / "__workflow_step_under_test.sh").unlink(missing_ok=True)
+			assert result.returncode == 0, (value, result.stderr)
+			assert (repo / "workflow-templates" / "CLAUDE.md").is_symlink() is expect_restore, value
+			if value == "bogus":
+				assert "::warning::IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED has an unrecognized value" in result.stdout
+				assert "bogus" not in result.stdout + result.stderr
+
+
+def test_restore_tracked_symlink_leaves_commit_step_paths_alone() -> None:
+	for var in ("STAGED_SUPPORT_LEDGER", "FETCHED_MANIFEST"):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _symlink_restore_repo(Path(tmp))
+			_break_tracked_symlink(repo, "regular_file")
+			listing = Path(tmp) / "list.txt"
+			listing.write_text("other/path\nworkflow-templates/CLAUDE.md\n", encoding="utf-8")
+			result = _run_symlink_restore(repo, {var: str(listing)})
+			assert result.returncode == 0, (var, result.stderr)
+			assert not (repo / "workflow-templates" / "CLAUDE.md").is_symlink(), var
+			assert "::notice::Left tracked symlink workflow-templates/CLAUDE.md" in result.stdout, var
+
+
+def test_restore_tracked_symlink_refuses_a_symlinked_parent() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _symlink_restore_repo(Path(tmp))
+		outside = Path(tmp) / "outside"
+		outside.mkdir()
+		(outside / "CLAUDE.md").write_text("keep me\n", encoding="utf-8")
+		shutil.rmtree(repo / "workflow-templates")
+		os.symlink(str(outside), repo / "workflow-templates")
+		result = _run_symlink_restore(repo)
+		assert result.returncode == 0, result.stderr
+		assert "::warning::Skipped tracked symlink workflow-templates/CLAUDE.md (unsafe path)" in result.stdout
+		assert (outside / "CLAUDE.md").read_text(encoding="utf-8") == "keep me\n"
+		assert "restored=0 skipped=1" in result.stdout
+
+
+def test_restore_tracked_symlink_leaves_unchanged_links_alone() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _symlink_restore_repo(Path(tmp))
+		result = _run_symlink_restore(repo)
+		assert result.returncode == 0, result.stderr
+		assert "Restored tracked symlink" not in result.stdout
+		assert "restored=0 skipped=0" in result.stdout
+		assert _changed_paths(repo) == []
+
+
+# --- Issue #8121: keep pipeline Python bytecode out of consumer implement commits ---
+# Host steps import the helpers "Stage workflow support files" copies into a
+# consumer's scripts/ (memory_helpers.sh -> ai_memory.py -> ai_memory_lib.py ...).
+# Bytecode written next to them landed in scripts/__pycache__/, the commit paths
+# staged it, and the automation-path guard blocked the issue as ai:scope-blocked
+# (mongo-explorer#42, run 40179480717).
+
+_PYCACHE_GITIGNORE_PRINTF = "printf '%s\\n' \"${_fetched_scripts[@]}\" __pycache__/ .gitignore"
+
+
+def _workflow_top_level_env() -> dict[str, str]:
+	env: dict[str, str] = {}
+	in_env = False
+	for line in _workflow_text().splitlines():
+		if line.startswith("env:"):
+			in_env = True
+			continue
+		if not in_env:
+			continue
+		if line and not line.startswith(" ") and not line.startswith("#"):
+			break
+		match = re.match(r"^  ([A-Z0-9_]+):\s*(.*?)\s*$", line)
+		if match:
+			env[match.group(1)] = match.group(2).strip('"').strip("'")
+	return env
+
+
+def test_implement_workflow_disables_python_bytecode_writes() -> None:
+	env = _workflow_top_level_env()
+	assert env, "top-level env: block not found in implement.yml"
+	assert env.get("PYTHONDONTWRITEBYTECODE") == "1", env.get("PYTHONDONTWRITEBYTECODE")
+
+
+def test_generated_scripts_gitignore_excludes_pycache() -> None:
+	script = _extract_run_script("Stage workflow support files")
+	assert _PYCACHE_GITIGNORE_PRINTF in script
+
+
+def _extract_scripts_gitignore_generation(script: str) -> str:
+	end_marker = "} > scripts/.gitignore\nfi\n"
+	end = script.index(end_marker) + len(end_marker)
+	start = script.rindex('if [ "${is_self_repo}" = "false" ]; then', 0, end)
+	return script[start:end]
+
+
+def _extract_staging_block(text: str) -> str:
+	start = text.index("add_u_excludes=(':!node_modules'")
+	reset_line = 'git reset -q HEAD -- "scripts/${fetched_script}"'
+	reset_at = text.index(reset_line, start)
+	end = text.index("\nfi\n", reset_at) + len("\nfi\n")
+	return text[start:end]
+
+
+def test_preflight_and_commit_staging_skip_scripts_pycache() -> None:
+	generation = _extract_scripts_gitignore_generation(_extract_run_script("Stage workflow support files"))
+	stagings = {
+		"preflight": _extract_staging_block(_extract_run_script("Preflight destructive-commit guard")),
+		"commit": _extract_staging_block(_implement_commit_script_text()),
+	}
+	planned = ".github/workflows/claude-auto-review.yml"
+	for label, staging in stagings.items():
+		with tempfile.TemporaryDirectory() as tmp_dir:
+			repo = Path(tmp_dir) / "repo"
+			_bootstrap_git_repo(repo)
+			(repo / planned).parent.mkdir(parents=True)
+			(repo / planned).write_text("name: review\n", encoding="utf-8")
+			_git(["git", "add", planned], cwd=repo)
+			_git(["git", "commit", "-m", "planned file"], cwd=repo)
+			(repo / planned).write_text("name: review\non: push\n", encoding="utf-8")
+			scripts_dir = repo / "scripts"
+			(scripts_dir / "__pycache__").mkdir(parents=True)
+			(scripts_dir / "ai_memory.py").write_text("print('helper')\n", encoding="utf-8")
+			(scripts_dir / "ai_memory_lib.py").write_text("X = 1\n", encoding="utf-8")
+			(scripts_dir / "__pycache__" / "ai_memory_lib.cpython-312.pyc").write_bytes(b"\x00bytecode")
+			(scripts_dir / "consumer_tool.sh").write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+			script = (
+				"set -euo pipefail\n"
+				"is_self_repo=false\n"
+				"_fetched_scripts=(ai_memory.py ai_memory_lib.py)\n"
+				"is_virtual_cleanup_path() { return 1; }\n"
+				+ generation
+				+ staging
+				+ "git diff --cached --name-only\n"
+			)
+			result = _run_shell_script(
+				script,
+				cwd=repo,
+				env={
+					"GITHUB_REPOSITORY": "owner/consumer",
+					"GIT_CONFIG_GLOBAL": "/dev/null",
+					"GIT_CONFIG_NOSYSTEM": "1",
+				},
+			)
+			assert result.returncode == 0, f"{label}: {result.stderr}"
+			staged = set(result.stdout.split())
+			assert "scripts/consumer_tool.sh" in staged, f"{label}: {staged}"
+			assert planned in staged, f"{label}: {staged}"
+			assert not any(p.startswith("scripts/__pycache__/") for p in staged), f"{label}: {staged}"
+			assert "scripts/ai_memory.py" not in staged, f"{label}: {staged}"
+			assert "scripts/ai_memory_lib.py" not in staged, f"{label}: {staged}"
+			assert "scripts/.gitignore" not in staged, f"{label}: {staged}"
+			gitignore = (scripts_dir / ".gitignore").read_text(encoding="utf-8").splitlines()
+			assert "__pycache__/" in gitignore, f"{label}: {gitignore}"
 
 
 def main() -> int:

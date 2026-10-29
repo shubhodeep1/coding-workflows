@@ -26,7 +26,8 @@ Rules enforced here:
     offered again, on this item or anywhere in the same project;
   - at most MAX_ROUNDS_PER_ITEM rounds per item and MAX_ROUNDS_PER_PROJECT
     per project; past a cap, or BLOCKED_AFTER_LAST_ROUND_HOURS after the last
-    round with the item still blocked, the only outcome is the terminal close;
+    round on the same stop id and fingerprint with the item still blocked,
+    the only outcome is the terminal close;
   - `override_guard` exists only for the scope and destructive latches on an
     issue, and its paths never include `.github/`, `.claude/` or
     `workflow-templates/` (case-insensitive) in any repository, or `scripts/`
@@ -39,10 +40,27 @@ Rules enforced here:
   - `accept_with_followup` is never offered for a failed security pass, a
     failed validation, or an `ai:security` issue (`decide --security-issue`)
     (no waiver, no validation pass);
-  - `close` is offered and accepted only once a round cap, the 24-hour rule
-    or an exhausted menu applies (TERMINAL_REASONS), never on the model's
-    choice alone: comment text the judge reads is evidence, not a reason to
-    abandon the work (issue #6557).
+  - `close` is offered and accepted only once a round cap, the 24-hour rule,
+    an exhausted menu or INVALID_VERDICT_PARK_AFTER refused answers in a row
+    applies (TERMINAL_REASONS), never on the model's choice alone: comment
+    text the judge reads is evidence, not a reason to abandon the work
+    (issue #6557). A refused answer posts
+
+      <!-- ai:unblock-wait:v1 item=<n> reason=invalid_verdict stop=<id> fingerprint=<12 hex> -->
+
+    which is not a round; `decide` counts the trailing run of these for the
+    same stop and fingerprint (older markers without stop/fingerprint are
+    not counted) and, with `--pending-invalid-verdicts`, the refusal the
+    caller has not posted yet;
+  - `wait` holds the item until a named condition the pipeline can check
+    itself holds (HOLD_KINDS). It records a hold marker, not a round, so it
+    uses no round and never counts toward the caps:
+
+      <!-- ai:unblock-wait:v1 item=<n> hold=<kind> ref=<ref>[ done| expired] -->
+
+    It is offered at most MAX_HOLDS_PER_ITEM times per item, never for a
+    condition this item already saw met, and not at all when the caller
+    passes `decide --wait-disabled` (UNBLOCK_JUDGE_WAIT_ENABLED=false).
 
 Subcommands (one JSON line on stdout; exit 0 ok, 1 bad arguments or a refused
 verdict, 2 unreadable input):
@@ -57,17 +75,38 @@ verdict, 2 unreadable input):
   decide --item <n> --stop <id> --fingerprint <fp> --comments-file <path>
          [--project-comments-file <path>] --trusted-login <login>
          --now <iso8601> [--kind issue|pr|project] [--last-activity <iso8601>]
-         [--security-issue]
+         [--security-issue] [--wait-disabled]
       Rounds used, the verdicts still allowed, and whether the item is
-      terminal (and why).
+      terminal (and why); `holds_used` and `holds_met` count the item's
+      trusted hold markers.
   validate --verdict-file <path> --decision-file <path> --repo <owner/repo>
+           [--sandbox-check]
       Check a judge verdict against the `decide` output and the hard limits,
-      and print the normalised verdict.
+      and print the normalised verdict. With --sandbox-check, instructions a
+      fix-up would run in the network-less implement sandbox are refused with
+      `sandbox_incompatible:<id>` (SANDBOX_INCOMPATIBLE_PATTERNS).
+      `target_repo` (`consumer` | `harness`) is kept for the instruction
+      verdicts (TARGET_REPO_VERDICTS); a missing or empty value becomes
+      `consumer`, any other value refuses the verdict.
   rejection --item <n> --stop <id> --comments-file <path> --trusted-login <login>
       Find the latest trusted, unused guard rejection on the blocked item.
+  protected-rejection --item <n> --comments-file <path> --trusted-login <login>
+      Find whether the newest trusted guard comment on the item is an
+      automation-path grant rejection, and whether a trusted operator-handoff
+      hold marker (<!-- ai:unblock-wait:v1 item=<n> reason=operator_handoff
+      run=<r> -->) already follows it. Read-only: it never makes
+      `override_guard` available (UNBLOCK_PROTECTED_HANDOFF_ENABLED, #7060).
+      `prior_handoff_verdict` names a trusted descope / operator_step verdict
+      recorded after the rejection (#7287), else null.
+  automation-rejection --item <n> --comments-file <path> --trusted-login <login>
+      The newest trusted guard rejection on the item when it is an
+      automation-path one not yet re-granted: `{status: ok, run, paths}`;
+      otherwise `{status: none, reason}`.
   marker --item <n> --stop <id> --fingerprint <fp> --verdict <v> --round <k>
          [--override bulk_delete]
-      The marker line to end the verdict comment with.
+      The marker line to end the verdict comment with (never for `wait`).
+  hold-marker --item <n> --kind <kind> --ref <ref> [--state done|expired]
+      The hold marker line for a `wait` verdict or an operator-step hold.
 
 No GitHub API calls and no network (CLAUDE.md §15): callers pass the
 comments they already fetched.
@@ -123,12 +162,21 @@ VERDICTS = (
 	"reissue",
 	"accept_with_followup",
 	"operator_step",
+	"wait",
 	"close",
 )
 TERMINAL_VERDICT = "close"
+# What a `wait` verdict may hold an item for: conditions the judge checks
+# itself on its next runs (scripts/unblock_judge.sh unblock_hold_condition).
+# pr_on_branch: pull request <pr> merged and its merge commit is on <branch>;
+# item_closed: issue or pull request <n> is closed; placeholder_retired: the
+# `_UNSET_OPERATOR_STEP` placeholder no longer appears on the default branch.
+HOLD_KINDS = ("pr_on_branch", "item_closed", "placeholder_retired")
+HOLD_STATES = ("done", "expired")
+MAX_HOLDS_PER_ITEM = 3
 # The deterministic conditions under which `decide` makes an item terminal;
 # `validate` accepts the terminal close only with one of these.
-TERMINAL_REASONS = ("item_cap", "project_cap", "still_blocked_24h", "menu_exhausted")
+TERMINAL_REASONS = ("item_cap", "project_cap", "still_blocked_24h", "menu_exhausted", "invalid_verdicts")
 GUARD_STOPS = ("scope-blocked", "destructive-blocked")
 GUARD_FOR_STOP = {"scope-blocked": "scope", "destructive-blocked": "destructive"}
 OVERRIDABLE_DESTRUCTIVE_REASONS = ("bulk-delete",)
@@ -149,6 +197,11 @@ NO_WAIVER_STOPS = ("security-pass-failed", "validation-failed", "validate-failed
 MAX_ROUNDS_PER_ITEM = 2
 MAX_ROUNDS_PER_PROJECT = 6
 BLOCKED_AFTER_LAST_ROUND_HOURS = 24
+# Refused judge answers in a row on one block before the item is terminal
+# (`invalid_verdicts`) and parked for a person. A refused answer is not a
+# round, so without this cap no other terminal condition could ever hold and
+# the item was retried silently forever (tele-funtoken-msg-scoring#4770).
+INVALID_VERDICT_PARK_AFTER = 2
 
 SOURCE_REPO = "shubhodeep1/coding-workflows"
 FORBIDDEN_OVERRIDE_PREFIXES = (".github/workflows/", ".claude/", "scripts/")
@@ -176,7 +229,91 @@ REJECTION_RE = re.compile(
 	r"reason=(?P<reason>[a-z-]+) run=(?P<run>[0-9]+) count=(?P<count>[0-9]+) "
 	r"truncated=(?P<truncated>true|false) paths=(?P<paths>[A-Za-z0-9+/=]+) -->$"
 )
+# The automation-path grant guard's marker (scripts/implement_handle_guard_block.sh).
+# Deliberately separate from REJECTION_RE: an automation-path rejection must
+# never feed override_guard eligibility; it only drives the operator handoff.
+AUTOMATION_PATH_REJECTION_RE = re.compile(
+	r"^<!-- ai:guard-rejection:v1 item=(?P<item>[1-9][0-9]*) guard=automation-path reason=automation-path "
+	r"run=(?P<run>[0-9]+) count=(?P<count>[0-9]+) truncated=(?P<truncated>true|false) "
+	r"paths=(?P<paths>[A-Za-z0-9+/=]+) -->$"
+)
+HOLD_MARKER_RE = re.compile(
+	r"^<!-- ai:unblock-wait:v1 item=(?P<item>[1-9][0-9]*) hold=(?P<kind>[a-z_]+) "
+	r"ref=(?P<ref>[A-Za-z0-9_./@-]{1,120})(?: (?P<state>done|expired))? -->$"
+)
+# A branch name a hold may name: no option-like start, no `..`, `//`, `@{`,
+# trailing `/` or `.`, or `.lock` suffix, as `git check-ref-format` refuses.
+HOLD_BRANCH_RE = re.compile(r"^(?![-./])(?!.*\.\.)(?!.*//)(?!.*\.lock$)[A-Za-z0-9._/-]{1,100}(?<![./])$")
+OPERATOR_HANDOFF_RE = re.compile(
+	r"^<!-- ai:unblock-wait:v1 item=(?P<item>[1-9][0-9]*) reason=operator_handoff run=(?P<run>[0-9]+) -->$"
+)
+# The automation-path grant guard writes the same marker with its own guard
+# name. It is never overridable by a verdict; the judge only re-runs that guard
+# (automation-rejection) to clear a latch the current guard would not set.
+AUTOMATION_REJECTION_RE = re.compile(
+	r"^<!-- ai:guard-rejection:v1 item=(?P<item>[1-9][0-9]*) guard=automation-path "
+	r"reason=(?P<reason>[a-z-]+) run=(?P<run>[0-9]+) count=(?P<count>[0-9]+) "
+	r"truncated=(?P<truncated>true|false) paths=(?P<paths>[A-Za-z0-9+/=]+) -->$"
+)
+REGRANT_MARKER_RE = re.compile(r"^<!-- ai:unblock-regrant:v1 item=(?P<item>[1-9][0-9]*) run=(?P<run>[0-9]+) -->$")
+# The unblock judge's own per-item markers (scripts/unblock_scan.py MARKER_PREFIXES).
+MARKER_PREFIXES_FOR_STREAK = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
+INVALID_VERDICT_MARKER_RE = re.compile(
+	r"^<!-- ai:unblock-wait:v1 item=(?P<item>[1-9][0-9]*) reason=invalid_verdict "
+	r"stop=(?P<stop>[a-z-]+) fingerprint=(?P<fp>[0-9a-f]{12}) -->$"
+)
+GUARD_REJECTION_HEADERS = (
+	"🚨 **files_touched scope guard rejected this implementation run.**",
+	"🚨 **Issue scope-lock rejected this implementation run.**",
+	"🚨 **Automation-path grant guard rejected this implementation run.**",
+	"🚨 **Destructive-commit guard rejected this implementation run.**",
+)
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
+# Commands the implement sandbox (scripts/codex_isolated_exec.sh: no network,
+# no git remote, no GitHub token) cannot run. `validate --sandbox-check`
+# refuses verdict instructions that name one (fun-token-multi-chain#639).
+# The alternatives are disjoint (a token, or an option value, can start only
+# one of them: an unquoted value never starts with a quote), so each option run
+# parses one way and a long run such as `git -c -c -c ... status` cannot
+# backtrack exponentially; the run is therefore unbounded (`*`), since any cap
+# lets one more option hide a remote command. An option value may be quoted
+# and contain spaces.
+_GIT_OPT_VALUE = r"""(?:"[^"\n]*"|'[^'\n]*'|[^\s"'][^\s]*)"""
+_GIT_GLOBAL_OPTS = (
+	r"(?:\s+(?:-[Cc]\s+" + _GIT_OPT_VALUE
+	+ r"|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+" + _GIT_OPT_VALUE + r")"
+	+ r"|--(?!(?:git-dir|work-tree|namespace)(?![\w-]))[A-Za-z][\w-]*(?:=\S+)?"
+	+ r"|-(?![Cc](?![\w-]))[A-Za-z][\w-]*))*"
+)
+# Quoted runs are replaced by one placeholder character before a second search,
+# so an option value with an embedded quoted run (`-c user.name="A B"`) still
+# reads as one token; the replacement is linear and only adds matches.
+_QUOTED_RUN_RE = re.compile(r""""[^"\n]*"|'[^'\n]*'""")
+SANDBOX_INCOMPATIBLE_PATTERNS = (
+	# `git remote` counts only as a command (a subcommand or flag follows), so
+	# prose such as "no git remote" from the judge prompt itself is not refused.
+	# Git global options may sit before the subcommand (`git -C <dir> fetch`,
+	# `git -c k=v pull`, `git --git-dir=.git fetch`); _GIT_GLOBAL_OPTS skips them.
+	("git_remote_op", re.compile(
+		r"\bgit" + _GIT_GLOBAL_OPTS + r"\s+(fetch|pull|clone|push|ls-remote)\b"
+		r"|\bgit" + _GIT_GLOBAL_OPTS + r"\s+remote\s+(add|set-url|get-url|set-head|set-branches|update|show|prune|remove|rm|rename|-v|--verbose)\b",
+		re.IGNORECASE,
+	)),
+	("git_history_deepen", re.compile(r"--unshallow|--deepen", re.IGNORECASE)),
+	("origin_ref", re.compile(r"\borigin/[A-Za-z0-9._/-]+", re.IGNORECASE)),
+	("package_install", re.compile(
+		r"\b(npm\s+(ci|install|i)|yarn(\s+install)?|pnpm\s+(install|i)|pip3?\s+install|pipx\s+install|conda\s+install|poetry\s+install|bundle\s+install|cargo\s+fetch|go\s+mod\s+download)\b",
+		re.IGNORECASE,
+	)),
+	("http_fetch", re.compile(r"\b(curl|wget)\s", re.IGNORECASE)),
+	("gh_cli", re.compile(r"\bgh\s+(api|pr|issue|run|repo|release|workflow|label|auth|secret|search|status|gist|codespace)\b", re.IGNORECASE)),
+)
+SANDBOX_CHECKED_VERDICTS = ("retry_budget", "descope", "reissue", "accept_with_followup", "operator_step")
+# Where the change an instruction verdict asks for belongs: `consumer` (this
+# repository) or `harness` (shubhodeep1/coding-workflows, which
+# scripts/unblock_actions.py routes to a heal report instead of a fix-up).
+TARGET_REPOS = ("consumer", "harness")
+TARGET_REPO_VERDICTS = SANDBOX_CHECKED_VERDICTS
 
 
 class UsageError(Exception):
@@ -293,7 +430,8 @@ def parse_markers(comments: object, trusted_login: str) -> list[dict]:
 		if not lines:
 			continue
 		match = MARKER_RE.match(lines[-1])
-		if not match or match.group("stop") not in STOP_IDS or match.group("verdict") not in VERDICTS:
+		if not match or match.group("stop") not in STOP_IDS or match.group("verdict") not in VERDICTS \
+			or match.group("verdict") == "wait":
 			continue
 		created = comment.get("created_at") or ""
 		try:
@@ -312,6 +450,85 @@ def parse_markers(comments: object, trusted_login: str) -> list[dict]:
 			}
 		)
 	return entries
+
+
+def hold_ref(wait_for: object, item: int | None = None) -> tuple[str, str]:
+	"""(kind, ref) for a `wait` condition; refuses anything the judge cannot check."""
+	if not isinstance(wait_for, dict):
+		raise UsageError("wait needs 'wait_for': an object naming the condition")
+	kind = wait_for.get("kind")
+	if kind not in HOLD_KINDS:
+		raise UsageError(f"wait_for kind must be one of {list(HOLD_KINDS)}")
+	if kind == "pr_on_branch":
+		pr, branch = wait_for.get("pr"), wait_for.get("branch")
+		if type(pr) is not int or pr < 1:
+			raise UsageError("wait_for pr_on_branch needs 'pr': a positive pull request number")
+		if not isinstance(branch, str) or not HOLD_BRANCH_RE.match(branch):
+			raise UsageError("wait_for pr_on_branch needs 'branch': a plain branch name")
+		return kind, f"{pr}@{branch}"
+	if kind == "item_closed":
+		number = wait_for.get("item")
+		if type(number) is not int or number < 1:
+			raise UsageError("wait_for item_closed needs 'item': a positive issue or pull request number")
+		if item is not None and number == item:
+			raise UsageError("wait_for item_closed cannot wait for the blocked item itself")
+		return kind, str(number)
+	name = wait_for.get("placeholder")
+	if not isinstance(name, str) or not ENV_NAME_RE.match(name) or not name.endswith(OPERATOR_PLACEHOLDER_SUFFIX):
+		raise UsageError(f"wait_for placeholder_retired needs 'placeholder': a name ending in {OPERATOR_PLACEHOLDER_SUFFIX}")
+	return kind, name
+
+
+def wait_for_from_ref(kind: str, ref: str) -> dict:
+	"""The `wait_for` object a hold marker's kind and ref stand for (inverse of hold_ref)."""
+	if kind == "pr_on_branch":
+		pr, sep, branch = ref.partition("@")
+		if not sep or not pr.isdigit():
+			raise UsageError(f"hold ref {ref!r} is not <pr>@<branch>")
+		return {"kind": kind, "pr": int(pr), "branch": branch}
+	if kind == "item_closed":
+		if not ref.isdigit():
+			raise UsageError(f"hold ref {ref!r} is not an issue number")
+		return {"kind": kind, "item": int(ref)}
+	return {"kind": kind, "placeholder": ref}
+
+
+def hold_marker(item: int, kind: str, ref: str, state: str = "") -> str:
+	if kind not in HOLD_KINDS:
+		raise UsageError(f"unknown hold kind {kind!r}")
+	if hold_ref(wait_for_from_ref(kind, ref), item) != (kind, ref):
+		raise UsageError(f"hold ref {ref!r} is not a canonical {kind} reference")
+	if state and state not in HOLD_STATES:
+		raise UsageError(f"hold state must be one of {list(HOLD_STATES)}")
+	line = f"<!-- ai:unblock-wait:v1 item={item} hold={kind} ref={ref}{' ' + state if state else ''} -->"
+	match = HOLD_MARKER_RE.match(line)
+	if not match or match.group("kind") != kind:
+		raise UsageError(f"hold ref {ref!r} is not a valid {kind} reference")
+	return line
+
+
+def parse_holds(comments: object, trusted_login: str, item: int) -> list[dict]:
+	"""This item's hold markers from comments by the trusted login (last non-empty line)."""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	holds = []
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if (user.get("login") or comment.get("author_login") or "") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		match = HOLD_MARKER_RE.match(lines[-1]) if lines else None
+		if not match or int(match.group("item")) != item or match.group("kind") not in HOLD_KINDS:
+			continue
+		holds.append({
+			"kind": match.group("kind"),
+			"ref": match.group("ref"),
+			"state": match.group("state") or "open",
+			"created_at": comment.get("created_at") or "",
+		})
+	return holds
 
 
 def latest_rejection(comments: object, trusted_login: str, item: int, stop: str) -> dict:
@@ -340,12 +557,7 @@ def latest_rejection(comments: object, trusted_login: str, item: int, stop: str)
 			newest_verdict_index = index
 		if rejection_item and int(rejection_item.group(1)) == item:
 			newest_rejection = (index, match, comment)
-		elif lines[0] in (
-			"🚨 **files_touched scope guard rejected this implementation run.**",
-			"🚨 **Issue scope-lock rejected this implementation run.**",
-			"🚨 **Automation-path grant guard rejected this implementation run.**",
-			"🚨 **Destructive-commit guard rejected this implementation run.**",
-		):
+		elif lines[0] in GUARD_REJECTION_HEADERS:
 			# A later handler that could not encode its marker must not leave
 			# an older, otherwise-valid rejection available for override.
 			newest_rejection = (index, None, comment)
@@ -365,18 +577,7 @@ def latest_rejection(comments: object, trusted_login: str, item: int, stop: str)
 	if match.group("truncated") == "true":
 		return {"status": "none", "reason": "truncated"}
 	try:
-		encoded = match.group("paths")
-		if len(encoded) > 512000:
-			raise ValueError("oversized rejection")
-		paths = json.loads(base64.b64decode(encoded, validate=True))
-		count = int(match.group("count"))
-		if not isinstance(paths, list) or not 0 < count < 100 or len(paths) != count:
-			raise ValueError("invalid rejection count")
-		if not all(isinstance(path, str) for path in paths):
-			raise ValueError("invalid rejection path")
-		cleaned = [_clean_path(path) for path in paths]
-		if len(set(cleaned)) != len(cleaned):
-			raise ValueError("duplicate rejection path")
+		cleaned = _decode_rejection_paths(match.group("paths"), int(match.group("count")), 99)
 	except (ValueError, UnicodeDecodeError, binascii.Error, UsageError):
 		return {"status": "none", "reason": "malformed"}
 	return {
@@ -384,6 +585,190 @@ def latest_rejection(comments: object, trusted_login: str, item: int, stop: str)
 		"run": match.group("run"), "paths": cleaned, "comment_id": comment.get("id"),
 		"created_at": comment.get("created_at", ""),
 	}
+
+
+def _decode_rejection_paths(encoded: str, count: int, max_count: int) -> list[str]:
+	"""Decode a guard-rejection marker's base64 path list; raise ValueError/UsageError when invalid."""
+	if len(encoded) > 512000:
+		raise ValueError("oversized rejection")
+	paths = json.loads(base64.b64decode(encoded, validate=True))
+	if not isinstance(paths, list) or not 0 < count <= max_count or len(paths) != count:
+		raise ValueError("invalid rejection count")
+	if not all(isinstance(path, str) for path in paths):
+		raise ValueError("invalid rejection path")
+	cleaned = [_clean_path(path) for path in paths]
+	if len(set(cleaned)) != len(cleaned):
+		raise ValueError("duplicate rejection path")
+	return cleaned
+
+
+def latest_protected_rejection(comments: object, trusted_login: str, item: int) -> dict:
+	"""The newest trusted guard comment on the item, when it is an automation-path rejection.
+
+	Unlike latest_rejection, a later verdict marker does not make the rejection
+	stale: the handoff only removes the automatic fix-up. `handoff_pending` is
+	true when a trusted operator-handoff hold marker follows the rejection.
+	`prior_handoff_verdict` is the newest trusted `scope-blocked` verdict marker
+	for the item when it follows the rejection and is `descope` or
+	`operator_step`; otherwise null.
+	"""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	newest_guard = None
+	newest_handoff_index = -1
+	newest_handoff_id = None
+	newest_verdict = (-1, "")
+	untrusted = False
+	for index, comment in enumerate(comments):
+		if not isinstance(comment, dict):
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines:
+			continue
+		line = lines[-1]
+		rejection_item = re.match(r"^<!-- ai:guard-rejection:v1 item=([1-9][0-9]*)\b", line)
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		login = user.get("login") or comment.get("author_login") or ""
+		if login != trusted_login:
+			if rejection_item and int(rejection_item.group(1)) == item:
+				untrusted = True
+			continue
+		verdict_marker = MARKER_RE.fullmatch(line)
+		if verdict_marker and int(verdict_marker.group("item")) == item \
+			and verdict_marker.group("stop") == "scope-blocked" and verdict_marker.group("verdict") in VERDICTS:
+			newest_verdict = (index, verdict_marker.group("verdict"))
+		handoff = OPERATOR_HANDOFF_RE.fullmatch(line)
+		if handoff and int(handoff.group("item")) == item:
+			newest_handoff_index = index
+			newest_handoff_id = comment.get("id")
+		elif rejection_item and int(rejection_item.group(1)) == item:
+			newest_guard = (index, AUTOMATION_PATH_REJECTION_RE.fullmatch(line), comment, line)
+		elif lines[0] in GUARD_REJECTION_HEADERS:
+			newest_guard = (index, None, comment, line)
+	if newest_guard is None:
+		return {"status": "none", "reason": "untrusted" if untrusted else "missing"}
+	index, match, comment, line = newest_guard
+	if match is None:
+		if line.startswith("<!-- ai:guard-rejection:v1 ") and " guard=automation-path " in line:
+			return {"status": "none", "reason": "malformed"}
+		return {"status": "none", "reason": "superseded"}
+	if int(match.group("item")) != item:
+		return {"status": "none", "reason": "malformed"}
+	try:
+		cleaned = _decode_rejection_paths(match.group("paths"), int(match.group("count")), 100)
+	except (ValueError, UnicodeDecodeError, binascii.Error, UsageError):
+		return {"status": "none", "reason": "malformed"}
+	return {
+		"status": "ok", "guard": "automation-path", "reason": "automation-path",
+		"run": match.group("run"), "paths": cleaned, "truncated": match.group("truncated") == "true",
+		"comment_id": comment.get("id"), "created_at": comment.get("created_at", ""),
+		"handoff_pending": newest_handoff_index > index,
+		"handoff_comment_id": newest_handoff_id if newest_handoff_index > index else None,
+		# The newest trusted scope-blocked verdict after the rejection, when it
+		# would have been a handoff: a fix-up filed for it must not resume the
+		# item into the same guard (#7287).
+		"prior_handoff_verdict": newest_verdict[1]
+		if newest_verdict[0] > index and newest_verdict[1] in ("descope", "operator_step") else None,
+	}
+
+
+def latest_automation_rejection(comments: object, trusted_login: str, item: int) -> dict:
+	"""The newest trusted guard rejection on the item, when it is an automation-path one.
+
+	`status: ok` carries its `run` and `paths` so the caller can re-run the
+	current guard on them. Any other newest rejection (scope, scope-lock,
+	destructive, an unencodable one), a truncated or malformed marker, or a run
+	already re-granted once (`<!-- ai:unblock-regrant:v1 item=<n> run=<r> -->`)
+	gives `status: none`: the item goes to the judge as before. Only comments by
+	`trusted_login` count.
+	"""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	newest = None
+	regranted: set[str] = set()
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if (user.get("login") or comment.get("author_login") or "") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines:
+			continue
+		last = lines[-1]
+		regrant = REGRANT_MARKER_RE.fullmatch(last)
+		if regrant and int(regrant.group("item")) == item:
+			regranted.add(regrant.group("run"))
+			continue
+		rejection_item = re.match(r"^<!-- ai:guard-rejection:v1 item=([1-9][0-9]*)\b", last)
+		if rejection_item and int(rejection_item.group(1)) == item:
+			newest = last
+		elif lines[0] in GUARD_REJECTION_HEADERS:
+			# A rejection that could not encode its marker is the newest one,
+			# and it is not re-checkable.
+			newest = ""
+	if newest is None:
+		return {"status": "none", "reason": "missing"}
+	match = AUTOMATION_REJECTION_RE.fullmatch(newest)
+	if not match:
+		return {"status": "none", "reason": "not_automation_path"}
+	if match.group("truncated") == "true":
+		return {"status": "none", "reason": "truncated"}
+	try:
+		encoded = match.group("paths")
+		if len(encoded) > 512000:
+			raise ValueError("oversized rejection")
+		paths = json.loads(base64.b64decode(encoded, validate=True))
+		count = int(match.group("count"))
+		if not isinstance(paths, list) or not 0 < count < 100 or len(paths) != count:
+			raise ValueError("invalid rejection count")
+		cleaned = [_clean_path(path) for path in paths]
+		if len(set(cleaned)) != len(cleaned):
+			raise ValueError("duplicate rejection path")
+	except (ValueError, UnicodeDecodeError, binascii.Error, UsageError):
+		return {"status": "none", "reason": "malformed"}
+	if match.group("run") in regranted:
+		return {"status": "none", "reason": "already_regranted", "run": match.group("run")}
+	return {"status": "ok", "run": match.group("run"), "paths": cleaned}
+
+
+def invalid_verdict_streak(comments: object, trusted_login: str, item: int, stop: str, fp: str) -> int:
+	"""Refused judge answers in a row for this item, stop and fingerprint.
+
+	Walks the trusted login's comments in order and looks only at those whose
+	last non-empty line is an unblock marker for this item (`ai:unblock:v1` or
+	`ai:unblock-wait:v1`). An invalid-verdict marker for the same stop and
+	fingerprint adds one; any other unblock marker for the item (a round, a
+	hold, a fix-up wait, an invalid verdict on another block) ends the run.
+	The older invalid-verdict marker without stop and fingerprint is neither
+	counted nor a break. The judge also posts it when the model gave no answer
+	(bad config, isolation failure), so a run with no answer between two
+	refused answers leaves them in a row: no other answer came between them,
+	and the no-answer run itself never parks. No API call.
+	"""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	streak = 0
+	item_prefixes = tuple(f"{prefix}item={item} " for prefix in MARKER_PREFIXES_FOR_STREAK)
+	legacy_line = f"<!-- ai:unblock-wait:v1 item={item} reason=invalid_verdict -->"
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if (user.get("login") or comment.get("author_login") or "") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines or not lines[-1].startswith(item_prefixes):
+			continue
+		last = lines[-1]
+		if last == legacy_line:
+			continue
+		match = INVALID_VERDICT_MARKER_RE.match(last)
+		if match and int(match.group("item")) == item and match.group("stop") == stop and match.group("fp") == fp:
+			streak += 1
+		else:
+			streak = 0
+	return streak
 
 
 def decide(
@@ -398,6 +783,9 @@ def decide(
 	rejection: dict | None = None,
 	*,
 	security_issue: bool = False,
+	holds: list[dict] | None = None,
+	wait_enabled: bool = True,
+	invalid_verdicts_in_row: int = 0,
 ) -> dict:
 	"""What the judge may still do for this item."""
 	if kind not in ITEM_KINDS:
@@ -439,12 +827,28 @@ def decide(
 		allowed = [verdict for verdict in allowed if verdict not in ISSUE_ONLY_VERDICTS]
 	if kind == "project":
 		allowed = [verdict for verdict in allowed if verdict not in NOT_FOR_PROJECT_VERDICTS]
+	# A hold is not a round, so it is bounded by its own count instead.
+	holds = [hold for hold in (holds or []) if isinstance(hold, dict)]
+	holds_met = sorted({f"{hold.get('kind')}:{hold.get('ref')}" for hold in holds if hold.get("state") == "done"})
+	if not wait_enabled or len(holds) >= MAX_HOLDS_PER_ITEM:
+		allowed = [verdict for verdict in allowed if verdict != "wait"]
 	# The terminal close is never on the model's menu (issue #6557): the judge
 	# reads public comments, so a comment steering it to `close` must not be
 	# able to abandon a blocked item. `close` is offered only below, once a
 	# deterministic terminal condition holds.
 	options = [verdict for verdict in allowed if verdict != TERMINAL_VERDICT]
-	last_times = [_parse_time(entry["created_at"]) for entry in pool if entry["item"] == item and entry["created_at"]]
+	# The 24-hour clock measures how long *this* block has outlived its last
+	# round, so only rounds on the same stop and fingerprint count. A round on
+	# an earlier, cleared block must not make a new block terminal on sight:
+	# binance-blessings#249 was closed on the first round of a new
+	# harness-broken block because its previous round, on another
+	# fingerprint, was three days old. The item and project caps still bound
+	# an item whose fingerprint keeps changing.
+	last_times = [
+		_parse_time(entry["created_at"])
+		for entry in pool
+		if entry["item"] == item and entry["created_at"] and entry["stop"] == stop and entry["fingerprint"] == fp
+	]
 	# A fix-up's follow-up (the reset posted after it merged) restarts the
 	# 24-hour clock, so the reset gets its chance before the terminal close.
 	if last_times and last_activity is not None:
@@ -458,6 +862,8 @@ def decide(
 		terminal_reason = "still_blocked_24h"
 	elif not options:
 		terminal_reason = "menu_exhausted"
+	elif invalid_verdicts_in_row >= INVALID_VERDICT_PARK_AFTER:
+		terminal_reason = "invalid_verdicts"
 	return {
 		"item": item,
 		"kind": kind,
@@ -470,7 +876,29 @@ def decide(
 		"allowed": [TERMINAL_VERDICT] if terminal_reason else options,
 		"terminal": bool(terminal_reason),
 		"terminal_reason": terminal_reason,
+		"holds_used": len(holds),
+		"holds_met": holds_met,
+		"invalid_verdict_streak": invalid_verdicts_in_row,
+		"invalid_verdict_park_after": INVALID_VERDICT_PARK_AFTER,
 	}
+
+
+def _strip_comment_delimiters(text: str) -> str:
+	"""Remove every `<!--` and `-->`, repeating until none is left.
+
+	Verdict text is posted in comments whose last line is a trusted
+	`<!-- ai:... -->` marker, so it must never carry a comment delimiter.
+	Removing them, instead of refusing the whole verdict, keeps an answer that
+	only quotes one, such as a changelog fragment's `<!-- changelog: fixed -->`
+	line (tele-funtoken-msg-scoring#4770). Repeating to a fixed point means a
+	removal cannot join two halves into a new delimiter (`<!<!---- ` gives
+	`<!-- ` after one pass and nothing after the next).
+	"""
+	while True:
+		stripped = text.replace("<!--", "").replace("-->", "")
+		if stripped == text:
+			return stripped
+		text = stripped
 
 
 def _clean_text(value: object, field: str, required: bool) -> str:
@@ -478,11 +906,9 @@ def _clean_text(value: object, field: str, required: bool) -> str:
 		value = ""
 	if not isinstance(value, str):
 		raise UsageError(f"verdict field {field!r} must be a string")
-	text = " ".join(value.split())
+	text = " ".join(_strip_comment_delimiters(value).split())
 	if required and not text:
 		raise UsageError(f"verdict field {field!r} must not be empty")
-	if "<!--" in text or "-->" in text:
-		raise UsageError(f"verdict field {field!r} must not contain an HTML comment delimiter")
 	return text[:MAX_TEXT]
 
 
@@ -561,7 +987,25 @@ def rejection_snapshot(run: object, artifact: object, zip_path: str, item: int, 
 	return {"run_id": run_id, "reason": "bulk-delete", "paths": paths}
 
 
-def validate(verdict: object, decision: object, repo: str, rejection: dict | None = None, rejected: object = None) -> dict:
+def _check_sandbox_instructions(text: str) -> None:
+	"""Refuse instructions the network-less implement sandbox cannot follow."""
+	if not text:
+		return
+	candidates = (text, _QUOTED_RUN_RE.sub("Q", text))
+	for pattern_id, pattern in SANDBOX_INCOMPATIBLE_PATTERNS:
+		if any(pattern.search(candidate) for candidate in candidates):
+			raise UsageError(f"sandbox_incompatible:{pattern_id}")
+
+
+def validate(
+	verdict: object,
+	decision: object,
+	repo: str,
+	rejection: dict | None = None,
+	rejected: object = None,
+	*,
+	sandbox_check: bool = False,
+) -> dict:
 	"""Refuse anything outside the menu or the hard limits; return the normalised verdict."""
 	if not isinstance(verdict, dict) or not isinstance(decision, dict):
 		raise UsageError("verdict and decision must be JSON objects")
@@ -576,7 +1020,10 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 	if name == TERMINAL_VERDICT and (
 		decision.get("terminal") is not True or decision.get("terminal_reason") not in TERMINAL_REASONS
 	):
-		raise UsageError("verdict 'close' is accepted only after a round cap, the 24-hour rule or an exhausted menu")
+		raise UsageError(
+			"verdict 'close' is accepted only after a round cap, the 24-hour rule, an exhausted menu "
+			"or repeated refused answers"
+		)
 	normalised = {
 		"verdict": name,
 		"reason": _clean_text(verdict.get("reason"), "reason", True),
@@ -585,6 +1032,10 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 		"fingerprint": decision.get("fingerprint"),
 		"round": decision.get("next_round"),
 	}
+	if decision.get("terminal") is True and decision.get("terminal_reason"):
+		# A ledger-forced terminal (every round spent): the actions planner
+		# parks the item in the needs-human digest instead of closing it (D6).
+		normalised["terminal_reason"] = str(decision["terminal_reason"])
 	if name in ("retry_budget", "descope", "reissue", "accept_with_followup"):
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
 	if name == "auto_answer":
@@ -639,24 +1090,49 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 			normalised["rejected_run"] = rejected["run_id"]
 		normalised["rejection_run"] = rejection["run"]
 		normalised["paths"] = cleaned
+	if name == "wait":
+		hold_kind, ref = hold_ref(verdict.get("wait_for"), decision.get("item") if type(decision.get("item")) is int else None)
+		if f"{hold_kind}:{ref}" in (decision.get("holds_met") or []):
+			raise UsageError(f"wait condition {hold_kind}:{ref} was already met on this item; pick another verdict")
+		if type(decision.get("item")) is int:
+			hold_marker(decision["item"], hold_kind, ref)
+		normalised["hold_kind"] = hold_kind
+		normalised["hold_ref"] = ref
 	if name == "operator_step":
 		flag = verdict.get("placeholder")
 		if not isinstance(flag, str) or not ENV_NAME_RE.match(flag):
 			raise UsageError("operator_step needs 'placeholder': an upper-case flag or env var name")
 		if not flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX) and not flag.endswith("_ENABLED"):
 			raise UsageError(
-				f"operator_step 'placeholder' must be a feature flag ending in _ENABLED (default off) "
+				f"operator_step 'placeholder' must be a feature flag ending in _ENABLED (default on, an off switch) "
 				f"or a placeholder ending in {OPERATOR_PLACEHOLDER_SUFFIX}"
 			)
 		normalised["placeholder"] = flag
-		normalised["operator_instructions"] = _clean_text(verdict.get("operator_instructions"), "operator_instructions", True)
+		# Only an _UNSET_OPERATOR_STEP placeholder pages a person, so only it needs
+		# operator steps; an _ENABLED off switch is finished by the fix-up alone.
+		normalised["operator_instructions"] = _clean_text(
+			verdict.get("operator_instructions"), "operator_instructions", flag.endswith(OPERATOR_PLACEHOLDER_SUFFIX)
+		)
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
+	if name in TARGET_REPO_VERDICTS:
+		target_repo = verdict.get("target_repo")
+		if target_repo is None or target_repo == "":
+			target_repo = "consumer"
+		if not isinstance(target_repo, str) or target_repo not in TARGET_REPOS:
+			raise UsageError("target_repo must be 'consumer' or 'harness'")
+		normalised["target_repo"] = target_repo
+	# Only the fix-up specification is checked: operator_instructions are
+	# written for a person and `answer` is a reply, neither runs in the sandbox.
+	if sandbox_check and name in SANDBOX_CHECKED_VERDICTS:
+		_check_sandbox_instructions(normalised.get("instructions", ""))
 	return normalised
 
 
 def marker(item: int, stop: str, fp: str, verdict: str, round_number: int, override: str = "") -> str:
 	if verdict not in VERDICTS:
 		raise UsageError(f"unknown verdict {verdict!r}")
+	if verdict == "wait":
+		raise UsageError("a wait records a hold marker (hold-marker), not a round")
 	if round_number < 1:
 		raise UsageError("round must be at least 1")
 	suffix = ""
@@ -689,11 +1165,14 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--last-activity", default="")
 	decide_cmd.add_argument("--rejection-file")
 	decide_cmd.add_argument("--security-issue", action="store_true")
+	decide_cmd.add_argument("--wait-disabled", action="store_true")
+	decide_cmd.add_argument("--pending-invalid-verdicts", type=int, default=0)
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
 	validate_cmd.add_argument("--repo", required=True)
 	validate_cmd.add_argument("--rejected-deletions-file")
+	validate_cmd.add_argument("--sandbox-check", action="store_true")
 	rejection_cmd = sub.add_parser("rejection-snapshot")
 	rejection_cmd.add_argument("--run-file", required=True)
 	rejection_cmd.add_argument("--artifact-file", required=True)
@@ -707,6 +1186,14 @@ def build_parser() -> argparse.ArgumentParser:
 	rejection_cmd.add_argument("--stop", required=True)
 	rejection_cmd.add_argument("--comments-file", required=True)
 	rejection_cmd.add_argument("--trusted-login", required=True)
+	protected_cmd = sub.add_parser("protected-rejection")
+	protected_cmd.add_argument("--item", required=True)
+	protected_cmd.add_argument("--comments-file", required=True)
+	protected_cmd.add_argument("--trusted-login", required=True)
+	automation_cmd = sub.add_parser("automation-rejection")
+	automation_cmd.add_argument("--item", required=True)
+	automation_cmd.add_argument("--comments-file", required=True)
+	automation_cmd.add_argument("--trusted-login", required=True)
 	marker_cmd = sub.add_parser("marker")
 	marker_cmd.add_argument("--item", required=True)
 	marker_cmd.add_argument("--stop", required=True)
@@ -714,6 +1201,11 @@ def build_parser() -> argparse.ArgumentParser:
 	marker_cmd.add_argument("--verdict", required=True)
 	marker_cmd.add_argument("--round", required=True, type=int)
 	marker_cmd.add_argument("--override", default="")
+	hold_cmd = sub.add_parser("hold-marker")
+	hold_cmd.add_argument("--item", required=True)
+	hold_cmd.add_argument("--kind", required=True)
+	hold_cmd.add_argument("--ref", required=True)
+	hold_cmd.add_argument("--state", default="")
 	return parser
 
 
@@ -735,13 +1227,24 @@ def run(argv: list[str] | None = None) -> dict:
 			raise UsageError("--trusted-login is not a GitHub login")
 		return latest_rejection(_read_json(args.comments_file, "--comments-file"), args.trusted_login,
 			_check_item(args.item), _check_stop(args.stop))
+	if args.command == "protected-rejection":
+		if not LOGIN_RE.fullmatch(args.trusted_login):
+			raise UsageError("--trusted-login is not a GitHub login")
+		return latest_protected_rejection(_read_json(args.comments_file, "--comments-file"), args.trusted_login,
+			_check_item(args.item))
+	if args.command == "automation-rejection":
+		if not LOGIN_RE.fullmatch(args.trusted_login):
+			raise UsageError("--trusted-login is not a GitHub login")
+		return latest_automation_rejection(_read_json(args.comments_file, "--comments-file"), args.trusted_login,
+			_check_item(args.item))
 	if args.command == "decide":
 		if not LOGIN_RE.match(args.trusted_login):
 			raise UsageError(f"--trusted-login is not a GitHub login: {args.trusted_login!r}")
 		item = _check_item(args.item)
 		stop = _check_stop(args.stop)
 		fp = _check_fingerprint(args.fingerprint)
-		item_entries = parse_markers(_read_json(args.comments_file, "--comments-file"), args.trusted_login)
+		item_comments = _read_json(args.comments_file, "--comments-file")
+		item_entries = parse_markers(item_comments, args.trusted_login)
 		project_entries = None
 		if args.project_comments_file:
 			project_entries = parse_markers(_read_json(args.project_comments_file, "--project-comments-file"), args.trusted_login)
@@ -750,6 +1253,10 @@ def run(argv: list[str] | None = None) -> dict:
 		return decide(
 			item, stop, fp, item_entries, project_entries, _parse_time(args.now), args.kind, last_activity, rejection,
 			security_issue=args.security_issue,
+			holds=parse_holds(item_comments, args.trusted_login, item),
+			wait_enabled=not args.wait_disabled,
+			invalid_verdicts_in_row=invalid_verdict_streak(item_comments, args.trusted_login, item, stop, fp)
+			+ max(0, args.pending_invalid_verdicts),
 		)
 	if args.command == "validate":
 		return validate(
@@ -758,6 +1265,7 @@ def run(argv: list[str] | None = None) -> dict:
 			args.repo,
 			_read_json(args.rejection_file, "--rejection-file") if args.rejection_file else None,
 			_read_json(args.rejected_deletions_file, "--rejected-deletions-file") if args.rejected_deletions_file else None,
+			sandbox_check=args.sandbox_check,
 		)
 	if args.command == "rejection-snapshot":
 		try:
@@ -769,6 +1277,8 @@ def run(argv: list[str] | None = None) -> dict:
 			args.zip_file, _check_item(args.item), args.repo, approved,
 		)
 	item = _check_item(args.item)
+	if args.command == "hold-marker":
+		return {"marker": hold_marker(item, args.kind, args.ref, args.state)}
 	return {
 		"marker": marker(
 			item, _check_stop(args.stop), _check_fingerprint(args.fingerprint), args.verdict, args.round, args.override

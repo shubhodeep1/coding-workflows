@@ -25,6 +25,8 @@ GITHUB_API_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 GITHUB_API_MAX_ATTEMPTS = 3
 GITHUB_API_BACKOFF_BASE_SECONDS = 1.0
 GITHUB_API_BACKOFF_CAP_SECONDS = 8.0
+RETIRED_LABEL_IN_USE_PAGE_SIZE = 100
+RETIRED_LABEL_IN_USE_MAX_LISTED_NUMBERS = 10
 
 
 def _require_nonempty(value: str | None, field_name: str) -> str:
@@ -322,6 +324,7 @@ def _log_label_sync(
     dry_run: bool,
     status: int | None = None,
     detail: str | None = None,
+    extra_fields: tuple[tuple[str, str], ...] = (),
 ) -> None:
     parts = [
         f"{prefix}:",
@@ -330,6 +333,8 @@ def _log_label_sync(
         f"action={action}",
         f"dry_run={'true' if dry_run else 'false'}",
     ]
+    for extra_key, extra_value in extra_fields:
+        parts.append(f"{extra_key}={extra_value}")
     if status is not None:
         parts.append(f"status={status}")
     if detail:
@@ -401,6 +406,14 @@ def cmd_resolve_phase(args: argparse.Namespace) -> int:
     return 0
 
 
+# ai:needs-human is a person's latch, parked on top of the item's stop label
+# (unblock judge park, operator_step_issue.py needs-human park). Repair keeps it
+# beside a later phase-group member instead of dropping it, unless that member
+# is terminal.
+REPAIR_OVERLAY_PHASE_LABELS = frozenset({"ai:needs-human"})
+REPAIR_TERMINAL_PHASE_LABELS = frozenset({"ai:merged", "ai:closed"})
+
+
 def cmd_repair_labels(args: argparse.Namespace) -> int:
     contract = load_label_contract(Path(args.contract_file).resolve())
     issue_labels = sorted({item.strip() for item in (args.issue_labels or "").split(",") if item.strip()})
@@ -426,8 +439,18 @@ def cmd_repair_labels(args: argparse.Namespace) -> int:
             # This avoids regressing issue state during repairs (e.g., keeping ai:done over ai:implementing).
             keep = present[-1]
             desired.append(keep)
+            kept = {keep}
+            # Keep-last ranks ai:blocked, ai:review-blocked and
+            # ai:implementation-failed above ai:needs-human, so it used to drop
+            # the latch the unblock judge parks on top of them: the needs-human
+            # digest then pruned the item and the judge parked it again every
+            # round. A terminal label still wins.
+            if keep not in REPAIR_TERMINAL_PHASE_LABELS:
+                overlay = {label for label in present if label in REPAIR_OVERLAY_PHASE_LABELS}
+                desired.extend(sorted(overlay - kept))
+                kept |= overlay
             for label in present:
-                if label != keep:
+                if label not in kept:
                     remove.add(label)
         else:
             desired.append(present[0])
@@ -682,6 +705,95 @@ def cmd_sync_labels(args: argparse.Namespace) -> int:
     return 1 if label_items and label_error_count == len(label_items) else 0
 
 
+def _warn_if_retired_label_in_use(*, repo: str, label_name: str, dry_run: bool) -> None:
+    """Log a warning when open issues / PRs still carry a retired label.
+
+    Input: the repo slug and one retired label name. Output: none; the
+    function never raises and never touches the sync error list or exit status.
+    API calls (CLAUDE.md §15): exactly one read-only
+    ``GET repos/{repo}/issues?labels=<label>&state=open&per_page=100`` per
+    call (the issues endpoint also returns pull requests). I audited the other
+    calls in this module: the label ``GET`` / ``DELETE`` target the label
+    resource and cannot report which issues carry it, so this read is
+    required. Counts are capped at one page: a full page is reported as
+    ``100+``. Fail-open: a failed or malformed read logs
+    ``LABEL_SYNC_RETIRED_CHECK_FAILED`` and returns.
+    Logs ``LABEL_SYNC_RETIRED_IN_USE`` (``level=WARNING``) with ``count`` and
+    up to 10 issue numbers when the count is above zero.
+    """
+    issues_path = (
+        f"repos/{repo}/issues?labels={urllib.parse.quote(label_name, safe='')}"
+        f"&state=open&per_page={RETIRED_LABEL_IN_USE_PAGE_SIZE}"
+    )
+    try:
+        issue_items = _github_api_request(issues_path)
+        if not isinstance(issue_items, list):
+            raise ValueError("unexpected issues response shape (expected a JSON array)")
+    except urllib.error.HTTPError as exc:
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_CHECK_FAILED",
+            repo=repo,
+            label_name=label_name,
+            action="in_use_check",
+            dry_run=dry_run,
+            status=exc.code,
+            detail=_http_error_message(exc),
+            extra_fields=(("level", "WARNING"),),
+        )
+        return
+    except (urllib.error.URLError, OSError, ValueError, LabelContractError) as exc:
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_CHECK_FAILED",
+            repo=repo,
+            label_name=label_name,
+            action="in_use_check",
+            dry_run=dry_run,
+            detail=str(exc),
+            extra_fields=(("level", "WARNING"),),
+        )
+        return
+
+    if not issue_items:
+        return
+    issue_numbers = [
+        item["number"]
+        for item in issue_items
+        if isinstance(item, dict) and isinstance(item.get("number"), int)
+    ]
+    if not issue_numbers:
+        # A non-empty page with no usable issue number is a malformed read,
+        # not proof that the label is in use.
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_CHECK_FAILED",
+            repo=repo,
+            label_name=label_name,
+            action="in_use_check",
+            dry_run=dry_run,
+            detail="issues response had no entries with an integer number",
+            extra_fields=(("level", "WARNING"),),
+        )
+        return
+    # Count only entries with an issue number, so count= agrees with issues=.
+    # The 100+ cap still follows the raw page size (a full page means more
+    # issues may exist past it).
+    count_text = str(len(issue_numbers))
+    if len(issue_items) >= RETIRED_LABEL_IN_USE_PAGE_SIZE:
+        count_text = f"{RETIRED_LABEL_IN_USE_PAGE_SIZE}+"
+    listed_numbers = issue_numbers[:RETIRED_LABEL_IN_USE_MAX_LISTED_NUMBERS]
+    _log_label_sync(
+        "LABEL_SYNC_RETIRED_IN_USE",
+        repo=repo,
+        label_name=label_name,
+        action="delete",
+        dry_run=dry_run,
+        extra_fields=(
+            ("level", "WARNING"),
+            ("count", count_text),
+            ("issues", ",".join(str(number) for number in listed_numbers)),
+        ),
+    )
+
+
 def _delete_retired_labels(
     contract: dict[str, Any],
     *,
@@ -695,10 +807,21 @@ def _delete_retired_labels(
     label names that are no longer used and are reserved, never re-declared).
     Output: the number of labels deleted (or, with ``dry_run``, that would be
     deleted); failures are appended to ``errors`` and never abort the sync.
-    API calls (CLAUDE.md §15): one ``DELETE`` per retired label, where a 404
-    means the label is already gone; ``dry_run`` issues one read-only ``GET``
-    per retired label instead. Logs ``LABEL_SYNC_DELETED`` /
-    ``LABEL_SYNC_RETIRED_ABSENT`` per label.
+    API calls (CLAUDE.md §15), per retired label:
+
+    * one ``DELETE``, where a 404 means the label is already gone; ``dry_run``
+      issues one read-only ``GET`` of the label instead;
+    * one extra read-only ``GET repos/{repo}/issues?labels=...&state=open``
+      (see ``_warn_if_retired_label_in_use``) that warns when open issues or
+      PRs still carry the label. On a real run it must precede the ``DELETE``
+      (afterwards the label is gone), so it is also issued for a label that
+      turns out to be absent; on ``dry_run`` it runs only after the label
+      ``GET`` found the label. Its failure is logged and ignored (fail-open),
+      the warning never blocks the delete, and the exit status is unchanged.
+
+    Logs ``LABEL_SYNC_DELETED`` / ``LABEL_SYNC_RETIRED_ABSENT`` per label, plus
+    ``LABEL_SYNC_RETIRED_IN_USE`` / ``LABEL_SYNC_RETIRED_CHECK_FAILED`` from
+    the in-use check.
     """
     deleted_count = 0
     for label_name in contract.get("retired_labels", []):
@@ -706,7 +829,9 @@ def _delete_retired_labels(
         try:
             if dry_run:
                 _github_api_request(label_path)
+                _warn_if_retired_label_in_use(repo=repo, label_name=label_name, dry_run=dry_run)
             else:
+                _warn_if_retired_label_in_use(repo=repo, label_name=label_name, dry_run=dry_run)
                 _github_api_request(label_path, method="DELETE", require_token=True)
         except urllib.error.HTTPError as exc:
             if exc.code == 404:

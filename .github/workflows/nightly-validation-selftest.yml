@@ -13,9 +13,13 @@ jobs:
   validation-selftest:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # The self-test runs generated validation tests as the runner user; they
+    # can rewrite this checkout's .git (hooks, config, HEAD) and, on hosted
+    # runners, read the job token from the runner process. This job therefore
+    # holds only a read-only token; the status commit runs in the separate
+    # commit-selftest-status job on a fresh runner and checkout (#6568).
     permissions:
-      contents: write
-      actions: write
+      contents: read
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
@@ -25,6 +29,9 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
+          # Generated validation tests run inside this checkout; keep the token
+          # out of .git/config so they cannot read it (#6568).
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -57,6 +64,17 @@ jobs:
           path: |
             artifacts/validation-selftest-summary.json
             artifacts/validation-selftest-logs/
+
+      # Only the summary JSON crosses into the commit job; the fixture logs
+      # and workspaces never reach the job that holds a write token.
+      - name: Upload validation self-test summary for status commit
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: validation-selftest-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 1
+          path: artifacts/validation-selftest-summary.json
 
       - name: Write self-test summary
         if: always()
@@ -114,18 +132,209 @@ jobs:
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Update validation self-test status artifact
-        if: always()
+  # Daily check of the validation harness sandbox (scripts/validation_harness_sandbox.sh).
+  # Every real project validation runs its harness there, but smoke
+  # validations and the self-test above skip it, so a runner-image change that
+  # breaks provisioning (rootless Docker packages, user namespaces) went
+  # unnoticed until every project validation failed (#6959). This job runs the
+  # same provision, isolation self-check, staged run and log copy-back on a
+  # fresh runner each night; a failure reaches the workflow failure heal
+  # intake like a red main CI run. It runs only trusted checkout code.
+  harness-sandbox-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Provision and exercise the validation harness sandbox
         run: |
           set -euo pipefail
+          probe="${RUNNER_TEMP}/harness_sandbox_probe.sh"
+          logs="${RUNNER_TEMP}/harness-sandbox-probe-logs"
+          # Runs as the sandbox user inside the staged copy: rootless Docker
+          # must answer, and a log under validation/logs must copy back.
+          cat > "${probe}" <<'PROBE'
+          set -euo pipefail
+          mkdir -p validation/logs
+          docker info --format 'server={{.ServerVersion}} rootless={{json .SecurityOptions}}' > validation/logs/harness_sandbox_probe.log
+          echo "probe=ok" >> validation/logs/harness_sandbox_probe.log
+          PROBE
+          if ! bash scripts/validation_harness_sandbox.sh provision; then
+            echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=provision_failed"
+            exit 1
+          fi
+          if ! VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${logs}" \
+            bash scripts/validation_harness_sandbox.sh checked-run "$$" "${probe}"; then
+            echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=checked_run_failed"
+            exit 1
+          fi
+          if ! grep -qx 'probe=ok' "${logs}/harness_sandbox_probe.log" 2>/dev/null; then
+            echo "::error::VALIDATION_HARNESS_SANDBOX_DAILY outcome=fail reason=probe_log_missing"
+            exit 1
+          fi
+          echo "VALIDATION_HARNESS_SANDBOX_DAILY outcome=ok $(head -n 1 "${logs}/harness_sandbox_probe.log" | cut -c1-200)"
+
+      - name: Clean up the validation harness sandbox
+        if: always()
+        run: bash scripts/validation_harness_sandbox.sh cleanup || true
+
+  commit-selftest-status:
+    needs: validation-selftest
+    if: always() && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Every write goes through GH_PAT: the status reaches main through a pull
+    # request, because the main ruleset requires `lint` and
+    # `ai-review/head-gate` and has no bypass actors, so a direct push is
+    # refused with GH013 (#8225, #8229). github.token writes nothing here.
+    permissions:
+      contents: read
+    # Serialize status delivery so a second run lists the first run's status
+    # PR before opening its own; never cancel a push-and-PR sequence midway.
+    concurrency:
+      group: nightly-validation-selftest-status-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      # Fresh runner and checkout: nothing the self-test executed can have
+      # touched this .git (hooks, config, HEAD) before the token is used.
+      # `ref` checks out the branch tip at job start, not the triggering SHA:
+      # a run queued behind the concurrency group must see a status PR that
+      # merged while it waited, or it would read a stale streak and open a
+      # PR that conflicts on the status file (#8229).
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download validation self-test summary
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: validation-selftest-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts
+
+      # While a status PR is open, main still holds the streak from before it.
+      # Seed the previous status from the newest open status PR the pipeline
+      # account opened, so consecutive_green_runs stays correct (#8229).
+      # Fail-open: any failure leaves the outputs empty, the streak is read
+      # from main's copy, and no open PR is superseded.
+      - name: Read previous status from an open status PR
+        id: previous_status
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          STATUS_BASE_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -uo pipefail
+          out="${GITHUB_OUTPUT:-/dev/null}"
+          seed_file="${RUNNER_TEMP:-/tmp}/previous-selftest-status.json"
+          rm -f "${seed_file}"
+          emit_outputs() {
+            printf 'path=%s\nsource_pr=%s\nsuperseded=%s\n' "$1" "$2" "$3" >> "${out}"
+          }
+          seed_skip() {
+            rm -f "${seed_file}"
+            echo "VALIDATION_SELFTEST_STATUS outcome=seed_skipped reason=$1"
+            emit_outputs "" "" ""
+            exit 0
+          }
+          if [ -z "${GH_TOKEN:-}" ]; then
+            seed_skip gh_pat_missing
+          fi
+          if ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] \
+            || ! [[ "${STATUS_BASE_BRANCH:-}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            seed_skip invalid_input
+          fi
+          # GitHub API calls (CLAUDE.md §15 / §14): no existing call in this job
+          # reads pull requests. Per run: one /user read, one paginated open-PR
+          # listing for the base branch (normally one page), one contents read.
+          login="$(gh api user --jq .login 2>/dev/null)" || login=""
+          if ! [[ "${login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+            seed_skip identity_unavailable
+          fi
+          listing="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=${STATUS_BASE_BRANCH}&per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)" || listing=""
+          if [ -z "${listing}" ] || ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"${listing}"; then
+            seed_skip listing_failed
+          fi
+          trusted="$(jq -c --arg repo "${GITHUB_REPOSITORY}" --arg login "${login}" '
+            [ .[]
+              | select(type == "object")
+              | select((.number | type) == "number")
+              | select((.head.repo.full_name // "") == $repo)
+              | select((.head.ref // "") | test("^auto/validation-selftest-status-[0-9]+-[0-9]+$"))
+              | select((.user.login // "") == $login) ]
+            | sort_by(.number) | reverse
+          ' <<<"${listing}" 2>/dev/null)" || trusted=""
+          if [ -z "${trusted}" ]; then
+            seed_skip listing_failed
+          fi
+          if [ "$(jq 'length' <<<"${trusted}")" = "0" ]; then
+            echo "::notice::VALIDATION_SELFTEST_STATUS outcome=seed_skipped reason=no_open_status_pr"
+            emit_outputs "" "" ""
+            exit 0
+          fi
+          newest_pr="$(jq -r '.[0].number' <<<"${trusted}")"
+          newest_sha="$(jq -r '.[0].head.sha // ""' <<<"${trusted}")"
+          superseded="$(jq -r '[.[].number | tostring] | join(" ")' <<<"${trusted}")"
+          if ! [[ "${newest_pr}" =~ ^[0-9]+$ ]] || ! [[ "${superseded}" =~ ^[0-9]+( [0-9]+)*$ ]]; then
+            seed_skip listing_failed
+          fi
+          if ! [[ "${newest_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            seed_skip content_unreadable
+          fi
+          if ! gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${GITHUB_REPOSITORY}/contents/analysis/validation-selftest-status.json?ref=${newest_sha}" \
+            > "${seed_file}" 2>/dev/null; then
+            seed_skip content_unreadable
+          fi
+          seed_size="$(wc -c < "${seed_file}" 2>/dev/null || echo 0)"
+          seed_size="${seed_size//[^0-9]/}"
+          if [ -z "${seed_size}" ] || [ "${seed_size}" -gt 65536 ] \
+            || ! jq -e 'type == "object"' "${seed_file}" >/dev/null 2>&1; then
+            seed_skip content_unreadable
+          fi
+          emit_outputs "${seed_file}" "${newest_pr}" "${superseded}"
+          echo "VALIDATION_SELFTEST_STATUS outcome=seeded pr=${newest_pr}"
+
+      - name: Update validation self-test status artifact
+        env:
+          PREVIOUS_STATUS_PATH: ${{ steps.previous_status.outputs.path }}
+        run: |
+          set -euo pipefail
+          previous_args=()
+          if [ -n "${PREVIOUS_STATUS_PATH:-}" ]; then
+            previous_args=(--previous-status-path "${PREVIOUS_STATUS_PATH}")
+          fi
           python3 scripts/validation_selftest_status.py \
             --summary-path "artifacts/validation-selftest-summary.json" \
-            --status-path "analysis/validation-selftest-status.json"
+            --status-path "analysis/validation-selftest-status.json" \
+            ${previous_args[@]+"${previous_args[@]}"}
 
       - name: Commit validation self-test status
         if: always() && github.ref_type == 'branch'
         env:
           TARGET_BRANCH: ${{ github.ref_name }}
+          # Same push identity as the other bot pushes (workflow-log-analysis.yml).
+          # Only this fresh-runner job sees it (#6568). A pull request opened
+          # with github.token starts no workflows, so GH_PAT is required (#8229).
+          STATUS_PUSH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          STATUS_PUSH_TOKEN_SOURCE: ${{ secrets.GH_PAT != '' && 'gh_pat' || 'github_token' }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PREVIOUS_STATUS_PATH: ${{ steps.previous_status.outputs.path }}
+          PREVIOUS_STATUS_PR: ${{ steps.previous_status.outputs.source_pr }}
+          SUPERSEDED_PRS: ${{ steps.previous_status.outputs.superseded }}
         run: |
           set -euo pipefail
           status_file="analysis/validation-selftest-status.json"
@@ -142,6 +351,122 @@ jobs:
             exit 0
           fi
 
-          git commit -m "chore: update validation self-test status"
-          git pull --rebase origin "${TARGET_BRANCH}"
-          git push origin "HEAD:${TARGET_BRANCH}"
+          previous_pr="${PREVIOUS_STATUS_PR:-}"
+          [[ "${previous_pr}" =~ ^[0-9]+$ ]] || previous_pr=""
+          # A rerun, or a night whose result the open status PR already
+          # carries, must not open a duplicate PR.
+          if [ -n "${PREVIOUS_STATUS_PATH:-}" ] && [ -f "${PREVIOUS_STATUS_PATH}" ] \
+            && cmp -s "${PREVIOUS_STATUS_PATH}" "${status_file}"; then
+            echo "VALIDATION_SELFTEST_STATUS outcome=unchanged reason=matches_open_pr pr=${previous_pr:-unknown}"
+            # Still close older status PRs; the newest open one carries this status.
+            if [ -n "${previous_pr}" ] && [ -n "${GH_TOKEN:-}" ]; then
+              for old in ${SUPERSEDED_PRS:-}; do
+                [[ "${old}" =~ ^[0-9]+$ ]] && [ "${old}" -lt "${previous_pr}" ] || continue
+                if gh pr close "${old}" --repo "${GITHUB_REPOSITORY}" --comment "Superseded by #${previous_pr} (nightly validation self-test status)." >/dev/null 2>&1; then
+                  echo "VALIDATION_SELFTEST_STATUS outcome=superseded pr=${old} by=${previous_pr}"
+                else
+                  echo "::warning::VALIDATION_SELFTEST_STATUS outcome=supersede_close_failed pr=${old}"
+                fi
+              done
+            fi
+            exit 0
+          fi
+
+          token_source="${STATUS_PUSH_TOKEN_SOURCE:-unknown}"
+          token_source="${token_source//[^a-z_]/_}"
+          if [ "${token_source}" != "gh_pat" ] || [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=gh_pat_missing token=${token_source}"
+            echo "A pull request opened with github.token starts no workflows, so its required checks never report; set the GH_PAT secret."
+            exit 1
+          fi
+          run_id="${GITHUB_RUN_ID:-}"
+          run_attempt="${GITHUB_RUN_ATTEMPT:-}"
+          if ! [[ "${run_id}" =~ ^[0-9]+$ ]] || ! [[ "${run_attempt}" =~ ^[0-9]+$ ]] \
+            || ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=run_context_invalid token=${token_source}"
+            exit 1
+          fi
+          status_branch="auto/validation-selftest-status-${run_id}-${run_attempt}"
+          run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          superseded=()
+          for candidate in ${SUPERSEDED_PRS:-}; do
+            if [[ "${candidate}" =~ ^[0-9]+$ ]]; then
+              superseded+=("${candidate}")
+            fi
+          done
+
+          pr_title="chore: update validation self-test status"
+          work_tmp="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/selftest-status.XXXXXX")"
+          trap 'rm -rf "${work_tmp}"' EXIT
+          body_file="${work_tmp}/selftest-status-pr.md"
+          {
+            echo "Nightly validation self-test status from run ${run_url}."
+            echo ""
+            echo "Updates \`analysis/validation-selftest-status.json\` only. The nightly self-test opens this pull request because the default branch requires status checks, so the status cannot be pushed directly."
+            if [ "${#superseded[@]}" -gt 0 ]; then
+              echo ""
+              for old in "${superseded[@]}"; do
+                echo "Supersedes #${old}"
+              done
+            fi
+          } > "${body_file}"
+          # CLAUDE.md §19 / unattended §21: lint the body before anything is pushed.
+          if ! python3 scripts/lint_pr_body_auto_close.py --pr-body-file "${body_file}" --repo "${GITHUB_REPOSITORY}"; then
+            echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=pr_body_lint_failed branch=${status_branch} token=${token_source}"
+            exit 1
+          fi
+
+          git commit -m "${pr_title}"
+          # Checkout does not persist credentials; authenticate the push
+          # through a one-shot helper that reads the token from the env.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0=credential.helper
+          export GIT_CONFIG_VALUE_0='!f() { printf "username=x-access-token\npassword=%s\n" "${STATUS_PUSH_TOKEN}"; }; f'
+          # A new branch per run, based on the checked-out default branch, so
+          # the push is always a fast-forward branch creation.
+          push_log="${work_tmp}/push.log"
+          push_exit=0
+          git push origin "HEAD:refs/heads/${status_branch}" >"${push_log}" 2>&1 || push_exit=$?
+          sed -E 's#(https?://)[^/@[:space:]]+@#\1***@#g' "${push_log}" >&2 || true
+          if [ "${push_exit}" -ne 0 ]; then
+            if grep -qiE 'GH006|GH013|protected branch|push declined|repository rule' "${push_log}"; then
+              echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=push_rejected_by_ruleset branch=${status_branch} token=${token_source}"
+              echo "The push identity may not create this branch under the repository rules; the status was not delivered."
+            else
+              echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=push_failed branch=${status_branch} token=${token_source} rc=${push_exit}"
+            fi
+            exit "${push_exit}"
+          fi
+
+          # The base is the branch this run checked out (github.ref_name, main
+          # for the nightly cron): the commit sits on that branch's HEAD, so a
+          # PR into another branch would also carry that branch's commits.
+          # The pull_request event of this GH_PAT-created PR starts CI and the
+          # review workflow, which post the required checks and merge it.
+          create_err="${work_tmp}/create.err"
+          pr_number=""
+          if create_out="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base "${TARGET_BRANCH}" --head "${status_branch}" --title "${pr_title}" --body-file "${body_file}" 2>"${create_err}")"; then
+            pr_number="$(printf '%s\n' "${create_out}" | sed -nE 's#.*/pull/([0-9]+).*#\1#p' | tail -n 1)"
+          fi
+          if ! [[ "${pr_number}" =~ ^[0-9]+$ ]]; then
+            pr_number="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${status_branch}" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          fi
+          if ! [[ "${pr_number}" =~ ^[0-9]+$ ]]; then
+            sed -E 's#(https?://)[^/@[:space:]]+@#\1***@#g' "${create_err}" >&2 || true
+            echo "::error::VALIDATION_SELFTEST_STATUS outcome=failed reason=pr_create_failed branch=${status_branch} token=${token_source}"
+            exit 1
+          fi
+          echo "VALIDATION_SELFTEST_STATUS outcome=pr_opened branch=${status_branch} pr=${pr_number} token=${token_source}"
+
+          # The status file is overwritten whole, so only the newest PR needs
+          # to merge. Branches stay (the ruleset blocks deletion).
+          for old in ${superseded[@]+"${superseded[@]}"}; do
+            if [ "${old}" -ge "${pr_number}" ]; then
+              continue
+            fi
+            if gh pr close "${old}" --repo "${GITHUB_REPOSITORY}" --comment "Superseded by #${pr_number} (nightly validation self-test status, run ${run_url})." >/dev/null 2>&1; then
+              echo "VALIDATION_SELFTEST_STATUS outcome=superseded pr=${old} by=${pr_number}"
+            else
+              echo "::warning::VALIDATION_SELFTEST_STATUS outcome=supersede_close_failed pr=${old}"
+            fi
+          done

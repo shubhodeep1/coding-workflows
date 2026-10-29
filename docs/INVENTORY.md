@@ -15,6 +15,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-implement-repair-continuation.txt` — Role: post-Codex syntax repairer continuing the same-run repair session.
 - `prompts/mode-implement-repair-syntax.txt` — Role: syntax repairer. Goal: repair syntax/parse validation failures in files changed by the implementation step.
 - `prompts/mode-implement-repair.txt` — Role: post-Codex syntax repairer. Goal: fix syntax/parse failures captured after the main implementation pass using the captured diagnostics as source of truth.
+- `prompts/mode-implement-repair-tests.txt` — Role: pre-push test repairer. Goal: in one repair turn, fix the test failures this change caused, using the captured failures as evidence.
 - `prompts/mode-implement.txt` — Role: implementation-phase coder. Goal: implement the approved plan; modify only the files the plan requires; keep changes minimal and safe.
 - `prompts/mode-judge-interim.txt` — Role: judge. Goal: evaluate whether the latest autofix round still leaves actionable issues.
 - `prompts/mode-judge-security-pass-exhaustion.txt` — Role: security-pass exhaustion judge. Goal: decide whether each remaining finding is accepted with follow-up, gets another fix cycle, or fails the project.
@@ -24,6 +25,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-judge.txt` — Role: judge. Goal: evaluate whether the project is progressing correctly after a wave of issues has been implemented and merged.
 - `prompts/mode-orchestrate-poll-judge.txt` — Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly.
 - `prompts/mode-orchestrate.txt` — Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph.
+- `prompts/mode-plan-heal-counterfactual.txt` — Role: workflow-heal planner. Goal: append a `## Counterfactual check` with one `HEAL_COUNTERFACTUAL:` line to workflow-heal plans so plan auto-approval can tell whether the change would have made the failing run pass (issue #8249).
 - `prompts/mode-plan.txt` — Role: planning-phase auditor. Goal: emit a structured implementation plan or `BLOCKED:` line.
 - `prompts/mode-security-audit.txt` — Role: Chief Security Officer. Goal: emit a JSON-array security audit for default-branch scope.
 - `prompts/mode-review-apply-fixes-continuation.txt` — Role: review-autofix editor continuing the same-run editor session.
@@ -46,6 +48,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/auto-release-stable.yml` — GitHub Actions workflow: Auto release stable.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
+- `.github/workflows/check-failure-triage-historical.yml` — GitHub Actions workflow: Internal: Historical check-failure triage (PR #6611 run 37922279826).
 - `.github/workflows/check_failure_triage.yml` — GitHub Actions workflow: AI Check Failure Triage (Reusable).
 - `.github/workflows/ci.yml` — GitHub Actions workflow: CI.
 - `.github/workflows/clarify.yml` — GitHub Actions workflow: AI Clarify (Reusable).
@@ -79,8 +82,10 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
+- `.github/workflows/promote-candidate-follow.yml` — GitHub Actions workflow: Promote candidate follower (keeps the `promote-candidate` branch at the main tip between promote cycles).
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
+- `.github/workflows/publish-sandbox-images.yml` — GitHub Actions workflow: Publish sandbox images (prebuilds the sandbox images `scripts/sandbox_image.sh` pulls from GHCR).
 - `.github/workflows/review_autofix.yml` — GitHub Actions workflow: Codex PR Self-Healing Semantic Agent.
 - `.github/workflows/review_autofix_sweep.yml` — GitHub Actions workflow: Internal: AI Review Autofix Sweep.
 - `.github/workflows/review_rb_judge_dispatch.yml` — GitHub Actions workflow: Internal: Review-Blocked Judge Dispatch.
@@ -97,6 +102,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/workflow-failure-heal-intake.yml` — GitHub Actions workflow: Workflow Failure Heal Intake.
 - `.github/workflows/workflow-log-analysis.yml` — GitHub Actions workflow: Workflow Log Analysis.
 - `.github/workflows/workflow_failure_heal.yml` — GitHub Actions workflow: AI Workflow Failure Heal (Reusable).
+- `.github/workflows/workflow_integrity.yml` — GitHub Actions workflow: Workflow Wrapper Integrity (Reusable; consumer-side check that managed wrappers match the signed release they pin).
 - `.github/workflows/workspace-cache-maintenance.yml` — GitHub Actions workflow: Workspace Cache Maintenance.
 
 ## Scripts
@@ -104,6 +110,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/activation_verify.sh` — Grade merged work LIVE or DORMANT, post the verdict, open one issue for code gaps and record operator steps (port P4).
 - `scripts/ai_context_utils.py` — Python helper for ai context utils.
 - `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` in the isolated container (`claude_run` via `codex_isolated_exec.sh --engine claude`), and fall back to codex (D1).
+- `scripts/ai_engine_fallback_report.sh` — Report the Claude engine's codex fallbacks and refusals from a phase job's last step (plan item 3e).
 - `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
 - `scripts/ai_memory.py` — CLI for AI memory operations used by GitHub workflows.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
@@ -111,6 +118,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
 - `scripts/apply_analysis_on_main.sh` — Dispatch one pending workflow-analysis document to the orchestrator.
 - `scripts/apply_audit_gate_assets.py` — Apply canonical audit-gate assets atomically to a repository.
+- `scripts/assemble_agents.py` — Fold per-PR agents.d fragments into agents.md / AGENTS.md (assemble at release and consumer sync, render for readers, check for CI).
 - `scripts/assemble_changelog.py` — Fold per-PR changelog.d fragments into CHANGELOG.md (Keep a Changelog or date-heading layout) and manage the .gitattributes union backstop.
 - `scripts/assemble_prompt.sh` — Shell wrapper over render_prompt.py --assemble-only for shared-prelude prompt assembly.
 - `scripts/audit_consumer_drift.py` — Audit consumer workflow-wrapper drift against checked-in templates.
@@ -119,13 +127,18 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/blocker_check.py` — Python helper for blocker check.
 - `scripts/build_semble_wrapper.sh` — build_semble_wrapper.sh — fail-soft Semble BM25 wrapper builder.
 - `scripts/build_state_snapshot.py` — Python helper for build state snapshot.
+- `scripts/build_sync_manifest.py` — builds the signed consumer sync manifest (`sync-manifest.json`) in the release jobs and checks paths against its consumer allowlist.
 - `scripts/build_static_context.sh` — codex-cli phases.
+- `scripts/check_agents_md_direct_edits.py` — CI check that fails a pull request adding documentation to agents.md / AGENTS.md directly instead of an agents.d fragment (CLAUDE.md §30).
 - `scripts/check_external_branch_advance.sh` — branch has advanced past a pinned local SHA due to a non-autofix push.
 - `scripts/check_failure_triage.sh` — Diagnose a failing pull-request check, enforce triage dedup/lineage rules, and open the follow-up triage issue.
+- `scripts/check_triage_resolution.py` — Close an ai:check-triage issue once its linked PR merged and the failure is verified fixed on the default branch; otherwise post the failing job's traceback (issue #7095).
 - `scripts/check_integration_pr_readiness.py` — Check whether an orchestrator integration PR is ready to merge based on the tracking issue's sub-issue checkbox state.
 - `scripts/check_resolver_diff.sh` — Validate the output of the AI conflict-resolver step before committing.
 - `scripts/check_workflow_script_refs.py` — Verify every script referenced by a workflow file exists in scripts/.
-- `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled or startup-failed CI on a current PR head.
+- `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
+- `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
+- `scripts/clarify_base_image_preseed.sh` — Seed the clarify sandbox's Docker Official Image base from a mirror before the build (CLARIFY_BASE_IMAGE_PRESEED log prefix).
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_github_facts.py` — Read referenced GitHub issue, PR, branch and run state for the isolated clarify-respond worker.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
@@ -136,6 +149,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/claude_anthropic_relay.py` — Host-side Anthropic relay and in-container bridge that keep the Claude OAuth token out of sandboxed runs.
 - `scripts/claude_engine.py` — Claude engine decisions: role resolution, the P5 settings, transcript extraction and classification, probe parsing, account order.
 - `scripts/claude_pool_token.sh` — Fetch the Claude account pool from claude-pool-broker with the job's OIDC token, probe each account, and write the ordered pool (run by `.github/actions/claude-pool-token`).
+- `scripts/claude_pool_health_alert.sh` — Send the hourly Telegram WARNING naming every Claude pool account at or above the usage gate, from the pool action's `probes` output (run by `orchestrate_poll.yml`).
+- `scripts/claude_pool_daily_usage.sh` — Once-a-day Telegram report of every Claude pool account's 5-hour and 7-day usage in one message: `slot` decides whether this poll tick is due, `send` posts the pool action's `probes` (run by `orchestrate_poll.yml`, coding-workflows only).
 - `scripts/claude_settings.json.tmpl` — P5 permission policy template rendered into the Claude engine's `--settings` file.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
@@ -150,6 +165,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/compare_issue_timeline_parity.sh` — Shell helper for compare issue timeline parity.
 - `scripts/comprehensive_test_and_release_gh_api.sh` — Shell helper for comprehensive test and release gh api.
 - `scripts/consolidate_soft_error_reports.py` — Consolidate per-phase soft-error reports into one deterministic markdown file.
+- `scripts/consumer_health_check.py` — Daily consumer health check decisions: map per-consumer snapshots to problems to file, issues to close and inactivity-disabled wrappers to re-enable (no API calls).
+- `scripts/consumer_health_check.sh` — Daily consumer health check run by `orchestrate_poll.yml` in this repository: read each consumer's workflows, poll runs and tracking issues, then re-enable wrappers and open or close `ai:consumer-health` issues.
 - `scripts/cost_audit.py` — cost_audit.py — Per-workflow LLM token-spend audit from GitHub Actions logs.
 - `scripts/detect_editor_changes_lost.sh` — Defense-in-depth guard for the EDITOR_CHANGES_LOST detection step in review_autofix.yml.
 - `scripts/dispatch_and_watch_workflow_run.sh` — Shell helper for dispatch and watch workflow run.
@@ -161,6 +178,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/emit_event.py` — Fail-open append-only JSONL mirror for stable workflow event prefixes.
 - `scripts/emit_event.sh` — emit_event.sh — fail-open append-only JSONL mirror helper.
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
+- `scripts/plan_superseded_merged_pr.py` — Plan-phase check that closes a CI-repair issue (or a re-issue of one) whose pull request already merged with the failing check passing on its final head (issue #7216; log prefix `PLAN_SUPERSEDED_MERGED_PR`).
+- `scripts/plan_split_dispatch.sh` — Plan-phase hand-off that starts an orchestrator project (Claude engine) for a pipeline-authored plan listing more than 50 files, instead of holding it for `/approved` (Q151; log prefix `PLAN_SPLIT`).
+- `scripts/partial_delivery.py` — Parse an approved plan's `## Deferred scope` section, embed it in the implement PR body and render the remaining-items comment that keeps a partially delivered issue open (issue #7657; log prefix `PARTIAL_DELIVERY`); its `heal-counterfactual` subcommand decides a workflow-heal plan's auto-approval from its `HEAL_COUNTERFACTUAL` line (issue #8249).
 - `scripts/fixtures/cloudflare-learnings/phase-a-anti-rules-noisy-pr.patch` — Fixture asset for phase-a-anti-rules-noisy-pr.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-always-full.patch` — Fixture asset for phase-b-risk-tier-always-full.patch.
 - `scripts/fixtures/cloudflare-learnings/phase-b-risk-tier-full.patch` — Fixture asset for phase-b-risk-tier-full.patch.
@@ -177,6 +197,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/generate_codex_model_reference.py` — Generate the Codex model reference markdown from the catalog and optional overrides.
 - `scripts/generate_resource_id.py` — Generate stable-format resource IDs via the ai-memory record-ID helper.
 - `scripts/generate_symbol_diff_summary.py` — Generate a symbol-level diff summary from a unified diff and changed files list.
+- `scripts/gh_api_retry.py` — Rate-limit-aware `gh api` retry helper; Python twin of `gh_api_retry` in gh_helpers.sh.
 - `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
 - `scripts/heal_isolated_implement.sh` — Run a heal editor and validator in disposable credential-free containers and scope-check transfer.
@@ -185,6 +206,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/implement_diagnose_post_codex_failure.sh` — validation failures in implement.yml and file fix-up issues.
 - `scripts/implement_handle_guard_block.sh` — Handle destructive-commit and scope-guard rejections after support cleanup.
 - `scripts/implement_staged_support_workspace.sh` — implement_staged_support_workspace.sh — give the implement editor the branch's own copies of the staged support helpers (self-repo only).
+- `scripts/implement_stale_branch_check.sh` — Tell implement.yml whether a leftover ai/issue-<N> branch has no open PR, so the push replaces it instead of rebasing onto it.
 - `scripts/install_semble.sh` — install_semble.sh — fail-soft Semble installer for GitHub Actions jobs.
 - `scripts/issue_attachment_bundle.py` — Python helper for issue attachment bundle.
 - `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.
@@ -206,11 +228,21 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
 - `scripts/orchestrate_parse_and_post_answer.sh` — Shell helper for orchestrate parse and post answer.
 - `scripts/orchestrate_poll_process.sh` — orchestrate_poll_process.sh — Process active orchestrator tracking issues.
+- `scripts/orchestrate_stall_retired_conflict.sh` — Stall-recovery helpers sourced by the poller that detect a PR conflict only on retired host-only files (issue #6680).
 - `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
+- `scripts/orphan_fixup_close.py` — Pick the open unblock fix-up issues whose source issue is already closed, for the poller to close.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
+- `scripts/implement_step_prepush_test_gate.sh` — Implement's pre-push affected-test gate step: runs the gate before commit, gives PR-caused failures one repair turn and writes the PR-body summary (issue #8190).
+- `scripts/prepush_test_gate_run.sh` — Run the pre-push affected-test gate in a credential-free container and copy back only its result (issue #7137).
+- `scripts/promote_candidate_follow.sh` — Fast-forward the `promote-candidate` branch to the main tip unless the `promote-cycle-frozen` tag freezes it (log prefix `PROMOTE_CANDIDATE_FOLLOW`).
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/propagate_consumer_secrets.sh` — Copy the library's consumer-facing Actions secrets into registered consumer repositories.
+- `scripts/release_ci_gate.sh` — Stable-release CI gate: require a successful github-actions `lint` check-run from `ci.yml` on the exact released SHA before tagging (log prefix `RELEASE_CI_GATE`, issue #6797).
+- `scripts/release_tag_preflight.sh` — Early release-credential check in the `resolve-version` job of both release workflows: fail when a classic GH_PAT lacks the `workflow` scope and the release range changes `.github/workflows/`; every uncertain case proceeds (log prefix `RELEASE_TAG_PREFLIGHT`).
+- `scripts/release_manifest.py` — Build the deterministic release manifest of files the consumer updater copies from a release.
+- `scripts/release_manifest_publish.sh` — Build the release manifest from the tagged tree and upload it as a GitHub Release asset in the stable release jobs.
+- `scripts/verify_release_manifest.py` — Verify a release tree (`verify`) or an updater PR tree (`verify-pr-tree`) against the attested release manifest; fail-closed, used by `update_workflows.yml` (log prefix `UPDATER_MANIFEST_VERIFY`).
 - `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
 - `scripts/render_prompt.sh` — Shell helper for render prompt.
 - `scripts/render_scenario_trace.py` — Render replayable workflow scenario traces from workflow-log collector excerpts.
@@ -222,19 +254,42 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
 - `scripts/review_autofix_step_changes_lost_redispatch.sh` — body of the review_autofix.yml "Re-dispatch review on editor-changes-lost" step (sourced by the step): re-dispatches one review run per head from the default branch, bounded by `autofix_changes_lost_head_retry_consumed` (issue #4898).
 - `scripts/review_autofix_step_count_iterations.sh` — body of the review_autofix.yml "Count autofix iterations" step (sourced by the step, `id: retrigger_guard`): classifies the orchestrator PR mode, counts `[ai-autofix]` rounds since the last `[judge-fix]` to decide `max_iterations_reached`, and counts `[judge-fix]` commits for the review-blocked judge retry budget.
+- `scripts/review_autofix_step_partial_finalize_safety.sh` — body of the review_autofix.yml "Decide partial-finalize validation/push safety" step (sourced by the step, moved out for the workflow file size limit, #6963): decides whether a partial-finalize run may still validate and push.
 - `scripts/review_autofix_step_detect_merge_conflicts.sh` — body of the review_autofix.yml "Detect merge conflicts" step (sourced by the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
+- `scripts/review_autofix_step_evaluate_gate.sh` — body of the review_autofix.yml "Evaluate review gate" step (`id: evaluate`) in the `gate` job (sourced by the step). The gate job runs before support staging, so the script is loaded only from the SHA-verified `.codex-head-gate-src` sparse checkout and the step fails closed when that checkout is unverified (issue #6972).
+- `scripts/review_autofix_step_assemble_failure_evidence.sh` — body of the review_autofix.yml "Assemble failure evidence" step, including the model-provider outage classification (issue #6633; moved out to keep the workflow under GitHub's 512,000-byte limit).
+- `scripts/review_autofix_step_provider_outage_record.sh` — body of the review_autofix.yml "Record model-provider outage" step: opens or reuses the `ai:provider-outage` tracker and sends its one alert (issue #6633).
+- `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh` — body of the review_autofix.yml "Mark linked issues review-blocked (workflow failure)" step (moved out to keep the workflow under GitHub's 512,000-byte limit).
+- `scripts/review_autofix_step_failure_comment.sh` — body of the review_autofix.yml "Post review-blocked comment on PR (workflow failure)" step, including the provider-outage comment (issue #6633).
+- `scripts/review_autofix_step_claude_capacity_wait.sh` — body of the review_autofix.yml "Defer review on Claude capacity" (`defer`) and "Record Claude capacity wait" (`record`) steps: with the Claude capacity wait on, an all-gated pool fails the run as `claude_capacity` instead of falling back, and the record mode labels the PR `ai:claude-capacity-wait` and records it on the capacity tracker for the hourly resume pass (issue #7370).
+- `scripts/review_autofix_step_claude_pool_capacity.sh` — body of the review_autofix.yml "Record Claude pool capacity" step: one deduplicated capacity tracker and alert when every Claude pool account is gated (issue #6633).
+- `scripts/provider_outage.py` — model-provider outage classifier, live probe, `ai:provider-outage` tracker and scheduled resume, called from the review failure path, `review_autofix_sweep.yml`, the consumer `ai-review.yml` schedule and the heal intake (issue #6633).
 - `scripts/review_autofix_step_editor_uncommitted_changes.sh` — body of the review_autofix.yml "Detect editor-claimed-but-uncommitted changes" step (sourced by the step).
 - `scripts/review_autofix_step_iteration_summary.sh` — body of the review_autofix.yml "Append review pipeline iteration summary" step (sourced by the step; skips with a warning when the script cannot be found).
 - `scripts/review_autofix_step_merge_topology_gate.sh` — body of the review_autofix.yml "Pre-review deterministic merge-topology gate" step (sourced by the step).
 - `scripts/review_autofix_step_partial_finalize.sh` — body of the review_autofix.yml "Post partial finalize comment and persist runtime marker" step (sourced by the step; skips with a warning when the script cannot be found).
 - `scripts/review_autofix_step_post_commit_retrigger.sh` — body of the review_autofix.yml "Re-trigger review via workflow_dispatch" step (sourced by the step): after an autofix or merge-resolve push, dispatches the next review run from the default branch, PR-named wrappers first (issue #4898).
+- `scripts/review_autofix_step_post_editor_summary.sh` — body of the review_autofix.yml "Post editor summary comment" step (sourced by the step; the step passes the server URL, repository and run id as `AUTOFIX_STEP_SERVER_URL` / `AUTOFIX_STEP_REPOSITORY` / `AUTOFIX_STEP_RUN_ID`).
+- `scripts/review_autofix_step_post_review_blocked_comment.sh` — body of the review_autofix.yml "Post review-blocked comment on PR (autofix exhaustion)" step (sourced by the step; same `AUTOFIX_STEP_*` pass-through as the editor summary step).
+- `scripts/review_autofix_step_detect_smoke_test.sh` — body of the review_autofix.yml "Detect smoke test and tune LLM settings" step (sourced by the step; the step passes the repository as `AUTOFIX_STEP_REPOSITORY`).
+- `scripts/review_autofix_step_apply_fixes_editor.sh` — body of the review_autofix.yml "Apply fixes with editor model" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_restore_partial_resume.sh` — body of the review_autofix.yml "Restore same-head partial resume state" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_generate_diff_context.sh` — body of the review_autofix.yml "Generate diff context" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_preflight_required_files.sh` — body of the review_autofix.yml "Preflight: Verify required files before reviewer invocation" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_editor_noop_disposition.sh` — body of the review_autofix.yml "Validate editor no-op disposition" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_stage_codex_logs.sh` — body of the review_autofix.yml "Stage codex logs for upload (failure or empty-editor)" step (sourced by the step; skips with a warning when the script is missing, since the step also runs after support staging failed; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_init_runtime_workspace.sh` — body of the review_autofix.yml "Initialize runtime workspace" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_mark_ready_to_merge.sh` — body of the review_autofix.yml "Mark linked issues ready to merge" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_prepush_test_gate.sh` — body of the review_autofix.yml "Pre-push affected-test gate" step (one repair turn through `review_apply_fixes.sh --repair-turn`), and the shared `gate` / `repair-prompt` / `allow-list` entry point the conflict resolver and the heal editor call (issue #8201).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
+- `scripts/review_freshness_ci_failed.sh` — Marks a freshness-update head whose CI failed (`ai:freshness-ci-failed:v1`) and dispatches the PR's review workflow so it gets a normal review and autofix run.
 - `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
+- `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
@@ -255,18 +310,24 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
 - `scripts/reviewer_failback_chains.json` — JSON asset for reviewer_failback_chains.json.
 - `scripts/run_plan_codex.sh` — Plan-phase Codex runner extracted from workflow YAML.
+- `scripts/sandbox_image.sh` — Pull a prebuilt sandbox image from GHCR by input hash, or build it locally when the pull fails (`SANDBOX_IMAGE` log prefix).
+- `scripts/sandbox_images_publish.sh` — Build and push every sandbox image variant the build sites resolve (run by publish-sandbox-images.yml).
 - `scripts/run_validation_repo_checks.sh` — Shell helper for run validation repo checks.
 - `scripts/run_workspace_hook.sh` — Shell helper for run workspace hook.
 - `scripts/self_heal_validation.sh` — failure context, then signalling validate_process.sh to re-run.
 - `scripts/semantic_cache.py` — Semantic cache helper for clarify-phase workflows.
 - `scripts/security_audit.sh` — security_audit.sh — Run the default-branch OWASP Top 10 + STRIDE security audit.
+- `scripts/security_audit_upstream_report.sh` — Send a consumer audit's high/critical findings on unmodified synced files to coding-workflows' heal intake as one OIDC-bound `synced_security_finding` report (issue #7623).
 - `scripts/security_audit_fp_exclusions.json` — JSON asset for editable security-audit false-positive exclusions.
 - `scripts/security_dependency.py` — Hold a generated security follow-up until the issue it depends on has merged (issue #4934).
+- `scripts/pr_dependency.py` — Hold a trusted standalone issue that declares `- Depends on PR: #N` until that PR merged into the default branch and a declared string is on it (issue #7228).
 - `scripts/security_pass_skip.py` — Decide whether the security pass skips a follow-up issue (verified-trust rules, #4623).
 - `scripts/semble_helpers.sh` — semble_helpers.sh — shared, sourceable Semble query helpers.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
 - `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
+- `scripts/stable_e2e_step_verify_bait_removed.sh` — body of the test-and-mark-stable.yml "Phase 4b: Verify editor restored canary (pytest + retry)" step (`id: verify-bait-removed`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
+- `scripts/stable_e2e_step_wait_review.sh` — body of the test-and-mark-stable.yml "Phase 4: Wait for review & autofix to complete" step (`id: wait-review`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
 - `scripts/stage_workflow_log_bundle.py` — Bound workflow-log artifacts before mounting them into the isolated analyzer.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-6-luna, reasoning: medium).
@@ -285,8 +346,10 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/unblock_scan.py` — Pick the blocked items the unblock judge looks at each poll tick (Phase 7).
 - `scripts/validate_changed_files_syntax.sh` — Shell helper for validate changed files syntax.
 - `scripts/validate_driver.sh` — Shell helper for validate driver.
+- `scripts/validation_harness_sandbox.sh` — Runs the generated validation harness as an unprivileged user with rootless Docker, an allowlisted environment and bounded log copy-back (invoked by `scripts/validate_process.sh` Phase 3).
 - `scripts/validate_editor_audit.sh` — when the helper exits non-zero (caller-side).
 - `scripts/validate_process.sh` — validate_process.sh — Generate and execute runtime validation harness.
+- `scripts/validate_scheduled_sink.sh` — Reports a scheduled validation run (issue #7553) in one `ai:scheduled-validation-failed` issue: open with one WARNING, update in place, close when a later scheduled run passes (invoked by `validate.yml`).
 - `scripts/validation_discovery_bootstrap.py` — Codex-driven .ai/validate.yml discovery for consumer repositories.
 - `scripts/validation_lint.py` — Deterministic lint checks for rendered validation harness output.
 - `scripts/validation_refresh_runner.py` — Render and self-test validation assets against consumer repositories.
@@ -299,7 +362,10 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workflow_failure_heal_autofix_report.sh` — Report a repeated review/autofix failure on a pull request to coding-workflows' heal intake from the review workflow's failure path, with the run's own evidence.
 - `scripts/workflow_failure_heal_intake.sh` — Diagnose an escalated workflow failure report in coding-workflows, enforce heal dedup/lineage/budget rules, and open the heal issue.
 - `scripts/workflow_failure_heal_evidence.sh` — Collect bounded, redacted, verified failure logs for heal prompts.
+- `scripts/workflow_failure_heal_non_retryable_backfill.sh` — Scheduled pass (review sweep, consumer `ai-review.yml` schedule) that re-sends a non-retryable review/autofix failure the heal intake never diagnosed, from trusted current-head markers (issue #7291).
 - `scripts/workflow_failure_heal_phase_report.sh` — Report a failed clarify / plan / implement run on an issue to coding-workflows' heal intake from the workflow's `heal-report` job, with the phase's failure streak on that issue.
+- `scripts/workflow_failure_heal_queue.sh` — First-come, first-served queue for the heal intake (`acquire` / `release` steps of both intake jobs): a ticket comment on the `ai:heal-intake-queue` issue, so a burst of reports waits its turn instead of being cancelled.
+- `scripts/workflow_failure_heal_recovery_scan.sh` — Hourly heal-scope recovery scan: rebuild the report of an open, pipeline-authored heal issue without a scope marker and run the intake on it (issue #7333).
 - `scripts/workflow_failure_heal_pr_reconcile.sh` — When a coding-workflows pull request closes, close the heal PRs stacked on its head branch (source not merged) or move their heal commits onto the source base and re-point them (source merged).
 - `scripts/workflow_failure_heal_report.sh` — Report a human-needed escalation from a consumer (or this repo) to coding-workflows with linked failed runs and the wrapper release pin.
 - `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
@@ -359,3 +425,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `tests/inventory_exemptions.txt` — Documented inventory parity exemptions (`path | justification`).
 - `tests/inventory_parity.py` — Direct-run inventory drift gate for docs/INVENTORY.md, README.md, and agents.md.
 - `tests/prompt_size_budget.py` — Direct-run prompt tier budget gate for mode and review prompts.
+
+## Claude hook templates
+
+Not checked by `tests/inventory_parity.py`; listed so the consumer-shipped hooks added for a plan phase have an inventory row.
+
+- `workflow-templates/.claude/hooks/prepush_affected_tests.py` — Pre-push affected-test gate: selects, runs and classifies the tests a change affects; interactive `stamp` and `PreToolUse` hook (issue #7137).
