@@ -5166,8 +5166,12 @@ jobs:
           # 40831286935 (08:08:20-08:31:55); each one starts every
           # issue_comment workflow, and the extra implement runs queue in
           # ai-implement-<repo>-<issue> (cancel-in-progress: false). A failed
-          # POST leaves the flag at 0 so the next poll retries.
+          # POST leaves the flag at 0 so the next poll retries. An issue still
+          # awaiting approval 600s after a post gets one more post, because
+          # implement can skip before it changes the label (metadata read or
+          # dependency hold) and nothing else re-triggers it.
           ALT_APPROVED_POSTED=0
+          ALT_APPROVED_POSTED_AT=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
             LABELS=$(gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}" \
               --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
@@ -5180,10 +5184,15 @@ jobs:
             fi
             # Auto-approve the plan when the issue lands in awaiting-approval.
             if echo "${LABELS}" | grep -q 'ai:awaiting-approval'; then
+              if [ "${ALT_APPROVED_POSTED}" = "1" ] && [ $(( $(date +%s) - ALT_APPROVED_POSTED_AT )) -ge 600 ]; then
+                echo "  still awaiting approval 600s after /approved; posting again"
+                ALT_APPROVED_POSTED=0
+              fi
               if [ "${ALT_APPROVED_POSTED}" = "0" ]; then
                 if gh api "repos/${TEST_REPO}/issues/${ISSUE_NUMBER}/comments" \
                     -f body="/approved" >/dev/null 2>&1; then
                   ALT_APPROVED_POSTED=1
+                  ALT_APPROVED_POSTED_AT=$(date +%s)
                   echo "  posted /approved (once per arrival)"
                 else
                   echo "::warning::Posting /approved failed; retrying on the next poll"
