@@ -225,6 +225,8 @@ def test_fail_closed_handler_writes_harness_error_without_running_tests() -> Non
 			f"set_tracking_phase_label() {{ echo \"label $1\" >> {calls}; }}\n"
 			f"write_result_files() {{ echo \"result $1 $4\" >> {calls}; }}\n"
 			f"tg_notify() {{ echo \"tg $2\" >> {calls}; }}\n"
+			f"validation_owner_fixed() {{ echo \"owner $1\" >> {calls}; }}\n"
+			"validation_owner_comment_marker() { :; }\n"
 			+ handler.group(0)
 			+ "fail_closed_validation_sandbox 'selfcheck proc_environ_readable'\necho unreachable\n"
 		)
@@ -240,6 +242,7 @@ def test_fail_closed_handler_writes_harness_error_without_running_tests() -> Non
 		assert "label ai:validation-failed" in recorded
 		assert "result fail harness_error" in recorded
 		assert "tg ERROR" in recorded
+		assert "owner sandbox_unavailable" in recorded
 
 
 def test_validate_workflow_stages_sandbox_helper() -> None:
@@ -1838,20 +1841,210 @@ def _write(workspace: Path, name: str, text: str) -> None:
 	path.write_text(text, encoding="utf-8")
 
 
-def _stage(helper_dir: Path, workspace: Path) -> tuple[dict[str, bytes], str]:
+def _stage_with_mode_map(helper_dir: Path, workspace: Path, *extra_args: str, env_extra: dict[str, str] | None = None) -> tuple[dict[str, bytes], dict[str, int], str]:
 	result = subprocess.run(
-		["python3", "-I", "-c", _stage_program(), str(helper_dir), str(workspace)],
-		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir)},
+		["python3", "-I", "-c", _stage_program(), str(helper_dir), str(workspace), *extra_args],
+		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir), **(env_extra or {})},
 	)
 	assert result.returncode == 0, result.stderr
 	members: dict[str, bytes] = {}
+	modes: dict[str, int] = {}
 	with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r|") as archive:
 		for member in archive:
 			assert member.isreg(), member.name
 			handle = archive.extractfile(member)
 			assert handle is not None
 			members[member.name] = handle.read()
-	return members, result.stderr.decode()
+			modes[member.name] = member.mode
+	return members, modes, result.stderr.decode()
+
+
+def _stage(helper_dir: Path, workspace: Path, *extra_args: str) -> tuple[dict[str, bytes], str]:
+	members, _, stderr = _stage_with_mode_map(helper_dir, workspace, *extra_args)
+	return members, stderr
+
+
+# Self-repo support staging writes trusted copies over tracked support files
+# (#6865); the copy under test must still hold the branch's committed bytes so
+# the branch's own tests read its code (#7913, heal #8064). These tests use the
+# shared _git_commit helper defined with the #8065 tests below.
+def test_stage_copy_takes_support_files_from_head(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "committed\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"committed\n"
+	assert "VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=support_from_head path=scripts/validate_process.sh\n" in stderr
+	assert "committed" not in stderr and "trusted" not in stderr, "logs must never carry file content"
+	# Without the HEAD: argument the working-tree bytes are staged, as before.
+	members, stderr = _stage(helper_dir, workspace)
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_keeps_the_trusted_driver_overlay(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_driver.sh", "branch driver\n")
+	_git_add(workspace, "scripts/validate_driver.sh")
+	_git_commit(workspace)
+	trusted = tmp_path / "trusted_driver.sh"
+	trusted.write_text("trusted driver\n", encoding="utf-8")
+	members, stderr = _stage(helper_dir, workspace, f"scripts/validate_driver.sh={trusted}", "HEAD:scripts/validate_driver.sh")
+	assert members["scripts/validate_driver.sh"] == b"trusted driver\n", "the overlay must win over a HEAD: entry"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_support_from_head_falls_back_for_untracked_symlink_and_unborn(tmp_path: Path) -> None:
+	# Unborn HEAD: nothing committed yet, the working-tree copy is staged.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "working\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"working\n"
+	assert "support_from_head" not in stderr
+	# Untracked listed path: staged from the working tree.
+	_write(workspace, "base.txt", "base\n")
+	_git_add(workspace, "base.txt")
+	subprocess.run(["git", "-C", str(workspace), "rm", "-q", "--cached", "scripts/validate_process.sh"], check=True,
+		env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+	_git_commit(workspace)
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"working\n"
+	assert "support_from_head" not in stderr
+	# Committed as a symlink: never staged from HEAD, and add() drops the symlink.
+	(workspace / "scripts" / "validate_process.sh").unlink()
+	os.symlink("../base.txt", workspace / "scripts" / "validate_process.sh")
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert "scripts/validate_process.sh" not in members
+	assert "support_from_head" not in stderr
+	# A working-tree regular file over a HEAD symlink still never reads the HEAD entry.
+	(workspace / "scripts" / "validate_process.sh").unlink()
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_support_from_head_ignores_unsafe_arguments(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "committed\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:", "HEAD:/etc/passwd", "HEAD:scripts/../scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "support_from_head" not in stderr
+
+
+def test_stage_copy_support_from_head_preserves_executable_mode(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "#!/bin/bash\necho committed\n")
+	(workspace / "scripts" / "validate_process.sh").chmod(0o755)
+	_write(workspace, "scripts/templates/slot_manifest.schema.json", "{}\n")
+	_git_add(workspace, "scripts/validate_process.sh", "scripts/templates/slot_manifest.schema.json")
+	_git_commit(workspace)
+	(workspace / "scripts" / "validate_process.sh").write_text("trusted\n", encoding="utf-8")
+	(workspace / "scripts" / "validate_process.sh").chmod(0o644)
+	_write(workspace, "scripts/templates/slot_manifest.schema.json", "{\"trusted\": true}\n")
+	members, modes, _ = _stage_with_mode_map(helper_dir, workspace, "HEAD:scripts/validate_process.sh", "HEAD:scripts/templates/slot_manifest.schema.json")
+	assert members["scripts/validate_process.sh"] == b"#!/bin/bash\necho committed\n"
+	assert modes["scripts/validate_process.sh"] == 0o755
+	assert members["scripts/templates/slot_manifest.schema.json"] == b"{}\n"
+	assert modes["scripts/templates/slot_manifest.schema.json"] == 0o644
+
+
+def test_stage_copy_support_from_head_directory_prefix(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "workflow-templates/validation-harness/a.sh.j2", "committed a\n")
+	_write(workspace, "workflow-templates/validation-harness/_shared/b.sh.j2", "committed b\n")
+	_write(workspace, "workflow-templates/other.yml", "committed other\n")
+	_git_add(workspace, "workflow-templates/validation-harness/a.sh.j2", "workflow-templates/validation-harness/_shared/b.sh.j2", "workflow-templates/other.yml")
+	_git_commit(workspace)
+	_write(workspace, "workflow-templates/validation-harness/a.sh.j2", "trusted a\n")
+	_write(workspace, "workflow-templates/validation-harness/_shared/b.sh.j2", "trusted b\n")
+	_write(workspace, "workflow-templates/other.yml", "trusted other\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:workflow-templates/validation-harness/")
+	assert members["workflow-templates/validation-harness/a.sh.j2"] == b"committed a\n"
+	assert members["workflow-templates/validation-harness/_shared/b.sh.j2"] == b"committed b\n"
+	assert members["workflow-templates/other.yml"] == b"trusted other\n", "a prefix entry covers only its own directory"
+	assert "reason=support_from_head path=workflow-templates/validation-harness/a.sh.j2" in stderr
+	assert "support_from_head_git_failed" not in stderr
+
+
+def test_stage_copy_support_from_head_keeps_working_tree_for_oversized_blob(tmp_path: Path) -> None:
+	# The HEAD blob is buffered whole, so one over 8 MiB keeps the streamed working-tree read.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "x" * (8 * 1024 * 1024 + 1))
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "outcome=skip reason=support_from_head_too_large path=scripts/validate_process.sh" in stderr
+
+
+def test_run_stages_exactly_the_support_paths_from_head() -> None:
+	run = _function_body("cmd_run")
+	listed = re.findall(r'"HEAD:([^"]+)"', run)
+	assert listed == [
+		"scripts/validate_process.sh",
+		"scripts/validation_harness_sandbox.sh",
+		"scripts/codex_isolated_workspace.py",
+		"scripts/templates/slot_manifest.schema.json",
+		"scripts/render_validation_templates.py",
+		"workflow-templates/validation-harness/",
+	]
+	assert "HEAD:scripts/validate_driver.sh" not in run, "the sandbox runs the driver, so it must stay the trusted overlay"
+	assert '"${overlays[@]}" "${support_from_head_args[@]}"' in run
+	assert run.index("support_from_head_args+=(") < run.index('python3 -I -c "${STAGE_PY}"')
+	# The off switch must cover the HEAD: list too, not only head-support:.
+	gate = run.index("if sandbox_support_from_head_enabled; then")
+	gated = run[gate:run.index("\n\tfi\n", gate)]
+	assert "support_from_head_args+=(" in gated
+	assert run.count("support_from_head_args+=") == 1
+	assert all(f'"HEAD:{path}"' in gated for path in listed)
+
+
+def test_stage_copy_support_from_head_git_timeout_falls_back(tmp_path: Path) -> None:
+	# A hung git call is a git failure: log it and stage the working-tree copy.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "committed\n")
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	program = _stage_program().replace(
+		"def _stage_from_head_git(git, info, arcname):\n",
+		"def _stage_from_head_git(git, info, arcname):\n\traise subprocess.TimeoutExpired(git, 60)\n",
+		1,
+	)
+	assert "raise subprocess.TimeoutExpired" in program
+	result = subprocess.run(
+		["python3", "-I", "-c", program, str(helper_dir), str(workspace), "HEAD:scripts/validate_process.sh"],
+		capture_output=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(helper_dir)},
+	)
+	assert result.returncode == 0, result.stderr
+	with tarfile.open(fileobj=io.BytesIO(result.stdout), mode="r|") as archive:
+		members = {m.name: archive.extractfile(m).read() for m in archive if m.isreg()}
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "outcome=skip reason=support_from_head_git_failed path=scripts/validate_process.sh" in result.stderr.decode()
+
+
+def test_stage_copy_head_support_path_is_not_read_from_head_twice(tmp_path: Path) -> None:
+	# A path on both lists is tried once (head_blob); its fallback logs one reason.
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	_write(workspace, "scripts/validate_process.sh", "x" * (8 * 1024 * 1024 + 1))
+	_git_add(workspace, "scripts/validate_process.sh")
+	_git_commit(workspace)
+	_write(workspace, "scripts/validate_process.sh", "trusted\n")
+	members, stderr = _stage(helper_dir, workspace, "head-support:scripts/validate_process.sh", "HEAD:scripts/validate_process.sh")
+	assert members["scripts/validate_process.sh"] == b"trusted\n"
+	assert "outcome=skip reason=support_from_head_unavailable path=scripts/validate_process.sh" in stderr
+	assert "support_from_head_too_large" not in stderr
+	assert stderr.count("path=scripts/validate_process.sh") == 1
 
 
 def test_stage_copy_includes_untracked_files_that_are_not_ignored(tmp_path: Path) -> None:
@@ -2163,3 +2356,41 @@ def test_cmd_run_passes_head_support_paths_after_the_driver_overlay() -> None:
 	assert 'head_support_args+=("head-support:${head_support_path}")' in gated
 	assert body.count("head_support_args+=") == 1
 	assert 'python3 -I -c "${STAGE_PY}" "${SANDBOX_HELPER_DIR}" "${workspace}" "${head_support_args[@]}" "${overlays[@]}"' in body
+
+
+# fun-token-multi-chain#579: a diagnosis could not tell whether the project was
+# staged at all, because ordinary files are staged without a log line. One
+# count line per run answers that without logging any file name.
+def test_stage_copy_logs_one_member_count(tmp_path: Path) -> None:
+	helper_dir, workspace = _stage_workspace(tmp_path)
+	for name in ("package.json", "hardhat.config.ts", "contracts/Token.sol", ".env.example"):
+		_write(workspace, name, "x\n")
+	_git_add(workspace, "package.json", "hardhat.config.ts", "contracts/Token.sol", ".env.example")
+	trusted = tmp_path / "trusted_driver.sh"
+	trusted.write_text("trusted driver\n", encoding="utf-8")
+	members, stderr = _stage(helper_dir, workspace, f"scripts/validate_driver.sh={trusted}")
+	lines = [line for line in stderr.splitlines() if "reason=staged_count" in line]
+	assert lines == [f"VALIDATION_HARNESS_SANDBOX phase=stage outcome=ok reason=staged_count staged={len(members)}"], stderr
+	assert len(members) == 5, sorted(members)
+	assert "package.json" not in lines[0], "the count line must never carry file names"
+
+
+def test_stage_copy_lists_from_split_git_dir_and_work_tree(tmp_path: Path) -> None:
+	# validate.yml exports GIT_DIR=<checkout>/.git and GIT_WORK_TREE=<workspace
+	# copy>; STAGE_PY inherits both, lists names from the checkout's index and
+	# reads the bytes from the copy. The project files must still be staged.
+	helper_dir, checkout = _stage_workspace(tmp_path)
+	for name in ("package.json", "hardhat.config.ts"):
+		_write(checkout, name, f"committed {name}\n")
+	_git_add(checkout, "package.json", "hardhat.config.ts")
+	_git_commit(checkout)
+	copy = tmp_path / "copy"
+	copy.mkdir()
+	for name in ("package.json", "hardhat.config.ts"):
+		shutil.copy2(checkout / name, copy / name)
+	members, _, stderr = _stage_with_mode_map(
+		helper_dir, copy,
+		env_extra={"GIT_DIR": str(checkout / ".git"), "GIT_WORK_TREE": str(copy)},
+	)
+	assert members.get("package.json") == b"committed package.json\n", (sorted(members), stderr)
+	assert members.get("hardhat.config.ts") == b"committed hardhat.config.ts\n", sorted(members)

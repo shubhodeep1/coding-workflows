@@ -46,7 +46,7 @@ echo "Running Codex resolver"
 
 # Ensure committer identity is set (see "Detect merge conflicts" step).
 git config user.name  "codex-bot"        2>/dev/null || true
-git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
+git config user.email "codex-bot@users.noreply.invalid" 2>/dev/null || true
 
 # Start this step from a clean tracked-file state.  The "Detect
 # merge conflicts" step's conflict branch only runs `git merge
@@ -880,6 +880,32 @@ if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true"
   echo ".ai asset take-base: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
 fi
 
+# Criss-cross clean merge (PR #8170): the detect step set
+# MERGE_CRISS_CROSS_CLEAN=true because git merges origin/<base> cleanly
+# through a virtual merge base while a single-base merge (what GitHub
+# computes) conflicts. Aborting here as "nothing to resolve" leaves the PR
+# dirty on GitHub forever, so commit the clean merge instead; the push step
+# then makes origin/<base> an ancestor of the PR head. Integration-sync
+# branches defer the commit until the fingerprint check below, like the
+# other deterministic resolutions.
+if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ] \
+   && [ "${_merge_exit}" -eq 0 ] && [ "${MERGE_CRISS_CROSS_CLEAN:-false}" = "true" ] \
+   && [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  echo "AUTOFIX_MERGE_CRISS_CROSS pr=${PR_NUMBER:-unknown} outcome=commit_clean_merge phase=prepare"
+  case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+    orchestrator/project-*)
+      _mu_defer_commit=true
+      _det_commit_label="Criss-cross clean merge"
+      _det_commit_scope="criss-cross-clean-merge"
+      _det_commit_path="origin/${BASE_BRANCH}"
+      echo "Criss-cross clean merge: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+      ;;
+    *)
+      _conflict_prepare_commit_deterministic_merge "Criss-cross clean merge"
+      ;;
+  esac
+fi
+
 if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ] && [ "${_ff_defer_commit}" != "true" ]; then
   if [ "${_merge_exit}" -eq 0 ]; then
     echo "::warning::Merge replay produced no unmerged paths (git merge exit=0) — skipping Codex resolver (nothing to resolve)."
@@ -1287,14 +1313,52 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
         | [.[][] | select((.body | type) == "string" and (.body | startswith("## Integration conflict diagnosis\n"))
           and (.body | endswith($marker)) and (.body | length <= 6000))] | last | .body // ""
       ' "${_ti_comments_raw}" 2>/dev/null || true)"
-      _state_payload="$(jq -s --arg login "${_conflict_state_login}" '
-        ([.[][] | select((.user.login // "") == $login) | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] // [])
-        | last // {}
-        | .body // ""
-        | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
-        | .json // ""
-      ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
-      _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+      # V2 first: the poller writes only chunked ORCHESTRATOR_STATE_V2 state,
+      # so a V1 comment, when one exists, is the stale initial snapshot with
+      # no merged sub-issues. Same lookup as _resolver_test_repair_context in
+      # review_conflict_resolve.sh: the trusted support copy of
+      # orchestrate_state_v2.py, comments by the pipeline login only, and the
+      # V1 jq only when there is no V2 state.
+      # Switch: CONFLICT_INTEGRATION_V2_STATE_ENABLED (default true; unset,
+      # empty or true in any case is on, false off, anything else off with a
+      # warning). Off restores the V1-only read. Reading V2 state gives the
+      # resolver real merged_issue_fingerprints, which turns on the fingerprint
+      # check in review_conflict_resolve.sh that skips a {} fingerprints file.
+      _state_json=""
+      _state_v2_helper=""
+      _state_v2_switch="$(printf '%s' "${CONFLICT_INTEGRATION_V2_STATE_ENABLED-}" | tr '[:upper:]' '[:lower:]')"
+      _state_v2_enabled=false
+      case "${_state_v2_switch}" in
+        ''|true) _state_v2_enabled=true ;;
+        false) ;;
+        *) echo "::warning::Integration state read: CONFLICT_INTEGRATION_V2_STATE_ENABLED has an unrecognised value; reading V1 state only." ;;
+      esac
+      if [ "${_state_v2_enabled}" = "true" ]; then
+        for _state_v2_cand in "${SUPPORT_SCRIPTS_DIR:-}/orchestrate_state_v2.py" \
+          "${GITHUB_WORKSPACE:-/nonexistent}/.codex-workflow-src/scripts/orchestrate_state_v2.py"; do
+          case "${_state_v2_cand}" in /*) ;; *) continue ;; esac
+          if [ -f "${_state_v2_cand}" ] && [ ! -L "${_state_v2_cand}" ]; then
+            _state_v2_helper="${_state_v2_cand}"
+            break
+          fi
+        done
+      fi
+      if [ -n "${_state_v2_helper}" ] && jq -s --arg login "${_conflict_state_login}" \
+        '[.[][] | select((.user.login // "") == $login)]' "${_ti_comments_raw}" > "${_ti_comments_raw}.login" 2>/dev/null; then
+        _state_json="$(python3 -I -B "${_state_v2_helper}" extract --comments-json "${_ti_comments_raw}.login" 2>/dev/null \
+          | jq -c 'select(type == "object")' 2>/dev/null || true)"
+      fi
+      rm -f -- "${_ti_comments_raw}.login"
+      if [ -z "${_state_json}" ]; then
+        _state_payload="$(jq -s --arg login "${_conflict_state_login}" '
+          ([.[][] | select((.user.login // "") == $login) | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] // [])
+          | last // {}
+          | .body // ""
+          | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
+          | .json // ""
+        ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
+        _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+      fi
       if [ -n "${_state_json}" ]; then
         # Build the merged sub-issues list (id : github_issue : status)
         INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '
@@ -1311,7 +1375,7 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
           .merged_issue_fingerprints // {}
         ' 2>/dev/null || echo "{}")"
       fi
-      unset _state_payload _state_json
+      unset _state_payload _state_json _state_v2_helper _state_v2_cand _state_v2_switch _state_v2_enabled
     fi
     rm -f "${_ti_comments_raw}"
     unset _ti_comments_raw

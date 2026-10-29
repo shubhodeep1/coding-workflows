@@ -12,6 +12,9 @@ re-reads the PR in its merged-PR guard (``_guard_pr_meta``). The live
   ``--match-head-commit`` already binds them;
 - the ``close_and_reissue`` spot-fix baseline uses the judged SHA, not a live
   ``gh pr view --json headRefOid`` re-read.
+
+Issue #8232 (end of file): the judge holds merges and closes of orchestrator
+integration PRs and leaves the final merge to the orchestrator.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -439,6 +443,7 @@ def _run_merge_site(
 	stderr_text: str = DRAFT_MESSAGE,
 	*,
 	tmpdir_exists: bool = True,
+	extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str, list[list[str]], Path, str]:
 	with tempfile.TemporaryDirectory(prefix="test_rb_judge_merge_err_") as td:
 		tmp = Path(td)
@@ -490,6 +495,7 @@ def _run_merge_site(
 			"REPOSITORY": "o/r",
 			"RB_JUDGED_HEAD_SHA": JUDGED,
 		}
+		env.update(extra_env or {})
 		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
 		calls: list[list[str]] = []
 		if gh_log.exists():
@@ -499,8 +505,8 @@ def _run_merge_site(
 		return proc, github_output.read_text(encoding="utf-8"), calls, scratch, proc.stdout
 
 
-def _expected_calls(path: str) -> list[list[str]]:
-	base = ["pr", "merge", "42", "--repo", "o/r", "--squash"]
+def _expected_calls(path: str, method: str = "--squash") -> list[list[str]]:
+	base = ["pr", "merge", "42", "--repo", "o/r", method]
 	if path == "sync":
 		return [base + ["--match-head-commit", JUDGED]]
 	return [base + ["--auto", "--match-head-commit", JUDGED], base + ["--match-head-commit", JUDGED]]
@@ -590,3 +596,325 @@ def test_no_merge_command_discards_stderr() -> None:
 			assert "2>/dev/null" not in line, line
 	reports = re.findall(r"^\s+rb_judge_merge_err_report (\S+)$", text, re.MULTILINE)
 	assert reports == ["merge", "terminal", "sync"]
+
+
+# --- forward-merge fallback PRs merge with a merge commit ------------------
+
+
+def _merge_method_selection_snippet() -> str:
+	text = _script_text()
+	start = text.index('RB_MERGE_METHOD_FLAG="--squash"\n')
+	end = text.index("\nfi\n", start) + len("\nfi\n")
+	return text[start:end]
+
+
+@pytest.mark.parametrize(
+	("head_ref", "expected"),
+	[
+		("auto/forward-merge-stable-40229490655-1", "--merge"),
+		("claude/some-feature", "--squash"),
+		("orchestrator/project-42", "--squash"),
+		("x-auto/forward-merge-stable-1-1", "--squash"),
+		("", "--squash"),
+	],
+)
+def test_merge_method_follows_head_ref(head_ref: str, expected: str) -> None:
+	script = (
+		"set -euo pipefail\n"
+		+ _merge_method_selection_snippet()
+		+ 'printf "METHOD=%s\\n" "${RB_MERGE_METHOD_FLAG}"\n'
+	)
+	proc = subprocess.run(
+		["bash", "-c", script],
+		check=False,
+		env={"PATH": os.environ.get("PATH", ""), "POST_REVIEW_HEAD_REF": head_ref, "PR_NUMBER": "42"},
+		text=True,
+		capture_output=True,
+		timeout=30,
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert f"METHOD={expected}" in proc.stdout.splitlines(), proc.stdout
+	assert ("RB_JUDGE_MERGE_METHOD pr=42 method=merge" in proc.stdout) == (expected == "--merge")
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_forward_merge_pr_merges_with_merge_commit(path: str) -> None:
+	proc, _output, calls, _scratch, _stdout = _run_merge_site(
+		path, [0], extra_env={"RB_MERGE_METHOD_FLAG": "--merge"}
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == _expected_calls(path, "--merge")[:1]
+	assert all("--squash" not in call for call in calls)
+
+
+# ---------------------------------------------------------------------------
+# Issue #8232: the judge holds merges and closes of orchestrator integration
+# PRs. ``merge``, ``merge_with_followup``, final-attempt ``fix`` and
+# ``close_and_reissue`` on a head ref matching ORCH_INTEGRATION_BRANCH_PATTERN
+# (default ``^orchestrator/project-``, with the canonical
+# ``^orchestrator/project-([0-9]+)$`` fallback for an empty or invalid
+# pattern, as in review_enable_auto_merge.sh) are held; the orchestrator's
+# finalize_integration_merge_if_needed merges the PR once the current head
+# passed runtime validation. A non-final ``fix`` still runs. The Telegram
+# step reports the hold at DEBUG.
+# ---------------------------------------------------------------------------
+
+IHOLD_AUTO_MERGE_SCRIPT = REPO_ROOT / "scripts" / "review_enable_auto_merge.sh"
+IHOLD_ITERATION_SUMMARY = REPO_ROOT / "scripts" / "review_autofix_step_iteration_summary.sh"
+IHOLD_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+
+IHOLD_BEGIN_MARKER = "# BEGIN rb-judge orchestrator integration hold (#8232)"
+IHOLD_END_MARKER = "# END rb-judge orchestrator integration hold (#8232)"
+IHOLD_START_ANCHOR = 'RB_MERGE_ACTION="false"\ncase "${RB_ACTION}" in'
+IHOLD_SHA = "a" * 40
+
+ihold_needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required by the Telegram step")
+
+
+def _ihold_extract_block() -> str:
+	text = SCRIPT.read_text(encoding="utf-8")
+	start = text.index(IHOLD_START_ANCHOR)
+	end = text.index(IHOLD_END_MARKER, start) + len(IHOLD_END_MARKER)
+	return text[start:end]
+
+
+def _ihold_run(
+	action: str,
+	*,
+	head_ref: str = "orchestrator/project-12",
+	is_final: str = "false",
+	already_merged: str = "false",
+	pattern: str | None = None,
+	judged_sha: str = IHOLD_SHA,
+	security_gate_rc: int = 0,
+) -> dict:
+	block = _ihold_extract_block()
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_integration_hold_") as td:
+		tmp = Path(td)
+		calls = tmp / "calls.log"
+		output = tmp / "github_output"
+		output.write_text("", encoding="utf-8")
+		prelude = textwrap.dedent(
+			"""\
+			set -uo pipefail
+			gh_retry() { printf 'gh_retry %s\\n' "$(printf '%s' "$*" | tr '\\n' ' ')" >> "${CALL_LOG}"; return 0; }
+			review_head_gate_post_status() { printf 'status %s\\n' "$*" >> "${CALL_LOG}"; return 0; }
+			_resilient_phase_swap() { printf 'phase_swap %s\\n' "$*" >> "${CALL_LOG}"; return 0; }
+			rb_security_merge_gate() { printf 'security_gate\\n' >> "${CALL_LOG}"; return "${IHOLD_SECURITY_GATE_RC:-0}"; }
+			"""
+		)
+		script = prelude + block + "\necho FELLTHROUGH\n"
+		env = {
+			"PATH": "/usr/bin:/bin",
+			"CALL_LOG": str(calls),
+			"GITHUB_OUTPUT": str(output),
+			"RB_ACTION": action,
+			"IS_FINAL": is_final,
+			"PR_ALREADY_MERGED": already_merged,
+			"POST_REVIEW_HEAD_REF": head_ref,
+			"RB_JUDGED_HEAD_SHA": judged_sha,
+			"REPOSITORY": "owner/repo",
+			"PR_NUMBER": "42",
+			"IHOLD_SECURITY_GATE_RC": str(security_gate_rc),
+		}
+		if pattern is not None:
+			env["ORCH_INTEGRATION_BRANCH_PATTERN"] = pattern
+		result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+		return {
+			"rc": result.returncode,
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"calls": calls.read_text(encoding="utf-8").splitlines() if calls.exists() else [],
+			"outputs": output.read_text(encoding="utf-8").splitlines(),
+		}
+
+
+IHOLD_HELD_OUTPUTS = [
+	"judge_handled=true",
+	"judge_action=orchestrator_integration_hold",
+	"judge_skip_reason=orchestrator_integration_pr",
+]
+
+
+@pytest.mark.parametrize(
+	("action", "is_final", "merge_type"),
+	[
+		("merge", "false", True),
+		("merge_with_followup", "false", True),
+		("fix", "true", True),
+		("close_and_reissue", "false", False),
+	],
+)
+def test_integration_hold_held_actions(action: str, is_final: str, merge_type: bool) -> None:
+	result = _ihold_run(action, is_final=is_final)
+	assert result["rc"] == 0, result["stderr"]
+	assert "FELLTHROUGH" not in result["stdout"]
+	assert result["outputs"] == IHOLD_HELD_OUTPUTS
+	assert (
+		f"AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=42 head_sha={IHOLD_SHA} action=skip reason=orchestrator_integration_pr judge_action={action}"
+		in result["stdout"]
+	)
+	comment_calls = [c for c in result["calls"] if c.startswith("gh_retry gh api repos/owner/repo/issues/42/comments")]
+	assert len(comment_calls) == 1
+	assert "action held for the orchestrator final merge" in comment_calls[0]
+	assert f"**{action}**" in comment_calls[0]
+	assert not any(c.startswith("phase_swap") for c in result["calls"])
+	assert not any("ai:ready-to-merge" in c for c in result["calls"])
+	assert not any("pr merge" in c or "pr close" in c for c in result["calls"])
+	status_calls = [c for c in result["calls"] if c.startswith("status ")]
+	if merge_type:
+		assert status_calls == [f"status owner/repo {IHOLD_SHA} success review-blocked judge approved; orchestrator owns the final merge"]
+		# The success status follows the security merge gate, as elsewhere.
+		assert result["calls"].index("security_gate") < result["calls"].index(status_calls[0])
+	else:
+		assert status_calls == []
+		assert "security_gate" not in result["calls"]
+
+
+def test_integration_hold_security_gate_hold_posts_no_status() -> None:
+	# The hold still applies, but a held security gate keeps head-gate pending.
+	result = _ihold_run("merge", security_gate_rc=1)
+	assert result["outputs"] == IHOLD_HELD_OUTPUTS
+	assert "FELLTHROUGH" not in result["stdout"]
+	assert "security_gate" in result["calls"]
+	assert not any(c.startswith("status ") for c in result["calls"])
+
+
+def test_integration_hold_final_fix_comment_says_it_counts_as_merge() -> None:
+	result = _ihold_run("fix", is_final="true")
+	comment = next(c for c in result["calls"] if "issues/42/comments" in c)
+	assert "counts as a merge" in comment
+
+
+def test_integration_hold_status_skipped_for_non_sha_head() -> None:
+	result = _ihold_run("merge", judged_sha="")
+	assert result["outputs"] == IHOLD_HELD_OUTPUTS
+	assert not any(c.startswith("status ") for c in result["calls"])
+	assert "head_sha=unknown" in result["stdout"]
+
+
+@pytest.mark.parametrize(
+	("action", "kwargs"),
+	[
+		("fix", {"is_final": "false"}),
+		("skip", {}),
+		("merge", {"head_ref": "ai/issue-5"}),
+		("close_and_reissue", {"head_ref": "ai/issue-5"}),
+		("merge", {"already_merged": "true"}),
+		("merge", {"head_ref": "orchestrator/project-12-extra", "pattern": "^nomatch/"}),
+	],
+)
+def test_integration_hold_passes_through(action: str, kwargs: dict) -> None:
+	result = _ihold_run(action, **kwargs)
+	assert result["rc"] == 0, result["stderr"]
+	assert "FELLTHROUGH" in result["stdout"]
+	assert result["outputs"] == []
+	assert result["calls"] == []
+
+
+def test_integration_hold_custom_pattern_holds() -> None:
+	result = _ihold_run("merge", head_ref="release/int-x", pattern="^release/int-")
+	assert result["outputs"] == IHOLD_HELD_OUTPUTS
+	assert "FELLTHROUGH" not in result["stdout"]
+
+
+@pytest.mark.parametrize("pattern", ["[", ""])
+def test_integration_hold_invalid_or_empty_pattern_falls_back(pattern: str) -> None:
+	result = _ihold_run("merge", head_ref="orchestrator/project-7", pattern=pattern)
+	assert result["outputs"] == IHOLD_HELD_OUTPUTS
+	assert "::warning::ORCH_INTEGRATION_BRANCH_PATTERN" in result["stdout"]
+	assert "falling back to canonical" in result["stdout"]
+
+
+def test_integration_hold_invalid_pattern_fallback_does_not_hold_other_refs() -> None:
+	result = _ihold_run("merge", head_ref="ai/issue-5", pattern="[")
+	assert "FELLTHROUGH" in result["stdout"]
+	assert result["outputs"] == []
+
+
+def test_integration_hold_hold_position_in_script() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	updater = text.index("reason=updater_pr_verify_job_owns_merge")
+	begin = text.index(IHOLD_BEGIN_MARKER)
+	end = text.index(IHOLD_END_MARKER)
+	security = text.index('&& ! rb_security_merge_gate; then', begin)
+	assert updater < begin < end < security
+	tail = text[end:]
+	head = text[:begin]
+	# No merge or close runs between the judge decision post and the hold.
+	decision = head.rindex('"${POST_REVIEW_HEAD_REF}" || true')
+	between = text[decision:begin]
+	assert "gh pr merge" not in between and "gh pr close" not in between
+	assert "gh pr merge" in tail
+
+
+def test_integration_hold_fallback_regex_matches_auto_merge_suppressor() -> None:
+	canonical = '=~ ^orchestrator/project-([0-9]+)$ ]]'
+	assert canonical in IHOLD_AUTO_MERGE_SCRIPT.read_text(encoding="utf-8")
+	block = SCRIPT.read_text(encoding="utf-8")
+	hold = block[block.index(IHOLD_BEGIN_MARKER):block.index(IHOLD_END_MARKER)]
+	assert canonical in hold
+
+
+def test_integration_hold_iteration_summary_records_any_judge_action() -> None:
+	text = IHOLD_ITERATION_SUMMARY.read_text(encoding="utf-8")
+	assert 'judge_action = env("JUDGE_ACTION").strip()' in text
+	assert "rb_judge_{judge_action or 'handled'}" in text
+	assert '"status": judge_action or "handled"' in text
+	# No allowlist of judge actions that would reject the new value.
+	assert "orchestrator_integration_hold" not in text
+	assert not re.search(r"judge_action\s+(not\s+)?in\s*[\(\[\{]", text)
+
+
+def _ihold_telegram_step() -> str:
+	workflow = IHOLD_WORKFLOW.read_text(encoding="utf-8")
+	start = workflow.index("      - name: Telegram review-blocked judge decision")
+	end = workflow.index("      - name: Check PR state before failure alerts", start)
+	return workflow[start:end]
+
+
+def _ihold_telegram_sends(env: dict[str, str]) -> list[str]:
+	step = _ihold_telegram_step()
+	body = step[step.index("        run: |\n") + len("        run: |\n"):]
+	body = textwrap.dedent(body)
+	body = re.sub(r"\$\{\{[^}]*\}\}", "x", body)
+	with tempfile.TemporaryDirectory() as tmp:
+		log = Path(tmp) / "tg.log"
+		(Path(tmp) / "tg_helpers.sh").write_text(
+			'tg_send_tracked() { printf \'%s\\t%s\\n\' "$3" "$(printf \'%s\' "$2" | head -n1)" >> "${TG_LOG}"; }\n',
+			encoding="utf-8",
+		)
+		run_env = {
+			"PATH": "/usr/bin:/bin",
+			"SUPPORT_SCRIPTS_DIR": tmp,
+			"TG_LOG": str(log),
+			"PR_NUMBER": "7",
+			"MAX_AUTOFIX_ITERATIONS": "5",
+		}
+		run_env.update(env)
+		result = subprocess.run(["bash", "-c", body], env=run_env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+
+def test_integration_hold_telegram_case_arm_precedes_default() -> None:
+	step = _ihold_telegram_step()
+	arm = step.index("orchestrator_integration_hold)")
+	default = step.index("              *)\n                MSG=\"Review-blocked judge action: ${JUDGE_ACTION}\"")
+	assert arm < default
+
+
+@ihold_needs_jq
+def test_integration_hold_telegram_hold_sends_debug() -> None:
+	sends = _ihold_telegram_sends(
+		{
+			"JUDGE_HANDLED": "true",
+			"JUDGE_ACTION": "orchestrator_integration_hold",
+			"JUDGE_SKIP_REASON": "orchestrator_integration_pr",
+		}
+	)
+	assert len(sends) == 1
+	level, first_line = sends[0].split("\t", 1)
+	assert level == "DEBUG"
+	assert "orchestrator integration PR" in first_line
+	assert not first_line.startswith("Review-blocked judge action:")

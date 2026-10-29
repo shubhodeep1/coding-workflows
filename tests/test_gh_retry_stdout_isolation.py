@@ -409,3 +409,174 @@ gh_review_pr_state o/r 7
 	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
 	assert result.returncode == 0 and result.stdout == "open\n", result.stderr
 	assert call_log.read_text().count("called") == 2
+
+
+# --- Issue #8095 (SEC-001 / SEC-002): diagnostics never print argument values
+# or API response content. -------------------------------------------------
+
+SECRET = "SECRET_SENTINEL"
+
+
+def _summary(tmp_path: Path, *args: str) -> str:
+	script = f"source '{GH_HELPERS}'\n_gh_cmd_log_summary \"$@\""
+	result = subprocess.run(
+		["bash", "-c", script, "summary", *args],
+		capture_output=True, text=True, cwd=tmp_path, timeout=30,
+	)
+	assert result.returncode == 0, result.stderr
+	return result.stdout
+
+
+def test_create_failure_reports_endpoint_and_flag_names_only(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1)])
+	result = _run(
+		tmp_path, env, f"gh_retry gh api repos/o/r/issues/1/comments -f body={SECRET}",
+	)
+	assert result.returncode == 1
+	assert _calls(tmp_path) == 1
+	assert (
+		"single attempt for non-idempotent create: gh api repos/o/r/issues/1/comments (flags: -f)"
+		in result.stderr
+	)
+	assert "gh command failed after 1 attempts: gh api repos/o/r/issues/1/comments" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+
+
+def test_permanent_failure_reports_summary_not_body(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(NOT_FOUND_BODY, NOT_FOUND_STDERR, 1)])
+	result = _run(
+		tmp_path, env, f"gh_retry gh api -X PATCH repos/o/r/issues/1 -f body={SECRET}",
+	)
+	assert result.returncode == 1
+	assert "not retrying: gh api repos/o/r/issues/1 (flags: -X -f)" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+
+
+def test_non_api_subcommand_reports_number_and_flag_names(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1)])
+	result = _run(tmp_path, env, f"gh_retry gh issue comment 5 --body {SECRET}")
+	assert result.returncode == 1
+	assert "gh issue comment 5 (flags: --body)" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+
+
+def test_retry_to_file_does_not_echo_field_values(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1)])
+	env["GH_RETRY_MAX_ATTEMPTS"] = "2"
+	out_file = tmp_path / "out.json"
+	result = _run(
+		tmp_path,
+		env,
+		f"gh_retry_to_file --idempotent '{out_file}' gh api -X PATCH repos/o/r/issues/1 -f body={SECRET}",
+	)
+	assert result.returncode == 1
+	assert _calls(tmp_path) == 2
+	assert "gh command failed after 2 attempts: gh api repos/o/r/issues/1 (flags: -X -f)" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+
+
+@pytest.mark.parametrize(
+	("payload", "category"),
+	[("PRIVATE_SENTINEL not json\nsecond line\n", "invalid_json"), ("", "empty")],
+)
+def test_invalid_json_response_is_summarised_not_printed(
+	tmp_path: Path, payload: str, category: str,
+) -> None:
+	import hashlib
+
+	env = _setup(tmp_path, [(payload, "", 0)])
+	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
+	out_file = tmp_path / "out.json"
+	result = _run(
+		tmp_path, env, f"gh_api_json_to_file '{out_file}' gh api repos/o/r/issues/1 -f q={SECRET}",
+	)
+	assert result.returncode == 1
+	raw = payload.encode("utf-8")
+	digest = hashlib.sha256(raw).hexdigest()[:12]
+	assert (
+		f"gh api response summary (attempt 1/1): bytes={len(raw)} sha256={digest} category={category}"
+		in result.stderr
+	)
+	assert "PRIVATE_SENTINEL" not in result.stderr + result.stdout
+	assert "Raw response (first 50 lines)" not in result.stderr
+	assert "gh api failed to return valid JSON after 1 attempts: gh api repos/o/r/issues/1 (flags: -f)" in result.stderr
+	assert SECRET not in result.stderr
+	assert out_file.read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.parametrize(
+	("command", "expected"),
+	[
+		(f"gh_retry gh api repos/o/r/issues/1 -f body={SECRET}", "gh api repos/o/r/issues/1 (flags: -f)"),
+		(f"_safe_gh_jq repos/o/r/issues/1 --jq .{SECRET}", "gh api repos/o/r/issues/1 (flags: --jq)"),
+	],
+)
+def test_mktemp_failure_messages_are_redacted(tmp_path: Path, command: str, expected: str) -> None:
+	env = _setup(tmp_path, [(ISSUE_BODY, "", 0)])
+	result = _run(tmp_path, env, f"mktemp() {{ return 1; }}\n{command}")
+	assert result.returncode == 1
+	assert f"aborting without running: {expected}" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+	assert _calls(tmp_path) == 0
+
+
+def test_summary_drops_query_and_fragment(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "api", f"repos/o/r/issues?per_page=100&q={SECRET}#x", "--paginate")
+	assert out == "gh api repos/o/r/issues (flags: --paginate)"
+
+
+def test_summary_breaks_workflow_command_markers(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "api", "repos/o/r/::set-output", "-H", "x::y")
+	assert "::" not in out
+	assert out.startswith("gh api repos/o/r/")
+
+
+def test_summary_is_bounded(tmp_path: Path) -> None:
+	flags = []
+	for index in range(40):
+		flags += [f"--flag-number-{index}", "v"]
+	out = _summary(tmp_path, "gh", "api", "repos/" + "a" * 500, *flags)
+	assert len(out) <= 200
+	assert "\n" not in out
+
+
+def test_summary_keeps_flag_names_without_glued_values(tmp_path: Path) -> None:
+	assert _summary(tmp_path, "gh", "api", "--method=POST", "repos/o/r/x") == "gh api repos/o/r/x (flags: --method)"
+	assert _summary(tmp_path, "gh", "api", "-XPOST", "repos/o/r/x", f"-fbody={SECRET}") == "gh api repos/o/r/x (flags: -X -f)"
+	assert _summary(tmp_path, "gh", "api", "graphql", "-f", f"query={SECRET}") == "gh api graphql (flags: -f)"
+
+
+def test_summary_names_endpoint_for_safe_gh_jq_wrapper(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "_safe_gh_jq", f"repos/o/r/pulls/7?q={SECRET}", "--jq", f".{SECRET}")
+	assert out == "_safe_gh_jq gh api repos/o/r/pulls/7 (flags: --jq)"
+	assert _summary(tmp_path, "_safe_gh_jq", "--paginate", "--slurp", "repos/o/r/x") == (
+		"_safe_gh_jq gh api repos/o/r/x (flags: --paginate --slurp)"
+	)
+
+
+def test_summary_of_other_commands_and_positionals(tmp_path: Path) -> None:
+	assert _summary(tmp_path, "curl", f"https://x/{SECRET}", "-H", SECRET) == "curl (flags: -H)"
+	assert _summary(tmp_path, "evil;cmd", SECRET) == "<command>"
+	assert _summary(tmp_path, "gh", "pr", "view", f"branch-{SECRET}", "--json", "x") == "gh pr view (flags: --json)"
+	assert _summary(tmp_path, "gh", "issue", "edit", "42", "--add-label", "bug") == "gh issue edit 42 (flags: --add-label)"
+	assert _summary(tmp_path) == ""
+	assert _summary(tmp_path, "gh") == "gh"
+
+
+def test_summary_never_logs_dash_prefixed_flag_values(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "issue", "comment", "5", "--body", "--secret123", "--repo", "o/r")
+	assert out == "gh issue comment 5 (flags: --body --repo)"
+	assert "secret123" not in out
+	assert _summary(tmp_path, "gh", "api", "repos/o/r/x", "-f", "-secretfield") == "gh api repos/o/r/x (flags: -f)"
+
+
+def test_summary_finds_number_after_flags(tmp_path: Path) -> None:
+	assert _summary(tmp_path, "gh", "issue", "view", "--repo", "o/r", "42") == "gh issue view 42 (flags: --repo)"
+	assert _summary(tmp_path, "gh", "pr", "view", "--repo", "o/r", "br", "7") == "gh pr view (flags: --repo)"
+
+
+def test_summary_unknown_flag_never_logs_dash_prefixed_value(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "issue", "create", "--project", "--PRIVATE_SENTINEL", "--title", "t")
+	assert out == "gh issue create (flags: --project --title)"
+	assert "PRIVATE_SENTINEL" not in out
+	assert _summary(tmp_path, "gh", "api", "--paginate", "--slurp", "repos/o/r/x") == "gh api repos/o/r/x (flags: --paginate --slurp)"

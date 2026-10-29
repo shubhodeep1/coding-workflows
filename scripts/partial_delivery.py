@@ -19,6 +19,17 @@ usage or I/O errors):
   pr-section --plan-file F --issue N
   pr-body-status --body-file F --issue N
   remaining-comment --body-file F --issue N --pr P
+  heal-counterfactual --plan-file F [--gate-flag V]
+
+``heal-counterfactual`` (issue #8249) reads the single
+``HEAL_COUNTERFACTUAL:`` line a workflow-heal plan ends its
+``## Counterfactual check`` with and decides whether the plan may be
+auto-approved. ``plan.yml`` and the poller's ``_plan_auto_approval_gate``
+both call it, so the two callers cannot drift apart. A ``PARTIAL`` line
+lists the jobs that would still fail; each must appear in a bullet of the
+plan's ``## Deferred scope`` section (read with ``parse_plan``), otherwise
+the result is ``FAIL``. Every other outcome than ``PASS`` or a fully
+deferred ``PARTIAL`` holds.
 
 Standard library only; run as ``python3 -I -B``.
 """
@@ -39,6 +50,23 @@ FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 BULLET_RE = re.compile(r"^[ \t]{0,3}[-*][ \t]+(\S.*)$")
 PR_MARKER_RE = re.compile(r"^<!--[ \t]*ai:partial-delivery:v1[ \t]+issue=(\d+)[ \t]*-->$")
 PR_SECTION_HEADING = "### Deferred scope (not delivered by this PR)"
+
+# Heal-route counterfactual line (issue #8249). Upper-case token at the start
+# of an unfenced line; a mention inside prose or a code fence does not count.
+# At most 3 leading spaces (as FENCE_RE): a line indented by 4+ spaces or a tab
+# is a Markdown indented code block, so an example there is not the marker.
+HEAL_CF_LINE_RE = re.compile(r"^[ ]{0,3}HEAL_COUNTERFACTUAL:[ \t]*(.*?)[ \t]*$")
+HEAL_CF_VALUE_RE = re.compile(r"^(PASS|PARTIAL|FAIL|UNVERIFIED)(?:[ \t]*(:)[ \t]*(.*))?$")
+# The line counts only inside a "## Counterfactual check" section (to the next
+# heading of the same or a shallower level). Only a level-2 heading opens it,
+# as the prompt requires; a deeper "### Counterfactual check" holds.
+HEAL_CF_HEADING_RE = re.compile(r"^[ ]{0,3}(##)[ \t]+counterfactual[ \t]+check[ \t]*:?[ \t]*$", re.IGNORECASE)
+# Up to 3 leading spaces, as HEAL_CF_LINE_RE: an indented ATX heading still
+# closes the section (CommonMark).
+HEAL_CF_ANY_HEADING_RE = re.compile(r"^[ ]{0,3}(#{1,6})(?:[ \t]|$)")
+HEAL_CF_MAX_JOBS = 20
+HEAL_CF_MAX_JOB_CHARS = 200
+HEAL_CF_MAX_LINE_CHARS = 300
 
 # Same rule as scripts/auto_decisions.py ISSUE_REF_RE: a word joiner after
 # "#" keeps "#<digits>" from referencing or auto-closing an issue.
@@ -149,6 +177,148 @@ def parse_plan(text: str) -> dict:
 	return _result("partial", items)
 
 
+def _unfenced_lines(lines: list[str]) -> list[str]:
+	"""Return the lines outside code fences (same fence rule as parse_plan).
+
+	An unclosed fence hides everything after it, which makes a gate built on
+	this fail closed.
+	"""
+	fence = ""
+	kept: list[str] = []
+	for line in lines:
+		fence_match = FENCE_RE.match(line)
+		if fence_match:
+			marker = fence_match.group(1)
+			if not fence:
+				fence = marker[0] * len(marker)
+			elif (marker[0] == fence[0] and len(marker) >= len(fence)
+				and not line[fence_match.end():].strip()):
+				# CommonMark: only a bare marker closes a fence; "```text"
+				# inside an open fence stays fenced.
+				fence = ""
+			continue
+		if fence:
+			continue
+		kept.append(line)
+	return kept
+
+
+def normalize_heal_counterfactual_flag(value: str | None) -> tuple[bool, bool]:
+	"""Return (gate_on, flag_invalid) for HEAL_COUNTERFACTUAL_GATE_ENABLED.
+
+	Unset, empty and ``true`` turn the gate on, ``false`` turns it off, and any
+	other value turns it on and is reported as invalid.
+	"""
+	normalized = str(value or "").strip().lower()
+	if normalized in ("", "true"):
+		return True, False
+	if normalized == "false":
+		return False, False
+	return True, True
+
+
+def _heal_counterfactual_display(text: str) -> str:
+	return sanitize_item(text)[:HEAL_CF_MAX_LINE_CHARS]
+
+
+def _evaluate_heal_counterfactual(text: str, lines: list[str]) -> dict:
+	found: list[str] = []
+	in_section: list[bool] = []
+	section_level = 0
+	for line in _unfenced_lines(lines):
+		heading = HEAL_CF_ANY_HEADING_RE.match(line)
+		if heading:
+			level = len(heading.group(1))
+			cf_heading = HEAL_CF_HEADING_RE.match(line)
+			if cf_heading:
+				section_level = len(cf_heading.group(1))
+			elif section_level and level <= section_level:
+				section_level = 0
+			continue
+		match = HEAL_CF_LINE_RE.match(line)
+		if match:
+			found.append(match.group(1))
+			in_section.append(bool(section_level))
+	outcome = {"result": "missing", "reason": "no_line", "line": "", "jobs": [], "unmatched_jobs": []}
+	if not found:
+		return outcome
+	outcome["line"] = _heal_counterfactual_display("HEAL_COUNTERFACTUAL: " + found[0])
+	if len(found) > 1:
+		outcome["reason"] = "duplicate_line"
+		return outcome
+	if not in_section[0]:
+		# The line must end the plan's "## Counterfactual check" section; a
+		# marker elsewhere (or with no such section) does not count.
+		outcome["reason"] = "outside_counterfactual_section"
+		return outcome
+	value_match = HEAL_CF_VALUE_RE.match(found[0])
+	if value_match is None:
+		outcome["reason"] = "malformed_line"
+		return outcome
+	verb, colon, detail = value_match.group(1), value_match.group(2), (value_match.group(3) or "").strip()
+	if verb == "PASS":
+		if colon:
+			outcome["reason"] = "malformed_line"
+			return outcome
+		outcome.update(result="PASS", reason="pass")
+		return outcome
+	if verb in ("FAIL", "UNVERIFIED"):
+		if not detail:
+			outcome["reason"] = "malformed_line"
+			return outcome
+		outcome.update(result=verb, reason=verb.lower())
+		return outcome
+	# PARTIAL: a comma-separated list of the jobs that would still fail.
+	names = [name.strip() for name in detail.split(",")] if detail else []
+	outcome["jobs"] = [_heal_counterfactual_display(name) for name in names[:HEAL_CF_MAX_JOBS] if name]
+	if (not colon or not names or any(not name for name in names) or len(names) > HEAL_CF_MAX_JOBS
+		or any(len(name) > HEAL_CF_MAX_JOB_CHARS for name in names)):
+		outcome.update(result="FAIL", reason="partial_job_list_invalid")
+		return outcome
+	deferred = parse_plan(text)
+	if deferred["status"] != "partial":
+		outcome.update(result="FAIL", reason="deferred_scope_missing")
+		return outcome
+	items = [item.casefold() for item in deferred["items"]]
+	# Whole-token match: "build" is not deferred by a bullet naming "build-image".
+	unmatched = [name for name in names if not any(
+		re.search(r"(?<![\w-])" + re.escape(sanitize_item(name).casefold()) + r"(?![\w-])", item) for item in items)]
+	if unmatched:
+		outcome.update(result="FAIL", reason="partial_jobs_not_deferred",
+			unmatched_jobs=[_heal_counterfactual_display(name) for name in unmatched])
+		return outcome
+	outcome.update(result="PARTIAL", reason="partial_jobs_deferred")
+	return outcome
+
+
+def parse_heal_counterfactual(text: str, gate_flag: str | None = "true") -> dict:
+	"""Decide a workflow-heal plan's auto-approval from its counterfactual line.
+
+	Returns ``{gate, flag_invalid, result, decision, reason, line, jobs,
+	unmatched_jobs}``. ``result`` is the effective value (one of PASS,
+	PARTIAL, FAIL, UNVERIFIED, missing); only PASS and a fully deferred
+	PARTIAL approve. With the gate off the decision is ``approve`` and the
+	reason ``gate_disabled``, but the result is still reported for logs.
+	"""
+	gate_on, flag_invalid = normalize_heal_counterfactual_flag(gate_flag)
+	lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+	outcome = _evaluate_heal_counterfactual(str(text or ""), lines)
+	decision = "approve" if outcome["result"] in ("PASS", "PARTIAL") else "hold"
+	reason = outcome["reason"]
+	if not gate_on:
+		decision, reason = "approve", "gate_disabled"
+	return {
+		"gate": "on" if gate_on else "off",
+		"flag_invalid": flag_invalid,
+		"result": outcome["result"],
+		"decision": decision,
+		"reason": reason,
+		"line": outcome["line"],
+		"jobs": outcome["jobs"],
+		"unmatched_jobs": outcome["unmatched_jobs"],
+	}
+
+
 def pr_section(items: list[str], issue: int) -> str:
 	lines = ["", marker_line(issue), PR_SECTION_HEADING, ""]
 	lines += [f"- {sanitize_item(item)}" for item in items]
@@ -219,6 +389,9 @@ def build_parser() -> argparse.ArgumentParser:
 	comment.add_argument("--body-file", required=True)
 	comment.add_argument("--issue", required=True, type=int)
 	comment.add_argument("--pr", required=True, type=int)
+	counterfactual = sub.add_parser("heal-counterfactual")
+	counterfactual.add_argument("--plan-file", required=True)
+	counterfactual.add_argument("--gate-flag", default="true")
 	return parser
 
 
@@ -241,6 +414,8 @@ def main(argv: list[str] | None = None) -> int:
 			if result["status"] != "partial":
 				return 0
 			sys.stdout.write(render_remaining_comment(result["items"], args.issue, args.pr))
+		elif args.command == "heal-counterfactual":
+			print(json.dumps(parse_heal_counterfactual(_read(args.plan_file), args.gate_flag)))
 	except OSError as exc:
 		print(f"partial_delivery: cannot read input: {exc.__class__.__name__}", file=sys.stderr)
 		return 2

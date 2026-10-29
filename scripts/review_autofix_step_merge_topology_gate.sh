@@ -88,7 +88,7 @@ if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
 fi
 
 git config user.name "codex-bot" 2>/dev/null || true
-git config user.email "codex@users.noreply.github.com" 2>/dev/null || true
+git config user.email "codex-bot@users.noreply.invalid" 2>/dev/null || true
 
 MERGE_STASH="$(mktemp -d 2>/dev/null || printf '')"
 if [ -z "${MERGE_STASH}" ] || [ ! -d "${MERGE_STASH}" ]; then

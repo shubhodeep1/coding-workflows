@@ -117,6 +117,7 @@ if m:
         sys.stderr.write("HTTP 404: pull %d not found\\n" % pr_num)
         sys.exit(1)
     body = {{"number": pr_num,
+            "mergeable_state": pr.get("mergeable_state", "clean"),
             "head": {{"sha": pr["head_sha"]}},
             "base": {{"ref": pr["base_ref"]}}}}
     if jq:
@@ -142,6 +143,27 @@ if m:
     body = {{"required_status_checks":
              {{"contexts": prot.get("required_status_checks_contexts", [])}}}}
     sys.stdout.write(json.dumps(body))
+    sys.exit(0)
+
+# repos/<owner>/<repo>/rules/branches/<branch>
+m = re.match(r"^repos/[^/]+/[^/]+/rules/branches/([^?]+)(\\?.*)?$", path or "")
+if m:
+    rules = state.get("rules", {{}}).get(m.group(1), [])
+    if rules == "fail":
+        sys.stderr.write("HTTP 500: rules lookup failed\\n")
+        sys.exit(1)
+    body = [{{"type": "deletion"}}]
+    if rules:
+        body.append({{"type": "required_status_checks",
+                     "parameters": {{"required_status_checks": [{{"context": c}} for c in rules]}}}})
+    sys.stdout.write(json.dumps(body))
+    sys.exit(0)
+
+# repos/<owner>/<repo>/commits/<sha>/status
+m = re.match(r"^repos/[^/]+/[^/]+/commits/([^/]+)/status(\\?.*)?$", path or "")
+if m:
+    statuses = state.get("statuses", {{}}).get(m.group(1), [])
+    sys.stdout.write(json.dumps({{"state": "pending", "statuses": statuses}}))
     sys.exit(0)
 
 # repos/<owner>/<repo>/commits/<sha>/check-runs
@@ -861,3 +883,129 @@ def test_summarize_blockers_includes_cancelled_required_check(tmp_path):
 	out = result.stdout.strip()
 	assert "review / gate (cancelled)" in out
 	assert "CI (" not in out
+
+
+# ---------------------------------------------------------------------------
+# Ruleset-required checks — _pr_ruleset_required_check_blockers
+# (shubhodeep1/fun-token-multi-chain#579: a ruleset-required commit status
+# failed on the final PR; the check-runs gate could not see it).
+# ---------------------------------------------------------------------------
+
+_RULESET_SHA = "7ca98c4747ea6d5b73c95c46501b8483cd037b89"
+_RULESET_PROBE = (
+	f'_pr_ruleset_required_check_blockers "{_RULESET_SHA}" main; '
+	'echo "EXIT=$? SUMMARY=${PR_RULESET_BLOCKERS_SUMMARY}"'
+)
+
+
+def _api_paths(tmp_path):
+	return [
+		next((a for a in c["argv"] if a.startswith("repos/")), "")
+		for c in _read_gh_calls(tmp_path)
+	]
+
+
+def test_ruleset_blockers_none_configured_costs_one_call(tmp_path):
+	_make_gh_stub(tmp_path, gh_state={"rules": {"main": []}})
+	result = _run_shell(tmp_path, _RULESET_PROBE)
+	assert result.returncode == 0, result.stderr
+	assert "EXIT=0 SUMMARY=" in result.stdout
+	# Sourcing the poller issues its own calls; count only the helper's.
+	paths = [p for p in _api_paths(tmp_path) if "/rules/" in p or _RULESET_SHA in p]
+	assert paths == ["repos/test-owner/test-repo/rules/branches/main?per_page=100"], paths
+
+
+def test_ruleset_blockers_reports_failing_required_commit_status(tmp_path):
+	_make_gh_stub(tmp_path, gh_state={
+		"rules": {"main": ["coding-workflows/workflow-integrity"]},
+		"statuses": {_RULESET_SHA: [
+			{"context": "coding-workflows/workflow-integrity", "state": "failure"},
+			{"context": "orchestrator/integration-pr-not-ready", "state": "success"},
+		]},
+	})
+	result = _run_shell(tmp_path, _RULESET_PROBE)
+	assert result.returncode == 0, result.stderr
+	assert "EXIT=1 SUMMARY=coding-workflows/workflow-integrity (failure)" in result.stdout
+	# Every required context had a commit status, so check-runs are not fetched.
+	assert not any("/check-runs" in p for p in _api_paths(tmp_path))
+
+
+def test_ruleset_blockers_passes_success_status(tmp_path):
+	_make_gh_stub(tmp_path, gh_state={
+		"rules": {"main": ["coding-workflows/workflow-integrity"]},
+		"statuses": {_RULESET_SHA: [
+			{"context": "coding-workflows/workflow-integrity", "state": "success"},
+		]},
+	})
+	result = _run_shell(tmp_path, _RULESET_PROBE)
+	assert result.returncode == 0, result.stderr
+	assert "EXIT=0 SUMMARY=" in result.stdout
+
+
+def test_ruleset_blockers_falls_back_to_check_runs_and_flags_missing(tmp_path):
+	_make_gh_stub(tmp_path, gh_state={
+		"rules": {"main": ["CI", "Lint", "Never Reported"]},
+		"statuses": {_RULESET_SHA: []},
+		"check_runs": {_RULESET_SHA: [
+			{"id": 1, "name": "CI", "status": "completed", "conclusion": "failure"},
+			{"id": 2, "name": "CI", "status": "completed", "conclusion": "success"},
+			{"id": 3, "name": "Lint", "status": "in_progress", "conclusion": None},
+		]},
+	})
+	result = _run_shell(tmp_path, _RULESET_PROBE)
+	assert result.returncode == 0, result.stderr
+	# The newest CI run passed; Lint is still running; the third never reported.
+	assert "EXIT=1 SUMMARY=Lint (pending), Never Reported (missing)" in result.stdout
+
+
+def test_ruleset_blockers_fetches_check_runs_when_other_statuses_exist(tmp_path):
+	# A required context backed only by a check-run must not be reported as
+	# missing just because the head carries some unrelated commit status.
+	_make_gh_stub(tmp_path, gh_state={
+		"rules": {"main": ["CI"]},
+		"statuses": {_RULESET_SHA: [
+			{"context": "orchestrator/integration-pr-not-ready", "state": "success"},
+		]},
+		"check_runs": {_RULESET_SHA: [
+			{"id": 1, "name": "CI", "status": "completed", "conclusion": "success"},
+		]},
+	})
+	result = _run_shell(tmp_path, _RULESET_PROBE)
+	assert result.returncode == 0, result.stderr
+	assert "EXIT=0 SUMMARY=" in result.stdout
+	assert any("/check-runs" in p for p in _api_paths(tmp_path))
+
+
+def test_ruleset_blockers_lookup_failure_returns_two(tmp_path):
+	_make_gh_stub(tmp_path, gh_state={"rules": {"main": "fail"}})
+	result = _run_shell(tmp_path, _RULESET_PROBE)
+	assert result.returncode == 0, result.stderr
+	assert "EXIT=2 SUMMARY=" in result.stdout
+
+
+def test_alert_names_ruleset_blocker_when_pr_blocked(tmp_path):
+	_make_gh_stub(tmp_path, gh_state={
+		"pr": {"596": {"head_sha": _RULESET_SHA, "base_ref": "main", "mergeable_state": "blocked"}},
+		"rules": {"main": ["coding-workflows/workflow-integrity"]},
+		"statuses": {_RULESET_SHA: [
+			{"context": "coding-workflows/workflow-integrity", "state": "failure"},
+		]},
+		"check_runs": {_RULESET_SHA: []},
+	})
+	state_blob = {
+		"final_merge_pr": 596,
+		"final_merge_ineligible_blocked_at_sha": _RULESET_SHA,
+		"final_merge_ineligible_first_blocked_at_utc": 0,
+		"final_merge_ineligible_alert_sent_for_sha": "",
+	}
+	result = _run_shell(
+		tmp_path,
+		'_check_final_merge_ineligibility_alert; echo "EXIT=$?"',
+		state_blob=state_blob,
+		env_overrides={"ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS": "6"},
+	)
+	assert result.returncode == 0, result.stderr
+	assert "EXIT=0" in result.stdout
+	tracking_log = _read_log(tmp_path / "tracking_comments.log")
+	assert "ruleset: coding-workflows/workflow-integrity (failure)" in tracking_log
+	assert "ruleset: coding-workflows/workflow-integrity (failure)" in _read_log(tmp_path / "tg_notify.log")

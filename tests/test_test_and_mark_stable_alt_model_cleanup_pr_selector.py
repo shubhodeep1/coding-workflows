@@ -173,6 +173,9 @@ def test_alt_model_wait_posts_approved_behind_once_flag() -> None:
 	body = _alt_wait_run_body(_read_workflow())
 	assert "DEADLINE=$(( $(date +%s) + 4500 ))" in body
 	assert "ALT_APPROVED_POSTED=0" in body
+	# The 600s re-post for an issue still awaiting approval must stay.
+	assert "ALT_APPROVED_POSTED_AT=0" in body
+	assert "ALT_APPROVED_POSTED_AT )) -ge 600 ]" in body
 	flag_check = body.index('if [ "${ALT_APPROVED_POSTED}" = "0" ]; then')
 	post = body.index('-f body="/approved"')
 	assert flag_check < post

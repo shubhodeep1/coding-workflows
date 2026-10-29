@@ -58,7 +58,7 @@ case "${JUDGE_SKIP_REASON:-}" in
     ;;
   sync_merge_failed)
     BODY_HEADING="AI review/autofix — judge approved merge but \`gh pr merge\` failed"
-    BODY_DETAIL="The review-blocked judge approved this PR and all check-runs had settled, but the synchronous \`gh pr merge --squash\` call failed. Typical causes: branch-protection rules, a merge queue requirement, missing permissions on the GH token, GitHub returning 422, or a concurrent push that changed HEAD. Stall recovery will re-fire the judge; the operator may need to merge manually if the underlying cause is permission/policy."
+    BODY_DETAIL="The review-blocked judge approved this PR and all check-runs had settled, but the synchronous \`gh pr merge\` call failed (\`--squash\`, or \`--merge\` for \`auto/forward-merge-stable-*\` PRs, which must keep a merge commit). Typical causes: branch-protection rules, a merge queue requirement, missing permissions on the GH token, GitHub returning 422, or a concurrent push that changed HEAD. Stall recovery will re-fire the judge; the operator may need to merge manually if the underlying cause is permission/policy."
     ;;
   auto_merge_disabled)
     BODY_HEADING="AI review/autofix — judge approved merge but auto-merge is disabled"

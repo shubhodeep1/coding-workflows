@@ -617,6 +617,58 @@ def _write_exec(path: Path, body: str) -> None:
 	path.chmod(0o755)
 
 
+# The poller's real `tg_cleanup_msgs` runs on every clean project completion
+# and calls `curl_gh_api`, which runs `curl` with no time limit. Without this
+# shim a poller test sent a live HTTPS request to api.github.com, and a slow
+# network hung tests past the harness timeout (CI run 40182895760). The shim
+# records each call (Authorization header, -u/--user and -b/--cookie values
+# redacted; option and header names matched case-insensitively) to
+# ${CURL_CALL_CAPTURE}, prints nothing and exits 7 ("couldn't connect"), the
+# same fast failure a runner without network gives.
+_POLLER_CURL_SHIM = r'''#!/usr/bin/env bash
+shopt -s nocasematch
+curl_shim_args=()
+curl_shim_redact_next=false
+curl_shim_redact_user=false
+for curl_shim_arg in "$@"; do
+	if [ "${curl_shim_redact_user}" = "true" ]; then
+		curl_shim_redact_user=false
+		curl_shim_arg="[redacted]"
+	fi
+	if [ "${curl_shim_redact_next}" = "true" ]; then
+		curl_shim_redact_next=false
+		case "${curl_shim_arg}" in
+			[Aa]uthorization:*) curl_shim_arg="Authorization: [redacted]" ;;
+		esac
+	fi
+	case "${curl_shim_arg}" in
+		-H|--header) curl_shim_redact_next=true ;;
+		--header=[Aa]uthorization:*) curl_shim_arg="--header=Authorization: [redacted]" ;;
+		-H[Aa]uthorization:*) curl_shim_arg="-HAuthorization: [redacted]" ;;
+		-u|--user) curl_shim_redact_user=true ;;
+		--user=*) curl_shim_arg="--user=[redacted]" ;;
+		-u?*) curl_shim_arg="-u[redacted]" ;;
+		-b|--cookie) curl_shim_redact_user=true ;;
+		--cookie=*) curl_shim_arg="--cookie=[redacted]" ;;
+		-b?*) curl_shim_arg="-b[redacted]" ;;
+	esac
+	curl_shim_args+=("${curl_shim_arg}")
+done
+if [ -n "${CURL_CALL_CAPTURE:-}" ]; then
+	printf '%s\n' "${curl_shim_args[*]}" >> "${CURL_CALL_CAPTURE}" 2>/dev/null || true
+fi
+exit 7
+'''
+
+
+def _write_poller_curl_shim(bin_dir: Path) -> None:
+	"""Put the failing `curl` shim on the sandbox PATH unless one exists."""
+	curl_shim_path = bin_dir / "curl"
+	if curl_shim_path.exists():
+		return
+	_write_exec(curl_shim_path, _POLLER_CURL_SHIM)
+
+
 # V2 framing parsing — keep in sync with scripts/orchestrate_state_v2.py.
 # Tests cannot import the helper module directly because it lives outside
 # `tests/` and the test runner is invoked as a flat script; reimplementing
@@ -882,6 +934,7 @@ def _run_poller(
 	security_audit_exit_code: int = 0,
 	security_audit_stderr: str = "",
 	capture_telegram_calls: bool = False,
+	capture_tg_send_msg: bool = False,
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
 	env_overrides: dict[str, str] | None = None,
@@ -1145,10 +1198,23 @@ esac
 		}
 		security_audit_capture = runtime_dir / "security_audit_capture.json"
 		telegram_cleanup_capture = runtime_dir / "telegram_cleanup_calls.log"
+		curl_call_capture = runtime_dir / "curl_calls.log"
 		telegram_notification_capture = runtime_dir / "telegram_notifications.jsonl"
 		bin_dir.mkdir(parents=True)
 		home_dir.mkdir(parents=True)
 		runtime_dir.mkdir(parents=True)
+		tg_send_msg_capture = runtime_dir / "tg_send_msg_calls.jsonl"
+		if capture_tg_send_msg:
+			# #8232: record untracked tg_send_msg calls (message + level) in a
+			# separate file so telegram_notifications keeps its shape.
+			with (sandbox / "scripts" / "tg_helpers.sh").open("a", encoding="utf-8") as tg_send_msg_helpers_file:
+				tg_send_msg_helpers_file.write(
+					'\ntg_send_msg() {\n'
+					'\t"${REAL_PYTHON_BIN}" -c \'import json, sys; open(sys.argv[1], "a", encoding="utf-8").write(json.dumps({"message": sys.argv[2], "level": sys.argv[3]}) + "\\n")\' '
+					'"%s" "$1" "${2:-CRITICAL}"\n'
+					'\treturn 0\n'
+					'}\n' % tg_send_msg_capture
+				)
 		if capture_telegram_calls:
 			with (sandbox / "scripts" / "tg_helpers.sh").open("a", encoding="utf-8") as telegram_helpers_file:
 				telegram_helpers_file.write(
@@ -1302,7 +1368,7 @@ esac
 									**state,
 									**{
 										pointer_key: _resolve_sandbox_sha_alias(str(state[pointer_key]))
-										for pointer_key in ("security_pass_last_audited_sha", "security_pass_head_sha", "integration_conflict_episode_base_sha")
+										for pointer_key in ("security_pass_last_audited_sha", "security_pass_head_sha", "integration_conflict_episode_base_sha", "validation_last_passed_sha")
 										if isinstance(state.get(pointer_key), str)
 									},
 								}
@@ -1429,7 +1495,15 @@ esac
 			"compare_commit_parent_counts": (
 				None if compare_commit_parent_counts is None else [int(n) for n in compare_commit_parent_counts]
 			),
-			"mock_validation_history_payload": mock_validation_history_payload,
+			# #8232: sandbox SHA aliases resolve in the seeded history SHA.
+			"mock_validation_history_payload": (
+				{
+					**mock_validation_history_payload,
+					"integration_sha": _resolve_sandbox_sha_alias(str(mock_validation_history_payload["integration_sha"])),
+				}
+				if isinstance(mock_validation_history_payload.get("integration_sha"), str)
+				else mock_validation_history_payload
+			),
 			"mock_validation_history_get_exit_code": mock_validation_history_get_exit_code,
 			"mock_validation_history_get_json": mock_validation_history_get_json,
 			"mock_validation_history_append_exit_code": mock_validation_history_append_exit_code,
@@ -1923,6 +1997,9 @@ if args[0] == 'pr' and len(args) >= 3 and args[1] == 'merge':
 		if pr.get('number') == pr_num:
 			if pr.get('mergeable') is False:
 				print('conflict', file=sys.stderr)
+				sys.exit(1)
+			if pr.get('merge_error'):
+				print(pr['merge_error'], file=sys.stderr)
 				sys.exit(1)
 			pr['state'] = 'closed'
 			pr['merged'] = True
@@ -2470,6 +2547,11 @@ if args[0] == 'api':
 			sys.exit(1)
 		issue = get_issue(m.group(1))
 		issue_state = 'closed' if issue.get('closed') else 'open'
+		# Opt-in closed state, state_reason and closed_at (validation harness
+		# hold heal-issue reads, #7913 P2b).
+		issue_ext = (store.get('issue_extra_fields') or {}).get(m.group(1), {})
+		if 'closed' in issue_ext:
+			issue_state = 'closed' if issue_ext.get('closed') else 'open'
 		if jq == '.body':
 			print(issue.get('body', ''))
 		elif jq == '.state':
@@ -2488,7 +2570,8 @@ if args[0] == 'api':
 				'body': issue.get('body', ''),
 				'title': issue.get('title', ''),
 				'state': issue_state,
-				'state_reason': issue.get('state_reason', ''),
+				'state_reason': issue_ext.get('state_reason', issue.get('state_reason', '')),
+				'closed_at': issue_ext.get('closed_at'),
 				'labels': [{'name': l} for l in issue.get('labels', [])],
 			}
 			import subprocess as _sp
@@ -2695,6 +2778,23 @@ if args[0] == 'api':
 		print(json.dumps({'merged': True}))
 		sys.exit(0)
 
+	# Ruleset + combined-status reads for _pr_ruleset_required_check_blockers
+	# (fun-token-multi-chain#579). Served only when a test sets
+	# 'ruleset_required_contexts'; otherwise the legacy '{}' fallback applies.
+	m = re.search(r'/rules/branches/([^?]+)(\?.*)?$', path)
+	if m and 'ruleset_required_contexts' in store:
+		ctxs = store.get('ruleset_required_contexts') or []
+		body = [{'type': 'deletion'}]
+		if ctxs:
+			body.append({'type': 'required_status_checks', 'parameters': {'required_status_checks': [{'context': c} for c in ctxs]}})
+		print(json.dumps(body))
+		sys.exit(0)
+
+	m = re.search(r'/commits/([^/]+)/status(\?.*)?$', path)
+	if m and 'ruleset_required_contexts' in store:
+		print(json.dumps({'state': 'pending', 'statuses': store.get('commit_statuses', {}).get(m.group(1), [])}))
+		sys.exit(0)
+
 	m = re.search(r'/branches/(.+)$', path)
 	if m:
 		encoded_branch = m.group(1)
@@ -2883,6 +2983,11 @@ if args[0] == 'api':
 	if m_commit:
 		files = [{'filename': f} for f in (store.get('commit_files') or {}).get(m_commit.group(1), [])]
 		payload = {'sha': m_commit.group(1), 'files': files}
+		# Opt-in committer date (validation harness hold truncated compare, #7913).
+		commit_date = (store.get('commit_dates') or {}).get(m_commit.group(1))
+		if commit_date:
+			payload['commit'] = {'committer': {'date': commit_date}}
+		save()
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-r', jq], input=json.dumps(payload), capture_output=True, text=True)
@@ -2926,6 +3031,11 @@ if args[0] == 'api':
 	m = re.search(r'^repos/[^/]+/[^/]+/compare/.+\.\.\..+$', path)
 	if m:
 		if store.get('compare_ahead_by_force_error'):
+			sys.stderr.write('simulated compare API error\n')
+			sys.exit(22)
+		# 'compare_fail_ranges' fails only the listed '<base>...<head>' ranges.
+		if path.split('/compare/', 1)[1] in (store.get('compare_fail_ranges') or []):
+			save()
 			sys.stderr.write('simulated compare API error\n')
 			sys.exit(22)
 		sequence = store.get('compare_ahead_by_sequence') or []
@@ -3107,6 +3217,7 @@ print('Unsupported gh call: ' + ' '.join(args), file=sys.stderr)
 sys.exit(1)
 '''
 		_write_exec(bin_dir / "gh", gh_mock)
+		_write_poller_curl_shim(bin_dir)
 
 		real_git = shutil.which("git")
 		real_jq = shutil.which("jq")
@@ -3136,6 +3247,13 @@ args = list(raw_args)
 while len(args) >= 2 and args[0] in ('-C', '-c'):
 	global_opts.extend(args[:2])
 	args = args[2:]
+
+# Validation harness hold tests (#7913, P2b): 'git_show_blobs' maps a
+# `<rev>:<path>` argument of `git show` to fixed file content, so the
+# poller's local pin read sees a chosen default-branch wrapper.
+if len(args) == 2 and args[0] == 'show' and args[1] in (store.get('git_show_blobs') or {}):
+	sys.stdout.write(store['git_show_blobs'][args[1]])
+	sys.exit(0)
 
 if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and '--name-only' in args:
 	paths = list(store.get('merge_tree_conflict_paths', []))
@@ -3791,6 +3909,7 @@ sys.exit(proc.returncode)
 				"SECURITY_PASS_CONFIDENCE_GATE": "8",
 				"SECURITY_AUDIT_CAPTURE": str(security_audit_capture),
 				"TG_CLEANUP_CAPTURE": str(telegram_cleanup_capture),
+				"CURL_CALL_CAPTURE": str(curl_call_capture),
 				"TG_NOTIFICATION_CAPTURE": str(telegram_notification_capture),
 				"MAX_VALIDATE_CYCLES": max_validate_cycles,
 				"BRANCH_REBUILD_ENABLED": branch_rebuild_enabled,
@@ -3880,6 +3999,16 @@ sys.exit(proc.returncode)
 		result["telegram_cleanup_calls"] = (
 			telegram_cleanup_capture.read_text(encoding="utf-8").splitlines()
 			if telegram_cleanup_capture.exists()
+			else []
+		)
+		result["curl_calls"] = (
+			curl_call_capture.read_text(encoding="utf-8").splitlines()
+			if curl_call_capture.exists()
+			else []
+		)
+		result["tg_send_msg_calls"] = (
+			[json.loads(tg_send_msg_line) for tg_send_msg_line in tg_send_msg_capture.read_text(encoding="utf-8").splitlines()]
+			if tg_send_msg_capture.exists()
 			else []
 		)
 		result["telegram_notifications"] = (
@@ -8946,6 +9075,8 @@ def _external_finalize_delivery_run(
 	enable_security_pass: str = "false",
 	state_extra: dict | None = None,
 	pull_ref_sha: str | None = "__integration_head__",
+	enable_validation: str = "false",
+	**poller_kwargs: object,
 ) -> dict:
 	"""Issue #7611: run one tick that reaches external-finalize for final PR
 	395 with the integration branch still present."""
@@ -8976,7 +9107,7 @@ def _external_finalize_delivery_run(
 		branch_ref_shas["main"] = default_tip
 	return _run_poller(
 		state=state,
-		enable_validation="false",
+		enable_validation=enable_validation,
 		max_validate_cycles="3",
 		enable_security_pass=enable_security_pass,
 		security_audit_payload=_security_audit_findings_payload(),
@@ -8988,6 +9119,8 @@ def _external_finalize_delivery_run(
 		# After a squash merge every integration commit stays "ahead".
 		compare_ahead_by=1,
 		capture_telegram_calls=True,
+		capture_tg_send_msg=True,
+		**poller_kwargs,
 	)
 
 
@@ -9045,6 +9178,130 @@ def test_external_finalize_completes_when_squash_merged_content_is_on_default() 
 	assert result["latest_state"]["final_merge_status"] == "merged"
 	assert result["latest_state"]["final_merge_pr"] == 395
 	assert "outcome=delivered_by_content reason=tip_content_on_default" in result["stdout"] + result["stderr"]
+
+
+def _extfin_history_entry(outcome: str = "passed") -> dict:
+	return {
+		"outcome": outcome,
+		"raw_status": "pass" if outcome == "passed" else "fail",
+		"raw_conclusion": "success" if outcome == "passed" else "failure",
+		"run_id": 9001,
+		"run_attempt": 1,
+		"run_url": "https://example.invalid/runs/9001",
+		"recorded_at": "2026-05-23T10:00:00Z",
+		"cycle": 1,
+		"context": "validation passed",
+		"source": "test",
+	}
+
+
+def _extfin_completion(result: dict) -> tuple[str, str, str]:
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	complete = [b for b in bodies if b.startswith("## ✅ Project complete — integration PR #395 merged externally")]
+	assert len(complete) == 1
+	messages = [
+		n.get("message", "")
+		for n in result["tg_send_msg_calls"]
+		if n.get("level") == "CRITICAL" and "completed (integration PR #395 merged externally)" in n.get("message", "")
+	]
+	assert len(messages) == 1
+	return complete[0], messages[0], result["stdout"] + result["stderr"]
+
+
+def test_external_finalize_validated_head_keeps_completion_text_unchanged() -> None:
+	# Issue #8232: a merged head with a runtime-validation pass adds nothing.
+	result = _external_finalize_delivery_run(
+		enable_validation="true",
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="__integration_head__",
+			entries=[_extfin_history_entry("passed")],
+		),
+	)
+	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	assert result["latest_state"]["status"] == "complete"
+	assert "ai:merged" in result["tracking_labels"]
+	body, message, output = _extfin_completion(result)
+	assert "Runtime validation" not in body
+	assert "Runtime validation" not in message
+	assert message.splitlines()[1].startswith("Tracking: ")
+	assert f"EXTERNAL_FINALIZE_VALIDATION tracking_issue=192 pr=395 merged_head={merged_head} outcome=validated reason=pass_record_present" in output
+
+
+def test_external_finalize_unvalidated_head_is_flagged_and_still_completes() -> None:
+	# Issue #8232 (incident tele-funtoken-msg-scoring#4861): the judge merged
+	# a head two autofix commits after the last validated one.
+	last_validated = "b" * 40
+	result = _external_finalize_delivery_run(
+		enable_validation="true",
+		state_extra={"validation_last_passed_sha": last_validated},
+	)
+	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	assert result["latest_state"]["status"] == "complete"
+	assert result["latest_state"]["final_merge_status"] == "merged"
+	assert "ai:merged" in result["tracking_labels"]
+	body, message, output = _extfin_completion(result)
+	for text in (body, message):
+		assert f"⚠️ Runtime validation: merged head `{merged_head}` has no successful runtime validation (reason=missing_pass)" in text
+		assert f"Last validated integration SHA: `{last_validated}`" in text
+		# The branch name is shown only when the default branch was resolved.
+		assert "was not runtime-validated before reaching " in text
+	assert (
+		f"EXTERNAL_FINALIZE_VALIDATION tracking_issue=192 pr=395 merged_head={merged_head} outcome=unvalidated reason=missing_pass last_validated={last_validated}"
+		in output
+	)
+
+
+def test_external_finalize_unvalidated_head_without_recorded_pass_says_none() -> None:
+	result = _external_finalize_delivery_run(
+		enable_validation="true",
+		mock_validation_history_payload=_validation_history_payload(
+			integration_sha="__integration_head__",
+			entries=[_extfin_history_entry("passed"), {**_extfin_history_entry("failed"), "recorded_at": "2026-05-24T10:00:00Z"}],
+		),
+	)
+	body, message, _output = _extfin_completion(result)
+	assert "(reason=later_non_harness_failure)" in body
+	assert "Last validated integration SHA: none recorded." in body
+	assert "none recorded" in message
+
+
+def test_external_finalize_unconfirmed_validation_fails_open() -> None:
+	result = _external_finalize_delivery_run(
+		enable_validation="true", mock_validation_history_get_exit_code=3)
+	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	assert result["latest_state"]["status"] == "complete"
+	assert "ai:merged" in result["tracking_labels"]
+	body, message, output = _extfin_completion(result)
+	expected = f"Runtime validation status of merged head `{merged_head}` could not be confirmed (reason=history_read_failed)."
+	assert expected in body
+	assert expected in message
+	assert "outcome=unknown reason=history_read_failed" in output
+
+
+def test_external_finalize_unavailable_history_ignores_state_last_passed_sha() -> None:
+	# An unreadable history says "could not be confirmed" even when the state
+	# field names the merged head: only the history confirms a pass.
+	result = _external_finalize_delivery_run(
+		enable_validation="true",
+		state_extra={"validation_last_passed_sha": "__integration_head__"},
+		mock_validation_history_get_exit_code=3,
+	)
+	merged_head = result["sandbox_sha_aliases"]["__integration_head__"]
+	body, message, output = _extfin_completion(result)
+	expected = f"Runtime validation status of merged head `{merged_head}` could not be confirmed (reason=history_read_failed)."
+	assert expected in body
+	assert expected in message
+	assert f"outcome=unknown reason=history_read_failed last_validated={merged_head}" in output
+
+
+def test_external_finalize_validation_disabled_adds_no_notice() -> None:
+	# With ENABLE_VALIDATION off there is no runtime validation to report.
+	result = _external_finalize_delivery_run(enable_validation="false")
+	assert result["latest_state"]["status"] == "complete"
+	body, message, output = _extfin_completion(result)
+	assert "Runtime validation" not in body
+	assert "Runtime validation" not in message
+	assert "outcome=skipped reason=validation_disabled" in output
 
 
 def test_external_finalize_fails_closed_when_integration_tip_does_not_descend_from_merged_head() -> None:
@@ -9363,45 +9620,104 @@ def test_security_pass_validation_complete_deleted_branch_findings_repair_conver
 	_assert_deleted_branch_security_repair_converges(validation_enabled=True)
 
 
+_SECURITY_PASS_CREATE_RACE_MARKERS = ("SECURITY_PASS_", "[external-finalize", "[security-pass]", "SECURITY_PASS_AUDIT_TREE")
+
+
+def _security_pass_create_race_failure_context(result: dict, *, final_pr_number: int, race_sha: str) -> str:
+	"""Describe how far the poller got, for the create-race test's failure messages (#8352).
+
+	Read-only: it never changes ``result``. Every lookup tolerates a missing key,
+	so the message itself cannot raise while reporting a failure.
+	"""
+	latest_state = result.get("latest_state") or {}
+	if not isinstance(latest_state, dict):
+		latest_state = {}
+	audit_capture = result.get("security_audit_capture")
+	audit_head = audit_capture.get("diff_head") if isinstance(audit_capture, dict) else None
+	stdout_text = str(result.get("stdout") or "")
+	stderr_text = str(result.get("stderr") or "")
+	marker_lines = [
+		line
+		for line in (stdout_text.splitlines() + stderr_text.splitlines())
+		if any(marker in line for marker in _SECURITY_PASS_CREATE_RACE_MARKERS)
+	][:80]
+	stdout_tail = stdout_text.splitlines()[-60:]
+	stderr_tail = stderr_text.splitlines()[-60:]
+	return "\n".join(
+		[
+			f"case: final_pr={final_pr_number} race_sha={race_sha}",
+			f"state: status={latest_state.get('status')!r} security_pass_status={latest_state.get('security_pass_status')!r}"
+			f" final_merge_pr={latest_state.get('final_merge_pr')!r} final_merge_status={latest_state.get('final_merge_status')!r}",
+			f"audit_ran={audit_capture is not None} audit_diff_head={audit_head!r}",
+			f"branch_create_calls={result.get('branch_create_calls')!r}",
+			f"created_branches={result.get('created_branches')!r}",
+			f"branch_ref_shas={result.get('branch_ref_shas')!r}",
+			f"created_issues={result.get('created_issues')!r}",
+			"--- marker lines (first 80) ---",
+			*marker_lines,
+			"--- stdout tail (last 60 lines) ---",
+			*stdout_tail,
+			"--- stderr tail (last 60 lines) ---",
+			*stderr_tail,
+		]
+	)
+
+
+def _assert_security_pass_create_race_case(
+	*, integration_branch: str, final_pr_number: int, race_sha: str, expect_fix_issue: bool
+) -> None:
+	final_pr = {
+		"number": final_pr_number,
+		"state": "closed",
+		"merged": True,
+		"baseRefName": "main",
+		"headRefName": integration_branch,
+		"headSha": "__integration_head__",
+	}
+	state = _base_state()
+	state.update({"integration_branch": integration_branch, "final_merge_pr": final_pr_number})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		prs=[final_pr],
+		existing_branches=["main"],
+		missing_git_branch_fetches=[integration_branch],
+		pull_ref_shas={final_pr_number: "__integration_head__"},
+		branch_create_race_shas={integration_branch: race_sha},
+	)
+	ctx = _security_pass_create_race_failure_context(result, final_pr_number=final_pr_number, race_sha=race_sha)
+	assert result["security_audit_capture"] is not None, ctx
+	audited_head_sha = result["security_audit_capture"]["diff_head"]
+	assert result.get("branch_create_calls", []) == [{"branch": integration_branch, "sha": audited_head_sha}], ctx
+	assert bool(result.get("created_issues", [])) is expect_fix_issue, ctx
+	latest_state = result.get("latest_state") or {}
+	if expect_fix_issue:
+		assert latest_state.get("status") == "security-pass-fixing", ctx
+	else:
+		assert latest_state.get("status") == "security-pass", ctx
+		assert latest_state.get("security_pass_status") == "failed", ctx
+		assert latest_state.get("final_merge_pr") == final_pr_number, ctx
+		assert result.get("created_branches", []) == [], ctx
+		assert integration_branch in result.get("branch_ref_shas", {}), ctx
+		assert result["branch_ref_shas"][integration_branch] != audited_head_sha, ctx
+
+
 def test_security_pass_deleted_branch_repair_accepts_only_exact_sha_create_race() -> None:
 	integration_branch = "orchestrator/project-192"
 	for final_pr_number, race_sha, expect_fix_issue in (
 		(402, "__integration_head__", True),
 		(403, "__default_head__", False),
 	):
-		final_pr = {
-			"number": final_pr_number,
-			"state": "closed",
-			"merged": True,
-			"baseRefName": "main",
-			"headRefName": integration_branch,
-			"headSha": "__integration_head__",
-		}
-		state = _base_state()
-		state.update({"integration_branch": integration_branch, "final_merge_pr": final_pr_number})
-		result = _run_poller(
-			state=state,
-			enable_validation="false",
-			max_validate_cycles="3",
-			enable_security_pass="true",
-			security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
-			issue_labels={10: ["ai:merged"]},
-			prs=[final_pr],
-			existing_branches=["main"],
-			missing_git_branch_fetches=[integration_branch],
-			pull_ref_shas={final_pr_number: "__integration_head__"},
-			branch_create_race_shas={integration_branch: race_sha},
+		_assert_security_pass_create_race_case(
+			integration_branch=integration_branch,
+			final_pr_number=final_pr_number,
+			race_sha=race_sha,
+			expect_fix_issue=expect_fix_issue,
 		)
-		assert result["branch_create_calls"] == [{"branch": integration_branch, "sha": result["security_audit_capture"]["diff_head"]}]
-		assert bool(result.get("created_issues", [])) is expect_fix_issue
-		if expect_fix_issue:
-			assert result["latest_state"]["status"] == "security-pass-fixing"
-		else:
-			assert result["latest_state"]["status"] == "security-pass"
-			assert result["latest_state"]["security_pass_status"] == "failed"
-			assert result["latest_state"]["final_merge_pr"] == final_pr_number
-			assert result.get("created_branches", []) == []
-			assert result["branch_ref_shas"][integration_branch] != result["security_audit_capture"]["diff_head"]
 
 
 def test_security_pass_deleted_branch_repair_fails_closed_when_created_ref_cannot_be_verified() -> None:
@@ -11893,6 +12209,129 @@ def test_final_merge_waits_for_required_checks_before_merging():
 	assert result.get("merged_prs", []) == []
 
 
+def test_final_merge_refusal_keeps_github_error_and_mergeable_state():
+	# fun-token-multi-chain#579: the final PR was mergeable=true but
+	# mergeable_state=blocked by a failing required commit status
+	# (coding-workflows/workflow-integrity). The check-runs gate never reads
+	# commit statuses, so the merge was tried and refused, and the recorded
+	# error said only "state=open, mergeable=true". GitHub's refusal text and
+	# mergeable_state must reach final_merge_error, which the exhausted-budget
+	# comment prints as "Last recorded error".
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 353,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"merge_error": (
+				"X Pull request owner/repo#353 is not mergeable: the base branch policy prohibits the merge.\n"
+				"Required status check `coding-workflows/workflow-integrity` is failing."
+			),
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert result.get("merged_prs", []) == []
+	err = result["state_on_disk"]["final_merge_error"]
+	assert err == (
+		"Final PR #353 could not be merged automatically (state=open, mergeable=true, mergeable_state=blocked). "
+		"GitHub: X Pull request owner/repo#353 is not mergeable: the base branch policy prohibits the merge. "
+		"Required status check coding-workflows/workflow-integrity is failing."
+	)
+	assert "[final-merge] " + err in result["stdout"]
+	comments = [
+		c.get("body", "") if isinstance(c, dict) else str(c)
+		for c in result["issues"]["192"]["comments"]
+	]
+	blocked = [c for c in comments if c.startswith("## ⚠️ Final merge blocked")]
+	assert blocked, comments
+	assert "mergeable_state=`blocked`" in blocked[-1]
+	assert "Required status check coding-workflows/workflow-integrity is failing." in blocked[-1]
+
+
+def test_final_merge_defers_on_failing_ruleset_required_status_without_spending_budget():
+	# fun-token-multi-chain#579: GitHub reported the final PR blocked by a
+	# failing ruleset-required commit status. The poller must hold the merge,
+	# name the blocker, and keep the final-merge budget intact instead of
+	# spending three refused attempts and parking the project.
+	head = "7ca98c4747ea6d5b73c95c46501b8483cd037b89"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 354,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"headSha": head,
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_store_extra={
+			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
+			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "failure"}]},
+		},
+	)
+	assert result.get("merged_prs", []) == []
+	assert (
+		"[final-merge] PR #354 is blocked by ruleset-required check(s): "
+		"coding-workflows/workflow-integrity (failure). Will retry next poll."
+	) in result["stdout"]
+	assert "ORCH_MERGE_HEAD_BOUND pr=354" not in result["stdout"]
+	disk = result["state_on_disk"]
+	assert disk["final_merge_status"] == "pending"
+	assert int(disk.get("final_merge_attempt_count", 0) or 0) == 0
+
+
+def test_final_merge_proceeds_when_ruleset_required_status_passes():
+	head = "7ca98c4747ea6d5b73c95c46501b8483cd037b89"
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	prs = [
+		{
+			"number": 355,
+			"state": "open",
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "blocked",
+			"headSha": head,
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		mock_store_extra={
+			"ruleset_required_contexts": ["coding-workflows/workflow-integrity"],
+			"commit_statuses": {head: [{"context": "coding-workflows/workflow-integrity", "state": "success"}]},
+		},
+	)
+	assert 355 in result.get("merged_prs", [])
+	assert "blocked by ruleset-required check(s)" not in result["stdout"]
+
+
 def test_final_merge_promotes_eager_draft_pr_when_tracking_issue_ready_to_merge():
 	state = _base_state(status="in_progress")
 	state["integration_branch"] = "orchestrator/project-192"
@@ -12926,6 +13365,53 @@ def test_mark_validation_complete_fails_open_on_history_write_error():
 	assert result.get("mock_validation_history_append_calls", 0) == 1
 	assert result.get("mock_validation_history_get_calls", 0) == 0
 	assert "Validation history unavailable for integration SHA abcdef1234; falling back to legacy ai:validated gate (reason=history_write_failed_current_tick)." in (result["stdout"] + result["stderr"])
+
+
+def test_mark_validation_complete_records_last_passed_sha():
+	# Issue #8232: the passed integration SHA is kept in state so an external
+	# merge of a later head can name the last validated one.
+	validated_sha = "c" * 40
+	state = _base_state(status="validating")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["validation_cycle"] = 2
+	prs = [
+		{
+			"number": 368,
+			"state": "open",
+			"draft": True,
+			"baseRefName": "main",
+			"headRefName": "orchestrator/project-192",
+			"mergeable": True,
+			"mergeable_state": "clean",
+		},
+	]
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validated"],
+		issue_labels={10: ["ai:merged"]},
+		prs=prs,
+		existing_branches=["main", "orchestrator/project-192"],
+		compare_ahead_by=5,
+		branch_ref_shas={"orchestrator/project-192": validated_sha},
+	)
+	assert result.get("mock_validation_history_append_calls", 0) == 1
+	assert result["latest_state"]["validation_last_passed_sha"] == validated_sha
+
+
+def test_validation_history_decision_for_current_sha_delegates_to_for_sha():
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	current = poller.split("validation_history_gate_decision_for_current_sha() {", 1)[1].split("\n}", 1)[0]
+	assert "validation_history_current_integration_sha" in current
+	assert 'validation_history_gate_decision_for_sha "${current_integration_sha}"' in current
+	for_sha = poller.split("validation_history_gate_decision_for_sha() {", 1)[1].split("\n}", 1)[0]
+	assert 'reason: "integration_sha_unavailable"' in for_sha
+	assert "history_write_failed_current_tick" in for_sha
+	assert 'reason: "missing_pass"' in for_sha
+	# External-finalize reads the decision for the merged head, never the
+	# current integration tip.
+	assert 'validation_history_gate_decision_for_sha "${merged_head_sha}"' in poller
 
 
 def test_mark_validation_complete_fails_open_on_shell_wrapper_history_write_error():
@@ -15278,6 +15764,8 @@ def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_
 		enable_validation="true",
 		max_validate_cycles="3",
 		tracking_labels=["ai:validation-failed"],
+		# Today's park path; the harness hold (Refs #7913) is on by default.
+		env_overrides={"VALIDATION_HARNESS_HEAL_ENABLED": "false"},
 		validation_workflow_runs=[{
 			"id": 7001,
 			"run_attempt": 1,
@@ -15313,6 +15801,9 @@ def test_validation_harness_error_raw_status_preserves_budget_and_sets_additive_
 		if operation == {"kind": "label_add", "issue": 192, "label": "ai:harness-broken"}
 	)
 	assert diagnostic_comment_index < harness_label_index
+	assert "validation_harness_hold" not in ls
+	assert "VALIDATION_HARNESS_HOLD" not in (result["stdout"] + result["stderr"])
+	assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" in (result["stdout"] + result["stderr"])
 
 
 
@@ -15379,6 +15870,985 @@ def test_validation_harness_error_validate_failure_comment_accepts_bare_token():
 	assert "HARNESS_ERROR_DETECTED" in (result["stdout"] + result["stderr"])
 
 
+
+# ---------------------------------------------------------------------------
+# Tests: validation harness hold (Refs #7913, plan Phase 2, P2a)
+# ---------------------------------------------------------------------------
+
+_HARNESS_ROUTE_LOGIN = "pipeline-bot"
+_HARNESS_OWNER_FP = "a" * 64
+_HARNESS_OWNER_SUPPORT = "b" * 40
+
+
+def _hold_since(days_ago: float) -> str:
+	return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - days_ago * 86400))
+
+
+# A hold `since` inside the default 14-day limit (P2c); older holds expire.
+_HOLD_SINCE_FRESH = _hold_since(1)
+
+
+def _harness_owner_comment(*, run: int = 7101, login: str = _HARNESS_ROUTE_LOGIN, fp: str = _HARNESS_OWNER_FP) -> dict:
+	return {
+		"body": (
+			"## Validation harness owner\n\nThe harness failed in the pinned workflow.\n"
+			f"<!-- validation-harness-owner:v1 fp={fp} stage=run_tests reason=harness_error support={_HARNESS_OWNER_SUPPORT} run={run} -->\n"
+		),
+		"user": {"login": login},
+		"author_association": "OWNER",
+	}
+
+
+def _harness_failed_run(run_id: int = 7101) -> list[dict]:
+	return [{
+		"id": run_id,
+		"run_attempt": 1,
+		"status": "completed",
+		"conclusion": "failure",
+		"created_at": "2026-01-01T00:00:00Z",
+		"head_branch": "orchestrator/project-192",
+		"outputs": {"raw_status": "harness_error"},
+	}]
+
+
+def _run_harness_hold_poller(state: dict | None = None, *, comments: list | None = None, env: dict | None = None) -> dict:
+	if state is None:
+		state = _base_state(status="validating")
+		state["validation_cycle"] = 2
+		state["validation_recovery_count"] = 1
+		state["validation_last_dispatch_cycle"] = 2
+	overrides = {"VALIDATION_HARNESS_ROUTE_LOGIN": _HARNESS_ROUTE_LOGIN}
+	overrides.update(env or {})
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		# The verdict label is what routes the poller into mark_validation_failed.
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=comments or [],
+		validation_workflow_runs=_harness_failed_run(),
+		capture_telegram_calls=True,
+		env_overrides=overrides,
+	)
+
+
+def _harness_comment_bodies(result: dict) -> list[str]:
+	return [c.get("body") or "" for c in result["issues"]["192"]["comments"]]
+
+
+def _assert_harness_parked_today(result: dict) -> None:
+	output = result["stdout"] + result["stderr"]
+	bodies = _harness_comment_bodies(result)
+	assert any("## ❌ Runtime validation harness error" in b for b in bodies), output
+	assert not any("<!-- validation-harness-hold:v1" in b for b in bodies)
+	assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" in output
+	assert any(n["level"] == "CRITICAL" and "harness is broken" in n["message"] for n in result["telegram_notifications"])
+
+
+def test_validation_harness_hold_entered_with_trusted_owner_marker():
+	result = _run_harness_hold_poller(comments=[_harness_owner_comment()])
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", output
+	assert ls["validation_recovery_count"] == 1
+	hold = ls["validation_harness_hold"]
+	assert hold["fp"] == _HARNESS_OWNER_FP
+	assert hold["support"] == _HARNESS_OWNER_SUPPORT
+	assert hold["heal_issue"] is None and hold["outcome"] is None
+	assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", hold["since"])
+	assert hold["reason"]
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
+	bodies = _harness_comment_bodies(result)
+	hold_comments = [b for b in bodies if "## ⏸ Runtime validation waiting for a harness fix" in b]
+	assert len(hold_comments) == 1, output
+	assert hold_comments[0].rstrip().splitlines()[-1] == (
+		f"<!-- validation-harness-hold:v1 fp={_HARNESS_OWNER_FP} support={_HARNESS_OWNER_SUPPORT} -->"
+	)
+	assert not any("## ❌ Runtime validation harness error" in b for b in bodies)
+	assert any(
+		"<!-- orchestrator:completion-status -->" in b and "Waiting for harness fix" in b for b in bodies
+	), output
+	levels = [(n["level"], n["message"]) for n in result["telegram_notifications"]]
+	assert any(level == "WARNING" and "waiting for a harness fix" in msg for level, msg in levels), levels
+	assert not any(level == "CRITICAL" and "harness" in msg for level, msg in levels), levels
+	assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" not in output
+	assert (
+		f"VALIDATION_HARNESS_HOLD tracking_issue=192 outcome=held fp={_HARNESS_OWNER_FP} "
+		f"pin={_HARNESS_OWNER_SUPPORT} heal_issue=none"
+	) in output
+
+
+def test_validation_harness_hold_falls_back_to_local_fingerprint():
+	for comments in ([], [_harness_owner_comment(login="outsider")], [_harness_owner_comment(run=9999)]):
+		result = _run_harness_hold_poller(comments=comments)
+		output = result["stdout"] + result["stderr"]
+		ls = result["latest_state"]
+		assert ls["status"] == "failed", output
+		hold = ls["validation_harness_hold"]
+		assert re.match(r"^local:[0-9a-f]{16}$", hold["fp"]), hold
+		assert hold["support"] is None or re.match(r"^[0-9a-f]{40}$", hold["support"]), hold
+		assert "outcome=held fp=local:" in output
+		assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" not in output
+
+
+def test_validation_harness_hold_caps_keep_today_park_path():
+	total_state = _base_state(status="validating")
+	total_state["validation_cycle"] = 2
+	total_state["validation_last_dispatch_cycle"] = 2
+	total_state["validation_harness_resumes"] = {"by_fp": {}, "total": 4}
+	total_state["validation_harness_hold"] = {"fp": "local:0000000000000000", "support": None}
+	result = _run_harness_hold_poller(total_state, comments=[_harness_owner_comment()])
+	_assert_harness_parked_today(result)
+	assert "validation_harness_hold" not in result["latest_state"]
+	assert result["latest_state"]["validation_harness_resumes"] == {"by_fp": {}, "total": 4}
+	assert (
+		f"VALIDATION_HARNESS_HOLD tracking_issue=192 outcome=capped fp={_HARNESS_OWNER_FP}"
+	) in result["stdout"] + result["stderr"]
+
+	fp_state = _base_state(status="validating")
+	fp_state["validation_cycle"] = 2
+	fp_state["validation_last_dispatch_cycle"] = 2
+	fp_state["validation_harness_resumes"] = {"by_fp": {_HARNESS_OWNER_FP: 2}, "total": 2}
+	result = _run_harness_hold_poller(fp_state, comments=[_harness_owner_comment()])
+	_assert_harness_parked_today(result)
+	assert "validation_harness_hold" not in result["latest_state"]
+	assert "outcome=capped" in result["stdout"] + result["stderr"]
+
+
+def test_validation_harness_hold_switch_off_keeps_today_path():
+	result = _run_harness_hold_poller(
+		comments=[_harness_owner_comment()],
+		env={"VALIDATION_HARNESS_HEAL_ENABLED": "false"},
+	)
+	_assert_harness_parked_today(result)
+	assert "validation_harness_hold" not in result["latest_state"]
+	assert "VALIDATION_HARNESS_HOLD" not in result["stdout"] + result["stderr"]
+
+
+def test_revalidate_clears_validation_harness_hold_and_keeps_resumes():
+	state = _base_state(status="failed")
+	state["validation_cycle"] = 2
+	state["validation_failure_reason"] = "Runtime validation harness error"
+	state["validation_last_raw_status"] = "harness_error"
+	state["validation_harness_hold"] = {
+		"fp": _HARNESS_OWNER_FP, "support": None, "heal_issue": None,
+		"outcome": None, "since": _HOLD_SINCE_FRESH, "reason": "harness",
+	}
+	state["validation_harness_resumes"] = {"by_fp": {_HARNESS_OWNER_FP: 1}, "total": 1}
+	result = _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
+		tracking_comments=["/revalidate"],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", result["stdout"] + result["stderr"]
+	assert "validation_harness_hold" not in ls
+	assert ls["validation_harness_resumes"] == {"by_fp": {_HARNESS_OWNER_FP: 1}, "total": 1}
+
+
+def _harness_held_failed_state(with_hold: bool = True) -> dict:
+	state = _base_state(status="failed")
+	state["validation_cycle"] = 2
+	state["validation_failure_reason"] = "Runtime validation harness error"
+	state["validation_last_raw_status"] = "harness_error"
+	if with_hold:
+		state["validation_harness_hold"] = {
+			"fp": "local:0123456789abcdef", "support": None, "heal_issue": None,
+			"outcome": None, "since": _HOLD_SINCE_FRESH, "reason": "harness",
+		}
+	return state
+
+
+def test_validation_harness_hold_skips_unblock_scan_offer():
+	skip_line = "UNBLOCK_SCAN item=192 kind=project outcome=skip reason=harness_hold"
+	common = {
+		"enable_validation": "true",
+		"max_validate_cycles": "3",
+		"tracking_labels": ["ai:validation-failed", "ai:harness-broken"],
+	}
+	held = _run_poller(
+		state=_harness_held_failed_state(),
+		env_overrides={"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false"},
+		**common,
+	)
+	assert skip_line in held["stdout"] + held["stderr"]
+	assert held["latest_state"]["status"] == "failed"
+
+	control = _run_poller(
+		state=_harness_held_failed_state(with_hold=False),
+		env_overrides={"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false"},
+		**common,
+	)
+	assert skip_line not in control["stdout"] + control["stderr"]
+
+	switched_off = _run_poller(
+		state=_harness_held_failed_state(),
+		env_overrides={
+			"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false",
+			"VALIDATION_HARNESS_HEAL_ENABLED": "false",
+		},
+		**common,
+	)
+	assert skip_line not in switched_off["stdout"] + switched_off["stderr"]
+
+
+def test_validation_harness_hold_is_dropped_from_unblock_scan_search():
+	"""The hold keeps block labels the scan's search matches, so the scan must drop it."""
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	scan = _extract_bash_function(script, "run_unblock_scan() {")
+	filter_at = scan.index('"${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE:-}"')
+	assert scan.index("> \"${work_dir}/search.json\"") < filter_at
+	assert filter_at < scan.index('sort -u "${UNBLOCK_FAILED_PROJECTS_FILE}"')
+	assert filter_at < scan.index("scripts/unblock_scan.py select")
+	assert "reason=harness_hold_filter_failed" in scan
+	loop_skip = script.index('VALIDATION_HARNESS_HOLD_SKIP_UNBLOCK="true"')
+	append_at = script.index('echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}"', loop_skip)
+	assert loop_skip < append_at < script.index("reason=harness_hold\"", loop_skip)
+	assert script.index("VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE=\"$(mktemp") < script.index("run_unblock_scan() {")
+	# The hold-entry tick must also be excluded: the finish helper records it.
+	finish = _extract_bash_function(script, "_validation_harness_hold_finish() {")
+	assert 'echo "${TRACKING_NUM}" >> "${VALIDATION_HARNESS_HOLD_UNBLOCK_SKIP_FILE}"' in finish
+	assert "outcome=unblock_skip_write_failed" in finish
+	assert "outcome=hold_clear_failed" in script
+
+
+def _harness_config_block(script: str) -> str:
+	start = script.index("# Validation harness hold (Refs #7913, docs/plans")
+	end_marker = '  VALIDATION_HARNESS_ROUTE_LOGIN=""\nfi\n'
+	return script[start:script.index(end_marker, start) + len(end_marker)]
+
+
+def _run_bash_snippet(snippet: str, env: dict[str, str], cwd: str | None = None) -> subprocess.CompletedProcess:
+	run_env = {k: v for k, v in os.environ.items() if not k.startswith("VALIDATION_HARNESS_") and not k.startswith("GIT_")}
+	run_env.update(env)
+	return subprocess.run(["bash", "-c", snippet], env=run_env, cwd=cwd, capture_output=True, text=True, check=False)
+
+
+def test_validation_harness_config_defaults_and_invalid_values():
+	block = _harness_config_block(POLLER_SCRIPT.read_text(encoding="utf-8"))
+	report = (
+		'\necho "heal=${VALIDATION_HARNESS_HEAL_ENABLED} days=${VALIDATION_HARNESS_HOLD_MAX_DAYS} '
+		'perfp=${VALIDATION_HARNESS_MAX_RESUMES_PER_FP} total=${VALIDATION_HARNESS_MAX_RESUMES} '
+		'login=${VALIDATION_HARNESS_ROUTE_LOGIN}"\n'
+	)
+	defaults = _run_bash_snippet(block + report, {})
+	assert defaults.returncode == 0, defaults.stderr
+	assert "heal=true days=14 perfp=2 total=4 login=" in defaults.stdout
+	assert "::warning::" not in defaults.stdout
+
+	custom = _run_bash_snippet(block + report, {
+		"VALIDATION_HARNESS_HEAL_ENABLED": "FALSE",
+		"VALIDATION_HARNESS_HOLD_MAX_DAYS": "30",
+		"VALIDATION_HARNESS_MAX_RESUMES_PER_FP": "0",
+		"VALIDATION_HARNESS_MAX_RESUMES": "7",
+		"VALIDATION_HARNESS_ROUTE_LOGIN": "pipeline-bot[bot]",
+	})
+	assert "heal=false days=30 perfp=0 total=7 login=pipeline-bot[bot]" in custom.stdout, custom.stdout
+
+	invalid = _run_bash_snippet(block + report, {
+		"VALIDATION_HARNESS_HEAL_ENABLED": "maybe-secret",
+		"VALIDATION_HARNESS_HOLD_MAX_DAYS": "0",
+		"VALIDATION_HARNESS_MAX_RESUMES_PER_FP": "101",
+		"VALIDATION_HARNESS_MAX_RESUMES": "abc-secret",
+		"VALIDATION_HARNESS_ROUTE_LOGIN": "bad login;secret",
+	})
+	assert "heal=true days=14 perfp=2 total=4 login=" in invalid.stdout, invalid.stdout
+	for name in (
+		"VALIDATION_HARNESS_HEAL_ENABLED",
+		"VALIDATION_HARNESS_HOLD_MAX_DAYS",
+		"VALIDATION_HARNESS_MAX_RESUMES_PER_FP",
+		"VALIDATION_HARNESS_MAX_RESUMES",
+		"VALIDATION_HARNESS_ROUTE_LOGIN",
+	):
+		assert f"::warning::VALIDATION_HARNESS_HOLD config={name} outcome=default reason=invalid_value" in invalid.stdout
+	assert "secret" not in "\n".join(l for l in invalid.stdout.splitlines() if l.startswith("::warning::"))
+
+
+def test_validation_harness_local_fp_ignores_digits_and_case():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fns = (
+		_extract_bash_function(script, "validation_reason_one_line() {")
+		+ _extract_bash_function(script, "validation_harness_local_fp() {")
+	)
+	snippet = fns + (
+		'\nvalidation_harness_local_fp "Run 123 failed: see https://x/runs/456"; echo'
+		'\nvalidation_harness_local_fp "RUN 9 failed:  see https://x/runs/7"; echo'
+		'\nvalidation_harness_local_fp "Different reason"; echo\n'
+	)
+	result = _run_bash_snippet(snippet, {})
+	assert result.returncode == 0, result.stderr
+	first, second, third = result.stdout.splitlines()
+	assert re.match(r"^local:[0-9a-f]{16}$", first)
+	assert first == second
+	assert third != first
+
+
+def test_validation_harness_pin_reads_default_branch_wrapper_locally():
+	fn = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "validation_harness_pin() {")
+	pin = "c" * 40
+	git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	git_env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
+
+	def _repo(tmp: str, wrapper: str | None) -> str:
+		repo = os.path.join(tmp, "repo")
+		subprocess.run(["git", "init", "--quiet", repo], check=True, env=git_env)
+		os.makedirs(os.path.join(repo, ".github", "workflows"))
+		with open(os.path.join(repo, "README.md"), "w", encoding="utf-8") as fh:
+			fh.write("x\n")
+		if wrapper is not None:
+			with open(os.path.join(repo, ".github", "workflows", "ai-validate.yml"), "w", encoding="utf-8") as fh:
+				fh.write(wrapper)
+		subprocess.run(["git", "-C", repo, "add", "-A"], check=True, env=git_env)
+		subprocess.run(["git", "-C", repo, "commit", "--quiet", "-m", "seed"], check=True, env=git_env)
+		subprocess.run(["git", "-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"], check=True, env=git_env)
+		return repo
+
+	run_twice = fn + (
+		'\n_VALIDATION_HARNESS_PIN_STATE=""\n'
+		'validation_harness_pin; echo " rc=$?"\n'
+		'validation_harness_pin; echo " rc=$? state=${_VALIDATION_HARNESS_PIN_STATE}"\n'
+	)
+	one = f"jobs:\n  v:\n    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@{pin} # stable\n"
+	two = one + f"  w:\n    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@{'d' * 40}\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _repo(tmp, one)
+		ok = _run_bash_snippet(run_twice, {"CWS_DEFAULT_BRANCH": "main"}, cwd=repo)
+		assert ok.stdout.splitlines() == [f"{pin} rc=0", f"{pin} rc=0 state=ok"], ok.stdout + ok.stderr
+	for wrapper, env in ((two, {"CWS_DEFAULT_BRANCH": "main"}), (None, {"CWS_DEFAULT_BRANCH": "main"}), (one, {"CWS_DEFAULT_BRANCH": "bad branch"})):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _repo(tmp, wrapper)
+			bad = _run_bash_snippet(run_twice, env, cwd=repo)
+			assert bad.stdout.splitlines() == [" rc=1", " rc=1 state=failed"], bad.stdout + bad.stderr
+
+	# Without CWS_DEFAULT_BRANCH or origin/HEAD the branch comes from the event
+	# payload, then from a scheduled run's ref; neither makes an API call.
+	no_branch_env = {"CWS_DEFAULT_BRANCH": "", "GITHUB_EVENT_NAME": "", "GITHUB_REF_NAME": "", "GITHUB_EVENT_PATH": ""}
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _repo(tmp, one)
+		event = os.path.join(tmp, "event.json")
+		with open(event, "w", encoding="utf-8") as fh:
+			json.dump({"repository": {"default_branch": "main"}}, fh)
+		if shutil.which("jq"):
+			from_event = _run_bash_snippet(run_twice, {**no_branch_env, "GITHUB_EVENT_PATH": event}, cwd=repo)
+			assert from_event.stdout.splitlines()[0] == f"{pin} rc=0", from_event.stdout + from_event.stderr
+		from_schedule = _run_bash_snippet(run_twice, {**no_branch_env, "GITHUB_EVENT_NAME": "schedule", "GITHUB_REF_NAME": "main"}, cwd=repo)
+		assert from_schedule.stdout.splitlines()[0] == f"{pin} rc=0", from_schedule.stdout + from_schedule.stderr
+		unresolved = _run_bash_snippet(run_twice, {**no_branch_env, "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF_NAME": "main"}, cwd=repo)
+		assert unresolved.stdout.splitlines()[0] == " rc=1", unresolved.stdout + unresolved.stderr
+		assert "VALIDATION_HARNESS_HOLD outcome=pin_unresolved reason=branch_unresolved" in unresolved.stderr
+
+
+
+
+# ---------------------------------------------------------------------------
+# Tests: validation harness hold per-tick check and resume (Refs #7913, P2b)
+# ---------------------------------------------------------------------------
+
+_HOLD_PIN_NEW = "c" * 40
+_HOLD_PIN_DATE = "2026-02-01T12:00:00Z"
+_HOLD_HEAL_ISSUE = "900"
+_HOLD_WRAPPER_PATH = "origin/main:.github/workflows/ai-validate.yml"
+
+
+def _harness_route_comment(
+	*, outcome: str = "opened", issue: str = _HOLD_HEAL_ISSUE, classification: str = "workflow-defect",
+	login: str = _HARNESS_ROUTE_LOGIN, fp: str = _HARNESS_OWNER_FP,
+) -> dict:
+	return {
+		"body": (
+			"The workflow failure heal intake routed this validation failure.\n"
+			f"<!-- workflow-failure-heal:validation-route:v1 fp={fp} outcome={outcome} issue={issue} "
+			f"classification={classification} run=4242 -->\n"
+		),
+		"user": {"login": login},
+		"author_association": "OWNER",
+	}
+
+
+def _run_harness_tick(
+	*, pin: str | None = _HOLD_PIN_NEW, support: str | None = _HARNESS_OWNER_SUPPORT,
+	comments: list | None = None, compare_status: str = "ahead", heal: dict | None = None,
+	recovery: int = 1, env: dict | None = None, store: dict | None = None,
+	fail_dispatch: bool = False, since: str | None = None, fp: str = _HARNESS_OWNER_FP,
+	raw_status: str = "harness_error",
+) -> dict:
+	state = _harness_held_failed_state()
+	state["validation_recovery_count"] = recovery
+	state["validation_last_raw_status"] = raw_status
+	state["validation_harness_hold"] = {
+		"fp": fp, "support": support, "heal_issue": None,
+		"outcome": None, "since": _HOLD_SINCE_FRESH if since is None else since, "reason": "harness",
+	}
+	if since == "__missing__":
+		del state["validation_harness_hold"]["since"]
+	extra: dict = {}
+	if pin:
+		extra["git_show_blobs"] = {
+			_HOLD_WRAPPER_PATH: (
+				"jobs:\n  v:\n    uses: shubhodeep1/coding-workflows/.github/workflows/"
+				f"validate.yml@{pin} # stable\n"
+			),
+		}
+	if pin and support:
+		extra["compare_status_by_range"] = {f"{support}...{pin}": compare_status}
+		extra["compare_commits_detail"] = [
+			{"sha": pin, "parents": [{"sha": support}], "commit": {"committer": {"date": _HOLD_PIN_DATE}}},
+		]
+	if heal is not None:
+		extra["issue_extra_fields"] = {_HOLD_HEAL_ISSUE: heal}
+	extra.update(store or {})
+	overrides = {
+		"VALIDATION_HARNESS_ROUTE_LOGIN": _HARNESS_ROUTE_LOGIN,
+		"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false",
+		"CWS_DEFAULT_BRANCH": "main",
+		# The harness default is 0; a bounce needs budget to revalidate.
+		"MAX_VALIDATION_RECOVERY_ATTEMPTS": "2",
+	}
+	overrides.update(env or {})
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed", "ai:harness-broken"],
+		tracking_comments=comments or [],
+		capture_telegram_calls=True,
+		fail_validation_dispatch=fail_dispatch,
+		env_overrides=overrides,
+		mock_store_extra=extra,
+	)
+
+
+def _hold_line(outcome: str, *, pin: str = _HOLD_PIN_NEW, heal_issue: str = "none", reason: str | None = None) -> str:
+	line = (
+		f"VALIDATION_HARNESS_HOLD tracking_issue=192 outcome={outcome} fp={_HARNESS_OWNER_FP} "
+		f"pin={pin} heal_issue={heal_issue}"
+	)
+	return line + (f" reason={reason}" if reason else "")
+
+
+def _harness_api_reads(result: dict) -> tuple[int, int]:
+	calls = result["api_calls"]
+	compares = sum("repos/shubhodeep1/coding-workflows/compare/" in c for c in calls)
+	issues = sum(c.endswith(f"coding-workflows/issues/{_HOLD_HEAL_ISSUE}") for c in calls)
+	return compares, issues
+
+
+def _assert_harness_still_held(result: dict) -> None:
+	output = result["stdout"] + result["stderr"]
+	ls = result.get("latest_state") or result["state_on_disk"]
+	assert ls["status"] == "failed", output
+	assert "validation_harness_hold" in ls, output
+	assert result["validation_dispatches"] == [], output
+	assert not any("<!-- validation-harness-resume:v1" in b for b in _harness_comment_bodies(result))
+
+
+def test_validation_harness_hold_waits_on_unchanged_pin_without_api_calls():
+	result = _run_harness_tick(pin=_HARNESS_OWNER_SUPPORT)
+	output = result["stdout"] + result["stderr"]
+	assert _hold_line("waiting", pin=_HARNESS_OWNER_SUPPORT, reason="pin_unchanged") in output, output
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+	assert result["state_on_disk"]["validation_harness_hold"]["support"] == _HARNESS_OWNER_SUPPORT
+	assert result["validation_dispatches"] == []
+
+	unreadable = _run_harness_tick(pin=None)
+	out2 = unreadable["stdout"] + unreadable["stderr"]
+	assert _hold_line("waiting", pin="unknown", reason="pin_unresolved") in out2, out2
+	assert _harness_api_reads(unreadable) == (0, 0), unreadable["api_calls"]
+	assert unreadable["validation_dispatches"] == []
+
+
+def test_validation_harness_hold_resumes_when_heal_issue_closed_before_pin():
+	result = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-01T11:00:00Z"},
+	)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert "validation_harness_hold" not in ls
+	assert ls["validation_recovery_count"] == 1
+	assert ls["validation_cycle"] == 1
+	assert ls["validation_harness_resumes"] == {"by_fp": {_HARNESS_OWNER_FP: 1}, "total": 1}
+	assert len(result["validation_dispatches"]) == 1, output
+	assert "ai:validating" in result["tracking_labels"]
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert "ai:harness-broken" not in result["tracking_labels"]
+	resume = [b for b in _harness_comment_bodies(result) if "## ▶️ Runtime validation resumed after a harness fix" in b]
+	assert len(resume) == 1, output
+	assert resume[0].rstrip().splitlines()[-1] == (
+		f"<!-- validation-harness-resume:v1 fp={_HARNESS_OWNER_FP} pin={_HOLD_PIN_NEW} -->"
+	)
+	assert any(n["level"] == "DEBUG" and "resumed after a harness fix" in n["message"] for n in result["telegram_notifications"])
+	assert _hold_line("resumed", heal_issue=_HOLD_HEAL_ISSUE) in output, output
+	assert _harness_api_reads(result) == (1, 1), result["api_calls"]
+
+
+def test_validation_harness_hold_waits_while_heal_issue_open_or_closed_after_pin():
+	open_result = _run_harness_tick(comments=[_harness_route_comment()])
+	out = open_result["stdout"] + open_result["stderr"]
+	assert _hold_line("waiting", heal_issue=_HOLD_HEAL_ISSUE, reason="heal_issue_open") in out, out
+	_assert_harness_still_held(open_result)
+	hold = open_result["latest_state"]["validation_harness_hold"]
+	assert (hold["heal_issue"], hold["outcome"]) == (900, "opened")
+
+	late = _run_harness_tick(
+		comments=[_harness_route_comment(outcome="duplicate")],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-02T00:00:00Z"},
+	)
+	out = late["stdout"] + late["stderr"]
+	assert _hold_line("waiting", heal_issue=_HOLD_HEAL_ISSUE, reason="heal_closed_after_pin") in out, out
+	_assert_harness_still_held(late)
+
+
+def test_validation_harness_hold_not_planned_heal_issue_parks_project():
+	result = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "not_planned", "closed_at": "2026-02-01T11:00:00Z"},
+	)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", output
+	assert "validation_harness_hold" not in ls
+	assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" in output
+	assert any(n["level"] == "CRITICAL" and "hold ended (not_planned)" in n["message"] for n in result["telegram_notifications"])
+	assert any("## ❌ Runtime validation harness hold ended" in b for b in _harness_comment_bodies(result))
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert result["validation_dispatches"] == []
+	assert _hold_line("not_planned", heal_issue=_HOLD_HEAL_ISSUE) in output, output
+
+
+def test_validation_harness_hold_waits_on_behind_or_diverged_pin():
+	for status in ("behind", "diverged"):
+		result = _run_harness_tick(comments=[_harness_route_comment()], compare_status=status)
+		output = result["stdout"] + result["stderr"]
+		assert _hold_line("waiting", heal_issue=_HOLD_HEAL_ISSUE, reason=f"pin_{status}") in output, output
+		assert _harness_api_reads(result) == (1, 0), result["api_calls"]
+		_assert_harness_still_held(result)
+
+	failed = _run_harness_tick(store={"compare_fail_ranges": [f"{_HARNESS_OWNER_SUPPORT}...{_HOLD_PIN_NEW}"]})
+	output = failed["stdout"] + failed["stderr"]
+	assert _hold_line("unknown", reason="compare_failed") in output, output
+	_assert_harness_still_held(failed)
+
+
+def test_validation_harness_hold_bounce_charges_recovery_attempt():
+	result = _run_harness_tick(comments=[_harness_route_comment(outcome="bounced", classification="consumer-app-defect")])
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert "validation_harness_hold" not in ls
+	assert ls["validation_recovery_count"] == 2
+	assert len(result["validation_dispatches"]) == 1, output
+	bounce = [b for b in _harness_comment_bodies(result) if "## ↩️ Harness heal returned the failure" in b]
+	assert len(bounce) == 1, output
+	assert "consumer-app-defect" in bounce[0]
+	assert bounce[0].rstrip().splitlines()[-1] == f"<!-- validation-harness-bounce:v1 fp={_HARNESS_OWNER_FP} -->"
+	assert "outcome=bounced" in output
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+
+	exhausted = _run_harness_tick(comments=[_harness_route_comment(outcome="bounced")], recovery=2)
+	output = exhausted["stdout"] + exhausted["stderr"]
+	ls = exhausted["latest_state"]
+	assert ls["status"] == "failed", output
+	assert "validation_harness_hold" not in ls
+	assert ls["validation_recovery_count"] == 2
+	assert exhausted["validation_dispatches"] == []
+	assert any(n["level"] == "CRITICAL" for n in exhausted["telegram_notifications"])
+	assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" in output
+	assert "outcome=bounced" in output and "reason=recovery_exhausted" in output
+
+
+def test_validation_harness_hold_untrusted_bounce_marker_is_ignored():
+	result = _run_harness_tick(
+		pin=_HARNESS_OWNER_SUPPORT,
+		comments=[_harness_route_comment(outcome="bounced", login="outsider")],
+	)
+	output = result["stdout"] + result["stderr"]
+	assert _hold_line("waiting", pin=_HARNESS_OWNER_SUPPORT, reason="pin_unchanged") in output, output
+	assert not any("validation-harness-bounce:v1" in b for b in _harness_comment_bodies(result))
+	assert result["state_on_disk"]["validation_recovery_count"] == 1
+
+
+def test_validation_harness_hold_resumes_on_pin_alone_without_heal_issue():
+	for comments in ([], [_harness_route_comment(outcome="already-fixed")]):
+		result = _run_harness_tick(comments=comments)
+		output = result["stdout"] + result["stderr"]
+		ls = result["latest_state"]
+		assert ls["status"] == "validating", output
+		assert "validation_harness_hold" not in ls
+		assert len(result["validation_dispatches"]) == 1, output
+		assert _harness_api_reads(result) == (1, 0), result["api_calls"]
+		assert "outcome=resumed" in output
+
+
+def test_validation_harness_hold_truncated_compare_reads_pin_commit_date():
+	# The compare lists 250 of 400 commits, so its last listed commit is older
+	# than the pin: the pin commit's own date decides.
+	store = {
+		"compare_total_commits": 400,
+		"commit_dates": {_HOLD_PIN_NEW: "2026-02-03T00:00:00Z"},
+	}
+	result = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-02T00:00:00Z"},
+		store=store,
+	)
+	output = result["stdout"] + result["stderr"]
+	assert result["latest_state"]["status"] == "validating", output
+	assert len(result["validation_dispatches"]) == 1, output
+	assert sum(c.endswith(f"coding-workflows/commits/{_HOLD_PIN_NEW}") for c in result["api_calls"]) == 1, result["api_calls"]
+
+	unread = _run_harness_tick(
+		comments=[_harness_route_comment()],
+		heal={"closed": True, "state_reason": "completed", "closed_at": "2026-02-01T11:00:00Z"},
+		store={"compare_total_commits": 400},
+	)
+	out2 = unread["stdout"] + unread["stderr"]
+	assert _hold_line("waiting", heal_issue=_HOLD_HEAL_ISSUE, reason="pin_date_unknown") in out2, out2
+	_assert_harness_still_held(unread)
+
+
+def test_validation_harness_hold_dispatch_failure_restores_hold_and_labels():
+	result = _run_harness_tick(fail_dispatch=True)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", output
+	assert ls["validation_harness_hold"]["fp"] == _HARNESS_OWNER_FP
+	assert "validation_harness_resumes" not in ls
+	assert ls["validation_last_raw_status"] == "harness_error"
+	assert "ai:validation-failed" in result["tracking_labels"]
+	assert "ai:harness-broken" in result["tracking_labels"]
+	assert not any("<!-- validation-harness-resume:v1" in b for b in _harness_comment_bodies(result))
+	assert _hold_line("unknown", reason="dispatch_failed") in output, output
+
+
+def test_validation_harness_hold_baselines_unknown_support_and_switch_off_skips():
+	result = _run_harness_tick(support=None)
+	output = result["stdout"] + result["stderr"]
+	assert _hold_line("waiting", reason="support_baselined") in output, output
+	assert result["latest_state"]["validation_harness_hold"]["support"] == _HOLD_PIN_NEW
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+	assert result["validation_dispatches"] == []
+
+	off = _run_harness_tick(env={"VALIDATION_HARNESS_HEAL_ENABLED": "false"})
+	assert "VALIDATION_HARNESS_HOLD tracking_issue=192 outcome=" not in off["stdout"] + off["stderr"]
+	assert off["validation_dispatches"] == []
+
+
+def test_validation_harness_hold_tick_runs_after_stale_pin_block_and_documents_api_budget():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	stale = script.index("# Stale validation-wrapper pin — one-shot automatic recovery (#7138)")
+	tick = script.index("validation_harness_hold_tick || VHH_TICK_RC=$?")
+	resume = script.index("# /judge_resume — manual reset from judge/recovery failure")
+	assert stale < tick < resume
+	for fn in ("_validation_harness_hold_compare() {", "_validation_harness_hold_issue_state() {"):
+		body = _extract_bash_function(script, fn)
+		assert "§14/§15 API budget" in body and "memoized" in body
+
+
+# ---------------------------------------------------------------------------
+# Tests: validation harness hold time limit and judge hold request (Refs #7913, P2c)
+# ---------------------------------------------------------------------------
+
+_JUDGE_FINGERPRINT = "abcdef012345"
+_JUDGE_FP = f"judge:{_JUDGE_FINGERPRINT}"
+
+
+def _assert_harness_hold_expired(result: dict, *, reason: str | None = None) -> None:
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", output
+	assert "validation_harness_hold" not in ls, output
+	assert result["validation_dispatches"] == [], output
+	assert "NEEDS_HUMAN item=192 kind=project reason=validation_failed" in output
+	assert any(
+		n["level"] == "CRITICAL" and "hold ended (expired)" in n["message"] for n in result["telegram_notifications"]
+	), result["telegram_notifications"]
+	assert any("## ❌ Runtime validation harness hold ended" in b for b in _harness_comment_bodies(result))
+	assert _hold_line("expired", pin="unknown", reason=reason) in output, output
+	assert _harness_api_reads(result) == (0, 0), result["api_calls"]
+
+
+def test_validation_harness_hold_expires_after_max_days():
+	result = _run_harness_tick(since=_hold_since(15))
+	_assert_harness_hold_expired(result)
+	assert "14-day limit" in "\n".join(_harness_comment_bodies(result))
+
+
+def test_validation_harness_hold_within_max_days_keeps_waiting():
+	result = _run_harness_tick(pin=_HARNESS_OWNER_SUPPORT, since=_hold_since(13))
+	output = result["stdout"] + result["stderr"]
+	assert _hold_line("waiting", pin=_HARNESS_OWNER_SUPPORT, reason="pin_unchanged") in output, output
+	assert "outcome=expired" not in output
+	_assert_harness_still_held(result)
+
+	short = _run_harness_tick(
+		pin=_HARNESS_OWNER_SUPPORT, since=_hold_since(2), env={"VALIDATION_HARNESS_HOLD_MAX_DAYS": "1"},
+	)
+	_assert_harness_hold_expired(short)
+
+
+def test_validation_harness_hold_invalid_since_expires():
+	for since in ("__missing__", "garbage", _hold_since(-365)):
+		result = _run_harness_tick(pin=_HARNESS_OWNER_SUPPORT, since=since)
+		_assert_harness_hold_expired(result, reason="since_invalid")
+		bodies = "\n".join(_harness_comment_bodies(result))
+		assert "start time" in bodies and "day limit" not in bodies, bodies
+
+
+def test_validation_harness_hold_expires_while_validation_is_disabled():
+	result = _run_harness_tick(since=_hold_since(15), env={"ENABLE_VALIDATION": "false"})
+	output = result["stdout"] + result["stderr"]
+	assert "outcome=expired" in output, output
+	assert "validation_harness_hold" not in result["latest_state"]
+	assert result["validation_dispatches"] == []
+	fresh = _run_harness_tick(pin=_HARNESS_OWNER_SUPPORT, env={"ENABLE_VALIDATION": "false"})
+	out2 = fresh["stdout"] + fresh["stderr"]
+	assert _hold_line("waiting", pin="unknown", reason="validation_disabled") in out2, out2
+	_assert_harness_still_held(fresh)
+
+
+def test_validation_harness_hold_skipped_in_the_source_repository():
+	result = _run_harness_hold_poller(
+		comments=[_harness_owner_comment()],
+		env={"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows"},
+	)
+	output = result["stdout"] + result["stderr"]
+	assert "validation_harness_hold" not in result["latest_state"], output
+	assert "outcome=skip fp=unknown pin=unknown heal_issue=none reason=self_repo" in output
+	assert not any("<!-- validation-harness-hold:v1" in b for b in _harness_comment_bodies(result))
+
+
+def test_validation_harness_hold_resume_comment_names_a_deferred_dispatch():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	resume = _extract_bash_function(script, "_validation_harness_hold_resume() {")
+	assert "(.validation_last_dispatch_cycle // 0) == 1" in resume
+	assert "is queued and dispatched on a later tick" in resume
+
+
+def test_validation_harness_hold_bounce_wins_over_expiry():
+	result = _run_harness_tick(
+		comments=[_harness_route_comment(outcome="bounced", classification="consumer-app-defect")],
+		since=_hold_since(30),
+	)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert ls["validation_recovery_count"] == 2
+	assert "outcome=bounced" in output
+	assert "outcome=expired" not in output
+	assert not any("hold ended (expired)" in n["message"] for n in result["telegram_notifications"])
+
+
+def _judge_request_comment(
+	*, item: str = "192", fingerprint: str = _JUDGE_FINGERPRINT, login: str = _HARNESS_ROUTE_LOGIN,
+	extra: str = "", trailer: str = "",
+) -> dict:
+	return {
+		"body": (
+			"The unblock judge found a harness defect.\n"
+			f"<!-- ai:unblock-harness-hold-request:v1 item={item} stop=validation-failed "
+			f"fingerprint={fingerprint} round=1{extra} -->\n{trailer}"
+		),
+		"user": {"login": login},
+		"author_association": "OWNER",
+	}
+
+
+def _run_judge_request(
+	comments: list, *, state_extra: dict | None = None, labels: list | None = None,
+	env: dict | None = None, with_hold: dict | None = None,
+) -> dict:
+	state = _harness_held_failed_state(with_hold=False)
+	state["validation_last_raw_status"] = "tests_failed"
+	state["validation_recovery_count"] = 2
+	if with_hold is not None:
+		state["validation_harness_hold"] = with_hold
+	state.update(state_extra or {})
+	overrides = {
+		"VALIDATION_HARNESS_ROUTE_LOGIN": _HARNESS_ROUTE_LOGIN,
+		"VALIDATION_STALE_PIN_AUTO_RECOVER_ENABLED": "false",
+		"CWS_DEFAULT_BRANCH": "main",
+	}
+	overrides.update(env or {})
+	return _run_poller(
+		state=state,
+		enable_validation="true",
+		max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"] if labels is None else labels,
+		tracking_comments=comments,
+		capture_telegram_calls=True,
+		env_overrides=overrides,
+		mock_store_extra={
+			"git_show_blobs": {
+				_HOLD_WRAPPER_PATH: (
+					"jobs:\n  v:\n    uses: shubhodeep1/coding-workflows/.github/workflows/"
+					f"validate.yml@{_HARNESS_OWNER_SUPPORT} # stable\n"
+				),
+			},
+		},
+	)
+
+
+def _judge_line(outcome: str, *, pin: str = "unknown", reason: str | None = None) -> str:
+	line = f"VALIDATION_HARNESS_HOLD tracking_issue=192 outcome={outcome} fp={_JUDGE_FP} pin={pin} heal_issue=none"
+	return line + (f" reason={reason}" if reason else "")
+
+
+def test_validation_harness_judge_hold_request_enters_hold():
+	result = _run_judge_request([_judge_request_comment()])
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "failed", output
+	hold = ls["validation_harness_hold"]
+	assert hold["fp"] == _JUDGE_FP
+	assert hold["support"] == _HARNESS_OWNER_SUPPORT
+	assert hold["heal_issue"] is None and hold["outcome"] is None
+	assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", hold["since"])
+	assert ls["validation_harness_hold_requests_used"] == [2]
+	assert ls["validation_last_raw_status"] == "tests_failed"
+	hold_comments = [b for b in _harness_comment_bodies(result) if "## ⏸ Runtime validation waiting for a harness fix" in b]
+	assert len(hold_comments) == 1, output
+	assert "The unblock judge found that this failure belongs to the validation harness" in hold_comments[0]
+	assert hold_comments[0].rstrip().splitlines()[-1] == (
+		f"<!-- validation-harness-hold:v1 fp={_JUDGE_FP} support={_HARNESS_OWNER_SUPPORT} -->"
+	)
+	warnings = [n for n in result["telegram_notifications"] if n["level"] == "WARNING" and "waiting for a harness fix" in n["message"]]
+	assert len(warnings) == 1, result["telegram_notifications"]
+	assert "harness_error" not in warnings[0]["message"], warnings[0]["message"]
+	assert _judge_line("held", pin=_HARNESS_OWNER_SUPPORT) in output, output
+	assert result["validation_dispatches"] == []
+	assert "ai:harness-broken" in result["tracking_labels"]
+
+
+def test_validation_harness_judge_hold_request_untrusted_author_ignored():
+	result = _run_judge_request([_judge_request_comment(login="outsider")])
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"] or result["state_on_disk"]
+	assert "validation_harness_hold" not in ls
+	assert not ls.get("validation_harness_hold_requests_used")
+	assert f"fp={_JUDGE_FP}" not in output
+	assert not any("<!-- validation-harness-hold:v1" in b for b in _harness_comment_bodies(result))
+
+
+def test_validation_harness_judge_hold_request_used_once():
+	result = _run_judge_request(
+		[_judge_request_comment()], state_extra={"validation_harness_hold_requests_used": [2]},
+	)
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"] or result["state_on_disk"]
+	assert "validation_harness_hold" not in ls
+	assert f"fp={_JUDGE_FP}" not in output
+
+	# A request at or below the highest consumed id was already seen, even
+	# after its own id left the 50-id list.
+	evicted = _run_judge_request(
+		[_judge_request_comment()], state_extra={"validation_harness_hold_requests_used": [3]},
+	)
+	ls_evicted = evicted["latest_state"] or evicted["state_on_disk"]
+	assert "validation_harness_hold" not in ls_evicted
+	assert f"fp={_JUDGE_FP}" not in evicted["stdout"] + evicted["stderr"]
+
+	# After an expiry the consumed request cannot re-enter the hold.
+	expired = _run_judge_request(
+		[_judge_request_comment()],
+		state_extra={"validation_harness_hold_requests_used": [2]},
+		with_hold={
+			"fp": _JUDGE_FP, "support": _HARNESS_OWNER_SUPPORT, "heal_issue": None,
+			"outcome": None, "since": _hold_since(20), "reason": "judge",
+		},
+	)
+	out2 = expired["stdout"] + expired["stderr"]
+	assert "outcome=expired" in out2, out2
+	assert "validation_harness_hold" not in expired["latest_state"]
+	assert _judge_line("held", pin=_HARNESS_OWNER_SUPPORT) not in out2
+
+
+def test_validation_harness_judge_hold_request_ignores_bad_markers():
+	for comment in (
+		_judge_request_comment(item="193"),
+		_judge_request_comment(fingerprint="abcdef01234"),
+		_judge_request_comment(extra=" item=192"),
+		_judge_request_comment(trailer="A later line.\n"),
+	):
+		result = _run_judge_request([comment])
+		ls = result["latest_state"] or result["state_on_disk"]
+		assert "validation_harness_hold" not in ls, comment["body"]
+		assert not ls.get("validation_harness_hold_requests_used"), comment["body"]
+
+
+def test_validation_harness_judge_hold_request_caps_reached():
+	for resumes in ({"by_fp": {_JUDGE_FP: 2}, "total": 2}, {"by_fp": {}, "total": 4}):
+		result = _run_judge_request(
+			[_judge_request_comment()], state_extra={"validation_harness_resumes": resumes},
+		)
+		output = result["stdout"] + result["stderr"]
+		ls = result["latest_state"]
+		assert "validation_harness_hold" not in ls, output
+		assert ls["validation_harness_hold_requests_used"] == [2]
+		assert _judge_line("capped") in output, output
+		assert any(
+			n["level"] == "CRITICAL" and "harness resume cap is reached" in n["message"]
+			for n in result["telegram_notifications"]
+		), result["telegram_notifications"]
+
+
+def test_validation_harness_judge_hold_request_skips_active_hold_and_non_validation_failure():
+	active = _run_judge_request(
+		[_judge_request_comment()],
+		state_extra={"validation_last_raw_status": "harness_error"},
+		with_hold={
+			"fp": _HARNESS_OWNER_FP, "support": _HARNESS_OWNER_SUPPORT, "heal_issue": None,
+			"outcome": None, "since": _HOLD_SINCE_FRESH, "reason": "harness",
+		},
+	)
+	output = active["stdout"] + active["stderr"]
+	ls = active["latest_state"]
+	assert ls["validation_harness_hold"]["fp"] == _HARNESS_OWNER_FP, output
+	assert ls["validation_harness_hold_requests_used"] == [2]
+	assert _judge_line("skip", reason="hold_active") in output, output
+
+	other = _run_judge_request([_judge_request_comment()], labels=["ai:needs-human"])
+	out2 = other["stdout"] + other["stderr"]
+	ls2 = other["latest_state"]
+	assert "validation_harness_hold" not in ls2, out2
+	assert ls2["validation_harness_hold_requests_used"] == [2]
+	assert _judge_line("skip", reason="not_validation_failure") in out2, out2
+
+
+def test_validation_harness_judge_hold_request_switch_off():
+	result = _run_judge_request([_judge_request_comment()], env={"VALIDATION_HARNESS_HEAL_ENABLED": "false"})
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"] or result["state_on_disk"]
+	assert "validation_harness_hold" not in ls
+	assert "validation_harness_hold_requests_used" not in ls
+	assert "VALIDATION_HARNESS_HOLD tracking_issue=192 outcome=" not in output
+	assert not any("<!-- validation-harness-hold:v1" in b for b in _harness_comment_bodies(result))
+
+
+def test_validation_harness_judge_hold_resumes_on_pin_ahead():
+	result = _run_harness_tick(fp=_JUDGE_FP, raw_status="tests_failed")
+	output = result["stdout"] + result["stderr"]
+	ls = result["latest_state"]
+	assert ls["status"] == "validating", output
+	assert "validation_harness_hold" not in ls
+	assert ls["validation_harness_resumes"] == {"by_fp": {_JUDGE_FP: 1}, "total": 1}
+	assert len(result["validation_dispatches"]) == 1, output
+	assert "outcome=resumed" in output
+
+
+def test_validation_harness_judge_hold_request_runs_before_tick_check():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	stale = script.index("# Stale validation-wrapper pin — one-shot automatic recovery (#7138)")
+	request = script.index("validation_harness_judge_hold_request || VHH_REQ_RC=$?")
+	tick = script.index("validation_harness_hold_tick || VHH_TICK_RC=$?")
+	assert stale < request < tick
+	body = _extract_bash_function(script, "validation_harness_judge_hold_request() {")
+	assert "gh " not in body and "_safe_gh_jq" not in body
+	assert ".[-50:]" in body
 
 
 def test_validation_fixing_label_collects_active_fix_issue_ids_from_comment():
@@ -19337,6 +20807,129 @@ def test_linked_pr_graphql_queries_request_full_label_page():
 	assert "labels(first: 100) { nodes { name } }" in linked_status_helper
 
 
+def _candidate_details_cross_repo_pr_node(number, repo, *, state="OPEN", merged=False, head_ref="feature", base_ref="main", merge_oid=None):
+	source = {
+		"__typename": "PullRequest",
+		"number": number,
+		"state": state,
+		"merged": merged,
+		"labels": {"nodes": []},
+		"mergedAt": "2026-10-01T00:00:00Z" if merged else None,
+		"headRefName": head_ref,
+		"baseRefName": base_ref,
+		"headRefOid": "b" * 40,
+		"mergeable": "MERGEABLE",
+		"mergeStateStatus": "CLEAN",
+		"mergeCommit": {"oid": merge_oid} if merge_oid else None,
+		"commits": {"nodes": [{"commit": {"pushedDate": None, "committedDate": "2026-10-01T00:00:00Z"}}]},
+	}
+	if repo is not None:
+		source["repository"] = {"nameWithOwner": repo}
+	return {"willCloseTarget": True, "source": source}
+
+
+def _candidate_details_cross_repo_issue(number, timeline_nodes):
+	return {
+		"number": number,
+		"state": "OPEN",
+		"body": f"issue {number}",
+		"author": {"login": "someone"},
+		"authorAssociation": "OWNER",
+		"labels": {"nodes": [{"name": "ai:done"}], "pageInfo": {"hasNextPage": False}},
+		"comments": {"nodes": [{
+			"databaseId": number * 100,
+			"body": "hello",
+			"createdAt": "2026-10-01T00:00:00Z",
+			"authorAssociation": "OWNER",
+			"author": {"login": "someone"},
+		}]},
+		"timelineItems": {"nodes": timeline_nodes},
+	}
+
+
+def test_candidate_issue_details_linked_pr_ignores_cross_repo_prs():
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	# The module's custom runner does not inject pytest fixtures such as
+	# tmp_path, so the test owns its temporary directory.
+	with tempfile.TemporaryDirectory() as _candidate_tmp:
+		_run_candidate_details_cross_repo_filter(Path(_candidate_tmp))
+
+
+def _run_candidate_details_cross_repo_filter(tmp_path: Path) -> None:
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	start = source.index("_fetch_candidate_issue_details_graphql() {")
+	body = source[start:source.index("\n}\n", start) + 2]
+
+	same_repo = _candidate_details_cross_repo_pr_node(
+		77,
+		"owner/repo",
+		state="CLOSED",
+		merged=True,
+		head_ref="ai/issue-10",
+		base_ref="orchestrator/project-1",
+		merge_oid="a" * 40,
+	)
+	# The foreign PR is newer (later in the timeline), so without the
+	# repository filter `last` would pick it.
+	foreign = _candidate_details_cross_repo_pr_node(88, "other-owner/other-repo", head_ref="evil")
+	no_repo = _candidate_details_cross_repo_pr_node(99, None, head_ref="hidden")
+	fixture = {
+		"data": {
+			"repository": {
+				"i0": _candidate_details_cross_repo_issue(10, [same_repo, foreign]),
+				"i1": _candidate_details_cross_repo_issue(11, [foreign]),
+				"i2": _candidate_details_cross_repo_issue(12, [no_repo]),
+			}
+		}
+	}
+	fixture_path = tmp_path / "graphql.json"
+	fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+	calls_path = tmp_path / "calls.txt"
+	script = (
+		"set -euo pipefail\n"
+		"export GITHUB_REPOSITORY=owner/repo\n"
+		'gh_retry() { printf \'%s\\n\' "$*" >> "$CALLS"; cat "$FIXTURE"; }\n'
+		+ body
+		+ "\n_fetch_candidate_issue_details_graphql '[10, 11, 12]'\n"
+	)
+	env = dict(os.environ, CALLS=str(calls_path), FIXTURE=str(fixture_path))
+	proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+
+	out = json.loads(proc.stdout)
+	linked = out["10"]["linked_pr"]
+	assert linked["number"] == 77
+	assert linked["merged"] is True
+	assert linked["head_ref"] == "ai/issue-10"
+	assert linked["merge_commit_sha"] == "a" * 40
+	assert set(linked) == {
+		"number", "state", "merged", "labels", "merged_at", "merge_commit_sha",
+		"head_ref", "base_ref", "head_sha", "mergeable", "merge_state_status", "headPushedAt",
+	}
+	assert out["11"]["linked_pr"] is None
+	assert out["12"]["linked_pr"] is None
+	assert out["10"]["labels"] == ["ai:done"]
+	assert out["10"]["comments"] and out["10"]["comments"][0]["id"] == 1000
+
+	call_lines = [line for line in calls_path.read_text(encoding="utf-8").splitlines() if line.startswith("gh ")]
+	assert len(call_lines) == 1
+	assert "graphql" in call_lines[0]
+	assert "repository { nameWithOwner }" in calls_path.read_text(encoding="utf-8")
+
+
+def test_candidate_and_linked_status_helpers_share_repo_filter():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	candidate_helper = script.split("_fetch_candidate_issue_details_graphql()", 1)[1].split("_fetch_linked_pr_status_graphql()", 1)[0]
+	linked_status_helper = script.split("_fetch_linked_pr_status_graphql()", 1)[1].split("_single_issue_linked_pr_status_graphql()", 1)[0]
+	repo_filter = 'select((.repository.nameWithOwner // "") == $repo)'
+	for helper in (candidate_helper, linked_status_helper):
+		assert "repository { nameWithOwner }" in helper
+		assert '--arg repo "${owner}/${name}"' in helper
+		assert repo_filter in helper
+	assert candidate_helper.index('select(.__typename == "PullRequest")') < candidate_helper.index(repo_filter)
+
+
 def test_retrigger_review_keeps_empty_commit_path_when_no_prior_autofix_failure():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
@@ -21187,6 +22780,8 @@ sys.exit(1)
 """
 		(bin_dir / "gh").write_text(gh_mock)
 		(bin_dir / "gh").chmod(0o755)
+		# GH_TOKEN and GITHUB_REPOSITORY are set below, so keep curl off the network.
+		_write_poller_curl_shim(bin_dir)
 
 		# Minimal codex mock (should not be reached in this test)
 		(bin_dir / "codex").write_text(
@@ -21722,7 +23317,7 @@ def test_integration_conflict_branch_rebuild_fetch_retry_stays_escalated_and_ign
 def test_branch_rebuild_replay_configures_git_identity():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert re.search(
-		r'cd "\$\{worktree_dir\}" \|\| exit 20\s+git config user.name "codex-bot" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+git config user.email "codex@users\.noreply\.github\.com" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+while IFS= read -r replay_item; do',
+		r'cd "\$\{worktree_dir\}" \|\| exit 20\s+git config user.name "codex-bot" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+git config user.email "codex-bot@users\.noreply\.invalid" >>"\$\{replay_log\}" 2>&1 \|\| exit 26\s+while IFS= read -r replay_item; do',
 		script,
 	), "expected branch rebuild replay subshell to configure git identity before cherry-pick"
 
@@ -24021,7 +25616,8 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	assert (
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
 		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
-		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh"'
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl provider_outage.py ai_engine_fallback_report.sh '
+		'implement_step_prepush_test_gate.sh prepush_test_gate_run.sh validate_changed_files_syntax.sh"'
 	) in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
@@ -26110,6 +27706,117 @@ def test_plan_gate_poller_wiring() -> None:
 	assert "_plan_auto_approval_gate" not in release
 
 
+# --------------------------------------------------------------------------
+# Heal-route counterfactual gate in stall recovery (issue #8249)
+# --------------------------------------------------------------------------
+
+_HEAL_CF_FAIL_LINE = "HEAL_COUNTERFACTUAL: FAIL: the gate still times out after 30 min"
+
+
+def _heal_cf_plan_comment(line: str) -> dict:
+	body = ("Implementation Plan\n\n### 1. Files likely to change\n- `src/app.py`\n\n"
+		"## Counterfactual check\n\n- e2e-smoke-test: walked the recorded failure.\n\n"
+		f"{line}\n\nSTATUS: CLEAR\n\n<!-- ai:plan-proposal:v1 -->")
+	return {"body": body, "user": {"login": _PLAN_GATE_LOGIN}, "author_association": "OWNER",
+		"created_at": "2026-01-01T00:00:00Z"}
+
+
+def _heal_cf_holds(result: dict, issue: str) -> list[str]:
+	return [c.get("body", "") for c in result["issues"][issue]["comments"]
+		if f"<!-- ai:heal-counterfactual-hold:v1 issue={issue} " in c.get("body", "")]
+
+
+def _managed_heal_cf_run(comments: list, **overrides) -> dict:
+	kwargs = {
+		"state": _managed_awaiting_approval_state(), "enable_validation": "false", "max_validate_cycles": "3",
+		"issue_labels": {10: ["ai:awaiting-approval", "ai:orchestrator-managed", "ai:workflow-heal"]},
+		"issue_comments": {10: comments},
+	}
+	kwargs.update(overrides)
+	return _run_poller(**kwargs)
+
+
+def test_managed_auto_approve_holds_heal_plan_whose_counterfactual_fails() -> None:
+	result = _managed_heal_cf_run([_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE)])
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10") == [], log
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=hold result=FAIL "
+		"reason=fail issue=10") in log
+	assert "STALL_SKIP issue=10 reason=heal_counterfactual_hold phase=ai:awaiting-approval action=none" in log
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+	# A held heal plan never gets a pipeline grant written into its body.
+	assert result.get("issue_body_patch_calls", []) == []
+	holds = _heal_cf_holds(result, "10")
+	assert len(holds) == 1, log
+	assert " result=FAIL source=poller -->" in holds[0]
+	assert "Stall recovery did not post `/approved`" in holds[0]
+	# The next tick holds again but does not post a second comment.
+	posted = {"body": holds[0], "user": {"login": _PLAN_GATE_LOGIN}, "author_association": "OWNER",
+		"created_at": "2026-01-01T00:00:05Z"}
+	second = _managed_heal_cf_run([_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE), posted])
+	second_log = second["stdout"] + second["stderr"]
+	assert _approved_bodies(second, "10") == [], second_log
+	assert "reason=heal_counterfactual_hold" in second_log
+	assert _heal_cf_holds(second, "10") == [holds[0]], second_log
+
+
+def test_managed_auto_approve_posts_heal_plan_whose_counterfactual_passes() -> None:
+	result = _managed_heal_cf_run([_heal_cf_plan_comment("HEAL_COUNTERFACTUAL: PASS")])
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10"), log
+	assert ("AI_PHASE_GATE_V1 phase=stall_recovery gate=heal_counterfactual outcome=approve result=PASS "
+		"reason=pass issue=10") in log
+	assert _heal_cf_holds(result, "10") == []
+
+
+def test_managed_heal_counterfactual_gate_can_be_turned_off() -> None:
+	result = _managed_heal_cf_run([_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE)],
+		env_overrides={"HEAL_COUNTERFACTUAL_GATE_ENABLED": "false"})
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10"), log
+	assert "reason=gate_disabled issue=10" in log
+	assert "reason=heal_counterfactual_hold" not in log
+
+
+def test_non_heal_issue_skips_the_heal_counterfactual_gate() -> None:
+	result = _run_poller(
+		state=_managed_awaiting_approval_state(), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:awaiting-approval", "ai:orchestrator-managed"]},
+		issue_comments={10: [_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE)]},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "10"), log
+	assert "gate=heal_counterfactual" not in log
+
+
+def test_standalone_auto_approve_holds_heal_plan_whose_counterfactual_fails() -> None:
+	result = _run_poller(
+		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval", "ai:workflow-heal"]},
+		issue_comments={501: [_heal_cf_plan_comment(_HEAL_CF_FAIL_LINE), _standalone_awaiting_approval_state_comment()]},
+		mock_gh_issue_list_label_filter=True,
+		tracking_issues_override=[],
+		env_overrides={"STANDALONE_RECOVERY_SWEEP_ONLY": "true"},
+	)
+	log = result["stdout"] + result["stderr"]
+	assert _approved_bodies(result, "501") == [], log
+	assert "gate=heal_counterfactual outcome=hold result=FAIL reason=fail issue=501" in log
+	assert "STALL_SKIP issue=501 reason=heal_counterfactual_hold phase=ai:awaiting-approval action=none" in log
+	assert len(_heal_cf_holds(result, "501")) == 1, log
+
+
+def test_heal_counterfactual_poller_wiring() -> None:
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'HEAL_COUNTERFACTUAL_GATE_ENABLED="${HEAL_COUNTERFACTUAL_GATE_ENABLED:-true}"' in poller
+	gate = poller.split("\n_plan_auto_approval_gate()\n", 1)[1].split("\n}\n", 1)[0]
+	assert gate.index("_plan_heal_counterfactual_check") < gate.index("--plan-auto-approval-gate")
+	assert "partial_delivery.py" in poller.split("\n_plan_heal_counterfactual_check()\n", 1)[1].split("\n}\n", 1)[0]
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert " pr_dependency.py partial_delivery.py pr_checks_lib.sh " in workflow
+	assert workflow.count(
+		"HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}") == 5
+
+
 def main() -> int:
 	# Force line-buffered stdout so PASS/FAIL messages surface to CI logs as
 	# each test completes, instead of sitting in Python's default block buffer
@@ -26332,7 +28039,7 @@ def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
 
 NEEDS_HUMAN_TERMINAL_CALLS = {
 	"security_pass_failed": 3,
-	"validation_failed": 3,
+	"validation_failed": 4,
 	"final_merge_exhausted": 1,
 	"integration_conflict_capped": 1,
 	"judge_cycles_exhausted": 1,
@@ -26347,7 +28054,22 @@ def test_needs_human_digest_terminal_paths_call_the_helper():
 	for reason, count in NEEDS_HUMAN_TERMINAL_CALLS.items():
 		assert script.count(f'needs_human_park_project "{reason}"') == count, reason
 	lines = script.splitlines()
+	# The validation harness hold (Refs #7913) waits for a harness fix instead
+	# of parking: entering the hold and rolling back a failed resume dispatch
+	# restore ai:validation-failed without parking, so those two helpers are
+	# the exemptions from the adjacency rule.
+	exempt = []
+	for header in ("_validation_harness_hold_finish() {", "_validation_harness_hold_resume() {"):
+		hold_start = lines.index(header)
+		hold_end = lines.index("}", hold_start)
+		assert any(
+			l.strip() == 'set_tracking_phase_label "ai:validation-failed"' for l in lines[hold_start:hold_end]
+		), header
+		assert not any("needs_human_park_project" in l for l in lines[hold_start:hold_end]), header
+		exempt.append((hold_start, hold_end))
 	for idx, line in enumerate(lines):
+		if any(start <= idx < end for start, end in exempt):
+			continue
 		if line.strip() in ('set_tracking_phase_label "ai:security-pass-failed"', 'set_tracking_phase_label "ai:validation-failed"'):
 			assert lines[idx + 1].strip().startswith("needs_human_park_project "), idx
 	assert 'NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"' in script
@@ -27140,6 +28862,212 @@ def test_standalone_pipeline_label_batch_unrecognised_answer_keeps_rest_path() -
 	assert result["pipeline_label_graphql_calls"] == 0, log
 	assert sorted(_stall_listing_labels(result)) == sorted(_STANDALONE_PIPELINE_LABELS), log
 	assert {501, 502, 503} <= set(result.get("candidate_details_requested", [])), log
+
+
+def test_poller_curl_shim_fails_fast_and_redacts_authorization() -> None:
+	with tempfile.TemporaryDirectory() as curl_shim_tmp:
+		curl_shim_root = Path(curl_shim_tmp)
+		curl_shim_bin = curl_shim_root / "bin"
+		curl_shim_bin.mkdir()
+		_write_poller_curl_shim(curl_shim_bin)
+		curl_shim_log = curl_shim_root / "curl_calls.log"
+		curl_shim_env = dict(os.environ)
+		curl_shim_env["CURL_CALL_CAPTURE"] = str(curl_shim_log)
+		curl_shim_env["PATH"] = f"{curl_shim_bin}:{curl_shim_env.get('PATH', '')}"
+		completed = subprocess.run(
+			["curl", "-s", "-H", "Authorization: token secret-value", "--header=authorization: bearer other-value", "-u", "user:pass-value", "--user=u2:pw2", "https://api.github.com/x"],
+			env=curl_shim_env,
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+		assert completed.returncode == 7
+		assert completed.stdout == ""
+		logged = curl_shim_log.read_text(encoding="utf-8").splitlines()
+		assert logged == ["-s -H Authorization: [redacted] --header=Authorization: [redacted] -u [redacted] --user=[redacted] https://api.github.com/x"]
+		assert "secret-value" not in curl_shim_log.read_text(encoding="utf-8")
+		assert "pass-value" not in curl_shim_log.read_text(encoding="utf-8")
+		# Header names are case-insensitive, and cookie values are redacted too.
+		curl_shim_log.unlink()
+		completed = subprocess.run(
+			["curl", "-H", "AUTHORIZATION: token upper-value", "-b", "sid=cookie-value", "--cookie=sid=cookie2", "https://api.github.com/x"],
+			env=curl_shim_env,
+			capture_output=True,
+			text=True,
+			timeout=30,
+		)
+		assert completed.returncode == 7
+		assert curl_shim_log.read_text(encoding="utf-8").splitlines() == ["-H Authorization: [redacted] -b [redacted] --cookie=[redacted] https://api.github.com/x"]
+		# A curl the test already supplied is kept.
+		(curl_shim_bin / "curl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+		_write_poller_curl_shim(curl_shim_bin)
+		assert (curl_shim_bin / "curl").read_text(encoding="utf-8") == "#!/bin/sh\nexit 0\n"
+		# Without a capture path the shim still fails fast.
+		curl_shim_env.pop("CURL_CALL_CAPTURE")
+		curl_shim_bin.joinpath("curl").unlink()
+		_write_poller_curl_shim(curl_shim_bin)
+		completed = subprocess.run(["curl", "https://api.github.com/x"], env=curl_shim_env, capture_output=True, text=True, timeout=30)
+		assert completed.returncode == 7
+
+
+# ── Integration post-sync test repair dispatch (#8210, plan phase P5) ──
+
+_ITR_SIGNATURE = "_dispatch_integration_test_repair()\n{"
+
+
+def _itr_git_env() -> dict[str, str]:
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
+	return env
+
+
+def _itr_fixture(tmp: str, wrapper_text: str | None) -> str:
+	"""Bare origin with main (optionally carrying review_autofix.yml) and an
+	orchestrator/project-1 branch; returns a clone to run the poller in."""
+	env = _itr_git_env()
+	seed = os.path.join(tmp, "seed")
+	origin = os.path.join(tmp, "origin.git")
+	work = os.path.join(tmp, "work")
+	subprocess.run(["git", "init", "--quiet", "-b", "main", seed], check=True, env=env)
+	os.makedirs(os.path.join(seed, ".github", "workflows"))
+	with open(os.path.join(seed, "README.md"), "w", encoding="utf-8") as fh:
+		fh.write("x\n")
+	if wrapper_text is not None:
+		with open(os.path.join(seed, ".github", "workflows", "review_autofix.yml"), "w", encoding="utf-8") as fh:
+			fh.write(wrapper_text)
+	subprocess.run(["git", "-C", seed, "add", "-A"], check=True, env=env)
+	subprocess.run(["git", "-C", seed, "commit", "--quiet", "-m", "seed"], check=True, env=env)
+	subprocess.run(["git", "-C", seed, "branch", "orchestrator/project-1"], check=True, env=env)
+	subprocess.run(["git", "clone", "--quiet", "--bare", seed, origin], check=True, env=env)
+	subprocess.run(["git", "clone", "--quiet", origin, work], check=True, env=env)
+	return work
+
+
+_ITR_WRAPPER_WITH_INPUT = (
+	"on:\n  workflow_dispatch:\n    inputs:\n      post_sync_test_repair:\n        type: boolean\n"
+)
+_ITR_WRAPPER_WITH_PASS_THROUGH_ONLY = (
+	"jobs:\n  review:\n    with:\n      post_sync_test_repair: ${{ inputs.x == 'true' }}\n"
+)
+
+
+def _itr_run(tmp: str, work: str, state: dict, env_extra: dict[str, str], calls: int = 1) -> tuple[str, dict, str]:
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	fn = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), _ITR_SIGNATURE)
+	state_file = os.path.join(tmp, "state.json")
+	with open(state_file, "w", encoding="utf-8") as fh:
+		json.dump(state, fh)
+	gh_log = os.path.join(tmp, "gh.log")
+	tracker = os.path.join(tmp, "tracker")
+	open(tracker, "w").close()
+	snippet = fn + (
+		'\ngh_retry() { printf "%s\\n" "$*" >> "${GH_LOG}"; return "${GH_RC:-0}"; }\n'
+		'post_state_comment() { echo posted >> "${GH_LOG}.state"; }\n'
+	) + '\n_dispatch_integration_test_repair 7 orchestrator/project-1 42 main\n' * calls
+	env = dict(_itr_git_env())
+	env.update({"STATE_FILE": state_file, "GH_LOG": gh_log, "_CONFLICT_DISPATCH_TRACKER": tracker,
+		"GITHUB_REPOSITORY": "o/r", "PREPUSH_TEST_GATE_MODE": "repair"})
+	env.update(env_extra)
+	snippet = "_CONFLICT_DISPATCH_TRACKER=\"${_CONFLICT_DISPATCH_TRACKER}\"\n" + snippet
+	proc = subprocess.run(["bash", "-c", snippet], cwd=work, env=env, capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stderr
+	with open(state_file, encoding="utf-8") as fh:
+		new_state = json.load(fh)
+	gh = open(gh_log, encoding="utf-8").read() if os.path.exists(gh_log) else ""
+	return proc.stdout + proc.stderr, new_state, gh
+
+
+def test_integration_test_repair_dispatches_once_and_records_the_head():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		head = subprocess.run(["git", "-C", work, "rev-parse", "origin/orchestrator/project-1"], check=True, capture_output=True, text=True, env=_itr_git_env()).stdout.strip()
+		out, state, gh = _itr_run(tmp, work, {"integration_conflict_total_dispatches": 1}, {"INTEGRATION_CONFLICT_LIFETIME_MAX": "1"}, calls=2)
+		lines = [ln for ln in gh.splitlines() if ln.startswith("gh workflow run")]
+		assert len(lines) == 1, gh
+		assert "review_autofix.yml" in lines[0] and "-f pr_number=42" in lines[0]
+		assert "-f post_sync_test_repair=true" in lines[0] and "--ref" not in lines[0]
+		assert state["integration_test_repair_sha"] == head
+		# Repairs use their own counter: a full conflict budget does not stop
+		# them, and they never consume conflict-resolver slots.
+		assert state["integration_test_repair_dispatches"] == 1
+		assert state["integration_conflict_total_dispatches"] == 1
+		assert f"outcome=dispatched pr=42 sha={head} workflow=review_autofix.yml" in out
+		# The second call in the same tick sees the recorded SHA.
+		assert f"reason=already_dispatched sha={head}" in out
+
+
+def test_integration_test_repair_dedupes_a_recorded_head_sha():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		head = subprocess.run(["git", "-C", work, "rev-parse", "origin/orchestrator/project-1"], check=True, capture_output=True, text=True, env=_itr_git_env()).stdout.strip()
+		out, state, gh = _itr_run(tmp, work, {"integration_test_repair_sha": head}, {})
+		assert "gh workflow run" not in gh
+		assert "reason=already_dispatched" in out
+		assert "integration_test_repair_dispatches" not in state
+
+
+def test_integration_test_repair_mode_off_stops_dispatch():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		out, state, gh = _itr_run(tmp, work, {}, {"PREPUSH_TEST_GATE_MODE": "OFF"})
+		assert gh == ""
+		assert "outcome=skipped reason=mode_off" in out
+		assert "integration_test_repair_sha" not in state
+
+
+def test_integration_test_repair_skips_wrappers_without_the_input():
+	for wrapper in (None, _ITR_WRAPPER_WITH_PASS_THROUGH_ONLY):
+		with tempfile.TemporaryDirectory() as tmp:
+			work = _itr_fixture(tmp, wrapper)
+			out, state, gh = _itr_run(tmp, work, {}, {})
+			assert gh == "", gh
+			assert "PREPUSH_TEST_GATE phase=integration" in out and "outcome=skipped reason=wrapper_input_absent" in out
+			assert "integration_test_repair_sha" not in state
+
+
+def test_integration_test_repair_respects_the_lifetime_cap_and_failed_dispatch():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		out, state, gh = _itr_run(tmp, work, {"integration_test_repair_dispatches": 3}, {"INTEGRATION_CONFLICT_LIFETIME_MAX": "3"})
+		assert gh == "" and "reason=lifetime_cap" in out
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		out, state, gh = _itr_run(tmp, work, {}, {"GH_RC": "1"})
+		assert "outcome=dispatch_failed" in out
+		assert "integration_test_repair_sha" not in state
+		assert "integration_test_repair_dispatches" not in state
+
+
+def test_integration_test_repair_skips_when_the_fetch_fails():
+	with tempfile.TemporaryDirectory() as tmp:
+		work = _itr_fixture(tmp, _ITR_WRAPPER_WITH_INPUT)
+		subprocess.run(["git", "-C", work, "remote", "set-url", "origin", os.path.join(tmp, "missing.git")], check=True, env=_itr_git_env())
+		out, state, gh = _itr_run(tmp, work, {}, {})
+		assert gh == "" and "outcome=skipped reason=fetch_failed" in out
+		assert "integration_test_repair_sha" not in state
+
+
+def test_integration_test_repair_wiring_and_poll_workflow_forwarding():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn = _extract_bash_function(script, _ITR_SIGNATURE)
+	# One dispatch call and no REST/GraphQL read (unattended section 14).
+	assert fn.count("gh workflow run") == 1
+	assert "_has_active_autofix_run" not in fn and "_safe_gh_jq" not in fn and "gh api" not in fn
+	calls = script.count('_dispatch_integration_test_repair "${TRACKING_NUM:-}"')
+	assert calls == 4, calls
+	clean_calls = re.findall(r'mark_integration_sync_clean "\$\{default_branch\}"\n\s+_dispatch_integration_test_repair ', script)
+	assert len(clean_calls) == 3, len(clean_calls)
+	rtm = script[script.index('echo "  PR #${RTM_PR} merged directly."'):]
+	rtm = rtm[:rtm.index("else\n")] + rtm[rtm.index("refresh_integration_backpressure_gate_after_merge || true"):][:400]
+	assert '_dispatch_integration_test_repair "${TRACKING_NUM:-}" "${RTM_INTEGRATION_BRANCH:-}"' in rtm
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	step = workflow[workflow.index("      - name: Process each tracking issue"):]
+	step = step[:step.index("\n      - name: ", 10)]
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in step
+	sweep = workflow[workflow.index("      - name: Run standalone stall recovery without active projects"):]
+	sweep = sweep[:sweep.index("\n      - name: ", 10)]
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in sweep
 
 
 if __name__ == "__main__":

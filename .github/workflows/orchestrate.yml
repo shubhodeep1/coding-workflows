@@ -463,7 +463,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py; do
+          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py orchestrate_state_v2.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -641,6 +641,8 @@ jobs:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Pre-assemble static context
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
 
@@ -654,6 +656,20 @@ jobs:
           fi
           orchestrate_readme_context="$(mktemp "${RUNNER_TEMP}/orchestrate-readme.XXXXXX")"
           bash scripts/build_static_context.sh readme "${orchestrate_readme_context}"
+          # Issue #8269: index the agents file instead of inlining it unless
+          # STATIC_CONTEXT_AGENTS_MODE says inline (same rules as build_static_context.sh).
+          orchestrate_agents_mode="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          case "${orchestrate_agents_mode}" in
+            ""|index) orchestrate_agents_mode=index ;;
+            inline) orchestrate_agents_mode=inline ;;
+            *)
+              echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+              orchestrate_agents_mode=inline
+              ;;
+          esac
+          orchestrate_agents_effective_mode="${orchestrate_agents_mode}"
+          orchestrate_agents_fallback_reason=""
+          orchestrate_agents_absent=false
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
             cat unattended_system_instructions.md
@@ -676,7 +692,29 @@ jobs:
                 echo "::warning::AGENTS.md is a symbolic link; omitted from the static context." >&2
               fi
             fi
-            if [ -n "${orchestrate_agents_file}" ]; then
+            orchestrate_agents_indexed=false
+            if [ -n "${orchestrate_agents_file}" ] && [ "${orchestrate_agents_mode}" = index ]; then
+              if orchestrate_agents_index_tmp="$(mktemp "${RUNNER_TEMP}/orchestrate-agents-index.XXXXXX" 2>/dev/null)"; then
+                if bash scripts/build_static_context.sh agents-index "${orchestrate_agents_index_tmp}" "${orchestrate_agents_file}" && [ -s "${orchestrate_agents_index_tmp}" ]; then
+                  cat "${orchestrate_agents_index_tmp}"
+                  echo
+                  orchestrate_agents_indexed=true
+                else
+                  orchestrate_agents_fallback_reason=index_unavailable
+                fi
+                rm -f "${orchestrate_agents_index_tmp}"
+              else
+                orchestrate_agents_fallback_reason=tmp_unavailable
+              fi
+              if [ "${orchestrate_agents_indexed}" != true ]; then
+                orchestrate_agents_effective_mode=inline
+                echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+              fi
+            fi
+            if [ -z "${orchestrate_agents_file}" ]; then
+              orchestrate_agents_absent=true
+            fi
+            if [ -n "${orchestrate_agents_file}" ] && [ "${orchestrate_agents_indexed}" != true ]; then
               echo "=== AGENTS.MD ==="
               # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
               if [ -d agents.d ] && [ ! -L agents.d ] && orchestrate_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${orchestrate_agents_file}" 2>/dev/null)"; then
@@ -700,6 +738,14 @@ jobs:
           STATIC_LINES="$(wc -l < ./pre_assembled_static.txt)"
           STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
+          orchestrate_size_line="STATIC_CONTEXT_SIZE phase=orchestrate mode=${orchestrate_agents_effective_mode} bytes=$(printf '%s' "${STATIC_BYTES}" | tr -d '[:space:]')"
+          if [ -n "${orchestrate_agents_fallback_reason}" ]; then
+            orchestrate_size_line="${orchestrate_size_line} fallback=inline reason=${orchestrate_agents_fallback_reason}"
+          fi
+          if [ "${orchestrate_agents_absent}" = true ]; then
+            orchestrate_size_line="${orchestrate_size_line} agents=absent"
+          fi
+          echo "${orchestrate_size_line}" >&2
 
       - name: Retrieve memory context
         env:
@@ -1071,6 +1117,8 @@ jobs:
 
       - name: Validate decomposition JSON
         if: env.CLAUDE_CAPACITY_WAIT != 'true'
+        env:
+          PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
         run: |
           set -euo pipefail
 
@@ -1082,6 +1130,47 @@ jobs:
           # cycle detection, files_touched normalization).
           python3 scripts/orchestrate_lib.py validate --input-file "${DECOMPOSITION_FILE}"
           echo "Decomposition validated successfully."
+
+          # Pre-push affected-test gate, phase P2 (issue #8189): append the
+          # tests and companion registries each issue's planned files affect,
+          # before the partition guard, compute-waves, the tracking body and
+          # pending_issue_defs read files_touched. The gate module comes only
+          # from the trusted support checkout; the repository checkout is
+          # read as data. A missing module or any failure is a no-op.
+          # The decomposition was just written from model output, so a
+          # prepush_augmented_paths key in it can only be model-supplied. Drop
+          # it before augmentation, so the partition guard only ever sees a
+          # marker augment-files-touched wrote in this run, also when the
+          # gate is off, fails or times out (issue #8244).
+          if jq -e 'type == "object" and has("prepush_augmented_paths")' "${DECOMPOSITION_FILE}" >/dev/null 2>&1; then
+            if jq 'del(.prepush_augmented_paths)' "${DECOMPOSITION_FILE}" > "${DECOMPOSITION_FILE}.marker-strip.tmp"; then
+              mv "${DECOMPOSITION_FILE}.marker-strip.tmp" "${DECOMPOSITION_FILE}"
+              echo "PREPUSH_TEST_GATE phase=augment outcome=marker_dropped reason=model_supplied"
+            else
+              rm -f "${DECOMPOSITION_FILE}.marker-strip.tmp"
+              echo "::error::PREPUSH_TEST_GATE phase=augment outcome=failed reason=marker_strip_failed"
+              exit 1
+            fi
+          fi
+          _prepush_gate_mode="$(printf '%s' "${PREPUSH_TEST_GATE_MODE:-repair}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          case "${_prepush_gate_mode}" in
+            off|report|repair) ;;
+            *)
+              echo "PREPUSH_TEST_GATE outcome=mode_invalid"
+              _prepush_gate_mode="repair"
+              ;;
+          esac
+          if [ "${_prepush_gate_mode}" = "off" ]; then
+            echo "PREPUSH_TEST_GATE phase=augment outcome=skipped reason=mode_off"
+          else
+            _prepush_gate_module="${GITHUB_WORKSPACE}/.codex-workflow-src/workflow-templates/.claude/hooks/prepush_affected_tests.py"
+            python3 scripts/orchestrate_lib.py augment-files-touched \
+              --decomposition "${DECOMPOSITION_FILE}" \
+              --repo-root "${GITHUB_WORKSPACE}" \
+              --gate-module "${_prepush_gate_module}" \
+              --write-back \
+              || echo "::warning::PREPUSH_TEST_GATE phase=augment outcome=skipped reason=command_failed"
+          fi
 
           # Fetch the conflict-telemetry JSONL from the ai-memory branch
           # so the partition guard can compute the EFFECTIVE hot-file
@@ -1138,10 +1227,16 @@ jobs:
           fi
           if [ "${PARTITION_OVERLAP_COUNT}" -gt 0 ]; then
             echo "::notice::Partition guard detected ${PARTITION_OVERLAP_COUNT} sibling file-touch overlap(s); auto-serialize will resolve them by injecting dependency_edges."
-            jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | "\(.issue_a)\u2194\(.issue_b) on \(.files | join(\", \"))"] | join("; "))' "${PARTITION_REPORT_FILE}" || true
+            # Plain concatenation: an escaped quote inside a \(...) interpolation
+            # is a jq compile error (issue #8244, run 40609251819).
+            jq -r '.wave_reports[]? | select(.overlap_count > 0) | "  Wave " + (.wave | tostring) + ": " + (.overlap_count | tostring) + " overlap(s): " + ([.overlaps[] | .issue_a + " <-> " + .issue_b + " on " + ((.files // []) | join(", "))] | join("; "))' "${PARTITION_REPORT_FILE}" || true
             jq -r '.planned_serializations[]? | "  Will serialize: \(.winner) -> \(.loser) (over " + (.overlap_type) + " on " + (.files | join(", ")) + ")"' "${PARTITION_REPORT_FILE}" || true
           else
             echo "Partition guard: no sibling file-touch overlaps detected."
+          fi
+          PARTITION_AUGMENTED_IGNORED="$(jq -r '.augmented_only_overlaps_ignored // 0' "${PARTITION_REPORT_FILE}" 2>/dev/null || echo 0)"
+          if [[ "${PARTITION_AUGMENTED_IGNORED}" =~ ^[0-9]+$ ]] && [ "${PARTITION_AUGMENTED_IGNORED}" -gt 0 ]; then
+            echo "Partition guard: ignored ${PARTITION_AUGMENTED_IGNORED} overlap(s) on affected-test paths that no sibling planned."
           fi
 
           # Compute waves with auto-serialize and write the resulting
@@ -1353,8 +1448,15 @@ jobs:
           # Only create Wave 1 issues now. Later-wave issues are created by the
           # poller when their dependencies are met (deferred creation). This
           # ensures clarify.yml fires on issues.opened at the right time.
+          # Issue #8314: the same Python call also records why each later-wave
+          # issue was deferred (model dependency edge or auto-serialize edge,
+          # with the shared files_touched path or hot file) in
+          # WAVE1_DEFERRALS_FILE. That part fails open and never changes the
+          # Wave 1 selection; stdout stays limited to the Wave 1 IDs.
+          WAVE1_DEFERRALS_FILE="${RUNTIME_DIR}/wave1_deferrals.json"
+          rm -f "${WAVE1_DEFERRALS_FILE}"
           WAVE1_IDS="$(python3 -c "
-          import json, sys
+          import json, os, sys
           sys.path.insert(0, 'scripts')
           from orchestrate_lib import validate_decomposition, compute_waves
 
@@ -1362,9 +1464,52 @@ jobs:
               data = json.load(f)
 
           validate_decomposition(data)
+          # The partition-guard write-back already holds the edges, so the call
+          # below resets partition_serializations; keep the written-back trail.
+          prior_ser = data.get('partition_serializations')
+          prior_ser = list(prior_ser) if isinstance(prior_ser, list) else []
           waves = compute_waves(data)
           for issue in waves[0]:
               print(issue['id'])
+
+          try:
+              ser_by_edge = {}
+              for rec in prior_ser + list(data.get('partition_serializations') or []):
+                  if isinstance(rec, dict):
+                      ser_by_edge.setdefault((rec.get('winner'), rec.get('loser')), rec)
+              # The library keeps one record per edge (hot_file before pair), so
+              # also name every files_touched path the two issues share.
+              touched = {i.get('id'): [p for p in (i.get('files_touched') or []) if isinstance(p, str)] for i in data.get('issues') or [] if isinstance(i, dict)}
+              # Paths the pre-push gate added to both issues never cause an edge
+              # (validate_wave_file_partition drops them, #8244); leave them out.
+              from orchestrate_lib import trusted_prepush_augmented_paths
+              aug = trusted_prepush_augmented_paths(data)
+              deferrals = {}
+              for wave_idx, wave in enumerate(waves):
+                  if wave_idx == 0:
+                      continue
+                  for issue in wave:
+                      iid = issue['id']
+                      reasons = []
+                      for edge in data.get('dependency_edges') or []:
+                          if edge.get('to') != iid:
+                              continue
+                          rec = ser_by_edge.get((edge.get('from'), iid))
+                          if rec is None:
+                              reasons.append({'from': edge.get('from'), 'source': 'model'})
+                          else:
+                              files = list(rec.get('files') or [])
+                              aug_both = aug.get(edge.get('from'), set()) & aug.get(iid, set())
+                              files += [p for p in touched.get(edge.get('from'), []) if p in touched.get(iid, []) and p not in files and p not in aug_both]
+                              reasons.append({'from': edge.get('from'), 'source': 'auto_serialize', 'overlap_type': rec.get('overlap_type'), 'files': files})
+                      if not reasons:
+                          reasons = [{'source': 'unknown'}]
+                      deferrals[iid] = 'wave=%d deferral_reasons=%s' % (wave_idx + 1, json.dumps(reasons, ensure_ascii=True, separators=(',', ':')))
+              with open(os.path.join(os.environ['RUNTIME_DIR'], 'wave1_deferrals.json'), 'w') as out:
+                  json.dump(deferrals, out)
+          except Exception as exc:
+              detail = str(exc).replace(chr(13), ' ').replace(chr(10), ' ')[:200]
+              print('::warning::Wave 1 deferral diagnostics unavailable: %s' % detail, file=sys.stderr)
           ")"
 
           echo "Wave 1 issue IDs: ${WAVE1_IDS}"
@@ -1378,13 +1523,28 @@ jobs:
 
             # Skip issues not in Wave 1
             if ! echo "${WAVE1_IDS}" | grep -qxF "${LOCAL_ID}"; then
-              echo "  Deferring ${LOCAL_ID} (not in Wave 1)"
+              # One greppable line per deferred issue (issue #8314); the
+              # "Deferring <id> (not in Wave 1)" prefix stays unchanged.
+              _wave1_defer_detail="$(jq -r --arg id "${LOCAL_ID}" '.[$id] // empty' "${WAVE1_DEFERRALS_FILE}" 2>"${RUNTIME_DIR}/wave1_deferrals_jq.err")" || {
+                _wave1_defer_detail=""
+                # Keep jq's own error text (one line, 200 chars, '::' broken up).
+                [ ! -s "${WAVE1_DEFERRALS_FILE}" ] || echo "::warning::Wave 1 deferral detail for ${LOCAL_ID} could not be read from wave1_deferrals.json: $(tr -d '\r\n' < "${RUNTIME_DIR}/wave1_deferrals_jq.err" 2>/dev/null | cut -c1-200 | sed 's/::/: :/g')"
+              }
+              echo "  Deferring ${LOCAL_ID} (not in Wave 1): ${_wave1_defer_detail:-deferral_reasons=unavailable}"
               continue
             fi
 
             TITLE="$(jq -r ".issues[${idx}].title" "${DECOMPOSITION_FILE}")"
             BODY="$(jq -r ".issues[${idx}].body" "${DECOMPOSITION_FILE}" | sed 's/\\n/\n/g')"
             PRIORITY="$(jq -r ".issues[${idx}].priority" "${DECOMPOSITION_FILE}")"
+
+            # Advisory "Expected files" section (issue #8189), rendered by the
+            # same helper as the poller's later-wave issues. Not an allowlist.
+            WAVE1_EXPECTED_SECTION="$(jq -c ".issues[${idx}].files_touched // []" "${DECOMPOSITION_FILE}" 2>/dev/null \
+              | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)"
+            if [ -n "${WAVE1_EXPECTED_SECTION}" ]; then
+              BODY="$(printf '%s\n\n%s' "${BODY}" "${WAVE1_EXPECTED_SECTION}")"
+            fi
 
             # Append orchestrator metadata to body
             FULL_BODY="$(cat <<EOF
@@ -1404,13 +1564,21 @@ jobs:
             if [ -n "${PROJECT_ENGINE_LABEL:-}" ]; then
               child_create_args+=(--label "${PROJECT_ENGINE_LABEL}")
             fi
+            _wave1_create_rc=0
             ISSUE_URL="$(gh_retry gh issue create \
               --repo "${{ github.repository }}" \
               --title "${TITLE}" \
               --body "${FULL_BODY}" \
-              "${child_create_args[@]}")"
+              "${child_create_args[@]}")" || _wave1_create_rc=$?
 
-            ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
+            # Issue #8314: a create that fails or returns no issue URL is
+            # reported here, not 90s later by the stable gate's child count.
+            ISSUE_NUM="$(printf '%s\n' "${ISSUE_URL}" | grep -oE '/issues/[0-9]+$' | tail -n1 | grep -oE '[0-9]+$' || true)"
+            if [ "${_wave1_create_rc}" -ne 0 ] || ! [[ "${ISSUE_NUM}" =~ ^[1-9][0-9]*$ ]]; then
+              _wave1_create_out_summary="$(printf '%s' "${ISSUE_URL}" | tr -d '\r\n' | cut -c1-200)"
+              echo "::error::Wave 1 child issue creation for local id ${LOCAL_ID} returned no issue number (gh_retry exit=${_wave1_create_rc}, output='${_wave1_create_out_summary:-<empty>}'); refusing to continue with a missing child (tracking issue #${TRACKING_ISSUE_NUMBER})."
+              exit 1
+            fi
             ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"
             echo "  Created #${ISSUE_NUM}: ${TITLE} (${LOCAL_ID})"
           done
@@ -1439,6 +1607,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           # Build state using Python helper
           python3 -c "
@@ -1467,18 +1636,37 @@ jobs:
               json.dump(state, f, indent=2)
           "
 
-          # Post state as a hidden comment on the tracking issue for the poller
-          STATE_COMMENT="$(cat <<EOF
-          <!-- ORCHESTRATOR_STATE_V1
-          $(cat "${STATE_FILE}")
-          ORCHESTRATOR_STATE_V1 -->
-          EOF
-          )"
-
-          jq -n --arg body "${STATE_COMMENT}" '{"body": $body}' \
-            | gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
-                --input - >/dev/null
-          echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER}"
+          # Post state for the poller as an ORCHESTRATOR_STATE_V2 chunked-comment
+          # chain, the format the poller's post_state_comment writes and its
+          # reader tries first. The old single V1 comment broke on big projects:
+          # its body went to jq as one argv string, which Linux caps at 128 KiB
+          # ("Argument list too long"), and a body over 65,536 bytes is refused
+          # by GitHub anyway. Tracking issue #8291 (31 issues, 20 waves) failed
+          # here in run 40789524145. Chunks are read from files, never argv.
+          STATE_PACK_DIR="${RUNTIME_DIR}/initial_state_v2"
+          rm -rf "${STATE_PACK_DIR}"
+          STATE_PACK_MANIFEST="$(python3 scripts/orchestrate_state_v2.py pack \
+            --state-file "${STATE_FILE}" \
+            --out-dir "${STATE_PACK_DIR}")"
+          STATE_PACK_TOTAL="$(jq -r '.total' <<< "${STATE_PACK_MANIFEST}")"
+          STATE_PACK_RAW_BYTES="$(jq -r '.raw_bytes' <<< "${STATE_PACK_MANIFEST}")"
+          mapfile -t STATE_PACK_FILES < <(jq -r '.files[]' <<< "${STATE_PACK_MANIFEST}")
+          if ! [[ "${STATE_PACK_TOTAL}" =~ ^[1-9][0-9]*$ ]] || [ "${#STATE_PACK_FILES[@]}" -ne "${STATE_PACK_TOTAL}" ]; then
+            echo "::error::orchestrate_state_v2 pack returned ${#STATE_PACK_FILES[@]} chunk file(s) for declared total=${STATE_PACK_TOTAL} (tracking issue #${TRACKING_ISSUE_NUMBER}); refusing to post a torn state chain."
+            exit 1
+          fi
+          STATE_PACK_PART=0
+          for STATE_PACK_CHUNK in "${STATE_PACK_FILES[@]}"; do
+            STATE_PACK_PART=$((STATE_PACK_PART + 1))
+            jq -Rs '{body: .}' < "${STATE_PACK_CHUNK}" > "${STATE_PACK_CHUNK}.json"
+            if ! gh_retry gh api "repos/${{ github.repository }}/issues/${TRACKING_ISSUE_NUMBER}/comments" \
+              --method POST \
+              --input "${STATE_PACK_CHUNK}.json" >/dev/null; then
+              echo "::error::Failed to post ORCHESTRATOR_STATE_V2 chunk ${STATE_PACK_PART}/${STATE_PACK_TOTAL} to tracking issue #${TRACKING_ISSUE_NUMBER}."
+              exit 1
+            fi
+          done
+          echo "Posted initial state to tracking issue #${TRACKING_ISSUE_NUMBER} (ORCHESTRATOR_STATE_V2 parts=${STATE_PACK_PART} raw_bytes=${STATE_PACK_RAW_BYTES})"
 
       - name: Record decomposition candidate
         if: env.CLAUDE_CAPACITY_WAIT != 'true'

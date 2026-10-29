@@ -5,3 +5,9 @@ optional_vars:
 forbidden_vars:
   - WORKFLOW_EDIT_RESTRICTION
   - SEMBLE_PREFETCH
+# Output fields (documentation only; the renderer accepts only the *_vars
+# keys above): the diagnosis JSON may carry the optional
+# `fix_issues[].files` (consumer-relative paths a fix edits) and
+# `harness_files` (paths the harness fix touches). scripts/validate_process.sh
+# passes them to `workflow_failure_heal.py classify-validation-owner`; answers
+# without them still parse.

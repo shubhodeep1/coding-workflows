@@ -821,16 +821,13 @@ rules, and audience split.
 
 ## §21. Merged-PR Commit Guard (MANDATORY)
 
-**Never commit or push onto a branch whose pull request has already
-merged.** A merged PR is finished — it cannot track new work. Commits
-stacked on top of already-merged history land on a branch no open PR
-carries, so the work is stranded: it never reaches the default branch and
-is lost when the branch is deleted.
+Full text (guard conditions, shell forms it parses, fail-open contract, API
+budget, push-command details): `.claude/docs/s21-merged-pr-commit-guard.md`.
 
-This is a real failure mode for long-lived interactive sessions. A session
-that runs for days or weeks outlives the PR it opened; the PR merges
-mid-session and the model, working from context that predates the merge,
-keeps committing to the same branch.
+**Never commit or push onto a branch whose pull request has already
+merged.** A merged PR cannot track new work: commits stacked on its history
+land on a branch no open PR carries, so the work is stranded. Long-lived
+sessions hit this when the PR merges mid-session.
 
 ### A) The rule
 
@@ -842,358 +839,114 @@ the current branch is not sitting on a merged PR. If it is:
    `git fetch origin <default> && git checkout -B <branch> origin/<default>`
 2. Re-apply the pending work and commit it there.
 3. Open a **new** pull request. The merged PR is not reusable, and §12.A's
-   single-PR rule does not apply across a merge boundary — the merged PR is
-   closed history, so the follow-up work is a new PR, not a split of an
-   existing one.
+   single-PR rule does not apply across a merge boundary.
 
 If the branch carries unmerged commits beyond the merged history, rebase
 them onto the new base rather than discarding them.
 
 ### B) Enforcement
 
-The rule is enforced deterministically by `.claude/hooks/pr_merge_status_guard.py`,
-wired as a `PreToolUse` hook on `Bash` in `.claude/settings.json`. Prose alone
-cannot enforce this — the instruction is furthest from the context window's live
-edge exactly when the session has run long enough for the merge to happen.
-
-The guard blocks a command only when all three conditions hold:
-
-1. A **merged** PR exists whose head ref is the current branch, **and**
-2. no **open** PR exists for the current branch, **and**
-3. that merged PR's head commit is an ancestor of `HEAD`.
-
-Condition 3 is what makes the guard self-clearing. Branch names are reused
-after the reset in §21.A, so the merged PR matches `--head <branch>`
-forever; ancestry is what separates "stacking on merged history" from
-"fresh work that reuses the name". No override flag is needed, and the
-guard goes quiet as soon as the branch is reset — before the new PR exists.
-
-Condition 3 is refined for repositories that merge with **merge commits**.
-There the merged head *is* an ancestor of the default branch, so after the
-reset it is an ancestor of `HEAD` too and plain ancestry would block the
-very remediation §21.A prescribes. The guard therefore also looks at where
-the branch forks off `origin/<default>`: a fork point on the default
-branch's first-parent chain means the branch was rebuilt from the default
-branch (allow); a fork point on merged side history means the branch is
-still sitting on the merged commits (block). Squash- and rebase-merged PRs
-never put the merged head into the default branch, so plain ancestry
-already decides for them.
-
-The guard finds `git commit` and `git push` behind the shell forms that still
-run them in the same repository, and judges them like a bare command:
-- leading `VAR=value` assignments and an `env` wrapper;
-- `time`, `command`, `nice`, `ionice`, `exec`, `nohup`, `setsid` and
-  `timeout` prefixes, with their options;
-- control words, `( ... )` subshells and `bash -c` / `eval` scripts.
-
-It follows a `cd` written behind `VAR=value`, `builtin`, `command [-p]` or
-`time [-p]`, all of which still run the builtin in the current shell.
-
-When it cannot tell where the Git write runs, it asks for confirmation
-instead of passing silently. That covers:
-- another command that runs its words as a command, such as `sudo git push`
-  or `xargs git push`;
-- a prefix option it does not understand;
-- a `cd` whose destination depends on a `CDPATH` set in the same command;
-- a `cd` after `cd` is redefined (a function, an alias or `enable -n cd`);
-- a Git write after a `pushd`, `popd`, `eval`, `source` or `.`, bare or
-  behind the prefixes above.
-
-`command -v git`, `time git status` and `echo "git push"` are not Git writes
-and pass without a prompt.
-
-The same hook guards the GitHub MCP push tools — `mcp__github__push_files`
-and `mcp__github__create_or_update_file` — through a second `PreToolUse`
-matcher in `.claude/settings.json`. Those tools write to a remote branch
-without a local `git push`, so the remote branch tip (fetched via
-`git ls-remote` + `git fetch`) takes the role `HEAD` plays for a local
-commit. When the target repository is not the local checkout, ancestry
-cannot be verified and a merged-PR match **asks** for confirmation instead
-of blocking, because a block there could never self-clear.
+`.claude/hooks/pr_merge_status_guard.py`, a `PreToolUse` hook in
+`.claude/settings.json` on `Bash` and on the GitHub MCP push tools
+(`mcp__github__push_files`, `mcp__github__create_or_update_file`), blocks a
+Git write when a merged PR's head is in the branch's history and no open PR
+exists for the branch. It clears itself once the branch is rebuilt from the
+default branch, so no override flag is needed. It asks for confirmation when
+it cannot tell where a Git write runs (`sudo git push`, `xargs git push`,
+`eval`, `pushd`, and similar).
 
 ### C) Fail-open contract
 
-An unreachable GitHub API — `gh` missing, token expired or unauthenticated,
-network failure, or Claude Code Web's agent proxy answering HTTP 403 as it
-does for sessions without the GitHub App connected — does **not** silently
-allow the command. The guard falls back to git history alone, fetching
-`origin/<default>` through the git remote (which works in exactly the
-sessions where the API does not):
-
-1. If the branch sits on merge-commit side history already in
-   `origin/<default>` and origin still holds a branch tip fully contained in
-   `origin/<default>`, the command is **blocked** with the same remediation as
-   the API path.
-2. Otherwise git history is **inconclusive** (an absent remote ref could be a
-   deleted merged branch or a never-pushed branch, and a rebuilt branch and a
-   squash- or rebase-merged one look identical): a `git push` or an MCP push
-   is routed through the harness permission prompt (`permissionDecision: ask`)
-   so a human confirms the PR is still open, and a bare `git commit` is allowed
-   with a warning, since the work only strands once pushed.
-
-Only the cases where nothing branch-shaped can be checked at all — an
-unparseable hook payload, detached HEAD, not a git repo, an undeterminable
-`<owner>/<repo>` — still **allow** the command and emit a warning naming the
-branch. A guard that hard-blocks every commit whenever the environment is
-broken would cost more than the bug it prevents; asking on a push is the
-compromise.
-
-The merged-PR check is skipped on the default branch and when
-`CLAUDE_PR_MERGE_GUARD=off` is set (default: unset, i.e. enabled). The API-write
-confirmation safeguard remains active in both cases.
+With the GitHub API unreachable, the guard falls back to git history: it
+blocks when history shows the branch is merged, asks on a push when history
+is inconclusive, and allows a bare commit with a warning. The merged-PR check
+is skipped on the default branch and when `CLAUDE_PR_MERGE_GUARD=off` is set
+(default: unset, i.e. enabled); the API-write confirmation safeguard stays on.
 
 ### D) API-call budget
 
-Per §15, the guard issues **one** API call per guarded command — a single
-`state=all` request answers both the merged and the open question — and
-caches the result for 300 seconds keyed on `<slug>/<branch>`. Cached data may
-satisfy an *allow* for a bare `git commit` only; a *block* is always
-re-verified against a live call first, so opening a new PR clears the guard
-immediately instead of after the TTL.
-
-A push never reads the cache, because a cached answer may predate a merge and
-a push is where the work strands. A `git push` or an MCP push always takes PR
-state from a live lookup. When one command guards the same branch more than
-once, a push reuses only a snapshot that came from a live lookup in the same
-hook run; a snapshot an earlier `git commit` in that command took from the
-cache is queried again once. A failed push lookup follows §21.C and never
-falls back to cached data.
-
-The git-history fallback in §21.C issues no GitHub API calls at all: one
-`git ls-remote` for the branch and one `git fetch` for the default branch
-(plus the branch, when origin still has it), both through the git remote.
-
-The call goes over REST (`gh api repos/<slug>/pulls`), **not** `gh pr list`.
-Claude Code Web's agent proxy serves only a pinned set of GraphQL operations
-and rejects the rest with HTTP 403, and `gh pr list` is GraphQL-backed — using
-it as the primary transport would make the guard fail open on every commit in
-exactly the long-running web sessions §21 exists to protect. `gh pr list`
-remains wired as a transport fallback for environments where REST is gated
-instead. The fallback is a retry of the same question on a different
-transport, never a second query.
+One REST call per guarded command (§15), cached for 300 seconds for bare
+commits only; a push always uses a live lookup.
 
 ### E) Push Command Shape
 
-Write every `git push` as one plain command with literal arguments:
-`git push -u origin <branch>`, or after a §21.A reset
-`git push --force-with-lease origin <branch>` (or
-`--force-with-lease=<branch>:<sha>` with the SHA typed out). Never put a push
-inside a `for`/`while` retry loop: the guard cannot tell which directory the
-push runs in, so it asks for confirmation in every permission mode. Keep
-`$VAR` and `$(...)` out of the push arguments too, so the allow rules below
-can match. When a push fails on a network error, retry it as a new call with
-the same plain command.
-
-`.claude/settings.json` allows the plain `git push` and
-`git push --force-with-lease` forms to `origin claude/*` without a prompt
-(§23.C makes force-pushing the session's own working branch routine). Its
-`ask` rules cover pushes that delete a branch with `--delete`, `-d` or
-`--prune`, or that name `main` or `master` as a destination. The trailing `*`
-of a `claude/*` allow rule also matches a second refspec, so the
-`pr_merge_status_guard.py` hook (§21.B) checks the parsed refspecs as well. It
-asks for every branch deletion (`--delete`, `-d`, a `:ref` refspec, `--prune`),
-and for every refspec whose destination is the repository's resolved default
-branch, with or without a `+` prefix (`claude/x +main`, `claude/x:main`), so a
-consumer repo whose default branch has another name is covered too. When
-neither `origin/HEAD` nor `git ls-remote --symref origin HEAD` names the
-default branch, it asks for every destination outside `claude/*`. What still
-passes without a prompt: `claude/x:release` (a non-default branch, checked
-only against its merged PR), a short `heads/<name>` destination such as
-`claude/x:heads/main` (the hook compares it unexpanded), a push to a renamed
-default branch while the checkout's cached `origin/HEAD` still names the old
-one, and
-`--force-with-lease=claude/a:<sha> origin claude/b` (which leases a different
-branch from the one it overwrites). `CLAUDE_PR_MERGE_GUARD=off` turns these
-deletion and default-branch asks off together with the merged-PR check; the
-`settings.json` ask rules still apply. So push exactly one plain branch name, give
-`--force-with-lease=` the same branch as the destination, and never add a
-second refspec, a `+` refspec or a `src:dst` refspec to a push.
-
-The same rule of one plain command applies to cleanup. Delete files with
-their absolute path, in a call of their own, never chained after a `cd` (for
-example `rm -rf /tmp/.../scratchpad/rel_shards`, not
-`cd <dir> && ...; rm -rf ../../rel_shards`). Claude Code's built-in
-critical-path check on `rm` appears to resolve a relative target against the
-session's working directory rather than the earlier `cd`, so `../../x` from
-`/home/user` reads as `/x`, a direct child of `/`. That check prompts in every
-permission mode, and no allow rule or hook can approve it. Files under the
-session scratchpad need no cleanup at all: the scratchpad goes away with the
-container.
+- Write every push as one plain command with literal arguments:
+  `git push -u origin <branch>`, or after a §21.A reset
+  `git push --force-with-lease origin <branch>`.
+- No `for`/`while` retry loops and no `$VAR` or `$(...)` in push arguments.
+  Create the branch and commit in their own command before the push. After a
+  network error, retry as a new call with the same plain command.
+- Push exactly one plain branch name: never a second refspec, a `+` refspec
+  or a `src:dst` refspec. The guard asks for every branch deletion and every
+  push to the default branch.
+- Delete files with their absolute path, in a call of their own, never
+  chained after a `cd`. Scratchpad files need no cleanup.
 
 ---
 
 ## §22. DigitalOcean Access (MANDATORY)
 
-The session environment provides a `DIGITALOCEAN_ACCESS_TOKEN` env var — a
-DigitalOcean API token. This section applies in this repo and in every
-consumer repo that receives this file via the `@stable` sync. It splits
-DigitalOcean operations into two postures: **reads are self-serve** (act,
-do not ask), **mutations are ask-first** (always confirm before acting).
+Full text: `.claude/docs/s22-digitalocean-access.md`.
+
+The session provides `DIGITALOCEAN_ACCESS_TOKEN`, a DigitalOcean API token.
+This applies here and in every consumer repo. **Reads are self-serve,
+mutations are ask-first.**
 
 ### A) Read Operations — Act, Do Not Ask
 
-When a task needs data from DigitalOcean, pull it yourself with the token
-instead of asking the user to fetch it or to run commands on your behalf.
-This is an explicit carve-out from §2 for **read-only** DigitalOcean calls —
-needing DO-hosted data is not, by itself, a reason to stop and ask.
-Self-serve reads include (non-exhaustively):
+Pull DigitalOcean data yourself instead of asking the user (a carve-out from
+§2): list and inspect Apps, Droplets, managed databases, volumes and load
+balancers; read deployed env vars; fetch build, deploy and runtime logs; check
+deployment status, alerts and metrics. Prefer `doctl`; otherwise
+`curl -sS -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" "https://api.digitalocean.com/v2/<endpoint>"`.
 
-- listing and inspecting Apps, Droplets, managed databases, volumes, and
-  load balancers, and their specs/configuration;
-- reading deployed app-level env vars to verify that a name or value
-  matches what the code and docs expect;
-- fetching build, deploy, and runtime logs to diagnose failures;
-- checking deployment status, alert policies, and monitoring/metrics data.
-
-Transport: prefer `doctl` when installed (it honours the
-`DIGITALOCEAN_ACCESS_TOKEN` env var natively); otherwise call the REST API
-directly:
-
-```
-curl -sS -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" \
-  "https://api.digitalocean.com/v2/<endpoint>"
-```
-
-Token hygiene (hard rules):
-- Never echo, log, or print the token value; reference it only via env
-  expansion (`$DIGITALOCEAN_ACCESS_TOKEN`).
-- Never write the token into committed files, PR bodies, issue comments,
-  or diagnostic output. Redact it if a tool response contains it.
-- If the token is missing or the API returns 401/403, report that to the
-  user and continue with what can be done without it — do not retry-loop
-  and do not ask the user to run the API calls manually.
+Never print the token or write it into files, PRs, comments or diagnostics.
+If it is missing or the API returns 401/403, say so once and continue
+without it; no retry loops, no asking the user to run calls.
 
 ### B) Provisioning & Mutations — ALWAYS Ask First
 
-**Never create, modify, resize, or destroy DigitalOcean resources without
-asking first** in the §2 Q/A format — even when the need seems obvious,
-and even under §12's proactive PR-review scope (this subsection is NOT
-superseded by §12). Ask-first operations include (non-exhaustively):
-
-- spinning up new Droplets, Apps, managed databases, volumes, load
-  balancers, or any other billable resource;
-- resizing, scaling, or migrating existing resources;
-- destroying or powering off resources;
-- changing a deployed app's spec or env vars, forcing rebuilds/redeploys,
-  restoring from backups, or rotating credentials.
-
-The question must name the exact resource type, size/plan, region, and
-estimated billing impact where known, so the user approves a concrete
-action rather than an intention. After approval, perform the operation
-yourself with the token — do not hand the user a command to run (§18).
+Never create, modify, resize, scale, migrate, power off or destroy a
+resource, change an app's spec or env vars, force a rebuild or redeploy,
+restore a backup, or rotate credentials without the §2 ask, even under §12.
+Name the resource type, size, region and billing impact. After approval, do
+it yourself (§18).
 
 ### C) Resource IDs Live in the Agents File
 
-Each repo's root agents file (`agents.md` in this repo; `AGENTS.md` in
-consumer repos that use that casing) carries a `## DigitalOcean resources`
-section listing the App / database / Droplet IDs relevant to that repo,
-as a table:
-
-```md
-## DigitalOcean resources
-
-| Resource | Type | ID | Notes |
-|---|---|---|---|
-| <name> | app / db / droplet / ... | <id> | <role, environment> |
-```
-
-Rules:
-- **Look there first.** Before asking for any DigitalOcean resource ID,
-  read the repo's agents file. Use recorded IDs without re-asking.
-- **Ask when missing.** If a needed ID is not recorded, ask the user for
-  it (§2 Q/A format, free-text answer allowed for the ID itself).
-- **Save once provided.** After the user supplies an ID, verify it
-  resolves with one read API call (§22.A), then add it to the
-  `## DigitalOcean resources` section of the agents file **in the same
-  PR/commit as the work that needed it**, so it is never asked for again.
-  Add the row through an `agents.d/` fragment (§30).
-  Create the section if the file lacks it.
-- IDs are identifiers under §6 — never remove or rewrite an existing
-  entry without the §2 ask flow; correcting a stale ID requires telling
-  the user what changed.
+Look up IDs in the agents file's `## DigitalOcean resources` table first. If
+one is missing, ask for it; once given, verify it with one read and record it
+through an `agents.d/` fragment (§30) in the same PR. IDs are §6 identifiers:
+never rewrite or remove one without the §2 ask.
 
 ---
 
 ## §23. GitHub Access (MANDATORY)
 
-The session environment provides a `GH_TOKEN` env var — a GitHub Personal
-Access Token whose reach is wider than the session's built-in GitHub tooling
-(other repositories, Actions logs, endpoints the MCP surface does not expose).
-This section applies in this repo and in every consumer repo that receives
-this file via the `@stable` sync. It splits GitHub work into three postures:
-**reads are self-serve** (act, do not ask), **routine repository writes are
-self-serve**, **destructive and administrative writes are ask-first**.
+Full text (web-session proxy details, transport, token scopes, and the
+`gh api` permission guard's rules): `.claude/docs/s23-github-access.md`.
 
-`GH_TOKEN` is the interactive counterpart of `DIGITALOCEAN_ACCESS_TOKEN`
-(§22): a standing credential the session uses itself, rather than a reason to
-hand the user commands to run.
+The session provides `GH_TOKEN`, a GitHub Personal Access Token. This applies
+here and in every consumer repo. **Reads are self-serve, routine repository
+writes are self-serve, destructive and administrative writes are ask-first.**
 
 ### A) Read Operations — Act, Do Not Ask
 
-When a task needs data from GitHub that the session's default tooling cannot
-reach, pull it yourself with the token instead of asking the user to fetch it
-or to run `gh` on your behalf. This is an explicit carve-out from §2 for
-**read-only** GitHub calls — needing GitHub-hosted data is not, by itself, a
-reason to stop and ask. Self-serve reads include (non-exhaustively):
+Pull GitHub data yourself instead of asking the user (a carve-out from §2):
+PRs, issues, reviews, timelines and labels; Actions runs, jobs, check runs
+and logs (`gh run view --log <run-id> -R <owner>/<repo>`, `--log-failed`);
+commits, diffs, branches, tags, releases and file contents; repo metadata.
+Stay within the repos the work touches: this repo, the consumers in
+`.github/ai/consumer_repos.json`, and repos the user names.
 
-- pull requests, issues, review threads, review comments, timeline events,
-  labels, and linked-issue relationships;
-- Actions workflow runs, jobs, check runs, annotations, and **run/job logs**
-  (`gh run view --log <run-id> -R <owner>/<repo>`,
-  `gh run view --log --job <job-id> -R <owner>/<repo>`,
-  `gh run view --log-failed <run-id> -R <owner>/<repo>`,
-  `gh api repos/<owner>/<repo>/actions/runs/<id>/logs`);
-- commits, diffs, blame, branches, tags, releases, and file contents at any
-  ref, including in a consumer repo whose wrapper or workflow is implicated;
-- repo and org metadata a task depends on: default branch, protection rules
-  as reported by the API, repo variables (`gh variable list`), workflow
-  definitions, and `gh api rate_limit`.
-
-**Repo scope is not widened by the token.** A PAT that *can* read a
-repository is not permission to browse one the task does not involve. Stay
-within the repos the work actually touches: this repo, the consumers listed
-in `.github/ai/consumer_repos.json`, and any repo the user names. When the
-host session exposes a repo-attachment mechanism, prefer attaching the repo
-over reaching around the session's declared scope.
-
-**Web sessions: the PAT never reaches GitHub.** In Claude Code on the web
-(claude.ai/code and the mobile/desktop apps backed by it) every request to
-`api.github.com` — `gh`, `curl`, anything — passes through the session's
-agent proxy, which strips the `Authorization` header and signs the request
-with its own short-lived GitHub App token. `GH_TOKEN` is read by `gh` but
-discarded in transit, so a valid, invalid, or absent token all behave the
-same. Consequences, verified against the proxy (2026-09-20):
-
-- **Identity and reach are the proxy's.** Calls authenticate as the user
-  who connected the GitHub App, and only for repositories attached to the
-  session. A consumer repo that is not attached answers 403 `GitHub access
-  to this repository is not enabled for this session. Use add_repo to
-  request access.` — attach it (with `access: "push"` when writes or the
-  API are needed) rather than treating the 403 as a token problem. Making a
-  repo reachable in *every* session is done in the Claude GitHub App
-  installation and claude.ai's repository access settings, not with any
-  env var.
-- **Some endpoints are refused outright**, whatever the token: GraphQL
-  (§23.D), and Actions paths such as repo variables (`Access to this GitHub
-  Actions path is not permitted through this proxy.`). Run/job logs and
-  runs remain readable.
-- **`gh auth status` is not a token test here.** It verifies over GraphQL,
-  so it reports `The token in GH_TOKEN is invalid` for a good PAT. The
-  SessionStart hook therefore probes over REST (`gh api user`) and, when an
-  unauthenticated `GET /user` also returns 200, reports that the proxy is
-  substituting its credential.
-- **The reads and writes above that need the PAT itself** — other repos
-  without attaching them, GraphQL, repo variables — are available only in
-  a local Claude Code session (CLI, desktop app, IDE extension), where no
-  proxy sits in front of `api.github.com` and `gh` uses `GH_TOKEN`
-  as-is. Do not try to route around the proxy (unsetting `HTTPS_PROXY`,
-  alternate hosts, credential helpers): direct egress is blocked as well.
+**Web sessions:** the agent proxy replaces the PAT with its own GitHub App
+token. Only repositories attached to the session are reachable (attach one
+with `add_repo`, `access: "push"` for writes); GraphQL and some Actions paths
+such as repo variables return 403; `gh auth status` reports a good token as
+invalid. PAT-only reach exists only in a local session. Never route around
+the proxy.
 
 ### B) Routine Repository Writes — Act, Do Not Ask
-
-These writes are ordinary session work, already implied by the task the user
-gave you. Perform them with the token (or the MCP equivalent, per §23.D)
-without a separate approval round:
 
 - pushing commits to the session's own designated working branch;
 - opening a pull request, updating its title/body, marking it ready for
@@ -1205,17 +958,13 @@ without a separate approval round:
   a routine write: §25 forbids it outright, and a `PreToolUse` hook blocks
   the call.
 
-Three constraints ride along and are **not** relaxed by this subsection:
-§19 (no auto-close keywords against `ai:orchestrator-tracking` issues) governs
-every body you post, §25 (PR watching is disabled) governs what happens after
-a push, and §21 (merged-PR commit guard) governs every commit
-and push.
+§19, §21 and §25 still govern every body you post, every commit and push,
+and what happens after a push.
 
 ### C) Destructive & Administrative Writes — ALWAYS Ask First
 
-**Never perform these without asking first** in the §2 Q/A format — even when
-the need seems obvious, and even under §12's proactive PR-review scope (this
-subsection is NOT superseded by §12):
+**Never perform these without asking first** in the §2 Q/A format, even
+under §12's proactive PR-review scope:
 
 - merging a pull request, enabling auto-merge, or overriding a failing
   required check;
@@ -1230,202 +979,64 @@ subsection is NOT superseded by §12):
   re-running a workflow) that start a billed or unattended pipeline;
 - any write to a repository outside the scope the session was given.
 
-The question must name the exact repository, the exact object (PR number,
-branch, setting), and what the operation changes, so the user approves a
-concrete action rather than an intention. After approval, perform the
-operation yourself with the token — do not hand the user a command to run
-(§18).
+Name the exact repository, object and change, so the user approves a
+concrete action. After approval, do it yourself (§18).
 
 **Command-invoked dispatches are already approved.** When the user invokes a
-command whose documented job is to dispatch a workflow — `/implement-plan-ai`,
-`/apply-analysis`, and any successor that says so in its own file — that
-invocation *is* the approval for the dispatch the command describes. Do not
-re-ask; the ask-first rule above covers dispatches you would be initiating on
-your own judgement.
+command whose documented job is to dispatch a workflow (`/implement-plan-ai`,
+`/apply-analysis`, and any successor that says so in its own file), that
+invocation is the approval for the dispatch it describes. Likewise, the
+user's go on a §31 plan approves opening the issues (or the orchestrator
+dispatch) that plan names.
 
 ### D) Transport & Tool Precedence
 
-1. **Prefer the `mcp__github__*` tools** for anything they cover. They are
-   scope-checked by the host session and keep the audit trail consistent.
-2. **Reach for `GH_TOKEN` when MCP is not enough** — the capability is not
-   exposed, the call is scope-gated (403), the response is truncated, or the
-   repository is not attached to the session.
-3. **Prefer REST over GraphQL** on the `gh` path. Claude Code Web's agent
-   proxy serves only a pinned set of GraphQL operations and rejects the rest
-   with HTTP 403, so GraphQL-backed commands (`gh pr list`, `gh issue list`,
-   `gh search`) can fail in exactly the environments this section is written
-   for. Use `gh api repos/<owner>/<repo>/...` as the primary transport and
-   treat the GraphQL-backed command as a fallback, never the reverse — the
-   same reasoning §21.D applies to the merged-PR guard.
+1. Prefer the `mcp__github__*` tools for anything they cover.
+2. Use `GH_TOKEN` when MCP is not enough (capability missing, 403, truncated
+   response, repo not attached).
+3. Prefer REST (`gh api repos/<owner>/<repo>/...`) over GraphQL-backed
+   commands (`gh pr list`, `gh issue list`, `gh search`).
+4. Shape `gh api` calls so the §23.H guard can approve them: type IDs
+   literally into the endpoint path (no `$VAR`, and no `gh api` inside
+   `$(...)`); put GET parameters in the URL or pass `-X GET -f ...`; keep
+   `gh api` out of loops, heredocs and file redirects; edit PR titles/bodies
+   and post or edit comments with the MCP tools, never with `--input`,
+   `-F body=@<file>` or a heredoc-built body.
 
-4. **Shape `gh api` calls so the §23.H guard can approve them.**
-   **Type IDs literally into the endpoint path** —
-   `gh api repos/o/r/actions/runs/123/jobs`, not `.../runs/$RUN_ID/jobs` or
-   `.../commits/$(git rev-parse HEAD)/check-runs`, and do not wrap `gh api`
-   in `$(...)`. An unquoted expansion in a `gh api` argument prompts in every
-   permission mode, Auto included, and so does a `gh api` call inside a
-   `$(...)` that sits in a loop or in a larger word. Look a value up with one
-   call, then issue the next call with the value typed out. Put GET
-   parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
-   pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
-   send a POST). Except for the literal-ID read loops in §23.H, keep `gh api`
-   calls out of loops, `$(...)`, `$VAR` paths, file redirects, and heredoc
-   scripts, and edit a PR's title or body with
-   `mcp__github__update_pull_request`. Post or edit an issue or PR comment
-   with `mcp__github__add_issue_comment` / `mcp__github__update_issue_comment`,
-   never with `gh api … --input <file>`, `-F body=@<file>`, or a heredoc that
-   builds the JSON body: file-backed fields and `--input` always prompt
-   under §23.H, on every method and endpoint (where no MCP tool is
-   available, pass the text inline with `-f body=...`), a
-   heredoc holding `{"` trips Claude Code's own shell check, and an
-   unattended session then stalls at a prompt nobody answers. Reads and
-   §23.B routine writes are approved without a prompt when the command
-   holds only them plus the safe
-   helpers §23.H lists (`cd`, `sleep`, `echo`, `2>&1`, pipes into `head`,
-   `tail`, `wc -l`, `sort`); beside anything else the guard leaves the
-   decision to the allow list or the Auto-mode classifier.
-
-Transport, in order of preference:
-
-```
-gh api repos/<owner>/<repo>/<endpoint>          # gh reads GH_TOKEN natively
-curl -sS -H "Authorization: Bearer ${GH_TOKEN}" \
-  -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/<owner>/<repo>/<endpoint>"
-```
-
-Two environment facts that make `gh` calls fail in confusing ways:
-
-- **Pass `-R <owner>/<repo>` on every `gh` call that needs repo context.** In
-  Claude Code Web the only git remote points at a local proxy, so bare calls
-  fail with `failed to determine base repo` — which is not an auth problem.
-  The SessionStart hook prints the resolved slug.
-- **Check auth over REST, nounset-safe**, rather than inferring it from the
-  SessionStart log:
-  `{ [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; } && gh api user --jq .login`.
-  Do not use `gh auth status` for this in a web session: it verifies over
-  GraphQL, which the proxy answers with 403, so it reports the token as
-  invalid whether or not it is (§23.A, "Web sessions"). The hook's secondary
-  probe only tests `actions:read` for one repo and can emit a
-  `NOTE`/`WARNING` while `gh` works fine for everything else.
-
-Useful token scopes: classic PATs need `repo` plus `workflow` (and
-`read:org` for org metadata); fine-grained PATs need contents, pull requests,
-issues, and **actions: read** for run/job logs. A token without `actions:read`
-still serves every non-Actions read in §23.A.
+Pass `-R <owner>/<repo>` on every `gh` call that needs repo context. Check
+auth with `gh api user --jq .login`, not `gh auth status`.
 
 ### E) Token Hygiene and Degradation (hard rules)
 
-- Never echo, log, or print the token value; reference it only via env
-  expansion (`$GH_TOKEN`).
-- Never write the token into committed files, PR bodies, issue comments, commit
-  messages, or diagnostic output. Redact it if a tool response contains it.
-- If the token is missing, the REST identity probe fails, or an API call
-  returns 401/403, **say so once**, fall back to the `mcp__github__*` tools for
-  whatever they can still reach, and continue with the rest of the task — do
-  not retry-loop, and do not ask the user to run the calls manually (§18).
-  Diagnose authentication with `gh api user --jq .login`, not the GraphQL-
-  backed `gh auth status`. In a web session, a successful identity probe may
-  be the proxy's identity and a 403 may be a proxy scope restriction (§23.A);
-  only a local session's rejected REST probe supports diagnosing the PAT as
-  invalid, expired, or saved incorrectly.
-- Never commit a workflow, script, or hook that reads `GH_TOKEN` from the
-  session environment. This section governs interactive sessions only;
-  Actions-side code authenticates via `secrets.GH_PAT` (§23.G).
+- Never echo, log or print the token; reference it only as `$GH_TOKEN`.
+- Never write it into committed files, PR bodies, comments, commit messages
+  or diagnostics. Redact it if a tool response contains it.
+- If it is missing or a call returns 401/403, say so once, fall back to the
+  `mcp__github__*` tools, and continue; no retry loops, no asking the user to
+  run calls (§18).
+- Never commit a workflow, script or hook that reads `GH_TOKEN` from the
+  session environment.
 
 ### F) API-Call Budget
 
-§15 (GitHub API Call Hygiene) applies to interactive `gh` and `curl` calls,
-not just to workflow code. Before adding a call, check whether an existing one
-in the same task can be extended; batch per-item lookups; cache results you
-will need again in the same session instead of re-fetching per loop iteration.
+§15 applies to interactive `gh` and `curl` calls too: extend or batch
+existing calls, and cache results you will need again.
 
 ### G) Relationship to `GH_PAT` and `GITHUB_TOKEN` (§6)
 
-`GH_TOKEN` already exists as an identifier in this repo's Actions workflows
-and scripts, where it is exported from the `GH_PAT` secret. That name is
-unchanged and must not be repurposed — the two readings are the same variable
-name in two different environments:
-
-| Environment | Value | Governed by |
-|---|---|---|
-| Actions workflows / unattended pipelines | `${{ secrets.GH_PAT }}` exported as `GH_TOKEN` | workflow YAML, `unattended_system_instructions.md` |
-| Interactive Claude Code session | PAT set in the Claude Code cloud session environment | this section |
-
-Consequences:
-
-- Do not "unify" the two by rewriting workflow YAML to read a session env var,
-  and do not add `GH_PAT` handling to interactive tooling. Either direction is
-  a §6 breaking change and requires the §2 ask flow.
-- `GITHUB_TOKEN` remains the accepted fallback name in session tooling that
-  already checks both (`.claude/hooks/session-start.sh`, the `.claude/commands/*`
-  Tool Access blocks). Keep accepting both; prefer `GH_TOKEN` when both are set.
-- The unattended pipelines read `unattended_system_instructions.md` and never
-  see this file, so §23 grants no new access to any codex-driven phase.
+In Actions, `GH_TOKEN` is exported from `secrets.GH_PAT`; in a session it is
+the session PAT. Same name, two environments: never unify them (a §6 change).
+Session tooling keeps accepting `GITHUB_TOKEN` as a fallback and prefers
+`GH_TOKEN` when both are set.
 
 ### H) Permission Guard for `gh api`
 
-Whether a `gh api` call prompts is decided by
-`.claude/hooks/gh_api_write_guard.py`, a `PreToolUse` hook on `Bash` in
-`.claude/settings.json`, not by `permissions.ask` rules. The seven former
-ask rules (`gh api * -X *`, `--method`, `-f`, `-F`, `--field`,
-`--raw-field`, `--input`) could not tell a read from a write: a search that
-passes query parameters with `-X GET -f q=...` prompted like a
-`-X DELETE`, and an ask rule prompts even in Auto mode and even when a hook
-allows, so unattended stage sessions stopped on reads. Do not add
-`gh api` ask rules back; they would override the hook.
-
-For each `gh api` call the hook works out the method the way `gh` does
-(`-X`/`--method`, else POST when fields or `--input` are present, else GET)
-and classifies it:
-
-| Class | What | Outcome |
-|---|---|---|
-| read | GET/HEAD to any REST endpoint; a GraphQL query that is not a mutation, is not read from a file, and has no shell expansion; in both cases with no file-backed `-F` value and no `--input`. A complete `for VAR in TOKEN…; do BODY; done` over literal IDs is also approved when every item is a vetted `gh api` read, `gh run view/list` or `gh pr view` read, or literal/`$VAR` echo (§23.H below). A bare `gh api --help` or `gh api -h` with no other argument is a read too (it prints usage and sends no API request); `--help` / `-h` next to an endpoint, any other flag or `--` stays unreadable and prompts (#6668). | not prompted by the hook |
-| routine | a §23.B write to the local checkout's repository (or `{owner}/{repo}`): create a PR; edit a PR's or issue's `title`/`body`; add or edit an issue or PR comment; reply to a review thread; add or remove one label; request reviewers; dispatch (`ref`, `inputs` only) one of the workflows `.claude/settings.json` already allows as `gh workflow run <file> *` (§23.C command-invoked carve-out) | not prompted by the hook |
-| write | everything else: any other endpoint or field (`state`, `base`, merges, dispatches, deletions, settings), another repository, `--input` or a file-backed `-F`/`--field` value (`@<file>`, or `@-` for stdin, which `gh` reads and sends) on any method, endpoint, or repository, GraphQL included (issue #4619; a `-f`/`--raw-field` value is sent literally and reads no file), an `-F` word the shell could rewrite into one (`$`, a backtick, `~`, or a glob character in it), a header other than `Accept`/`X-GitHub-Api-Version`, an unreadable call, or `gh api` that could run hidden (in a backtick or double-quoted `$(...)` substitution Bash would run — single-quoted text is data — handed to `bash -c`, `sudo`, `xargs`, `python3` and similar, or in a heredoc fed to one) | prompt, in every permission mode |
-| malformed jq | a `-q`/`--jq` value that is one of jq's own command-line options (matches `^--?[A-Za-z]`: `--arg`, `-r`, `--raw-output`, `-c`); `gh api` has no such flags, so the call could never work (#4891) | denied with a reason that says how to fix the command; nothing runs and no human is needed |
-
-The hook decides once for the whole Bash call: **deny** when any call
-passes a jq command-line option to `--jq` (checked after the
-unparseable-command and hidden-call asks, and winning over ask and allow;
-put the value into the jq program, pipe the output to `jq` with its own
-options, or wrap a program that starts with a minus sign in parentheses,
-`--jq '(-length)'`); **ask** when any call is a
-write, or when the command (heredoc bodies aside) uses ANSI-C quoting
-(`$'...'`), an unquoted `#` comment, or brace expansion (`{a,b}`), which
-Bash parses unlike the guard, so a word could become a hidden flag or
-command; **allow** when every call is a read or routine and the command
-holds nothing else but safe helpers (items joined by `;` or `&&`, each a
-`gh api` call, optionally piped into `head`/`tail -n N`, `wc -l`, or
-`sort -n -r -u -k K -t C`, or a standalone `cd <path>`, `sleep <n>`,
-`echo <text>`, or `true`; `2>&1` as the only redirect; no `$`, backticks,
-globs, subshells, or loops). One narrow exception: a whole `for VAR in TOKEN
-…; do BODY; done` loop is allowed when its header contains only unquoted
-literal IDs (letters, digits, `.`, `_`, `-`; not starting with `-`) and a
-plain shell-name counter that cannot override command lookup, gh settings,
-or proxy settings. Uppercase ordinary counters such as `ID` are allowed.
-Its body can only contain classified `gh api` reads with `$VAR` / `${VAR}`
-in the endpoint path (not the first segment or query string), allowlisted
-`gh run view/list` or `gh pr view` reads with the counter only as a positional
-argument, and literal/counter `echo` items, joined by `;` or `&&` and
-optionally piped into the same safe filters. No surrounding commands,
-unvetted options, other expansions, nested loops, or file redirects are
-approved. A `gh api` write in the body still asks. Otherwise **no decision**,
-so the allow list or the Auto-mode classifier decides, because an allow would
-also approve code the guard has not read (an arbitrary loop, a `python3`
-heredoc, a `$VAR` redirect). `gh api` text that is only data (`git commit -m`, `grep`,
-`echo`) is ignored.
-
-It fails **closed**, unlike the §21/§25 hooks: an unreadable, invalid,
-or non-object payload, or an internal error, asks. Empty input is allowed
-silently. It issues no GitHub API calls (§15), runs only
-`git config --get remote.origin.url` (and only when a call could be
-routine), and has no environment-variable escape hatch. It does not see
-`gh` behind an expansion (`$GH api ...`), which the old ask rules did not
-either. The hook and the settings entry ship to consumer repos through the
-same `.claude/` sync as the other hooks; `tests/test_gh_api_write_guard.py`
-covers the rules and the wiring and runs in its own `ci.yml` step.
+`.claude/hooks/gh_api_write_guard.py`, a `PreToolUse` hook on `Bash`,
+decides whether a `gh api` call prompts: reads and §23.B routine writes pass,
+every other write asks in every permission mode, and a jq command-line option
+passed to `--jq` is denied. Do not add `gh api` ask rules to settings; they
+would override the hook. The classification table and Auto-mode behaviour
+are in the full text; `tests/test_gh_api_write_guard.py` covers them.
 
 ### I) Permission Prompt Reports
 
@@ -1438,69 +1049,41 @@ number kept per §6.
 
 ## §24. Cloudflare Access (MANDATORY)
 
-The session environment provides two Cloudflare credential env vars for
-managing Cloudflare Workers. Each value is a single string in the format
-`<account_id>:<api_token>` — the Cloudflare account ID, a literal colon,
-then an API token authorized to create and edit Workers in that account.
-This section applies in this repo and in every consumer repo that receives
-this file via the `@stable` sync. It follows the same posture split as §22
-and §23: **reads are self-serve**, **Worker deploys the task calls for are
-self-serve**, **destructive and account-level writes are ask-first**.
+Full text: `.claude/docs/s24-cloudflare-access.md`.
+
+The session provides two Cloudflare credentials, each a single
+`<account_id>:<api_token>` string for managing Workers. This applies here and
+in every consumer repo. **Reads are self-serve, Worker deploys the task calls
+for are self-serve, destructive and account-level writes are ask-first.**
 
 ### A) Credential Selection & Parsing
 
-Pick the credential by the site the work targets — the two vars are
-different Cloudflare accounts and are NOT interchangeable:
+The two vars are different accounts and are NOT interchangeable:
 
 | Env var | Covers | Use for |
 |---|---|---|
 | `FUNTOKEN_IO_CF` | `funtoken.io` | Workers serving the funtoken.io website |
 | `FT_GAMES_CF` | `ft.games`, `5m.fun` | Workers serving the ft.games and 5m.fun websites |
 
-If the target site or zone is not one of the domains above, neither
-credential covers it — STOP and ask (§2 Q/A format) rather than guessing
-which account to use.
-
-Split on the **first** colon only (API tokens can theoretically contain
-further separators; account IDs are 32 hex chars and never contain `:`),
-referencing the value only via env expansion:
+For any other site or zone, STOP and ask (§2). Split on the **first** colon
+only, via env expansion:
 
 ```
 CF_ACCOUNT_ID="${FUNTOKEN_IO_CF%%:*}"
 CF_API_TOKEN="${FUNTOKEN_IO_CF#*:}"
 ```
 
-Transport: prefer `wrangler` when installed — export the split halves as
-`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`, which wrangler honours
-natively. Otherwise call the REST API directly:
-
-```
-curl -sS -H "Authorization: Bearer ${CF_API_TOKEN}" \
-  "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts"
-```
-
-Health-check gotcha: these are **account-owned** tokens, so
-`GET /client/v4/user/tokens/verify` returns 401 `Invalid API Token` for
-them even when they work. Do not diagnose a credential as invalid from
-that endpoint — probe with an account-scoped read instead (the
-`workers/scripts` list above is the canonical probe).
+Prefer `wrangler` (export the halves as `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN`); otherwise use the REST API. These are account-owned
+tokens, so `/user/tokens/verify` returns 401 even when they work: probe with
+`GET /client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts` instead.
 
 ### B) Read Operations — Act, Do Not Ask
 
-When a task needs data from Cloudflare, pull it yourself with the matching
-credential instead of asking the user to fetch it. This is an explicit
-carve-out from §2 for **read-only** Cloudflare calls — needing
-Cloudflare-hosted state is not, by itself, a reason to stop and ask.
-Self-serve reads include (non-exhaustively):
-
-- listing Workers and reading a Worker's script content, settings,
-  bindings, routes, custom domains, and cron triggers;
-- listing deployments/versions of a Worker and reading rollback state;
-- reading zone and DNS records for the covered domains to verify routing;
-- listing KV namespaces, R2 buckets, and D1 databases bound to a Worker
-  (and reading individual values needed to diagnose a defect);
-- tailing Worker logs (`wrangler tail`) and reading analytics/metrics to
-  diagnose failures.
+Pull Cloudflare data yourself with the matching credential (a carve-out from
+§2): Workers and their script, settings, bindings, routes, domains and cron
+triggers; deployments and versions; zone and DNS records of covered domains;
+bound KV, R2 and D1 resources; `wrangler tail` logs and analytics.
 
 ### C) Worker Deploys & Edits — Self-Serve When the Task Calls for Them
 
@@ -1574,60 +1157,27 @@ to run (§18).
 
 ### E) Token Hygiene and Degradation (hard rules)
 
-- Never echo, log, or print the credential or either of its halves;
-  reference them only via env expansion (`$FUNTOKEN_IO_CF`,
-  `$FT_GAMES_CF`, or split-out shell variables as in §24.A).
-- Never write the credential into committed files, PR bodies, issue
-  comments, commit messages, or diagnostic output. Redact it if a tool
-  response contains it. The account ID half is less sensitive than the
-  token half, but treat the combined value as a secret throughout.
-- If a var is missing or the API returns 401/403, **say so once**, report
-  which credential failed, and continue with what can be done without it —
-  do not retry-loop, and do not ask the user to run the calls manually
-  (§18).
+- Never echo, log or print the credential or either half; reference them
+  only via env expansion. Never write them into files, PRs, comments, commit
+  messages or diagnostics, and redact them from tool output.
+- If a var is missing or the API returns 401/403, say so once, name the
+  credential that failed, and continue; no retry loops, no asking the user to
+  run calls (§18).
 
 ### F) Worker & Zone Identifiers Live in the Agents File
 
-Each repo's root agents file (`agents.md` in this repo; `AGENTS.md` in
-consumer repos that use that casing) carries a `## Cloudflare resources`
-section listing the Worker names, zone IDs, routes, and namespace IDs
-relevant to that repo, as a table:
-
-```md
-## Cloudflare resources
-
-| Resource | Type | ID / name | Credential | Notes |
-|---|---|---|---|---|
-| <name> | worker / zone / kv / r2 / d1 / route | <id or name> | FUNTOKEN_IO_CF / FT_GAMES_CF | <role, environment> |
-```
-
-Rules (same as §22.C):
-
-- **Look there first.** Before asking for any Cloudflare identifier, read
-  the repo's agents file. Use recorded entries without re-asking. Zone
-  IDs are also discoverable self-serve via a §24.B read — prefer looking
-  them up over asking.
-- **Ask when missing.** If a needed identifier is neither recorded nor
-  discoverable via a read, ask the user (§2 Q/A format, free-text answer
-  allowed for the identifier itself).
-- **Save once provided.** Verify a supplied identifier resolves with one
-  read call (§24.B), then record it in the agents file **in the same
-  PR/commit as the work that needed it**. Create the section if the file
-  lacks it. Add it through an `agents.d/` fragment (§30).
-- Entries are identifiers under §6 — never remove or rewrite an existing
-  entry without the §2 ask flow.
+Look up Worker names, zone IDs, routes and namespace IDs in the agents
+file's `## Cloudflare resources` table first (zone IDs can also be read via
+§24.B). If one is missing, ask; once given, verify it with one read and
+record it through an `agents.d/` fragment (§30) in the same PR. Entries are
+§6 identifiers.
 
 ### G) Interactive Sessions Only
 
-- `FUNTOKEN_IO_CF` and `FT_GAMES_CF` are session env vars, like
-  `DIGITALOCEAN_ACCESS_TOKEN` (§22) and the session reading of `GH_TOKEN`
-  (§23). No Actions workflow reads them, and none may be added that does:
-  never commit a workflow, script, or hook that reads either var from the
-  session environment. Actions-side Cloudflare work would need its own
-  repo secret and its own review — route that through §2.
-- The unattended pipelines read `unattended_system_instructions.md` and
-  never see this file, so §24 grants no new access to any codex-driven
-  phase.
+`FUNTOKEN_IO_CF` and `FT_GAMES_CF` are session env vars. Never commit a
+workflow, script or hook that reads either one; Actions-side Cloudflare work
+needs its own repo secret and review (§2). The unattended pipelines never see
+this file.
 
 ---
 
@@ -1691,23 +1241,13 @@ is not a workaround.
 
 ### D) Enforcement
 
-The rule is enforced deterministically by `.claude/hooks/pr_watch_guard.py`,
-wired as a `PreToolUse` hook in `.claude/settings.json` under the matcher
-`mcp__.*__subscribe_pr_activity`. This hook guards subscriptions, not the
-user-requested scheduled checks governed by §25.C. Prose alone cannot enforce
-this: the harness prompt actively pushes toward offering a watch, and the
-instruction is furthest from the context window's live edge exactly when a
-session has run long enough to open a PR. The hook blocks every
-`subscribe_pr_activity` call from any MCP server, never blocks
-`unsubscribe_pr_activity`, issues no
-API calls (§15), and fails open with a `systemMessage` warning when the hook
-payload cannot be read, is invalid or non-object JSON, or guard evaluation
-raises an internal exception. There is deliberately no environment-variable
-escape hatch. The hook and the settings entry ship to consumer repos
-through the same `.claude/` sync as the §21 guard;
-`tests/test_pr_watch_guard.py` covers the rule and the wiring.
-Empty or whitespace-only hook input is treated as an empty object and allowed
-silently because there is no tool payload to evaluate.
+`.claude/hooks/pr_watch_guard.py`, a `PreToolUse` hook in
+`.claude/settings.json` under the matcher `mcp__.*__subscribe_pr_activity`,
+blocks every `subscribe_pr_activity` call from any MCP server and never
+blocks `unsubscribe_pr_activity` or the scheduled checks of §25.C. There is
+deliberately no environment-variable escape hatch.
+`tests/test_pr_watch_guard.py` covers the rule and the wiring; its fail-open
+behaviour is in `.claude/docs/s25-pr-watching-disabled.md`.
 
 ### E) Interactive Sessions Only
 
@@ -1768,101 +1308,49 @@ number kept per §6.
 
 ## §29. OpenRouter Access (MANDATORY)
 
-The session environment provides an `OR_MGMT_KEY` env var: an OpenRouter
-**management** (provisioning) key for the account whose API keys the
-pipelines use. This section applies in this repo and in every consumer repo
-that receives this file via the `@stable` sync. It follows the same posture
-split as §22–§24: **reads are self-serve**, **key and account mutations are
-ask-first**.
+Full text (endpoint fields, attribution limits): `.claude/docs/s29-openrouter-access.md`.
 
-`OR_MGMT_KEY` is not `OPENROUTER_API_KEY`. The Actions secret
-`OPENROUTER_API_KEY` is an inference key the workflows send model requests
-with (§6: name unchanged). The management key cannot run models; it reads and
-manages the account and its keys.
+The session provides `OR_MGMT_KEY`, an OpenRouter **management** key: it
+reads and manages the account and its keys but cannot run models. It is not
+the `OPENROUTER_API_KEY` inference secret the workflows use (§6). This applies
+here and in every consumer repo. **Reads are self-serve, key and account
+mutations are ask-first.**
 
 ### A) Read Operations — Act, Do Not Ask
 
-Whenever a task needs OpenRouter data — spend, token usage, per-model cost,
-which key is spending, remaining credit — pull it yourself with `OR_MGMT_KEY`
-instead of asking the user for it, estimating it from list prices, or
-reconstructing it from workflow logs. This is an explicit carve-out from §2
-for **read-only** OpenRouter calls. Do it automatically, every time the data
-is needed.
+Whenever a task needs OpenRouter spend, token usage, per-model cost, per-key
+spend or remaining credit, pull it yourself (a carve-out from §2) instead of
+asking, estimating from list prices, or rebuilding it from logs:
+`GET https://openrouter.ai/api/v1/activity` (per day × model, last 30
+completed UTC days), `/api/v1/keys` (per-key USD totals), `/api/v1/credits`,
+with `Authorization: Bearer ${OR_MGMT_KEY}`.
 
-| Endpoint | Returns |
-|---|---|
-| `GET /api/v1/activity` | One row per day × model × provider endpoint for the last 30 completed UTC days: `usage` (USD), `requests`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens`. Optional `?date=YYYY-MM-DD` for a single day. |
-| `GET /api/v1/keys` | Every API key on the account: `name`, `label`, `disabled`, `limit`, and USD `usage` / `usage_daily` / `usage_weekly` / `usage_monthly`. |
-| `GET /api/v1/credits` | `total_credits` and `total_usage` (USD) for the account. |
-
-Transport (no CLI exists; use the REST API):
-
-```
-curl -sS -H "Authorization: Bearer ${OR_MGMT_KEY}" \
-  "https://openrouter.ai/api/v1/activity"
-```
-
-Limits that shape every analysis (verified 2026-10-06):
-
-- **30 days only.** `/activity` rejects dates older than the last 30
-  completed UTC days with HTTP 400, and today's partial day is not included.
-  Anything older has to come from saved data (for example a report under
-  `analysis/`), not from the API.
-- **Split by model, not by key or repo.** `/activity` is account-wide. Cost
-  can be attributed to a pipeline role only when that role is the sole user
-  of the model slug. Check the slugs in `.github/workflows/*.yml` and
-  `scripts/` before attributing, and say when a slug is shared (for example
-  the reviewer-panel slot and the cross-reviewer summariser).
-- **Per-key spend is totals only.** `/keys` gives each key's daily, weekly
-  and calendar-month USD totals with no model breakdown. `usage_monthly` is
-  the current calendar month, not a rolling 30 days.
-- Some direct OpenRouter calls set attribution headers: `scripts/analyze_soft_errors.py`
-  sets `HTTP-Referer` and `X-Title`, and `scripts/summarize_unselected_runs.py`
-  sets `X-Title`. The management API's account-wide `/activity` and `/keys`
-  totals do not provide a workflow, phase, or consumer-repo breakdown; do not
-  infer one from these headers or from a model slug shared by multiple callers.
-
-Write downloaded responses under the session scratchpad, not the repo
-(§13).
+- Older than 30 days is not available from the API; use saved reports.
+- `/activity` is account-wide and split by model, not by key or repo:
+  attribute cost to a pipeline role only when that role is the sole user of
+  the model slug, and say when a slug is shared.
+- Write downloaded responses under the session scratchpad, not the repo.
 
 ### B) Key & Account Mutations — ALWAYS Ask First
 
-**Never perform these without asking first** in the §2 Q/A format, even
-under §12's proactive PR-review scope (this subsection is NOT superseded by
-§12):
-
-- creating, deleting, disabling, re-enabling, or renaming an API key
-  (`POST` / `PATCH` / `DELETE /api/v1/keys/...`);
-- setting or changing a key's spend `limit` or limit reset;
-- buying credits or changing any billing, organization, or workspace
-  setting.
-
-The question must name the exact key (its `name` and `label`, never the key
-value) and what the operation changes. After approval, perform it yourself
-with the key; do not hand the user a command to run (§18).
+Never create, delete, disable, re-enable or rename a key, change a key's
+spend limit, buy credits, or change billing or organization settings without
+the §2 ask, even under §12. Name the key by `name` and `label`, never its
+value. After approval, do it yourself (§18).
 
 ### C) Token Hygiene and Degradation (hard rules)
 
-- Never echo, log, or print `OR_MGMT_KEY`; reference it only via env
-  expansion (`$OR_MGMT_KEY`).
-- Never write it into committed files, PR bodies, issue comments, commit
-  messages, or diagnostic output. Redact it if a tool response contains it.
-  A newly created key's value, returned once by `POST /api/v1/keys`, gets the
-  same treatment.
-- If the var is missing or the API returns 401/403, **say so once** and
-  continue with what can be done without it. Do not retry-loop, and do not
-  ask the user to run the calls manually (§18).
+- Never echo, log or print `OR_MGMT_KEY` or a newly created key's value, and
+  never write either into files, PRs, comments, commit messages or
+  diagnostics.
+- If the key is missing or the API returns 401/403, say so once and
+  continue; no retry loops, no asking the user to run calls (§18).
 
 ### D) Interactive Sessions Only
 
-- `OR_MGMT_KEY` is a session env var, like `DIGITALOCEAN_ACCESS_TOKEN` (§22)
-  and the Cloudflare credentials (§24). No Actions workflow reads it, and
-  none may be added that does: never commit a workflow, script, or hook that
-  reads it from the session environment. Actions-side spend reporting would
-  need its own repo secret and its own review; route that through §2.
-- The unattended pipelines read `unattended_system_instructions.md` and
-  never see this file, so §29 grants no new access to any codex-driven
-  phase.
+`OR_MGMT_KEY` is a session env var. Never commit a workflow, script or hook
+that reads it; Actions-side spend reporting needs its own secret and review
+(§2). The unattended pipelines never see this file.
 
 ---
 
@@ -1927,6 +1415,63 @@ fragment that would not fold. Readers see pending fragments: the static
 context (`scripts/build_static_context.sh`), the materiality check and the
 tests read the agents file through `assemble_agents.py render` or
 `tests/agents_doc.py`.
+
+---
+
+## §31. Plan, Then Hand Off to the Pipeline (MANDATORY)
+
+In an interactive session, Claude implements only small fixes itself. For
+any other task it clarifies, writes the plan, and hands the plan to the
+unattended pipeline by opening issues (or dispatching the orchestrator). This
+applies in this repo and in every consumer repo that receives this file via
+the `@stable` sync.
+
+### A) Small fixes: implement in the session
+
+A task is small only when all of these hold:
+
+- it changes at most two files, not counting a test for the fix and the §20
+  / §30 fragments;
+- it adds or changes no env var, repo variable, workflow, scheduled job, DB
+  collection, index or contract, and no public interface;
+- it needs no plan: the cause and the fix are clear (a typo, a
+  one-function bug, a config value).
+
+If it is unclear whether a task is small, it is not small. This section does
+not change:
+
+- tasks the user explicitly asks to have implemented in the session;
+- PR review fixes under §12 (they land in the PR under review, §12.A);
+- slash commands whose own file says what they ship (for example
+  `/investigate-issue`, `/analyze-log`);
+- questions, investigations and other work that changes no code.
+
+### B) Everything else: plan, approve, hand off
+
+1. **Clarify** per §2 until no question is open, after reading the context
+   the PRE-TASK rule names.
+2. **Plan.** Write the plan with the structure `/write-plan` uses, and add
+   a §18.E section to it (that structure does not list one).
+   - Work that fits in one PR: the plan becomes the issue body.
+   - Work that needs several independently-mergeable PRs: follow
+     `/write-plan` (a plan PR under `docs/plans/`); that plan PR is the
+     plan the user reviews in step 3. After the go, hand it off with
+     `/implement-plan-claude`.
+3. **Show the plan and wait for the user's go.** Open nothing else before
+   it: no issue, no `/implement-plan-claude` dispatch, no implementation PR.
+   The go is the approval §23.C requires for opening the issues or
+   dispatching the orchestrator.
+4. **Open the issues** (single-PR path only; the multi-PR path ends at the
+   `/implement-plan-claude` dispatch, and the orchestrator opens its own
+   tracking and wave issues). One issue per repository that needs a change,
+   labelled `ai:engine-claude` at creation, cross-linked with
+   `Refs <owner>/<repo>#<N>` (never auto-close keywords, §19). Check that each
+   target repository runs the pipeline (this repo, or a consumer in
+   `.github/ai/consumer_repos.json`) and attach it with `add_repo` when
+   needed; if it does not run the pipeline, ask. An issue opened by the user's
+   account starts clarify on its own; do not also post `/reclarify`.
+5. **Report** each issue or dispatch link. Do not implement the planned work
+   in the session: no branch, no code edits, no PR for it.
 
 ---
 

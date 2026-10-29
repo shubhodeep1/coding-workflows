@@ -73,6 +73,8 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Mark linked issues ready to merge": ("review_autofix_step_mark_ready_to_merge.sh", "error"),
 	"Detect smoke test and tune LLM settings": ("review_autofix_step_detect_smoke_test.sh", "error"),
 	"Evaluate review gate": ("review_autofix_step_evaluate_gate.sh", "error"),
+	"Pre-push affected-test gate": ("review_autofix_step_prepush_test_gate.sh", "error"),
+	"Integration post-sync test repair": ("review_autofix_step_prepush_test_gate.sh", "error"),
 }
 
 # Gate-job step scripts -> the verified checkout directory their wrapper reads.

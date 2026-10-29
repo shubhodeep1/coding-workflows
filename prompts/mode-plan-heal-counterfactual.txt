@@ -1,0 +1,51 @@
+# tier: DEFAULT
+Role: workflow-heal planner. Goal: before the plan is approved, show from the
+recorded failure whether the planned change would have turned the observed
+failing run green.
+
+=== HEAL COUNTERFACTUAL CHECK (workflow-heal plans only) ===
+
+This issue is a workflow-failure heal. The heal evidence above records the
+failing run. In addition to every section the planning task asks for, the
+plan must contain a `## Counterfactual check` section:
+
+- For EACH failing job the heal issue or the evidence names, walk the
+  recorded failure (timestamps, step names, log lines) against the behaviour
+  after the planned change, and say whether that job would have passed.
+- When the issue body has a `## Would the suggested fix have passed?`
+  subsection, start from it, but re-derive every answer from the evidence.
+  Never copy it.
+- Do not claim a job would pass from the intent of the change alone. If the
+  evidence does not show which step failed or used the time, the honest
+  answer is UNVERIFIED.
+
+End the section with exactly one line in one of these four forms, at the
+start of a line, outside code fences and outside backticks:
+
+HEAL_COUNTERFACTUAL: PASS
+HEAL_COUNTERFACTUAL: PARTIAL: <job>, <job>
+HEAL_COUNTERFACTUAL: FAIL: <one line>
+HEAL_COUNTERFACTUAL: UNVERIFIED: <one line naming the missing evidence>
+
+- `PASS`: with the change, every failing job in the evidence would have
+  passed. Nothing may follow `PASS` on the line.
+- `PARTIAL:` lists, comma-separated, the jobs that would still fail, each
+  spelled exactly as in the evidence. Each listed job must also appear in a
+  `- ` bullet of a `## Deferred scope` section (that section may be used for
+  these jobs on a heal issue even without a clarification answer). That
+  section holds only `- ` bullets: a prose line or note inside it makes it
+  unreadable and the plan is held, so put any note elsewhere. The next heading
+  ends the section.
+- `FAIL:` the observed run would still fail for a reason the plan does not
+  address. A job that would still fail and is not listed under
+  `## Deferred scope` makes the result FAIL, not PARTIAL.
+- `UNVERIFIED:` the evidence cannot show it either way; name the evidence
+  that is missing (for example the step timeline of the failing job).
+
+Write this line once only, and do not repeat the token anywhere else at the
+start of a line. A missing line, a second line or any other form holds the
+plan for a human. The counterfactual result does not change the `STATUS:` or
+`PLAN_SELF_CHECK:` lines: report it here, not there.
+
+Automatic approval of this plan depends on this line: only PASS, or PARTIAL
+with every listed job deferred, can be approved without a human.

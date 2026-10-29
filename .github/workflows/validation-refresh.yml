@@ -184,6 +184,9 @@ jobs:
           AI_ENGINE_VALIDATION_REFRESH: ${{ vars.AI_ENGINE_VALIDATION_REFRESH || '' }}
           VALIDATION_DISCOVERY_PR_BRANCH_PREFIX: ${{ vars.VALIDATION_DISCOVERY_PR_BRANCH_PREFIX || 'automation/validate-discovery' }}
           VALIDATION_DISCOVERY_PR_LABEL: ${{ vars.VALIDATION_DISCOVERY_PR_LABEL || 'automation:validate-bootstrap' }}
+          # Close obsolete discovery PRs (older head SHA, or a manifest already
+          # committed). Set the repo var to 'false' to stop the runner closing PRs.
+          VALIDATION_DISCOVERY_CLOSE_SUPERSEDED: ${{ vars.VALIDATION_DISCOVERY_CLOSE_SUPERSEDED || 'true' }}
           VALIDATION_REFRESH_REPOS_FILE_INPUT: ${{ github.event.inputs.repos_file || '.github/ai/consumer_repos.json' }}
           VALIDATION_REFRESH_BRANCH_NAME_INPUT: ${{ github.event.inputs.branch_name || 'ai/validation-refresh' }}
         run: |
