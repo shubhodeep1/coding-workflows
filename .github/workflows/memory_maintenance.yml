@@ -63,6 +63,10 @@ jobs:
           python-version: "3.12"
 
       - name: Extract repository learnings (fail-open)
+        # Without a step cap a slow extraction used the whole 20-minute job
+        # budget and the job was cancelled (run 40752760153), so
+        # continue-on-error never applied and compaction never ran.
+        timeout-minutes: 10
         continue-on-error: true
         timeout-minutes: 10
         env:
