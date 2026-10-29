@@ -985,6 +985,17 @@ class FreshnessSyncWiring(unittest.TestCase):
 				'&& [[ ",${pr_labels}," != *,e2e-smoke-test,* ]]'):
 			self.assertIn(cond, fast_path)
 			self.assertIn(cond, skip_block)
+		# #8333: with AUTOFIX_SKIP_RUNS_SECURITY_PASS=true the skip job runs
+		# the pass; a PR labelled ai:security-pass-failed stays on codex-agent.
+		# Anything other than an exact `true` keeps today's suppression.
+		switch_off = 'if [ "${AUTOFIX_SKIP_RUNS_SECURITY_PASS:-false}" != "true" ]; then'
+		label_check = '[[ ",${pr_labels}," == *,ai:security-pass-failed,* ]]'
+		for path_text, candidate in ((fast_path, "freshness_sync"), (text.split('SECURITY_PASS_SKIP_SUPPRESSED="false"', 1)[1].split("FRESHNESS_CI_FAILED_SKIP_SUPPRESSED=", 1)[0], "${candidate_skip_reason}")):
+			self.assertLess(path_text.index(switch_off), path_text.index("reason=single_issue_security_pass"))
+			self.assertLess(path_text.index("reason=single_issue_security_pass"), path_text.index(label_check))
+			self.assertIn(f"reason=security_pass_failed pr=${{PR_NUMBER}} candidate={candidate}", path_text)
+			self.assertLess(path_text.index(label_check), path_text.index('DET_SKIP_SECURITY_PASS_REQUIRED="true"'))
+		self.assertIn("AUTOFIX_GATE_DET_SKIP_SECURITY_PASS pr=${PR_NUMBER} candidate=${DET_SKIP_REASON} route=skip_job", text)
 		branch = block.split("elif gate_freshness_sync_fast_path; then", 1)[1]
 		for line in ('DETERMINISTIC_SKIP="true"', 'DET_SKIP_REASON="freshness_sync"', 'SHOULD_RUN="false"'):
 			self.assertIn(line, branch)
