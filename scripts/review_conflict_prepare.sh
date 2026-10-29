@@ -1313,14 +1313,38 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
         | [.[][] | select((.body | type) == "string" and (.body | startswith("## Integration conflict diagnosis\n"))
           and (.body | endswith($marker)) and (.body | length <= 6000))] | last | .body // ""
       ' "${_ti_comments_raw}" 2>/dev/null || true)"
-      _state_payload="$(jq -s --arg login "${_conflict_state_login}" '
-        ([.[][] | select((.user.login // "") == $login) | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] // [])
-        | last // {}
-        | .body // ""
-        | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
-        | .json // ""
-      ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
-      _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+      # V2 first: the poller writes only chunked ORCHESTRATOR_STATE_V2 state,
+      # so a V1 comment, when one exists, is the stale initial snapshot with
+      # no merged sub-issues. Same lookup as _resolver_test_repair_context in
+      # review_conflict_resolve.sh: the trusted support copy of
+      # orchestrate_state_v2.py, comments by the pipeline login only, and the
+      # V1 jq only when there is no V2 state.
+      _state_json=""
+      _state_v2_helper=""
+      for _state_v2_cand in "${SUPPORT_SCRIPTS_DIR:-}/orchestrate_state_v2.py" \
+        "${GITHUB_WORKSPACE:-/nonexistent}/.codex-workflow-src/scripts/orchestrate_state_v2.py"; do
+        case "${_state_v2_cand}" in /*) ;; *) continue ;; esac
+        if [ -f "${_state_v2_cand}" ] && [ ! -L "${_state_v2_cand}" ]; then
+          _state_v2_helper="${_state_v2_cand}"
+          break
+        fi
+      done
+      if [ -n "${_state_v2_helper}" ] && jq -s --arg login "${_conflict_state_login}" \
+        '[.[][] | select((.user.login // "") == $login)]' "${_ti_comments_raw}" > "${_ti_comments_raw}.login" 2>/dev/null; then
+        _state_json="$(python3 -I -B "${_state_v2_helper}" extract --comments-json "${_ti_comments_raw}.login" 2>/dev/null \
+          | jq -c 'select(type == "object")' 2>/dev/null || true)"
+      fi
+      rm -f -- "${_ti_comments_raw}.login"
+      if [ -z "${_state_json}" ]; then
+        _state_payload="$(jq -s --arg login "${_conflict_state_login}" '
+          ([.[][] | select((.user.login // "") == $login) | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] // [])
+          | last // {}
+          | .body // ""
+          | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
+          | .json // ""
+        ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
+        _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+      fi
       if [ -n "${_state_json}" ]; then
         # Build the merged sub-issues list (id : github_issue : status)
         INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '
@@ -1337,7 +1361,7 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
           .merged_issue_fingerprints // {}
         ' 2>/dev/null || echo "{}")"
       fi
-      unset _state_payload _state_json
+      unset _state_payload _state_json _state_v2_helper _state_v2_cand
     fi
     rm -f "${_ti_comments_raw}"
     unset _ti_comments_raw
