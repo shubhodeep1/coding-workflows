@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/prepush-gate-baseline-timeout-unverified.md and agents.d/prepush-gate-baseline-timeout-unverified.md:whole files | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Both new fragment filenames omit the issue-or-PR number prefix required by the documented convention (`<issue-or-pr>-<slug>.md`).\n  WHY: No runtime failure, because the contract test has no filename check and unprefixed fragments already exist, so this is only a traceability and convention deviation (source severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The `names` carried on `baseline_timeout` and `baseline_error` unverified entries should reach the PR-body summary through the step scripts' summary mode, and a contract test should lock that path.\n  expected_change_site: tests/test_implement_prepush_test_gate.py or tests/test_review_prepush_test_gate.py (summary-mode case with an `unverified` entry carrying `names`)\n  confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: tests/test_implement_prepush_test_gate.py:72 hardcodes \"unverified\": [] in `_result`, tests/test_review_prepush_test_gate.py:78 TIMEOUT fixture has no `names`, tests/test_prepush_affected_tests.py:366-404 calls gate.write_summary directly and does not go through the step scripts' `names` mapping at scripts/implement_step_prepush_test_gate.sh:147 and scripts/review_autofix_step_prepush_test_gate.sh:157\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- TASK_GAP (severity=NIT | confidence=2)\n  Requirement: The `names` carried on `baseline_timeout` and `baseline_error` entries should reach the PR-body summary through the step scripts' summary mode, and a contract test should lock that path.\n  Expected change site: `tests/test_implement_prepush_test_gate.py` or `tests/test_review_prepush_test_gate.py`, as a summary-mode case with an `unverified` entry that carries `names`.\n  Evidence of absence: `_result` in `tests/test_implement_prepush_test_gate.py` hardcodes `\"unverified\": []`, and the TIMEOUT fixture in `tests/test_review_prepush_test_gate.py` has no `names`. The new tests in `tests/test_prepush_affected_tests.py` call `gate.write_summary` directly, so they do not go through the step scripts' `names` mapping.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/prepush-gate-baseline-timeout-unverified.md and agents.d/prepush-gate-baseline-timeout-unverified.md:filenames (both new files, whole PR) | severity=NIT | confidence=3\n  PROBLEM: The documented fragment convention (CLAUDE.md \u00a720.B and \u00a730.A) requires an issue-or-PR number prefix, and both new fragments omit it.\n  WHY: No runtime failure, because tests/test_changelog_fragment_contract.py has no filename check and several unprefixed fragments already exist on main. This is a traceability and convention deviation only.\n- TASK_GAP (severity=NIT | confidence=3)\n  Requirement: PR DESCRIPTION, Changes section: run_gate moves a failure whose baseline re-run timed out or could not start into unverified (baseline_timeout / baseline_error) with the failing names surfaced for diagnosis, and the step scripts' summary mode carries that names field through.\n  Expected change site: tests/test_implement_prepush_test_gate.py or tests/test_review_prepush_test_gate.py, as a summary-mode case whose fixture passes an unverified entry carrying \"names\" through the step script.\n  Evidence of absence: tests/test_implement_prepush_test_gate.py:72 hardcodes \"unverified\": [] in its _result fixture, tests/test_review_prepush_test_gate.py:78 defines TIMEOUT with unverified=[{\"item\": ..., \"reason\": \"timeout\"}] and no names key, and tests/test_prepush_affected_tests.py:366-404 exercises gate.write_summary directly. The names mapping at scripts/implement_step_prepush_test_gate.sh:147 and scripts/review_autofix_step_prepush_test_gate.sh:157 is therefore never asserted by any test. The mapping itself was verified correct against gate.write_summary (workflow-templates/.claude/hooks/prepush_affected_tests.py:925-933).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1f0d8e6313e2abf1bb3428bad4f85b4adeca00e65a276a53e5a5a6b648842af0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8382,
+    "run_id": "40934933939",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40934933939",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029200410_311fea7be6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8382,
+    "run_id": "40934933939"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T20:04:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
