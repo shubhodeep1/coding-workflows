@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.75,
+  "details": "Merged changes that add agent documentation or operational scripts have also updated the repository inventory. When introducing such components, check whether they should be indexed there and add focused tests for the new behavior.",
+  "fingerprint": "d51cb9d3e4478d859fc2b0388e497d00f77c2c7ceae4394f4f0f3c8ea703424d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40885035693",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40885035693",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8292",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8293",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8295",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8305",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8306",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8303",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8308",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8313",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8317",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8318"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261029135738_0acae21250",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "New agent or operational-script components may require updating docs/INVENTORY.md.",
+  "timestamps": {
+    "created_at": "2026-10-29T13:57:38Z",
+    "promoted_at": "2026-10-29T13:58:13Z",
+    "superseded_at": null
+  }
+}
