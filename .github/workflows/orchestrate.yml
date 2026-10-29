@@ -1525,9 +1525,10 @@ jobs:
             if ! echo "${WAVE1_IDS}" | grep -qxF "${LOCAL_ID}"; then
               # One greppable line per deferred issue (issue #8314); the
               # "Deferring <id> (not in Wave 1)" prefix stays unchanged.
-              _wave1_defer_detail="$(jq -r --arg id "${LOCAL_ID}" '.[$id] // empty' "${WAVE1_DEFERRALS_FILE}" 2>/dev/null)" || {
+              _wave1_defer_detail="$(jq -r --arg id "${LOCAL_ID}" '.[$id] // empty' "${WAVE1_DEFERRALS_FILE}" 2>"${RUNTIME_DIR}/wave1_deferrals_jq.err")" || {
                 _wave1_defer_detail=""
-                [ ! -s "${WAVE1_DEFERRALS_FILE}" ] || echo "::warning::Wave 1 deferral detail for ${LOCAL_ID} could not be read from wave1_deferrals.json"
+                # Keep jq's own error text (one line, 200 chars, '::' broken up).
+                [ ! -s "${WAVE1_DEFERRALS_FILE}" ] || echo "::warning::Wave 1 deferral detail for ${LOCAL_ID} could not be read from wave1_deferrals.json: $(tr -d '\r\n' < "${RUNTIME_DIR}/wave1_deferrals_jq.err" 2>/dev/null | cut -c1-200 | sed 's/::/: :/g')"
               }
               echo "  Deferring ${LOCAL_ID} (not in Wave 1): ${_wave1_defer_detail:-deferral_reasons=unavailable}"
               continue
