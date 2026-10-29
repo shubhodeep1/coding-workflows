@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -552,7 +553,9 @@ def test_single_branch_clone_failure_falls_back_to_full_clone(
 	tmp_path: Path,
 	monkeypatch: pytest.MonkeyPatch,
 	capsys: pytest.CaptureFixture[str],
+	caplog: pytest.LogCaptureFixture,
 ) -> None:
+	caplog.set_level(logging.INFO, logger=extractor.ai_memory_lib.__name__)
 	monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
 	calls = _install_fake_git(
 		monkeypatch,
@@ -569,11 +572,14 @@ def test_single_branch_clone_failure_falls_back_to_full_clone(
 		assert first_dir != clone_dir
 		assert [call["args"] for call in calls[1:]] == _legacy_call_args(str(clone_dir), branch_exists=False)
 		assert clone_dir.is_dir()
-		stderr = capsys.readouterr().err
-		assert f"reason={expected_reason}" in stderr
-		assert "falling back to full clone" in stderr
-		assert "sekrit-token" not in stderr
-		assert _FAKE_ORIGIN_URL not in stderr
+		# The notice goes to the module logger, never to stderr, so fail-open
+		# embedders that require an empty stderr stay unchanged.
+		assert capsys.readouterr().err == ""
+		logged = "\n".join(record.getMessage() for record in caplog.records)
+		assert f"reason={expected_reason}" in logged
+		assert "falling back to full clone" in logged
+		assert "sekrit-token" not in logged
+		assert _FAKE_ORIGIN_URL not in logged
 	finally:
 		shutil.rmtree(clone_dir, ignore_errors=True)
 

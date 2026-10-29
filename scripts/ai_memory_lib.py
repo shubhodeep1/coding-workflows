@@ -3255,7 +3255,7 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     # the memory branch (full history, no tags). Any failure, including a
     # memory branch that does not exist yet, falls back to the legacy full
     # clone. The clone args and git stderr are never logged because the
-    # origin URL may embed GH_TOKEN; only the classified reason is printed.
+    # origin URL may embed GH_TOKEN; only the classified reason is logged.
     temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
     clone = _run_git(
         temp_dir.parent,
@@ -3272,11 +3272,16 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
         check=False,
     )
     if clone.returncode != 0:
-        reason = "branch_missing" if "not found in upstream" in (clone.stderr or "") else "clone_failed"
-        print(
-            f"AI memory single-branch clone unavailable (reason={reason}); falling back to full clone",
-            file=sys.stderr,
+        clone_stderr = clone.stderr or ""
+        reason = (
+            "branch_missing"
+            if "not found in upstream" in clone_stderr or "Could not find remote branch" in clone_stderr
+            else "clone_failed"
         )
+        # Logged at info level, not printed: fail-open embedders (e.g. the
+        # fingerprint verifier's quarantine persist) require an empty stderr,
+        # and the legacy path wrote nothing there.
+        _log.info("AI memory single-branch clone unavailable (reason=%s); falling back to full clone", reason)
         shutil.rmtree(temp_dir, ignore_errors=True)
         return _full_clone_for_memory_branch(origin_url, memory_branch)
 
