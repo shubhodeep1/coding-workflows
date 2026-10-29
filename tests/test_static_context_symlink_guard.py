@@ -21,7 +21,7 @@ def _safe_env() -> dict[str, str]:
 	for key in (
 		"BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE",
 		"GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES", "STATIC_CONTEXT_AGENTS_MODE", "RUNTIME_DIR",
 	):
 		env.pop(key, None)
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -223,6 +223,9 @@ def test_phase_static_context_skips_symlinks_but_keeps_canonical_agents() -> Non
 			"public overview\n### 2. Create wrapper workflows\nprivate runbook\n", encoding="utf-8",
 		)
 		(root / "agents.md").write_text("local agents\n", encoding="utf-8")
+		# clarify and plan index agents.md by default (#8260); inline mode keeps
+		# the full file, which is what this loop checks.
+		env["STATIC_CONTEXT_AGENTS_MODE"] = "inline"
 		for phase in ("clarify", "plan", "implement"):
 			output = root / f"{phase}-regular.txt"
 			result = subprocess.run(
@@ -285,6 +288,8 @@ def test_orchestrator_static_context_guards_symlinks() -> None:
 				(root / name).symlink_to(secret)
 			workflow_env = _safe_env()
 			workflow_env["RUNNER_TEMP"] = str(root)
+			# The full-file assertions below need inline mode (issue #8269).
+			workflow_env["STATIC_CONTEXT_AGENTS_MODE"] = "inline"
 			result = subprocess.run(
 				["bash", "-c", step_run], cwd=root, env=workflow_env,
 				capture_output=True, text=True, check=False,
@@ -484,7 +489,9 @@ def test_implement_static_context_emits_agents_once_without_canonical_copy() -> 
 			shutil.copy(REPO_ROOT / name, tmp / name)
 		(tmp / "agents.md").write_text("# Agents\nSELF_REPO_AGENTS_SENTINEL\n", encoding="utf-8")
 		out = tmp / "static.txt"
-		env = {**_safe_env(), "RUNTIME_DIR": str(tmp / "runtime")}
+		# Implement indexes agents.md by default since #8262; inline mode keeps
+		# the full file, which is what this checks.
+		env = {**_safe_env(), "RUNTIME_DIR": str(tmp / "runtime"), "STATIC_CONTEXT_AGENTS_MODE": "inline"}
 		(tmp / "runtime").mkdir()
 		subprocess.run(["bash", str(REPO_ROOT / "scripts" / "build_static_context.sh"), "implement", str(out)], cwd=tmp, env=env, check=True)
 		text = out.read_text(encoding="utf-8")

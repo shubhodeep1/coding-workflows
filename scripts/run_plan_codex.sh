@@ -12,9 +12,12 @@ You are executing the PLANNING phase of the AI development pipeline.
 
 Your task is to generate an implementation plan for the GitHub issue.
 
-IMPORTANT: The system instructions, AI pipeline spec, agents.md, and README.md
-are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt or
-any of the individual source files — they are already loaded.
+IMPORTANT: The system instructions, AI pipeline spec, README.md and agents.md
+(either inlined in full, or as an `=== AGENTS.MD INDEX ===` list of sections)
+are provided ABOVE in this prompt. Do NOT read pre_assembled_static.txt, the
+system instructions, the pipeline spec or README.md — they are already loaded.
+When an agents.md index is shown, read only the agents.md sections (and the
+agents.d/ fragments it lists) that you need, from the working tree.
 
 The planning context (issue description, clarification Q&A, and comments) is
 provided BELOW at the end of this prompt — do NOT read planning_context.txt

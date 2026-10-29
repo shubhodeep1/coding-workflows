@@ -719,3 +719,80 @@ def test_image_context_installs_gawk(tmp_path, engine):
 	tokens = apt_line.split()
 	for package in ("gawk", "ripgrep", "build-essential"):
 		assert package in tokens, apt_line
+
+
+# --- static-context files under /support (issue #8262) -------------------------------
+
+
+def _static_context_file(sandbox, name="agents_canonical.md", text="# canon\n\n## One\nbody\n"):
+	runtime = sandbox["runner_temp"] / "runtime"
+	runtime.mkdir(exist_ok=True)
+	path = runtime / name
+	path.write_text(text)
+	return path
+
+
+def test_static_context_file_is_copied_under_the_read_only_support_mount(sandbox):
+	write_fake_codex(sandbox)
+	canonical = _static_context_file(sandbox)
+	prep = run_helper(sandbox, "prepare", "--workdir", str(sandbox["repo"]))
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	proc = run_helper(sandbox, "run", "--mode", "workspace", "--root", str(root), *CODEX_ARGS,
+		env_extra={"CODEX_ISOLATED_STATIC_CONTEXT_FILES": f"{canonical}\n"})
+	assert proc.returncode == 0, proc.stderr
+	assert "CODEX_ISOLATION static_context files=1" in proc.stderr
+	assert str(canonical) not in proc.stderr
+	copied = root / "support" / "static-context" / "agents_canonical.md"
+	assert copied.read_text() == canonical.read_text()
+	run_entry = docker_runs(sandbox["docker_log"])[-1]
+	support_mounts = [m for m in mounts_of(run_entry) if "dst=/support," in m or m.endswith("dst=/support")]
+	assert support_mounts == [f"type=bind,src={root}/support,dst=/support,readonly"]
+	assert not any("static-context" in m for m in mounts_of(run_entry))
+	assert not (sandbox["repo"] / "agents_canonical.md").exists()
+	for entry in read_docker_log(sandbox["docker_log"]):
+		assert "CODEX_ISOLATED_STATIC_CONTEXT_FILES" not in entry["env"]
+	assert "CODEX_ISOLATED_STATIC_CONTEXT_FILES" not in codex_records(sandbox)[-1]["env"]
+	assert not any("CODEX_ISOLATED_STATIC_CONTEXT_FILES" in arg for arg in run_entry["argv"])
+
+	# A later attempt on the same root without the variable keeps no stale copy.
+	proc = run_helper(sandbox, "run", "--mode", "workspace", "--root", str(root), *CODEX_ARGS)
+	assert proc.returncode == 0, proc.stderr
+	assert not (root / "support" / "static-context").exists()
+	assert "static_context" not in proc.stderr
+	assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+@pytest.mark.parametrize("case", ["symlink", "name", "duplicate", "missing", "directory"])
+def test_static_context_file_rejections_fail_closed(sandbox, case):
+	write_fake_codex(sandbox)
+	canonical = _static_context_file(sandbox)
+	if case == "symlink":
+		link = canonical.parent / "link" / "agents_canonical.md"
+		link.parent.mkdir()
+		link.symlink_to(canonical)
+		value = str(link)
+	elif case == "name":
+		value = str(_static_context_file(sandbox, name="secrets.md"))
+	elif case == "duplicate":
+		other = canonical.parent / "other"
+		other.mkdir()
+		(other / "agents_canonical.md").write_text("again\n")
+		value = f"{canonical}\n{other / 'agents_canonical.md'}"
+	elif case == "missing":
+		value = str(canonical.parent / "agents.rendered.md")
+	else:
+		directory = canonical.parent / "dir" / "agents.rendered.md"
+		directory.mkdir(parents=True)
+		value = str(directory)
+	proc = run_helper(sandbox, "run", "--mode", "read-only", *CODEX_ARGS,
+		env_extra={"CODEX_ISOLATED_STATIC_CONTEXT_FILES": value})
+	assert proc.returncode == 1
+	assert "::error::CODEX_ISOLATION static context file rejected" in proc.stderr
+	assert not docker_runs(sandbox["docker_log"])
+	assert not codex_records(sandbox)
+
+
+def test_static_context_marker_is_advertised():
+	text = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text()
+	assert "# supports: CODEX_ISOLATED_STATIC_CONTEXT_FILES" in text.splitlines()
