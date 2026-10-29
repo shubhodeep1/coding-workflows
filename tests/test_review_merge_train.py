@@ -1874,6 +1874,19 @@ def test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe() -> None:
 	assert "BASE_BRANCH: ${{ github.event.pull_request.base.ref }}" in workflow
 
 
+def test_cancel_on_close_event_runs_get_their_own_concurrency_group() -> None:
+	# A shared group let a second PR close cancel the first close's pending
+	# run (release run 40794181365, issue #8327). Event runs are keyed by PR;
+	# scheduled sweeps keep the repository group so they still run one at a time.
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8"))
+	concurrency = workflow["jobs"]["cancel-active-runs"]["concurrency"]
+	assert concurrency["group"] == (
+		"cancel-on-pr-close-${{ github.repository }}"
+		"${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || '' }}"
+	)
+	assert concurrency["cancel-in-progress"] is False
+
+
 def test_usage_error_for_unknown_subcommand(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	result, _log_text, _env = _run("bogus", tmp_path, bin_dir, fixtures, log)
