@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Resolve the test_no_session_automation_remains CI failure by removing the retired token \"send_later\" from s25-pr-watching-disabled.md (both copies) and making the matching change in CLAUDE.md \u00a725.C.\n  expected_change_site: .claude/docs/s25-pr-watching-disabled.md, workflow-templates/.claude/docs/s25-pr-watching-disabled.md, and CLAUDE.md \u00a725.C (line 1231)\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The retired token \"send_later\" is still present at line 55 of both reference files. (Other reviewers state this was fixed by commit 28d3e33, which cut both files to 28 lines.)\n- requirement: Add the \u00a731 approval sentence to the end of the \u00a723.C \"Command-invoked dispatches are already approved\" paragraph in both copies of s23-github-access.md.\n  expected_change_site: .claude/docs/s23-github-access.md and workflow-templates/.claude/docs/s23-github-access.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The sentence \"Likewise, the user's go on a \u00a731 plan approves opening the issues (or the orchestrator dispatch) that plan names.\" is absent from the \u00a723.C paragraph in both files. (Other reviewers state it is present after commit 28d3e33.)\n- requirement: Soften the wording \"copied verbatim\" on line 4 of changelog.d/8250-claude-md-plan-handoff.md and \"word for word\" in the PR description to something like \"moved with minimal edits\".\n  expected_change_site: changelog.d/8250-claude-md-plan-handoff.md and PR description\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The phrase \"copied verbatim\" remains in the changelog fragment. (Other reviewers state the line now discloses the one new \u00a723.C sentence.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: Resolve the test_no_session_automation_remains CI failure by removing the retired token \"send_later\" from s25-pr-watching-disabled.md (both copies) and making the matching change in CLAUDE.md \u00a725.C.\n  Expected change site: .claude/docs/s25-pr-watching-disabled.md, workflow-templates/.claude/docs/s25-pr-watching-disabled.md, and CLAUDE.md \u00a725.C (line 1231).\n  Evidence of absence: The retired token \"send_later\" is still present at line 55 of both reference files.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: Add the \u00a731 approval sentence to the end of the \u00a723.C \"Command-invoked dispatches are already approved\" paragraph in both copies of s23-github-access.md.\n  Expected change site: .claude/docs/s23-github-access.md and workflow-templates/.claude/docs/s23-github-access.md.\n  Evidence of absence: The sentence \"Likewise, the user's go on a \u00a731 plan approves opening the issues (or the orchestrator dispatch) that plan names.\" is absent from the \u00a723.C paragraph in both files.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: Soften the wording \"copied verbatim\" on line 4 of changelog.d/8250-claude-md-plan-handoff.md and \"word for word\" in the PR description to something like \"moved with minimal edits\".\n  Expected change site: changelog.d/8250-claude-md-plan-handoff.md and PR description.\n  Evidence of absence: The phrase \"copied verbatim\" remains in the changelog fragment.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "47c283ef300680a21f8b42fba332b9cedb85e903bca4d400780319613a8f85bf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8250,
+    "run_id": "40804043112",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40804043112",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029031023_cf2a82a9a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8250,
+    "run_id": "40804043112"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T03:10:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
