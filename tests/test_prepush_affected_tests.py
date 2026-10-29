@@ -370,6 +370,66 @@ def test_run_gate_inherited_only_passes(tmp_path):
 	assert result["status"] == "pass" and result["failures"] == [] and len(result["inherited"]) == 1
 
 
+LINT_OLD = "import os\nimport sys\n"
+
+
+@pytest.mark.skipif(gate.shutil.which("ruff") is None, reason="ruff not installed")
+def test_run_gate_counts_only_lint_findings_the_change_added(tmp_path):
+	# The file already has an unused import on the merge-base; a change that
+	# adds an unrelated line must not fail for it.
+	root = _repo(tmp_path, {"lib/a.py": LINT_OLD + "X = 1\n"})
+	baseline = _repo(tmp_path, {"lib/a.py": LINT_OLD}, name="baseline")
+	selection = {"changed_files": ["lib/a.py"], "affected_tests": [], "static_checks": [
+		{"tool": "ruff", "files": ["lib/a.py"], "argv": ["ruff", *gate.RUFF_CHECK_ARGS, "lib/a.py"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and result["failures"] == []
+	assert [i["test"] for i in result["inherited"]] == ["ruff"]
+	# A new unused import is a finding the change added.
+	(root / "lib" / "a.py").write_text(LINT_OLD + "import json\nX = 1\n", encoding="utf-8")
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail" and [f["test"] for f in result["failures"]] == ["ruff"]
+	tail = result["failures"][0]["tail"]
+	assert tail.startswith("1 finding(s) added by this change:") and "lib/a.py: F401" in tail and "json" in tail
+	assert "`os`" not in tail and "`sys`" not in tail
+
+
+@pytest.mark.skipif(gate.shutil.which("ruff") is None, reason="ruff not installed")
+def test_run_gate_counts_every_lint_finding_in_a_new_file(tmp_path):
+	root = _repo(tmp_path, {"lib/new.py": LINT_OLD})
+	baseline = _repo(tmp_path, {"README": ""}, name="baseline")
+	selection = {"changed_files": ["lib/new.py"], "affected_tests": [], "static_checks": [
+		{"tool": "ruff", "files": ["lib/new.py"], "argv": ["ruff", *gate.RUFF_CHECK_ARGS, "lib/new.py"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail" and result["failures"][0]["tail"].startswith("2 finding(s) added")
+
+
+def test_static_failure_stays_caused_by_the_change_when_findings_cannot_be_read(tmp_path, monkeypatch):
+	baseline = tmp_path / "baseline"
+	baseline.mkdir()
+	monkeypatch.setattr(gate, "_static_findings", lambda tool, files, cwd, deadline: None)
+	unit = {"id": "ruff", "file": None, "kind": "static", "files": ["a.py"], "status": "fail", "tail": "raw"}
+	pr_caused, inherited = gate.classify_baseline([unit], baseline, time.monotonic() + 30, 1, tmp_path)
+	assert pr_caused == [unit] and inherited == [] and unit["tail"] == "raw"
+
+
+def test_static_failure_without_a_repo_keeps_the_old_classification(tmp_path):
+	baseline = tmp_path / "baseline"
+	baseline.mkdir()
+	unit = {"id": "ruff", "file": None, "kind": "static", "files": ["a.py"], "status": "fail", "tail": "raw"}
+	assert gate.classify_baseline([unit], baseline, time.monotonic() + 30, 1) == ([unit], [])
+
+
+@pytest.mark.skipif(gate.shutil.which("shellcheck") is None, reason="shellcheck not installed")
+def test_run_gate_compares_shellcheck_findings_against_the_baseline(tmp_path):
+	old = "#!/bin/bash\nif [ 1 ]\nthen echo x\n"
+	root = _repo(tmp_path, {"lib/b.sh": old})
+	baseline = _repo(tmp_path, {"lib/b.sh": old}, name="baseline")
+	selection = {"changed_files": ["lib/b.sh"], "affected_tests": [], "static_checks": [
+		{"tool": "shellcheck", "files": ["lib/b.sh"], "argv": ["shellcheck", *gate.SHELLCHECK_ARGS, "lib/b.sh"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and [i["test"] for i in result["inherited"]] == ["shellcheck"]
+
+
 def test_failing_names_parses_the_heal_shapes():
 	tail = "\n".join([
 		'TEST_CASE_EVENT: {"status":"fail","test_name":"test_event"}',
@@ -489,14 +549,17 @@ def test_hook_asks_when_no_stamp_exists(tmp_path):
 	assert "CLAUDE_PREPUSH_TEST_GATE=off" in decision["permissionDecisionReason"]
 
 
-def test_hook_allows_with_a_passing_stamp_and_asks_on_failures(tmp_path):
+def test_hook_allows_with_a_passing_stamp_and_reports_failures_without_asking(tmp_path):
 	root = _repo(tmp_path, {"a.txt": ""})
 	_write(root, tmp_path, "pass")
 	assert _hook(_push(root), {"TMPDIR": str(tmp_path)}) == {}
 	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
 	out = _hook(_push(root), {"TMPDIR": str(tmp_path)})
-	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
-	assert "tests/test_broken.py" in out["hookSpecificOutput"]["permissionDecisionReason"]
+	specific = out["hookSpecificOutput"]
+	assert "permissionDecision" not in specific
+	assert specific["hookEventName"] == "PreToolUse"
+	assert "tests/test_broken.py" in specific["additionalContext"]
+	assert "tests/test_broken.py" in out["systemMessage"]
 
 
 def test_hook_ignores_non_push_commands_and_other_tools(tmp_path):
@@ -815,14 +878,17 @@ def test_hook_still_asks_for_a_missing_stamp_outside_auto_mode(tmp_path, mode):
 	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
-def test_hook_auto_mode_keeps_passing_stamps_silent_and_failures_asking(tmp_path):
+@pytest.mark.parametrize("mode", ["auto", "default", "acceptEdits", "bypassPermissions", "dontAsk"])
+def test_hook_never_holds_a_push_for_a_failing_stamp(tmp_path, mode):
 	root = _repo(tmp_path, {"a.txt": ""})
 	_write(root, tmp_path, "pass")
-	assert _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)}) == {}
+	assert _hook(_auto(_push(root), mode), {"TMPDIR": str(tmp_path)}) == {}
 	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
-	out = _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)})
-	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
-	assert "tests/test_broken.py" in out["hookSpecificOutput"]["permissionDecisionReason"]
+	out = _hook(_auto(_push(root), mode), {"TMPDIR": str(tmp_path)})
+	specific = out["hookSpecificOutput"]
+	assert "permissionDecision" not in specific
+	assert "tests/test_broken.py" in specific["additionalContext"]
+	assert "confirm to push anyway" not in specific["additionalContext"]
 
 
 @pytest.mark.parametrize("command", ["git push --tags origin", "git push --all origin"])
@@ -859,11 +925,19 @@ def test_hook_still_asks_for_a_pushed_branch_that_does_not_exist_yet_outside_aut
 
 def test_hook_auto_mode_asks_when_a_missing_stamp_comes_with_a_human_finding(tmp_path):
 	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root, "git push origin HEAD && git push --tags origin")), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "No pre-push test stamp" in reason and "tags" in reason
+
+
+def test_hook_auto_mode_a_failing_stamp_next_to_a_missing_one_still_denies(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
 	_git(root, "branch", "other")
 	_commit(root, {"a.txt": "changed\n"})
 	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
 	out = _hook(_auto(_push(root, "git push origin HEAD && git push origin other")), {"TMPDIR": str(tmp_path)})
-	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 	reason = out["hookSpecificOutput"]["permissionDecisionReason"]
 	assert "No pre-push test stamp" in reason and "tests/test_broken.py" in reason
 
