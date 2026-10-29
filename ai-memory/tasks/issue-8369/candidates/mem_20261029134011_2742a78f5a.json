@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `orchestrator/project-8365` @ `7c12ae34409fcd5d81b60a4a466489a199980557` (Integration branch mismatch: false)\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Functions or modules to implement\nNone. This is a data-only edit. Overwrite `tests/e2e_smoke_canary.txt` so it contains exactly:\n```\nstatus: ok\ndecompose-run: 40876853022\n```\nfollowed by one trailing newline (LF). The file holds 39 bytes in total.\n\n## Data structures affected\n- The canary fixture file. On the current ref it holds `status: ok` and `decompose-run: 40427433026`, each followed by LF. Only the run ID on line 2 changes.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 only, and keep the LF line endings\n- Chosen: rewrite the file to the two specified lines with LF endings and a single trailing newline.\n- Alternatives considered: append a new line instead of replacing line 2; regenerate the file from a template.\n- Why: the acceptance criteria require exactly two lines and no other changes. The current file already uses LF with a trailing newline (checked with `cat -A`).\n\n## Security considerations\n- No trust boundaries, endpoints, secrets or money state are involved. The only input is the run ID, a public numeric value taken from the issue.\n\n## Risks and edge cases\n- A missing or doubled trailing newline, or CRLF line endings, would break the \"exactly two lines\" check. Verify the result with `cat -A` and confirm it is 39 bytes.\n- No other file may change. `git diff --stat` should show only this file, with 1 line inserted and 1 deleted.\n- No conflicts were found between the issue and the codebase: the issue's description of the current file content matches the ref.\n\n## Testing considerations\n- `cat -A tests/e2e_smoke_canary.txt` should print `status: ok$` and `decompose-run: 40876853022$`.\n- `wc -c` should report 39.\n- No test suite changes are needed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: the issue fully specifies a single-line value change in one existing fixture file. There is no helper or pattern to reuse beyond editing the file in place, and widening scope would break the \"no other files changed\" acceptance criterion. This follows the order in \u00a76 (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed): correctness requires exact bytes and nothing more.\n\n## Pre-execution self-check\n- The plan meets all three acceptance criteria.\n- The one file listed matches the issue's `files_touched`.\n- The planning ref is on the integration branch.\n- No blockers.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "f87ff2b508a792c45a4a1fe8595994cdcfb80f09cf96182c74120f8bd8bee3b2",
+  "lineage": {
+    "issue_number": 8369,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40883057343",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40883057343",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8369"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261029134011_2742a78f5a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8369,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40883057343"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #8369",
+  "timestamps": {
+    "created_at": "2026-10-29T13:40:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
