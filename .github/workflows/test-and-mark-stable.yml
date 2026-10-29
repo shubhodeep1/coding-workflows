@@ -1559,6 +1559,10 @@ jobs:
             stall_diag_json=$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs?per_page=100&created=>${IMPL_CREATED_AFTER:-}" 2>/dev/null || true)
             stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r --arg id "$stall_diag_id" --arg title "${ISSUE_TITLE:-}" "$stall_diag_defs$stall_diag_runs"' runs("window-run")' 2>/dev/null)
             echo "${stall_diag_out:-  stall-diag window-run: unavailable}"
+            # One page of 100 runs only: say so when it is full, so "none" is not read as absence.
+            if printf '%s' "$stall_diag_json" | jq -e '(.workflow_runs | type) == "array" and (.workflow_runs | length) >= 100' >/dev/null 2>&1; then
+              echo "  stall-diag window-run: note: only the newest 100 runs in the window were read"
+            fi
             stall_diag_json=$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs?status=in_progress&per_page=100" 2>/dev/null || true)
             stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r --arg id "$stall_diag_id" --arg title "${ISSUE_TITLE:-}" "$stall_diag_defs$stall_diag_runs"' runs("in-progress-run")' 2>/dev/null)
             echo "${stall_diag_out:-  stall-diag in-progress-run: unavailable}"

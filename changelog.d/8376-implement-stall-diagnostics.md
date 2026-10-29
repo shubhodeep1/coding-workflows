@@ -10,7 +10,7 @@ On that stall exit only, the `wait-implement` step in `.github/workflows/test-an
 - other unfinished implement runs created in the phase's window, with whether their title matches the smoke issue;
 - implement runs in progress anywhere in the test repository, which shows a run started before the window that holds the issue's concurrency group.
 
-Each run list shows at most 20 runs and ends with a `truncated, <n> more` line when there are more.
+Each run list shows at most 20 runs and ends with a `truncated, <n> more` line when there are more. The window's runs come from one page of the newest 100 runs, and a `note:` line says so when that page is full.
 
 A warning names the run when the issue carries `ai:implementing` but the tracked run is still `pending`, `queued`, `waiting` or `requested`.
 
@@ -18,4 +18,4 @@ What this means for operators: the next stall shows whether a different run was 
 
 ### For contributors
 
-The four reads (`actions/runs/<id>`, its jobs, the window's runs and the repository's in-progress runs) run once, only on the stall exit, with a 30-second timeout each and no retries. A failed read prints `unavailable`, and the diagnostics run in a subshell after `status=timeout` is written, so they cannot change the step's result. Text from the API is printed as JSON strings on lines that start with `stall-diag`, so a run title cannot inject a workflow command. Tests: `tests/test_test_and_mark_stable_plan_polling_guard.py` runs the step against a fake `gh` (pending run with a concurrency holder, unreadable and malformed payloads, no stall diagnostics on the PR and `implement_failed` paths, hostile run titles, a fresh run status that differs from the cached one, truncated run lists, and the step's `env:` mapping).
+The four reads (`actions/runs/<id>`, its jobs, the window's runs and the repository's in-progress runs) run once, only on the stall exit, with a 30-second timeout each and no retries. A failed read prints `unavailable`, and the diagnostics run in a subshell after `status=timeout` is written, so they cannot change the step's result. Text from the API is printed as JSON strings on lines that start with `stall-diag`, so a run title cannot inject a workflow command. Tests: `tests/test_test_and_mark_stable_plan_polling_guard.py` runs the step against a fake `gh` (pending run with a concurrency holder, unreadable and malformed payloads, no stall diagnostics on the PR and `implement_failed` paths, hostile run titles, a fresh run status that differs from the cached one, truncated run lists, a full window page, and the step's `env:` mapping).

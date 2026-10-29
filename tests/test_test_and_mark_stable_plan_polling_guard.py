@@ -810,6 +810,16 @@ def test_implement_stall_diagnostics_mark_truncated_run_lists() -> None:
 	assert "stall-diag in-progress-run: truncated, 2 more" in log, log
 
 
+def test_implement_stall_window_run_notes_a_full_page() -> None:
+	# The window-run read is one page of 100 runs; a full page is noted.
+	pages = [[_pending_implement_run()] + _noise_page(1000, count=99)]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", pages, labels="ai:implementing", terminal=True, terminal_timeout="2")
+	assert rc == 1 and outputs == {"status": "timeout"}, (outputs, log)
+	assert "stall-diag window-run: note: only the newest 100 runs in the window were read" in log, log
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[_pending_implement_run()]], labels="ai:implementing", terminal=True, terminal_timeout="2")
+	assert "stall-diag window-run: note:" not in log, log
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	for test in tests:
