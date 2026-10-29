@@ -2605,8 +2605,8 @@ _heal_fetch_linked_runs || log "warn linked_runs_failed"
 #   qualifies; `heal-scope linked-workflow-paths` takes each cached run's
 #   workflow file (API `.path`), the reusable workflows it calls (one hop) and
 #   the scripts its failed or longest step runs, from the tree at HEAD_SHA (the
-#   commit _open_issue renders the scope against), within the marker's 20
-#   explicit path slots. No REST
+#   commit _open_issue renders the scope against), at most
+#   HEAL_SCOPE_LINKED_PATHS_MAX (12) of the marker's 20 explicit slots. No REST
 #   call: a missing HEAD_SHA commit gets the same git fetch _open_issue makes.
 #   Fails open: any failure leaves `[]`, today's scope.
 #   WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED=false skips the helper.
