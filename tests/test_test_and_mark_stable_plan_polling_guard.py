@@ -780,6 +780,36 @@ def test_implement_stall_diagnostics_do_not_inject_workflow_commands() -> None:
 		assert not line.lstrip().startswith("##[error]legacy"), line
 
 
+def test_implement_stall_warning_uses_fresh_run_status() -> None:
+	# The by-ID read overrides the 30s-cached status for the warning.
+	started = _pending_implement_run() | {"status": "in_progress", "run_started_at": "2026-09-29T00:49:30Z"}
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[_pending_implement_run()]], labels="ai:implementing", terminal=True, terminal_timeout="2", active_run=started)
+	assert rc == 1 and outputs == {"status": "timeout"}, (outputs, log)
+	assert 'stall-diag latest-run: id=777 name="Internal: AI Implement"' in log and 'status="in_progress"' in log, log
+	assert "::warning::" not in log, log
+	# The reverse: a stale cached in_progress and a fresh pending still warns.
+	cached = _run(777, name="Internal: AI Implement", conclusion=None, status="in_progress")
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[cached]], labels="ai:implementing", terminal=True, terminal_timeout="2", active_run=_pending_implement_run())
+	assert rc == 1 and outputs == {"status": "timeout"}, (outputs, log)
+	assert "::warning::Issue #4712 carries ai:implementing but its latest scoped Implement run 777 is still pending at the stall" in log, log
+
+
+def test_implement_window_start_comes_from_step_env() -> None:
+	doc = yaml.safe_load(_read_workflow())
+	step = next(s for s in doc["jobs"]["e2e-smoke-test"]["steps"] if s.get("id") == "wait-implement")
+	assert step["env"]["IMPL_WINDOW_CREATED_AFTER"] == IMPL_CREATED_AFTER_EXPR, step.get("env")
+	assert 'IMPL_CREATED_AFTER="${IMPL_WINDOW_CREATED_AFTER:-}"' in step["run"]
+	assert IMPL_CREATED_AFTER_EXPR not in step["run"]
+
+
+def test_implement_stall_diagnostics_mark_truncated_run_lists() -> None:
+	holders = [_run(1000 + n, name="Internal: AI Implement", conclusion=None, status="in_progress") for n in range(22)]
+	rc, outputs, _calls, log = _run_phase_step("wait-implement", [[_pending_implement_run()]], labels="ai:implementing", terminal=True, terminal_timeout="2", in_progress_runs=holders)
+	assert rc == 1 and outputs == {"status": "timeout"}, (outputs, log)
+	assert log.count("stall-diag in-progress-run: id=") == 20, log
+	assert "stall-diag in-progress-run: truncated, 2 more" in log, log
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
 	for test in tests:
