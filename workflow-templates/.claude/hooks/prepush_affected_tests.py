@@ -1236,6 +1236,9 @@ def _hook_findings(payload: object) -> tuple[list[tuple[str, str]], str]:
 			))
 			continue
 		status = stamp.get("status")
+		# A non-string status (list, object) is unhashable; treat it as missing.
+		if not isinstance(status, str):
+			status = None
 		if status in PASSING_STAMP_STATUSES:
 			continue
 		if status != "fail":

@@ -4500,8 +4500,8 @@ for a bare push), so stamp the branch you push. A bulk push (`--all`,
 through without a prompt. A stamp that records failures the change caused
 never holds the push, in any permission mode: the hook passes the failures to
 the session as context and shows them to the user, and CI runs the full
-suite. A missing stamp, or a push whose options or destination the hook cannot
-resolve (for example an abbreviated option such as `--follow-tag`), asks for
+suite. A missing stamp, a stamp with a missing or unknown status, or a push
+whose options or destination the hook cannot resolve (for example an abbreviated option such as `--follow-tag`), asks for
 confirmation. In Auto mode a push whose only problems are a missing stamp or
 a pushed branch that does not exist yet (usually one the same command creates) is
 denied instead of asking: nothing runs, and the reason tells the session to

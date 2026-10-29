@@ -955,7 +955,7 @@ def test_hook_auto_mode_a_failing_stamp_next_to_a_missing_one_still_denies(tmp_p
 	assert "not held" not in reason
 
 
-@pytest.mark.parametrize("status", [None, "garbled"])
+@pytest.mark.parametrize("status", [None, "garbled", ["fail"], {"k": "v"}])
 def test_hook_asks_for_a_stamp_without_a_valid_status(tmp_path, status):
 	root = _repo(tmp_path, {"a.txt": ""})
 	_write(root, tmp_path, status)
