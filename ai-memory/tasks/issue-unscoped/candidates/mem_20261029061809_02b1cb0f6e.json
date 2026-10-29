@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:4993 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The sentence \"so a second close can no longer cancel a pending close run\" overstates the guarantee, because the group key is repository plus PR number and two close runs for the same PR (closed, reopened, closed again) still share one group.\n  WHY: The contract doc states a wider invariant than the code implements, but there is no runtime defect because the surviving run cancels the same set of runs. All four reviewers rated it NIT (low).\n- .github/workflows/cancel_on_pr_close.yml:22 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Informational only. The new concurrency.group expression correctly partitions close runs by PR number, and the only residual edge is the same-PR case.\n  WHY: The reviewer rated it NIT and said no change is needed.\n- tests/test_review_merge_train.py:1860 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Informational only. The existing assertion still holds because the new group string contains the old one as a prefix, and the new test pins the full expression.\n  WHY: The reviewer rated it NIT and found no backward-compatibility break.\n- .github/workflows/cancel_on_pr_close.yml:22 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Informational only. The PR number comes from a server-set `github.event.pull_request.number`, so the change adds no new trust-boundary expansion or implicit execution.\n  WHY: The reviewer rated it NIT and said no change is needed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:4993 | severity=low | confidence=3\n  PROBLEM: The sentence \"so a second close can no longer cancel a pending close run\" overstates what the new group key does. Two close runs for the same PR still share one group.\n  WHY: It is not a runtime failure. The newer run for the same PR carries the same PR number and head ref, so it cancels the same set of runs. Suggested wording: \"a close of a different PR can no longer cancel a pending close run\".\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:4993 | severity=low | confidence=3\n  PROBLEM: The documentation incorrectly states the invariant for the new concurrency group.\n  WHY: Because the key includes the PR number (-pr-<N>), two close runs for the same PR number (closed, reopened, closed again) still share a group, and the older pending run is cancelled.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:line 4993 | severity=low | confidence=3\n  PROBLEM: The sentence \"so a second close can no longer cancel a pending close run\" overstates the guarantee. The group `cancel-on-pr-close-<repo>-pr-<N>` is still shared by two close events for the same PR.\n  WHY: There is no correctness regression, because the surviving run cancels the same branch runs. The doc claims an invariant the code does not implement.\n- .github/workflows/cancel_on_pr_close.yml:line 22 | severity=low | confidence=2\n  PROBLEM: None at the cross-PR level. The new key correctly partitions close runs by PR number, and the operator precedence and short-circuit behave correctly for schedule events.\n  WHY: Informational only, with no change needed. The same-PR edge is the only residual.\n- tests/test_review_merge_train.py:line 1860 | severity=low | confidence=4\n  PROBLEM: The existing assertion still holds because the new group string contains the old substring as a prefix. The new test pins the full conditional expression, and the `yaml` import is already present at line 26.\n  WHY: There is no backward-compatibility break.\n- .github/workflows/cancel_on_pr_close.yml:line 22 | severity=low | confidence=4\n  PROBLEM: The PR number comes from a server-set integer, so the change adds no new implicit execution or trust-boundary expansion. The wrappers invoke the workflow via `workflow_call`, so `github.event_name` is preserved.\n  WHY: Informational only, with no change needed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:4993 | severity=low | confidence=4\n  PROBLEM: The guarantee \"so a second close can no longer cancel a pending close run\" is broader than the concurrency key, because two close events for the same PR share the same group.\n  WHY: If a PR is reopened and closed again while its earlier cleanup run is pending, the newer run can cancel the earlier one. Both runs target the same PR, so this is not a cleanup failure, but the documented guarantee is inaccurate.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "f9cd6193198952c469216eb123ef970cf0ae2ba97a5a6435fc4604fa62ab0461",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8331,
+    "run_id": "40823954532",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40823954532",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029061809_02b1cb0f6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8331,
+    "run_id": "40823954532"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T06:18:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
