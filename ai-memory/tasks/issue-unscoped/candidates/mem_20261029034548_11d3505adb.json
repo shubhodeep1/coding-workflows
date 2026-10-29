@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR must pass all CI tests (retired send_later token must be absent from s25 reference files)\n  expected_change_site: .claude/docs/s25-pr-watching-disabled.md and workflow-templates/.claude/docs/s25-pr-watching-disabled.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The tests-hooks-and-orchestrator CI job fails because the retired send_later token persists in both the live and template reference files, preventing PR merge. (Other reviewers state this was already fixed by commit 28d3e33.)\n- requirement: Reference documentation in .claude/docs/ must be updated to match the changes made in CLAUDE.md (the \u00a731 plan-go sentence in \u00a723.C)\n  expected_change_site: .claude/docs/s23-github-access.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The \u00a723.C \"Command-invoked dispatches are already approved\" paragraph in the reference file lacks the sentence \"Likewise, the user's go on a \u00a731 plan approves opening the issues (or the orchestrator dispatch) that plan names.\" (Other reviewers state this was already fixed.)\n- requirement: Changelog and PR description should describe the moved text accurately (\"copied verbatim\" / \"word for word\")\n  expected_change_site: PR description (\"word for word\" for \u00a725.C) and changelog.d/8250-claude-md-plan-handoff.md line 4 (\"copied verbatim\")\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: The changelog says \"copied verbatim, plus one new sentence in \u00a723.C\", matching the reference files, but the s25 file no longer repeats \u00a725.C, so the PR description's \"word for word\" claim is stale; the repository files are consistent (NIT, wording fix only).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: Changelog and PR description should describe the moved text accurately.\n  Expected change site: PR description (\"word for word\" for \u00a725.C) and `changelog.d/8250-claude-md-plan-handoff.md` line 4 (\"copied verbatim\").\n  Evidence of absence: The changelog already says \"copied verbatim, plus one new sentence in \u00a723.C\", which matches the reference files. The s25 file no longer repeats \u00a725.C, so the PR description's \"word for word\" claim about \u00a725.C is now stale. PR-description wording fix only, no code impact.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: PR must pass all CI tests.\n  Expected change site: .claude/docs/s25-pr-watching-disabled.md and workflow-templates/.claude/docs/s25-pr-watching-disabled.md\n  Evidence of absence: The tests-hooks-and-orchestrator CI job fails because the retired send_later token persists in both the live and template reference files, preventing PR merge.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- Requirement: Reference documentation in .claude/docs/ must be updated to match the changes made in CLAUDE.md.\n  Expected change site: .claude/docs/s23-github-access.md\n  Evidence of absence: The \u00a723.C \"Command-invoked dispatches are already approved\" paragraph in the reference file lacks the sentence: \"Likewise, the user's go on a \u00a731 plan approves opening the issues (or the orchestrator dispatch) that plan names.\"\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- Requirement: Changelog and PR description must accurately reflect the nature of the documentation migration.\n  Expected change site: changelog.d/8250-claude-md-plan-handoff.md and PR description\n  Evidence of absence: The changelog entry claims documentation was \"copied verbatim\" and the PR description mentions \"word for word\", which contradicts the cleanup edits made.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2cf3eb8477d3dd6cbaa918ffeab8f0d6e71249fde2f0e594a0d601566f865e4e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8250,
+    "run_id": "40805868360",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40805868360",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029034548_11d3505adb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8250,
+    "run_id": "40805868360"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T03:45:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
