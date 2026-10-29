@@ -3205,9 +3205,33 @@ def _resolve_origin_url(repo_root: Path) -> str:
     return url
 
 
+def _memory_single_branch_clone_enabled() -> bool:
+    # Off switch for the single-branch memory clone (#8287 / #8295). Unset,
+    # empty or a parse_bool true word keeps it on; a parse_bool false word
+    # turns it off; any other value also turns it off and warns on stderr
+    # (stdout carries machine-readable JSON).
+    raw = os.environ.get("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED")
+    if raw is None or not raw.strip():
+        return True
+    parsed = parse_bool(raw, default=None)  # type: ignore[arg-type]
+    if parsed is None:
+        shown = "".join(c if c.isprintable() else "?" for c in raw.strip()[:64])
+        print(
+            f"::warning::AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED={shown} "
+            "is not a boolean; single-branch memory clone disabled",
+            file=sys.stderr,
+        )
+        return False
+    return bool(parsed)
+
+
 def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     origin_url = _resolve_origin_url(repo_root)
     temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
+    if not _memory_single_branch_clone_enabled():
+        # Off switch (#8295): skip the single-branch fast path below and run
+        # the pre-#8287 full clone (clone, ls-remote, fetch/checkout).
+        return _full_repo_clone_for_memory_branch(temp_dir, origin_url, memory_branch)
 
     # Fast path: clone only the memory branch tip. A full clone fetched every
     # branch plus the whole ai-memory history (260k+ commits) on each write,
@@ -3253,6 +3277,13 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
         shutil.rmtree(temp_dir, ignore_errors=True)
         temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
 
+    return _full_repo_clone_for_memory_branch(temp_dir, origin_url, memory_branch)
+
+
+def _full_repo_clone_for_memory_branch(temp_dir: Path, origin_url: str, memory_branch: str) -> Path:
+    # Full clone of the repository into the empty temp_dir. Used when the
+    # single-branch fast path is switched off, when the memory branch does not
+    # exist yet, or when the shallow memory-branch clone fails.
     _run_git(temp_dir.parent, ["clone", "--no-tags", "--quiet", origin_url, str(temp_dir)])
 
     branch_exists = (
