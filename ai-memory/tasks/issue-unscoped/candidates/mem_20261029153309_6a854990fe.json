@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When a new consumer repository is onboarded (i.e. it copies workflow templates from workflow-templates/), always add it to .github/ai/consumer_repos.json.\" (CLAUDE.md \u00a714).\n  expected_change_site: .github/ai/consumer_repos.json\n  confidence=1\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports that this PR modifies coding-workflows itself, which is the source/template repo and not a consumer. It says no consumer repo is being onboarded and that the rule only applies when one is, so the file is correctly not touched here. The reviewer rated it SEVERITY: NIT and noted that \"the \u00a714 rule does not apply\". anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly rejected the same gap because issue #8321 onboards no consumer repository.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"When a new consumer repository is onboarded (i.e. it copies workflow templates from workflow-templates/), always add it to .github/ai/consumer_repos.json.\" (CLAUDE.md \u00a714).\n  Expected change site: .github/ai/consumer_repos.json\n  Evidence of absence: This PR modifies coding-workflows itself, the source/template repo, not a consumer. No consumer repo is being onboarded. The rule is conditional on onboarding a consumer, so the file is correctly not touched here.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d9cb2fe2542154a3b6503bbb9f276e9a574391bb93e9d9ac308e7b6a3933c549",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8326,
+    "run_id": "40889331864",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40889331864",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029153309_6a854990fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8326,
+    "run_id": "40889331864"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T15:33:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
