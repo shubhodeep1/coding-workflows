@@ -54,7 +54,14 @@ def _v2_comments(tmp_path: Path, author: str, state: dict, chunk_size: int = 0) 
 	return [{"user": {"login": author}, "body": Path(path).read_text(encoding="utf-8")} for path in manifest["files"]]
 
 
-def _run_state_read(tmp_path: Path, comments: list[dict], *, identity_available: bool = True, support_dir: Path | None = SCRIPTS) -> subprocess.CompletedProcess:
+def _run_state_read(
+	tmp_path: Path,
+	comments: list[dict],
+	*,
+	identity_available: bool = True,
+	support_dir: Path | None = SCRIPTS,
+	v2_switch: str | None = None,
+) -> subprocess.CompletedProcess:
 	# The comments endpoint is paginated: write two pages to check the read
 	# handles `gh api --paginate` output (one JSON array per page).
 	half = len(comments) // 2
@@ -93,6 +100,9 @@ printf 'FINGERPRINTS=%s\\nLIST=%s\\n' "$INTEGRATION_FINGERPRINTS_JSON" "$INTEGRA
 	env.pop("SUPPORT_SCRIPTS_DIR", None)
 	if support_dir is not None:
 		env["SUPPORT_SCRIPTS_DIR"] = str(support_dir)
+	env.pop("CONFLICT_INTEGRATION_V2_STATE_ENABLED", None)
+	if v2_switch is not None:
+		env["CONFLICT_INTEGRATION_V2_STATE_ENABLED"] = v2_switch
 	return subprocess.run(["bash", "-c", harness], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30, check=False)
 
 
@@ -194,3 +204,34 @@ def test_relative_support_dir_is_not_used(tmp_path: Path):
 	(tmp_path / "rel").mkdir()
 	shutil.copy(SCRIPTS / "orchestrate_state_v2.py", tmp_path / "rel" / "orchestrate_state_v2.py")
 	_assert_no_state(_run_state_read(tmp_path, _v2_comments(tmp_path, "pipeline-bot", TRUSTED), support_dir=Path("rel")))
+
+
+@pytest.mark.parametrize("v2_switch", ["", "true", "TRUE"])
+def test_switch_on_values_read_v2(tmp_path: Path, v2_switch: str):
+	if shutil.which("jq") is None:
+		pytest.skip("jq unavailable")
+	comments = [_v1_comment("pipeline-bot", INITIAL), *_v2_comments(tmp_path, "pipeline-bot", TRUSTED)]
+	proc = _run_state_read(tmp_path, comments, v2_switch=v2_switch)
+	_assert_trusted(proc)
+	assert "CONFLICT_INTEGRATION_V2_STATE_ENABLED" not in proc.stdout
+
+
+@pytest.mark.parametrize(("v2_switch", "warns"), [("false", False), ("False", False), ("off", True)])
+def test_switch_off_reads_v1_only(tmp_path: Path, v2_switch: str, warns: bool):
+	if shutil.which("jq") is None:
+		pytest.skip("jq unavailable")
+	# V1 carries the stale initial snapshot; switched off, the newer V2 state is not read.
+	comments = [_v1_comment("pipeline-bot", INITIAL), *_v2_comments(tmp_path, "pipeline-bot", TRUSTED)]
+	proc = _run_state_read(tmp_path, comments, v2_switch=v2_switch)
+	_assert_no_state(proc)
+	assert ("CONFLICT_INTEGRATION_V2_STATE_ENABLED has an unrecognised value" in proc.stdout) is warns
+
+
+def test_review_autofix_forwards_the_switch_defaulting_on():
+	workflow = (ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	line = "CONFLICT_INTEGRATION_V2_STATE_ENABLED: ${{ vars.CONFLICT_INTEGRATION_V2_STATE_ENABLED || 'true' }}"
+	assert line in workflow
+	# It must sit in the step that runs the prepare script, not a neighbour.
+	start = workflow.index(line)
+	end = workflow.find("\n      - name: ", start)
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_conflict_prepare.sh"' in workflow[start:end]
