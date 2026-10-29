@@ -129,9 +129,10 @@ Create a structured implementation plan that includes:
    non-closing reference, so the issue stays open and clarification restarts
    for these items after the merge. The section holds only those bullets (an
    indented line continues the bullet above it): put any note about how the
-   items will be delivered in another section. A prose line, note or
-   sub-heading inside it makes the section unreadable, so the issue closes at
-   the merge and a heal plan's `PARTIAL` counterfactual is held.
+   items will be delivered in another section. A prose line or note inside it
+   makes the section unreadable, so the issue closes at the merge and a heal
+   plan's `PARTIAL` counterfactual is held. The next heading ends the section,
+   so bullets placed after a sub-heading are not part of it.
 
 Use the following shared security and money-handling lens when planning any
 affected surface:

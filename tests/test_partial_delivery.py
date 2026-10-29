@@ -165,7 +165,8 @@ def test_plan_prompt_copies_carry_the_same_deferred_scope_rule() -> None:
 	assert "never emit it\n   for an orchestrator-managed child issue" in rules[0]
 	# Issue #8327: a note inside the section makes it malformed, so the prompt must say bullets only.
 	assert "The section holds only those bullets" in rules[0]
-	assert "A prose line, note or\n   sub-heading inside it makes the section unreadable" in rules[0]
+	assert "A prose line or note inside it\n   makes the section unreadable" in rules[0]
+	assert "The next heading ends the section" in rules[0]
 
 
 def main() -> int:

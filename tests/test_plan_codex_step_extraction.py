@@ -32,12 +32,14 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # 16_738 -> 16_978 bytes).
 # Issue #8327 added a "bullets only" sentence to rule 12 (`## Deferred scope`):
 # a note inside the section made it unreadable (259 -> 263 lines,
-# 16_978 -> 17_307 bytes).
+# 16_978 -> 17_307 bytes). Its review then dropped the inaccurate "sub-heading
+# makes it unreadable" clause: a heading ends the section (263 -> 264 lines,
+# 17_307 -> 17_390 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"f3bcf180fb8242759d309d2b568aeadc4dba54d470a870961296b5a99bde142e"
+	"56e5938f459d367742c9fc6b4a920689a24024db8239ecfd6e492c9675618e5b"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 17_307
-PRE_EXTRACTION_PROMPT_LINES = 263
+PRE_EXTRACTION_PROMPT_BYTES = 17_390
+PRE_EXTRACTION_PROMPT_LINES = 264
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:

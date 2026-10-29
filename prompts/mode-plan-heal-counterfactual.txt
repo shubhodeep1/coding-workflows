@@ -33,8 +33,9 @@ HEAL_COUNTERFACTUAL: UNVERIFIED: <one line naming the missing evidence>
   spelled exactly as in the evidence. Each listed job must also appear in a
   `- ` bullet of a `## Deferred scope` section (that section may be used for
   these jobs on a heal issue even without a clarification answer). That
-  section holds only `- ` bullets: a prose line, note or sub-heading inside it
-  makes it unreadable and the plan is held, so put any note elsewhere.
+  section holds only `- ` bullets: a prose line or note inside it makes it
+  unreadable and the plan is held, so put any note elsewhere. The next heading
+  ends the section.
 - `FAIL:` the observed run would still fail for a reason the plan does not
   address. A job that would still fail and is not listed under
   `## Deferred scope` makes the result FAIL, not PARTIAL.

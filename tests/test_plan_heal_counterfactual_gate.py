@@ -34,7 +34,7 @@ FIXTURE_8241 = REPO_ROOT / "tests" / "fixtures" / "heal_counterfactual" / "issue
 FIXTURE_8327 = REPO_ROOT / "tests" / "fixtures" / "heal_counterfactual" / "issue_8327_plan.md"
 # The trailing note the #8327 planner wrote inside its "## Deferred scope" section.
 NOTE_8327 = "\nThese items are delivered through a separate issue that is not a heal issue,"
-DEFERRED_MISSING_HINT = "The section must appear once and hold only `- ` bullets: a prose line, note or sub-heading inside it makes it unreadable."
+DEFERRED_MISSING_HINT = "The section must appear once and hold only `- ` bullets: a prose line or note inside it makes it unreadable."
 
 
 def _load_partial_delivery():
@@ -270,7 +270,7 @@ def test_counterfactual_prompt_contract() -> None:
 		assert needle in text, needle
 	assert "{{" not in text
 	# Issue #8327: the planner must know that a note inside the section holds the plan.
-	assert "section holds only `- ` bullets: a prose line, note or sub-heading inside it" in text
+	assert "section holds only `- ` bullets: a prose line or note inside it makes it" in text
 
 
 def test_heal_intake_prompt_has_the_would_it_pass_subsection() -> None:
