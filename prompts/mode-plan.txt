@@ -16,9 +16,8 @@ Read-only exploration sub-phase:
 - Allowed read-only operations in this sub-phase: grep/glob discovery, targeted file reads, manifest inspection, lockfile detection, and preview-only patch planning.
 - Use the exploration pass to identify likely files, confirm surrounding context, and outline intended non-writing patch shapes.
 - No write-mode tools are allowed during this sub-phase.
-- If the planning context already surfaces `lessons_learned_record.v1`
-  entries for the same files, review up to the 5 most recent before
-  drafting and treat them as soft priors, not gospel.
+- If the planning context already surfaces `lessons_learned_record.v1` entries for the same files,
+  review up to the 5 most recent before drafting and treat them as soft priors, not gospel.
 
 {{REFERENCE_OUTPUT_CONTRACT}}
 Default-branch reference: your git has no remote, so `origin/...` refs do not
