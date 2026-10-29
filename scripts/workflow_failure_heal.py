@@ -3575,11 +3575,8 @@ def heal_scope_guard_subjects(test_files: Iterable[str], exists: Any, oversized_
 
 # Explicit scope slots reserved for failing-test subjects ahead of changed_files.
 HEAL_SCOPE_SUBJECT_RESERVE = 8
-# Linked-run scope paths (issue #8360) one intake may add to self_workflows.
-# They sit ahead of the subject reserve in workflow_paths, so without this
-# sub-cap four linked runs could take every explicit slot and confine a
-# test-failure heal to tests/** again (#6907/#6916). They still count toward 20.
-HEAL_SCOPE_LINKED_PATHS_MAX = 8
+# The linked paths share the marker's existing 20 explicit slots.
+HEAL_SCOPE_LINKED_PATHS_MAX = 20
 
 
 def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = ()) -> str:
@@ -7208,7 +7205,7 @@ _LINKED_SCOPE_LOCAL_USES_RE = re.compile(r"^\./(\.github/workflows/[A-Za-z0-9_.-
 _LINKED_SCOPE_REMOTE_USES_RE = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)@[A-Za-z0-9_./-]+$")
 _LINKED_SCOPE_FAILED_CONCLUSIONS = ("failure", "timed_out")
 HEAL_SCOPE_LINKED_YAML_MAX_BYTES = 600_000
-HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP = 8
+HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP = 20
 
 
 def heal_scope_linked_workflows_gate(*, enabled: Any, source_kind: Any, source_repo: Any, self_repo: Any, source_workflow_paths: Iterable[Any]) -> str:
@@ -7390,9 +7387,9 @@ def heal_scope_linked_workflow_paths(run: Any, jobs: Any, *, repo: str, exists: 
 			candidate = match.group("path")
 			if candidate.startswith("scripts/") and candidate not in candidates:
 				candidates.append(candidate)
-			if len(candidates) >= HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP:
-				break
 		for candidate in candidates:
+			if len(paths) >= HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP:
+				break
 			if not _safe_heal_path(candidate) or not exists(candidate):
 				_skip("script_missing")
 			elif candidate not in paths:
