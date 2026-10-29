@@ -389,11 +389,16 @@ DEFAULT_FAILURE_FINGERPRINT_MAX_IDENTICAL = 3
 # REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL. review_conflict_resolve.sh writes
 # them as ``conflict_resolver_<fail-closed reason>`` (PR #6438: a conflict set
 # the resolver sandbox cannot carry failed ~28 identical runs on one head).
+# review_autofix_step_post_editor_summary.sh writes
+# ``review_editor_sandbox_path_excluded`` when the editor changed nothing and
+# declined a finding only as "sandbox-excluded path" (#8321: PR #8250 was
+# re-reviewed 29 times on unchanged heads).
 NON_RETRYABLE_FAILURE_REASONS = frozenset(
 	{
 		"conflict_resolver_sandbox_path_host_only",
 		"conflict_resolver_sandbox_path_unsupported",
 		"conflict_resolver_sandbox_support_missing",
+		"review_editor_sandbox_path_excluded",
 	}
 )
 # A non-retryable cap is re-armed once per verified review-support commit not
@@ -4236,6 +4241,9 @@ def verify_run_provenance(
 		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES + SCHEDULED_CHECK_WORKFLOW_FILES)
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
+	report_head = str(payload.get("head_sha") or "").strip().lower()
+	# Run ids of autofix_failure runs that a trusted failure marker binds to report_head.
+	result["marker_head_run_ids"] = []
 	for position, ref in enumerate(refs):
 		run_id = str(ref["run_id"])
 		run = runs.get(run_id) if isinstance(runs, dict) else None
@@ -4281,20 +4289,28 @@ def verify_run_provenance(
 			)
 			if not linked:
 				reason = "not_linked_to_issue"
+		marker_head_bound = False
 		if not reason and kind == "autofix_failure":
 			linked = False
 			for comment in comments or []:
 				if not isinstance(comment, dict) or _comment_author(comment) != trusted_login.strip().lower():
 					continue
 				body = sanitize_text(comment.get("body"))
-				if _marker_fields(_canonical_failure_marker(body)).get("run") == run_id or any(
-					_marker_fields(match).get("run") == run_id for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body)
-				):
+				run_markers = [fields for fields in (
+					_marker_fields(_canonical_failure_marker(body)),
+					*(_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body)),
+				) if fields.get("run") == run_id]
+				if run_markers:
 					linked = True
-					break
+					# A trusted marker naming this run and the report's PR head
+					# binds the run to that head even when the run itself was
+					# dispatched on another ref (verify-run --marker-head-bound).
+					if any(is_valid_sha(report_head) and fields.get("head", "").lower() == report_head for fields in run_markers):
+						marker_head_bound = True
+						break
+					continue
 				if body.strip().startswith(AUTOFIX_FAILURE_COMMENT_MARKERS) and any(item["run_id"] == run_id for item in extract_run_refs([body], repo)):
 					linked = True
-					break
 			pr_number = payload.get("issue_number")
 			if not linked and isinstance(run.get("pull_requests"), list):
 				linked = any(isinstance(pr, dict) and pr.get("number") == pr_number for pr in run["pull_requests"])
@@ -4309,6 +4325,8 @@ def verify_run_provenance(
 				result["reason"] = f"current_run_rejected:{reason}"
 		else:
 			result["run_refs"].append(ref)
+			if marker_head_bound:
+				result["marker_head_run_ids"].append(run_id)
 			if pending:
 				result["pending_current_run"] = run_id
 	if result["reason"]:
@@ -4866,6 +4884,7 @@ _NON_RETRYABLE_EXPLANATIONS = {
 	"conflict_resolver_sandbox_path_host_only": "Another review/autofix run cannot resolve this: the conflicted path(s) are executed on the host and the resolver sandbox refuses them by design. Merge the conflict by hand, push, then remove `ai:needs-human`.",
 	"conflict_resolver_sandbox_path_unsupported": "Another review/autofix run cannot resolve this: the conflicted path(s) are symlinks or have names the resolver sandbox cannot carry, so it refuses them. Merge the conflict by hand, push, then remove `ai:needs-human`.",
 	"conflict_resolver_sandbox_support_missing": "Another review/autofix run cannot resolve this: the verified workflow support commit is missing the conflict resolver's sandbox support files, so no resolver run can start until workflow support is fixed. Ask a maintainer to fix workflow support, or merge the conflict by hand and push, then remove `ai:needs-human`.",
+	"review_editor_sandbox_path_excluded": "Another review/autofix run cannot fix this: the fix needs a path the review editor sandbox does not admit (a `.claude/` file other than the admitted command and docs reference files, or a new file there). Make that change by hand, push, then remove `ai:needs-human`.",
 }
 _NON_RETRYABLE_EXPLANATION_DEFAULT = "Another review/autofix run cannot resolve this failure. Resolve it by hand, push, then remove `ai:needs-human`."
 
@@ -4885,7 +4904,7 @@ def render_non_retryable_comment(decision: dict[str, Any], *, pr_number: Any, he
 		lines.append("Conflicted path(s) that need a manual merge:")
 		lines.append("")
 		lines.extend(f"- `{sanitize_text(path).replace('@', '')}`" for path in paths)
-	elif reason != "conflict_resolver_sandbox_support_missing":
+	elif reason not in ("conflict_resolver_sandbox_support_missing", "review_editor_sandbox_path_excluded"):
 		lines.append("The conflicted path(s) could not be read from the failure comment; see the latest review/autofix failure comment on this pull request.")
 	lines.extend(["", _NON_RETRYABLE_EXPLANATIONS.get(reason, _NON_RETRYABLE_EXPLANATION_DEFAULT), "", "No heal issue was opened."])
 	run_match = _RUN_URL_RE.fullmatch(str(intake_run_url or ""))
@@ -7119,7 +7138,20 @@ def _autofix_dispatch_run_for_pr(run_json: dict[str, Any], *, kind: str, pr_numb
 	return bool(match and match.group("n") == str(pr_number))
 
 
-def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "", allow_pending: bool = False, pr_number: int = 0) -> dict[str, Any]:
+def _autofix_dispatch_run_marker_bound(run_json: dict[str, Any], *, kind: str, marker_head_bound: bool) -> bool:
+	"""True for a dispatched review run that a trusted failure marker binds to the PR head.
+
+	A self-dispatched ``review_autofix.yml`` run has no ``[pr:N]`` title and
+	runs on the dispatch ref, so neither its title nor its ``head_sha`` names
+	the PR. `verify_run_provenance` links it by the pipeline's own failure
+	marker instead, and lists it in ``marker_head_run_ids`` only when that
+	marker names this run and the report's PR head; the intake passes that
+	verdict here as ``marker_head_bound``.
+	"""
+	return kind == "autofix_failure" and marker_head_bound and run_json.get("event") == "workflow_dispatch"
+
+
+def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "", allow_pending: bool = False, pr_number: int = 0, marker_head_bound: bool = False) -> dict[str, Any]:
 	if not isinstance(run_json, dict) or (run_json.get("repository") or {}).get("full_name") != repo or not isinstance(run_json.get("id"), int) or run_json["id"] < 1:
 		raise ValueError("run identity mismatch")
 	# A phase reporter dispatches while its own run is still in progress; the
@@ -7127,7 +7159,8 @@ def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str 
 	pending = allow_pending and run_json.get("conclusion") is None and run_json.get("status") in ("queued", "in_progress", "pending")
 	if not pending and run_json.get("conclusion") not in (("failure", "timed_out", "cancelled", "success") if kind == "autofix_failure" else ("failure", "timed_out", "cancelled")):
 		raise ValueError("run not completed with expected conclusion")
-	if head_sha and run_json.get("head_sha") != head_sha and not _autofix_dispatch_run_for_pr(run_json, kind=kind, pr_number=pr_number):
+	if head_sha and run_json.get("head_sha") != head_sha and not _autofix_dispatch_run_for_pr(run_json, kind=kind, pr_number=pr_number) \
+		and not _autofix_dispatch_run_marker_bound(run_json, kind=kind, marker_head_bound=marker_head_bound):
 		raise ValueError("run head mismatch")
 	path = run_json.get("path") or ""
 	paths = [path] if isinstance(path, str) and _safe_heal_path(path) else []
@@ -7145,7 +7178,7 @@ def _cmd_select_evidence_jobs(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify_run(args: argparse.Namespace) -> int:
-	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending, pr_number=args.pr_number))
+	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending, pr_number=args.pr_number, marker_head_bound=args.marker_head_bound))
 	return 0
 
 
@@ -7970,6 +8003,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--allow-pending", action="store_true")
 	p.add_argument("--pr-number", type=int, default=0, help="autofix_failure: the PR a dispatched review run must name in its title")
+	p.add_argument("--marker-head-bound", action="store_true", help="autofix_failure: verify-run-provenance listed this run in marker_head_run_ids")
 	p.set_defaults(func=_cmd_verify_run)
 
 	p = sub.add_parser("heal-route")

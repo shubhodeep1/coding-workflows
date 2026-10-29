@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -348,6 +349,73 @@ def test_package_write_failure_rolls_back_copied_assets() -> None:
 		assert allowlist_file.read_bytes() == before_allowlist
 
 
+def test_existing_allowlist_is_seed_only_and_never_overwritten() -> None:
+	"""multi-user-ai-agent#316: every @stable sync reset an 18-entry allowlist to []."""
+	with tempfile.TemporaryDirectory(prefix="audit-gate-seed-only-") as td:
+		repo_root = Path(td)
+		_write_json(repo_root / "package.json", {"name": "fixture", "version": "1.0.0", "scripts": {}})
+		allowlist_file = repo_root / "security" / "dependency-audit-allowlist.json"
+		allowlist_file.parent.mkdir(parents=True, exist_ok=True)
+		consumer_allowlist = b'[\n  {"package": "basic-ftp", "advisoryId": "GHSA-C475-QRG2-PJ4R"}\n]\n'
+		allowlist_file.write_bytes(consumer_allowlist)
+
+		result = _run_apply(contract_root=CANONICAL_CONTRACT_ROOT, repo_root=repo_root)
+		assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+
+		result_payload = _read_json(repo_root / ".tmp" / "audit_gate_result.json")
+		assert result_payload["status"] == "applied"
+		assert "security/dependency-audit-allowlist.json" not in result_payload["changed_files"]
+		assert "scripts/security/check-npm-audit.js" in result_payload["changed_files"]
+		assert allowlist_file.read_bytes() == consumer_allowlist
+
+		second = _run_apply(contract_root=CANONICAL_CONTRACT_ROOT, repo_root=repo_root)
+		assert second.returncode == 0, f"stdout:\n{second.stdout}\n\nstderr:\n{second.stderr}"
+		assert _read_json(repo_root / ".tmp" / "audit_gate_result.json")["status"] == "unchanged"
+		assert allowlist_file.read_bytes() == consumer_allowlist
+
+
+def test_vendored_script_runs_in_an_esm_package() -> None:
+	"""multi-user-ai-agent#316: the vendored script crashed under "type": "module"."""
+	with tempfile.TemporaryDirectory(prefix="audit-gate-esm-") as td:
+		repo_root = Path(td)
+		_write_json(repo_root / "package.json", {"name": "fixture", "version": "1.0.0", "type": "module", "scripts": {}})
+
+		result = _run_apply(contract_root=CANONICAL_CONTRACT_ROOT, repo_root=repo_root)
+		assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+		script_text = (repo_root / "scripts" / "security" / "check-npm-audit.js").read_text(encoding="utf-8")
+		assert re.search(r"(\brequire|createRequire)\s*\(", script_text) is None
+
+		npm_probe = subprocess.run(
+			["npm", "run", "audit:ci"],
+			cwd=str(repo_root),
+			text=True,
+			capture_output=True,
+			check=False,
+			env=_build_npm_wrapper_env(
+				repo_root=repo_root,
+				audit_payload={"auditReportVersion": 2, "vulnerabilities": {}},
+			),
+		)
+		assert npm_probe.returncode == 0, f"stdout:\n{npm_probe.stdout}\n\nstderr:\n{npm_probe.stderr}"
+		assert "No vulnerabilities reported by npm audit." in npm_probe.stdout
+
+
+def test_non_boolean_seed_only_is_rejected() -> None:
+	with tempfile.TemporaryDirectory(prefix="audit-gate-seed-only-type-") as td:
+		repo_root = Path(td)
+		_write_json(repo_root / "package.json", {"name": "fixture", "version": "1.0.0", "scripts": {}})
+		broken_contract_root = repo_root / "broken-contract"
+		shutil.copytree(CANONICAL_CONTRACT_ROOT, broken_contract_root)
+		contract = _read_json(broken_contract_root / "contract.json")
+		contract["managed_files"][1]["seed_only"] = "yes"
+		_write_json(broken_contract_root / "contract.json", contract)
+
+		result = _run_apply(contract_root=broken_contract_root, repo_root=repo_root)
+		assert result.returncode == 1, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+		assert "seed_only must be a boolean" in _read_json(repo_root / ".tmp" / "audit_gate_result.json")["message"]
+		assert not (repo_root / "scripts" / "security" / "check-npm-audit.js").exists()
+
+
 def main() -> int:
 	test_fresh_apply_vendors_script_and_package_script_atomically()
 	test_missing_template_asset_does_not_mutate_package_json()
@@ -356,6 +424,9 @@ def main() -> int:
 	test_reapply_preserves_a_consumer_allowlist()
 	test_seed_only_must_be_a_boolean()
 	test_package_write_failure_rolls_back_copied_assets()
+	test_existing_allowlist_is_seed_only_and_never_overwritten()
+	test_vendored_script_runs_in_an_esm_package()
+	test_non_boolean_seed_only_is_rejected()
 	return 0
 
 

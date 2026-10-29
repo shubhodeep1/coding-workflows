@@ -1469,6 +1469,8 @@ _non_retryable_route_apply()
 	NON_RETRYABLE_PATHS="$(jq -r '.paths | join(", ")' "${NON_RETRYABLE_FILE}")"
 	if [ "${NON_RETRYABLE_REASON}" = "conflict_resolver_sandbox_support_missing" ]; then
 		NON_RETRYABLE_ACTION="workflow support lacks the conflict resolver's sandbox files; a maintainer must fix workflow support (or merge the conflict by hand)"
+	elif [ "${NON_RETRYABLE_REASON}" = "review_editor_sandbox_path_excluded" ]; then
+		NON_RETRYABLE_ACTION="the fix needs a path the review editor sandbox does not admit; make that change by hand"
 	elif [ -n "${NON_RETRYABLE_PATHS}" ]; then
 		NON_RETRYABLE_ACTION="${NON_RETRYABLE_PATHS} need a manual merge"
 	else
@@ -1598,6 +1600,13 @@ while IFS=$'\t' read -r run_id run_url; do
 	verify_pr_args=()
 	if [ "${SOURCE_KIND}" = autofix_failure ] && [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
 		verify_pr_args=(--pr-number "${ISSUE_NUMBER}")
+	fi
+	# A self-dispatched review_autofix.yml run has no `[pr:N]` title either; the
+	# provenance gate binds it by a trusted failure marker that names this run
+	# and the PR head (marker_head_run_ids).
+	if [ "${SOURCE_KIND}" = autofix_failure ] && [ -s "${PROVENANCE_RESULT:-}" ] \
+		&& jq -e --arg id "${run_id}" '(.marker_head_run_ids // []) | index($id) != null' "${PROVENANCE_RESULT}" >/dev/null 2>&1; then
+		verify_pr_args+=(--marker-head-bound)
 	fi
 	if [ "${run_info_ready}" != true ] \
 		|| ! python3 "${HEAL_PY}" verify-run --run-json "${RUN_INFO_FILE}" --repo "${SOURCE_REPO}" --target-repo "${SELF_REPO}" --kind "${SOURCE_KIND}" "${verify_pending_args[@]}" "${verify_pr_args[@]}" \

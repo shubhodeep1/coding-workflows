@@ -227,6 +227,73 @@ def test_gate_holds_on_empty_scope_or_plan(tmp_path: Path) -> None:
 	assert record["reason"] == "plan_gate_error"
 
 
+def _files_section(section: str) -> str:
+	return "Implementation Plan\n\n" + section + "\n\n## Functions or modules to implement\nNone in this issue.\n"
+
+
+def test_gate_approves_plan_that_declares_no_file_changes(tmp_path: Path) -> None:
+	# #8241: the closing re-plan after a partial delivery. Steps outside the
+	# Files section may name other paths; only the Files section is read.
+	plan = _files_section("## Files likely to change\nNone. This plan changes no repository file. The change for "
+		"this issue's scope merged in PR #8243.") + "\nSteps: a maintainer files an issue for .github/workflows/orchestrate.yml.\n"
+	record, code, grant_out = _gate(tmp_path, plan)
+	assert code == 0, record
+	assert record["decision"] == "approve" and record["reason"] == "heal_scope_plan_no_changes"
+	assert record["denied_paths"] == [] and record["protected_paths"] == []
+	assert not grant_out.exists()
+
+
+def test_gate_accepts_none_spellings(tmp_path: Path) -> None:
+	for section in ("## Files likely to change\nNone", "## Files likely to change\n- None.", "## Files likely to change\n_None._",
+			"## Files likely to change\n**None** — already merged in PR #1.", "**Files likely to change:** None.",
+			"Files to change: none; the fix already merged.", "## Files likely to change\n\nNONE!\n\nNothing is left to do."):
+		record, code, _ = _gate(tmp_path, _files_section(section))
+		assert code == 0 and record["reason"] == "heal_scope_plan_no_changes", (section, record)
+
+
+def test_gate_holds_empty_section_that_does_not_say_none(tmp_path: Path) -> None:
+	for section in (
+			"## Files likely to change\n",
+			"## Files likely to change\nEdit the workflow and its tests.",
+			"## Files likely to change\nNone in the workflow; edit the docs instead.",
+			"## Files likely to change\nNoneworthy changes.",
+			"## Files likely to change\nNone. Also update README.md.",
+			"## Files likely to change\nNone. See docs/guide for the rest.",
+			"## Files likely to change\nNone, except *.py helpers.",
+			"## Files likely to change\nNone. Touch `x` only.",
+			"## Files likely to change\nNone.\n- something else",
+			"## Files likely to change\nEdit the parser.\nNone.",
+			"## Files likely to change\nNone.\n\n## Files to change\nRewrite the parser.",
+			"## Files likely to change\nNone.\nUpdate the Makefile.",
+			"## Files likely to change\nNone. Also edit CODEOWNERS.",
+			"## Files likely to change\nNone. Then refresh .gitignore.",
+			"## Files likely to change\nNone. Also update .env.",
+			"## Files likely to change\nNone. Also update .ENV.",
+			"## Files likely to change\nNone. Also update .envrc.",
+			"## Files likely to change\nNone. Also update .npmrc.",
+			"## Files likely to change\nNone. Then edit .netrc.",
+			"## Files likely to change\nNone. Also update README.",
+			"## Files likely to change\nNone. Update the readme.",
+			"## Files likely to change\nNone. Update the makefile.",
+			"## Files likely to change\nNone. Refresh the Codeowners.",
+			"## Files likely to change\nNone. Also edit app.webmanifest.",
+			"## Files likely to change README.md\nNone.",
+			"Files likely to change in README.md: None."):
+		record, code, _ = _gate(tmp_path, _files_section(section))
+		assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_paths_missing", (section, record)
+
+
+def test_none_plan_still_needs_a_verified_scope(tmp_path: Path) -> None:
+	record, code, _ = _gate(tmp_path, _files_section("## Files likely to change\nNone."), scope="")
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_check_unavailable"
+
+
+def test_none_with_a_listed_path_is_checked_against_scope(tmp_path: Path) -> None:
+	record, code, _ = _gate(tmp_path, _files_section("## Files likely to change\n- None\n- `scripts/other.py`"))
+	assert code == guard.EXIT_AUTOMATION_UNGRANTED and record["reason"] == "heal_scope_plan_out_of_scope"
+	assert "scripts/other.py" in record["denied_paths"]
+
+
 def main() -> int:
 	import tempfile
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

@@ -336,6 +336,8 @@ def derive_managed_digests(repo_root: Path, commit: str = "HEAD") -> dict:
 			source, target = item.get("source"), item.get("target")
 			if not (isinstance(source, str) and source and isinstance(target, str) and target):
 				continue
+			if item.get("seed_only") is True:
+				continue
 			source_entry = by_path.get("workflow-templates/audit-gate/" + source)
 			if source_entry and source_entry[0] != "120000":
 				sources[target] = ("copy", source_entry[1])
