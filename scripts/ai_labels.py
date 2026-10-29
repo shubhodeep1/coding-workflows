@@ -225,7 +225,12 @@ def _github_api_request(
     method: str = "GET",
     payload: dict[str, Any] | None = None,
     require_token: bool = False,
+    retry_transient: bool = True,
 ) -> Any:
+    # retry_transient=False makes exactly one attempt. Use it for
+    # non-idempotent writes (a comment POST): a 5xx or timeout after GitHub
+    # applied the write would otherwise post the same comment again.
+    attempt_limit = GITHUB_API_MAX_ATTEMPTS if retry_transient else 1
     token_text = _github_token()
     if require_token and token_text is None:
         raise LabelContractError("GH_TOKEN / GITHUB_TOKEN is required unless --dry-run is set")
@@ -249,17 +254,17 @@ def _github_api_request(
         headers=request_headers,
         method=method_name,
     )
-    for attempt_index in range(GITHUB_API_MAX_ATTEMPTS):
+    for attempt_index in range(attempt_limit):
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
                 response_body = response.read()
         except urllib.error.HTTPError as exc:
-            if exc.code not in GITHUB_API_RETRY_STATUSES or attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
+            if exc.code not in GITHUB_API_RETRY_STATUSES or attempt_index + 1 >= attempt_limit:
                 raise
             time.sleep(_github_retry_delay_seconds(exc.headers, attempt_index))
             continue
         except (urllib.error.URLError, OSError):
-            if attempt_index + 1 >= GITHUB_API_MAX_ATTEMPTS:
+            if attempt_index + 1 >= attempt_limit:
                 raise
             time.sleep(_github_retry_delay_seconds(None, attempt_index))
             continue
@@ -897,31 +902,34 @@ def _list_open_items_with_label(repo: str, label_name: str) -> tuple[list[dict[s
 def _retired_label_marker_present(repo: str, number: int, marker: str, comment_count: int) -> bool:
     """Return true when a trusted author already posted ``marker`` on the item.
 
-    API calls (CLAUDE.md §15): exactly one read-only
+    API calls (CLAUDE.md §15): one read-only
     ``GET repos/{repo}/issues/{number}/comments?per_page=100&page=<last>``,
     where ``<last>`` comes from the listing's ``comments`` count, so the
-    newest comments (where the drain's own marker sits) are read in one call.
-    Only comments whose author association is OWNER / MEMBER / COLLABORATOR,
+    newest comments (where the drain's own marker sits) are read first. When
+    that page has no trusted marker and ``<last>`` is above 1, one more GET
+    reads ``<last> - 1``, so a marker that newer comments pushed across the
+    page boundary is still found (at most two calls). Only comments whose author association is OWNER / MEMBER / COLLABORATOR,
     or whose author is ``github-actions[bot]``, count; a marker forged by
     anyone else is ignored. Raises on read failure or a non-array response.
     """
     last_page = max(1, -(-comment_count // RETIRED_LABEL_DRAIN_PAGE_SIZE))
-    comment_items = _github_api_request(
-        f"repos/{repo}/issues/{number}/comments?per_page={RETIRED_LABEL_DRAIN_PAGE_SIZE}&page={last_page}"
-    )
-    if not isinstance(comment_items, list):
-        raise ValueError("unexpected comments response shape (expected a JSON array)")
-    for comment in comment_items:
-        if not isinstance(comment, dict):
-            continue
-        body_text = comment.get("body")
-        if not isinstance(body_text, str) or marker not in body_text:
-            continue
-        association_text = comment.get("author_association")
-        user_value = comment.get("user")
-        login_text = user_value.get("login") if isinstance(user_value, dict) else None
-        if association_text in RETIRED_LABEL_DRAIN_TRUSTED_ASSOCIATIONS or login_text == RETIRED_LABEL_DRAIN_TRUSTED_BOT_LOGIN:
-            return True
+    for page_number in range(last_page, max(0, last_page - 2), -1):
+        comment_items = _github_api_request(
+            f"repos/{repo}/issues/{number}/comments?per_page={RETIRED_LABEL_DRAIN_PAGE_SIZE}&page={page_number}"
+        )
+        if not isinstance(comment_items, list):
+            raise ValueError("unexpected comments response shape (expected a JSON array)")
+        for comment in comment_items:
+            if not isinstance(comment, dict):
+                continue
+            body_text = comment.get("body")
+            if not isinstance(body_text, str) or marker not in body_text:
+                continue
+            association_text = comment.get("author_association")
+            user_value = comment.get("user")
+            login_text = user_value.get("login") if isinstance(user_value, dict) else None
+            if association_text in RETIRED_LABEL_DRAIN_TRUSTED_ASSOCIATIONS or login_text == RETIRED_LABEL_DRAIN_TRUSTED_BOT_LOGIN:
+                return True
     return False
 
 
@@ -972,9 +980,10 @@ def _drain_retired_label(
 
     * one listing (``_list_open_items_with_label``, up to 2 GETs); when it is
       complete and empty nothing else is called and the label may be deleted;
-    * per item, within the shared budget: one comments GET (marker check),
-      one ``POST repos/{repo}/issues/{n}/comments`` when no trusted marker is
-      present, and one ``PATCH repos/{repo}/issues/{n}`` that closes it
+    * per item, within the shared budget: one or two comments GETs (marker
+      check), one single-attempt ``POST repos/{repo}/issues/{n}/comments``
+      when no trusted marker is present (never retried, so a lost response
+      cannot post the comment twice; the next run re-checks the marker), and one ``PATCH repos/{repo}/issues/{n}`` that closes it
       (``state_reason=not_planned`` for issues only; PRs have none);
     * one final listing (up to 2 GETs) after every listed item was closed.
 
@@ -1052,6 +1061,7 @@ def _drain_retired_label(
                     method="POST",
                     payload={"body": _retired_label_drain_comment_body(label_name, is_pr=is_pr)},
                     require_token=True,
+                    retry_transient=False,
                 )
             except LabelContractError:
                 raise

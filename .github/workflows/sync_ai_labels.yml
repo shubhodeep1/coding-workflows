@@ -29,9 +29,10 @@ env:
 # request more than its caller grants, and the consumer template
 # (workflow-templates/ai-sync-labels.yml) grants no pull-requests scope, so
 # adding pull-requests: write here would stop every consumer label sync from
-# starting. The retired-label drain closes PRs with GH_TOKEN, which is GH_PAT
-# when it is set; this repo's internal-sync-ai-labels.yml caller also grants
-# pull-requests: write for the github.token fallback.
+# starting. This block also caps the job token whatever the caller grants, so
+# the github.token fallback never has pull-requests scope: draining a retired
+# label from PRs needs GH_PAT. Without it each PR item fails as drain_comment /
+# drain_close and keeps the label (issues still drain with github.token).
 permissions:
   contents: read
   issues: write

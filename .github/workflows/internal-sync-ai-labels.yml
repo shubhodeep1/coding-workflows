@@ -27,6 +27,9 @@ concurrency:
 
 jobs:
   sync:
+    # pull-requests: write is capped by sync_ai_labels.yml's own permissions
+    # block, so it does not reach the called job's github.token; the drain
+    # closes PRs with GH_PAT.
     permissions:
       contents: read
       issues: write

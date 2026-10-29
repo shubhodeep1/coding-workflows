@@ -350,6 +350,46 @@ def test_drain_trusted_marker_skips_the_comment_and_forged_marker_does_not() -> 
 	assert "item=7 kind=issue comment=marker_present" in stderr_text
 
 
+def test_drain_comment_post_is_never_retried_and_marker_check_reads_previous_page() -> None:
+	# A 502 on the comment POST may follow a write GitHub already applied, so
+	# the POST is not retried (no duplicate marker); the item stays open.
+	with tempfile.TemporaryDirectory(prefix="ai-label-drain-no-retry-") as tmpdir:
+		contract_path = _write_contract(Path(tmpdir), ["ai:old-present"])
+		responses = _unchanged_responses() + [
+			_FakeHTTPResponse([_item(5)]),
+			_FakeHTTPResponse([]),
+			_http_error(f"{API}/issues/5/comments", 502, "Bad Gateway"),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+	assert rc == 0
+	assert payload["deleted"] == 0
+	assert payload["errors"] == [
+		{"action": "drain_comment", "label": "ai:old-present", "message": "item=#5: Bad Gateway", "status": 502}
+	]
+	assert _methods(request_log) == ["GET", "GET", "POST"]
+	assert "reason=item_failed" in stderr_text
+
+	# 101 comments: the last page holds no marker, the previous page does.
+	with tempfile.TemporaryDirectory(prefix="ai-label-drain-prev-page-") as tmpdir:
+		contract_path = _write_contract(Path(tmpdir), ["ai:old-present"])
+		responses = _unchanged_responses() + [
+			_FakeHTTPResponse([_item(5, comments=101)]),
+			_FakeHTTPResponse([{"body": "newer", "author_association": "OWNER"}]),
+			_FakeHTTPResponse([{"body": MARKER, "author_association": "OWNER"}]),
+			_FakeHTTPResponse({"state": "closed"}),
+			_FakeHTTPResponse([]),
+			_EmptyResponse(),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+	assert rc == 0
+	assert payload["deleted"] == 1
+	assert payload["errors"] == []
+	assert _methods(request_log) == ["GET", "GET", "GET", "PATCH", "GET", "DELETE"]
+	assert request_log[3]["url"] == f"{API}/issues/5/comments?per_page=100&page=2"
+	assert request_log[4]["url"] == f"{API}/issues/5/comments?per_page=100&page=1"
+	assert "item=5 kind=issue comment=marker_present" in stderr_text
+
+
 def test_drain_incomplete_or_failed_listing_keeps_the_label() -> None:
 	with tempfile.TemporaryDirectory(prefix="ai-label-drain-incomplete-") as tmpdir:
 		contract_path = _write_contract(Path(tmpdir), ["ai:old-present"])
