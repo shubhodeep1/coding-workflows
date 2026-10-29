@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Give the cancel-on-close job in the reusable 'cancel_on_pr_close.yml' workflow (job 'cancel-active-runs') a per-trigger concurrency group, 'cancel-on-pr-close-${{ github.repository }}-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number }}', keeping 'cancel-in-progress: false'\n  expected_change_site: .github/workflows/cancel_on_pr_close.yml\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: No hunk in the PR diff touches .github/workflows/cancel_on_pr_close.yml, The PR description explicitly defers this under \"Deferred scope\" (AD-1) (severity NIT; anthropic_claude-sonnet-5_5 skipped it as a deferred requirement with confidence 1)\n- requirement: Update the concurrency-group pin in 'tests/test_review_merge_train.py' near line 1860 in the same change as the workflow edit\n  expected_change_site: tests/test_review_merge_train.py\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: No hunk in the PR diff touches tests/test_review_merge_train.py, The PR description explicitly defers this under \"Deferred scope\" (AD-1) (severity NIT)\n- requirement: Add an agents fragment that corrects 'Cleanup jobs share repository-scoped concurrency' under 'Conflict-safe PR-close cleanup'\n  expected_change_site: agents.d/ (new fragment)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: No agents fragment in the PR diff corrects this documentation, The PR description explicitly defers this under \"Deferred scope\" (AD-1) (severity NIT)\n- requirement: Add a changelog fragment for the concurrency change\n  expected_change_site: changelog.d/ (new fragment)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: No changelog fragment in the PR diff documents the concurrency change, The PR description explicitly defers this under \"Deferred scope\" (AD-1) (severity NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: Per-trigger concurrency group for job `cancel-active-runs`, the matching pin in `tests/test_review_merge_train.py`, and the agents fragment plus changelog fragment for that change (the issue's Suggested fix #1).\n  Expected change site: `.github/workflows/cancel_on_pr_close.yml`, `tests/test_review_merge_train.py`, `agents.d/`\n  Evidence of absence: No hunk touches these files. The PR description's \"Deferred scope\" section (AD-1) defers this item on purpose. The frozen heal-scope marker (`.github/workflows/test-and-mark-stable.yml`, `tests/**`, `changelog.d/*.md`) excludes `cancel_on_pr_close.yml`. Deferred requirements are not gaps, so this is skipped.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Give the cancel-on-close job in the reusable 'cancel_on_pr_close.yml' workflow (job 'cancel-active-runs') a per-trigger concurrency group, 'cancel-on-pr-close-${{ github.repository }}-${{ github.event_name == 'schedule' && 'schedule' || github.event.pull_request.number }}', keeping 'cancel-in-progress: false'\"\n  Expected change site: .github/workflows/cancel_on_pr_close.yml\n  Evidence of absence: No hunk in the PR diff touches .github/workflows/cancel_on_pr_close.yml. The PR description explicitly defers this under \"Deferred scope\" (AD-1).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Update the concurrency-group pin in 'tests/test_review_merge_train.py' near line 1860 in the same change as the workflow edit\"\n  Expected change site: tests/test_review_merge_train.py\n  Evidence of absence: No hunk in the PR diff touches tests/test_review_merge_train.py. The PR description explicitly defers this under \"Deferred scope\" (AD-1).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Add an agents fragment that corrects 'Cleanup jobs share repository-scoped concurrency' under 'Conflict-safe PR-close cleanup'\"\n  Expected change site: agents.d/ (new fragment)\n  Evidence of absence: No agents fragment in the PR diff corrects this documentation. The PR description explicitly defers this under \"Deferred scope\" (AD-1).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Add ... a changelog fragment for the concurrency change\"\n  Expected change site: changelog.d/ (new fragment)\n  Evidence of absence: No changelog fragment in the PR diff documents the concurrency change. The PR description explicitly defers this under \"Deferred scope\" (AD-1).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "def8e48177f087c16980f3e5a01d5481972e8f557662470e5250cd75d69bdef3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8361,
+    "run_id": "40951373868",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40951373868",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029210414_5ad1e55dfd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8361,
+    "run_id": "40951373868"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 4 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T21:04:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
