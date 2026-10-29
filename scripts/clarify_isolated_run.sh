@@ -200,8 +200,10 @@ def copy(path, extra=False):
         try:
             info = node.lstat()
         except FileNotFoundError:
-            if extra and node == root / path:
-                return  # Tracked but absent from the worktree (e.g. sparse checkout).
+            if extra:
+                # Tracked but absent from the worktree, the file itself or a
+                # parent directory (e.g. a cone-mode sparse checkout).
+                return
             raise
         if stat.S_ISLNK(info.st_mode) and node == root / path:
             return  # A tracked symlink is not part of the snapshot.

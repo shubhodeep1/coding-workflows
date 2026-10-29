@@ -208,6 +208,17 @@ class ClarifySnapshotAllTextTest(unittest.TestCase):
 		self.assertIsNotNone(prompt_bytes)
 		self.assertIn("- aa/f4999.txt (limit)\n", prompt_bytes.decode("utf-8"))
 
+	def test_tracked_file_under_missing_directory_is_skipped(self) -> None:
+		checkout = self._checkout({"src/app.py": b"x\n", "contracts/T.sol": b"contract T {}\n", "Makefile": b"all:\n"})
+		# Like a sparse checkout: still tracked, but its directory is absent.
+		(checkout / "contracts" / "T.sol").unlink()
+		(checkout / "contracts").rmdir()
+		proc, files, prompt_bytes = self._run(checkout)
+		self.assertNotIn("clarify source snapshot rejected", proc.stderr)
+		self.assertIn("src/app.py", files)
+		self.assertIn("Makefile", files)
+		self.assertNotIn("contracts/T.sol", files)
+
 	def test_unsafe_names_are_counted_but_not_listed(self) -> None:
 		checkout = self._checkout({"src/app.py": b"x\n", "has space.bin": b"\x00\x01", b"bad\xff.txt": b"x\n"})
 		proc, files, prompt_bytes = self._run(checkout)
