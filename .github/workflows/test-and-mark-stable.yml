@@ -1533,9 +1533,12 @@ jobs:
           # scoped Implement run made no progress. Fail-open: called in a
           # subshell after status=timeout is written. API strings go through
           # tojson and every line starts with "stall-diag", so no workflow command.
+          # API audit: the paged window reads (scoped_implement_progress_counts)
+          # carry no by-ID run/jobs detail and no repo-wide in-progress list;
+          # these four reads run once, on the stall exit only.
           log_implement_stall_diagnostics() {
             set +e
-            local stall_diag_id="${IMPL_RUN_ID_LATEST:-}" stall_diag_json="" stall_diag_out=""
+            local stall_diag_id="${IMPL_RUN_ID_LATEST:-}" stall_diag_json="" stall_diag_out="" stall_diag_status="${IMPL_RUN_STATUS:-}"
             local stall_diag_defs='def s: (if type == "string" then .[:120] else . end) | tojson;'
             local stall_diag_runs='def runs($k): if (.workflow_runs | type) != "array" then error("bad") else [.workflow_runs[] | select((.name | type) == "string" and (.name | test("Implement"; "i")) and (.id | tostring) != $id) | select($k == "in-progress-run" or .status != "completed")] | if length == 0 then "  stall-diag \($k): none" else .[:20][] | "  stall-diag \($k): id=\(.id | s) title_matches=\(.display_title == $title) title=\(.display_title | s) status=\(.status | s) event=\(.event | s) created_at=\(.created_at | s) run_started_at=\(.run_started_at | s)" end end;'
             echo "Implement stall diagnostics (cause unverified; may be environmental): window created>${IMPL_CREATED_AFTER:-}"
@@ -1543,6 +1546,9 @@ jobs:
               stall_diag_json=$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs/${stall_diag_id}" 2>/dev/null || true)
               stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r --argjson id "$stall_diag_id" "$stall_diag_defs"' if type == "object" and .id == $id then "  stall-diag latest-run: id=\(.id) name=\(.name | s) event=\(.event | s) status=\(.status | s) conclusion=\(.conclusion | s) created_at=\(.created_at | s) run_started_at=\(.run_started_at | s) updated_at=\(.updated_at | s) run_attempt=\(.run_attempt | s)" else empty end' 2>/dev/null)
               echo "${stall_diag_out:-  stall-diag latest-run: unavailable}"
+              # Prefer the fresh status over the 30s-cached one for the warning.
+              stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r --argjson id "$stall_diag_id" 'if type == "object" and .id == $id and (.status | type) == "string" then .status else empty end' 2>/dev/null)
+              stall_diag_status="${stall_diag_out:-$stall_diag_status}"
               stall_diag_json=$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs/${stall_diag_id}/jobs?per_page=30" 2>/dev/null || true)
               stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r "$stall_diag_defs"' if (.jobs | type) != "array" then error("bad") elif (.jobs | length) == 0 then "  stall-diag jobs: none" else .jobs[:30][] | "  stall-diag job: name=\(.name | s) status=\(.status | s) conclusion=\(.conclusion | s) started_at=\(.started_at | s) runner=\(.runner_name | s) step=\([.steps[]? | select(.status == "in_progress")] | last | .name // null | s)" end' 2>/dev/null)
               echo "${stall_diag_out:-  stall-diag jobs: unavailable}"
@@ -1556,8 +1562,8 @@ jobs:
             stall_diag_json=$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs?status=in_progress&per_page=100" 2>/dev/null || true)
             stall_diag_out=$(printf '%s' "$stall_diag_json" | jq -r --arg id "$stall_diag_id" --arg title "${ISSUE_TITLE:-}" "$stall_diag_defs$stall_diag_runs"' runs("in-progress-run")' 2>/dev/null)
             echo "${stall_diag_out:-  stall-diag in-progress-run: unavailable}"
-            if [[ ",${IMPL_PREV_LABELS:-}," == *",ai:implementing,"* ]] && [[ "${IMPL_RUN_STATUS:-}" =~ ^(pending|queued|waiting|requested)$ ]]; then
-              echo "::warning::Issue #${ISSUE_NUMBER} carries ai:implementing but its latest scoped Implement run ${stall_diag_id:-unknown} is still ${IMPL_RUN_STATUS} at the stall — the run never started; see the stall-diag lines for a concurrency holder (cause unverified, may be environmental)"
+            if [[ ",${IMPL_PREV_LABELS:-}," == *",ai:implementing,"* ]] && [[ "$stall_diag_status" =~ ^(pending|queued|waiting|requested)$ ]]; then
+              echo "::warning::Issue #${ISSUE_NUMBER} carries ai:implementing but its latest scoped Implement run ${stall_diag_id:-unknown} is still ${stall_diag_status} at the stall — the run never started; see the stall-diag lines for a concurrency holder (cause unverified, may be environmental)"
             fi
           }
 
