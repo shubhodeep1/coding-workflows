@@ -983,9 +983,11 @@ def _drain_retired_label(
     * one listing (``_list_open_items_with_label``, up to 2 GETs); when it is
       complete and empty nothing else is called and the label may be deleted;
     * per item, within the shared budget: one or two comments GETs (marker
-      check), one single-attempt ``POST repos/{repo}/issues/{n}/comments``
-      when no trusted marker is present (never retried, so a lost response
-      cannot post the comment twice; the next run re-checks the marker), and one ``PATCH repos/{repo}/issues/{n}`` that closes it
+      check), one ``POST repos/{repo}/issues/{n}/comments`` when no trusted
+      marker is present (a 5xx or timeout is not retried, so a lost response
+      cannot post the comment twice and the next run re-checks the marker;
+      only an HTTP 429 is retried, up to ``GITHUB_API_MAX_ATTEMPTS`` calls,
+      because GitHub does not apply a rate-limited write), and one ``PATCH repos/{repo}/issues/{n}`` that closes it
       (``state_reason=not_planned`` for issues only; PRs have none);
     * one final listing (up to 2 GETs) after every listed item was closed.
 
