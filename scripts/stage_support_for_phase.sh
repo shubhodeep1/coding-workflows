@@ -213,5 +213,8 @@ fi
 if [ "${stage_support_export_isolation_dir}" = "true" ]; then
 	echo "CLARIFY_ISOLATION_SUPPORT_DIR=${stage_support_scripts}" >> "${GITHUB_ENV}"
 fi
+# Machine-readable verify level (exact | ref | head_only) so later steps can
+# gate on the degraded head_only path, not only read its ::warning::.
+echo "SUPPORT_SCRIPTS_VERIFY=${stage_support_verify}" >> "${GITHUB_ENV}"
 
 echo "::notice::Support scripts staged phase=${stage_support_phase} sha=${stage_support_sha} verify=${stage_support_verify}"

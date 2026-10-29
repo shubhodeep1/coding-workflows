@@ -323,6 +323,7 @@ def test_support_copy_of_stall_guard_wins(tmp_path: Path, workflow: str, step_na
 	bundle = Path(exported["SUPPORT_SCRIPTS_DIR"])
 	assert bundle == tmp_path / "runner" / "coding-workflows-runtime-101-1" / "scripts"
 	assert exported["CLARIFY_ISOLATION_SUPPORT_DIR"] == str(bundle)
+	assert exported["SUPPORT_SCRIPTS_VERIFY"] == "exact"
 	for name in _helper_phase_list(phase, "stage_support_required_scripts"):
 		assert (bundle / name).is_file(), name
 	assert (bundle / "codex_stall_guard.sh").read_bytes() == (REPO_ROOT / "scripts" / "codex_stall_guard.sh").read_bytes()
@@ -388,9 +389,12 @@ def test_helper_rejects_mismatched_or_invalid_ref(tmp_path: Path, workflow: str,
 	assert "refs/tags/stable" in result.stderr
 
 	# A ref absent from the checkout (the fallback to main) keeps its HEAD.
-	result = _run_helper(workspace, _runner_env(tmp_path, workspace, "no-such-ref"), phase)
+	head_only_env = _runner_env(tmp_path, workspace, "no-such-ref")
+	result = _run_helper(workspace, head_only_env, phase)
 	assert result.returncode == 0, result.stderr
 	assert "verify=head_only" in result.stdout
+	assert "does not resolve in the support checkout" in result.stdout
+	assert _github_env(head_only_env)["SUPPORT_SCRIPTS_VERIFY"] == "head_only"
 
 	head_env = _runner_env(tmp_path, workspace, _git(support, "rev-parse", "HEAD"))
 	assert _run_helper(workspace, head_env, "unknown-phase").returncode == 2
