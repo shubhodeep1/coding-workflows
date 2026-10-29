@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cVerify that `.codex-workflow-src` HEAD equals SCRIPT_REF.\u201d\n  expected_change_site: `scripts/stage_support_for_phase.sh` ref verification.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: When `SCRIPT_REF` is not a SHA and no local tag or branch resolves, the helper sets `stage_support_verify=head_only`, warns, and continues staging from HEAD (lines 137-150). This occurs on the documented `stable`-to-`main` checkout fallback in `.github/workflows/clarify.yml` (lines 434-442). Exporting `SUPPORT_SCRIPTS_VERIFY=head_only` does not enforce the required equality; the fixture also asserts that this unverified case succeeds. (source SEVERITY: MAJOR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cVerify that `.codex-workflow-src` HEAD equals SCRIPT_REF.\u201d\n  Expected change site: `scripts/stage_support_for_phase.sh` ref verification.\n  Evidence of absence: When `SCRIPT_REF` is not a SHA and no local tag or branch resolves, the helper sets `stage_support_verify=head_only`, warns, and continues staging from HEAD (lines 137-150). This occurs on the documented `stable`-to-`main` checkout fallback in `.github/workflows/clarify.yml` (lines 434-442). Exporting `SUPPORT_SCRIPTS_VERIFY=head_only` does not enforce the required equality; the fixture also asserts that this unverified case succeeds.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "048de9f012c42c8af7e711dcf534b28f30a26b220c22f3fcb69f1006479ecef0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8318,
+    "run_id": "40823757755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40823757755",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029061933_3f2ecac56b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8318,
+    "run_id": "40823757755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T06:19:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
