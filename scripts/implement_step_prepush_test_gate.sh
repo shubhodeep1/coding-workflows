@@ -144,7 +144,7 @@ def main(argv):
 			"selected": result.get("selected") if isinstance(result.get("selected"), int) else 0,
 			"failures": [{"test": str(e.get("test")), "names": [n for n in (e.get("names") or []) if isinstance(n, str)][:10]} for e in entries(result, "failures")],
 			"inherited": [{"test": str(e.get("test")), "names": [n for n in (e.get("names") or []) if isinstance(n, str)][:10]} for e in entries(result, "inherited")],
-			"unverified": [{"item": str(e.get("item")), "reason": str(e.get("reason"))} for e in entries(result, "unverified")],
+			"unverified": [{"item": str(e.get("item")), "reason": str(e.get("reason")), "names": [n for n in (e.get("names") or []) if isinstance(n, str)][:10]} for e in entries(result, "unverified")],
 			"changed_assertions": [
 				{"file": str(e.get("file")), "kind": e.get("kind") if e.get("kind") in ("removed_or_modified", "skip_added") else "changed"}
 				for e in entries(result, "changed_assertions")
