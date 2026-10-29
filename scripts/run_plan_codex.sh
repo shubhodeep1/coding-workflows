@@ -185,6 +185,15 @@ Rules:
   on the current ref are NOT external inputs — they are codebase state the
   plan can address; note them under "Risks and edge cases" as a conflict (per
   the CONFLICT DETECTION rule above) and continue planning.
+- Implement only writes repository files and opens one pull request; it
+  cannot post comments, close issues, or check or wait for another pull
+  request, so never plan such steps. When another open, unmerged pull
+  request already delivers this issue's work and no clarification answer
+  chose to build it here anyway, plan neither a duplicate nor wait-only
+  steps: emit `PLAN_SELF_CHECK: BLOCKER: work is delivered by open PR #<N>; resume once it is merged`
+  and end with `STATUS: NOT_CLEAR`. When that work is already on the
+  planning ref, plan no edits: emit `PLAN_SELF_CHECK: BLOCKER: work is already on the planning ref; nothing to implement`
+  and end with `STATUS: NOT_CLEAR`.
 - Boil the Lake forcing question: if shipping the complete implementation
   costs ≤30 LOC more and ≤10 minutes more than the shortcut, and neither
   option adds a new dependency nor a new external interface, pick the
