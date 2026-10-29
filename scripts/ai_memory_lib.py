@@ -3222,7 +3222,11 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
             check=False,
         )
         if single_branch_clone.returncode == 0:
-            _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
+            try:
+                _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
+            except MemoryGitError:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise
             return temp_dir
         shutil.rmtree(temp_dir, ignore_errors=True)
         temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))

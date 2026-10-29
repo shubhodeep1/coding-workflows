@@ -353,7 +353,7 @@ def test_clone_for_memory_branch_falls_back_to_full_clone_when_single_branch_fai
 
 
 def main() -> int:
-	test_funcs =[v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
 	failed = 0
 	for func in test_funcs:
