@@ -1835,6 +1835,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_historical.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_clarify_isolated_run.py
 
       # Moved here unchanged from tests-hooks-and-orchestrator (15m01s of its 20
       # minutes, run 40264887710, budget-watch issue #8179). Step timings were not

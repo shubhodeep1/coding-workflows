@@ -156,6 +156,15 @@ def sensitive(parts):
     return (not parts or any(part.lower() in bad_parts or part.lower().startswith(".env") for part in parts)
             or any(part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in parts))
 
+# Pass 2 only: credential-store names the legacy roots/suffix filter never
+# reached (the list mirrors codex_isolated_workspace.READONLY_BAD_PARTS). Like
+# sensitive() hits, these are neither copied, counted nor listed.
+pass2_credential_names = {".ssh", ".aws", ".azure", ".kube", ".config", ".docker", ".npmrc", ".netrc", ".pypirc",
+                          ".pgpass", ".git-credentials", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"}
+
+def pass2_credential(parts):
+    return any(part.lower() in pass2_credential_names or part.lower().endswith((".jks", ".tfstate")) for part in parts)
+
 def legacy_eligible(path, parts):
     return ((path in root_files or parts[0] in roots or parts[:2] in ((".github", "workflows"), (".github", "actions")))
             and (path in root_files or pathlib.PurePosixPath(path).suffix.lower() in suffixes or parts[-1] == "Dockerfile"))
@@ -167,7 +176,7 @@ def copy(path, extra=False):
     # extra=True: an all-text pass-2 file outside the legacy set.
     global count, total, omitted
     parts = pathlib.PurePosixPath(path).parts
-    if sensitive(parts) or (not extra and not legacy_eligible(path, parts)):
+    if sensitive(parts) or (extra and pass2_credential(parts)) or (not extra and not legacy_eligible(path, parts)):
         return
     # agents.d/ fragments (CLAUDE.md §30) are agents.md content waiting to be folded.
     if omit_agent_instructions and (parts[-1].lower() in agent_instruction_names or parts[0] == "agents.d"):
@@ -210,13 +219,17 @@ def copy(path, extra=False):
         opened = os.fstat(source.fileno())
         if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
             raise ValueError("source changed during snapshot")
-        data = source.read(max_file_bytes + 1)
+        # Pass 2 sniffs the first 8 KiB before reading the rest, so excluded
+        # binaries are not read in full.
+        data = source.read(8192 if extra else max_file_bytes + 1)
+        if extra and b"\0" not in data:
+            data += source.read(max_file_bytes + 1 - len(data))
+    if extra and b"\0" in data[:8192]:
+        exclude("binary", path)
+        return
     if len(data) != info.st_size:
         raise ValueError("source changed during snapshot")
     if extra:
-        if b"\0" in data[:8192]:
-            exclude("binary", path)
-            return
         count += 1
         total += info.st_size
     target = dest.joinpath(*parts)
@@ -250,7 +263,8 @@ try:
             try:
                 path = entry.decode("utf-8")
             except UnicodeDecodeError:
-                if not sensitive(pathlib.PurePosixPath(entry.decode("utf-8", "surrogateescape")).parts):
+                undecodable_parts = pathlib.PurePosixPath(entry.decode("utf-8", "surrogateescape")).parts
+                if not sensitive(undecodable_parts) and not pass2_credential(undecodable_parts):
                     exclude("path_encoding", None)
                 continue
             parts = pathlib.PurePosixPath(path).parts

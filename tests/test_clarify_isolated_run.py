@@ -129,6 +129,10 @@ class ClarifySnapshotAllTextTest(unittest.TestCase):
 			".env.local": b"TOKEN=x\n",
 			"secrets/x.txt": b"secret\n",
 			"keys/id.pem": b"-----BEGIN-----\n",
+			# Credential stores the legacy filter never reached stay out of pass 2 too.
+			".npmrc": b"//registry/:_authToken=x\n",
+			"deploy/id_rsa": b"key\n",
+			"certs/store.jks": b"jks\n",
 		}
 
 	def test_default_all_text_snapshot_lists_exclusions(self) -> None:
@@ -153,7 +157,7 @@ class ClarifySnapshotAllTextTest(unittest.TestCase):
 		self.assertIn("- assets/logo.png (binary)\n", prompt_text)
 		self.assertIn("- big.txt (oversize)\n", prompt_text)
 		self.assertTrue(prompt_text.endswith("=== END CLARIFY SNAPSHOT EXCLUSIONS ===\n"))
-		for sensitive_name in (".env.local", "secrets/x.txt", "keys/id.pem", "id.pem"):
+		for sensitive_name in (".env.local", "secrets/x.txt", "keys/id.pem", "id.pem", ".npmrc", "id_rsa", "store.jks"):
 			self.assertNotIn(sensitive_name, proc.stderr)
 			self.assertNotIn(sensitive_name, prompt_text)
 		# The caller's prompt file is never edited in place.
