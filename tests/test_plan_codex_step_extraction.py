@@ -27,11 +27,14 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # `isolated-base` sandbox branch (245 -> 256 lines).
 # PR #7908 reworded the two-line Claude web-search sentence to defer to the
 # system note's `WebSearch` tool (256 lines, 16_693 -> 16_738 bytes).
+# Issue #8260 replaced the 3-line "already loaded" IMPORTANT paragraph with a
+# 6-line one that allows reading indexed agents.md sections (256 -> 259 lines,
+# 16_738 -> 16_978 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"11a210281a239e3d35105ddbf79b2d8ca6f90c4461919cf667644dbec9ce24de"
+	"c1319fc8142a0f07f66ca4e4425862c6d3040afc2ca021dab35766ee9820d743"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 16_738
-PRE_EXTRACTION_PROMPT_LINES = 256
+PRE_EXTRACTION_PROMPT_BYTES = 16_978
+PRE_EXTRACTION_PROMPT_LINES = 259
 
 
 def _workflow_step(workflow_text: str, step_name: str) -> str:
@@ -55,7 +58,8 @@ def _inline_prompt(runner_text: str) -> str:
 def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	workflow_text = PLAN_WORKFLOW.read_text(encoding="utf-8")
 	step = _workflow_step(workflow_text, "Run Codex planning")
-	stage_step = _workflow_step(workflow_text, "Stage workflow support files")
+	# Called for its built-in assertion that the staging step still exists.
+	_workflow_step(workflow_text, "Stage workflow support files")
 
 	assert "for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh" in workflow_text
 	assert 'install -m 0644 "${src}" scripts/claude_settings.json.tmpl' in workflow_text

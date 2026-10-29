@@ -1356,6 +1356,7 @@ jobs:
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           TRACKING_ISSUE: ${{ inputs.tracking_issue }}

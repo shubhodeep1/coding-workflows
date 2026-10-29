@@ -641,6 +641,8 @@ jobs:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Pre-assemble static context
+        env:
+          STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           set -euo pipefail
 
@@ -654,6 +656,20 @@ jobs:
           fi
           orchestrate_readme_context="$(mktemp "${RUNNER_TEMP}/orchestrate-readme.XXXXXX")"
           bash scripts/build_static_context.sh readme "${orchestrate_readme_context}"
+          # Issue #8269: index the agents file instead of inlining it unless
+          # STATIC_CONTEXT_AGENTS_MODE says inline (same rules as build_static_context.sh).
+          orchestrate_agents_mode="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          case "${orchestrate_agents_mode}" in
+            ""|index) orchestrate_agents_mode=index ;;
+            inline) orchestrate_agents_mode=inline ;;
+            *)
+              echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+              orchestrate_agents_mode=inline
+              ;;
+          esac
+          orchestrate_agents_effective_mode="${orchestrate_agents_mode}"
+          orchestrate_agents_fallback_reason=""
+          orchestrate_agents_absent=false
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
             cat unattended_system_instructions.md
@@ -676,7 +692,29 @@ jobs:
                 echo "::warning::AGENTS.md is a symbolic link; omitted from the static context." >&2
               fi
             fi
-            if [ -n "${orchestrate_agents_file}" ]; then
+            orchestrate_agents_indexed=false
+            if [ -n "${orchestrate_agents_file}" ] && [ "${orchestrate_agents_mode}" = index ]; then
+              if orchestrate_agents_index_tmp="$(mktemp "${RUNNER_TEMP}/orchestrate-agents-index.XXXXXX" 2>/dev/null)"; then
+                if bash scripts/build_static_context.sh agents-index "${orchestrate_agents_index_tmp}" "${orchestrate_agents_file}" && [ -s "${orchestrate_agents_index_tmp}" ]; then
+                  cat "${orchestrate_agents_index_tmp}"
+                  echo
+                  orchestrate_agents_indexed=true
+                else
+                  orchestrate_agents_fallback_reason=index_unavailable
+                fi
+                rm -f "${orchestrate_agents_index_tmp}"
+              else
+                orchestrate_agents_fallback_reason=tmp_unavailable
+              fi
+              if [ "${orchestrate_agents_indexed}" != true ]; then
+                orchestrate_agents_effective_mode=inline
+                echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+              fi
+            fi
+            if [ -z "${orchestrate_agents_file}" ]; then
+              orchestrate_agents_absent=true
+            fi
+            if [ -n "${orchestrate_agents_file}" ] && [ "${orchestrate_agents_indexed}" != true ]; then
               echo "=== AGENTS.MD ==="
               # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
               if [ -d agents.d ] && [ ! -L agents.d ] && orchestrate_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${orchestrate_agents_file}" 2>/dev/null)"; then
@@ -700,6 +738,14 @@ jobs:
           STATIC_LINES="$(wc -l < ./pre_assembled_static.txt)"
           STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
           echo "Static context assembled: ${STATIC_LINES} lines, ${STATIC_BYTES} bytes"
+          orchestrate_size_line="STATIC_CONTEXT_SIZE phase=orchestrate mode=${orchestrate_agents_effective_mode} bytes=$(printf '%s' "${STATIC_BYTES}" | tr -d '[:space:]')"
+          if [ -n "${orchestrate_agents_fallback_reason}" ]; then
+            orchestrate_size_line="${orchestrate_size_line} fallback=inline reason=${orchestrate_agents_fallback_reason}"
+          fi
+          if [ "${orchestrate_agents_absent}" = true ]; then
+            orchestrate_size_line="${orchestrate_size_line} agents=absent"
+          fi
+          echo "${orchestrate_size_line}" >&2
 
       - name: Retrieve memory context
         env:
