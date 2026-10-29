@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:1055-1057 | severity=high | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: `_names_bare_file` reuses `_PLAN_GRANT_ROOT_FILE_RE`, which deliberately excludes `.env`/`.env.*`, so a \"None. Also update .env.\" plan yields the token `.env`, escapes detection, and is approved with reason `heal_scope_plan_no_changes`.\n  WHY: The grant-oriented exclusion is reused as a detection predicate, so the gate wrongly approves and the named credential file is only refused at implement time (the #8241-style stall). Source severity is MAJOR, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The agents fragment must describe the full set of checks the heal plan gate runs to approve a \"no changes\" plan, including extensionless filenames (`Makefile`, `CODEOWNERS`) and root dotfiles (`.gitignore`).\n  expected_change_site: agents.d/8241-heal-plan-no-changes.md (block under `<!-- agents: section=\"Workflow architecture\" -->`)\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The fragment predates `_names_bare_file` in `scripts/files_touched_scope_guard.py:1053-1057` and still ends with \"no line carries a backtick or a path- or filename-shaped token (`a/b`, `README.md`, `*.py`)\", so the bare-file and dotfile check is not reflected. Reviewer severity: NIT.\n- requirement: The test description in `tests/test_heal_plan_grant_body_edit_fix.py` should reflect what the test now exercises.\n  expected_change_site: tests/test_heal_plan_grant_body_edit_fix.py::test_gate_holds_empty_section_that_does_not_say_none\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The three added cases (\"None.\\nUpdate the Makefile.\", \"None. Also edit CODEOWNERS.\", \"None. Then refresh .gitignore.\") are not empty sections, so the test name no longer matches what it covers. Reviewer severity: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: The agents fragment must describe the full set of checks the heal plan gate now runs to approve a \"no changes\" plan, including extensionless filenames (`Makefile`, `CODEOWNERS`, ...) and root dotfiles (`.gitignore`, ...) that the path-like regex misses.\n  Expected change site: `agents.d/8241-heal-plan-no-changes.md` (the block under `<!-- agents: section=\"Workflow architecture\" -->`).\n  Evidence of absence: The fragment was written before the autofix added `_names_bare_file` in `scripts/files_touched_scope_guard.py:1053-1057`. It still ends with \"no line carries a backtick or a path- or filename-shaped token (`a/b`, `README.md`, `*.py`)\", so the new bare-file and dotfile check is not reflected.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Requirement: The test description in `tests/test_heal_plan_grant_body_edit_fix.py` should reflect what the test now exercises.\n  Expected change site: `tests/test_heal_plan_grant_body_edit_fix.py`, function `test_gate_holds_empty_section_that_does_not_say_none`.\n  Evidence of absence: The three added cases are \"None.\" followed by a line naming a bare file or root dotfile, not empty sections. The test name still says \"empty section that does not say none\", which can mislead a maintainer.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:1055-1057 | severity=MAJOR | confidence=4\n  PROBLEM: `_names_bare_file` reuses `_PLAN_GRANT_ROOT_FILE_RE` (lines 731-737), which excludes `.env`/`.env.*` via the negative lookahead `(?!env(?:\\.|$))`, so \"None. Also update .env.\" produces the token `.env`, matches neither regex, and `_heal_plan_declares_no_file_changes` returns True.\n  WHY: The gate approves with `heal_scope_plan_no_changes` even though the plan names a filename-shaped token, and the named credential file only surfaces at implement time, where the frozen heal-scope marker refuses it.\n- scripts/files_touched_scope_guard.py:1055-1057 | severity=MAJOR | confidence=4\n  PROBLEM: The same `.env` detection gap, listed under CORRECTNESS & LOGIC. The detection predicate treats `.env` and `.env.local` as not-a-file while holding `.gitignore`, `Makefile` and `CODEOWNERS`.\n  WHY: The new branch in `run_heal_plan_scope_gate` (lines 1085-1087) approves with empty denied_paths, and the observable failure is the contradicting implement-time refusal.\n- TASK_GAP: none reported. Reviewer states all five PR deliverables are present.\n- HARDENING: add `or re.fullmatch(r\"\\.env(?:\\.[A-Za-z0-9_.-]+)?\", tok)` to the disjunct in `_names_bare_file` (`scripts/files_touched_scope_guard.py` line 1056), plus a hold test. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ab47e3b000bcde407fe0db5912b238723159ca6b154ee741fb702bb966fede95",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8319,
+    "run_id": "40814906947",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40814906947",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029055445_c6a6629786",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8319,
+    "run_id": "40814906947"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T05:54:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
