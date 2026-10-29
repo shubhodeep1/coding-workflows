@@ -5,13 +5,24 @@
   "entry_id": "processed_command_8395_6509201499_approved",
   "issue_number": 8395,
   "metadata": {
+    "branch": "ai/issue-8395",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/8395-heal-job-plumbing-step-to-hooks.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 8395,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8395",
+    "pr_number": 8400,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8400",
+    "run_attempt": "1",
+    "run_id": "40961587765",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40961587765"
   },
   "run_attempt": 1,
   "run_id": "40961587765",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T21:56:54Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T22:09:17Z",
   "workflow": "implement"
 }
