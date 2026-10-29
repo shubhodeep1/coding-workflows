@@ -148,6 +148,8 @@ def test_not_edited_run_with_sandbox_excluded_bullet_ends_with_marker(tmp_path: 
 		(_summary(ignored="- README.md nit — out of scope (stylistic)\n- tests/x.py — already satisfied"), ""),
 		# Something was committed even though the editor said not-edited.
 		(_summary(ignored="- .claude/docs/a.md — sandbox-excluded path"), "- scripts/x.py\n"),
+		# A committed path that merely starts with "none " is not the "- none" sentinel.
+		(_summary(ignored="- .claude/docs/a.md — sandbox-excluded path"), "- none notes.md\n"),
 		# No committed-files evidence at all: unknown, so no marker.
 		(_summary(ignored="- .claude/docs/a.md — sandbox-excluded path"), None),
 		# The reason appears only under PR comment audit.
@@ -164,7 +166,7 @@ def test_no_marker_outside_the_sandbox_excluded_not_edited_case(tmp_path: Path, 
 	assert "AUTOFIX_FAILURE_REASON" not in github_env
 
 
-@pytest.mark.parametrize("committed", ["", "- none\n", "- commit skipped (branch is not writable from this workflow)\n"])
+@pytest.mark.parametrize("committed", ["", "- none\n", "- none (edits withheld for safety: write_guard)\n", "- commit skipped (branch is not writable from this workflow)\n"])
 def test_placeholder_committed_files_count_as_nothing_committed(tmp_path: Path, committed: str) -> None:
 	summary = _summary(ignored="- .claude/docs/a.md — sandbox-excluded path")
 	result, body, _ = _run_step(tmp_path, summary, committed=committed)

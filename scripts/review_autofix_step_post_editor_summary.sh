@@ -199,7 +199,7 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 sandbox_excluded_marker_suffix=""
 sandbox_excluded_nothing_committed=0
 if [ -n "${COMMITTED_FILES_FILE:-}" ] && [ -f "${COMMITTED_FILES_FILE}" ] && [ -r "${COMMITTED_FILES_FILE}" ] \
-  && ! grep -q -v -E '^[[:space:]]*$|^- (none|commit skipped)([[:space:]]|$)' "${COMMITTED_FILES_FILE}"; then
+  && ! grep -q -v -E '^[[:space:]]*$|^- none$|^- none \(edits withheld for safety: .*\)$|^- commit skipped \(.*\)$' "${COMMITTED_FILES_FILE}"; then
   sandbox_excluded_nothing_committed=1
 fi
 if [ "${editor_summary_is_real}" = "1" ] && [ "${sandbox_excluded_nothing_committed}" = "1" ]; then
