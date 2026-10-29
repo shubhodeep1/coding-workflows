@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/8335-activation-open-pr-gaps.md:1 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fragment text says the warning is logged as `reason=lookup_failed`, but the script can also emit `reason=parse_failed` when the gh api call succeeds but jq produces empty output.\n  WHY: Documentation drift between the agent fragment and the new behavior; reviewer rated it NIT with no runtime failure.\n- scripts/activation_verify.sh:278 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The new `parse_failed` branch (`activation_open_prs_reason=\"parse_failed\"` in `activation_open_prs_json`) has no test, because the fake gh stub at tests/test_activation_verify.py:86-89 can only exit 1 or return a valid JSON array.\n  WHY: No runtime failure, but a future edit that renames or breaks the branch would not be caught; reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/8335-activation-open-pr-gaps.md:1 | severity=NIT | confidence=4\n  PROBLEM: The fragment text says the warning is logged as `reason=lookup_failed`, but the script (after this autofix) can also emit `reason=parse_failed` when the gh api call succeeds but jq produces empty output.\n  WHY: No runtime failure; operators reading the fragment would expect only `lookup_failed` in the warning, but the script can also surface `parse_failed`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/activation_verify.sh:278 | severity=NIT | confidence=4\n  PROBLEM: The new `parse_failed` branch has no test. The only coverage for this helper's failure path is `test_open_pr_lookup_failure_fails_open` (tests/test_activation_verify.py:923-925), which asserts `reason=lookup_failed`; the fake gh stub at tests/test_activation_verify.py:86-89 can only either exit 1 or return a valid JSON array, so the `reason=parse_failed` string emitted at scripts/activation_verify.sh:292 is unexercised.\n  WHY: No runtime failure; the branch is fail-open and correct, but a future edit renaming or breaking the branch would not be caught, unlike the parallel `git_failed`/`parse_failed` split in `activation_tracked_symlinks_json` at scripts/activation_verify.sh:258.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0c7dbdc13fe78a43c72f2355ec186b8ad276735e154fb5f059bd3a2ecafab46d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8335,
+    "run_id": "40857944850",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40857944850",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029114941_e6a93217a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8335,
+    "run_id": "40857944850"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T11:49:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
