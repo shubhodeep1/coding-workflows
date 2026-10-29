@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:5183-5195 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: After a successful `/approved` post, `ALT_APPROVED_POSTED` stays set while `ai:awaiting-approval` remains, so if implement skips before changing that label (implement.yml 2303-2338) no second approval comment is posted.\n  WHY: Without a new comment implement is not retriggered, so the wait runs to the 4500s deadline and fails; severity is NIT for both reviewers (mapped to low), and confidence is 4 from openai_gpt-6-luna and 3 from z-ai_glm-5_3-flash.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:5183-5195 | severity=low (source: NIT) | confidence=4\n  PROBLEM: After a successful `/approved` post, `ALT_APPROVED_POSTED` stays set while `ai:awaiting-approval` remains. If implement skips before changing that label, the loop does not post another approval comment.\n  WHY: `implement.yml` runs on newly created issue comments (lines 99-108), and its approval validation can skip on transient metadata or dependency failures before changing the label (lines 2303-2338). With no new comment, implement is not retriggered, so the canary stays awaiting approval until the 4500-second wait expires and fails.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/test-and-mark-stable.yml:5183-5195 (interacting with .github/workflows/implement.yml:2303-2308, 2320-2325, 2334-2339) | severity=low (source: NIT) | confidence=3\n  PROBLEM: Once one `/approved` POST succeeds, the flag stays 1 while the label remains ai:awaiting-approval. implement.yml has three skip paths before the label edit at 2388 (metadata_unavailable, security_dependency held, pr_dependency held), so on a transient skip no second `/approved` is posted. The only remaining retry path (RESTORE_AWAITING_APPROVAL_ON_SKIP, line 2389) applies only to skips after the label edit.\n  WHY: A transient preflight failure in implement makes the release-gate alt-model wait spin for 75 minutes and then fail with \"Alt-model run timed out before reaching review stage\" (line 5213), where the old every-20s post would have re-triggered implement within 20s.\n  HARDENING_SUGGESTION: re-arm ALT_APPROVED_POSTED=0 when the label has persisted past a cooldown (e.g. 10 minutes), about 6 lines. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3ed82198eaa21850f3810b12b96a4b6c9a1db3ec9df1dbee644b53591a48afb1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8359,
+    "run_id": "40887096333",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40887096333",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029153802_7d0f08b049",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8359,
+    "run_id": "40887096333"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T15:38:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
