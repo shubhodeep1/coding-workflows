@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":8376,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/8376\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/8407\",\"pr_number\":8407,\"branch\":\"ai/issue-8376\",\"run_id\":\"40971268658\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/40971268658\",\"changed_files\":[\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/8376-implement-working-run-and-prepush-budget-backport.md\",\"tests/test_test_and_mark_stable_plan_polling_guard.py\",\"tests/test_test_and_mark_stable_review_blocked_budget.py\"]}",
+  "fingerprint": "0eff0efdc7772fa0a754760028a3983435e0adf4e86d9af9fe00cc4801d41b9c",
+  "lineage": {
+    "issue_number": 8376,
+    "parent_ids": [],
+    "pr_number": 8407,
+    "run_id": "40971268658",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40971268658",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/8407"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261029234101_bba66f6916",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8376,
+    "level": "run",
+    "pr_number": 8407,
+    "run_id": "40971268658"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #8376: https://github.com/shubhodeep1/coding-workflows/pull/8407",
+  "timestamps": {
+    "created_at": "2026-10-29T23:41:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
