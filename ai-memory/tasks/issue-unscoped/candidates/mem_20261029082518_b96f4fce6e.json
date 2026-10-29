@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:1056-1059 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `_names_bare_file` in `_heal_plan_declares_no_file_changes` holds only `.env*` names (case-sensitive) plus the dotfiles `_PLAN_GRANT_ROOT_FILE_RE` allows. Other bare dot-led names (`.npmrc`, `.netrc`, `.htpasswd`) and case variants (`.ENV`) are not held. The reviewers also name `.envrc`, but only minimax_minimax-m3 does.\n  WHY: A plan that says \"None. Also update .npmrc.\" is approved as `heal_scope_plan_no_changes`, and the implement run then fails on the out-of-scope edit at the commit guard. Severity disagreement: NIT (sonnet, glm) vs MAJOR (gemini, minimax); the highest, MAJOR, is used here as high.\n- tests/test_heal_plan_grant_body_edit_fix.py:270 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Only one new hold case (\"None. Also update .env.\") was added. It does not cover `.envrc`, `.ENV`, `.envoy` or multi-segment `.env.local.bak`.\n  WHY: Future regex changes have no regression test for these `.env*` shapes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: no line carries a backtick or a path- or filename-shaped token (`a/b`, `README.md`, `*.py`, or a bare name such as `Makefile`, `CODEOWNERS`, `.gitignore` or `.env`)\n  expected_change_site: scripts/files_touched_scope_guard.py, `_names_bare_file` inside `_heal_plan_declares_no_file_changes` (lines 1056-1059)\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The helper catches only `_PLAN_GRANT_BARE_FILE_RE` names, `_PLAN_GRANT_ROOT_FILE_RE` names and the new `.env*` regex. Other root dotfiles (`.npmrc`, `.netrc`, `.htpasswd`, `.htaccess`) are not caught, which contradicts the stated \"filename-shaped token\" intent.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:1056-1059 (`_names_bare_file`, with `_PLAN_GRANT_ROOT_FILE_RE` at 731-737) | severity=NIT | confidence=3\n  PROBLEM: The check holds only bare `.env*` names plus the dotfiles `_PLAN_GRANT_ROOT_FILE_RE` accepts. `.npmrc`, `.netrc`, `.htpasswd` and `.ENV` pass all three checks.\n  WHY: \"None. Also update .npmrc.\" is approved as `heal_scope_plan_no_changes`, and implement then fails at the commit guard. The trigger is narrow and the cost is a failed run.\n- HARDENING_SUGGESTIONS: add `or (tok.startswith(\".\") and len(tok) > 1)` to the `any(...)` condition, and make the `.env` regex case-insensitive (1-2 lines). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:1056-1059 | severity=MAJOR | confidence=4\n  PROBLEM: `_names_bare_file` explicitly handles only `.env*` files besides `_PLAN_GRANT_ROOT_FILE_RE`. Other bare dot-files (`.npmrc`, `.netrc`, `.htpasswd`, and case variants such as `.ENV`) go undetected.\n  WHY: The gate approves such plans as \"no file changes\", and the commit-time scope guard then blocks the edit, so the implement run fails.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/files_touched_scope_guard.py:1058 | severity=MAJOR | confidence=4\n  PROBLEM: `re.fullmatch(r\"\\.env(?:\\.[A-Za-z0-9_.-]+)?\", tok)` matches only `.env` or `.env.<segment>`. `.envrc`, `.envoy`, `.envbackup` and `.envrc.local` slip through. The regex is also case-sensitive, so `.ENV` and `.Env` slip through.\n  WHY: \"None. Also update .envrc.\" is approved, the commit guard refuses the edit, and the result is a failed implement cycle.\n- tests/test_heal_plan_grant_body_edit_fix.py:270 | severity=NIT | confidence=4\n  PROBLEM: Only the \"None. Also update .env.\" hold case was added. `.envrc`, `.envoy`, `.envbackup`, `.ENV` and `.env.local.bak` are not exercised.\n  WHY: No regression test guards these shapes against a future regex change.\n- TASK_GAP: Requirement: \"no line carries a backtick or a path- or filename-shaped token (`a/b`, `README.md`, `*.py`, or a bare name such as `Makefile`, `CODEOWNERS`, `.gitignore` or `.env`)\"\n  Expected change site: scripts/files_touched_scope_guard.py, `_names_bare_file` (around lines 1056-1059)\n  Evidence of absence: The helper catches only `_PLAN_GRANT_BARE_FILE_RE` names, `_PLAN_GRANT_ROOT_FILE_RE` names and the new `.env*` regex. `.npmrc`, `.netrc`, `.htpasswd`, `.htaccess` and `aws/credentials` are not caught, which contradicts the \"filename-shaped token\" framing.\n  SEVERITY: MAJOR, ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:1056-1059 (fullmatch added at line 1058) | severity=NIT | confidence=4\n  PROBLEM: The bare-dotfile check fails open for dot-led filenames outside its narrow set. The `.env` fullmatch is case-sensitive. `.npmrc`, `.netrc`, `.htpasswd`, `.bashrc` and `.profile` pass `_HEAL_PLAN_PATHLIKE_RE` (line 1033), `_PLAN_GRANT_BARE_FILE_RE` and `_PLAN_GRANT_ROOT_FILE_RE` (731-737).\n  WHY: \"None. Also update .ENV.\" (or `.npmrc`, `.netrc`, `.htpasswd`) is approved with `heal_scope_plan_no_changes`. Implement then makes an out-of-scope edit that the commit guard refuses, which produces a failed run and a re-trigger loop.\n- HARDENING_SUGGESTIONS: replace the `.env` fullmatch with one case-insensitive regex covering bare dot-led config names, e.g. `re.fullmatch(r\"\\.(?:env(?:\\.[A-Za-z0-9_.-]+)?|npmrc|netrc|htpasswd|bashrc|profile|wgetrc|curlrc|gitconfig|ssh)\", tok, re.IGNORECASE)` (1 line). HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a8af1c369b3ec7379ec4721f7094560f30f86451c1bab062e42eaa5d0fcda4cb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8319,
+    "run_id": "40830799168",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40830799168",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029082518_b96f4fce6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8319,
+    "run_id": "40830799168"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T08:25:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
