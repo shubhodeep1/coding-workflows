@@ -15296,6 +15296,8 @@ def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 		issue_labels={10: ["ai:merged"], 501: ["ai:review-blocked"]},
 		issue_comments={501: [standalone_state_comment]},
 		mock_gh_issue_list_label_filter=True,
+		# Switch-off parity: the legacy skip-and-close path (stuck-states P3b).
+		env_overrides={"STALL_FINGERPRINT_BREAKER_ENABLED": "false"},
 	)
 	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
 	assert standalone_state is not None
@@ -15330,6 +15332,8 @@ def test_standalone_stall_exhaustion_reports_phase_attempts_not_reset_counter():
 		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
 		issue_comments={501: [standalone_state_comment]},
 		mock_gh_issue_list_label_filter=True,
+		# Switch-off parity: the legacy skip-and-close path (stuck-states P3b).
+		env_overrides={"STALL_FINGERPRINT_BREAKER_ENABLED": "false"},
 	)
 	assert "ai:closed" in result["issues"]["501"]["labels"]
 	close_comments = [
@@ -15340,6 +15344,297 @@ def test_standalone_stall_exhaustion_reports_phase_attempts_not_reset_counter():
 	assert close_comments, result.get("issue_close_short_comments")
 	assert "(5 attempts in 'ai:awaiting-approval' phase, limit 5;" in close_comments[-1]
 	assert "(0 attempts" not in close_comments[-1]
+
+
+
+# ---------------------------------------------------------------
+# Stuck-states P3b: failure-signature breaker + exhaustion escalation
+# ---------------------------------------------------------------
+_FFB_FP = "0123456789ab"
+
+
+def _ffb_marker_comment(run: int, login: str = "github-actions[bot]", phase: str = "plan", fp: str = _FFB_FP) -> dict:
+	return {
+		"body": f"Plan phase failed.\n<!-- AI_FAILURE_FINGERPRINT_V1 phase={phase} fp={fp} run={run} -->",
+		"user": {"login": login},
+	}
+
+
+def _ffb_stale_clarification_state_comment() -> str:
+	return (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:clarification",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+
+
+def _ffb_breaker_comments(comments: list[dict]) -> list[str]:
+	return [
+		str(comment.get("body", ""))
+		for comment in comments
+		if "<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 " in str(comment.get("body", ""))
+	]
+
+
+def test_standalone_failure_fingerprint_breaker_trips_on_two_identical_trusted_markers():
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:clarification"]},
+		issue_comments={501: [
+			_ffb_stale_clarification_state_comment(),
+			_ffb_marker_comment(9001),
+			"## Clarification questions",
+			_ffb_marker_comment(9002),
+		]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	issue = result["issues"]["501"]
+	assert "ai:plan-failed" in issue["labels"]
+	breaker_bodies = _ffb_breaker_comments(issue["comments"])
+	assert len(breaker_bodies) == 1
+	assert f"<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=plan fp={_FFB_FP} runs=9001,9002 -->" in breaker_bodies[0]
+	assert "unblock judge" in breaker_bodies[0]
+	assert not any(str(comment.get("body", "")).startswith("/answer") for comment in issue["comments"])
+	assert (
+		f"STALL_FINGERPRINT_BREAKER issue=501 scope=standalone outcome=tripped phase=plan fp={_FFB_FP} runs=9001,9002 label=ai:plan-failed"
+		in result["stdout"]
+	)
+	assert issue.get("closed", False) is False
+	standalone_state = _extract_latest_standalone_state(issue["comments"])
+	assert standalone_state is not None
+	assert [entry["run"] for entry in standalone_state["failure_fingerprints"]] == ["9001", "9002"]
+
+
+def test_standalone_failure_fingerprint_breaker_ignores_outsider_markers():
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:clarification"]},
+		issue_comments={501: [
+			_ffb_stale_clarification_state_comment(),
+			_ffb_marker_comment(9001, login="mallory"),
+			_ffb_marker_comment(9002, login="mallory"),
+		]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	issue = result["issues"]["501"]
+	assert "ai:plan-failed" not in issue["labels"]
+	assert _ffb_breaker_comments(issue["comments"]) == []
+	assert "outcome=tripped" not in result["stdout"]
+
+
+def test_standalone_failure_fingerprint_breaker_disabled_keeps_legacy_path():
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:clarification"]},
+		issue_comments={501: [
+			_ffb_stale_clarification_state_comment(),
+			_ffb_marker_comment(9001),
+			_ffb_marker_comment(9002),
+		]},
+		mock_gh_issue_list_label_filter=True,
+		env_overrides={"STALL_FINGERPRINT_BREAKER_ENABLED": "false"},
+	)
+	issue = result["issues"]["501"]
+	assert "ai:plan-failed" not in issue["labels"]
+	assert _ffb_breaker_comments(issue["comments"]) == []
+	assert "STALL_FINGERPRINT_BREAKER" not in result["stdout"]
+
+
+def test_standalone_failure_fingerprint_breaker_truncated_cache_reads_full_history_once():
+	state = _base_state(status="complete")
+	comments: list = []
+	marker = _ffb_marker_comment(9001)
+	marker["created_at"] = "2026-01-01T00:00:00Z"
+	comments.append(marker)
+	for idx in range(99):
+		comments.append({
+			"body": f"noise {idx}",
+			"user": {"login": "octocat"},
+			"created_at": f"2026-01-01T{1 + idx // 60:02d}:{idx % 60:02d}:00Z",
+		})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:clarification"]},
+		issue_comments={501: comments},
+		mock_gh_issue_list_label_filter=True,
+	)
+	full_reads = [
+		path for path in result.get("api_calls", [])
+		if "/issues/501/comments?sort=created&direction=asc" in str(path)
+	]
+	assert len(full_reads) == 1, full_reads
+	assert "ai:plan-failed" not in result["issues"]["501"]["labels"]
+
+
+def test_standalone_stall_exhaustion_escalates_needs_human_and_keeps_issue_open():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:awaiting-approval": 5},
+			"failure_fingerprints": [{"phase": "plan", "fp": _FFB_FP, "run": "9001", "id": 7}],
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	issue = result["issues"]["501"]
+	assert "ai:needs-human" in issue["labels"]
+	assert "ai:closed" not in issue["labels"]
+	assert issue.get("closed", False) is False
+	assert not any(call["issue"] == 501 for call in result.get("issue_close_short_comments", []))
+	escalation = [
+		str(comment.get("body", "")) for comment in issue["comments"]
+		if "Stall recovery exhausted: escalated for the unblock judge" in str(comment.get("body", ""))
+	]
+	assert len(escalation) == 1
+	assert "(5 attempts in 'ai:awaiting-approval' phase, limit 5;" in escalation[0]
+	assert "`phase_attempts`" in escalation[0]
+	assert _FFB_FP in escalation[0]
+	assert (
+		"STALL_EXHAUSTED_ESCALATED issue=501 scope=standalone phase=ai:awaiting-approval attempts=5 limit=5 counter=phase_attempts outcome=labelled"
+		in result["stdout"]
+	)
+
+
+def test_standalone_stall_exhaustion_label_failure_posts_nothing_and_keeps_state():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:awaiting-approval": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [standalone_state_comment]},
+		mock_gh_issue_list_label_filter=True,
+		fail_issue_edit_for=[501],
+	)
+	issue = result["issues"]["501"]
+	assert "ai:needs-human" not in issue["labels"]
+	assert issue.get("closed", False) is False
+	assert not any(
+		"Stall recovery exhausted: escalated" in str(comment.get("body", ""))
+		for comment in issue["comments"]
+	)
+	assert "STALL_EXHAUSTED_ESCALATED issue=501 scope=standalone" in result["stdout"]
+	assert "outcome=label_failed" in result["stdout"]
+	standalone_state = _extract_latest_standalone_state(issue["comments"])
+	assert standalone_state is not None
+	assert standalone_state["status_since_ts"] == 1
+	assert standalone_state["phase_attempts"]["ai:awaiting-approval"] == 5
+
+
+def test_managed_failure_fingerprint_breaker_trips_and_label_survives_next_tick():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:clarification"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:clarification"]},
+		issue_comments={10: [_ffb_marker_comment(9001), _ffb_marker_comment(9002)]},
+	)
+	# Managed scope uses the non-terminal ai:needs-human, never the
+	# terminal ai:plan-failed (which would close the wave issue for good).
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	assert "ai:plan-failed" not in result["issues"]["10"]["labels"]
+	assert len(_ffb_breaker_comments(result["issues"]["10"]["comments"])) == 1
+	assert "STALL_FINGERPRINT_BREAKER issue=10 scope=managed outcome=tripped" in result["stdout"]
+	assert "label=ai:needs-human" in result["stdout"]
+	wave_issue = result["latest_state"]["waves"][0]["issues"][0]
+	assert [entry["run"] for entry in wave_issue["failure_fingerprints"]] == ["9001", "9002"]
+	assert not any(str(comment.get("body", "")).startswith("/answer") for comment in result["issues"]["10"]["comments"])
+
+	second = _run_poller(
+		state=result["latest_state"],
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: list(result["issues"]["10"]["labels"])},
+		issue_comments={10: list(result["issues"]["10"]["comments"])},
+	)
+	assert "ai:needs-human" in second["issues"]["10"]["labels"]
+	assert len(_ffb_breaker_comments(second["issues"]["10"]["comments"])) == 1
+	assert "outcome=tripped" not in second["stdout"]
+	assert second["latest_state"]["waves"][0]["issues"][0]["status"] not in ("closed", "skipped")
+
+
+def test_managed_stall_exhaustion_escalates_needs_human_without_closing():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1"},
+	)
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	assert "ai:closed" not in result["issues"]["10"]["labels"]
+	assert result["issues"]["10"].get("closed", False) is False
+	assert "STALL_EXHAUSTED_ESCALATED issue=10 scope=managed phase=ai:done attempts=1 limit=1 outcome=labelled" in result["stdout"]
+
+
+def test_managed_stall_exhaustion_switch_off_closes_as_before():
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 1
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		env_overrides={"MAX_STALL_RECOVERIES_DONE": "1", "STALL_FINGERPRINT_BREAKER_ENABLED": "false"},
+	)
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert "STALL_EXHAUSTED_ESCALATED" not in result["stdout"]
 
 
 def test_standalone_stall_recovery_honors_ai_done_phase_attempt_override():
