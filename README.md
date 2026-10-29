@@ -1399,7 +1399,12 @@ not delete wrappers that are already present in `.github/workflows/`.
 > canonical), the updater sets `scripts.audit:ci = node
 > scripts/security/check-npm-audit.js` and syncs managed files
 > (`scripts/security/check-npm-audit.js`,
-> `security/dependency-audit-allowlist.json`). Repositories with a custom
+> `security/dependency-audit-allowlist.json`). A `managed_files` entry marked
+> `"seed_only": true` is written only when the target is missing and is never
+> overwritten afterwards; the allowlist is such an entry, because it holds the
+> consumer's own justified findings. Seed-only targets are consumer-owned, so
+> `build_sync_manifest.py managed-paths` / `managed-digests` leave them out.
+> Repositories with a custom
 > `scripts.audit:ci` value are preserved unchanged, and repositories without
 > `package.json` are skipped (`no_package_json`).
 
