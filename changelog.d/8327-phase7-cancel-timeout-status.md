@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **The release gate no longer reports a cancel-on-close run that never finished as SKIPPED (#8327).** When Phase 7 of `test-and-mark-stable.yml` found the PR-close run of `internal-cancel-on-pr-close` but the run was still `pending` or `queued` when `PHASE7_WAIT_BUDGET_MINUTES` ran out, the step wrote an empty `status=`, and the results table printed `SKIPPED (no PR to close)` and "ALL PHASES PASSED" (run 40794181365). The step now logs `::error::cancel-on-close run #<id> did not complete within <n>m (status=<status>)`, writes `status=timeout` and `cancel_run_id`, and fails, the same way the already-closed path does. The results table also reports `FAILED (no status)` instead of SKIPPED when a smoke PR exists but Phase 7 wrote no status.
+
+  For operators: a run that waits behind the cancel-on-close job's shared concurrency group now shows as a Phase 7 timeout. The concurrency-group fix comes in a separate change.
