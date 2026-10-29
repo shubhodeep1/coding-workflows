@@ -2762,8 +2762,15 @@ jobs:
       # step (#8072), so it had the most headroom. Commands and order
       # unchanged; they run once per CI run. The unblock step left group 1
       # for group 0 in #8091.
+      # Moved again, from group 1 to group 3: orchestrate-poll (1) took 20m12s
+      # of its 20 minutes on main (run 40954844196, budget-watch issue #8396).
+      # This was group 1's only pinned step besides its slice. Step timings
+      # were not readable when this was planned, so the choice is an estimate
+      # from recorded group totals: group 3 has not been named by budget-watch
+      # since #8072, after which its unblock step left and its slice shrank to
+      # a fifth (#8113). Name and body unchanged; still once per CI run.
       - name: Orchestrate poll single-file module tests
-        if: strategy.job-index == 1
+        if: strategy.job-index == 3
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_noop_suspicious_recovery.py
