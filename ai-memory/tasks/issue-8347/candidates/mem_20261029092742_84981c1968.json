@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The heal-scope marker only covers `.github/workflows/test-and-mark-stable.yml`, `tests/**` and `changelog.d/*.md`, so B would leave the fix held at the plan gate. C would open a follow-up issue that this pipeline does not need. A fixes the confirmed root cause inside that scope. Under A, the 2026-10-29 timeline (20m22s queued plus a 41m45s run, about 62m07s \u2248 3727 s) fits inside 5520 s and the 95-minute step limit. A also keeps the existing check `test_release_gate_validation_refresh_watch_covers_child_budget` (`tests/test_validation_refresh_workflow_contract.py:125-147`) passing: 5520 \u2265 60\u00b760+60, 5520 < 95\u00b760, and 95 < 165. Two notes for the planner: the job's step limits then sum to 158 minutes (95 + 18 + 45, from lines 4192/4244/4287), which keeps today's 7 minutes of headroom under a 165-minute job. The comment at lines 4133-4134 should read 5520 + 600 + 2400 = 8520 s = 142 minutes.\nQ2: According to GITHUB FACTS, issues #8337 and #8338 are closed (not_planned), and no Implement run evidence was provided. The issue itself makes item 4 conditional on that evidence confirming candidate 3, so Phase 3b stays unchanged and the plan records candidate 3 as unconfirmed. The single `/approved` post in `e2e-alt-model-test` (suggested-fix item 3) is a separate change inside the scope and stays in this fix. That change should get a static contract test of its own, alongside the one pinning `--completion-timeout-secs 5520` and the 95/165-minute limits. The plan should also include a `changelog.d/` fragment and a `wc -c` check that the workflow file stays under 480,000 bytes.",
+  "fingerprint": "c46ba33264d77a5454ca0a77c45c207a7d2d1554beb71874b9151b992b617746",
+  "lineage": {
+    "issue_number": 8347,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40849001869",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40849001869",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8347"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029092742_84981c1968",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8347,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40849001869"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8347",
+  "timestamps": {
+    "created_at": "2026-10-29T09:27:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
