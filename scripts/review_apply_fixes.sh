@@ -1370,7 +1370,13 @@ excluded except for ".github/workflows/", ".github/actions/" and the files
 ".github/ai/claude_engine.json" and ".claude/hooks/gh_api_write_guard.py".
 "scripts/claude_settings.json.tmpl" is also admitted. In particular,
 ".claude/commands/" files are admitted only when their twins exist in the
-verified workflow-support checkout. Other ".claude/" and ".github/ai/"
+verified workflow-support checkout. ".claude/docs/<name>.md" reference
+files are admitted the same way: only when their twin exists in the
+verified workflow-support checkout, so the ".claude/docs/" files present
+in your workspace are the admitted ones, and new ".claude/docs/" files
+cannot be created. When a twin "workflow-templates/.claude/docs/<name>.md"
+exists, edit both copies in the same run so they stay byte-identical.
+Other ".claude/" and ".github/ai/"
 paths are not available except for the named files. Secret, credential, ".env" and
 key-file paths, dependency and build directories, and files with extensions
 outside the admitted set are excluded and cannot be written back.
@@ -1597,7 +1603,7 @@ If additional context is required beyond what is inlined, you may read:
 - files imported by the changed code
 - the original bug report file located under ${PREVIOUS_REVIEWS_DIR}
 - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
-- The editor workspace contains only admitted source paths, including selected .claude/commands/ files, .claude/hooks/gh_api_write_guard.py and .github/ai/claude_engine.json when present. Do not create excluded paths; if a finding needs one, list it under Ignored suggestions with reason "sandbox-excluded path".
+- The editor workspace contains only admitted source paths, including selected .claude/commands/ files, selected .claude/docs/ reference files, .claude/hooks/gh_api_write_guard.py and .github/ai/claude_engine.json when present. Do not create excluded paths; if a finding needs one, list it under Ignored suggestions with reason "sandbox-excluded path".
 - Creating a directory symlink, an unadmitted directory under .github/ or .claude/, a directory with a secret-like name, or a case variant of an excluded build/cache directory aborts the whole transfer of your edits. Exact excluded build/cache names are omitted.
 The bug report may contain important context about the problem being fixed.
 
