@@ -740,16 +740,44 @@ def test_merged_runs_dedupe_keep_order_and_cap(tmp_path: Path) -> None:
 	assert broken == {"outcome": "none", "paths": [], "skipped": [{"run_id": "?", "reason": "cache_unreadable"}], "runs": 1}
 
 
-def test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker() -> None:
-	# #6907/#6916: linked paths sit ahead of the subject reserve in workflow_paths.
+def _lw_freeze_filter() -> str:
+	"""The intake's scope-freeze jq program, as shipped."""
+	text = LW_INTAKE_SCRIPT.read_text(encoding="utf-8")
+	start = text.index("'($self_workflows + $engine_paths) as $base") + 1
+	end = text.index("}' > \"${SCOPE_INPUTS_FROZEN}\"", start) + 1
+	return text[start:end]
+
+
+@pytest.mark.parametrize(("crash", "engine_paths"), [("", []), ("scripts/crash.sh", []), ("", ["scripts/ai_engine.sh", "scripts/claude_engine.py"])])
+def test_linked_paths_at_the_cap_leave_the_subject_reserve_in_the_marker(crash: str, engine_paths: list[str]) -> None:
+	# #6907/#6916: the source workflow, engine and crash paths sit ahead of the
+	# subject reserve too, so the freeze trims the linked paths to the room left.
+	if shutil.which("jq") is None:
+		pytest.skip("jq is required to run the intake's scope-freeze filter")
 	assert heal.HEAL_SCOPE_LINKED_PATHS_MAX + heal.HEAL_SCOPE_SUBJECT_RESERVE == 20
-	linked = [f"scripts/linked{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_PATHS_MAX - 1)]
+	source = ".github/workflows/test-and-mark-stable.yml"
+	linked = [f"scripts/linked{index}.sh" for index in range(heal.HEAL_SCOPE_LINKED_PATHS_MAX)]
 	subjects = [f"scripts/subject{index}.sh" for index in range(heal.HEAL_SCOPE_SUBJECT_RESERVE)]
-	marker = heal.render_heal_scope_marker(crash_file=None, workflow_paths=[".github/workflows/test-and-mark-stable.yml", *linked],
-		changed_files=[], exists=lambda path: True, runs=[f"{SELF_REPO}:500"], test_subjects=subjects)
+	args = {"failing_tests": {"names": [], "files": []}, "engine_runs": [], "engine_paths": engine_paths, "linked_paths": linked,
+		"runs": [f"{SELF_REPO}:500"], "self_workflows": [source], "consumer_workflows": [], "changed": []}
+	cmd = ["jq", "-n", "--arg", "crash", crash]
+	for key, value in args.items():
+		cmd += ["--argjson", key, json.dumps(value)]
+	frozen = json.loads(subprocess.run([*cmd, _lw_freeze_filter()], capture_output=True, text=True, check=True).stdout)
+	assert frozen["self_workflows"][:1 + len(engine_paths)] == [source, *engine_paths]
+	assert len(frozen["self_workflows"]) + (1 if crash else 0) == heal.HEAL_SCOPE_LINKED_PATHS_MAX
+	marker = heal.render_heal_scope_marker(crash_file=crash or None, workflow_paths=frozen["self_workflows"],
+		changed_files=[], exists=lambda path: True, runs=frozen["runs"], test_subjects=subjects)
 	assert marker
 	for path in subjects:
 		assert path in marker
+	# Without linked paths the freeze output is unchanged.
+	empty = dict(args, linked_paths=[])
+	cmd = ["jq", "-n", "--arg", "crash", crash]
+	for key, value in empty.items():
+		cmd += ["--argjson", key, json.dumps(value)]
+	frozen_empty = json.loads(subprocess.run([*cmd, _lw_freeze_filter()], capture_output=True, text=True, check=True).stdout)
+	assert frozen_empty["self_workflows"] == [source, *engine_paths]
 
 
 # --- heal_scope_linked_workflows_gate --------------------------------------
@@ -971,7 +999,7 @@ def test_intake_layout_fetches_before_the_freeze_and_renders_after() -> None:
 	assert text.index('_heal_fetch_linked_runs || log "warn linked_runs_failed"') < text.index("\n_heal_scope_linked_paths ||") < freeze
 	assert freeze < text.index('_heal_collect_linked_runs || log "warn linked_runs_failed"')
 	assert '--argjson linked_paths "${LINKED_SCOPE_PATHS_JSON:-[]}"' in text
-	assert "self_workflows: ($self_workflows + $engine_paths + ($linked_paths - ($self_workflows + $engine_paths)))" in text
+	assert "self_workflows: ($base + (($linked_paths - $base)[:$linked_room]))" in text
 	# The run and jobs REST reads happen only in the fetch half.
 	collect = text[text.index("_heal_collect_linked_runs()\n"):text.index('_heal_collect_linked_runs || log "warn linked_runs_failed"')]
 	assert "gh_api_json_to_file" not in collect and "fetched_ids.txt" in collect

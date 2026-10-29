@@ -2603,7 +2603,9 @@ _heal_fetch_linked_runs || log "warn linked_runs_failed"
 #   workflow file (API `.path`), the reusable workflows it calls (one hop) and
 #   the scripts its failed or longest step runs, from the tree at HEAD_SHA (the
 #   commit _open_issue renders the scope against), at most
-#   HEAL_SCOPE_LINKED_PATHS_MAX (12) of the marker's 20 explicit slots. No REST
+#   HEAL_SCOPE_LINKED_PATHS_MAX (12). The freeze below then keeps only as many
+#   as fit in the 12 explicit slots ahead of the 8-subject reserve that the
+#   source workflow, engine and crash paths leave free (#6907/#6916). No REST
 #   call: a missing HEAD_SHA commit gets the same git fetch _open_issue makes.
 #   Fails open: any failure leaves `[]`, today's scope.
 #   WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED=false skips the helper.
@@ -2661,7 +2663,9 @@ jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
 	--argjson self_workflows "$(_heal_slurp_verified_runs '[.[] | .referenced_paths[]?] | unique')" \
 	--argjson consumer_workflows "$(_heal_slurp_verified_runs '[.[] | .path | select(type == "string" and . != "")] | unique')" \
 	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
-	'{crash_file: $crash, runs: (($runs + $engine_runs) | unique), self_workflows: ($self_workflows + $engine_paths + ($linked_paths - ($self_workflows + $engine_paths))), consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
+	'($self_workflows + $engine_paths) as $base
+	| ([20 - 8 - ($base | unique | length) - (if $crash != "" and ($base | any(. == $crash) | not) then 1 else 0 end), 0] | max) as $linked_room
+	| {crash_file: $crash, runs: (($runs + $engine_runs) | unique), self_workflows: ($base + (($linked_paths - $base)[:$linked_room])), consumer_workflows: $consumer_workflows, changed_files: $changed, failing_tests: $failing_tests}' > "${SCOPE_INPUTS_FROZEN}" \
 	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
 	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
 

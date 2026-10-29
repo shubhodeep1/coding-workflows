@@ -3579,7 +3579,9 @@ HEAL_SCOPE_SUBJECT_RESERVE = 8
 # They count toward the marker's 20 explicit slots but sit ahead of the subject
 # reserve in workflow_paths, so this sub-cap keeps HEAL_SCOPE_SUBJECT_RESERVE
 # slots free: without it linked runs could take every explicit slot and confine
-# a test-failure heal to tests/** again (#6907/#6916).
+# a test-failure heal to tests/** again (#6907/#6916). The intake's scope freeze
+# also subtracts the source workflow, engine and crash paths already ahead of
+# the subjects, so the reserve holds when those are present too.
 HEAL_SCOPE_LINKED_PATHS_MAX = 20 - HEAL_SCOPE_SUBJECT_RESERVE
 
 
@@ -7210,7 +7212,9 @@ _LINKED_SCOPE_REMOTE_USES_RE = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(
 _LINKED_SCOPE_FAILED_CONCLUSIONS = ("failure", "timed_out")
 HEAL_SCOPE_LINKED_YAML_MAX_BYTES = 600_000
 # Existing script paths kept per matched step (counted after the existence check).
-HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP = 8
+# Equal to the linked-path cap, so only that cap (and the marker's 20 slots)
+# bounds a step's scripts; issue #8360 asks for no narrower per-step limit.
+HEAL_SCOPE_LINKED_SCRIPTS_PER_STEP = HEAL_SCOPE_LINKED_PATHS_MAX
 
 
 def heal_scope_linked_workflows_gate(*, enabled: Any, source_kind: Any, source_repo: Any, self_repo: Any, source_workflow_paths: Iterable[Any]) -> str:
