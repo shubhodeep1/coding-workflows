@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate.yml:1480-1499 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The shared-file list in the auto_serialize deferral reason (`files += [p for p in touched.get(edge.get('from'), []) if p in touched.get(iid, []) and p not in files]`) includes paths in `prepush_augmented_paths` for both issues, which `validate_wave_file_partition` deliberately ignores (scripts/orchestrate_lib.py:897-900).\n  WHY: The deferral log names non-causal paths, which can misdirect diagnosis (diagnostics only; wave selection and exit code are unchanged). Severity disagreement: four reviewers said NIT, minimax_minimax-m3 said MAJOR (mapped to high here).\n- tests/test_orchestrate_lib.py:3987-3998 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `test_wave1_deferral_logs_all_shared_files_for_mixed_hot_overlap` never sets `prepush_augmented_paths`, so the augmented-path overcorrection is not exercised.\n  WHY: The passing test locks in the wrong contract for shared files.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/orchestrate.yml:(embedded Python in \"Create Wave 1 issues only\" step, the `files += [...]` line) | severity=NIT | confidence=3\n  PROBLEM: The last autofix run adds every path both issues list in `files_touched` to the reported `files`, but `scripts/orchestrate_lib.py` (`validate_wave_file_partition`, lines 898-899) drops paths both issues carry in `prepush_augmented_paths`, so a path that did not cause the serialization can appear in the deferral line.\n  WHY: Diagnostic text only; the line can name a shared pre-push-augmented path the partition guard ignored, which could misdirect investigation.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate.yml:1480-1499 | severity=NIT | confidence=3\n  PROBLEM: The shared-file list for deferral reasons includes paths from `prepush_augmented_paths` that `validate_wave_file_partition` deliberately ignores.\n  WHY: The log output contains non-causal file paths for auto-serialize deferrals, which is confusing diagnostic information.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/orchestrate.yml:1480-1499 | severity=MAJOR | confidence=4\n  PROBLEM: The shared-file computation re-includes paths that `auto_serialize_file_overlaps` deliberately excluded (`common = sorted(shared - augmented_both)`, scripts/orchestrate_lib.py:899; `augmented_paths=augmented` at scripts/orchestrate_lib.py:983), by appending every shared `files_touched` path including pre-push-augmented ones.\n  WHY: An operator reading `overlap_type=hot_file` with `files=[\"<augmented path>\", \"<hot path>\"]` concludes the augmented path contributed to the edge and chases the wrong path.\n- tests/test_orchestrate_lib.py:3987-3998 | severity=NIT | confidence=4\n  PROBLEM: `test_wave1_deferral_logs_all_shared_files_for_mixed_hot_overlap` never sets `prepush_augmented_paths`, so the case the autofix overcorrects on is not exercised.\n  WHY: The passing test enshrines the wrong contract until someone updates it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/orchestrate.yml:1497-1499 (especially the `files +=` intersection at line 1498) | severity=NIT | confidence=5\n  PROBLEM: The diagnostic adds every path shared by both issues, including paths augmented for both by the pre-push test gate, which the partition guard excludes at `scripts/orchestrate_lib.py:897-900`.\n  WHY: When another shared path causes auto-serialization, the deferral log also names the ignored augmented path as a reason, which misidentifies the cause and can mislead diagnosis.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/orchestrate.yml:1497-1498 | severity=NIT | confidence=3\n  PROBLEM: The merge (`files += [p for p in touched.get(edge.get('from'), []) if p in touched.get(iid, []) and p not in files]`) appends every shared `files_touched` path without subtracting the paths `validate_wave_file_partition` ignores (`augmented_both = augmented.get(iid_a, set()) & augmented.get(iid_b, set()); common = sorted(shared - augmented_both)`, scripts/orchestrate_lib.py:897-899, the #8244 rule).\n  WHY: In the #8244 scenario (shared planned path P plus pre-push-augmented path Q), the deferral line prints `files: [P, Q]` and misidentifies part of the cause. This affects diagnostics only; wave selection and serialization are unaffected.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d943520c714b8f6b428b5120a0b421196644d01fbd4549a160860881e8127f2b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8324,
+    "run_id": "40828095075",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40828095075",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029071003_4bb9ffac6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8324,
+    "run_id": "40828095075"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T07:10:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
