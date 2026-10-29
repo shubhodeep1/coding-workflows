@@ -132,7 +132,7 @@ review_autofix_sweep_reap_zombie_runs()
 	fi
 
 	if [ "${DRY_RUN:-false}" = "true" ]; then
-		echo "ZOMBIE_RUN_REAPER_END outcome=dry_run candidates=${reaper_total} attempted=0 cancelled=0 force_cancelled=0 failed=0 deferred=${reaper_total}"
+		echo "ZOMBIE_RUN_REAPER_END outcome=dry_run candidates=${reaper_total} attempted=0 cancelled=0 force_cancelled=0 failed=0 deferred=${reaper_deferred}"
 		return 0
 	fi
 

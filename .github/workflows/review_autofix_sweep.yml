@@ -245,10 +245,22 @@ jobs:
 
           printf '%s\n' "${prs_json}" > "${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"
 
+          # Zombie run reaper (P11b): it reads the active-run snapshot taken
+          # further down, so the early exits below skip it. Say so in the log
+          # instead of skipping silently (silent while the reaper is off).
+          zombie_reaper_skip_note()
+          {
+            case "$(printf '%s' "${ZOMBIE_RUN_REAPER_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+              false|0|no|off) ;;
+              *) echo "ZOMBIE_RUN_REAPER_END outcome=skipped reason=$1" ;;
+            esac
+          }
+
           # Provider outage (issue #6633): the CI-cancelled snapshot above is
           # still written; review dispatches wait for the provider to recover.
           if [ "${PROVIDER_OUTAGE_PAUSED:-false}" = "true" ]; then
             echo "AUTOFIX_SWEEP_SKIP reason=provider_outage candidates=$(printf '%s' "${prs_json}" | jq 'length')"
+            zombie_reaper_skip_note provider_outage
             exit 0
           fi
 
@@ -279,6 +291,7 @@ jobs:
 
           if [ "${total}" -eq 0 ]; then
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total}"
+            zombie_reaper_skip_note no_candidates
             exit 0
           fi
 
@@ -293,6 +306,7 @@ jobs:
           if ! [[ "${sweep_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || [ "${sweep_default_branch}" = "null" ]; then
             echo "::warning::AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable — review dispatch runs cannot be verified; no dispatch this tick."
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+            zombie_reaper_skip_note default_branch_unavailable
             exit 0
           fi
 

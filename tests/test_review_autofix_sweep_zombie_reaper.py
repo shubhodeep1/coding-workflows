@@ -307,6 +307,26 @@ class SweepZombieReaperTest(unittest.TestCase):
 		self.assertEqual(self.posts(), [])
 		self.assertIn("ZOMBIE_RUN_REAPER_END outcome=dry_run candidates=1 attempted=0", result.stdout)
 
+	def test_dry_run_counts_only_runs_past_the_cap_as_deferred(self) -> None:
+		runs = [run(950 + i, 100 - i) for i in range(12)]
+		result = self.run_sweep({("internal-review.yml", "queued"): runs}, DRY_RUN="true")
+		self.assert_sweep_finished(result)
+		self.assertEqual(self.posts(), [])
+		self.assertIn("outcome=dry_run candidates=12 attempted=0 cancelled=0 force_cancelled=0 failed=0 deferred=2", result.stdout)
+
+	def test_early_exit_logs_reaper_skip(self) -> None:
+		result = self.run_sweep({("internal-review.yml", "queued"): [run(960, 30)]}, PROVIDER_OUTAGE_PAUSED="true")
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertIn("ZOMBIE_RUN_REAPER_END outcome=skipped reason=provider_outage", result.stdout)
+		self.assertEqual(self.posts(), [])
+		self.reset()
+		off = self.run_sweep(PROVIDER_OUTAGE_PAUSED="true", ZOMBIE_RUN_REAPER_ENABLED="off")
+		self.assertEqual(off.returncode, 0, off.stderr)
+		self.assertNotIn("ZOMBIE_RUN_", off.stdout)
+		script = extract_step_script()
+		for reason in ("provider_outage", "no_candidates", "default_branch_unavailable"):
+			self.assertIn(f"zombie_reaper_skip_note {reason}\n", script.replace("\r", ""))
+
 	def test_invalid_cap_cancels_nothing(self) -> None:
 		for value in ("abc", "0", "-5", "1.5", "24h"):
 			with self.subTest(value=value):
