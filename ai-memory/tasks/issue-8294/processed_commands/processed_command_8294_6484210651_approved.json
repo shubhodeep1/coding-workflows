@@ -5,13 +5,28 @@
   "entry_id": "processed_command_8294_6484210651_approved",
   "issue_number": 8294,
   "metadata": {
+    "branch": "ai/issue-8294",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/review_autofix_sweep.yml",
+      "agents.d/stuck-states-p11b-zombie-reaper.md",
+      "changelog.d/stuck-states-p11b-zombie-reaper.md",
+      "docs/INVENTORY.md",
+      "scripts/review_autofix_sweep_reaper.sh",
+      "tests/test_review_autofix_sweep_zombie_reaper.py"
+    ],
+    "issue_number": 8294,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/8294",
+    "pr_number": 8302,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/8302",
+    "run_attempt": "1",
+    "run_id": "40792913863",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/40792913863"
   },
   "run_attempt": 1,
   "run_id": "40792913863",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-29T00:19:17Z",
+  "status": "completed",
+  "timestamp": "2026-10-29T00:46:40Z",
   "workflow": "implement"
 }
