@@ -973,6 +973,8 @@ def test_audit_wiring() -> None:
 # ----- Skip-path security pass (#8333) -----
 SKIP_STEP = ROOT / "scripts" / "review_autofix_step_deterministic_skip_security_pass.sh"
 FRESHNESS = ROOT / "scripts" / "review_freshness_ci_failed.sh"
+HEAD_GATE = ROOT / "scripts" / "review_head_gate.sh"
+GH_HELPERS = ROOT / "scripts" / "gh_helpers.sh"
 REVIEW_WORKFLOW_NAMES = {"ai-review.yml", "internal-review.yml", "review_autofix.yml"}
 
 
@@ -984,7 +986,7 @@ def _run_skip_step(tmp_path: Path, comments: list | None = None, pr: dict | None
 		(bin_dir / name).chmod(0o755)
 	support = tmp_path / "freshness-src" / "scripts"
 	support.mkdir(parents=True, exist_ok=True)
-	for src in (SCRIPT, FRESHNESS):
+	for src in (SCRIPT, FRESHNESS, HEAD_GATE, GH_HELPERS):
 		(support / src.name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 	(support / "security_pass_skip.py").write_text("import json\nprint(json.dumps({'skip': False}))\n", encoding="utf-8")
 	checkout = tmp_path / "pr-head"
@@ -1016,6 +1018,8 @@ def _run_skip_step(tmp_path: Path, comments: list | None = None, pr: dict | None
 		DET_SKIP_SECURITY_PASS_CHECKOUT=str(checkout),
 		REVIEW_AUTOFIX_CALLER_WORKFLOW_REF="o/r/.github/workflows/internal-review.yml@refs/heads/main",
 		ALLOW_WORKFLOW_EDITS="",
+		RUN_URL="",
+		REVIEW_HEAD_GATE_STATUS_ENABLED="true",
 	)
 	run_env.update(env or {})
 	result = subprocess.run(["bash", str(SKIP_STEP)], capture_output=True, text=True, env=run_env, check=False)
@@ -1037,6 +1041,12 @@ def test_skip_step_clean_marker_lets_the_merge_run(tmp_path: Path) -> None:
 	assert output == "hold=false\nexhausted=false\n"
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 	assert f"AUTOFIX_DET_SKIP_SECURITY_PASS pr=42 head={HEAD} outcome=clean hold_reason=none redispatch=none" in result.stdout
+	# The gate withholds the head-gate success while the pass is required;
+	# the skip step posts it once the pass lets the merge run.
+	assert [call for call in calls if f"repos/o/r/statuses/{HEAD}" in call] == [[
+		"api", "-X", "POST", f"repos/o/r/statuses/{HEAD}", "-f", "state=success",
+		"-f", "context=ai-review/head-gate", "-f", "description=deterministic skip and security pass passed",
+	]]
 
 
 def test_skip_step_without_marker_dispatches_the_audit_and_holds(tmp_path: Path) -> None:
@@ -1046,6 +1056,7 @@ def test_skip_step_without_marker_dispatches_the_audit_and_holds(tmp_path: Path)
 	assert any(call[:3] == ["workflow", "run", "ai-security-audit.yml"] for call in calls)
 	assert _review_dispatches(calls) == []
 	assert "outcome=hold hold_reason=audit_dispatched redispatch=none" in result.stdout
+	assert not any(any("/statuses/" in arg for arg in call) for call in calls)
 	# The comments were read fresh (paginated) and the pass ran in the PR-head checkout.
 	assert ["api", "--paginate", "repos/o/r/issues/42/comments?per_page=100"] in calls
 
@@ -1057,8 +1068,13 @@ def test_skip_step_exhausted_redispatches_review_once(tmp_path: Path) -> None:
 	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed"] in calls
 	assert _review_dispatches(calls) == [["workflow", "run", "internal-review.yml", "--repo", "o/r", "-f", "pr_number=42", "-f", "allow_workflow_edits=false"]]
 	assert "outcome=exhausted hold_reason=cycles_exhausted redispatch=dispatched workflow=internal-review.yml" in result.stdout
-	# No marker comment: the label is the routing signal.
-	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	# The label is the routing signal; the skip step posts no marker of its
+	# own, so the only comment is the pass's usual exhaustion comment.
+	comment_posts = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert len(comment_posts) == 1, comment_posts
+	assert any(arg.startswith("body=## Single-issue security pass exhausted") for arg in comment_posts[0])
+	assert not any("<!--" in arg for arg in comment_posts[0])
+	assert not any(any("/statuses/" in arg for arg in call) for call in calls)
 
 
 def test_skip_step_exhausted_dispatch_failure_warns_and_holds(tmp_path: Path) -> None:
@@ -1128,9 +1144,16 @@ def test_deterministic_skip_merge_wiring() -> None:
 	for key, value in codex_pass["env"].items():
 		assert pass_step["env"][key] == value, key
 	assert pass_step["env"]["DET_SKIP_SECURITY_PASS_PR_JSON"] == "${{ needs.gate.outputs.det_skip_security_pass_pr_json }}"
+	assert pass_step["env"]["REVIEW_HEAD_GATE_STATUS_ENABLED"] == "${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}"
+	# The gate posts no head-gate success while the skip-path pass is required.
+	status_step = _steps(REVIEW, "gate")["Withdraw stale auto-merge and publish head-gate status"]
+	assert status_step["env"]["DETERMINISTIC_SKIP"] == (
+		"${{ steps.evaluate.outputs.det_skip_security_pass != 'true' && steps.evaluate.outputs.deterministic_skip || 'false' }}"
+	)
 	sparse = steps["Checkout merge-base freshness helper"]["with"]["sparse-checkout"].split()
 	for script in ("scripts/review_single_issue_security_pass.sh", "scripts/security_pass_skip.py",
-			"scripts/review_autofix_step_deterministic_skip_security_pass.sh", "scripts/review_freshness_ci_failed.sh"):
+			"scripts/review_autofix_step_deterministic_skip_security_pass.sh", "scripts/review_freshness_ci_failed.sh",
+			"scripts/review_head_gate.sh", "scripts/gh_helpers.sh"):
 		assert script in sparse, script
 
 

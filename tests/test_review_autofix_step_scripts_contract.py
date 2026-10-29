@@ -178,18 +178,6 @@ def test_gate_job_step_scripts_come_only_from_verified_head_gate_checkout() -> N
 		assert names.index("Verify head-gate helper identity") < names.index(step_name)
 
 
-def main() -> int:
-	test_functions = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
-	for func in test_functions:
-		func()
-	print(f"OK: {len(test_functions)} review_autofix step-script contract checks passed")
-	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 def test_skip_merge_job_step_scripts_come_only_from_verified_freshness_checkout() -> None:
 	assert REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS, "skip-merge step registry must not be empty"
 	workflow = yaml.safe_load(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
@@ -209,3 +197,15 @@ def test_skip_merge_job_step_scripts_come_only_from_verified_freshness_checkout(
 		assert by_name[step_name]["env"]["FRESHNESS_HELPER_CHECKOUT_OUTCOME"] == "${{ steps.checkout_freshness_helper.outcome }}"
 		assert by_name[step_name]["env"]["REVIEW_SUPPORT_SHA"] == "${{ needs.gate.outputs.review_support_sha }}"
 		assert names.index("Checkout merge-base freshness helper") < names.index(step_name)
+
+
+def main() -> int:
+	test_functions = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
+	for func in test_functions:
+		func()
+	print(f"OK: {len(test_functions)} review_autofix step-script contract checks passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

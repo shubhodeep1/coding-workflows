@@ -827,8 +827,9 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] || return 1
     [[ "${pr_head_sha_gate}" =~ ^[0-9a-f]{40}$ ]] || return 1
     # Same suppressors as the doc-only / small-diff skip: the skip
-    # job runs no conflict resolver and no single-issue security
-    # pass, and the updated head has no audit of its own.
+    # job runs no conflict resolver, and it runs the single-issue
+    # security pass only with AUTOFIX_SKIP_RUNS_SECURITY_PASS=true
+    # (#8333); the updated head has no audit of its own.
     if [ "${pr_mergeable}" = "false" ] || [ "${pr_mergeable_state}" = "dirty" ]; then
       echo "AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=merge_conflict pr=${PR_NUMBER} mergeable=${pr_mergeable:-unknown} mergeable_state=${pr_mergeable_state:-unknown} candidate=freshness_sync"
       return 1

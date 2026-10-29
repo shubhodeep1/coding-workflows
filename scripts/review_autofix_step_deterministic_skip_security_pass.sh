@@ -14,18 +14,23 @@
 # (scripts/review_single_issue_security_pass.sh gate) for the gate-observed
 # head before the job labels the PR or enables auto-merge:
 #   hold=false  the merge step runs (clean audit marker for the head, or the
-#               PR is not eligible / is a verified follow-up).
+#               PR is not eligible / is a verified follow-up). This step then
+#               posts the ai-review/head-gate success for the head; the gate
+#               withholds it while the skip-path pass is required.
 #   hold=true   the merge step is skipped. The audit the pass dispatched
 #               re-runs review when it reports.
 #   exhausted   hold=true, and the PR's review workflow is dispatched once
 #               (review_freshness_ci_failed.sh's candidate order). The pass
 #               already labelled the PR ai:security-pass-failed, so the gate
 #               keeps that run on codex-agent, whose review-blocked judge
-#               runs in security-exhaustion mode. No marker comment.
+#               runs in security-exhaustion mode. This step posts no marker
+#               comment of its own; the pass still posts its exhaustion
+#               comment when it applies the label.
 #
 # Env: PR_NUMBER, PR_HEAD_SHA (gate head), REPOSITORY, DEFAULT_BRANCH,
 # DET_SKIP_SECURITY_PASS_PR_JSON (gate PR snapshot), the pass's own env
-# block, REVIEW_AUTOFIX_CALLER_WORKFLOW_REF, ALLOW_WORKFLOW_EDITS.
+# block, REVIEW_AUTOFIX_CALLER_WORKFLOW_REF, ALLOW_WORKFLOW_EDITS,
+# REVIEW_HEAD_GATE_STATUS_ENABLED (default true), RUN_URL.
 # DET_SKIP_SECURITY_PASS_SUPPORT_DIR (default
 # ${GITHUB_WORKSPACE}/.codex-freshness-src/scripts),
 # DET_SKIP_SECURITY_PASS_CHECKOUT (default ${GITHUB_WORKSPACE}/.codex-skip-pr-head),
@@ -36,7 +41,8 @@
 # the step, so nothing merges.
 # API budget (§14): one paginated comments read (up to 3 attempts), one
 # GraphQL closingIssuesReferences read, then whatever the pass does; on
-# exhaustion, one `gh workflow run` per candidate until one succeeds.
+# exhaustion, one `gh workflow run` per candidate until one succeeds; on
+# hold=false, one commit-status POST (ai-review/head-gate success).
 # Log: AUTOFIX_DET_SKIP_SECURITY_PASS pr= head= outcome=clean|hold|exhausted|skip_input_unverifiable hold_reason= redispatch=none|dispatched|dispatch_failed [workflow=]
 set -euo pipefail
 
@@ -63,6 +69,28 @@ det_skip_security_pass_summary()
 		printf '### Single-issue security pass (deterministic skip)\n\n- PR: #%s\n- Head: `%s`\n- Outcome: `%s`\n- Hold reason: `%s`\n- Review re-dispatch: `%s`\n' \
 			"${PR_NUMBER:-?}" "${PR_HEAD_SHA:-?}" "$1" "$2" "$3" >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
 	fi
+}
+
+# On hold=false, publish the ai-review/head-gate success the gate withheld
+# for this head (#8333). Best effort: a missing helper or failed POST only
+# warns, and the status stays pending.
+det_skip_security_pass_post_head_status()
+{
+	local support_dir="$1"
+	if [ ! -f "${support_dir}/review_head_gate.sh" ] || [ ! -f "${support_dir}/gh_helpers.sh" ]; then
+		echo "::warning::review_head_gate.sh unavailable; leaving the ai-review/head-gate status pending for PR #${PR_NUMBER:-?}."
+		return 0
+	fi
+	# cd keeps gh_helpers.sh's relative scripts/ fallback inside the verified
+	# support directory.
+	# shellcheck source=/dev/null
+	(
+		cd "${support_dir}" \
+			&& source "${support_dir}/gh_helpers.sh" \
+			&& source "${support_dir}/review_head_gate.sh" \
+			&& review_head_gate_post_status "${REPOSITORY}" "${PR_HEAD_SHA}" success "deterministic skip and security pass passed"
+	) || echo "::warning::Could not publish the ai-review/head-gate status for PR #${PR_NUMBER:-?}; it stays pending."
+	return 0
 }
 
 det_skip_security_pass_unverifiable()
@@ -105,6 +133,9 @@ det_skip_security_pass_main()
 		det_skip_security_pass_unverifiable tempdir_failed
 		return 1
 	fi
+	# Removed on every exit path, including the early unverifiable returns.
+	DET_SKIP_SECURITY_PASS_WORK_DIR="${work}"
+	trap 'rm -rf "${DET_SKIP_SECURITY_PASS_WORK_DIR:-}"' EXIT
 	pr_file="${work}/pr.json"
 	comments_file="${work}/comments.json"
 	pass_output="${work}/pass_output"
@@ -179,7 +210,6 @@ det_skip_security_pass_main()
 	elif ! det_skip_security_pass_output "hold=false" "exhausted=false"; then
 		return 1
 	fi
-	rm -rf "${work}"
 
 	if [ "${exhausted}" = "true" ]; then
 		outcome="exhausted"
@@ -200,6 +230,7 @@ det_skip_security_pass_main()
 		outcome="hold"
 	else
 		outcome="clean"
+		det_skip_security_pass_post_head_status "${support_dir}"
 	fi
 	det_skip_security_pass_log "outcome=${outcome} hold_reason=${hold_reason:-none} redispatch=${redispatch}${workflow:+ workflow=${workflow}}"
 	det_skip_security_pass_summary "${outcome}" "${hold_reason:-none}" "${redispatch}"
