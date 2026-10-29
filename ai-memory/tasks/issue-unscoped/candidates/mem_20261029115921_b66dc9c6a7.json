@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:742-744,1035-1036,1063-1065 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `_PLAN_GRANT_BARE_FILE_RE` and `_HEAL_PLAN_EXTRA_BARE_FILE_RE` are case-sensitive, so `_names_bare_file` misses lowercase or mixed-case extensionless file names such as readme, makefile and codeowners.\n  WHY: `run_heal_plan_scope_gate` approves a \"None. Update the readme.\" Files section with `heal_scope_plan_no_changes`, which leads to a success-no-op close or a commit-guard refusal. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT/low, and the other three reviewers rated it MAJOR. The highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:1063-1065 (`_names_bare_file` in `_heal_plan_declares_no_file_changes`; uses regexes at 742-744 and 1035-1036) | severity=NIT | confidence=3\n  PROBLEM: Lowercase or mixed-case extensionless file names, such as \"None. Update the makefile.\", are not recognised because both bare-file regexes are case-sensitive.\n  WHY: The gate approves with `heal_scope_plan_no_changes` even though the section names a file. The commit guard still blocks the out-of-scope edit, so the practical outcome is a re-parked issue.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:1035-1036 | severity=MAJOR | confidence=4\n  PROBLEM: The `_HEAL_PLAN_EXTRA_BARE_FILE_RE` regex is case-sensitive.\n  WHY: Lowercase or mixed-case extensionless names are not detected. A plan saying \"None. Update the readme.\" is approved, and the out-of-scope edit is rejected later by the implement gate or the commit guard.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/files_touched_scope_guard.py:1035-1036 and 1063-1065 (also 742-744) | severity=MAJOR | confidence=4\n  PROBLEM: `_HEAL_PLAN_EXTRA_BARE_FILE_RE` and `_PLAN_GRANT_BARE_FILE_RE` are compiled without `re.IGNORECASE`. `_names_bare_file` therefore misses readme, makefile, codeowners, dockerfile, caddyfile, vagrantfile, license, version and authors in lowercase or mixed case.\n  WHY: `run_heal_plan_scope_gate` approves with `heal_scope_plan_no_changes` although the prose names a file. Implement then takes the success-no-op path, or the commit guard refuses the edit. The added test at tests/test_heal_plan_grant_body_edit_fix.py line 274 covers only uppercase.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:1063-1065 (uses 1035-1036 and 742-744; approval branch 1095-1097) | severity=MAJOR | confidence=4\n  PROBLEM: Both bare-file regexes lack `re.IGNORECASE`, so lowercase or mixed-case extensionless names (makefile, dockerfile, codeowners, gemfile, vagrantfile, changelog, contributing, owners, caddyfile, earthfile) pass every filename check. \"None. Update the readme.\" is therefore approved.\n  WHY: A heal plan that intends to edit an extensionless file is auto-approved. Implement then closes the issue as delivered (the #8241 incident class), or the commit guard refuses the edit and the issue parks again. This reopens the fail-open shape the last run closed for uppercase README.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d0f2c59a5099d22638df7014cc2c319777bd167b2cffe459a46b1fc013d918d1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8319,
+    "run_id": "40861418126",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40861418126",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029115921_b66dc9c6a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8319,
+    "run_id": "40861418126"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T11:59:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
