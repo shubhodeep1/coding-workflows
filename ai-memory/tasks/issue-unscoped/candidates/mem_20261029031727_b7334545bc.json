@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/files_touched_scope_guard.py:1027-1053 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: `_HEAL_PLAN_PATHLIKE_RE` / `_heal_plan_declares_no_file_changes` only detect slash or dot-extension paths, so extensionless bare filenames (Makefile, Dockerfile, CODEOWNERS) in prose after \"None\" are not detected and the plan is auto-approved as `heal_scope_plan_no_changes`.\n  WHY: The heal issue is closed through the success-no-op path without making the named change; severity disagreement: sonnet-5_5 and glm-5_3-flash said NIT, gemini said MAJOR (highest used).\n- README.md:2750 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The `HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED` row ties the `PIPELINE_PLAN_GRANT ... reason=heal_issue` log line only to the `heal_scope_plan_paths_missing` hold, but .github/workflows/plan.yml:3106 emits it unconditionally for every heal-issue gate run.\n  WHY: The documentation misleads operators about when the log line appears (all reviewers rated it NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/files_touched_scope_guard.py:~1033-1053 | severity=NIT | confidence=3\n  PROBLEM: A \"None\" Files section followed by prose naming an extensionless file (e.g. \"None.\\nUpdate the Makefile.\") is still approved, because `_HEAL_PLAN_PATHLIKE_RE` / `_heal_plan_declares_no_file_changes` does not use `_PLAN_GRANT_BARE_FILE_RE` (line 742).\n  WHY: The gate approves with `heal_scope_plan_no_changes` and the heal issue closes without the named change; the frozen scope and commit guard limit writes, so this can only close early.\n- README.md:2750 | severity=NIT | confidence=4\n  PROBLEM: The README row attaches the `PIPELINE_PLAN_GRANT` log line only to the `heal_scope_plan_paths_missing` hold, but plan.yml line 3106 echoes it unconditionally for every `ai:workflow-heal` issue.\n  WHY: Documentation misdescribes when operators see the log line.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/files_touched_scope_guard.py:_HEAL_PLAN_PATHLIKE_RE | severity=MAJOR | confidence=4\n  PROBLEM: The regex is too narrow, as it only detects paths with slashes or dot-extensions and misses bare filenames (Makefile, Dockerfile, Jenkinsfile, LICENSE, CODEOWNERS).\n  WHY: Plans like \"None. Update Makefile.\" are auto-approved as \"no file changes\" and the heal issue is closed without the required changes.\n- README.md:2750 | severity=NIT | confidence=3\n  PROBLEM: The README says the log line is tied to the `heal_scope_plan_paths_missing` hold, but plan.yml:3106 emits it unconditionally for every heal-issue gate run.\n  WHY: It misleads operators about when the log line is emitted.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/files_touched_scope_guard.py:1033,1053 | severity=NIT | confidence=3\n  PROBLEM: The path-shaped-token check misses extensionless bare filenames that `_PLAN_GRANT_BARE_FILE_RE` (742-744) treats as file grants, and `extract_plan_file_paths` also drops them (`_plan_grant_path` at 768), so \"None.\\nUpdate the Makefile.\" is auto-approved with `heal_scope_plan_no_changes`.\n  WHY: plan.yml approves, implement takes the success-no-op path and closes the heal issue without the named change, with no human in the loop.\n- README.md:2750 | severity=NIT\n  PROBLEM: The README row attaches the `PIPELINE_PLAN_GRANT` log line only to the paths_missing hold, but `.github/workflows/plan.yml:3106` emits it unconditionally on every heal-issue gate run.\n  WHY: Reword so the line is described as emitted on every heal-issue plan-gate run.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2907645a2389e9c0205a22d6666c3dc61956b0fa189f53b4b7674f361fca5b60",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8319,
+    "run_id": "40804934758",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40804934758",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029031727_b7334545bc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8319,
+    "run_id": "40804934758"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T03:17:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
