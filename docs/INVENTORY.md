@@ -83,7 +83,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
-- `.github/workflows/pr6576-shard-followup.yml` — GitHub Actions workflow: PR 6576 orchestrate-poll shard follow-up.
 - `.github/workflows/promote-candidate-follow.yml` — GitHub Actions workflow: Promote candidate follower (keeps the `promote-candidate` branch at the main tip between promote cycles).
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
@@ -234,7 +233,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/orchestrate_state_v2.py` — V2 chunked state persistence helper for orchestrator state comments.
 - `scripts/orphan_fixup_close.py` — Pick the open unblock fix-up issues whose source issue is already closed, for the poller to close.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
-- `scripts/pr6576_shard_followup.py` — One-time follow-up for PR #6576's failed orchestrate-poll shard: fetch the log or rerun the partition, confirm on main, report once on #7072 (single-use, issue #7072).
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/implement_step_prepush_test_gate.sh` — Implement's pre-push affected-test gate step: runs the gate before commit, gives PR-caused failures one repair turn and writes the PR-body summary (issue #8190).
 - `scripts/prepush_test_gate_run.sh` — Run the pre-push affected-test gate in a credential-free container and copy back only its result (issue #7137).
@@ -284,6 +282,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_init_runtime_workspace.sh` — body of the review_autofix.yml "Initialize runtime workspace" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_mark_ready_to_merge.sh` — body of the review_autofix.yml "Mark linked issues ready to merge" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_prepush_test_gate.sh` — body of the review_autofix.yml "Pre-push affected-test gate" step (one repair turn through `review_apply_fixes.sh --repair-turn`), and the shared `gate` / `repair-prompt` / `allow-list` entry point the conflict resolver and the heal editor call (issue #8201).
+- `scripts/review_autofix_sweep_reaper.sh` — sourced by the review_autofix_sweep.yml enumerate step from the trusted default-branch checkout: cancels, then force-cancels on 409, up to 10 review runs per sweep queued longer than `ZOMBIE_RUN_MAX_QUEUED_HOURS`, from the listing the sweep already fetched (P11b; log prefix `ZOMBIE_RUN_REAPED`).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
