@@ -170,6 +170,33 @@ def test_managed_digests_hold_the_bytes_a_sync_writes(tmp_path):
 	assert not {"CHANGELOG.md", "agents.md", "package.json"} & set(digests)
 
 
+def test_seed_only_audit_gate_target_is_allowed_but_consumer_owned(tmp_path):
+	"""The sync creates a seed_only target (the advisory allowlist) once and then leaves it to the consumer."""
+	repo, _sha = make_upstream_repo(tmp_path)
+	contract = {"managed_files": [
+		{"source": "assets/x.js", "target": "scripts/security/x.js"},
+		{"source": "assets/allow.json", "target": "security/allow.json", "seed_only": True},
+	]}
+	(repo / "workflow-templates" / "audit-gate" / "contract.json").write_text(json.dumps(contract), encoding="utf-8")
+	(repo / "workflow-templates" / "audit-gate" / "assets").mkdir(parents=True)
+	(repo / "workflow-templates" / "audit-gate" / "assets" / "x.js").write_text("audit()\n", encoding="utf-8")
+	(repo / "workflow-templates" / "audit-gate" / "assets" / "allow.json").write_text("[]\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-q", "-m", "seed only")
+	sha = _git(repo, "rev-parse", "HEAD")
+
+	allowed = run_builder("allowed-paths", "--repo-root", str(repo), "--commit", sha).stdout.splitlines()
+	managed = run_builder("managed-paths", "--repo-root", str(repo), "--commit", sha).stdout.splitlines()
+	result = run_builder("managed-digests", "--repo-root", str(repo), "--commit", sha)
+	assert result.returncode == 0, result.stderr
+	digests = json.loads(result.stdout)
+	assert "security/allow.json" in allowed
+	assert "security/allow.json" not in managed
+	assert "security/allow.json" not in digests
+	assert "scripts/security/x.js" in managed
+	assert "scripts/security/x.js" in digests
+
+
 def test_managed_digests_skip_a_wrapper_the_renderer_rejects(tmp_path):
 	repo, sha = make_upstream_repo(tmp_path)
 	result = run_builder("managed-digests", "--repo-root", str(repo), "--commit", sha)

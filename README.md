@@ -1396,9 +1396,17 @@ not delete wrappers that are already present in `.github/workflows/`.
 > The contract requires `package_script` and `managed_files`. When
 > `package.json` exists and `scripts.audit:ci` is missing (or already
 > canonical), the updater sets `scripts.audit:ci = node
-> scripts/security/check-npm-audit.js` and syncs managed files
-> (`scripts/security/check-npm-audit.js`,
-> `security/dependency-audit-allowlist.json`). Repositories with a custom
+> scripts/security/check-npm-audit.js` and syncs managed files. It overwrites
+> `scripts/security/check-npm-audit.js` with the template on every sync, and
+> the template runs under both CommonJS and `"type": "module"` packages
+> (Node.js 20.16+ or 22.3+, for `process.getBuiltinModule`). A
+> `managed_files` entry with `"seed_only": true` is created only when the
+> consumer has no copy and is never overwritten after that:
+> `security/dependency-audit-allowlist.json` is seed-only, because its
+> advisory entries belong to the consumer. Seed-only targets stay out of
+> `build_sync_manifest.py managed-paths` and `managed-digests`, so the
+> security audit, heal and validation classifiers treat them as
+> consumer-owned. Repositories with a custom
 > `scripts.audit:ci` value are preserved unchanged, and repositories without
 > `package.json` are skipped (`no_package_json`).
 

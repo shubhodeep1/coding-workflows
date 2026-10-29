@@ -2,9 +2,16 @@
 
 'use strict';
 
-const childProcess = require('child_process');
-const fs = require('fs');
-const path = require('path');
+// process.getBuiltinModule() loads core modules the same way under CommonJS
+// and under "type": "module", so this one file runs in either kind of repo.
+// A CommonJS-only loader crashed every ESM consumer before npm audit ran.
+if (typeof process.getBuiltinModule !== 'function') {
+  console.error('check-npm-audit.js needs Node.js 20.16+ or 22.3+ (process.getBuiltinModule is missing).');
+  process.exit(1);
+}
+const childProcess = process.getBuiltinModule('node:child_process');
+const fs = process.getBuiltinModule('node:fs');
+const path = process.getBuiltinModule('node:path');
 
 const repoRoot = process.cwd();
 const allowlistPath = path.join(repoRoot, 'security', 'dependency-audit-allowlist.json');
