@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Several independent CI workflow changes also updated this test, suggesting it covers shared CI job-ordering or sharding behavior. Before changing CI job placement or flow, inspect the test and update it if the change affects those contracts.",
+  "fingerprint": "912af8346e2bc48a03a600eac6565e23d8f8bf0e4ec3677830f9dd28d0887fe3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40885035693",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40885035693",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8292",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8293",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8295",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8305",
+      "https://github.com/shubhodeep1/coding-workflows/issues/8306",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8303",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8308",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8313",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8317",
+      "https://github.com/shubhodeep1/coding-workflows/pull/8318"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261029135623_b0f7f9f051",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Changes to CI job flow should be checked against tests/test_ci_poll_test_sharding.py.",
+  "timestamps": {
+    "created_at": "2026-10-29T13:56:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
