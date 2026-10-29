@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Reuse the PR payload and comments the gate already fetched where the script supports it; add no per-iteration API calls.\"\n  expected_change_site: scripts/review_autofix_step_evaluate_gate.sh (gate outputs at lines 1398-1414) and scripts/review_autofix_step_deterministic_skip_security_pass.sh (comment read at lines 150-164), passing comments via PR_ISSUE_COMMENTS_FILE to review_single_issue_security_pass.sh\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The gate emits the PR snapshot (det_skip_security_pass_pr_json) but no comments payload in scripts/review_autofix_step_evaluate_gate.sh lines 1398-1414, and the skip script makes a fresh paginated comments request at scripts/review_autofix_step_deterministic_skip_security_pass.sh lines 150-164 although review_single_issue_security_pass.sh accepts PR_ISSUE_COMMENTS_FILE. All three rated it NIT. Note: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash reviewed the same candidate and did not report it, calling it at most a NIT or rejecting it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Reuse the PR payload and comments the gate already fetched where the script supports it; add no per-iteration API calls.\n  Expected change site: scripts/review_autofix_step_evaluate_gate.sh and scripts/review_autofix_step_deterministic_skip_security_pass.sh\n  Evidence of absence: The gate passes the PR snapshot but does not pass its comments cache to the skip job; the skip script makes a fresh paginated comments request at lines 150\u2013164 of scripts/review_autofix_step_deterministic_skip_security_pass.sh; the gate's outputs at lines 1398\u20131414 of scripts/review_autofix_step_evaluate_gate.sh contain no comments output.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Reuse the PR payload and comments the gate already fetched where the script supports it; add no per-iteration API calls.\" (linked issue \u00a715 / .github #8333)\n  Expected change site: scripts/review_autofix_step_evaluate_gate.sh gate outputs at lines 1398-1414 and scripts/review_autofix_step_deterministic_skip_security_pass.sh comment-read at lines 150-164\n  Evidence of absence: The gate emits det_skip_security_pass and det_skip_security_pass_pr_json to GITHUB_OUTPUT but no det_skip_security_pass_comments_json. The skip step runs its own paginated gh api call for the same PR comments, even though review_single_issue_security_pass.sh honours PR_ISSUE_COMMENTS_FILE.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Reuse the PR payload and comments the gate already fetched where the script supports it; add no per-iteration API calls.\"\n  Expected change site: scripts/review_autofix_step_evaluate_gate.sh and scripts/review_autofix_step_deterministic_skip_security_pass.sh, with comments passed through PR_ISSUE_COMMENTS_FILE.\n  Evidence of absence: The gate emits the PR snapshot but no comments payload (scripts/review_autofix_step_evaluate_gate.sh, lines 1398\u20131414). The skip-pass helper makes a fresh paginated comments request (scripts/review_autofix_step_deterministic_skip_security_pass.sh, lines 150\u2013164), despite the security-pass script accepting PR_ISSUE_COMMENTS_FILE.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c4d3d67c84f558913a10bb2c5ff8dd20bd665b06bec43250b8d1189e169a83e6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8345,
+    "run_id": "40874901217",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40874901217",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029140033_3e79b5a49b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8345,
+    "run_id": "40874901217"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T14:00:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
