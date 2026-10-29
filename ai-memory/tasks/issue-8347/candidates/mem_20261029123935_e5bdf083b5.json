@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: B\nQ3: A\n\nRATIONALE:\nQ1: The defect can be read straight from the code. In `scoped_implement_progress_counts` (`.github/workflows/test-and-mark-stable.yml:1492-1527`), lines 1512-1514 `break` on the first page that has any match. Lines 1523-1525 then take status, id and conclusion from the newest-created match whatever its status, and line 1589 reads the step name from that same `IMPL_RUN_ID_LATEST`. So a queued duplicate run can hide the `in_progress` run, and the step name in `CUR_STATE` (line 1598), which resets the idle timer, never changes. The change stays inside the heal scope (the workflow file plus `tests/**`). Option C would leave the paging half of the defect open, and option B gives up on a defect that can be demonstrated with synthetic fixtures. That makes A a SYNTHESIZE-backed hardening; the run-log evidence the issue asked for is replaced by a deterministic fixture (see the plan below).\nQ2: The confirmed root cause is already fixed in the working tree. Line 4227 passes `--completion-timeout-secs 5520`, and the comment at line 4218 states \"+ 1800s queue allowance = 5520s\". The step has `timeout-minutes: 95` (line 4196) and the `orphan-workflows-test` job has `timeout-minutes: 165` (line 4151). Adding the flag would change `scripts/dispatch_and_watch_workflow_run.sh`, which is outside the heal-scope marker, mainly to get a separate \"still queued\" error. \u00a79 (minimal change) and the scope marker both point to dropping it. Record it as not pursued.\nQ3: The issue body says outright: \"Leave the 4500 s deadline unchanged in this issue\". The `/approved` flood that made the wait worse is already fixed: the `ALT_APPROVED_POSTED` flag at lines 5009-5028 posts once per arrival in `ai:awaiting-approval`. Both of the #8337/#8338 issues are closed `not_planned` and there is no Implement-run timeline, so any new deadline value would be a guess.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: synthesize\n  inputs:\n    - `.github/workflows/test-and-mark-stable.yml` `scoped_implement_progress_counts` (lines 1492-1527), its reset at line 1575, and its consumers at lines 1580, 1589-1598, 1616, 1659 and 1671\n    - `SCOPED_RUN_LOOKUP_MAX_PAGES=10` (line 1445)\n    - Existing pattern for extracting shell from the workflow and testing it: `tests/test_test_and_mark_stable_*.py`. For example, `tests/test_test_and_mark_stable_plan_polling_guard.py` and `tests/test_test_and_mark_stable_phantom_review_run_filter.py` use a fake `gh`/`gh_api_safe_print` on `PATH`.\n  steps:\n    - Paging: stop breaking on the first page with a match. Append each page's `.matches` to `progress_matches`, and stop only when `progress_count -lt 100` or `progress_page` exceeds `SCOPED_RUN_LOOKUP_MAX_PAGES`. Keep the existing `|| return 1` fail paths and the per-run validation jq unchanged.\n    - Selection: pick one run. Take the newest-by-`created_at` match with `status == \"in_progress\"`. If there is none, take the newest match of any status (today's behaviour). Set `IMPL_RUN_STATUS`, `IMPL_RUN_ID_LATEST` and `IMPL_RUN_CONCLUSION_LATEST` all from that one run, so the log line at 1580 stays consistent. Leave `IMPL_RUN_TOTAL` and `IMPL_RUN_IN_PROGRESS` as counts over all accumulated matches. Introduce no new exported identifiers and rename nothing.\n    - Update the comment at lines 1484-1491 to describe the full-window walk and the in_progress preference. Keep the run-39926633796 incident text.\n    - Add a test, `tests/test_test_and_mark_stable_impl_progress_active_run.py`. It extracts `scoped_implement_progress_counts` from the workflow and feeds it fake run pages built from the workflow's own validation rules. Each case asserts the resulting variables:\n      - (a) Page 1 has 100 runs: one match, id 2002, `status: \"pending\"`, `created_at` 08:30Z, plus 99 non-matching runs. Page 2 has one match, id 1001, `status: \"in_progress\"`, `created_at` 08:20Z. Expect `IMPL_RUN_ID_LATEST=1001`, `IMPL_RUN_STATUS=in_progress`, `IMPL_RUN_TOTAL=2`, `IMPL_RUN_IN_PROGRESS=2`.\n      - (b) Both matches on one page, in_progress older than pending. Expect the in_progress id to be chosen.\n      - (c) No in_progress runs: completed/failure at 08:20Z and queued at 08:30Z. Expect the queued run's id (fallback is newest run).\n      - (d) Ten full pages: the function stops at `SCOPED_RUN_LOOKUP_MAX_PAGES`.\n      - (e) A malformed page: the function returns 1, and the totals stay at their reset values.\n    - Add a `changelog.d/<issue>-release-gate-impl-progress-active-run.md` fragment that records candidate 3 as hardening that is still unconfirmed.\n  replaces_acceptance_criterion: \"Do this only after the implement-run evidence above confirms candidate 3.\"\n  equivalence_argument: The evidence was needed to show that a pending duplicate could hide the working run. The fixtures prove that failure mode against the real function body, and that this change removes it. The runs behind the evidence (issues #8337 and #8338) are closed `not_planned`, so the evidence cannot be gathered from the repo. The change only makes the probe more accurate: it reads at most the same 10-page bound, it fails the same way on bad pages, and the fallback keeps today's behaviour whenever nothing is `in_progress`.\n  reversibility: The change is limited to one function in one workflow, plus one new test file and one changelog fragment. A revert puts back the first-match/newest-run behaviour exactly.\n\nQ2 (non-pursuit record): Do not change `scripts/dispatch_and_watch_workflow_run.sh`. Leave `--completion-timeout-secs 5520`, step `timeout-minutes: 95` and job `timeout-minutes: 165` as they are. In the plan, record `--queue-timeout-secs` as \"not pursued \u2014 outside heal scope; confirmed failure already covered by the 5520s budget\". If no existing contract test pins those three values, the planner may add one under `tests/**`.\n\nQ3 (non-pursuit record): Leave `DEADLINE=$(( $(date +%s) + 4500 ))` (line 5002) unchanged. If the single-post flag (`ALT_APPROVED_POSTED`, lines 5009-5028) has no static contract test, the planner may add one under `tests/**`.",
+  "fingerprint": "184d7569e54627269399c4cbab290af2be5d73aa9c17b76f3599dbe6202c3dba",
+  "lineage": {
+    "issue_number": 8347,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40874035157",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40874035157",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8347"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029123935_e5bdf083b5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8347,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40874035157"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8347",
+  "timestamps": {
+    "created_at": "2026-10-29T12:39:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
