@@ -425,6 +425,17 @@ def test_worker_prompt_carries_placeholder_and_no_intent_rules(prompt: Path) -> 
 	assert "ESCALATE every question that asks what the work should be" in text
 
 
+@pytest.mark.parametrize("prompt", RESPOND_PROMPTS, ids=lambda path: str(path.relative_to(ROOT)))
+def test_worker_prompt_limits_steps_to_file_changes(prompt: Path) -> None:
+	# tele-funtoken-msg-scoring#4992: a decision whose steps were "post a
+	# tracking comment and wait for open PR #4991" reached implement, which
+	# can only change files, and ended in a BLOCKED run.
+	text = prompt.read_text(encoding="utf-8")
+	assert "Pipeline-capability rule:" in text
+	assert "Never write execution steps that post comments, close\n  issues, or check or wait for another pull request." in text
+	assert "The planner then holds the issue on the blocked path until that\n  pull request merges" in text
+
+
 def test_release_gate_fixture_still_matches_the_no_intent_example() -> None:
 	gate = RELEASE_GATE.read_text(encoding="utf-8")
 	assert 'TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"' in gate
