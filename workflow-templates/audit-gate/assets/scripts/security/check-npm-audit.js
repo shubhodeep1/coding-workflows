@@ -14,9 +14,11 @@ if (loadBuiltin === null) {
   console.error('check-npm-audit.js needs Node.js 20.16+ or 22.3+ in a "type": "module" package (process.getBuiltinModule is missing).');
   process.exit(1);
 }
-const childProcess = loadBuiltin('node:child_process');
-const fs = loadBuiltin('node:fs');
-const path = loadBuiltin('node:path');
+// Unprefixed names: process.getBuiltinModule accepts them, and the CommonJS
+// loader on Node.js older than 14.18 rejects the `node:` scheme.
+const childProcess = loadBuiltin('child_process');
+const fs = loadBuiltin('fs');
+const path = loadBuiltin('path');
 
 const repoRoot = process.cwd();
 const allowlistPath = path.join(repoRoot, 'security', 'dependency-audit-allowlist.json');
