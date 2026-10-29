@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-29T07:39:44Z",
+  "tick_at": "2026-10-29T08:01:26Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -75,14 +75,14 @@
       "wave_complete": false
     },
     {
-      "current_wave": 1,
+      "current_wave": 2,
       "integration_ahead_by": "8",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 3,
+        "in_progress": 3,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -90,10 +90,10 @@
       },
       "number": 8291,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Unattended pipeline: remove stuck states (plan P2a-P13 remainder)",
       "total_waves": 20,
-      "wave_complete": true
+      "wave_complete": false
     }
   ]
 }
