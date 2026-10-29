@@ -22600,8 +22600,20 @@ _failure_fingerprint_breaker_check()
 # posts the breaker comment that carries the consumption-point marker.
 # Returns 1 (no comment, no state change) when the label cannot be verified
 # or the breaker comment could not be posted and the label was rolled back,
-# so the next tick retries idempotently. Returns 2 when the comment failed and
-# the label could not be rolled back (the issue stays stopped).
+# so the next tick retries idempotently. Returns 2 when the label state is
+# unknown or still applied: the label read after the add failed, or the
+# comment failed and the rollback could not be verified (the issue stays
+# stopped; callers must not run the stall ladder on it this tick).
+_ffb_read_issue_labels()
+{
+  # Unlike get_issue_labels_json, a failed read is reported (rc=1) instead
+  # of being turned into "[]", which would read as "label absent".
+  local ffb_read_out=""
+  ffb_read_out="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/$1/labels" --jq '[.[].name]' 2>/dev/null)" || return 1
+  printf '%s' "${ffb_read_out}" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  printf '%s' "${ffb_read_out}"
+}
+
 _failure_fingerprint_breaker_apply()
 {
   local issue_num="$1"
@@ -22613,7 +22625,10 @@ _failure_fingerprint_breaker_apply()
 
   ensure_label_exists "${FFB_LABEL}"
   gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label "${FFB_LABEL}" >/dev/null 2>&1 || true
-  ffb_labels_after="$(get_issue_labels_json "${issue_num}")"
+  if ! ffb_labels_after="$(_ffb_read_issue_labels "${issue_num}")"; then
+    echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed label=${FFB_LABEL} reason=label_read_failed (label state unknown; ladder skipped this tick)"
+    return 2
+  fi
   if ! has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
     echo "STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed phase=${FFB_PHASE} fp=${FFB_FP} runs=${FFB_RUNS} label=${FFB_LABEL}"
     echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=label_failed label=${FFB_LABEL}"
@@ -22642,7 +22657,10 @@ The unblock judge will pick this up on its next scan."
     # when the rollback cannot be verified, so callers do not run the legacy
     # ladder on an issue that still carries the failure label.
     gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --remove-label "${FFB_LABEL}" >/dev/null 2>&1 || true
-    ffb_labels_after="$(get_issue_labels_json "${issue_num}")"
+    if ! ffb_labels_after="$(_ffb_read_issue_labels "${issue_num}")"; then
+      echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=unverified (label read failed; breaker comment not posted)"
+      return 2
+    fi
     if has_label "${ffb_labels_after}" "${FFB_LABEL}"; then
       echo "::warning::STALL_FINGERPRINT_BREAKER issue=${issue_num} scope=${ffb_scope} outcome=comment_failed label=${FFB_LABEL} rollback=failed (label applied; breaker comment not posted)"
       return 2
@@ -22715,9 +22733,15 @@ else:
         # TERMINAL_PHASES, which reconcile_wave_issue_status would record as
         # a permanent "closed" wave status (the skip-and-close P3b removes).
         FFB_LABEL="ai:needs-human"
-        _failure_fingerprint_breaker_apply "${ffb_issue}" "managed" || continue
+        local ffb_apply_rc=0
+        _failure_fingerprint_breaker_apply "${ffb_issue}" "managed" || ffb_apply_rc=$?
+        # rc=1: nothing applied; check-stalls sees the issue as before.
+        [ "${ffb_apply_rc}" -eq 1 ] && continue
+        # rc=0 and rc=2 (label applied or state unknown): patch the in-memory
+        # snapshot so check-stalls skips the issue this tick.
         ffb_new_labels="$(printf '%s' "${ffb_issue_labels}" | jq -c --arg l "${FFB_LABEL}" 'if index($l) == null then . + [$l] else . end' 2>/dev/null || echo "${ffb_issue_labels}")"
         LABELS_JSON="$(printf '%s' "${ffb_labels_map}" | jq -c --arg key "${ffb_issue}" --argjson labels "${ffb_new_labels}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
+        [ "${ffb_apply_rc}" -eq 0 ] || continue
         if [ -n "${ffb_local_id}" ] \
           && jq --argjson w "${WAVE_IDX}" --arg id "${ffb_local_id}" --argjson recent "${FFB_RECENT_JSON}" \
             '(.waves[$w].issues[]? | select(.id == $id)) |= (.failure_fingerprints = $recent)' \
