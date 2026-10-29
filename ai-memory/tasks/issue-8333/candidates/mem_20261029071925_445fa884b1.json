@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Option A meets requirement 3 because exhausted PRs reach the existing review-blocked judge on `codex-agent` unchanged. The gate already reads the PR labels it fetched (`pr_labels`, `scripts/review_autofix_step_evaluate_gate.sh` line 110), so routing on `ai:security-pass-failed` costs no extra API call. The pass already applies that label before it reports exhausted, and it stops with an error if labelling fails (`scripts/review_single_issue_security_pass.sh` lines 479\u2013501), so the label is a reliable routing signal. Option B adds a second copy of the judge to keep in sync and pushes `review_autofix.yml` toward the 480,000-byte guard. Option C goes against requirement 3.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 (binding detail for option A):\n  inputs:\n    - scripts/review_autofix_step_evaluate_gate.sh (`pr_labels` at line 110; `single_issue_security_pass` suppressors at lines ~838 and ~1202)\n    - scripts/review_single_issue_security_pass.sh (gate mode: `exhausted=true` written by `single_pass_exhausted_output` at line ~123; label applied first at lines 479\u2013481)\n    - scripts/review_freshness_ci_failed.sh (pattern to copy: list the candidate review workflows, then `gh workflow run` at lines ~113\u2013120; on failure it logs a warning and does not fail the job)\n    - .github/workflows/review_autofix.yml (`deterministic-skip-merge` job around line 1080; judge steps keyed on `steps.single_issue_security_pass.outputs.exhausted` at lines 4427 and 5347)\n  steps:\n    - Gate: while `AUTOFIX_SKIP_RUNS_SECURITY_PASS` is on, keep suppressing the deterministic skip (both the docs_only/small_diff and freshness_sync candidates) when `,${pr_labels},` contains `,ai:security-pass-failed,`. Log it under the existing `AUTOFIX_GATE_DET_SKIP_SUPPRESSED` prefix with a new reason, `security_pass_failed`. When the switch is `false`, this check does not run and the existing `single_issue_security_pass` suppression applies exactly as today.\n    - Skip job: run the pass with `gate`. If it reports `exhausted=true`, do not enable auto-merge and do not apply merge-ready or linked-issue labels. Then dispatch the PR's review workflow once, using the same candidate-workflow fallback as `review_freshness_ci_failed.sh`. No marker comment: the `ai:security-pass-failed` label is the routing signal. Log the outcome with a stable prefix (a new one goes in an `agents.d/` fragment). A failed dispatch logs a warning and leaves the PR held.\n    - The re-dispatched run takes `codex-agent` because of the label. Its `single_issue_security_pass` step reports exhausted again for that head, and today's `rb_judge` and provider-unavailable fallback steps run unchanged in security-exhaustion mode.\n    - If the pass reports `hold=true` without `exhausted=true` (for example `audit_dispatched` or `findings`), the job only holds. No re-dispatch, because the audit completion re-runs review.\n    - Tests: in the gate tests, cover suppression when the label is present and the switch is on, and no change when the switch is off. In `tests/test_single_issue_security_pass.py` or a workflow contract test, check that the skip job does not merge on hold or exhausted, that it re-dispatches only on exhausted, and that merge and label steps are gated on `hold != 'true'`. Keep `tests/test_workflow_file_size_limit.py` green by putting new step bodies in `scripts/review_autofix_step_<slug>.sh`.\n  replaces_acceptance_criterion: none (this decides how \"hand off exactly as the codex-agent path does\" is wired)\n  equivalence_argument: The judge that decides an exhausted PR is the same code with the same inputs as today. The skip path only routes the PR to it and never merges an exhausted head.\n  reversibility: Setting `AUTOFIX_SKIP_RUNS_SECURITY_PASS=false` restores today's routing. A later change can replace the re-dispatch with option B without touching the gate's label check.\n\nAccepted cost and assumption: a PR that keeps the `ai:security-pass-failed` label goes through the full `codex-agent` review on later heads too. This is the conservative behaviour, the same as today for every audited PR.",
+  "fingerprint": "b4036f0583557cfa7fef18225560c09b63a7ae39df35752be2da8f64e52ee195",
+  "lineage": {
+    "issue_number": 8333,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40832500697",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40832500697",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/8333"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261029071925_445fa884b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8333,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40832500697"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #8333",
+  "timestamps": {
+    "created_at": "2026-10-29T07:19:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
