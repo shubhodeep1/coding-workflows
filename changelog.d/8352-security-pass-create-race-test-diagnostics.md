@@ -1,0 +1,2 @@
+<!-- changelog: changed -->
+- **The security-pass create-race test now says why it failed.** When `test_security_pass_deleted_branch_repair_accepts_only_exact_sha_create_race` fails, its message names the case (final PR and race SHA), whether the audit ran, the state fields, the fake GitHub calls, the poller's `SECURITY_PASS_*` lines and the last 60 lines of its output, instead of a bare `KeyError: 'branch_create_calls'`. The expected values are unchanged. Refs #8352.
