@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The suggested fix touches `scripts/workflow_failure_heal.py`, which is outside this issue's scope marker. How should the fix be scoped?\nChoices:\nA) Stay inside the current scope. Change only `scripts/ai_engine_fallback_report.sh` (and if needed `scripts/ai_engine.sh` / `scripts/clarify_isolated_run.sh`) so the consumer run's log gets a structured line with the pool step's reason (for example `pool_reason=<token>`, read with the same symlink, 64-byte and `[a-z0-9_]{1,60}` rules as `ai_engine_no_account_reason`). Add a regression test under `tests/`. The heal payload, `no_credential`, the record format and the fingerprint stay unchanged. (RECOMMENDED)\nB) Widen the scope to the full suggested fix. Also change `scripts/workflow_failure_heal.py`: an optional `--pool-reason` on `build-engine-fallback-payload`, a `Claude pool step reason:` evidence line, and `validate-payload` filtering. This needs an operator to re-file or re-scope the issue, because the pipeline cannot widen a verified scope marker (an edit to it makes `verify_heal_scope` report `edited`).\nC) Do both. Ship A now on this issue, and open a separate follow-up issue for the `workflow_failure_heal.py` payload change.\nD) Make no code change. Treat this as an operator-only check (read the \"Resolve Claude credential\" step log of run 40951784257, then `/reclarify`) and close the issue.\n**Note:** B and C's follow-up both need an operator to act on the scope. Choosing B on this issue as it stands will stop again at the plan gate.",
+  "fingerprint": "f3045b41133c052d202d93e9c0a3aa0a8fb86515ecc445dcdd94cea1b134bbba",
+  "lineage": {
+    "issue_number": 8392,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "40952938539",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40952938539",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261029210123_0fc83cb6b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 8392,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "40952938539"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #8392 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-29T21:01:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
