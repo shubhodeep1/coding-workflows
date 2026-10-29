@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 import shutil
 import subprocess
@@ -492,7 +491,7 @@ def _install_fake_git(
 		**_kwargs: Any,
 	) -> subprocess.CompletedProcess[str]:
 		calls.append({"cwd": cwd, "args": list(args), "check": check})
-		if args[:2] == ["clone", "--single-branch"]:
+		if args[:1] == ["clone"] and "--depth" in args:
 			return subprocess.CompletedProcess(
 				["git", *args], single_branch_returncode, stdout="", stderr=single_branch_stderr
 			)
@@ -516,88 +515,95 @@ def _legacy_call_args(clone_dir: str, *, branch_exists: bool) -> list[list[str]]
 	return sequence
 
 
+def _probe_args() -> list[str]:
+	return ["ls-remote", "--heads", _FAKE_ORIGIN_URL, _MEMORY_BRANCH]
+
+
+def _shallow_clone_args(clone_dir: str) -> list[str]:
+	return [
+		"clone",
+		"--no-tags",
+		"--quiet",
+		"--single-branch",
+		"--depth",
+		"1",
+		"--branch",
+		_MEMORY_BRANCH,
+		_FAKE_ORIGIN_URL,
+		clone_dir,
+	]
+
+
 @pytest.mark.parametrize("flag_value", [None, "", "  ", "true", "TRUE", "1", "on"])
 def test_single_branch_clone_used_when_flag_on(
 	flag_value: str | None,
 	tmp_path: Path,
 	monkeypatch: pytest.MonkeyPatch,
+	capsys: pytest.CaptureFixture[str],
 ) -> None:
+	# With the switch on (the default) the write clone is the #8287 depth-1
+	# single-branch clone of the memory branch, unchanged from main.
 	if flag_value is None:
 		monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
 	else:
 		monkeypatch.setenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", flag_value)
-	calls = _install_fake_git(monkeypatch)
+	calls = _install_fake_git(monkeypatch, ls_remote_stdout=f"deadbeef\trefs/heads/{_MEMORY_BRANCH}\n")
 
 	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
 	try:
 		assert [call["args"] for call in calls] == [
-			[
-				"clone",
-				"--single-branch",
-				"--branch",
-				_MEMORY_BRANCH,
-				"--no-tags",
-				"--quiet",
-				_FAKE_ORIGIN_URL,
-				str(clone_dir),
-			],
-			_FETCH_ARGS,
+			_probe_args(),
+			_shallow_clone_args(str(clone_dir)),
 			_CHECKOUT_TRACKING_ARGS,
 		]
 		assert calls[0]["check"] is False
+		assert calls[1]["check"] is False
 		assert calls[0]["cwd"] == clone_dir.parent
-		assert all(call["cwd"] == clone_dir for call in calls[1:])
-		assert not any("--depth" in arg or arg.startswith("--filter") for call in calls for arg in call["args"])
-		assert not any(call["args"][0] == "ls-remote" for call in calls)
+		assert calls[1]["cwd"] == clone_dir.parent
+		assert calls[2]["cwd"] == clone_dir
 		assert clone_dir.is_dir()
+		assert capsys.readouterr().err == ""
 	finally:
 		shutil.rmtree(clone_dir, ignore_errors=True)
 
 
-@pytest.mark.parametrize(
-	("stderr_text", "expected_reason"),
-	[
-		(
-			f"warning: Could not find remote branch {_MEMORY_BRANCH} to clone.\n"
-			f"fatal: Remote branch {_MEMORY_BRANCH} not found in upstream origin\n",
-			"branch_missing",
-		),
-		(f"fatal: unable to access '{_FAKE_ORIGIN_URL}/': Could not resolve host\n", "clone_failed"),
-	],
-)
+@pytest.mark.parametrize("branch_on_remote", [True, False])
 def test_single_branch_clone_failure_falls_back_to_full_clone(
-	stderr_text: str,
-	expected_reason: str,
+	branch_on_remote: bool,
 	tmp_path: Path,
 	monkeypatch: pytest.MonkeyPatch,
 	capsys: pytest.CaptureFixture[str],
-	caplog: pytest.LogCaptureFixture,
 ) -> None:
-	caplog.set_level(logging.INFO, logger=extractor.ai_memory_lib.__name__)
+	# A memory branch that does not exist yet skips the shallow clone; a
+	# shallow clone that fails falls back to the full clone in a fresh dir.
 	monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
+	monkeypatch.delenv("AI_MEMORY_CLONE_DIAGNOSTICS", raising=False)
+	ls_remote_stdout = f"deadbeef\trefs/heads/{_MEMORY_BRANCH}\n" if branch_on_remote else ""
 	calls = _install_fake_git(
 		monkeypatch,
 		single_branch_returncode=128,
-		single_branch_stderr=stderr_text,
-		ls_remote_stdout="",
+		single_branch_stderr=f"fatal: unable to access '{_FAKE_ORIGIN_URL}/': Could not resolve host\n",
+		ls_remote_stdout=ls_remote_stdout,
 	)
 
 	clone_dir = extractor.ai_memory_lib._clone_for_memory_branch(tmp_path, _MEMORY_BRANCH)
 	try:
-		first_dir = Path(calls[0]["args"][-1])
-		assert calls[0]["args"][:2] == ["clone", "--single-branch"]
-		assert not first_dir.exists()
-		assert first_dir != clone_dir
-		assert [call["args"] for call in calls[1:]] == _legacy_call_args(str(clone_dir), branch_exists=False)
+		call_args = [call["args"] for call in calls]
+		assert call_args[0] == _probe_args()
+		if branch_on_remote:
+			first_dir = Path(call_args[1][-1])
+			assert call_args[1] == _shallow_clone_args(str(first_dir))
+			assert first_dir != clone_dir
+			assert not first_dir.exists()
+			rest = call_args[2:]
+		else:
+			assert not any("--depth" in args for args in call_args)
+			rest = call_args[1:]
+		assert rest == _legacy_call_args(str(clone_dir), branch_exists=branch_on_remote)
 		assert clone_dir.is_dir()
-		# The notice goes to the module logger, never to stderr, so fail-open
-		# embedders that require an empty stderr stay unchanged.
+		# Fallback diagnostics stay off by default: fail-open embedders
+		# require an empty stderr.
 		assert capsys.readouterr().err == ""
-		logged = "\n".join(record.getMessage() for record in caplog.records)
-		assert f"reason={expected_reason}" in logged
-		assert "falling back to full clone" in logged
-		assert "sekrit-token" not in logged
-		assert _FAKE_ORIGIN_URL not in logged
 	finally:
 		shutil.rmtree(clone_dir, ignore_errors=True)
 

@@ -68,7 +68,6 @@ jobs:
         # continue-on-error never applied and compaction never ran.
         timeout-minutes: 10
         continue-on-error: true
-        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

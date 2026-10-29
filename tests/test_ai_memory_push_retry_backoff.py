@@ -235,10 +235,9 @@ def _run_persist(
 		def _op(_clone_dir: Path) -> dict:
 			return {"claimed": True}
 
-		# These tests pin the push-retry loop and script its fetch results, so
-		# keep the clone on the legacy full-clone path (#8295): the
-		# single-branch path runs its own clone-time fetch, which would consume
-		# the scripted retry-fetch results.
+		# These tests pin the push-retry loop and script its git results, so
+		# keep the clone on the plain full-clone path (#8295 off switch) and
+		# out of the single-branch fast path's probe and shallow clone.
 		original_single_branch_flag = ai_memory_lib.os.environ.get("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED")
 		ai_memory_lib.os.environ["AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED"] = "false"
 		try:
