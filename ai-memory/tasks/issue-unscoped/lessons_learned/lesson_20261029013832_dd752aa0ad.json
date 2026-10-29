@@ -1,0 +1,32 @@
+{
+  "discovered_at": "2026-10-29T01:38:32Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=CLAUDE.md:1; cited_path=copilot-pull-request-reviewer check-run (external service; AGENTS.md and CLAUDE.md as inputs); files_touched=.claude/commands/seed-repo.md, .claude/docs/s21-merged-pr-commit-guard.md, .claude/docs/s22-digitalocean-access.md, .claude/docs/s23-github-access.md, .claude/docs/s24-cloudflare-access.md, .claude/docs/s25-pr-watching-disabled.md, .claude/docs/s29-openrouter-access.md, CLAUDE.md, agents.d/8250-claude-md-reference-docs.md, changelog.d/8250-claude-md-plan-handoff.md, tests/test_pr_merge_status_guard.py, tests/test_pr_watch_guard.py, workflow-templates/.claude/commands/seed-repo.md, workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md, workflow-templates/.claude/docs/s22-digitalocean-access.md, workflow-templates/.claude/docs/s23-github-access.md, workflow-templates/.claude/docs/s24-cloudflare-access.md, workflow-templates/.claude/docs/s25-pr-watching-disabled.md, workflow-templates/.claude/docs/s29-openrouter-access.md.",
+  "phase": "review_autofix",
+  "pr_number": 8250,
+  "record_id": "lesson_20261029013832_dd752aa0ad",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "copilot-pull-request-reviewer check-run (external service; AGENTS.md and CLAUDE.md as inputs)",
+    "CLAUDE.md",
+    ".claude/commands/seed-repo.md",
+    ".claude/docs/s21-merged-pr-commit-guard.md",
+    ".claude/docs/s22-digitalocean-access.md",
+    ".claude/docs/s23-github-access.md",
+    ".claude/docs/s24-cloudflare-access.md",
+    ".claude/docs/s25-pr-watching-disabled.md",
+    ".claude/docs/s29-openrouter-access.md",
+    "agents.d/8250-claude-md-reference-docs.md",
+    "changelog.d/8250-claude-md-plan-handoff.md",
+    "tests/test_pr_merge_status_guard.py",
+    "tests/test_pr_watch_guard.py",
+    "workflow-templates/.claude/commands/seed-repo.md",
+    "workflow-templates/.claude/docs/s21-merged-pr-commit-guard.md",
+    "workflow-templates/.claude/docs/s22-digitalocean-access.md",
+    "workflow-templates/.claude/docs/s23-github-access.md",
+    "workflow-templates/.claude/docs/s24-cloudflare-access.md",
+    "workflow-templates/.claude/docs/s25-pr-watching-disabled.md",
+    "workflow-templates/.claude/docs/s29-openrouter-access.md"
+  ]
+}
