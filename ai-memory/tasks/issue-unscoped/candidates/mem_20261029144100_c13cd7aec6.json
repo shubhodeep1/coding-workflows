@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:17-18 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The comment says the CommonJS loader on Node.js older than 14.18 rejects the `node:` scheme, but `require()` gained `node:` support in v14.13.1, so the cited version is slightly off.\n  WHY: There is no runtime failure because the comment is informational, but it could mislead someone debugging Node.js versions near the cutoff (source severity was NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/audit-gate/assets/scripts/security/check-npm-audit.js:17-18 | severity=low | confidence=3\n  PROBLEM: The comment says the CommonJS loader on Node.js older than 14.18 rejects the `node:` scheme, but `require()` gained `node:` support in v14.13.1, so the cited version is slightly off.\n  WHY: There is no runtime failure because the comment is informational, but it could mislead someone debugging Node.js versions near the cutoff (source severity was NIT).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "87a5544836551021435881f5092ab61b3533db6faaebdc015256b90cb0667003",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8334,
+    "run_id": "40880816144",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40880816144",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029144100_c13cd7aec6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8334,
+    "run_id": "40880816144"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-29T14:41:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
