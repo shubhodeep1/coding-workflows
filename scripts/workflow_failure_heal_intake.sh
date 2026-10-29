@@ -2702,11 +2702,11 @@ _heal_collect_linked_runs()
 	local linked_raw="" linked_window="" linked_filtered=""
 	local -a parent_logs=()
 	: > "${out_file}"
-	[ "${MAX_LINKED_RUNS}" -gt 0 ] 2>/dev/null || return 0
+	[ "${MAX_LINKED_RUNS:-0}" -gt 0 ] 2>/dev/null || return 0
 	[ -s "${fetched_ids_file}" ] || return 0
-	[ -s "${SUMMARIES_FILE}" ] || return 0
+	[ -s "${SUMMARIES_FILE:-}" ] || return 0
 	# The parent logs again, for the stall-window hints of the timelines.
-	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE}" 2>/dev/null)
+	mapfile -t parent_logs < <(jq -r '.[] | .log_file // empty' "${SUMMARIES_FILE:-}" 2>/dev/null)
 	[ "${#parent_logs[@]}" -gt 0 ] || return 0
 	while IFS= read -r linked_id; do
 		[[ "${linked_id}" =~ ^[0-9]+$ ]] || continue

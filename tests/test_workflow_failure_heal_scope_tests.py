@@ -232,8 +232,6 @@ def _run_scope_freeze(log_dir: Path, runtime_dir: Path, *, linked_env: bool = Tr
 		"PAYLOAD_CRASH_FILE": "",
 		"CRASH_OWNERSHIP": "none",
 		"SOURCE_REPO": SELF_REPO,
-		"MAX_LINKED_RUNS": "0",
-		"SCOPE_LINKED_WORKFLOWS_ENABLED": "false",
 	}
 	if linked_env:
 		env.update({"MAX_LINKED_RUNS": "0", "SOURCE_KIND": "", "SELF_REPO": SELF_REPO, "SCOPE_LINKED_WORKFLOWS_ENABLED": "true"})
