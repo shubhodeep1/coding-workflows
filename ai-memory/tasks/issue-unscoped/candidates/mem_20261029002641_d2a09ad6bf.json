@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ai_memory_lib.py:3219-3247 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `_clone_for_memory_branch` unconditionally prints to stderr when the `ls-remote` probe or the fast shallow clone fails, and this pollutes stderr for fail-open in-process callers such as the integration fingerprint verifier.\n  WHY: Verifier tests assert `err == \"\"` (tests/test_verify_integration_fingerprints_tiers.py:215), so `static-checks` and `orchestrate-poll` (`test_verify_integration_fingerprints_baseline_regressions`) fail in CI. Reviewers rated it BLOCKER; the highest severity is used.\n- scripts/ai_memory_lib.py:3219-3222 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The probe-failure stderr print also fires on benign, recoverable failures (e.g. a `file://` origin, a missing `GH_TOKEN`), which turns a silent fast-path optimization into a behavior change for every fail-open caller.\n  WHY: Any caller or test that expects silent fallback now sees output. Rated MAJOR. This is a related framing of the main finding, kept separate because it was reported as its own entry.\n- scripts/ai_memory_lib.py:3243-3247 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fast-clone-failure print relies on `_redact_memory_push_stderr` to scrub credentials, and its coverage is unverified, so the print may widen the surface where git error text (and possibly `GH_TOKEN`) reaches the Actions log.\n  WHY: Redaction is only as good as that function's regex coverage, which has no regression test. Rated MAJOR. z-ai_glm-5_3-flash separately judged the redaction at scripts/ai_memory_lib.py:3352-3361 correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/ai_memory_lib.py:3220-3222 | severity=BLOCKER | confidence=5\n  PROBLEM: The autofix added an unconditional stderr print in `_clone_for_memory_branch` when the `ls-remote` probe fails, and the fast-clone-failure print has the same exposure. The verifier is fail-open on this path, and the print breaks `assert err == \"\"` (tests/test_verify_integration_fingerprints_tiers.py:215), failing `static-checks` and `lint`. It also fails `test_verify_integration_fingerprints_baseline_regressions` in `orchestrate-poll` shard 2.\n  WHY: The temp-dir sandbox is not a git repo, so `ls-remote` exits non-zero and the print fires. Fix: remove both prints or gate them behind an opt-in env var such as `AI_MEMORY_VERBOSE_CLONE`.\n- scripts/ai_memory_lib.py:3220-3222 | severity=BLOCKER | confidence=4 (NAMING / BACKWARD COMPATIBILITY)\n  PROBLEM: Adding stderr output to the shared `persist_memory_operation` path changes the output of in-process fail-open callers such as the verifier.\n  WHY: Same root cause as the finding above.\n- HARDENING_SUGGESTIONS: delete the two prints or guard them with `AI_MEMORY_VERBOSE_CLONE`; HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ai_memory_lib.py:3220-3222 and 3245-3247 | severity=BLOCKER | confidence=5\n  PROBLEM: Unconditional printing of probe and clone failures to stderr pollutes the stderr stream.\n  WHY: Integration tests, including `test_verify_integration_fingerprints_baseline_regressions`, assert `err == \"\"`, so CI fails in `static-checks` and `orchestrate-poll`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/ai_memory_lib.py:3219-3222 and 3243-3247 | severity=BLOCKER | confidence=5\n  PROBLEM: Two new unconditional `print(..., file=sys.stderr)` blocks fire when the `ls-remote` probe or the shallow clone returns non-zero. The path is reached via `_persist_quarantine_list` (scripts/ai_memory.py:529-577) and scripts/verify_integration_fingerprints.py:1134.\n  WHY: tests/test_verify_integration_fingerprints_tiers.py:215 and the nested `test_verify_integration_fingerprints_baseline_regressions` (called from tests/test_orchestrate_poll_process.py:23388) assert `err == \"\"`. This turns `static-checks` and `orchestrate-poll` red (CI run 40791047330).\n- scripts/ai_memory_lib.py:3219-3222 | severity=MAJOR | confidence=4\n  PROBLEM: The probe-failure stderr print runs even when the failure is benign and recoverable, which converts a silent optimization into a behavior change for fail-open callers.\n  WHY: Callers and tests that assert on stderr from memory helpers break. The reviewer suggests dropping the print, demoting it to `logging.debug`, or gating it behind a debug flag.\n- scripts/ai_memory_lib.py:3243-3247 | severity=MAJOR | confidence=3\n  PROBLEM: The fast-clone-failure print relies on `_redact_memory_push_stderr`, whose coverage is unknown, so it widens the surface where git error text (and possibly `GH_TOKEN`) can reach the run log.\n  WHY: A future git release or a proxy could echo credentials in an error. `_redact_memory_push_stderr` has no regression test.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/ai_memory_lib.py:3220-3222 | severity=BLOCKER | confidence=5\n  PROBLEM: The probe-failure diagnostic writes to stderr even when a fail-open caller handles the clone failure.\n  WHY: The verifier persists quarantine state (scripts/verify_integration_fingerprints.py:2039). The tier test runs in a temp directory with no Git remote, so the `ls-remote` probe fails and the print violates `err == \"\"` (tests/test_verify_integration_fingerprints_tiers.py:199-215).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/ai_memory_lib.py:3220-3222 and 3246-3247 | severity=BLOCKER | confidence=5\n  PROBLEM: `_clone_for_memory_branch` writes unconditionally to `sys.stderr` when the `ls-remote` probe or shallow clone fails. Fail-open callers (scripts/ai_memory.py:466-526, 529-585; scripts/verify_integration_fingerprints.py:1048 and :1134) previously produced zero stderr output.\n  WHY: `static-checks` failed at tests/test_verify_integration_fingerprints_tiers.py:215, and `orchestrate-poll` shard 2 failed `test_verify_integration_fingerprints_baseline_regressions` (tests/test_orchestrate_poll_process.py:23388-23403). Fix: remove both prints or gate them behind default-off `AI_MEMORY_CLONE_DIAGNOSTICS`.\n- HARDENING_SUGGESTIONS: wrap both prints in `if os.environ.get(\"AI_MEMORY_CLONE_DIAGNOSTICS\", \"\") == \"1\":`; HARDENING_RISK_SCORE: 1\n- Note: redaction via `_redact_memory_push_stderr` (scripts/ai_memory_lib.py:3352-3361) is correct and introduces no secret leak.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bd7ed8ebb7930d001e855a3134a29135afd1a684be1729cfb6c45b1d94632e12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 8288,
+    "run_id": "40791047494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "40791047494",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261029002641_d2a09ad6bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 8288,
+    "run_id": "40791047494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-29T00:26:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
