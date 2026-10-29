@@ -98,12 +98,16 @@ Related plan: `docs/plans/heal-issues-self-resolve-plan.md`. Its non-goals ("let
 | `${RUNTIME_DIR}/linked_scope.json` | frozen file, schema `heal_linked_scope.v1` | written only when P1 is on and some run qualifies | P1 |
 | `heal-scope linked-scope` | `workflow_failure_heal.py` operation | n/a | P1 |
 | `heal-scope closure` | `workflow_failure_heal.py` operation | n/a | P2 |
-| `<!-- ai:heal-rescope:v1 outcome=<replaced\|needs_human\|failed> reason=<token> denied=<sha256-12> run=<id> -->` | issue comment marker | n/a | P3 |
+| `<!-- ai:heal-rescope:v1 outcome=<replaced\|needs_human\|failed> reason=<token> denied=<sha256-12> render=<n> run=<id> -->` | issue comment marker | n/a | P3 |
 | `WORKFLOW_HEAL linked_run_scope run=<id> outcome=added\|rejected reason=<token> paths=<n>` | log line | n/a | P1 |
 | `WORKFLOW_HEAL scope_closure seeds=<n> matched=<n> paths=<n> reserved=<n> truncated=<n>` and `WORKFLOW_HEAL scope_closure_seed_skipped run=<id> reason=<token>` | log lines | n/a | P2 |
 | `WORKFLOW_HEAL heal_rescope issue=<n> outcome=<o> reason=<r>` | log line | n/a | P3 |
 
 The P1 rejection reasons are `conclusion`, `outside_window`, `actor_mismatch`, `actor_missing`, `consumer_heal`, `switch_off`, `run_cap` and `malformed`.
+
+The P2 `scope_closure_seed_skipped` reasons are `step_unmatched`, `step_ambiguous`, `step_no_run`, `yaml_error`, `pr_scope` and `run_info_unavailable`.
+
+`HEAL_SCOPE_RENDER_VERSION` (an integer constant in `scripts/workflow_failure_heal.py`, new) names the scope derivation the running code uses. It starts at 1 and P1 and P2 each bump it by one when they merge. P3 records it in the `ai:heal-rescope:v1` marker as `render=<n>`.
 
 ### `linked_scope.json` format
 
@@ -144,9 +148,10 @@ This rule is shared by the parent run (P2) and linked runs (P1 records it). With
 ### Reference extraction (Q3: A)
 
 - **Shell or YAML text.** Every match of `(?<![A-Za-z0-9_.-])([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:sh|py))(?![A-Za-z0-9_])` names a candidate `scripts/<group1>`, subject to the prefix rule below.
-- **Prefix rule.** Look at the path text directly before the basename: the longest run ending at the match, without whitespace or quotes, that ends in `/`. Keep the match when that prefix is empty, or when its last segment is `scripts` or a variable expansion (`${NAME}` or `$NAME`). Drop it for any other last segment. So `scripts/x.sh`, `.codex-workflow-src/scripts/x.sh` and `${MEMORY_SCRIPTS_DIR}/ai_memory.py` are kept, and `scripts/lib/x.sh` is dropped. Without this rule, a nested path would resolve to a top-level file that has the same basename.
+- **Prefix rule.** Look at the path text directly before the basename: the longest run ending at the match, without whitespace or quotes, that ends in `/`. Keep the match when that prefix is empty, or when its last segment is `scripts` or a variable expansion (`${NAME}` or `$NAME`). Also keep it when the prefix is `)/` and that `)` closes a `$(dirname …)` command substitution on the same line, the sibling-include idiom `$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh` (for example `scripts/implement_handle_guard_block.sh:12`). Drop it for any other last segment. So `scripts/x.sh`, `.codex-workflow-src/scripts/x.sh` and `${MEMORY_SCRIPTS_DIR}/ai_memory.py` are kept, and `scripts/lib/x.sh` is dropped. Without this rule, a nested path would resolve to a top-level file that has the same basename.
 - **Python files** add `from X import`, `import X`, `from scripts.X import`, `from scripts import X`, and comma-separated `import X, Y`. Each yields the candidate `scripts/X.py`.
 - **Keep** a candidate only when `git cat-file -e <scope_ref>:<candidate>` succeeds and the candidate passes `_safe_heal_path`.
+- The prototype table above was computed before the prefix rule. P2 re-runs it under the final rule and updates the integration test expectation if a path moves.
 
 ### Closure walk
 
@@ -169,7 +174,7 @@ Then the existing 20-path cap, existence check and tail apply. With an empty clo
 
 - **Where it runs.** P3 extends the hourly recovery scan rather than the plan gate. The scan already holds the intake's lock, reconstructs reports from pipeline-authored bodies, re-runs the unchanged intake (re-verifying run provenance and the fingerprint) and files replacements.
 - **How the reconstructed report is trusted.** The existing `recovery_scan` origin accepts only `autofix_failure` reports (intake around lines 400–416), and `reconstruct_recovery_payload` is bound to the autofix body shape. P3 therefore adds a separate `rescope_scan` origin with the same binding, and no bypass for unauthenticated reports. The origin is accepted only on a `schedule` event, with `HEAL_SCOPE_RESCOPE_ENABLED` on, `SOURCE_KIND=workflow_run`, and a 64-hex expected fingerprint plus an expected issue number that come only from the scan's environment. Anything else is rejected with `_report_auth_reject "rescope_scan_invalid"`. The payload is built by a new `reconstruct_rescope_payload`, which calls the existing `build_workflow_run_payload` with the run read through the API (not the body's copy). The unchanged provenance gate then re-verifies that run. The fingerprint and duplicate decision must equal the expected values, exactly as for `recovery_scan`.
-- **How denied paths are used.** They are taken only from a pipeline-authored `ai:automation-path-plan-hold:v1` comment with `reason=heal_scope_plan_out_of_scope` (the author is checked against the token's login). They are passed to the intake as a priority list. The intake places only those already inside its own freshly computed candidate set (linked workflow paths ∪ closure ∪ existing inputs) right after the crash file. It never adds a path from that list that its own derivation did not produce.
+- **How denied paths are used.** They are taken only from a pipeline-authored `ai:automation-path-plan-hold:v1` comment with `reason=heal_scope_plan_out_of_scope` and `source=plan` or `source=poller` (the author is checked against the token's login, and the comment must be newer than the issue's newest plan comment, see P3 step 1). They are passed to the intake as a priority list. The intake places only those already inside its own freshly computed candidate set (linked workflow paths ∪ closure ∪ existing inputs) right after the crash file. It never adds a path from that list that its own derivation did not produce.
 
 ### Clarify (G5)
 
@@ -243,7 +248,7 @@ Four phases (Q7: A). Each is one PR, independently mergeable in any order, compl
    - **Scope:** add rescope candidates to the recovery scan; reconstruct `workflow_run` heal reports for rescope; give the intake a `rescope_scan` origin with priority paths, a replacement path and a `needs_human` path.
    - **Files:** `scripts/workflow_failure_heal_recovery_scan.sh`, `scripts/workflow_failure_heal.py` (reconstruct and replacement-body helpers), `scripts/workflow_failure_heal_intake.sh`, `.github/workflows/workflow-failure-heal-intake.yml` (env plumbing only), tests, fragments.
    - **Done when** a held heal whose denied paths are inside the recomputed scope is replaced exactly once, and a held heal with any denied path outside it gets exactly one `needs_human` comment and WARNING and is not retried for the same denied set.
-   - **Without P1/P2 merged:** the recomputed scope equals the old one, so every candidate takes the `needs_human` path. That is safe: today's outcome plus a clearer message.
+   - **Without P1/P2 merged:** the recomputed scope equals the old one, so every candidate takes the `needs_human` path. That is safe: today's outcome plus a clearer message. Because the `needs_human` marker records `render=<n>`, each heal is evaluated once more after P1 or P2 bumps `HEAL_SCOPE_RENDER_VERSION`, so the later automatic replacement is not lost.
    - **Rollback:** `HEAL_SCOPE_RESCOPE_ENABLED=false`, or revert.
 4. **P4: Clarify scope facts and rule.**
    - **Scope:** a `HEAL SCOPE` block in `scripts/clarify_github_facts.py`, and a rule paragraph in the clarify and clarify-respond prompts.
@@ -278,16 +283,17 @@ Four phases (Q7: A). Each is one PR, independently mergeable in any order, compl
    - When the switch is on and the heal is self-repo, build the seeds: parent runs from `${LOG_DIR}/run-<id>-jobs.json` with their verified `referenced_paths`, plus `linked_scope.json` runs whose `step` is non-null when that file has a valid schema.
    - Run `heal-scope closure` against `scope_checkout` / `scope_ref`, add `closure_paths` to `scope_inputs.json`, pass the reserve, and log `scope_closure`.
    - The seeds come only from the frozen and verified files listed above.
-   - When `scope_ref` is not an ancestor of the default branch tip (a PR-branch `workflow_run` heal, where `checkout_ref` is the run's head SHA, intake around line 3036), skip closure seeding and log `scope_closure_seed_skipped run=<id> reason=pr_scope`. A PR author then cannot widen the frozen scope by adding scripts at their own head. A failed ancestry check counts as not an ancestor.
+   - Skip closure seeding for a verified run whose own run record shows it was started by a pull request: `event` is `pull_request` or `pull_request_target`, or `head_repository.full_name` differs from the run's `repository.full_name`. Read both fields from the frozen `${LOG_DIR}/run-<id>-info.json` (no API call, no git ancestry check, no extra fetch). Log `scope_closure_seed_skipped run=<id> reason=pr_scope`. A PR author then cannot widen the frozen scope by adding scripts at their own head (`checkout_ref` is the run's head SHA for every `workflow_run` heal, intake around line 3036). A missing or unreadable run record skips the seed with `reason=run_info_unavailable`. Release-gate, `push`, `schedule` and `workflow_dispatch` runs, such as #8287's, are seeded.
 5. **Fragments:** `changelog.d/<N>-heal-script-closure.md` and `agents.d/<N>-heal-script-closure.md` (`Workflow architecture`).
 
 ### P3: Plan-hold re-check
 
 1. **Candidates** (`scripts/workflow_failure_heal_recovery_scan.sh`). The existing jq filter (around line 187) drops every issue whose body contains `ai:workflow-heal-scope`, which is exactly what rescope candidates carry. When `HEAL_SCOPE_RESCOPE_ENABLED` is on, build a second candidate list with its own jq select from the same nodes file, and leave the recovery filter unchanged. Keep open heal issues that meet all of these:
    - authored by the token login, labelled `ai:workflow-heal`, carrying a scope marker;
-   - with the newest pipeline-authored `ai:automation-path-plan-hold:v1 … reason=heal_scope_plan_out_of_scope source=plan …` comment;
+   - whose newest pipeline-authored `ai:automation-path-plan-hold:v1` comment has `reason=heal_scope_plan_out_of_scope` and `source=plan` or `source=poller` (stall recovery posts `source=poller`, `scripts/orchestrate_poll_process.sh` around line 18528);
+   - where that hold comment is newer than the issue's newest plan comment, compared by `(created_at, id)` as `.github/workflows/plan.yml` does (around lines 2881–2885). A hold that a later plan superseded, for example after `/reclarify`, does not count;
    - with no open PR referencing the issue. The data comes from the same GraphQL listing query, extended with `timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 20)` and the source pull request's `state`. That adds no call; a missing or unreadable field excludes the issue;
-   - with no `ai:heal-rescope:v1` comment for the same `denied=<sha256-12>` (sha256 of the sorted, decoded denied paths, first 12 hex).
+   - with no pipeline-authored `ai:heal-rescope:v1` comment for the same `denied=<sha256-12>` (sha256 of the sorted, decoded denied paths, first 12 hex) and the same `render=<n>` as the running code's `HEAL_SCOPE_RENDER_VERSION`. A `needs_human` result recorded before P1 or P2 merged carries an older `render=` value, so the heal is evaluated once more after each scope phase lands instead of being skipped for good. A marker without `render=` counts as `render=0`.
 
    Process at most `HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK` candidates (shared with recovery) and respect `HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS`.
 2. **Reconstruct** (`scripts/workflow_failure_heal.py`, next to `reconstruct_recovery_payload`, around line 3920). Add `reconstruct_rescope_payload`, with a `rescope` operation, for `workflow_run` heal bodies. `reconstruct_recovery_payload` stays unchanged and autofix-only. The new function reads the pipeline-written source run URL, target branch and head SHA, then builds the payload with `build_workflow_run_payload` from the run read through the API (see Approach → Re-check). It refuses an edited body, unless `verify_heal_scope_pipeline_edits` accepts it, and refuses missing markers, as today.
@@ -296,10 +302,10 @@ Four phases (Q7: A). Each is one PR, independently mergeable in any order, compl
    - Accept `HEAL_RESCOPE_PRIORITY_PATHS_FILE` (decoded denied paths) only for this origin. Require the recomputed fingerprint to equal the issue's `fp`, as recovery does.
    - Render with `priority_paths` = denied ∩ (crash file ∪ workflow paths ∪ linked workflow paths ∪ uncapped closure ∪ test subjects ∪ changed files). Add a keyword-only `priority_paths: Iterable[str] = ()` to `render_heal_scope_marker`, placed right after `crash_file` and filtered to members of the other inputs inside the function as a second guard.
    - If every denied path is in the rendered marker: file the replacement through the recovery replacement helpers. The body is the original body with the new marker plus `Re-issued from #<N> (heal rescope)`. Post `ai:heal-rescope:v1 outcome=replaced` and the existing `ai:heal-scope-recovery:v1 replaced_by=` marker on the original, and close it as `not_planned` with a comment.
-   - Otherwise post `ai:heal-rescope:v1 outcome=needs_human reason=outside_scope` listing the outside paths and send one Telegram WARNING through the existing helper.
+   - Otherwise post `ai:heal-rescope:v1 outcome=needs_human reason=outside_scope` (with `render=<HEAL_SCOPE_RENDER_VERSION>`) listing the outside paths and send one Telegram WARNING through the existing helper.
    - A failure in either path posts `outcome=failed reason=<token>`, counted by the existing attempt cap.
 4. **Workflow env:** add `HEAL_SCOPE_RESCOPE_ENABLED` plumbing to the `recovery-candidates` and `recovery-scan` jobs in `.github/workflows/workflow-failure-heal-intake.yml` (env lines only; check §27 with `wc -c`).
-5. **Fragments:** `changelog.d/<N>-heal-plan-hold-rescope.md` and `agents.d/<N>-heal-plan-hold-rescope.md` (`Workflow architecture`; also `Orchestrator tracking-issue comment markers` if heal markers are registered there).
+5. **Fragments:** `changelog.d/<N>-heal-plan-hold-rescope.md` and `agents.d/<N>-heal-plan-hold-rescope.md`. The agents fragment documents the `ai:heal-rescope:v1` marker (its fields, the trusted author and the `render=` re-arm) and the `WORKFLOW_HEAL heal_rescope` log line under `Workflow architecture`, unconditionally. `heal_rescope` is a token under the existing `WORKFLOW_HEAL` prefix, so no new prefix bullet is needed unless the implementer adds a new prefix.
 
 ### P4: Clarify scope facts and rule
 
@@ -351,14 +357,15 @@ Existing test files are extended rather than new ones added, because `tests/test
 - Step selection: failed, cancelled and longest cases.
 - Matching: exact, reusable `caller / callee`, a matrix suffix, an unnamed step (skipped), duplicate names (skipped), and missing `run:` (skipped).
 - Extraction: `${DIR}/ai_memory.py`, `bash scripts/x.sh`, `source scripts/x.sh`, `. scripts/x.sh`, Python import forms, a non-existent name (dropped), and a nested path (dropped).
-- PR scope: a `scope_ref` that is not an ancestor of the default branch tip yields no closure and logs `reason=pr_scope`.
+- PR scope: a run record with `event=pull_request` (or a foreign `head_repository`) yields no closure and logs `reason=pr_scope`; a `workflow_dispatch` run whose head SHA is not on the default branch (the #8287 shape) is seeded; a missing run record logs `reason=run_info_unavailable`.
+- Extraction keeps the `$(dirname "${BASH_SOURCE[0]}")/x.sh` sibling idiom; a seed with no `run:` logs `reason=step_no_run`.
 - Closure on a temp git repo mirroring the prototype: depth limit, smallest-depth wins, deterministic order, the 200-read cap.
 - Render order: the reserve placement, leftover filling, the 20 cap, and byte-identical output with an empty closure.
 - Integration on the real tree at a pinned commit: the seeds from #8287 yield `scripts/ai_memory_lib.py` within the first 20 paths.
 
 ### P3 (recovery-scan harness, extending `tests/test_workflow_failure_heal_recovery_scan.py`)
 
-- Candidate filtering: a foreign-author hold comment is ignored; an open PR excludes the issue; an already-processed `denied=` hash is skipped.
+- Candidate filtering: a foreign-author hold comment is ignored; a `source=poller` hold qualifies; a hold older than the newest plan comment is ignored; an open PR excludes the issue; an already-processed `denied=` hash with the current `render=` is skipped, and the same hash with an older `render=` is evaluated again.
 - Replaced path: exactly one replacement, the original closed `not_planned`, both markers posted.
 - `needs_human` path: one comment and one WARNING, no retry on the next tick.
 - A fingerprint mismatch posts `failed`.
@@ -390,7 +397,7 @@ Existing test files are extended rather than new ones added, because `tests/test
 
 ## Rollout
 
-- All switches default on, so each phase is active on merge. To disable one, set the repo variable or workflow env to `false`. The heal intake and recovery scan read `vars.*` through their existing env blocks; the implementer confirms each switch is plumbed.
+- All switches default on, so each phase is active on merge. With a switch off, that phase does nothing at all: P3 builds no rescope candidate list, dispatches no `rescope_scan` intake and posts no `ai:heal-rescope:v1` comment or WARNING, and the intake rejects the origin. `HEAL_SCOPE_RESCOPE_ENABLED` is the single off control for both the candidate scan and the `rescope_scan` origin; the existing recovery scan keeps its own switch (`HEAL_SCOPE_RECOVERY_ENABLED`) and is unaffected. To disable one, set the repo variable or workflow env to `false`. The heal intake and recovery scan read `vars.*` through their existing env blocks; the implementer confirms each switch is plumbed.
 - Heals run only in this repository (`shubhodeep1/coding-workflows`). Consumer repos (§14) receive no behaviour change: consumer heals are excluded (Q6: A), and the clarify prompts change only text that applies to `ai:workflow-heal` issues, which are filed here.
 - Changes reach the release gate's workflows on the next promotion, like any other change.
 - After P1 and P2 merge, #8287-style failures should produce in-scope plans. Watch the first heal's `scope_closure` and `linked_run_scope` log lines and the plan gate decision.
