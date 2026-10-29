@@ -143,6 +143,11 @@ else
 		fi
 		stage_support_verify="ref"
 	done
+	# Visible degraded path: e.g. the checkout fell back to main while
+	# SCRIPT_REF stays `stable` (clarify.yml support source fallback).
+	if [ "${stage_support_verify}" = "head_only" ]; then
+		echo "::warning::stage_support_for_phase: SCRIPT_REF ${SCRIPT_REF} does not resolve in the support checkout; staging its HEAD ${stage_support_sha} unverified."
+	fi
 fi
 
 # --- 2. run the review bundle stager from a scratch directory ---------------
