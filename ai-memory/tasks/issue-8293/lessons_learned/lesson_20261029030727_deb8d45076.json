@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-10-29T03:07:27Z",
+  "issue_number": 8293,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=tests/inventory_parity.py:1-1; cited_path=tests/inventory_parity.py; files_touched=.github/workflows/internal-sync-ai-labels.yml, .github/workflows/sync_ai_labels.yml, agents.d/stuck-states-p11a-retired-label-drain.md, agents.md, changelog.d/stuck-states-p11a-retired-label-drain.md, docs/INVENTORY.md, scripts/ai_labels.py, tests/test_ai_labels.py, tests/test_ai_labels_retired.py, tests/test_promote_candidate_follow.py.",
+  "phase": "review_autofix",
+  "pr_number": 8303,
+  "record_id": "lesson_20261029030727_deb8d45076",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "tests/inventory_parity.py",
+    ".github/workflows/internal-sync-ai-labels.yml",
+    ".github/workflows/sync_ai_labels.yml",
+    "agents.d/stuck-states-p11a-retired-label-drain.md",
+    "agents.md",
+    "changelog.d/stuck-states-p11a-retired-label-drain.md",
+    "docs/INVENTORY.md",
+    "scripts/ai_labels.py",
+    "tests/test_ai_labels.py",
+    "tests/test_ai_labels_retired.py",
+    "tests/test_promote_candidate_follow.py"
+  ]
+}
